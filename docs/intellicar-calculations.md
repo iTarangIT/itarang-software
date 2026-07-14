@@ -539,6 +539,9 @@
   3,117 Ah and discharged 3,736 Ah — a ratio of 0.83. Two entirely independent measurements
   agreeing within 25% is the strongest evidence available that neither is badly wrong.
 
+  The timeline's detail panel and the per-cycle scatter divide a cycle's calibrated distance
+  (§21) by the **SOC-derived** figure to get per-cycle mileage (§22) — never by the coulomb one.
+
   ---
 
   ## 14. Deep discharge events (< 20% SOC)
@@ -596,20 +599,21 @@
 
   ### Discharge vs kilometres
 
-  Plotted **per day**, and that is a data constraint rather than a design choice: distance
-  exists only as a daily rollup, so splitting a day's kilometres between the several discharge
-  cycles inside that day would be an invention.
+  Plotted **one point per discharge cycle**: x = kilometres covered inside the cycle's own
+  window (the calibrated per-cycle distance of §21), y = the SOC-derived Ah out. Splitting the
+  day's *rollup* kilometres between cycles would be an invention — instead each cycle earns its
+  own GPS-measured share of the day, scaled to the rollup's total. Cycles that moved less than
+  `MIN_CYCLE_KM` (1 km) are parked SOC-drains, not trips; they are counted in
+  `cycleSummary.cyclesWithoutDistance` rather than plotted at the axis.
+
+  The daily pairing (a day's rollup km against that day's summed discharge) still exists in the
+  same payload — it is what the **mileage trend** (§22) is built from, because the rollup is the
+  authoritative distance and the day is its native grain.
 
   The headline efficiency is the **aggregate** ratio (total Ah ÷ total km), not the mean of the
-  per-day ratios. Per-day ratios are biased low wherever cycle detection resolved only part of a
-  day's discharge — 27 May on the reference battery shows 118 km against a single detected
-  cycle, giving 0.38 Ah/km where the pack really does about 1.2 — and averaging them lets an
-  under-detected day count as much as a fully-resolved one. Summing first weights every kilometre
-  equally. Reference battery: **1.158 Ah/km** across 29 days.
-
-  Days with kilometres but no resolvable discharge cycle are **left out** of the scatter rather
-  than dragged onto the axis at zero Ah. On the reference battery that is 14 of 43 driving days,
-  so the scatter is a sample of the period, not a census of it.
+  per-cycle ratios. Partial ratios are biased wherever cycle detection resolved only part of the
+  discharge, and averaging them lets an under-detected cycle count as much as a fully-resolved
+  one. Summing first weights every kilometre equally.
 
   ---
 
@@ -781,7 +785,9 @@
   ```
 
   These are **different questions and often different places** — the busiest daytime dwell is
-  usually a stand or a charging point, not a home.
+  usually a stand or a charging point, not a home. The map numbers them **1 Home, 2 Parking,
+  3 Charging, 4 Overnight (secondary)**; the last two are defined in §23. Roles that land on
+  the same grid cell render as ONE pin carrying every number ("1·2"), never as stacked pins.
 
   A "visit" is an *arrival*: a dwell interval whose previous interval was **not** a dwell. Counting
   fixes instead reports one overnight park as fifty visits. (This was a real bug: computing the
@@ -810,3 +816,116 @@
   | Parking | 25.45700, 81.82900 — 505 h, 61 visits |
   | Overnight | same location — 143 h across 29 nights |
   | Second base | 25.30300, 81.89200 — 302 h, 40 visits, 122 night-hours |
+
+  ---
+
+  ## 21. Per-cycle distance, and the GPS calibration
+
+  `distance_rollup` is authoritative but DAILY; the GPS chord has the right time resolution but
+  is a **~27% lower bound** (§20). Per-cycle distance uses each for what it is good at:
+
+  ```
+  cycle_gps_km[day]  = Σ move_m ≥ MOVE_MIN_M inside the cycle window, per UTC day
+  factor[day]        = rollup_km[day] ÷ total_gps_km[day]      (both feeds present)
+  cycle_km           = Σ_days( cycle_gps_km[day] × factor[day] )
+  ```
+
+  The chord provides the *shape* — which cycle got what share of the day — and the rollup
+  provides the *scale*. Implemented in `src/lib/telemetry/cycle-distance.ts`; one query covers
+  every cycle via an `unnest()` windows CTE, and an interval belongs to the window its END
+  falls in (a segment's `move_m` covers `(prev_time, time]`).
+
+  Guards, each of which exists because the naive version mints kilometres:
+
+  - **Factor clamp 0.8–3.0** (`CYCLE_KM_FACTOR_MIN/MAX`): a day whose two feeds wildly disagree
+    had a partial outage on one of them; scaling by its ratio would invent (or erase) distance.
+    Clamped days fall back to the period-global factor, and are excluded from computing it.
+  - **Missing rollup day** → the period-global factor (Σ rollup ÷ Σ GPS over trusted days).
+  - **No factor anywhere** → the raw chord is returned flagged `km_source: 'gps'` and every UI
+    surface labels it a **lower bound**, never a measurement.
+  - **Day boundaries are UTC**, matching how §15 buckets `distance_rollup` — NOT the IST
+    boundaries the overnight clustering uses. The two answer different questions.
+
+  Consumers: the per-cycle scatter (§15), the timeline detail panel (Distance covered +
+  Mileage, discharge cycles only — a charge cycle happens parked, and a fake-precise "0.2 km"
+  of jitter on it would invite misreading), and the charging-spot marker (§23).
+
+  ---
+
+  ## 22. Mileage (km per Ah)
+
+  ```
+  daily mileage   = rollup_km[day] ÷ SOC-derived Ah discharged that day     (the trend line)
+  pack average    = Σ km ÷ Σ Ah over the window                             (the reference line)
+  per-cycle       = cycle_km (§21) ÷ SOC-derived Ah                         (tooltips, timeline)
+  ```
+
+  km/Ah is the driver's-eye reading of §15's Ah/km — bigger is better, like fuel economy. The
+  user picked km/Ah over km/kWh deliberately: it needs no voltage assumptions.
+
+  The trend is **daily and rollup-based, not "instantaneous"**. Instantaneous mileage
+  (speed ÷ current) would sample two different feeds at a ~8.5-minute cadence — pure aliasing
+  dressed as a signal. Per-cycle mileage as a *trend* inherits the chord's bias, so it stays in
+  the scatter's tooltips. A day of authoritative km over a day of SOC-derived Ah is the finest
+  honest unit.
+
+  How to read it: points well below the pack-average reference line are days the battery did
+  little distance for its charge — **overload, heavy current draw, or misuse**; a sustained
+  slide of the line is a **mileage drop**. Days lacking either feed are absent, not zero.
+
+  ---
+
+  ## 23. The charging spot, and the secondary overnight place
+
+  ```
+  charging  = the ~111 m grid cell with the most stationary time INSIDE detected
+              charge-cycle windows, requiring ≥ 2 distinct sessions there
+              (TELEMETRY_CHARGING_SPOT_MIN_SESSIONS)
+  overnight = the runner-up night-hours cluster, excluding home's cell, across ≥ 2 nights
+              (TELEMETRY_SECONDARY_OVERNIGHT_MIN_NIGHTS)
+  ```
+
+  **Charge windows come from rising-SOC detection (§2), never from a flag** — the remote
+  `charging` boolean is NULL on every row. The GPS chain is joined to those windows with the
+  same `unnest()` CTE as §21, dwell-filtered (`move_m < DWELL_RADIUS_M`), and grouped by grid
+  cell; `count(DISTINCT win_id)` is the session count. One session at a spot is an anecdote,
+  so the winner needs two. The pins carry the evidence (`chargeHours`, `chargeSessions`), and
+  the caveat says the quiet part: a pack that only ever fast-charges between two polls can be
+  missed entirely.
+
+  The secondary overnight place is **rank-based, not recency-based** — a recency definition
+  flaps between refreshes; the runner-up by night hours is stable and honestly labelled
+  "secondary". Each dwell cluster also reports `last_night`, the most recent IST date it hosted
+  night hours, as popup evidence.
+
+  Implemented as pure pickers in `geo-math.ts` (`pickChargingCluster`,
+  `pickSecondaryOvernight`), tested without a database.
+
+  ---
+
+  ## 24. Battery spec models, and threshold resolution (E-189)
+
+  `battery_spec_models` (CRM RDS, **not** the read-only IoT DB) holds one row per pack model:
+  rated voltage/capacity plus under-voltage, over-voltage, over-current and over-temperature
+  limits. `device_battery_map.battery_model` maps a deployment to a model — the same
+  CRM-side-annotation pattern E-184 used for state/city. Specs are maintained by SQL only.
+
+  Per-field resolution, in `thresholds.ts` / `thresholds-math.ts`:
+
+  ```
+  model spec  >  app_settings row  >  env var  >  hardcoded default
+  ```
+
+  A NULL spec column means "no manufacturer limit recorded" and falls through — a sparse spec
+  row never blanks the fields it omits. With no spec row the resolution is byte-for-byte the
+  pre-E-189 behaviour (there is a test that pins this). `weakChargeCurrentA` and the capacity
+  fractions stay fleet-wide: they describe how this dashboard judges, not what a pack is rated
+  for. The response carries `modelName` and `specKeys` so the UI can attribute a band to the
+  spec rather than the fleet settings.
+
+  A vehicle can appear in `device_battery_map` more than once (re-deployments); resolution
+  takes the `status = 'active'` row with the latest `installed_at`.
+
+  **These remain display thresholds** (§17): the alerting pipeline's thresholds live in the
+  AWS `iot_stack` poller, outside this repo. Editing a spec row changes what the dashboard
+  calls a breach; it does not change what the poller alerts on.

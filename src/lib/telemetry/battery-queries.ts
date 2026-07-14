@@ -26,8 +26,14 @@ import {
     depthOfDischarge,
     dischargeDivergencePct,
     dischargeGates,
+    kmPerAh,
     socDerivedAh,
 } from "@/lib/telemetry/discharge-math";
+import {
+    MIN_CYCLE_KM,
+    fetchCycleWindowKm,
+    type CycleKmSource,
+} from "@/lib/telemetry/cycle-distance";
 import { SESSION_GAP_MAX_S } from "@/lib/telemetry/charging-math";
 import { getBatteryThresholds } from "@/lib/telemetry/thresholds";
 import { fetchChargingCycleAggregate } from "@/lib/telemetry/queries";
@@ -258,30 +264,48 @@ export async function fetchDistanceTrend(
     // `raw` (from sampleCTEs) is the deduped telemetry_can series — the evidence that the
     // device was alive. distance_rollup is the only populated distance source: the per-trip
     // `trips` table is empty fleet-wide, and daily_distance_per_vehicle was never populated.
-    const rows = (await iot`
-        ${sampleCTEs(iot, vehicleno, timePredicate)},
-        tel AS (
-            SELECT date_trunc(${granularity}, time) AS bucket, count(*)::int AS n
-            FROM raw
-            GROUP BY 1
-        ),
-        dist AS (
-            SELECT date_trunc(${granularity}, time) AS bucket,
-                   sum(distance_km)::float AS km
-            FROM distance_rollup
-            WHERE vehicleno = ${vehicleno}
-              AND bucket_size = 'day'
-              ${timePredicate}
-            GROUP BY 1
-        )
-        -- No COALESCE on km. A missing distance row is unknown, not zero.
-        SELECT COALESCE(t.bucket, d.bucket)   AS bucket,
-               d.km::float                    AS km,
-               (t.bucket IS NOT NULL)         AS has_telemetry
-        FROM tel t
-        FULL OUTER JOIN dist d USING (bucket)
-        ORDER BY 1 ASC
-    `) as unknown as Array<Record<string, unknown>>;
+    const [rows, dayAggRows] = await Promise.all([
+        iot`
+            ${sampleCTEs(iot, vehicleno, timePredicate)},
+            tel AS (
+                SELECT date_trunc(${granularity}, time) AS bucket, count(*)::int AS n
+                FROM raw
+                GROUP BY 1
+            ),
+            dist AS (
+                SELECT date_trunc(${granularity}, time) AS bucket,
+                       sum(distance_km)::float AS km
+                FROM distance_rollup
+                WHERE vehicleno = ${vehicleno}
+                  AND bucket_size = 'day'
+                  ${timePredicate}
+                GROUP BY 1
+            )
+            -- No COALESCE on km. A missing distance row is unknown, not zero.
+            SELECT COALESCE(t.bucket, d.bucket)   AS bucket,
+                   d.km::float                    AS km,
+                   (t.bucket IS NOT NULL)         AS has_telemetry
+            FROM tel t
+            FULL OUTER JOIN dist d USING (bucket)
+            ORDER BY 1 ASC
+        ` as unknown as Promise<Array<Record<string, unknown>>>,
+        // "Active Days" stays in DAYS whatever the chart's granularity — a week bucket with
+        // one working day must not read as one active week. At day grain the buckets already
+        // carry it, so the extra aggregate only runs when the grains differ.
+        granularity === "day"
+            ? Promise.resolve(null)
+            : (iot`
+                SELECT count(*) FILTER (WHERE km > 0)::int AS active_days
+                FROM (
+                    SELECT sum(distance_km) AS km
+                    FROM distance_rollup
+                    WHERE vehicleno = ${vehicleno}
+                      AND bucket_size = 'day'
+                      ${timePredicate}
+                    GROUP BY date_trunc('day', time)
+                ) d
+            ` as unknown as Promise<Array<Record<string, unknown>>>),
+    ]);
 
     let cum = 0;
     const buckets: DistanceBucket[] = rows.map((r) => {
@@ -300,6 +324,7 @@ export async function fetchDistanceTrend(
     const totalKm = Math.round(known.reduce((a, b) => a + b.km, 0) * 10) / 10;
     const active = known.filter((b) => b.km > 0).length;
     const unknown = buckets.length - known.length;
+    const activeDays = dayAggRows ? Number(dayAggRows[0]?.active_days) || 0 : active;
 
     return {
         vehicleno,
@@ -319,6 +344,11 @@ export async function fetchDistanceTrend(
              */
             bucketsWithoutDistance: unknown,
             avgKmPerActiveBucket: active ? Math.round((totalKm / active) * 10) / 10 : 0,
+            /** Days with a distance row and km > 0 — day-grained regardless of granularity. */
+            activeDays,
+            avgKmPerActiveDay: activeDays
+                ? Math.round((totalKm / activeDays) * 10) / 10
+                : 0,
         },
     };
 }
@@ -467,7 +497,9 @@ export async function fetchElectricalTrend(
 ) {
     const iot = getIotSql();
     const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
-    const t = await getBatteryThresholds();
+    // E-189: fields defined by this vehicle's battery_spec_models row override the
+    // fleet-wide settings, so the bands and breach counts judge the pack by its model.
+    const t = await getBatteryThresholds(vehicleno);
 
     // One pass over the deduped series produces both the envelope and the breach counts, so
     // the numbers on the cards and the shape of the chart can never come from different rows.
@@ -593,7 +625,26 @@ export interface DischargeKmPoint {
     ah_discharged: number;
     /** Ah drawn per kilometre — the efficiency number this chart exists to expose. */
     ah_per_km: number | null;
+    /** The same ratio as a driver reads it: km per Ah. Feeds the mileage trend. */
+    km_per_ah: number | null;
     cycles: number;
+}
+
+/** One discharge cycle with the distance it covered — one scatter point. */
+export interface DischargeKmCyclePoint {
+    break_id: number;
+    start_time: Date;
+    end_time: Date;
+    duration_s: number;
+    dod_pct: number | null;
+    /** Calibrated GPS distance over the cycle window (cycle-distance.ts). */
+    km: number;
+    /** 'gps' = uncalibrated chord, a lower bound — the tooltip must say so. */
+    km_source: CycleKmSource;
+    /** SOC-derived Ah out (the primary series — see discharge-math.ts). */
+    ah_discharged: number;
+    ah_per_km: number | null;
+    km_per_ah: number | null;
 }
 
 /**
@@ -636,6 +687,7 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
             km: b.km,
             ah_discharged: ah,
             ah_per_km: ahPerKm(ah, b.km),
+            km_per_ah: kmPerAh(b.km, ah),
             cycles: d.cycles,
         });
     }
@@ -643,9 +695,69 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
     const totalKm = Math.round(points.reduce((a, b) => a + b.km, 0) * 10) / 10;
     const totalAh = Math.round(points.reduce((a, b) => a + b.ah_discharged, 0) * 10) / 10;
 
+    // ── Per-cycle scatter points ──────────────────────────────────────────────
+    // One point per discharge cycle, with the distance covered inside that cycle's own
+    // window (GPS chord calibrated against the daily rollup — cycle-distance.ts). Cycles
+    // with no usable Ah or under MIN_CYCLE_KM of movement are parked SOC-drains, not
+    // trips; they are counted rather than plotted at the axis.
+    const kmByCycle = await fetchCycleWindowKm(
+        vehicleno,
+        opts,
+        discharge.cycles.map((c) => ({
+            id: c.break_id,
+            start: new Date(c.start_time),
+            end: new Date(c.end_time),
+        })),
+    );
+    const cyclePoints: DischargeKmCyclePoint[] = [];
+    let cyclesWithoutDistance = 0;
+    for (const c of discharge.cycles) {
+        const ah = c.ah_discharged_soc;
+        const dist = kmByCycle.get(c.break_id);
+        if (ah == null || ah <= 0 || dist == null || dist.km < MIN_CYCLE_KM) {
+            cyclesWithoutDistance += 1;
+            continue;
+        }
+        cyclePoints.push({
+            break_id: c.break_id,
+            start_time: c.start_time,
+            end_time: c.end_time,
+            duration_s: c.duration_s,
+            dod_pct: c.dod_pct,
+            km: dist.km,
+            km_source: dist.source,
+            ah_discharged: ah,
+            ah_per_km: ahPerKm(ah, dist.km),
+            km_per_ah: kmPerAh(dist.km, ah),
+        });
+    }
+    const cycleKmTotal = Math.round(cyclePoints.reduce((a, c) => a + c.km, 0) * 10) / 10;
+    const cycleAhTotal =
+        Math.round(cyclePoints.reduce((a, c) => a + c.ah_discharged, 0) * 10) / 10;
+
     return {
         vehicleno,
         points,
+        cycles: cyclePoints,
+        cycleSummary: {
+            cycles: cyclePoints.length,
+            totalKm: cycleKmTotal,
+            totalAh: cycleAhTotal,
+            /** Aggregate ratio, not mean-of-ratios — same reasoning as the daily summary. */
+            avgAhPerKm:
+                cycleKmTotal > 0
+                    ? Math.round((cycleAhTotal / cycleKmTotal) * 1000) / 1000
+                    : null,
+            /** Valid cycles with no plottable distance — parked drains or GPS-silent windows. */
+            cyclesWithoutDistance,
+            calibratedPct: cyclePoints.length
+                ? Math.round(
+                      (cyclePoints.filter((c) => c.km_source === "calibrated").length /
+                          cyclePoints.length) *
+                          100,
+                  )
+                : null,
+        },
         summary: {
             days: points.length,
             totalKm,

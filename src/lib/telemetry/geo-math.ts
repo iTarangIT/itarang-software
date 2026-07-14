@@ -57,6 +57,21 @@ export const NIGHT_END_HOUR = envNumber("TELEMETRY_NIGHT_END_HOUR", 5);
 /** Grid cell for clustering, in degrees. 0.001° ≈ 111 m of latitude. */
 export const GRID_DEG = 0.001;
 
+/**
+ * Fewest DISTINCT charge sessions a grid cell must host before it can be called "the
+ * charging spot". One session at a place is an anecdote; a pattern needs repetition.
+ */
+export const CHARGING_SPOT_MIN_SESSIONS = envNumber("TELEMETRY_CHARGING_SPOT_MIN_SESSIONS", 2);
+
+/**
+ * Fewest distinct nights before a non-home cluster is offered as the secondary overnight
+ * place. Same reasoning: one night somewhere is a stopover, not a pattern.
+ */
+export const SECONDARY_OVERNIGHT_MIN_NIGHTS = envNumber(
+    "TELEMETRY_SECONDARY_OVERNIGHT_MIN_NIGHTS",
+    2,
+);
+
 const EARTH_RADIUS_M = 6_371_000;
 const rad = (d: number) => (d * Math.PI) / 180;
 
@@ -109,6 +124,41 @@ export function isNightHour(hourIst: number): boolean {
         : hourIst >= NIGHT_START_HOUR && hourIst < NIGHT_END_HOUR;
 }
 
+/**
+ * The charging spot: the grid cell with the most stationary time inside detected
+ * charge-cycle windows, provided enough distinct sessions happened there. Charging is
+ * inferred from rising SOC (the remote `charging` flag is never populated), so the
+ * windows come from the charge-cycle aggregate, never from a flag.
+ */
+export function pickChargingCluster<
+    T extends { chargeHours: number; chargeSessions: number },
+>(cells: T[]): T | null {
+    let best: T | null = null;
+    for (const cell of cells) {
+        if (cell.chargeSessions < CHARGING_SPOT_MIN_SESSIONS) continue;
+        if (best == null || cell.chargeHours > best.chargeHours) best = cell;
+    }
+    return best;
+}
+
+/**
+ * The SECONDARY overnight place: ranked next by night hours after home, excluding home's
+ * own cell, with the nights floor above. Rank-based rather than recency-based on purpose —
+ * a recency definition flaps between refreshes; a ranking is stable and honestly labelled
+ * "secondary".
+ */
+export function pickSecondaryOvernight<
+    T extends { lat: number; lon: number; nightHours: number; nights: number },
+>(dwell: T[], home: { lat: number; lon: number } | null): T | null {
+    let best: T | null = null;
+    for (const d of dwell) {
+        if (d.nights < SECONDARY_OVERNIGHT_MIN_NIGHTS) continue;
+        if (home && d.lat === home.lat && d.lon === home.lon) continue;
+        if (best == null || d.nightHours > best.nightHours) best = d;
+    }
+    return best;
+}
+
 /** The active gates, so the UI can explain what it clustered and why. */
 export function geoGates() {
     return {
@@ -118,5 +168,7 @@ export function geoGates() {
         nightStartHour: NIGHT_START_HOUR,
         nightEndHour: NIGHT_END_HOUR,
         gridDeg: GRID_DEG,
+        chargingSpotMinSessions: CHARGING_SPOT_MIN_SESSIONS,
+        secondaryOvernightMinNights: SECONDARY_OVERNIGHT_MIN_NIGHTS,
     };
 }

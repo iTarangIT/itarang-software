@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+    CHARGING_SPOT_MIN_SESSIONS,
     DWELL_RADIUS_M,
     DWELL_TRUST_GAP_S,
     GRID_DEG,
     MOVE_MIN_M,
     NIGHT_END_HOUR,
     NIGHT_START_HOUR,
+    SECONDARY_OVERNIGHT_MIN_NIGHTS,
     haversineM,
     isDwell,
     isNightHour,
     isObserved,
     isTravel,
+    pickChargingCluster,
+    pickSecondaryOvernight,
     snapToGrid,
 } from "@/lib/telemetry/geo-math";
 
@@ -124,5 +128,68 @@ describe("isNightHour", () => {
         expect(isNightHour(12)).toBe(false);
         expect(isNightHour(21)).toBe(false);
         expect(isNightHour(22)).toBe(true);
+    });
+});
+
+describe("pickChargingCluster", () => {
+    const cell = (lat: number, chargeHours: number, chargeSessions: number) => ({
+        lat,
+        lon: 81.0,
+        chargeHours,
+        chargeSessions,
+    });
+
+    it("picks the cell with the most stationary charge time", () => {
+        const picked = pickChargingCluster([cell(25.1, 4, 3), cell(25.2, 9, 2), cell(25.3, 2, 5)]);
+        expect(picked?.lat).toBe(25.2);
+    });
+
+    it("ignores cells below the session floor — one session at a spot is an anecdote", () => {
+        // 25.2 has the most hours but only ONE distinct charge session there.
+        const picked = pickChargingCluster([cell(25.1, 4, 2), cell(25.2, 9, 1)]);
+        expect(picked?.lat).toBe(25.1);
+        expect(CHARGING_SPOT_MIN_SESSIONS).toBeGreaterThanOrEqual(2);
+    });
+
+    it("returns null when no cell qualifies", () => {
+        expect(pickChargingCluster([cell(25.1, 9, 1)])).toBeNull();
+        expect(pickChargingCluster([])).toBeNull();
+    });
+
+    it("is deterministic on a tie — the first-seen cell wins", () => {
+        const picked = pickChargingCluster([cell(25.1, 5, 2), cell(25.2, 5, 2)]);
+        expect(picked?.lat).toBe(25.1);
+    });
+});
+
+describe("pickSecondaryOvernight", () => {
+    const spot = (lat: number, nightHours: number, nights: number) => ({
+        lat,
+        lon: 81.0,
+        nightHours,
+        nights,
+    });
+
+    it("returns the top overnight cluster that is NOT the home cell", () => {
+        const home = spot(25.1, 90, 20);
+        const picked = pickSecondaryOvernight([home, spot(25.2, 30, 6), spot(25.3, 12, 4)], home);
+        expect(picked?.lat).toBe(25.2);
+    });
+
+    it("applies the nights floor — one night somewhere is a stopover, not a pattern", () => {
+        const home = spot(25.1, 90, 20);
+        const picked = pickSecondaryOvernight([home, spot(25.2, 30, 1)], home);
+        expect(picked).toBeNull();
+        expect(SECONDARY_OVERNIGHT_MIN_NIGHTS).toBeGreaterThanOrEqual(2);
+    });
+
+    it("returns null when the only overnight place IS home", () => {
+        const home = spot(25.1, 90, 20);
+        expect(pickSecondaryOvernight([home], home)).toBeNull();
+    });
+
+    it("works without a home — the top qualified cluster wins", () => {
+        const picked = pickSecondaryOvernight([spot(25.2, 30, 6), spot(25.3, 40, 3)], null);
+        expect(picked?.lat).toBe(25.3);
     });
 });
