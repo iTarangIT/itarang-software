@@ -70,6 +70,12 @@
   --radius-xl:  1rem;
   --radius-2xl: 1.25rem;
   --radius-3xl: 1.5rem;
+
+  /* Battery buyback prototype tokens (peakAmp design handoff). Everything
+   * else the buyback UI kit needs is stock Tailwind (green-600, blue-600,
+   * amber-700/100, red-600/700, slate-*, gray-200). */
+  --color-bb-navy: #0B2239;
+  --color-bb-bg:   #F6F7F9;
 }
 
 /* Non-color custom properties Tailwind doesn't surface as utilities. */
