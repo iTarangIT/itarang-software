@@ -82,6 +82,8 @@ export interface DealerLineView {
 export interface DealerDealView {
   request_id: string;
   request_no: string;
+  /** The dealer's OWN registered firm name. Not a secret from the dealer. */
+  dealer_firm: string | null;
   status: DealState;
   offer_version: number;
   source_channel: string;
@@ -100,6 +102,14 @@ export const DEALER_FORBIDDEN_KEYS = [
   "floor_total",
   "vendor_threads",
   "dealer_entity_id",
+  // Ext-1/Ext-2 additions. Internal ids and S3 capabilities that must never ride
+  // along on the dealer-leg negotiation rounds or the dealer PO summary:
+  //   · counterparty_id       — the vendor-leg counterparty on a round row
+  //   · counterparty_entity_id — the PO's counterparty account id
+  //   · pdf_s3                 — an S3 key is a capability, never handed to a client
+  "counterparty_id",
+  "counterparty_entity_id",
+  "pdf_s3",
 ] as const;
 
 export function toDealerLine(line: AdminLineView): DealerLineView {
@@ -140,6 +150,9 @@ export function toDealerDeal(deal: AdminDealView): DealerDealView {
   return {
     request_id: deal.request_id,
     request_no: deal.request_no,
+    // The dealer's own firm — shown as the addressee on the PO iTarang issues to
+    // them. dealer_entity_id (the internal account id) stays structurally absent.
+    dealer_firm: deal.dealer_name ?? null,
     status: deal.status,
     offer_version: deal.offer_version,
     source_channel: deal.source_channel,
@@ -153,6 +166,118 @@ export function toDealerDeal(deal: AdminDealView): DealerDealView {
 /** The admin sees everything. Identity, but named so call sites read symmetrically. */
 export function toAdminDeal(deal: AdminDealView): AdminDealView {
   return deal;
+}
+
+// ---------------------------------------------------------------------------
+// DEALER-LEG NEGOTIATION (Ext-1).
+//
+// The dealer sees THEIR OWN negotiation: the back-and-forth of the prices they
+// offered and the prices iTarang countered/finalised. That data is theirs to
+// see. What must NOT ride along is the internal identity behind an offer — the
+// `offered_by` user uuid and the vendor-leg `counterparty_id` — and, as ever,
+// any margin/vendor column a careless join might hang on a line row. So a round
+// is rebuilt field-by-field: only the ROLE ("dealer"|"admin"), a friendly actor
+// label, the note, the timestamp and the per-SKU prices survive.
+// ---------------------------------------------------------------------------
+
+export interface DealerNegLineView {
+  line_id: string;
+  label: string;
+  price_per_unit: number;
+}
+
+export interface DealerNegRoundView {
+  round_no: number;
+  /** ROLE only — never the internal user id that authored the round. */
+  offered_by: "dealer" | "admin";
+  /** "You" for the dealer's own rounds, "iTarang" for admin/final offers. */
+  actor_label: string;
+  note: string | null;
+  created_at: Date | string;
+  lines: DealerNegLineView[];
+  is_final: boolean;
+  is_accept: boolean;
+}
+
+/**
+ * The source row as read from negotiation_rounds / final_offers. It MAY carry
+ * internal ids (offered_by, counterparty_id) and — if a caller joins carelessly
+ * — margin/vendor columns on a line. None of them survive toDealerNegRound.
+ */
+export interface DealerNegRoundSource {
+  round_no: number;
+  offered_by_role: string; // 'dealer' | 'admin'
+  offered_by?: string | null;
+  counterparty_id?: string | null;
+  note?: string | null;
+  created_at: Date | string;
+  lines: Array<{ line_id: string; label: string; price_per_unit: number | string }>;
+  is_final?: boolean;
+  is_accept?: boolean;
+}
+
+export function toDealerNegRound(round: DealerNegRoundSource): DealerNegRoundView {
+  const role: "dealer" | "admin" = round.offered_by_role === "admin" ? "admin" : "dealer";
+
+  // Built field-by-field. `offered_by` (the uuid) and `counterparty_id` are
+  // never read into the output; the only `offered_by` the dealer gets is a role.
+  return {
+    round_no: round.round_no,
+    offered_by: role,
+    actor_label: role === "dealer" ? "You" : "iTarang",
+    note: round.note ?? null,
+    created_at: round.created_at,
+    lines: round.lines.map((l) => ({
+      line_id: l.line_id,
+      label: l.label,
+      price_per_unit: Number(l.price_per_unit),
+    })),
+    is_final: round.is_final ?? false,
+    is_accept: round.is_accept ?? false,
+  };
+}
+
+export function toDealerNegotiation(rounds: DealerNegRoundSource[]): DealerNegRoundView[] {
+  return rounds.map(toDealerNegRound);
+}
+
+// ---------------------------------------------------------------------------
+// DEALER PO SUMMARY (Ext-2).
+//
+// The PO iTarang issues to the dealer (leg=DEALER, direction=ISSUED). Its number,
+// status and issue date are the dealer's to see. Its `pdf_s3` key is a capability
+// we never emit, and `counterparty_entity_id` is an internal account id — both
+// stay structurally absent. There is no dealer-facing route that serves a PO PDF
+// (the media route serves only photos/provenance), so `pdf_available` is false
+// and the Documents card is rendered from the deal's own locked-price lines.
+// ---------------------------------------------------------------------------
+
+export interface DealerPoSource {
+  number: string;
+  status: string;
+  issued_at: Date | string | null;
+  pdf_s3?: string | null;
+  counterparty_entity_id?: string | null;
+}
+
+export interface DealerPoView {
+  number: string;
+  status: string;
+  issued_at: Date | string | null;
+  pdf_available: boolean;
+}
+
+export function toDealerPo(po: DealerPoSource | null): DealerPoView | null {
+  if (!po) return null;
+
+  // Built field-by-field: pdf_s3 and counterparty_entity_id are structurally
+  // absent. No dealer-facing PO PDF route exists, so pdf_available is false.
+  return {
+    number: po.number,
+    status: po.status,
+    issued_at: po.issued_at ?? null,
+    pdf_available: false,
+  };
 }
 
 /**

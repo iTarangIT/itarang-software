@@ -17,10 +17,14 @@ import {
   VENDOR_FORBIDDEN_KEYS,
   toDealerDeal,
   toDealerLine,
+  toDealerNegotiation,
+  toDealerPo,
   toVendorLine,
   toVendorQuotation,
   visibleActivityForDealer,
   type AdminDealView,
+  type DealerNegRoundSource,
+  type DealerPoSource,
 } from "../serialize";
 import { NOTIFICATION_FOR } from "../transition";
 import { DEAL_ACTIONS } from "../state-machine";
@@ -145,6 +149,13 @@ describe("dealer payload excludes margin and vendor data — ABSENT, not null", 
     expect(payload.lines[1].condition).toBe("Dead");
   });
 
+  it("gives the dealer their OWN firm name, but never the entity id", () => {
+    // dealer_firm is the dealer's own registered name — theirs to see. The
+    // internal account id (dealer_entity_id) stays structurally absent.
+    expect(payload.dealer_firm).toBe("Shakti Battery House");
+    expect("dealer_entity_id" in JSON.parse(JSON.stringify(payload))).toBe(false);
+  });
+
   it("a NEW secret column on the admin view does not ride along", () => {
     // The regression this whole design exists to prevent: someone adds a column,
     // and a spread-based serializer quietly ships it to dealers.
@@ -162,6 +173,125 @@ describe("dealer payload excludes margin and vendor data — ABSENT, not null", 
     const line = toDealerLine(ADMIN_DEAL.lines[0]);
     expect("margin_value" in line).toBe(false);
     expect("vendor_price" in line).toBe(false);
+  });
+});
+
+// ===========================================================================
+// EXT-1 — the dealer-leg negotiation. Same rule, new surface: the dealer sees
+// their own prices, but never the internal actor id behind an offer, never the
+// vendor-leg counterparty, and never a margin/vendor number a careless join
+// hangs on a line. The uuids below are the leak we hunt for.
+// ===========================================================================
+describe("dealer negotiation payload (Ext-1) excludes internal ids and margin/vendor", () => {
+  const OFFERED_BY_UUID = "usr-admin-77";
+  const COUNTERPARTY_UUID = "vendor-entity-88";
+
+  const rounds: DealerNegRoundSource[] = [
+    {
+      round_no: 1,
+      offered_by_role: "dealer",
+      offered_by: "usr-dealer-01",
+      note: "Our ask.",
+      created_at: "2026-07-11T02:00:00Z",
+      lines: [{ line_id: "line-1", label: "60V 120Ah · Working", price_per_unit: 5300 }],
+    },
+    {
+      round_no: 2,
+      offered_by_role: "admin",
+      // The two internal ids that must be stripped, plus a stray margin/vendor
+      // number smuggled onto a line by a careless join.
+      offered_by: OFFERED_BY_UUID,
+      counterparty_id: COUNTERPARTY_UUID,
+      note: "Our counter.",
+      created_at: "2026-07-11T03:00:00Z",
+      lines: [
+        {
+          line_id: "line-1",
+          label: "60V 120Ah · Working",
+          price_per_unit: 5100,
+          margin_value: 1300,
+          vendor_price: 6400,
+        } as never,
+      ],
+      is_final: true,
+      is_accept: true,
+    },
+  ];
+
+  const payload = toDealerNegotiation(rounds);
+  const keys = allKeys(payload);
+  const values = allValues(payload);
+
+  it.each(DEALER_FORBIDDEN_KEYS)("the key %s does not appear at any depth", (key) => {
+    expect(keys.has(key)).toBe(false);
+  });
+
+  it("maps offered_by to a ROLE, never the internal user id", () => {
+    expect(payload[0].offered_by).toBe("dealer");
+    expect(payload[1].offered_by).toBe("admin");
+    // The uuid the source carried must be nowhere in the output.
+    expect(values).not.toContain(OFFERED_BY_UUID);
+    expect(values).not.toContain(COUNTERPARTY_UUID);
+    expect(keys.has("counterparty_id")).toBe(false);
+  });
+
+  it("labels the dealer's own rounds 'You' and iTarang's 'iTarang'", () => {
+    expect(payload[0].actor_label).toBe("You");
+    expect(payload[1].actor_label).toBe("iTarang");
+  });
+
+  it("no margin or vendor VALUE rides along on a line", () => {
+    for (const secret of [1300, 6400]) {
+      expect(values).not.toContain(secret);
+    }
+  });
+
+  it("still gives the dealer their own per-SKU prices and the final/accept flags", () => {
+    expect(payload[0].lines[0].price_per_unit).toBe(5300);
+    expect(payload[1].lines[0].price_per_unit).toBe(5100);
+    expect(payload[1].is_final).toBe(true);
+    expect(payload[1].is_accept).toBe(true);
+    expect(payload[0].is_final).toBe(false);
+  });
+});
+
+// ===========================================================================
+// EXT-2 — the dealer PO summary. Number/status/date are the dealer's to see;
+// the S3 key (pdf_s3) and the internal counterparty account id are not.
+// ===========================================================================
+describe("dealer PO summary (Ext-2) excludes the S3 key and counterparty id", () => {
+  const source: DealerPoSource = {
+    number: "PO-1024-D",
+    status: "SENT",
+    issued_at: "2026-07-13T00:00:00Z",
+    pdf_s3: "buyback/req-1/po/PO-1024-D.pdf",
+    counterparty_entity_id: "ACC-1",
+  };
+
+  const po = toDealerPo(source)!;
+  const keys = allKeys(po);
+  const values = allValues(po);
+
+  it.each(DEALER_FORBIDDEN_KEYS)("the key %s does not appear at any depth", (key) => {
+    expect(keys.has(key)).toBe(false);
+  });
+
+  it("emits number, status and issue date, but pdf_available stays false", () => {
+    expect(po.number).toBe("PO-1024-D");
+    expect(po.status).toBe("SENT");
+    expect(po.issued_at).toBe("2026-07-13T00:00:00Z");
+    expect(po.pdf_available).toBe(false);
+  });
+
+  it("carries neither the S3 key nor the counterparty account id", () => {
+    expect(values).not.toContain("buyback/req-1/po/PO-1024-D.pdf");
+    expect(values).not.toContain("ACC-1");
+    expect(keys.has("pdf_s3")).toBe(false);
+    expect(keys.has("counterparty_entity_id")).toBe(false);
+  });
+
+  it("returns null when no PO has been issued to the dealer yet", () => {
+    expect(toDealerPo(null)).toBe(null);
   });
 });
 
