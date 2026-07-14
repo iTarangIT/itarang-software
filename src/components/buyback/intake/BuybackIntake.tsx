@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import Lightbox, { type LightboxItem } from "@/components/buyback/Lightbox";
+import { PageHeader } from "@/components/buyback/ui";
 import { useRouter } from "next/navigation";
 
 import { inr } from "@/lib/buyback/format";
@@ -748,22 +749,18 @@ export default function BuybackIntake() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 pb-32 pt-6">
-      <header className="mb-6 flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-            New Buyback Request
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Add battery lines, attach provenance, choose pickup — one page, no wizard.
-          </p>
-        </div>
-        {requestNo && (
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600">
-            <span className="h-[7px] w-[7px] rounded-full bg-emerald-500" />
-            Autosaved · {requestNo}
-          </div>
-        )}
-      </header>
+      <PageHeader
+        title="New Buyback Request"
+        sub="Add battery lines, attach provenance, choose pickup — one page, no wizard."
+        right={
+          requestNo ? (
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-green-600">
+              <span className="h-[7px] w-[7px] rounded-full bg-green-600" />
+              Autosaved · {requestNo}
+            </div>
+          ) : undefined
+        }
+      />
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -901,9 +898,9 @@ export default function BuybackIntake() {
             )}
 
             {/* Photos — six slots, min five */}
-            <div className="flex items-center gap-3 px-4 pb-3.5">
-              <div>
-                <Label>Photos for all units (min {MIN_PHOTOS_PER_LINE})</Label>
+            <div className="px-4 pb-3.5">
+              <Label>Photos for all units (min {MIN_PHOTOS_PER_LINE})</Label>
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="flex gap-1.5">
                   {Array.from({ length: 6 }, (_, i) => {
                     const photo = row.photos[i];
@@ -991,22 +988,20 @@ export default function BuybackIntake() {
                     );
                   })}
                 </div>
-              </div>
 
-              <div className="self-end pb-1">
                 <span
-                  className={`rounded-md px-2 py-1 text-[11px] font-bold ${
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
                     photoCount < MIN_PHOTOS_PER_LINE
                       ? "bg-amber-100 text-amber-700"
-                      : "bg-emerald-100 text-emerald-700"
+                      : "bg-green-100 text-green-700"
                   }`}
                 >
                   {photoCount}/6 photos
                 </span>
                 {photoCount < MIN_PHOTOS_PER_LINE && (
-                  <p className="mt-1 text-[11.5px] text-red-600">
+                  <span className="text-[11.5px] text-red-600">
                     ⚠ Minimum {MIN_PHOTOS_PER_LINE} required
-                  </p>
+                  </span>
                 )}
               </div>
             </div>
@@ -1219,7 +1214,7 @@ export default function BuybackIntake() {
 
       <button
         onClick={() => setRows((rs) => [...rs, newRow()])}
-        className="mb-6 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+        className="mb-6 rounded-lg border border-green-200 bg-white px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50"
       >
         + Add Battery
       </button>
@@ -1229,6 +1224,26 @@ export default function BuybackIntake() {
         <h3 className="text-sm font-bold text-slate-900">Pickup address</h3>
         <p className="mb-3 text-xs text-slate-500">How should we pick up this order?</p>
 
+        {/* Pickup mode — only "one address" is supported today; the per-batch /
+            per-row modes are shown but disabled ("coming soon") so the roadmap is
+            visible without pretending it works. Purely presentational: the intake
+            always sends one address per request (see selectAddress), so there is
+            no mode state to wire. */}
+        <div className="mb-4 flex flex-wrap gap-2">
+          <span className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white">
+            One address for whole order
+          </span>
+          {["Per batch", "Per battery row"].map((label) => (
+            <span
+              key={label}
+              title="Coming soon"
+              className="cursor-not-allowed rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-300"
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+
         {addresses.length > 0 && (
           <div className="mb-3 grid grid-cols-2 gap-3">
             {addresses.map((a) => (
@@ -1237,12 +1252,17 @@ export default function BuybackIntake() {
                 onClick={() => void selectAddress(a.id)}
                 className={`rounded-lg border p-3 text-left ${
                   addressId === a.id
-                    ? "border-emerald-500 bg-emerald-50"
+                    ? "border-green-600 bg-green-50"
                     : "border-slate-200 bg-white"
                 }`}
               >
-                <div className="text-sm font-semibold text-slate-900">{a.label}</div>
-                <div className="text-xs text-slate-500">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-900">{a.label}</div>
+                  {addressId === a.id && (
+                    <span className="text-sm font-bold text-green-600">✓</span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
                   {a.address_line1}
                   {a.city ? `, ${a.city}` : ""} {a.pincode ?? ""}
                 </div>
@@ -1327,17 +1347,20 @@ export default function BuybackIntake() {
       )}
 
       {/*
-        The totals bar.
+        The totals bar — a fixed footer, per the prototype (scrNewRequest:584).
 
-        `sticky`, not `fixed`. It was `fixed bottom-0 left-0 right-0`, which pins
-        it to the VIEWPORT — so it ran the full width of the screen, underneath
-        the sidebar, and the first characters of "Total units" were hidden behind
-        it. Sticky keeps it inside this page's own column, where it belongs, and
-        it needs no hard-coded sidebar width to stay out of the way (that number
-        would be wrong the moment the sidebar collapses on a narrow screen).
+        `fixed`, offset by the sidebar. It is pinned to the viewport bottom but
+        starts at `md:left-64` — the 256px CRM sidebar width, matching
+        LayoutWrapper's `md:ml-64` — so it spans exactly the content column and
+        never runs under the sidebar (the old `fixed left-0 right-0` did, which is
+        why "Total units" was once clipped). On phones the sidebar is an
+        off-canvas drawer, so `left-0` is correct there. The page reserves
+        `pb-32` up top so the last card is never hidden behind this bar, and the
+        inner row is capped at `max-w-5xl mx-auto` to line up with the page
+        column above.
       */}
-      <div className="sticky bottom-0 -mx-6 mt-6 border-t border-slate-200 bg-white/95 px-6 py-3.5 backdrop-blur shadow-[0_-4px_18px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white px-6 py-3.5 shadow-[0_-4px_18px_rgba(15,23,42,0.06)] md:left-64">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
           <div className="flex gap-8">
             <Stat label="Total units" value={String(totalUnits)} />
             <Stat label="Estimated value" value={inr(estimatedValue)} accent />
@@ -1353,7 +1376,7 @@ export default function BuybackIntake() {
             <button
               onClick={() => void submit()}
               disabled={submitting || !requestId}
-              className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             >
               {submitting ? "Submitting…" : "Submit request"}
             </button>
@@ -1439,7 +1462,7 @@ function ProofUpload({
 
   if (fileName) {
     return (
-      <div className="flex flex-1 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-1.5">
+      <div className="flex flex-1 items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-1.5">
         {/* A thumbnail, not a tick. An admin — and the dealer — needs to see WHICH
             document went where; "✓ uploaded" on five battery lines tells you
             nothing and is exactly how the wrong scan ends up on the wrong battery. */}
@@ -1447,10 +1470,10 @@ function ProofUpload({
           type="button"
           onClick={onView}
           title="View"
-          className="h-9 w-9 shrink-0 overflow-hidden rounded border border-emerald-300 bg-white"
+          className="h-9 w-9 shrink-0 overflow-hidden rounded border border-green-300 bg-white"
         >
           {isPdf || !previewUrl ? (
-            <span className="flex h-full w-full items-center justify-center text-[9px] font-bold text-emerald-700">
+            <span className="flex h-full w-full items-center justify-center text-[9px] font-bold text-green-700">
               PDF
             </span>
           ) : (
@@ -1464,7 +1487,7 @@ function ProofUpload({
         </button>
 
         <span
-          className="min-w-0 flex-1 truncate text-xs font-medium text-emerald-800"
+          className="min-w-0 flex-1 truncate text-xs font-medium text-green-800"
           title={fileName}
         >
           {fileName}
@@ -1473,7 +1496,7 @@ function ProofUpload({
         <button
           type="button"
           onClick={onClear}
-          className="shrink-0 pr-1 text-xs font-semibold text-emerald-700 hover:underline"
+          className="shrink-0 pr-1 text-xs font-semibold text-green-700 hover:underline"
         >
           Replace
         </button>
@@ -1519,7 +1542,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
       </div>
       <div
         className={`text-xl font-extrabold tabular-nums ${
-          accent ? "text-emerald-600" : "text-slate-900"
+          accent ? "text-green-600" : "text-slate-900"
         }`}
       >
         {value}
