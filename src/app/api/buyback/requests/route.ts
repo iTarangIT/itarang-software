@@ -95,6 +95,18 @@ export const GET = withErrorHandler(async () => {
         JOIN buyback_batches bb ON bb.id = bl.batch_id
         WHERE bb.request_id = ${buybackRequests.id}
       )`,
+      // The dealer's own asking value, derived from the LINES (never stored on
+      // the request — same invariant, same subquery shape as the admin queue's
+      // dealer_quote (src/app/api/admin/buyback/queue/route.ts). Cast to
+      // ::float8 rather than left as the bare numeric aggregate — postgres.js
+      // returns NUMERIC as a string, which would silently type as `number`
+      // here (sql<number> is a compile-time label only) but arrive as a string
+      // over the wire.
+      dealer_quote: sql<number>`(
+        SELECT coalesce(sum(bl.quantity * bl.expected_price_per_unit), 0)::float8 FROM buyback_lines bl
+        JOIN buyback_batches bb ON bb.id = bl.batch_id
+        WHERE bb.request_id = ${buybackRequests.id}
+      )`,
     })
     .from(buybackRequests)
     .innerJoin(buybackDeals, eq(buybackDeals.request_id, buybackRequests.id))

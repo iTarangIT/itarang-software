@@ -993,9 +993,21 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "buyback",
-          label: "My Buyback Requests",
+          label: "Buyback Dashboard",
           icon: Recycle,
           href: "/dealer-portal/buyback",
+          // Task 6: /dealer-portal/buyback now has children (requests, new,
+          // [id]) as well as siblings that share its prefix. Without `exact`,
+          // the default startsWith match (see isActive below) highlights this
+          // tile on every one of them too — most visibly alongside "My
+          // Requests" on /dealer-portal/buyback/requests.
+          exact: true,
+        },
+        {
+          id: "buyback-requests",
+          label: "My Requests",
+          icon: FileText,
+          href: "/dealer-portal/buyback/requests",
         },
         {
           id: "buyback-new",
@@ -1063,9 +1075,14 @@ function SidebarNav({
               {group.items.map((item: any) => {
                 // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
                 const itemPath = item.href.split("?")[0];
-                const isActive =
-                  pathname === itemPath ||
-                  (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
+                // `exact: true` opts an item out of the startsWith fallback —
+                // for an item whose href is a prefix of a sibling's (e.g.
+                // /dealer-portal/buyback vs. /dealer-portal/buyback/requests),
+                // startsWith would keep it highlighted on the child route too.
+                const isActive = item.exact
+                  ? pathname === itemPath
+                  : pathname === itemPath ||
+                    (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
                 return (
                   <Link
                     key={item.id}
