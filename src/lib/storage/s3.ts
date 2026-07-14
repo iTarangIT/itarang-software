@@ -132,6 +132,47 @@ export async function signObject(
   }
 }
 
+/**
+ * Presigned PUT — lets a browser upload straight to S3, without the bytes ever
+ * passing through the Next server.
+ *
+ * signObject() above only signs GETs; until this was added every upload in the
+ * repo POSTed the file through a route into putObject(). That is fine for one
+ * PDF, but the buyback intake (M02) uploads 5-6 photos per battery line, which
+ * would otherwise stream through the app server on every request.
+ *
+ * The caller decides the key. The browser must PUT with the SAME Content-Type
+ * it was signed for, or S3 rejects the signature.
+ */
+export async function signUpload(
+  logicalBucket: string,
+  key: string,
+  contentType: string,
+  expiresSec = 300,
+): Promise<string | null> {
+  try {
+    return await getSignedUrl(
+      client(),
+      new PutObjectCommand({
+        Bucket: physicalBucket(),
+        Key: s3Key(logicalBucket, key),
+        ContentType: contentType,
+      }),
+      { expiresIn: expiresSec },
+    );
+  } catch (error) {
+    // Returning null and staying silent made a signing failure indistinguishable
+    // from a missing bucket name — the caller could only say "check the S3
+    // configuration", which tells nobody anything. The reason lives here; log it.
+    console.error(
+      "[s3:signUpload] could not sign a PUT for",
+      `${logicalBucket}/${key}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
 /** Best-effort delete. */
 export async function removeObjects(logicalBucket: string, keys: string[]): Promise<void> {
   if (!keys.length) return;
