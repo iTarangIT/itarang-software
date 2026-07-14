@@ -270,7 +270,7 @@ export default function BuybackCatalogPage() {
           {trim(v.voltage)}V {trim(v.ah)}Ah
         </div>
         <div className="text-[11.5px] text-slate-400">
-          {v.chemistry ?? v.type.replace(/^[\d.]+V\s*\d+Ah\s*/, "").replace(/[()]/g, "") || "—"}
+          {(v.chemistry ?? v.type.replace(/^[\d.]+V\s*\d+Ah\s*/, "").replace(/[()]/g, "")) || "—"}
           {" · v"}
           {v.price_book_version}
         </div>
