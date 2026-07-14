@@ -218,21 +218,6 @@ export const POST = withErrorHandler(async (req: Request) => {
         )
         .limit(1)
     ).length > 0;
-  const invoiceValueAlreadyUsed =
-    refInvoiceValue != null &&
-    !Number.isNaN(refInvoiceValue) &&
-    (
-      await db
-        .select({ id: inventory.id })
-        .from(inventory)
-        .where(
-          and(
-            eq(inventory.inventory_amount, String(refInvoiceValue)),
-            eq(inventory.inventory_type, inventoryTypeForAsset),
-          ),
-        )
-        .limit(1)
-    ).length > 0;
 
   const errors: StructuredError[] = [];
   const seenSerials = new Set<string>();
@@ -302,15 +287,6 @@ export const POST = withErrorHandler(async (req: Request) => {
           field: "invoice_value",
           code: "INVOICE_VALUE_MISMATCH",
           message: `invoice_value must be identical on every row of one upload (expected ${refInvoiceValue}).`,
-        });
-        continue;
-      }
-      if (invoiceValueAlreadyUsed) {
-        errors.push({
-          row: rowNumber,
-          field: "invoice_value",
-          code: "DUPLICATE_INVOICE_VALUE",
-          message: `invoice_value '${refInvoiceValue}' was already used by a previous ${assetType} upload — use a new invoice value for this asset type.`,
         });
         continue;
       }

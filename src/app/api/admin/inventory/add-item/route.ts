@@ -163,9 +163,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     if (dupImei) return errorResponse(`IMEI ${imei} already exists`, 409);
   }
 
-  // Invoice — invoice_number and invoice_value must not already exist for this
-  // asset type (per-asset-type uniqueness; one supplier invoice can still span
-  // different asset types). Mirrors the bulk upload.
+  // Invoice — invoice_number must not already exist for this asset type
+  // (per-asset-type uniqueness; one supplier invoice can still span different
+  // asset types). invoice_value is NOT unique — two invoices can legitimately
+  // carry the same amount. Mirrors the bulk upload.
   const inventoryTypeForAsset =
     assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
   const invoiceNumber = String(row.invoice_number || "").trim();
@@ -185,27 +186,6 @@ export const POST = withErrorHandler(async (req: Request) => {
         `invoice_number '${invoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type.`,
         400,
       );
-    }
-  }
-  if (assetType !== "paraphernalia") {
-    const invoiceValue = Number(row.invoice_value);
-    if (!Number.isNaN(invoiceValue)) {
-      const [dupValue] = await db
-        .select({ id: inventory.id })
-        .from(inventory)
-        .where(
-          and(
-            eq(inventory.inventory_amount, String(invoiceValue)),
-            eq(inventory.inventory_type, inventoryTypeForAsset),
-          ),
-        )
-        .limit(1);
-      if (dupValue) {
-        return errorResponse(
-          `invoice_value '${invoiceValue}' was already used by a previous ${assetType} upload — use a new invoice value for this asset type.`,
-          400,
-        );
-      }
     }
   }
 

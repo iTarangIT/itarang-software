@@ -46,6 +46,28 @@ export function withErrorHandler(handler: Function) {
             }
 
             console.error('API Error:', error);
+
+            // Errors that carry their own HTTP status keep it (see
+            // src/lib/buyback/errors.ts — HttpError and its subclasses). Without
+            // this, a refused state transition or a role violation would surface
+            // as a 500 and be indistinguishable from a server bug. Nothing else
+            // in the repo sets `.status` on a thrown error, so this is inert for
+            // every existing caller.
+            if (typeof error?.status === 'number' && error.status >= 400 && error.status < 600) {
+                // `details` lets an error carry structure alongside its sentence —
+                // e.g. the buyback submit gate returns one issue per battery line
+                // so the intake page can highlight the offending rows rather than
+                // just printing a paragraph.
+                return NextResponse.json({
+                    success: false,
+                    error: {
+                        message: error.message || 'Request failed',
+                        ...(error.details ? { details: error.details } : {}),
+                    },
+                    timestamp: new Date().toISOString(),
+                }, { status: error.status });
+            }
+
             if (error instanceof ZodError) {
                 return NextResponse.json({
                     success: false,
