@@ -29,10 +29,13 @@ function sample(overrides: Partial<ChargingSample>): ChargingSample {
     };
 }
 
-// Cycle A yields a capacity; cycle B's SOC swing is below the gate, so its capacity
-// stays blank (its low coverage does not disqualify it — coverage is a confidence
-// signal, not a filter).
+// Cycle A is well-evidenced: a big swing, full coverage, plenty of samples — HIGH confidence.
+//
+// Cycle B carries a capacity too (nothing is withheld any more), but it rests on a 2% swing, so
+// the extrapolation amplifies its Ah error fiftyfold and it is graded LOW. The export must show
+// the number AND the grade — that pairing is the whole point.
 const CYCLE_A: ChargingCycleAggregate = {
+    cycle_no: 1,
     break_id: 3,
     start_time: new Date("2026-03-01T00:00:00Z"),
     end_time: new Date("2026-03-01T02:00:00Z"),
@@ -45,27 +48,41 @@ const CYCLE_A: ChargingCycleAggregate = {
     max_charging_current: 21.6,
     coverage_pct: 100,
     n_samples: 42,
+    n_current_samples: 42,
+    avg_sampling_interval_s: 175.6,
+    max_gap_s: 300,
     rated_capacity_ah: 105,
     estimated_capacity_ah: 105.7,
+    capacity_confidence: "high",
     capacity_plausible: true,
+    is_topup: false,
+    enough_samples: true,
 };
 
 const CYCLE_B: ChargingCycleAggregate = {
+    cycle_no: 2,
     break_id: 7,
     start_time: new Date("2026-03-05T10:00:00Z"),
     end_time: new Date("2026-03-05T11:00:00Z"),
     duration_s: 3600,
-    ah_charged: 49.1,
+    ah_charged: 2.1,
     start_soc: 41,
-    end_soc: 88,
-    soc_difference: 47,
+    end_soc: 43,
+    soc_difference: 2,
     avg_charging_current: 18.4,
     max_charging_current: 19.2,
     coverage_pct: 42,
     n_samples: 18,
+    n_current_samples: 18,
+    avg_sampling_interval_s: 211.8,
+    max_gap_s: 900,
     rated_capacity_ah: 105,
-    estimated_capacity_ah: null,
+    // 2.1 Ah over a 2% swing = 105 Ah. Arithmetically fine, epistemically worthless.
+    estimated_capacity_ah: 105,
+    capacity_confidence: "low",
     capacity_plausible: true,
+    is_topup: true,
+    enough_samples: true,
 };
 
 const SAMPLES: ChargingSample[] = [
@@ -165,22 +182,51 @@ describe("buildChargingAnalysisWorkbook", () => {
         expect(first.getCell(6).value).toBe(76); // difference = end - start
         expect(first.getCell(7).value).toBe("2h 00m");
         expect(first.getCell(8).value).toBe(20); // avg charging current
-        expect(first.getCell(9).value).toBe(21.6); // max charging current
-        expect(first.getCell(10).value).toBe(78.2); // total AH
-        expect(first.getCell(11).value).toBe(100); // coverage
-        expect(first.getCell(12).value).toBe(105.7); // estimated capacity
-        expect(first.getCell(13).value).toBe(105); // nameplate
+        expect(first.getCell(9).value).toBe(21.6); // peak charging current
+        expect(first.getCell(10).value).toBe(78.2); // total charged AH
+        expect(first.getCell(11).value).toBe(100); // data coverage
+        expect(first.getCell(12).value).toBe(42); // total CAN samples
+        expect(first.getCell(13).value).toBe(175.6); // avg sampling interval
+        expect(first.getCell(14).value).toBe(105.7); // estimated capacity
+        expect(first.getCell(15).value).toBe(105); // nameplate
+        expect(first.getCell(16).value).toBe("HIGH"); // confidence
     });
 
-    it("leaves capacity blank when the SOC swing is too small to extrapolate from", async () => {
+    it("carries every field the charging-cycle spec requires", async () => {
+        const { workbook } = await buildAndLoad();
+        const header = workbook.getWorksheet("Summary")!.getRow(6);
+        const headers = Array.from({ length: 16 }, (_, i) => String(header.getCell(i + 1).value));
+        for (const required of [
+            "Charging Cycle No.",
+            "Start Timestamp",
+            "End Timestamp",
+            "Charging Duration",
+            "Start SOC",
+            "End SOC",
+            "SOC Difference (%)",
+            "Total Charged AH",
+            "Estimated Battery Capacity (Ah)",
+            "Avg Charging Current (A)",
+            "Peak Charging Current (A)",
+            "Total CAN Samples",
+            "Avg Sampling Interval (s)",
+            "Data Coverage (%)",
+        ]) {
+            expect(headers).toContain(required);
+        }
+    });
+
+    it("**still writes a capacity for a small charge** — graded, never blank", async () => {
+        // This REVERSES the old behaviour. Cycle B gains only 2% SOC, so its capacity carries
+        // ×50 the error of its Ah total — but the answer to an untrustworthy number is a grade,
+        // not a blank cell. Withholding it told the reader nothing.
         const { workbook } = await buildAndLoad();
         const second = workbook.getWorksheet("Summary")!.getRow(8);
         expect(second.getCell(1).value).toBe("Cycle-02");
-        expect(second.getCell(10).value).toBe(49.1);
-        // Blank, not zero — we decline to estimate rather than guess.
-        expect(second.getCell(12).value ?? null).toBeNull();
-        // But its coverage is still reported: a confidence signal, not a filter.
-        expect(second.getCell(11).value).toBe(42);
+        expect(second.getCell(10).value).toBe(2.1); // total charged AH
+        expect(second.getCell(11).value).toBe(42); // coverage still reported
+        expect(second.getCell(14).value).toBe(105); // the estimate IS there
+        expect(second.getCell(16).value).toBe("LOW"); // ...and it is labelled
     });
 
     it("accumulates running AH down a cycle sheet, skipping the first interval", async () => {
@@ -199,31 +245,43 @@ describe("buildChargingAnalysisWorkbook", () => {
     it("takes cycle-sheet footer totals from the aggregate, not the running sum", async () => {
         const { workbook } = await buildAndLoad();
         const sheet = workbook.getWorksheet("Cycle-01")!;
-        // Rows 2-4 are samples, 5 is the spacer, so the footer starts at row 6.
+        // Rows 2-4 are samples, 5 is the spacer, so the footer starts at row 6 and now runs to
+        // row 16 — the spec added Total CAN Samples, Avg Sampling Interval and Capacity Confidence.
         const labels = new Map<string, ExcelJS.CellValue>();
-        for (let r = 6; r <= 13; r++) {
+        for (let r = 6; r <= 16; r++) {
             labels.set(String(sheet.getRow(r).getCell(1).value), sheet.getRow(r).getCell(2).value);
         }
         expect(labels.get("Total Charging Duration")).toBe("2h 00m");
         // 78.2 from SQL, deliberately NOT the 40 Ah the display rows sum to.
-        expect(labels.get("Total AH")).toBe(78.2);
+        expect(labels.get("Total Charged AH")).toBe(78.2);
         expect(labels.get("SOC Difference (%)")).toBe(76);
         expect(labels.get("Avg Charging Current (A)")).toBe(20);
-        expect(labels.get("Max Charging Current (A)")).toBe(21.6);
+        expect(labels.get("Peak Charging Current (A)")).toBe(21.6);
         expect(labels.get("Data Coverage (%)")).toBe(100);
-        expect(labels.get("Estimated Battery Capacity")).toBe(105.7);
-        expect(labels.get("Rated Capacity (A)")).toBe(105);
+        expect(labels.get("Estimated Battery Capacity (Ah)")).toBe(105.7);
+        expect(labels.get("Rated Capacity (Ah)")).toBe(105);
+        // The spec's two new per-cycle fields ride on the footer too.
+        expect(labels.get("Total CAN Samples")).toBe(42);
+        expect(labels.get("Avg Sampling Interval (s)")).toBe(175.6);
+        expect(String(labels.get("Capacity Confidence"))).toContain("HIGH");
     });
 
-    it("explains a blank capacity on the cycle sheet rather than showing zero", async () => {
+    it("states WHY a low-confidence capacity is low, on the cycle sheet itself", async () => {
+        // The number is there; what the reader needs beside it is the reason not to trust it —
+        // and specifically the amplification factor, because "2% swing" means nothing on its own
+        // while "any error is multiplied 50x" means everything.
         const { workbook } = await buildAndLoad();
         const sheet = workbook.getWorksheet("Cycle-02")!;
         const labels = new Map<string, ExcelJS.CellValue>();
-        for (let r = 5; r <= 12; r++) {
+        for (let r = 5; r <= 16; r++) {
             labels.set(String(sheet.getRow(r).getCell(1).value), sheet.getRow(r).getCell(2).value);
         }
-        expect(String(labels.get("Estimated Battery Capacity"))).toContain("N/A");
-        expect(String(labels.get("Estimated Battery Capacity"))).toContain("SOC swing");
+        expect(labels.get("Estimated Battery Capacity (Ah)")).toBe(105);
+        const grade = String(labels.get("Capacity Confidence"));
+        expect(grade).toContain("LOW");
+        expect(grade).toContain("50x");
+        expect(labels.get("Total CAN Samples")).toBe(18);
+        expect(labels.get("Avg Sampling Interval (s)")).toBe(211.8);
     });
 
     it("flags an estimate that contradicts the nameplate", async () => {
@@ -240,7 +298,7 @@ describe("buildChargingAnalysisWorkbook", () => {
         });
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-        const cell = workbook.getWorksheet("Summary")!.getRow(7).getCell(12);
+        const cell = workbook.getWorksheet("Summary")!.getRow(7).getCell(14);
         expect(cell.value).toBe(19.26);
         expect((cell.font as ExcelJS.Font).color?.argb).toBe("FFC00000");
     });
@@ -274,7 +332,8 @@ describe("buildChargingAnalysisWorkbook", () => {
         const { workbook } = await buildAndLoad();
         const summary = workbook.getWorksheet("Summary")!;
         expect(summary.getColumn(1).width).toBe(18);
-        expect(summary.getColumn(12).width).toBe(34);
+        // Column 14 is the capacity — the widest, because its header carries the unit.
+        expect(summary.getColumn(14).width).toBe(34);
 
         const master = workbook.getWorksheet("Master Raw Data")!;
         expect(master.getColumn(1).width).toBe(21);
