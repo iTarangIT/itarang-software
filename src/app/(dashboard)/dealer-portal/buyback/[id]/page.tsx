@@ -526,7 +526,7 @@ function DealerRequestDetail() {
               <button
                 disabled={busy}
                 onClick={() => void act(`/api/buyback/requests/${id}/resubmit`)}
-                className="mt-3 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                className="mt-3 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50"
               >
                 Resubmit
               </button>
@@ -627,7 +627,7 @@ function DealerRequestDetail() {
                           })),
                         })
                       }
-                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                      className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
                     >
                       Send counter
                     </button>
@@ -767,7 +767,7 @@ function FinalOfferPanel({
         <button
           disabled={busy}
           onClick={() => onRespond(offer.id, "ACCEPT")}
-          className="flex-1 rounded-lg bg-emerald-600 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="flex-1 rounded-lg bg-green-600 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
         >
           Accept (YES)
         </button>

@@ -164,7 +164,7 @@ export default function DealerInvoicePane({
           <button
             onClick={submit}
             disabled={busy || !number.trim()}
-            className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
           >
             {busy ? "Raising…" : "Raise invoice"}
           </button>

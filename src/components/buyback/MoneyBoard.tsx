@@ -228,7 +228,7 @@ export default function MoneyBoard({
               onClick={() =>
                 post(`/api/admin/buyback/requests/${requestId}/invoice`, { action: "approve" })
               }
-              className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+              className="flex-1 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             >
               Approve &amp; invoice the vendor
             </button>

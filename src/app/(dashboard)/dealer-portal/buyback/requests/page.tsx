@@ -60,7 +60,7 @@ export default function DealerMyRequestsPage() {
           right={
             <Link
               href="/dealer-portal/buyback/new"
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-emerald-700"
+              className="rounded-lg bg-green-600 px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-green-700"
             >
               + New Buyback Request
             </Link>

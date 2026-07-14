@@ -25,7 +25,13 @@ import { db } from "@/lib/db";
 import { invoiceLines, invoices } from "@/lib/db/schema";
 import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
-import { dealMoney, dealerPayout, invoicesForDeal, settlementsForDeal } from "@/lib/buyback/money";
+import {
+  dealMoney,
+  dealerPayout,
+  invoicesForDeal,
+  settlementsForDeal,
+  toLockedLines,
+} from "@/lib/buyback/money";
 import { dealHeader } from "@/lib/buyback/queries";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";
 
@@ -60,15 +66,16 @@ export const GET = withErrorHandler(
       status: header.status,
       can_raise: header.status === "PICKED_UP",
 
-      // What to bill: per SKU, at the price they accepted.
-      lines: money.map((m) => ({
-        line_id: m.line_id,
-        label: m.label,
-        quantity: m.quantity,
-        price_per_unit: m.dealer_price,
-        line_total: m.quantity * m.dealer_price,
-        // NOTE: no vendor_price, no margin_value. Not filtered out — never
-        // selected. (See serialize.ts for why that distinction matters.)
+      // What to bill: per SKU, at the price they accepted. Mapped from
+      // toLockedLines() — the dealer-safe projection (line_id/label/quantity/
+      // dealer price ONLY) — so the raw money rows' vendor and margin fields
+      // never enter this mapping's scope. Wire shape unchanged.
+      lines: toLockedLines(money).map((l) => ({
+        line_id: l.line_id,
+        label: l.label,
+        quantity: l.quantity,
+        price_per_unit: Number(l.dealer_price),
+        line_total: l.quantity * Number(l.dealer_price),
       })),
       invoice_total: dealerPayout(money),
 

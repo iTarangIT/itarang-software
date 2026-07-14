@@ -160,6 +160,7 @@ function AdminBuybackDetail() {
 
   const [d, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
@@ -185,11 +186,34 @@ function AdminBuybackDetail() {
     let cancelled = false;
 
     (async () => {
-      const res = await fetch(`/api/admin/buyback/requests/${id}`);
-      const json = await res.json();
-      if (cancelled) return;
-      setDetail(json?.data ?? null);
-      setLoading(false);
+      try {
+        const res = await fetch(`/api/admin/buyback/requests/${id}`);
+        if (cancelled) return;
+
+        if (res.status === 404) {
+          // Keep existing behavior: no data → the "Request not found." fallback.
+          setDetail(null);
+          return;
+        }
+
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+
+        if (!res.ok || !json?.success) {
+          // Non-404 failure — show the API's reason rather than "Request not found."
+          setLoadError(json?.error?.message ?? "Could not load this request.");
+          return;
+        }
+
+        setDetail(json?.data ?? null);
+      } catch (e) {
+        // Network failure — without this, we'd hang on "Loading…" forever.
+        if (!cancelled) {
+          setLoadError(e instanceof Error ? e.message : "Could not load this request.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
 
     return () => {
@@ -232,6 +256,23 @@ function AdminBuybackDetail() {
   };
 
   if (loading) return <div className="p-10 text-slate-400">Loading…</div>;
+
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 pb-24 pt-6">
+        <button
+          onClick={() => router.push("/admin/buyback")}
+          className="mb-4 text-[12.5px] text-slate-500 hover:underline"
+        >
+          ← Review Queue
+        </button>
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </div>
+      </div>
+    );
+  }
+
   if (!d) return <div className="p-10 text-slate-400">Request not found.</div>;
 
   const actionOf = (a: string) => d.review_actions.find((r) => r.action === a);
