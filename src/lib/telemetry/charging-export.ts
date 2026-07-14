@@ -28,6 +28,7 @@ import {
     CAPACITY_SOC_THRESHOLD,
     COVERAGE_TRUST_GAP_S,
     MIN_COVERAGE_PCT,
+    MIN_CYCLE_SAMPLES,
     ahIncrement,
 } from "./charging-math";
 import type { ChargingCycleAggregate, ChargingSample } from "./queries";
@@ -213,7 +214,7 @@ function writeSummarySheet(
 
     // Before any row is committed, or the widths never reach the file: WorksheetWriter
     // emits <cols> when it writes the first row.
-    setWidths(sheet, [18, 21, 21, 11, 10, 15, 17, 13, 13, 11, 13, 34, 13]);
+    setWidths(sheet, [18, 21, 21, 11, 10, 15, 17, 13, 13, 11, 13, 14, 19, 34, 13, 12]);
 
     const title = sheet.getRow(1);
     title.values = ["Charging Cycle Summary"];
@@ -231,6 +232,7 @@ function writeSummarySheet(
         row.commit();
     }
 
+    // Every field the charging-cycle spec requires, in its order.
     writeHeaderRow(
         sheet,
         [
@@ -241,12 +243,15 @@ function writeSummarySheet(
             "End SOC",
             "SOC Difference (%)",
             "Charging Duration",
-            "Avg Current (A)",
-            "Max Current (A)",
-            "Total AH",
+            "Avg Charging Current (A)",
+            "Peak Charging Current (A)",
+            "Total Charged AH",
             "Data Coverage (%)",
-            "Estimated Battery Capacity (100%)",
-            "Rated (A)",
+            "Total CAN Samples",
+            "Avg Sampling Interval (s)",
+            "Estimated Battery Capacity (Ah)",
+            "Rated Capacity (Ah)",
+            "Confidence",
         ],
         HEADER_ROW,
     );
@@ -265,32 +270,40 @@ function writeSummarySheet(
             cycle.max_charging_current,
             cycle.ah_charged,
             cycle.coverage_pct,
-            // Blank, not zero: too small a swing or too little coverage means we
-            // decline to estimate rather than publish a number we don't believe.
+            cycle.n_samples,
+            cycle.avg_sampling_interval_s,
+            // Present on EVERY cycle now. What decides whether to believe it is the
+            // Confidence column beside it, not its absence.
             cycle.estimated_capacity_ah,
             cycle.rated_capacity_ah,
+            cycle.capacity_confidence.toUpperCase(),
         ];
+
+        // A LOW-confidence estimate is arithmetically valid and epistemically worthless. Grey it
+        // so a reader scanning the column cannot mistake it for a measurement.
+        if (cycle.capacity_confidence === "low") {
+            row.getCell(14).font = { color: { argb: "FF9CA3AF" }, italic: true };
+            row.getCell(16).font = { color: { argb: "FF9CA3AF" }, italic: true };
+        }
         // An estimate that contradicts the nameplate is a measurement fault. Make it
         // impossible to read past.
         if (cycle.estimated_capacity_ah != null && !cycle.capacity_plausible) {
-            row.getCell(12).font = { bold: true, color: { argb: "FFC00000" } };
+            row.getCell(14).font = { bold: true, color: { argb: "FFC00000" } };
         }
         row.commit();
     });
 
-    const coverageRule =
-        MIN_COVERAGE_PCT > 0
-            ? ` and Data Coverage is ≥ ${MIN_COVERAGE_PCT}%`
-            : "";
     const footnote = sheet.getRow(HEADER_ROW + cycles.length + 2);
     footnote.values = [
-        `Estimated capacity = Total AH ÷ (SOC Difference / 100). It is only calculated when the swing is ≥ ${CAPACITY_SOC_THRESHOLD}%` +
-            `${coverageRule}; otherwise the cell is left blank. The division amplifies any error in Total AH by 100/SOC Difference, ` +
-            "so below that threshold the result is noise rather than a measurement. " +
-            `Data Coverage is the share of the cycle's elapsed time spanned by intervals of ${COVERAGE_TRUST_GAP_S}s or less — ` +
-            "a low value means the AH total leans on interpolation across gaps between samples, so treat that cycle's estimate as indicative. " +
-            "Total AH is the trapezoidal integral of |current| over the cycle's real elapsed time. " +
-            "An estimate shown in red contradicts the battery's rated capacity and indicates a measurement fault, not a degraded pack.",
+        "Estimated capacity = Total Charged AH ÷ (SOC Difference / 100), and it is calculated for EVERY cycle whose SOC rose — " +
+            "no cycle is rejected for being small. What varies is how far the number can be trusted, and that is the Confidence column. " +
+            `HIGH means the SOC swing was ≥ ${CAPACITY_SOC_THRESHOLD}%, coverage ≥ ${MIN_COVERAGE_PCT}%, and there were ≥ ${MIN_CYCLE_SAMPLES} samples. ` +
+            "LOW (shown greyed) means the number is arithmetically valid but the evidence behind it is thin: the division amplifies any error " +
+            "in Total AH by 100 ÷ SOC Difference, so a 2% swing multiplies it fiftyfold. Do not read a degradation trend through LOW rows. " +
+            `Data Coverage is the share of the cycle's elapsed time spanned by intervals of ${COVERAGE_TRUST_GAP_S}s or less — a low value means ` +
+            "the AH total leans on interpolation across gaps between samples. Avg Sampling Interval is the cycle's duration divided by (samples − 1). " +
+            "Total Charged AH is the trapezoidal integral of |current| over the cycle's real elapsed time. " +
+            "An estimate shown in red contradicts the battery's rated capacity and indicates a measurement fault on that cycle, not a degraded pack.",
     ];
     footnote.font = { italic: true, size: 9 };
     footnote.commit();
@@ -344,17 +357,24 @@ function writeCycleSheet(
     rowNo += 1;
     for (const [label, value] of [
         ["Total Charging Duration", formatDuration(cycle.duration_s)],
-        ["Total AH", cycle.ah_charged],
+        ["Total Charged AH", cycle.ah_charged],
         ["SOC Difference (%)", cycle.soc_difference],
         ["Avg Charging Current (A)", cycle.avg_charging_current],
-        ["Max Charging Current (A)", cycle.max_charging_current],
+        ["Peak Charging Current (A)", cycle.max_charging_current],
+        ["Total CAN Samples", cycle.n_samples],
+        ["Avg Sampling Interval (s)", cycle.avg_sampling_interval_s],
         ["Data Coverage (%)", cycle.coverage_pct],
+        // Always a number now. Whether to believe it is the next row's job.
+        ["Estimated Battery Capacity (Ah)", cycle.estimated_capacity_ah],
         [
-            "Estimated Battery Capacity",
-            cycle.estimated_capacity_ah ??
-                `N/A (needs a SOC swing of at least ${CAPACITY_SOC_THRESHOLD}%)`,
+            "Capacity Confidence",
+            cycle.capacity_confidence === "high"
+                ? "HIGH — swing, coverage and sample count all support this number"
+                : cycle.capacity_confidence === "medium"
+                  ? "MEDIUM — usable, but not solid enough to read a trend through"
+                  : `LOW — arithmetically valid, but the evidence is thin. Capacity divides by the SOC swing (${cycle.soc_difference}%), so any error in Total Charged AH is multiplied by ${cycle.soc_difference ? Math.round(100 / cycle.soc_difference) : "—"}x. Do not trend through this.`,
         ],
-        ["Rated Capacity (A)", cycle.rated_capacity_ah],
+        ["Rated Capacity (Ah)", cycle.rated_capacity_ah],
     ] as Array<[string, string | number | null]>) {
         const row = sheet.getRow(rowNo++);
         row.values = [label, value];

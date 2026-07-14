@@ -14,6 +14,7 @@ import type { getIotSql } from "@/lib/db/iot";
 import {
     COVERAGE_TRUST_GAP_S,
     MAX_VALID_CURRENT_A,
+    MIN_CYCLE_DURATION_S,
     MIN_CYCLE_SAMPLES,
     MIN_CYCLE_SOC_GAIN,
     SESSION_GAP_MAX_S,
@@ -69,7 +70,7 @@ export function buildTimeWindow(iot: IotSql, opts: ChargingWindowOpts) {
             to: null as string | null,
         };
     }
-    const months = [1, 3, 6].includes(opts.months ?? 3) ? (opts.months ?? 3) : 3;
+    const months = [1, 3, 6, 12].includes(opts.months ?? 3) ? (opts.months ?? 3) : 3;
     return {
         timePredicate: iot`AND time > now() - (interval '1 month' * ${months})`,
         months: months as number | null,
@@ -123,7 +124,19 @@ export function buildTimeWindow(iot: IotSql, opts: ChargingWindowOpts) {
  *   payload->'battery_voltage'->>'value' pack voltage in V (export only)
  *   payload->'rated_capacity'->>'value'  nameplate Ah — the plausibility check
  */
-export function cycleCTEs(
+/**
+ * The shared prefix of every per-battery telemetry query: `raw` → `samples` → `stepped`.
+ *
+ * Opens the WITH chain and ends WITHOUT a trailing comma, so a caller appends
+ * `, next_cte AS (…)`. Charging (cycleCTEs) and discharging (dischargeCTEs) both build on
+ * this, which is the point: the dedupe, the `dsoc` / `dt_s` window and the trapezoid term
+ * are the same physics in both directions, and a second copy of them would be a second
+ * thing to keep correct.
+ *
+ * Everything downstream of `stepped` differs, because charge and discharge are not
+ * symmetric — see dischargeCTEs for the three asymmetries.
+ */
+export function sampleCTEs(
     iot: IotSql,
     vehicleno: string,
     timePredicate: SqlFragment,
@@ -172,7 +185,16 @@ export function cycleCTEs(
                           * (dt_s / 3600.0)
                      ELSE 0 END AS ah_term
             FROM samples
-        ),
+        )`;
+}
+
+export function cycleCTEs(
+    iot: IotSql,
+    vehicleno: string,
+    timePredicate: SqlFragment,
+) {
+    return iot`
+        ${sampleCTEs(iot, vehicleno, timePredicate)},
         flagged AS (
             SELECT *,
                 CASE WHEN dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= ${SESSION_GAP_MAX_S}
@@ -184,19 +206,40 @@ export function cycleCTEs(
                 SUM(CASE WHEN in_sess = 0 THEN 1 ELSE 0 END) OVER (ORDER BY time) AS break_id
             FROM flagged
         ),
+        anchored AS (
+            SELECT *,
+                min(time) FILTER (WHERE in_sess = 1 AND dsoc > 0)
+                    OVER (PARTITION BY break_id) AS first_rise,
+                max(time) FILTER (WHERE in_sess = 1 AND dsoc > 0)
+                    OVER (PARTITION BY break_id) AS last_rise
+            FROM grouped
+        ),
         bounded AS (
             SELECT *,
-                -- Charging begins at the first sample actually carrying current, and
-                -- ends at the last sample where SOC still rose. Ending on the last
-                -- *rising* sample rather than the last sample carrying current is
-                -- deliberate: it keeps the CV taper (where current falls to 0 as SOC
-                -- reaches 100) inside the cycle, while still excluding the long idle
-                -- stretch that follows at a flat 100%.
-                min(time) FILTER (WHERE in_sess = 1 AND pack_current > 0)
-                    OVER (PARTITION BY break_id) AS cyc_first,
-                max(time) FILTER (WHERE in_sess = 1 AND dsoc > 0)
-                    OVER (PARTITION BY break_id) AS cyc_last
-            FROM grouped
+                -- Charging begins at the last sample *before* SOC first ticked up, and
+                -- ends at the last sample where SOC still rose.
+                --
+                -- The start anchor used to be the first sample carrying current, which
+                -- truncated real charges. Pack current is an unsigned magnitude and it
+                -- is often absent or zero over the opening samples of a charge, so the
+                -- cycle began late and its start_soc was read part-way up the ramp: on
+                -- the reference battery, a 50% -> 100% charge was recorded as 59% ->
+                -- 100%, losing 9 points of the swing that the capacity extrapolation
+                -- divides by. Anchoring on the sample that *preceded* the first genuine
+                -- SOC tick keeps start_soc at the pre-charge SOC, and keeps the excluded
+                -- first interval the one that reaches back into idle.
+                --
+                -- Ending on the last *rising* sample rather than the last sample carrying
+                -- current is deliberate: it keeps the CV taper (where current falls to 0
+                -- as SOC reaches 100) inside the cycle, while still excluding the long
+                -- idle stretch that follows at a flat 100%.
+                COALESCE(
+                    max(time) FILTER (WHERE in_sess = 1 AND time < first_rise)
+                        OVER (PARTITION BY break_id),
+                    first_rise
+                ) AS cyc_first,
+                last_rise AS cyc_last
+            FROM anchored
         ),
         cycled AS (
             SELECT *,
@@ -228,6 +271,10 @@ export function cycleCTEs(
                 )                                                            AS covered_s,
                 count(*)::int                                                AS n_samples,
                 count(*) FILTER (WHERE pack_current > 0)::int                AS n_current_samples,
+                -- The widest silence inside the charge. Reported so a reader can see whether the
+                -- Ah integral leans on a long stretch of interpolated current. Bounded by
+                -- SESSION_GAP_MAX_S by construction — a wider gap would have ended the session.
+                max(dt_s) FILTER (WHERE time > cyc_first)                    AS max_gap_s,
                 max(rated_capacity_ah)                                       AS rated_capacity_ah
             FROM cycled
             WHERE in_cycle
@@ -238,17 +285,69 @@ export function cycleCTEs(
                 round(
                     (COALESCE(covered_s, 0) / NULLIF(duration_s, 0) * 100)::numeric, 1
                 )::float AS coverage_pct,
-                -- A cycle is real when: SOC actually rose by a meaningful amount, charge
-                -- actually flowed, and there are enough samples to integrate over. Two
-                -- samples describe one straight line through a whole charge — that is not
-                -- an integral, it is a guess with a slope.
+                -- DETECTION: did a charge physically happen?
+                --
+                -- Four questions, all of them about physics, none of them about how *big* the
+                -- charge was or how well we happened to sample it:
+                --
+                --   SOC rose                  something went in
+                --   Ah flowed                 the integral is positive
+                --   current was seen          the BMS actually reported a charge current
+                --   it lasted MIN_CYCLE_DURATION_S   a 1% tick over two minutes is a BMS
+                --                             re-estimate; twenty minutes carrying current is a
+                --                             driver topping up
+                --
+                -- **A small charge is still a charge.** The old rule rejected any cycle gaining
+                -- under 5% SOC, and a sample floor rejected any cycle the poller stored fewer
+                -- than 5 times — between them they deleted real charges from the count, from
+                -- Total Ah and from Avg Duration. Both are gone from this gate. What replaces
+                -- them is not a looser threshold but a *different question*: detection asks
+                -- whether it happened, and capacityConfidence() (charging-math.ts) grades how far
+                -- the resulting numbers can be trusted.
+                --
+                -- Rejecting a cycle and distrusting one are different facts. The reader is owed
+                -- the difference.
                 (
-                    (end_soc - start_soc) >= ${MIN_CYCLE_SOC_GAIN}
-                    AND end_soc > start_soc
+                    end_soc > start_soc
                     AND COALESCE(ah_charged, 0) > 0
-                    AND n_samples >= ${MIN_CYCLE_SAMPLES}
                     AND n_current_samples > 0
-                ) AS is_valid
+                    AND COALESCE(duration_s, 0) >= ${MIN_CYCLE_DURATION_S}
+                ) AS is_valid,
+                -- Reported, not enforced. Feeds the confidence grade; a cycle below it is still
+                -- counted, and still carries a capacity estimate — graded low.
+                --
+                -- Keep OUT of is_valid: fetchChargingCycleDetail's in_valid_cycle and the Excel
+                -- export's anti-drift guard both key off is_valid, and pointing either at this
+                -- would fire the guard and 500 every export.
+                (n_samples >= ${MIN_CYCLE_SAMPLES}) AS enough_samples,
+                -- A top-up rather than a full charge. Worth saying on the row; not worth
+                -- deleting the row over.
+                ((end_soc - start_soc) < ${MIN_CYCLE_SOC_GAIN}) AS is_topup
             FROM cycle_stats
         )`;
+}
+
+/**
+ * Pre-flight sample count for the export cap.
+ *
+ * Counts `raw` — the deduped, current-validated set the export's rows actually come
+ * from — rather than restating its filter. The previous hand-written count claimed in
+ * its own comment to "mirror the raw CTE exactly" and mirrored neither DISTINCT ON nor
+ * the current bound, so it counted duplicate timestamps: on the reference battery that
+ * is 7,109 rows against 2,331 real samples, a 3x overstatement, and the 100k export cap
+ * then rejected windows that would have exported fine.
+ *
+ * Postgres does not evaluate unreferenced CTEs, so selecting from `raw` alone costs the
+ * dedupe scan and nothing else. Building it from cycleCTEs rather than beside it is what
+ * makes the two structurally incapable of drifting apart again.
+ */
+export function countSamplesQuery(
+    iot: IotSql,
+    vehicleno: string,
+    timePredicate: SqlFragment,
+) {
+    return iot`
+        ${cycleCTEs(iot, vehicleno, timePredicate)}
+        SELECT count(*)::int AS n FROM raw
+    `;
 }
