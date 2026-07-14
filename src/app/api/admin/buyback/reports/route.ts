@@ -82,10 +82,18 @@ async function runReport(type: ReportType) {
           "Received from vendor",
           "Planned margin",
           "Realised margin",
+          // Ext-4: the buyback admin dashboard's "Margin by month" chart groups
+          // these rows by month — it needs a timestamp per row to group on.
+          // `raised_at` is the request's created_at, already computed (and
+          // already named raised_at) by the LOCKED CTE for its own ORDER BY;
+          // this just also selects it out. Additive — appended, not inserted,
+          // so any existing positional CSV consumer's first 9 columns are
+          // untouched.
+          "Raised at",
         ],
         rows: (await db.execute(sql`
           SELECT request_no, dealer, COALESCE(vendor, '—') AS vendor, status, units,
-                 dealer_total, vendor_total, planned_margin, realised_margin
+                 dealer_total, vendor_total, planned_margin, realised_margin, raised_at
           FROM (${LOCKED}) locked
           ORDER BY raised_at DESC
         `)) as unknown as Array<Record<string, unknown>>,
