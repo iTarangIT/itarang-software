@@ -1,7 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+
+/**
+ * A dropped RSC stream, not a render failure. When the server accepts the
+ * navigation, starts streaming, and then goes away mid-response (dev server
+ * recompiling, PM2 reload, laptop sleeping, VPN flap), the browser aborts the
+ * body stream and React surfaces it here.
+ *
+ * These are the *browser's* fetch messages, and Chrome distinguishes the two
+ * halves of the failure:
+ *   - "Failed to fetch"  → could not connect at all
+ *   - "network error"    → connected, then the body stream broke
+ * Firefox says "NetworkError when attempting to fetch resource."; Safari says
+ * "Load failed". None of them means the page code is wrong.
+ *
+ * Deliberately narrow. Node-side transport words ("fetch failed", "socket hang
+ * up", "Connection terminated") are NOT matched here: those reach us wrapped in
+ * a server-component error — usually Drizzle's "Failed query: …" — which the DB
+ * branch already handles and which we still want reported to the server logs.
+ */
+function isTransportError(err: Error): boolean {
+  const m = (err?.message ?? "").trim();
+  return (
+    /^network error\.?$/i.test(m) ||
+    /^Failed to fetch$/i.test(m) ||
+    /^NetworkError when attempting to fetch resource\.?$/i.test(m) ||
+    /^Load failed$/i.test(m) ||
+    /^net::ERR_[A-Z_]+$/.test(m)
+  );
+}
 
 export default function NbfcError({
   error,
@@ -13,7 +42,13 @@ export default function NbfcError({
   const pathname = usePathname();
   const [reported, setReported] = useState<"idle" | "sending" | "ok" | "fail">("idle");
 
+  const msg = error?.message ?? "";
+  const isNetworkError = isTransportError(error);
+
+  // Reporting a transport error over the same transport that just failed is
+  // pointless — it produces the "✗ failed" badge and tells us nothing. Skip it.
   useEffect(() => {
+    if (isNetworkError) return;
     void fetch("/api/internal/log-client-error", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -30,9 +65,40 @@ export default function NbfcError({
     })
       .then((r) => setReported(r.ok ? "ok" : "fail"))
       .catch(() => setReported("fail"));
-  }, [error, pathname]);
+  }, [error, pathname, isNetworkError]);
 
-  const msg = error?.message ?? "";
+  // One automatic retry for a dropped stream — by the time the boundary paints,
+  // the server is usually back (an on-demand dev compile has finished, or the
+  // process has restarted). Guarded by a ref so a genuinely dead server shows
+  // the card instead of spinning in a reset loop.
+  const retried = useRef(false);
+  const [retrying, setRetrying] = useState(false);
+  useEffect(() => {
+    if (!isNetworkError || retried.current) return;
+    retried.current = true;
+    setRetrying(true);
+    const t = setTimeout(() => {
+      setRetrying(false);
+      reset();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [isNetworkError, reset]);
+
+  if (retrying) {
+    return (
+      <div className="max-w-3xl mx-auto py-12 px-4">
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm px-6 py-8 flex items-center gap-3">
+          <svg className="animate-spin h-4 w-4 text-gray-500" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+            <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <p className="text-sm text-gray-600">
+            Lost connection to the server — reconnecting…
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // A transient DB connection blip (CONNECT_TIMEOUT / ECONNRESET to the RDS
   // host) manifests as a "Failed query: …" error even though the SQL is fine.
@@ -53,16 +119,20 @@ export default function NbfcError({
       <div className="bg-white border border-red-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="bg-red-50 border-b border-red-200 px-6 py-4">
           <h1 className="text-lg font-semibold text-red-900">
-            {isDbConnError
-              ? "Couldn’t reach the database"
-              : "This page failed to load"}
+            {isNetworkError
+              ? "Lost connection to the server"
+              : isDbConnError
+                ? "Couldn’t reach the database"
+                : "This page failed to load"}
           </h1>
           <p className="text-sm text-red-700 mt-1">
-            {isDbConnError
-              ? "The database connection timed out — usually a brief network blip, not a data problem. Retrying should load the page."
-              : isChunkError
-                ? "A required script bundle is missing — usually a stale tab from before a deploy. Reloading should fix it."
-                : "An unexpected error occurred while rendering this page."}
+            {isNetworkError
+              ? "The connection dropped while this page was loading, so it never rendered. The server was most likely restarting or recompiling. Retrying usually works."
+              : isDbConnError
+                ? "The database connection timed out — usually a brief network blip, not a data problem. Retrying should load the page."
+                : isChunkError
+                  ? "A required script bundle is missing — usually a stale tab from before a deploy. Reloading should fix it."
+                  : "An unexpected error occurred while rendering this page."}
           </p>
         </div>
 
@@ -99,14 +169,20 @@ export default function NbfcError({
           ) : null}
 
           <div className="text-xs text-gray-500">
-            Reported to server logs:{" "}
-            <span className="font-medium">
-              {reported === "ok"
-                ? "✓ logged"
-                : reported === "fail"
-                  ? "✗ failed"
-                  : "sending…"}
-            </span>
+            {isNetworkError ? (
+              <>Not reported — the server was unreachable, so there was nothing to report to.</>
+            ) : (
+              <>
+                Reported to server logs:{" "}
+                <span className="font-medium">
+                  {reported === "ok"
+                    ? "✓ logged"
+                    : reported === "fail"
+                      ? "✗ failed"
+                      : "sending…"}
+                </span>
+              </>
+            )}
           </div>
         </div>
 

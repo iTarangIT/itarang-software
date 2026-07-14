@@ -22,8 +22,12 @@ interface EmiRow {
   amount: number | null;
   status: string | null;
   days_late: number | null;
+  /** CDS terms */
   emi_weight: number | null;
   recency_multiplier: number | null;
+  /** PCI terms */
+  emi_score: number | null;
+  weight: number | null;
   contribution: number | null;
 }
 
@@ -42,6 +46,15 @@ interface CdsBreakdown {
   cds_score: number;
 }
 
+interface PciBreakdown {
+  emi_count: number;
+  weighted_sum: number;
+  total_weight: number;
+  raw_score: number;
+  pci_score: number;
+  band: "healthy" | "monitoring" | "high_concern";
+}
+
 interface CdsReference {
   formula: string;
   emi_weight_rules: { label: string; condition: string; weight: number }[];
@@ -50,19 +63,37 @@ interface CdsReference {
   telemetry_rule: string;
 }
 
-interface ExplainabilityResponse {
+interface PciReference {
+  formula: string;
+  emi_score_rules: { label: string; condition: string; score: number }[];
+  weight_rule: string;
+  band_rule: string;
+}
+
+interface ExplainabilityBase {
   ok: true;
-  score_type: "cds" | "pci";
   score_value: number;
   formula_text: string;
   inputs: { last_6_emis: EmiRow[] };
-  breakdown: CdsBreakdown | null;
-  reference: CdsReference | null;
   confidence: { level: "HIGH" | "MEDIUM" | "LOW"; reasons: string[] };
   when_not_to_trust: string[];
   override: { available: boolean; required_role: string };
   computed_at: string;
+  /** The nightly snapshot in borrower_risk_scores, for drift detection. */
+  stored: { score_value: number | null; computed_at: string };
 }
+
+type ExplainabilityResponse =
+  | (ExplainabilityBase & {
+      score_type: "cds";
+      breakdown: CdsBreakdown | null;
+      reference: CdsReference | null;
+    })
+  | (ExplainabilityBase & {
+      score_type: "pci";
+      breakdown: PciBreakdown | null;
+      reference: PciReference | null;
+    });
 
 interface ErrorResponse {
   ok: false;
@@ -77,6 +108,12 @@ interface Props {
   /** Optional override CTA. Parent owns the actual override flow. */
   onOverrideClick?: () => void;
 }
+
+const BAND_LABEL: Record<PciBreakdown["band"], string> = {
+  healthy: "Healthy (> 0.75)",
+  monitoring: "Monitoring (0.40 – 0.75)",
+  high_concern: "High concern (< 0.40)",
+};
 
 const LEVEL_BADGE: Record<"HIGH" | "MEDIUM" | "LOW", string> = {
   HIGH: "bg-emerald-100 text-emerald-800 ring-emerald-300",
@@ -174,6 +211,14 @@ export function ScoreExplainabilityDrawer({
   if (!open) return null;
 
   const isCds = data?.score_type === "cds";
+  // CDS is a 0–100 integer-ish risk score; PCI is a 0.0–1.0 ratio persisted at
+  // numeric(4,3), so it needs the extra digit to be readable near the 0.40/0.75
+  // band boundaries.
+  const dp = isCds ? 2 : 3;
+  const drifted =
+    data != null &&
+    data.stored.score_value !== null &&
+    Math.abs(data.stored.score_value - data.score_value) > 0.005;
 
   return (
     <div
@@ -216,7 +261,7 @@ export function ScoreExplainabilityDrawer({
           <div className="space-y-5">
             <section className="flex items-baseline gap-3">
               <div className="text-3xl font-bold text-gray-900">
-                {data.score_value.toFixed(2)}
+                {data.score_value.toFixed(dp)}
               </div>
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${LEVEL_BADGE[data.confidence.level]}`}
@@ -224,9 +269,21 @@ export function ScoreExplainabilityDrawer({
                 {data.confidence.level} confidence
               </span>
               <span className="ml-auto text-xs text-gray-500">
-                computed {formatDate(data.computed_at)}
+                live · from the EMI window below
               </span>
             </section>
+
+            {drifted && (
+              <p className="rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
+                The last nightly run stored{" "}
+                <strong className="tabular-nums">
+                  {data.stored.score_value!.toFixed(dp)}
+                </strong>{" "}
+                on {formatDate(data.stored.computed_at)}. The score shown above
+                is recomputed from the current EMI window — re-run nightly
+                scoring to refresh the stored snapshot.
+              </p>
+            )}
 
             <section>
               <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -252,10 +309,15 @@ export function ScoreExplainabilityDrawer({
                         <th className="py-1">Amount</th>
                         <th className="py-1">Status</th>
                         <th className="py-1 text-right">Days late</th>
-                        {isCds && (
+                        {isCds ? (
                           <>
                             <th className="py-1 text-right">EMI weight</th>
                             <th className="py-1 text-right">Recency ×</th>
+                          </>
+                        ) : (
+                          <>
+                            <th className="py-1 text-right">EMI score</th>
+                            <th className="py-1 text-right">Weight</th>
                           </>
                         )}
                         <th className="py-1 text-right">Contribution</th>
@@ -270,7 +332,7 @@ export function ScoreExplainabilityDrawer({
                           <td className="py-1.5 text-right">
                             {row.days_late ?? "—"}
                           </td>
-                          {isCds && (
+                          {isCds ? (
                             <>
                               <td className="py-1.5 text-right tabular-nums">
                                 {row.emi_weight === null
@@ -283,26 +345,37 @@ export function ScoreExplainabilityDrawer({
                                   : `× ${row.recency_multiplier.toFixed(2)}`}
                               </td>
                             </>
+                          ) : (
+                            <>
+                              <td className="py-1.5 text-right tabular-nums">
+                                {row.emi_score === null
+                                  ? "—"
+                                  : row.emi_score.toFixed(2)}
+                              </td>
+                              <td className="py-1.5 text-right tabular-nums text-gray-500">
+                                {row.weight === null ? "—" : `× ${row.weight}`}
+                              </td>
+                            </>
                           )}
                           <td className="py-1.5 text-right font-medium tabular-nums">
                             {row.contribution === null
                               ? "—"
-                              : row.contribution.toFixed(2)}
+                              : row.contribution.toFixed(dp)}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  {isCds && (
-                    <p className="mt-1 text-[11px] text-gray-400">
-                      Contribution = EMI weight × recency multiplier.
-                    </p>
-                  )}
+                  <p className="mt-1 text-[11px] text-gray-400">
+                    {isCds
+                      ? "Contribution = EMI weight × recency multiplier."
+                      : "Contribution = (EMI score × weight) ÷ sum of weights. The contributions add up to the PCI above."}
+                  </p>
                 </>
               )}
             </section>
 
-            {isCds && data.breakdown && (
+            {data.score_type === "cds" && data.breakdown && (
               <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
                   How this score is calculated
@@ -344,18 +417,102 @@ export function ScoreExplainabilityDrawer({
                     strong
                   />
                 </dl>
-                {Math.abs(data.breakdown.cds_score - data.score_value) > 0.01 && (
-                  <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
-                    Stored score is {data.score_value.toFixed(2)} (computed{" "}
-                    {formatDate(data.computed_at)}). Recomputed from the EMI
-                    window above it is {data.breakdown.cds_score.toFixed(2)} —
-                    re-run nightly scoring to refresh the stored value.
-                  </p>
-                )}
               </section>
             )}
 
-            {isCds && data.reference && (
+            {data.score_type === "pci" && data.breakdown && (
+              <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  How this score is calculated
+                </h3>
+                <dl className="space-y-1 text-xs text-gray-700">
+                  <MathRow
+                    label="EMIs in the window"
+                    value={String(data.breakdown.emi_count)}
+                    hint="most recent elapsed installments"
+                  />
+                  <MathRow
+                    label="Sum of weighted EMI scores"
+                    value={data.breakdown.weighted_sum.toFixed(2)}
+                    hint="Σ (EMI score × weight)"
+                  />
+                  <MathRow
+                    label="Sum of weights"
+                    value={data.breakdown.total_weight.toFixed(2)}
+                    hint={`n(n+1) ÷ 2 for n = ${data.breakdown.emi_count}`}
+                  />
+                  <div className="my-1 border-t border-dashed border-gray-300" />
+                  <MathRow
+                    label="Payment Consistency Index"
+                    value={data.breakdown.pci_score.toFixed(3)}
+                    hint={`${data.breakdown.weighted_sum.toFixed(2)} ÷ ${data.breakdown.total_weight.toFixed(2)}`}
+                    strong
+                  />
+                </dl>
+                <p className="mt-2 text-[11px] text-gray-500">
+                  Band:{" "}
+                  <span className="font-medium text-gray-700">
+                    {BAND_LABEL[data.breakdown.band]}
+                  </span>
+                </p>
+              </section>
+            )}
+
+            {data.score_type === "pci" && data.reference && (
+              <section>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Field reference
+                </h3>
+                <div className="space-y-3 text-xs text-gray-700">
+                  <div>
+                    <p className="mb-1 font-medium text-gray-800">
+                      EMI score — how each installment is scored
+                    </p>
+                    <table className="w-full">
+                      <tbody className="divide-y divide-gray-100">
+                        {data.reference.emi_score_rules.map((r) => (
+                          <tr key={r.label}>
+                            <td className="py-1 pr-2">{r.label}</td>
+                            <td className="py-1 pr-2 text-gray-500">
+                              {r.condition}
+                            </td>
+                            <td className="py-1 text-right font-medium tabular-nums">
+                              {r.score.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div>
+                    <p className="mb-1 font-medium text-gray-800">
+                      Weight — newest EMIs count more
+                    </p>
+                    <p className="text-gray-600">{data.reference.weight_rule}</p>
+                    {data.breakdown && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {data.inputs.last_6_emis.map((r, i) => (
+                          <span
+                            key={i}
+                            className="rounded bg-gray-100 px-1.5 py-0.5 tabular-nums text-gray-600"
+                          >
+                            {i === 0 ? "newest" : `#${i + 1}`} × {r.weight ?? "—"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="mb-1 font-medium text-gray-800">
+                      Bands and alerting
+                    </p>
+                    <p className="text-gray-600">{data.reference.band_rule}</p>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {data.score_type === "cds" && data.reference && (
               <section>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Field reference

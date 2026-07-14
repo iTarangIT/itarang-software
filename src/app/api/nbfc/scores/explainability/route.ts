@@ -28,18 +28,22 @@ import {
   borrowerRiskScores,
   emiSchedules,
   nbfcLoanRestructures,
-  telemetryIngestionLog,
 } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { resolveLoanTelemetryAt } from "@/lib/nbfc/cds/liveScores";
 import {
   computeCdsBreakdown,
-  computeCdsForLoan,
   CDS_EMI_WEIGHT_RULES,
   CDS_RECENCY_SCHEDULE,
   CDS_STREAK_RULE,
   CDS_TELEMETRY_RULE,
 } from "@/lib/nbfc/cds/computeCds";
-import { emiScore, EMI_HISTORY_DEPTH } from "@/lib/nbfc/pci/computePci";
+import {
+  computePciBreakdown,
+  PCI_BAND_RULE,
+  PCI_EMI_SCORE_RULES,
+  PCI_WEIGHT_RULE,
+} from "@/lib/nbfc/pci/computePci";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -98,14 +102,13 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const rawValue = score_type === "cds" ? score.cds_score : score.pci_score;
-    if (rawValue === null || rawValue === undefined) {
-      return NextResponse.json(
-        { ok: false, error: "SCORE_NOT_COMPUTED" },
-        { status: 404 },
-      );
-    }
-    const score_value = Number(rawValue);
+    // The persisted nightly snapshot. It is NOT the displayed number — the
+    // headline below is recomputed live from the current EMI window so the
+    // drawer agrees with the battery/lead tables (both go through
+    // `computeLiveScores`). The snapshot is surfaced separately so a stale or
+    // drifted nightly run is visible rather than silently shown as the truth.
+    const rawStored = score_type === "cds" ? score.cds_score : score.pci_score;
+    const stored_score_value = rawStored == null ? null : Number(rawStored);
 
     // Last 6 ELAPSED EMIs (due on/before today), newest first — the borrower's
     // trailing repayment record, which is the window the score is computed
@@ -132,38 +135,31 @@ export async function GET(req: NextRequest) {
       .orderBy(desc(emiSchedules.due_date))
       .limit(6);
 
-    const n = Math.min(emis.length, EMI_HISTORY_DEPTH);
-    const pciTotalWeight = (n * (n + 1)) / 2;
+    const now = new Date();
 
-    // ---- CDS breakdown (single source of truth shared with the nightly job) --
-    // For CDS we reproduce the FULL derivation — per-EMI weight × recency,
-    // streak penalty, telemetry term and the 0..100 normalisation — using the
-    // freshest telemetry for the caller's tenant and the score's own
-    // computed_at as `now`, so the surfaced math reconstructs the same number
-    // the job stored (modulo telemetry that has changed since).
-    let breakdown: ReturnType<typeof computeCdsBreakdown> | null = null;
-    let reference: {
-      formula: string;
-      emi_weight_rules: typeof CDS_EMI_WEIGHT_RULES;
-      recency_schedule: typeof CDS_RECENCY_SCHEDULE;
-      streak_rule: string;
-      telemetry_rule: string;
-    } | null = null;
+    // ---- Breakdown (single source of truth shared with the read surfaces) ---
+    // We reproduce the FULL derivation from the live EMI window using the exact
+    // engine helpers `computeLiveScores` uses, so the surfaced math always
+    // reconstructs the headline number and can never drift from it.
+    //   CDS — per-EMI weight × recency, streak penalty, telemetry term, 0..100.
+    //   PCI — per-EMI score × recency weight ÷ Σ weights, 0.0..1.0.
+    let cdsBreakdown: ReturnType<typeof computeCdsBreakdown> | null = null;
+    let pciBreakdown: ReturnType<typeof computePciBreakdown> | null = null;
+    let reference: Record<string, unknown> | null = null;
 
     if (score_type === "cds") {
-      const [tel] = await db
-        .select({ ingested_at: telemetryIngestionLog.ingested_at })
-        .from(telemetryIngestionLog)
-        .where(eq(telemetryIngestionLog.tenant_id, actor.tenant_id))
-        .orderBy(desc(telemetryIngestionLog.ingested_at))
-        .limit(1);
-      breakdown = computeCdsBreakdown({
+      // Same per-loan live telemetry the battery/lead tables score against, so
+      // the drawer's arithmetic reconstructs the number they display.
+      const telemetryByLoan = await resolveLoanTelemetryAt(actor.tenant_id, [
+        loan_sanction_id,
+      ]);
+      cdsBreakdown = computeCdsBreakdown({
         emis: emis.map((e) => ({
           status: e.status,
           days_overdue: e.days_overdue ?? null,
         })),
-        telemetryIngestedAt: tel?.ingested_at ?? null,
-        now: score.computed_at,
+        telemetryIngestedAt: telemetryByLoan.get(loan_sanction_id) ?? null,
+        now,
       });
       reference = {
         formula: FORMULA_CDS,
@@ -172,42 +168,44 @@ export async function GET(req: NextRequest) {
         streak_rule: CDS_STREAK_RULE,
         telemetry_rule: CDS_TELEMETRY_RULE,
       };
+    } else {
+      pciBreakdown = computePciBreakdown(
+        emis.map((e) => ({
+          due_date: e.due_date,
+          paid_at: e.paid_at,
+          status: e.status,
+          days_overdue: e.days_overdue ?? null,
+        })),
+      );
+      reference = {
+        formula: FORMULA_PCI,
+        emi_score_rules: PCI_EMI_SCORE_RULES,
+        weight_rule: PCI_WEIGHT_RULE,
+        band_rule: PCI_BAND_RULE,
+      };
     }
 
-    // Per-row inputs. CDS rows carry the weight × recency terms straight from
-    // the breakdown (same index order); PCI keeps its recency-weighted score.
+    const score_value = cdsBreakdown
+      ? cdsBreakdown.cds_score
+      : pciBreakdown!.pci_score;
+
+    // Per-row inputs, taken straight from the breakdown (same index order) so
+    // the table columns are literally the terms that produced the headline.
     const last_6_emis = emis.map((e, idx) => {
-      const days = e.days_overdue ?? null;
-      let contribution: number;
-      let emi_weight: number | null = null;
-      let recency_multiplier: number | null = null;
-      if (score_type === "cds") {
-        const row = breakdown!.per_emi[idx];
-        emi_weight = row?.emi_weight ?? null;
-        recency_multiplier = row?.recency_multiplier ?? null;
-        contribution = row?.contribution ?? 0;
-      } else {
-        const weight = n - idx; // most-recent gets the highest weight
-        contribution =
-          pciTotalWeight > 0
-            ? (emiScore({
-                due_date: e.due_date,
-                paid_at: e.paid_at,
-                status: e.status,
-                days_overdue: days,
-              }) *
-                weight) /
-              pciTotalWeight
-            : 0;
-      }
+      const cdsRow = cdsBreakdown?.per_emi[idx];
+      const pciRow = pciBreakdown?.per_emi[idx];
       return {
         due_date: e.due_date ? new Date(e.due_date).toISOString() : null,
         amount: e.amount != null ? Number(e.amount) : null,
         status: e.status ?? null,
-        days_late: days,
-        emi_weight,
-        recency_multiplier,
-        contribution: Math.round(contribution * 100) / 100,
+        days_late: e.days_overdue ?? null,
+        // CDS terms
+        emi_weight: cdsRow?.emi_weight ?? null,
+        recency_multiplier: cdsRow?.recency_multiplier ?? null,
+        // PCI terms
+        emi_score: pciRow?.emi_score ?? null,
+        weight: pciRow?.weight ?? null,
+        contribution: cdsRow?.contribution ?? pciRow?.contribution ?? 0,
       };
     });
 
@@ -240,12 +238,16 @@ export async function GET(req: NextRequest) {
       score_value,
       formula_text: score_type === "cds" ? FORMULA_CDS : FORMULA_PCI,
       inputs: { last_6_emis },
-      breakdown,
+      breakdown: cdsBreakdown ?? pciBreakdown,
       reference,
       confidence: { level, reasons },
       when_not_to_trust: [...WHEN_NOT_TO_TRUST],
       override: { available: true, required_role: "nbfc_risk_manager" },
-      computed_at: score.computed_at.toISOString(),
+      computed_at: now.toISOString(),
+      stored: {
+        score_value: stored_score_value,
+        computed_at: score.computed_at.toISOString(),
+      },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

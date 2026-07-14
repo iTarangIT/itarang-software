@@ -982,3 +982,98 @@ export async function getOpenAlerts(vehiclenos: string[]): Promise<OpenAlert[]> 
   `;
   return rows.map((r) => ({ ...r, time: new Date(r.time) }));
 }
+
+// ─── Geo-shift ──────────────────────────────────────────────────────────────
+
+export interface GeoShiftRow {
+  vehicleno: string;
+  /** Modal GPS cluster over the window — where this vehicle habitually operates. */
+  home_lat: number;
+  home_lon: number;
+  /** GPS fixes inside the modal cell. Low values mean the home base is a guess. */
+  home_points: number;
+  current_lat: number;
+  current_lon: number;
+  distance_km: number;
+}
+
+/** Below this many fixes in the modal cell, we have not established a home base. */
+export const GEO_SHIFT_MIN_HOME_POINTS = 50;
+
+/**
+ * Per-vehicle distance from its own habitual operating area to where it is now.
+ *
+ * The risk card used to test something else entirely: whether the vehicle's
+ * current position fell outside a hard-coded bounding box of *India*. That
+ * flagged asset diversion only if the e-rickshaw left the country, while its
+ * stored hypothesis text told operators it was checking "more than 100 km from
+ * their onboarding region centroid".
+ *
+ * There are no onboarding centroids in this system, so we derive the home base
+ * the same way `deriveGeofenceEventsFromGps` does: bin GPS fixes into ~0.1°
+ * cells (~11 km), take the most-visited cell, and use the mean position of the
+ * fixes inside it. That is the depot/home the vehicle keeps returning to.
+ * Distance from it is a real geo-shift signal; distance from a national border
+ * is not.
+ */
+export async function getGeoShiftDistances(
+  vehiclenos: string[],
+  days: number,
+): Promise<GeoShiftRow[]> {
+  if (vehiclenos.length === 0) return [];
+  const iotSql = getIotSql();
+  const rows = await iotSql<
+    Array<{
+      vehicleno: string;
+      home_lat: number;
+      home_lon: number;
+      home_points: number;
+      current_lat: number;
+      current_lon: number;
+    }>
+  >`
+    WITH pts AS (
+      SELECT vehicleno, lat, lon
+      FROM telemetry_gps
+      WHERE vehicleno = ANY(${vehiclenos})
+        AND time > NOW() - (${days}::int || ' days')::interval
+        AND lat IS NOT NULL AND lon IS NOT NULL
+    ),
+    cells AS (
+      SELECT vehicleno,
+             ROUND(lat::numeric, 1) AS clat,
+             ROUND(lon::numeric, 1) AS clon,
+             COUNT(*)::int          AS n,
+             AVG(lat)::float        AS mlat,
+             AVG(lon)::float        AS mlon
+      FROM pts
+      GROUP BY vehicleno, clat, clon
+    ),
+    home AS (
+      SELECT DISTINCT ON (vehicleno)
+             vehicleno, mlat AS home_lat, mlon AS home_lon, n AS home_points
+      FROM cells
+      ORDER BY vehicleno, n DESC
+    )
+    SELECT h.vehicleno, h.home_lat, h.home_lon, h.home_points,
+           vs.lat AS current_lat, vs.lon AS current_lon
+    FROM home h
+    JOIN vehicle_state vs ON vs.vehicleno = h.vehicleno
+    WHERE vs.lat IS NOT NULL AND vs.lon IS NOT NULL
+  `;
+
+  return rows.map((r) => ({
+    vehicleno: r.vehicleno,
+    home_lat: Number(r.home_lat),
+    home_lon: Number(r.home_lon),
+    home_points: Number(r.home_points),
+    current_lat: Number(r.current_lat),
+    current_lon: Number(r.current_lon),
+    distance_km: haversineKm(
+      Number(r.home_lat),
+      Number(r.home_lon),
+      Number(r.current_lat),
+      Number(r.current_lon),
+    ),
+  }));
+}
