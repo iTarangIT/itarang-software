@@ -4222,6 +4222,12 @@ export const riskHypotheses = pgTable("risk_hypotheses", {
   source: varchar({ length: 16 }).default('human').notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   retired_at: timestamp("retired_at", { withTimezone: true }),
+  // E-188 — human-in-the-loop promotion. An llm-v1 hypothesis is capped at
+  // severity=warn until a human vets it; only then can it raise a High Alert.
+  // source='human' rows are promoted by definition (backfilled by the migration).
+  promoted_at: timestamp("promoted_at", { withTimezone: true }),
+  promoted_by: uuid("promoted_by"),
+  retire_reason: text("retire_reason"),
 });
 
 // One row per (tenant, hypothesis, run). Risk page reads the latest run per
@@ -4233,7 +4239,16 @@ export const riskCardRuns = pgTable(
     tenant_id: uuid("tenant_id").notNull(),
     hypothesis_id: uuid("hypothesis_id").notNull(),
     run_at: timestamp("run_at", { withTimezone: true }).defaultNow().notNull(),
+    // high | warn | ok | inconclusive | error (E-185). `ok` means "tested, found
+    // nothing"; a test we could not run is inconclusive/error, never ok.
     severity: varchar({ length: 16 }).notNull(),
+    // E-185 — who computed the numbers: hand_coded | sandbox | none | legacy_llm.
+    // Rows written before E-185 are backfilled to legacy_llm unless they came
+    // from a hand-coded evaluator; an LLM may have stated those counts itself.
+    verdict_source: varchar("verdict_source", { length: 16 }),
+    // E-187 — the risk_runs row that produced this card. Null for rows written
+    // before run tracking existed.
+    run_id: uuid("run_id"),
     finding_summary: text("finding_summary").notNull(),
     affected_count: integer("affected_count").default(0).notNull(),
     total_count: integer("total_count").default(0).notNull(),
@@ -4247,6 +4262,32 @@ export const riskCardRuns = pgTable(
     tenantRunIdx: index("risk_card_runs_tenant_run_idx").on(table.tenant_id, table.run_at),
     tenantHypIdx: index("risk_card_runs_tenant_hyp_idx").on(table.tenant_id, table.hypothesis_id),
     severityIdx: index("risk_card_runs_severity_idx").on(table.severity),
+  }),
+);
+
+// E-187 — One row per risk-engine invocation. Also the concurrency lock: the
+// partial unique index (tenant_id) WHERE status='running' means the DB, not a
+// check-then-insert, decides who gets to run. See src/lib/nbfc/risk-run.ts.
+export const riskRuns = pgTable(
+  "risk_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    triggered_by: varchar("triggered_by", { length: 16 }).notNull(), // manual | cron
+    actor_user_id: uuid("actor_user_id"),
+    status: varchar({ length: 16 }).default("running").notNull(), // running | completed | failed
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    cards_generated: integer("cards_generated").default(0).notNull(),
+    cards_computed: integer("cards_computed").default(0).notNull(),
+    cards_inconclusive: integer("cards_inconclusive").default(0).notNull(),
+    cards_errored: integer("cards_errored").default(0).notNull(),
+    prompt_tokens: integer("prompt_tokens").default(0).notNull(),
+    completion_tokens: integer("completion_tokens").default(0).notNull(),
+    error: text(),
+  },
+  (table) => ({
+    tenantStartedIdx: index("risk_runs_tenant_started_idx").on(table.tenant_id, table.started_at),
   }),
 );
 

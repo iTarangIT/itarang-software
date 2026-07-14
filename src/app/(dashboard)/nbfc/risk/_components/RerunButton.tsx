@@ -17,18 +17,33 @@ export default function RerunButton() {
       const data = (await r.json()) as {
         ok?: boolean;
         cards_generated?: number;
-        prompt_tokens?: number;
-        completion_tokens?: number;
+        cards_computed?: number;
+        cards_inconclusive?: number;
+        cards_errored?: number;
         error?: string;
       };
+      // 409 — a run is already in flight (someone else's click, or the nightly
+      // cron). Not an error to shout about; just tell the operator to wait.
+      if (r.status === 409) {
+        setResult("Analysis already running — wait for it to finish");
+        return;
+      }
       if (!r.ok || data.ok === false) {
         setResult(`Error: ${data.error ?? r.statusText}`);
-      } else {
-        const tok = (data.prompt_tokens ?? 0) + (data.completion_tokens ?? 0);
-        setResult(`${data.cards_generated ?? 0} cards in ${tok.toLocaleString()} tokens`);
-        // Re-fetch the server component so the new cards appear
-        startTransition(() => router.refresh());
+        return;
       }
+      // Report what was actually tested, not just how many rows we wrote. A run
+      // where the sandbox was down produces cards too — they're just empty.
+      const generated = data.cards_generated ?? 0;
+      const computed = data.cards_computed ?? 0;
+      const notComputed = generated - computed;
+      setResult(
+        notComputed > 0
+          ? `${computed} of ${generated} hypotheses tested · ${notComputed} inconclusive`
+          : `${generated} hypotheses tested`,
+      );
+      // Re-fetch the server component so the new cards appear
+      startTransition(() => router.refresh());
     } catch (e) {
       setResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -43,7 +58,11 @@ export default function RerunButton() {
       {result && (
         <span
           className={`text-xs ${
-            result.startsWith("Error") ? "text-red-600" : "text-emerald-600"
+            result.startsWith("Error")
+              ? "text-red-600"
+              : result.includes("inconclusive") || result.includes("already running")
+                ? "text-amber-600"
+                : "text-emerald-600"
           }`}
         >
           {result}

@@ -9,13 +9,16 @@
  * prove the data path end-to-end before letting the agent generate hypotheses.
  */
 import {
+  GEO_SHIFT_MIN_HOME_POINTS,
   getDailyKm,
+  getGeoShiftDistances,
   getSohDelta30d,
   getVehicleStates,
-  type VehicleStateRow,
 } from "@/lib/db/iot-queries";
+import type { Severity, VerdictSource } from "@/lib/risk/severity";
+import type { RiskThresholds } from "@/lib/nbfc/risk-thresholds";
 
-export type Severity = "high" | "warn" | "ok";
+export type { Severity, VerdictSource } from "@/lib/risk/severity";
 
 export interface TenantLoanSlice {
   loan_application_id: string;
@@ -28,6 +31,8 @@ export interface TenantLoanSlice {
 export interface CardEvaluation {
   slug: string;
   severity: Severity;
+  /** Who computed the numbers. Every evaluator in this file is `hand_coded`. */
+  verdict_source: VerdictSource;
   finding_summary: string;
   affected_count: number;
   total_count: number;
@@ -35,11 +40,22 @@ export interface CardEvaluation {
     sample_rows?: Array<Record<string, unknown>>;
     chart?: { kind: string; data: unknown };
     notes?: string[];
+    /**
+     * The governed thresholds this card was actually judged by, snapshotted at
+     * run time. Without this, a card read six months from now is silently
+     * reinterpreted against whatever the rules say then.
+     */
+    thresholds?: Record<string, number>;
   };
 }
 
+export type CardEvaluator = (
+  loans: TenantLoanSlice[],
+  thresholds: RiskThresholds,
+) => Promise<CardEvaluation>;
+
 // Map slug → evaluator. Add new hand-coded ones here.
-export const HAND_CODED_CARDS: Record<string, (loans: TenantLoanSlice[]) => Promise<CardEvaluation>> = {
+export const HAND_CODED_CARDS: Record<string, CardEvaluator> = {
   "usage-drop-7d": evalUsageDrop7d,
   "dpd-7-no-telemetry": evalDpd7NoTelemetry,
   "geo-shift": evalGeoShift,
@@ -61,9 +77,36 @@ function pickSeverity(affectedFraction: number, highCutoff = 0.05, warnCutoff = 
   return "ok";
 }
 
+/**
+ * The card for a test whose assessable population turned out to be empty.
+ *
+ * This is the difference between "we checked 5 vehicles and all 5 are fine" and
+ * "no vehicle had enough telemetry to check". Both used to come out of
+ * pickSeverity(0 / max(0,1)) as a green OK showing `0 / 0 affected`, so a total
+ * absence of data rendered identically to a clean bill of health. It is a
+ * coverage gap, not a finding, and it says so.
+ */
+function notAssessable(slug: string, why: string, notes: string[] = []): CardEvaluation {
+  return {
+    slug,
+    severity: "inconclusive",
+    verdict_source: "none",
+    finding_summary: why,
+    affected_count: 0,
+    total_count: 0,
+    evidence: { notes: [why, ...notes] },
+  };
+}
+
 // ─── 1. 7-day usage cliff ───────────────────────────────────────────────────
 
-async function evalUsageDrop7d(loans: TenantLoanSlice[]): Promise<CardEvaluation> {
+async function evalUsageDrop7d(
+  loans: TenantLoanSlice[],
+  thresholds: RiskThresholds,
+): Promise<CardEvaluation> {
+  // Governed: usage_drop_pct (BRD default 40%). Was hard-coded to 0.4 here,
+  // which meant the admin Risk Rule screen had no effect on this card.
+  const dropCutoff = thresholds.usage_drop_pct / 100;
   const vehiclenos = vnos(loans);
   const total = loans.length;
   const daily = await getDailyKm(vehiclenos, 14);
@@ -80,40 +123,68 @@ async function evalUsageDrop7d(loans: TenantLoanSlice[]): Promise<CardEvaluation
     buckets.set(r.vehicleno, slot);
   }
   const droppers: Array<{ vehicleno: string; prior: number; recent: number; drop_pct: number }> = [];
+  // Vehicles with a real prior-week baseline — the only ones a week-over-week
+  // drop can be measured on. Everything else is excluded from the denominator
+  // rather than counted as "no drop".
+  let withBaseline = 0;
   for (const [vno, b] of buckets) {
     if (b.prior < 50) continue; // ignore vehicles with negligible baseline
+    withBaseline += 1;
     const dropPct = (b.prior - b.recent) / b.prior;
-    if (dropPct >= 0.4) {
+    if (dropPct >= dropCutoff) {
       droppers.push({ vehicleno: vno, prior: b.prior, recent: b.recent, drop_pct: dropPct });
     }
   }
+
+  const pct = thresholds.usage_drop_pct;
+  if (withBaseline === 0) {
+    return notAssessable(
+      "usage-drop-7d",
+      `Not assessable — none of the ${total} loans have a vehicle with at least 50 km of prior-week mileage to compare against.`,
+      ["A week-over-week drop needs a baseline week; with no baseline there is nothing to drop from."],
+    );
+  }
+
   droppers.sort((a, b) => b.drop_pct - a.drop_pct);
   const affected = droppers.length;
-  const severity = pickSeverity(affected / Math.max(total, 1));
+  const severity = pickSeverity(affected / Math.max(withBaseline, 1));
   return {
     slug: "usage-drop-7d",
     severity,
+    verdict_source: "hand_coded",
     finding_summary:
       affected === 0
-        ? "No borrowers showed a ≥40% week-over-week km drop."
-        : `${affected} borrowers had ≥40% drop in 7-day km vs prior 7 days.`,
+        ? `No borrowers showed a ≥${pct}% week-over-week km drop (${withBaseline} assessed).`
+        : `${affected} of ${withBaseline} assessed borrowers had a ≥${pct}% drop in 7-day km vs the prior 7 days.`,
     affected_count: affected,
-    total_count: total,
+    // The assessed population, not the whole book — the share shown on the card
+    // is now the same share that picked its colour.
+    total_count: withBaseline,
     evidence: {
       sample_rows: droppers.slice(0, 10),
       chart: { kind: "bar", data: droppers.slice(0, 10).map((d) => ({ x: d.vehicleno, y: d.drop_pct })) },
       notes: [
-        "Excludes vehicles with <50 km in prior 7d (avoids noise on idle units).",
-        `Threshold: 40% drop (matches default usage-drop in risk-thresholds.ts).`,
+        `${withBaseline} of ${total} loans had a vehicle with a usable prior-week baseline (≥50 km); the rest are excluded as unmeasurable, not counted as healthy.`,
+        `Threshold: ${pct}% drop, from the governed usage_drop_pct rule.`,
       ],
+      thresholds: { usage_drop_pct: pct },
     },
   };
 }
 
 // ─── 2. Past-due + telemetry silent ─────────────────────────────────────────
 
-async function evalDpd7NoTelemetry(loans: TenantLoanSlice[]): Promise<CardEvaluation> {
-  const overdue = loans.filter((l) => l.current_dpd >= 7);
+async function evalDpd7NoTelemetry(
+  loans: TenantLoanSlice[],
+  thresholds: RiskThresholds,
+): Promise<CardEvaluation> {
+  // Governed: emi_overdue_days (default 30) and offline_alert_hours (default 24).
+  // Both were hard-coded — 7 days and 6 hours respectively — so this card tested
+  // something neither the BRD nor the admin screen had ever agreed to.
+  const dpdCutoff = thresholds.emi_overdue_days;
+  const silenceSeconds = thresholds.offline_alert_hours * 3600;
+
+  const overdue = loans.filter((l) => l.current_dpd >= dpdCutoff);
   const vehiclenos = vnos(overdue);
   const states = await getVehicleStates(vehiclenos);
   const stateByVno = new Map(states.map((s) => [s.vehicleno, s]));
@@ -121,91 +192,167 @@ async function evalDpd7NoTelemetry(loans: TenantLoanSlice[]): Promise<CardEvalua
   for (const loan of overdue) {
     if (!loan.vehicleno) continue;
     const s = stateByVno.get(loan.vehicleno);
-    const stale = !s || s.sec_since_gps == null || s.sec_since_gps > 6 * 3600;
+    const stale = !s || s.sec_since_gps == null || s.sec_since_gps > silenceSeconds;
     if (stale) {
       concerning.push({ ...loan, sec_since_gps: s?.sec_since_gps ?? null });
     }
   }
-  const severity = pickSeverity(concerning.length / Math.max(loans.length, 1), 0.03, 0.01);
+
+  // Denominator is the overdue pool — the population this hypothesis is about.
+  // It used to score `concerning / all loans` while *displaying* `/ overdue`, so
+  // the share the operator read off the card was not the share that picked the
+  // colour.
+  const severity = pickSeverity(concerning.length / Math.max(overdue.length, 1), 0.03, 0.01);
   return {
     slug: "dpd-7-no-telemetry",
     severity,
+    verdict_source: "hand_coded",
     finding_summary:
-      concerning.length === 0
-        ? "No 7+ DPD borrowers are currently telemetry-silent."
-        : `${concerning.length} borrowers are 7+ DPD and have not reported GPS for 6h+.`,
+      overdue.length === 0
+        ? `No borrowers are currently ${dpdCutoff}+ days past due.`
+        : concerning.length === 0
+          ? `No ${dpdCutoff}+ DPD borrowers are currently telemetry-silent.`
+          : `${concerning.length} of ${overdue.length} borrowers are ${dpdCutoff}+ DPD and have not reported GPS for ${thresholds.offline_alert_hours}h+.`,
     affected_count: concerning.length,
     total_count: overdue.length,
     evidence: {
       sample_rows: concerning.slice(0, 10),
       notes: [
-        `Pool: ${overdue.length} loans currently 7+ DPD.`,
-        "GPS-silence threshold: 6 hours (operator-tunable in audit page later).",
+        `Pool: ${overdue.length} of ${loans.length} loans are currently ${dpdCutoff}+ DPD (governed emi_overdue_days rule).`,
+        `GPS-silence threshold: ${thresholds.offline_alert_hours} hours (governed offline_alert_hours rule).`,
       ],
+      thresholds: {
+        emi_overdue_days: dpdCutoff,
+        offline_alert_hours: thresholds.offline_alert_hours,
+      },
     },
   };
 }
 
 // ─── 3. Vehicle outside operating radius (geo-shift) ────────────────────────
-// MVP: we don't yet have onboarding-region centroids. For now: vehicles whose
-// CURRENT lat/lon falls outside India's bounding box are flagged. Phase B will
-// replace this with a real per-borrower centroid stored at onboarding time.
+// Was: "is the vehicle's current position outside a bounding box of India?" —
+// which flagged asset diversion only if an e-rickshaw left the country, while
+// the card told operators it was checking distance from an onboarding centroid.
+// Now: distance from the vehicle's own 30-day home cluster, against the governed
+// geo_shift_km rule. See getGeoShiftDistances().
 
-async function evalGeoShift(loans: TenantLoanSlice[]): Promise<CardEvaluation> {
+const GEO_HOME_WINDOW_DAYS = 30;
+
+async function evalGeoShift(
+  loans: TenantLoanSlice[],
+  thresholds: RiskThresholds,
+): Promise<CardEvaluation> {
+  const limitKm = thresholds.geo_shift_km;
   const vehiclenos = vnos(loans);
-  const states = await getVehicleStates(vehiclenos);
-  // India bbox: lat 6-37, lon 68-97 (rough)
-  const outside: VehicleStateRow[] = states.filter(
-    (s) =>
-      s.lat != null &&
-      s.lon != null &&
-      (s.lat < 6 || s.lat > 37 || s.lon < 68 || s.lon > 97),
+  const rows = await getGeoShiftDistances(vehiclenos, GEO_HOME_WINDOW_DAYS);
+
+  // A vehicle with too few fixes in its modal cell has no established home base.
+  // Measuring "distance from home" for it would be measuring distance from noise,
+  // so it is excluded from the denominator rather than scored.
+  const assessable = rows.filter((r) => r.home_points >= GEO_SHIFT_MIN_HOME_POINTS);
+  const unassessable = loans.length - assessable.length;
+
+  if (assessable.length === 0) {
+    return notAssessable(
+      "geo-shift",
+      `Not assessable — none of the ${loans.length} vehicles have enough GPS history in the last ${GEO_HOME_WINDOW_DAYS} days to establish a home base.`,
+      [`A home base needs at least ${GEO_SHIFT_MIN_HOME_POINTS} GPS fixes in its most-visited area.`],
+    );
+  }
+
+  const outside = assessable
+    .filter((r) => r.distance_km > limitKm)
+    .sort((a, b) => b.distance_km - a.distance_km);
+
+  const severity = pickSeverity(
+    outside.length / Math.max(assessable.length, 1),
+    0.005,
+    0.001,
   );
-  const severity = pickSeverity(outside.length / Math.max(loans.length, 1), 0.005, 0.001);
+
   return {
     slug: "geo-shift",
     severity,
+    verdict_source: "hand_coded",
     finding_summary:
-      outside.length === 0
-        ? "All vehicles with GPS fix are within India bbox."
-        : `${outside.length} vehicles report a location outside expected operating geography.`,
+      assessable.length === 0
+        ? `Geo-shift not assessable — none of the ${loans.length} vehicles have enough GPS history in the last ${GEO_HOME_WINDOW_DAYS} days to establish a home base.`
+        : outside.length === 0
+          ? `No vehicles are more than ${limitKm} km from their usual operating area (${assessable.length} assessed).`
+          : `${outside.length} of ${assessable.length} vehicles are more than ${limitKm} km from their usual operating area.`,
     affected_count: outside.length,
-    total_count: loans.length,
+    total_count: assessable.length,
     evidence: {
-      sample_rows: outside.slice(0, 10).map((s) => ({
-        vehicleno: s.vehicleno,
-        lat: s.lat,
-        lon: s.lon,
+      sample_rows: outside.slice(0, 10).map((r) => ({
+        vehicleno: r.vehicleno,
+        distance_km: Math.round(r.distance_km),
+        current_lat: r.current_lat,
+        current_lon: r.current_lon,
+        home_lat: r.home_lat,
+        home_lon: r.home_lon,
       })),
       notes: [
-        "Phase A heuristic: India bounding box. Phase B: per-borrower onboarding centroid + 100km radius.",
+        `Threshold: more than ${limitKm} km from home (governed geo_shift_km rule).`,
+        `Home base = the most-visited ~11 km GPS cell over the last ${GEO_HOME_WINDOW_DAYS} days, needing at least ${GEO_SHIFT_MIN_HOME_POINTS} fixes to count.`,
+        ...(unassessable > 0
+          ? [
+              `${unassessable} of ${loans.length} vehicles had no establishable home base (too few GPS fixes) and were excluded — a coverage gap, not a clean result.`,
+            ]
+          : []),
       ],
+      thresholds: { geo_shift_km: limitKm },
     },
   };
 }
 
 // ─── 4. Accelerated battery degradation ─────────────────────────────────────
 
+/**
+ * Percentage points of SOH loss over 30 days that counts as accelerated decay.
+ * Deliberately NOT a governed rule: the eight `nbfc_risk_rules` keys have no
+ * battery-degradation entry, so there is nothing in the admin screen to read.
+ * Hard-coded and labelled as such, rather than silently pretending to be tunable.
+ */
+const SOH_DECAY_PP_30D = 5;
+
 async function evalBatterySohDecay(loans: TenantLoanSlice[]): Promise<CardEvaluation> {
   const vehiclenos = vnos(loans);
   const decay = await getSohDelta30d(vehiclenos);
-  const concerning = decay.filter((d) => d.delta <= -5); // 5pp drop or more (delta is signed)
+
+  if (decay.length === 0) {
+    return notAssessable(
+      "battery-soh-decay",
+      `Not assessable — none of the ${loans.length} loans have an SOH reading at both ends of the 30-day window.`,
+      ["Measuring decay needs a baseline and a current reading; with neither there is nothing to compare."],
+    );
+  }
+
+  const concerning = decay.filter((d) => d.delta <= -SOH_DECAY_PP_30D); // delta is signed
   concerning.sort((a, b) => a.delta - b.delta);
-  const severity = pickSeverity(concerning.length / Math.max(loans.length, 1), 0.02, 0.005);
+
+  // Denominator is the measured population — vehicles with an SOH reading at
+  // both ends of the window. Scoring against every loan (most of which have no
+  // reading) diluted the fraction and under-reported the severity, while the
+  // card displayed the measured count as its total.
+  const severity = pickSeverity(concerning.length / Math.max(decay.length, 1), 0.02, 0.005);
   return {
     slug: "battery-soh-decay",
     severity,
+    verdict_source: "hand_coded",
     finding_summary:
-      concerning.length === 0
-        ? "No vehicles show >5pp SOH drop in last 30 days."
-        : `${concerning.length} vehicles show >5pp SOH drop in the last 30 days.`,
+      decay.length === 0
+        ? `Battery decay not assessable — none of the ${loans.length} loans have SOH readings at both ends of the 30-day window.`
+        : concerning.length === 0
+          ? `No vehicles show >${SOH_DECAY_PP_30D}pp SOH drop in the last 30 days (${decay.length} assessed).`
+          : `${concerning.length} of ${decay.length} assessed vehicles show >${SOH_DECAY_PP_30D}pp SOH drop in the last 30 days.`,
     affected_count: concerning.length,
     total_count: decay.length,
     evidence: {
       sample_rows: concerning.slice(0, 10),
       notes: [
         `SOH baseline = oldest reading in last 30d. Current = newest reading.`,
-        `Sample size: only ${decay.length} of ${loans.length} loans had readings on both ends.`,
+        `Only ${decay.length} of ${loans.length} loans had readings on both ends; the rest are excluded as unmeasurable.`,
+        `Threshold: ${SOH_DECAY_PP_30D}pp — hard-coded, as there is no battery-degradation rule in the risk-rule catalogue.`,
       ],
     },
   };
@@ -213,70 +360,126 @@ async function evalBatterySohDecay(loans: TenantLoanSlice[]): Promise<CardEvalua
 
 // ─── 5. Active loan, low utilization ────────────────────────────────────────
 
+const UTILISATION_WINDOW_DAYS = 14;
+/**
+ * Km/day below which an active-EMI vehicle counts as under-utilised. Like the
+ * SOH threshold, this has no entry in the eight-rule catalogue, so it stays a
+ * documented constant rather than a fake-configurable one.
+ */
+const LOW_UTILISATION_KM_PER_DAY = 20;
+/**
+ * Reporting days a vehicle needs inside the window before its average is a
+ * measurement rather than a guess. Below this we exclude it instead of scoring
+ * it — an unmeasurable vehicle is a coverage problem, not a credit signal.
+ */
+const MIN_ASSESSABLE_DAYS = 7;
+
 async function evalLowUtilizationActiveLoan(loans: TenantLoanSlice[]): Promise<CardEvaluation> {
   const activeWithEmi = loans.filter((l) => l.emi_amount && Number(l.emi_amount) > 0);
   const vehiclenos = vnos(activeWithEmi);
-  const daily = await getDailyKm(vehiclenos, 14);
-  // A vehicle only enters totalsByVno if daily_distance_per_vehicle returned at
-  // least one row for it. Absence therefore means "no telemetry", which must be
-  // treated separately from a genuine 0 km/day — otherwise a missing tracker
-  // masquerades as an idle (risky) vehicle and inflates the alert.
-  const totalsByVno = new Map<string, number>();
-  for (const r of daily) totalsByVno.set(r.vehicleno, (totalsByVno.get(r.vehicleno) ?? 0) + r.km);
+  const daily = await getDailyKm(vehiclenos, UTILISATION_WINDOW_DAYS);
+
+  // Average over the days a vehicle ACTUALLY reported — never over a fixed 14.
+  // distance_rollup emits a row (often ~0.01 km) for a parked-but-powered
+  // vehicle, so a genuinely idle day still lands in the denominator and a truly
+  // idle vehicle still trips the threshold. A MISSING day means the pipeline had
+  // no contact at all; treating those as zero-km days is what let a 10-day
+  // ingestion outage deflate every vehicle's average by 3.5x and fire a false
+  // "2 of 5 under 20 km/day" High Alert while the fleet was doing 50-93 km/day.
+  const statsByVno = new Map<string, { km: number; days: number }>();
+  for (const r of daily) {
+    const s = statsByVno.get(r.vehicleno) ?? { km: 0, days: 0 };
+    s.km += r.km;
+    s.days += 1; // getDailyKm returns exactly one row per (vehicle, day) bucket
+    statsByVno.set(r.vehicleno, s);
+  }
 
   const concerning: Array<{
     vehicleno: string;
     avg_km_per_day: number;
+    days_reported: number;
     emi_amount: number | null;
   }> = [];
   const noTelemetry: string[] = [];
+  const thinCoverage: Array<{ vehicleno: string; days_reported: number }> = [];
+
   for (const loan of activeWithEmi) {
     if (!loan.vehicleno) continue;
-    // No row in the 14-day window → coverage gap, not a measurement. Skip it
-    // from the low-utilisation verdict and record it as an observability note.
-    if (!totalsByVno.has(loan.vehicleno)) {
+    const s = statsByVno.get(loan.vehicleno);
+    // No row at all in the window → no telemetry contact, not a measurement.
+    if (!s || s.days === 0) {
       noTelemetry.push(loan.vehicleno);
       continue;
     }
-    const avgPerDay = totalsByVno.get(loan.vehicleno)! / 14;
-    if (avgPerDay < 20) {
+    // Some rows, but too few days to average over honestly.
+    if (s.days < MIN_ASSESSABLE_DAYS) {
+      thinCoverage.push({ vehicleno: loan.vehicleno, days_reported: s.days });
+      continue;
+    }
+    const avgPerDay = s.km / s.days;
+    if (avgPerDay < LOW_UTILISATION_KM_PER_DAY) {
       concerning.push({
         vehicleno: loan.vehicleno,
         avg_km_per_day: avgPerDay,
+        days_reported: s.days,
         emi_amount: loan.emi_amount,
       });
     }
   }
   concerning.sort((a, b) => a.avg_km_per_day - b.avg_km_per_day);
 
-  // Denominator is the observable population — vehicles that actually reported
-  // telemetry — not every active-EMI loan. Judging coverage-gap vehicles as
-  // "low utilisation" is what produced the false 7/7 High Alert on seed data.
-  const observable = activeWithEmi.length - noTelemetry.length;
+  // Denominator is the ASSESSABLE population — vehicles with enough reporting
+  // days to have a real average. Vehicles with no telemetry, or too thin a
+  // window to judge, are excluded and surfaced as coverage notes rather than
+  // scored as idle.
+  const observable = activeWithEmi.length - noTelemetry.length - thinCoverage.length;
+
+  if (observable === 0) {
+    return notAssessable(
+      "low-utilization-active-loan",
+      `Not assessable — none of the ${activeWithEmi.length} active-EMI vehicles reported on at least ${MIN_ASSESSABLE_DAYS} of the last ${UTILISATION_WINDOW_DAYS} days.`,
+      [
+        `${noTelemetry.length} had no telemetry at all; ${thinCoverage.length} reported on too few days to average honestly.`,
+        "A fleet-wide shortfall here means the telemetry pipeline has a gap, not that borrowers stopped driving.",
+      ],
+    );
+  }
+
   const severity = pickSeverity(concerning.length / Math.max(observable, 1), 0.1, 0.04);
 
-  const gapNote =
+  const noTelemetryNote =
     noTelemetry.length > 0
-      ? `${noTelemetry.length} of ${activeWithEmi.length} active-EMI vehicles had NO telemetry in the last 14 days — excluded from this metric (see "Past-due + telemetry silent" for the coverage signal).`
+      ? `${noTelemetry.length} of ${activeWithEmi.length} active-EMI vehicles had NO telemetry in the last ${UTILISATION_WINDOW_DAYS} days — excluded (see "Past-due + telemetry silent" for the coverage signal).`
+      : null;
+  const thinCoverageNote =
+    thinCoverage.length > 0
+      ? `${thinCoverage.length} of ${activeWithEmi.length} active-EMI vehicles reported on fewer than ${MIN_ASSESSABLE_DAYS} of the last ${UTILISATION_WINDOW_DAYS} days (${thinCoverage
+          .slice(0, 10)
+          .map((t) => `${t.vehicleno}: ${t.days_reported}d`)
+          .join(
+            ", ",
+          )}) — excluded as unmeasurable. A fleet-wide shortfall here means the telemetry pipeline has a gap, not that borrowers stopped driving.`
       : null;
 
   return {
     slug: "low-utilization-active-loan",
     severity,
+    verdict_source: "hand_coded",
     finding_summary:
       observable === 0
-        ? `No telemetry for any of ${activeWithEmi.length} active-EMI vehicles — utilisation cannot be assessed.`
+        ? `Utilisation not assessable — none of the ${activeWithEmi.length} active-EMI vehicles reported on at least ${MIN_ASSESSABLE_DAYS} of the last ${UTILISATION_WINDOW_DAYS} days.`
         : concerning.length === 0
-          ? `No telemetry-reporting active-loan vehicles below 20 km/day (${observable} assessed).`
-          : `${concerning.length} of ${observable} telemetry-reporting vehicles averaged <20 km/day in the last 14 days.`,
+          ? `No assessable active-loan vehicles below ${LOW_UTILISATION_KM_PER_DAY} km/day (${observable} assessed).`
+          : `${concerning.length} of ${observable} assessable vehicles averaged <${LOW_UTILISATION_KM_PER_DAY} km/day across the days they reported.`,
     affected_count: concerning.length,
     total_count: observable,
     evidence: {
       sample_rows: concerning.slice(0, 10),
       notes: [
-        "Threshold: <20 km/day average over 14 days.",
-        "Only vehicles with ≥1 telemetry row in the window are assessed; missing telemetry is not counted as 0 km.",
-        ...(gapNote ? [gapNote] : []),
+        `Threshold: <${LOW_UTILISATION_KM_PER_DAY} km/day, averaged over the days each vehicle actually reported inside a ${UTILISATION_WINDOW_DAYS}-day window.`,
+        `Vehicles with fewer than ${MIN_ASSESSABLE_DAYS} reporting days are excluded — a missing day is a pipeline gap, not a zero-km day.`,
+        ...(noTelemetryNote ? [noTelemetryNote] : []),
+        ...(thinCoverageNote ? [thinCoverageNote] : []),
         "Phase B: tier this by region (rural vs urban have different utilisation norms).",
       ],
     },

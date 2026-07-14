@@ -168,6 +168,11 @@ least trustworthy column (drift began ~E-145).
 | E-182_emi_tracker_financier | nbfc_emi_tracker_overrides.financier — free-text financier label shown in a new Finance column on the EMI Tracker | ✅ | ☐ | ☐ | ☐ |
 | E-183_emi_tracker_standalone | nbfc_emi_tracker_overrides.is_standalone + loan_application_id made nullable + partial unique index on (tenant, lower(vehicleno)) WHERE is_standalone — force-import bulk-upload rows with no matching loan as display-only tracker entries | ✅ | ☐ | ☐ | ☐ |
 | E-184_device_battery_map_location | device_battery_map.state + city (Intellicar Fleet Overview State/City filters) | ✅ | ✅ | ✅ | ✅ |
+| E-185_risk_card_verdict_source | risk_card_runs.verdict_source (hand_coded/sandbox/none/legacy_llm) + backfill; severity vocabulary widened to include inconclusive/error so a failed test stops rendering as a green OK card | ✅ | ☐ | ☐ | ☐ |
+| E-186_risk_hypothesis_text_matches_code | Rewrites the 5 hand-coded risk_hypotheses descriptions so the text shown to operators matches the test that runs (geo-shift said "100 km from onboarding centroid" but checked an India bounding box) and stops hard-coding threshold values now governed by nbfc_risk_rules | ✅ | ☐ | ☐ | ☐ |
+| E-187_risk_runs | risk_runs table (one row per risk-engine invocation) + risk_card_runs.run_id. Partial unique index (tenant_id) WHERE status='running' is the concurrency lock; the table is also the freshness source for the Risk page | ✅ | ☐ | ☐ | ☐ |
+| E-188_risk_hypothesis_promotion | risk_hypotheses.promoted_at/promoted_by/retire_reason. An unvetted llm-v1 hypothesis is capped at severity=warn and cannot raise a High Alert until a human promotes it; hand-coded rows backfilled as promoted. Enables catalogue reuse + retirement instead of unbounded growth | ☐ | ☐ | ☐ | ☐ |
+| E-189_inventory_transfers_canonical_ids | Rebuilds inventory_transfers on canonical id types (varchar(64) PK, varchar(255) dealer ids → accounts.id, uuid actor ids → users.id). This DB still had the pre-0038 integer-PK/integer-FK/rejected_* design, so every transfer read blew up with 22P02 "invalid input syntax for type integer: ACC-…". Supersedes 0038; guarded — drops only when the stale schema is present AND empty, else RAISEs | ☐ | ☐ | ☐ | ☐ |
 | E-185_buyback_core | peakAmp Battery Buyback Portal core schema (BRD §3) — buyback_deal_status enum (all 21 states) + catalog_variants, business_entity_roles, buyback_pickup_addresses, buyback_requests/batches/lines/units, buyback_photos, provenance_records, info_requests, buyback_deals, negotiation_rounds(+_lines), final_offers(+_lines), deal_line_locks, buyback_activity_log (INSERT-only trigger), buyback_notification_events | ☐ | ✅ | ✅ | ☐ |
 | E-186_buyback_vendor_leg | peakAmp vendor leg & fulfilment (M09–M11 + minimal M05) — scrap_vendors, vendor_threads (partial UNIQUE: one AGREED vendor per deal), vendor_thread_lines, purchase_orders(+_lines, tax cols modelled not ruled), pickups, buyback_po_no_seq; buyback_notification_events gains attempts/next_attempt_at/recipient_ref/attachment_s3_key for dispatch; deal_line_locks becomes FILL-ONCE via trigger (only vendor_price, only once). **Apply AFTER E-185.** | ☐ | ✅ | ✅ | ☐ |
 | E-187_buyback_money | peakAmp money leg (M12–M14) — invoices (partial UNIQUE: one LIVE invoice per deal+leg, RETURNED ones kept as evidence), invoice_lines (per-line `matched` verdict + tax cols), settlement_transactions (TXN-{n}-D OUT / -V IN; **CHECK constraint makes an unevidenced MANUAL payout impossible**; UNIQUE leg_sub_id so a dealer cannot be paid twice), buyback_invoice_no_seq. **Apply AFTER E-186.** | ☐ | ✅ | ✅ | ☐ |
@@ -192,8 +197,14 @@ least trustworthy column (drift began ~E-145).
      by reading the box env and querying through it. The "different RDS instance each"
      note above is stale for sandbox; it still holds for prod. -->
 
-
-
+<!-- NUMBER COLLISION: E-185..E-188 exist twice — the risk-engine family
+     (E-185_risk_card_verdict_source … E-188_risk_hypothesis_promotion, developed on
+     Rushikesh-claude) and the peakAmp buyback family (E-185_buyback_core …
+     E-188_buyback_compliance_trust, developed on main). Both were numbered from the
+     same free slot before the branches merged. They are independent — no shared
+     tables, no cross-family ordering — and each family is internally ordered, so both
+     were kept rather than renumbered (they are already applied under these names).
+     Next free number is E-190. Match on the FULL filename, not the number alone. -->
 
 > Add a new row whenever you create an `E-<n>_*.sql` file. When `DATABASE_URL`
 > points at a DB and you confirm a migration is present, tick that env's box.
