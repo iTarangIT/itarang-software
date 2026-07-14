@@ -55,7 +55,12 @@ export const GET = withErrorHandler(async () => {
 
       -- SLA aging: days sitting in the queue since submit.
       GREATEST(0, EXTRACT(DAY FROM (now() - coalesce(br.submitted_at, br.created_at))))::int
-        AS days_in_queue
+        AS days_in_queue,
+
+      -- Same aging, in hours — additive: days_in_queue floors sub-24h requests
+      -- to "0d in queue", which reads as broken for anything submitted today.
+      GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - coalesce(br.submitted_at, br.created_at))) / 3600))::int
+        AS hours_in_queue
 
     FROM buyback_requests br
     JOIN buyback_deals bd ON bd.request_id = br.id
@@ -81,6 +86,7 @@ export const GET = withErrorHandler(async () => {
       // 0 lines → 0%, not a divide-by-zero NaN.
       provenance_pct: lineCount === 0 ? 0 : Math.round((withProv / lineCount) * 100),
       days_in_queue: Number(r.days_in_queue),
+      hours_in_queue: Number(r.hours_in_queue),
       created_at: r.created_at,
       submitted_at: r.submitted_at,
     };
