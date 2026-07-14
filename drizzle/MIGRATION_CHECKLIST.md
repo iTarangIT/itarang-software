@@ -168,6 +168,25 @@ least trustworthy column (drift began ~E-145).
 | E-182_emi_tracker_financier | nbfc_emi_tracker_overrides.financier — free-text financier label shown in a new Finance column on the EMI Tracker | ✅ | ☐ | ☐ | ☐ |
 | E-183_emi_tracker_standalone | nbfc_emi_tracker_overrides.is_standalone + loan_application_id made nullable + partial unique index on (tenant, lower(vehicleno)) WHERE is_standalone — force-import bulk-upload rows with no matching loan as display-only tracker entries | ✅ | ☐ | ☐ | ☐ |
 | E-184_device_battery_map_location | device_battery_map.state + city (Intellicar Fleet Overview State/City filters) | ✅ | ✅ | ✅ | ✅ |
+| E-185_buyback_core | peakAmp Battery Buyback Portal core schema (BRD §3) — buyback_deal_status enum (all 21 states) + catalog_variants, business_entity_roles, buyback_pickup_addresses, buyback_requests/batches/lines/units, buyback_photos, provenance_records, info_requests, buyback_deals, negotiation_rounds(+_lines), final_offers(+_lines), deal_line_locks, buyback_activity_log (INSERT-only trigger), buyback_notification_events | ☐ | ✅ | ☐ | ☐ |
+| E-186_buyback_vendor_leg | peakAmp vendor leg & fulfilment (M09–M11 + minimal M05) — scrap_vendors, vendor_threads (partial UNIQUE: one AGREED vendor per deal), vendor_thread_lines, purchase_orders(+_lines, tax cols modelled not ruled), pickups, buyback_po_no_seq; buyback_notification_events gains attempts/next_attempt_at/recipient_ref/attachment_s3_key for dispatch; deal_line_locks becomes FILL-ONCE via trigger (only vendor_price, only once). **Apply AFTER E-185.** | ☐ | ✅ | ☐ | ☐ |
+| E-187_buyback_money | peakAmp money leg (M12–M14) — invoices (partial UNIQUE: one LIVE invoice per deal+leg, RETURNED ones kept as evidence), invoice_lines (per-line `matched` verdict + tax cols), settlement_transactions (TXN-{n}-D OUT / -V IN; **CHECK constraint makes an unevidenced MANUAL payout impossible**; UNIQUE leg_sub_id so a dealer cannot be paid twice), buyback_invoice_no_seq. **Apply AFTER E-186.** | ☐ | ✅ | ☐ | ☐ |
+| E-188_buyback_compliance_trust | peakAmp compliance & trust (Sprints 3–4) — agreements (Digio eSign, dealers AND vendors; one live per entity+role, declined ones kept); catalog_price_history + catalog_price_reviews (M16 versioned price books + weekly nudge); bank_statement_imports/_rows (M13 STATEMENT reconcile) + settlement_transactions.statement_row_id; buyback_photos dedup (phash index + dup_flag: **DUPLICATE_CROSS_DEALER is the fraud case**); pickups BWM gate (expected_counts, variance_ack_required — blocks payout until the dealer acknowledges a count variance). **Apply AFTER E-187.** | ☐ | ✅ | ☐ | ☐ |
+
+<!-- E-185/E-186 verified on db-1 (database-1.…ap-south-1) on 2026-07-13 by querying
+     pg_tables / pg_enum / pg_trigger / pg_indexes directly: all 24 tables, 21 enum
+     states, both immutability triggers and the one-AGREED-per-deal partial index are
+     present, and catalog_variants is seeded (14 variants). The `sandbox` and `prod`
+     columns are a DIFFERENT RDS instance each — still unapplied there.
+
+     E-187/E-188 re-run + verified on db-1 on 2026-07-14 (idempotent re-apply, every
+     statement skipped as existing): all 8 money/compliance tables, buyback_invoice_no_seq,
+     invoices_one_live_per_deal_leg + settlement_transactions_leg_sub_unique +
+     agreements_one_live_per_entity_role partial indexes, settlement_manual_needs_proof +
+     settlement_amount_positive CHECKs, pickups variance/e-way columns and buyback_photos
+     dedup columns all present. -->
+
+
 
 > Add a new row whenever you create an `E-<n>_*.sql` file. When `DATABASE_URL`
 > points at a DB and you confirm a migration is present, tick that env's box.
