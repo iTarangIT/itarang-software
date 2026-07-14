@@ -7354,3 +7354,1019 @@ export const leadRegistry = pgTable(
     phoneIdx: index("lead_registry_phone_idx").on(t.phone),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// PEAKAMP BATTERY BUYBACK PORTAL (E-185)
+//
+// Mirrors drizzle/E-185_buyback_core.sql — that file is the source of truth.
+// Spec: docs/peakAmp/DEVELOPMENT_BRD.md §3.
+//
+// Schema-level invariants (do not "fix" these by adding columns):
+//   · buybackRequests carries NO pricing. Prices live on lines/offers/locks.
+//   · negotiationRounds and finalOffers have NO amount column — every offer is
+//     itemized per SKU on their *_lines children. Lump sums are unrepresentable.
+//   · buybackActivityLog is INSERT-only (DB trigger blocks UPDATE/DELETE).
+//   · buybackNotificationEvents.idempotencyKey is UNIQUE — exactly one event
+//     per state change.
+//
+// Unrelated to nbfcBuybackRequests (E-118), which is NBFC recovery of financed
+// batteries — a different domain that happens to share the word "buyback".
+// ---------------------------------------------------------------------------
+
+// The deal state machine (BRD §2). ALL states are declared up front so no later
+// sprint needs an ALTER TYPE. Sprint 1 only transitions into the first eight.
+// DEALER_REOPENED is declared but intentionally unreachable — `reopen` returns
+// the deal to NEGOTIATING and bumps offerVersion, which carries that signal.
+export const buybackDealStatus = pgEnum("buyback_deal_status", [
+  "DRAFT",
+  "SUBMITTED",
+  "UNDER_REVIEW",
+  "INFO_REQUESTED",
+  "NEGOTIATING",
+  "FINAL_OFFER_SENT",
+  "DEALER_ACCEPTED",
+  "MARGIN_SET",
+  "VENDOR_ROUTED",
+  "VENDOR_NEGOTIATING",
+  "VENDOR_AGREED",
+  "DEALER_REOPENED",
+  "PO_EXCHANGED",
+  "PICKUP_SCHEDULED",
+  "PICKED_UP",
+  "INVOICE_RAISED",
+  "INVOICE_APPROVED",
+  "SETTLED",
+  "CLOSED",
+  "REJECTED",
+  "CANCELLED",
+]);
+
+export const buybackEntityRole = pgEnum("buyback_entity_role", [
+  "BATTERY_DEALER",
+  "SCRAP_SELLER",
+  "SCRAP_VENDOR",
+]);
+export const buybackSourceChannel = pgEnum("buyback_source_channel", ["WEB", "WHATSAPP", "CSV"]);
+export const buybackCondition = pgEnum("buyback_condition", ["WORKING", "DEAD"]);
+export const buybackProvScope = pgEnum("buyback_prov_scope", ["LINE", "UNIT"]);
+export const buybackProvSource = pgEnum("buyback_prov_source", ["PREV_OWNER_DOCS", "DEALER_STOCK"]);
+export const buybackLeg = pgEnum("buyback_leg", ["DEALER", "VENDOR"]);
+export const buybackFinalOfferStatus = pgEnum("buyback_final_offer_status", [
+  "SENT",
+  "ACCEPTED",
+  "DECLINED",
+]);
+export const buybackMarginMode = pgEnum("buyback_margin_mode", ["FLAT", "PCT"]);
+export const buybackNotifyParty = pgEnum("buyback_notify_party", ["DEALER", "ADMIN", "VENDOR"]);
+export const buybackNotifyChannel = pgEnum("buyback_notify_channel", [
+  "WHATSAPP",
+  "EMAIL",
+  "PORTAL",
+]);
+export const buybackNotifyStatus = pgEnum("buyback_notify_status", ["PENDING", "SENT", "FAILED"]);
+
+// M16 — every V+Ah combo is its own variant (BRD P1), with separate Working and
+// Dead buyback estimates.
+export const catalogVariants = pgTable(
+  "catalog_variants",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    type: text().notNull(), // display SKU name, e.g. '60V 120Ah Li-ion'
+    chemistry: text(),
+    voltage: numeric({ precision: 6, scale: 2 }).notNull(),
+    ah: numeric({ precision: 7, scale: 2 }).notNull(),
+    unit_price: numeric("unit_price", { precision: 12, scale: 2 }),
+    est_buyback_price_working: numeric("est_buyback_price_working", { precision: 12, scale: 2 }),
+    est_buyback_price_dead: numeric("est_buyback_price_dead", { precision: 12, scale: 2 }),
+    price_book_version: integer("price_book_version").default(1).notNull(),
+    active: boolean().default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    typeVAhUnique: uniqueIndex("catalog_variants_type_v_ah_unique").on(t.type, t.voltage, t.ah),
+  }),
+);
+
+// BRD §8 — the role layer on top of the existing `accounts` entity/KYC store.
+export const businessEntityRoles = pgTable(
+  "business_entity_roles",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id),
+    role: buybackEntityRole().notNull(),
+    status: text().default("PENDING").notNull(), // PENDING | ACTIVE | SUSPENDED
+    agreement_id: text("agreement_id"), // Digio doc id — Sprint 4 (M19)
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityRoleUnique: uniqueIndex("business_entity_roles_entity_role_unique").on(
+      t.entity_id,
+      t.role,
+    ),
+  }),
+);
+
+// `accounts` holds only one address, but the dealer picks a pickup location at
+// intake (M02). Sprint 1 is order-level; per-batch/per-line is Sprint 3 (M05).
+export const buybackPickupAddresses = pgTable(
+  "buyback_pickup_addresses",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id),
+    label: text().notNull(), // 'Shop — Nashik'
+    address_line1: text("address_line1").notNull(),
+    address_line2: text("address_line2"),
+    city: text(),
+    state: text(),
+    pincode: varchar({ length: 6 }),
+    contact_name: text("contact_name"),
+    contact_phone: varchar("contact_phone", { length: 20 }),
+    is_default: boolean("is_default").default(false).notNull(),
+    active: boolean().default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("buyback_pickup_addresses_entity_idx").on(t.entity_id),
+  }),
+);
+
+// INVARIANT 1: no pricing column here, ever. Totals are derived from lines/locks.
+// Also NO status column — BRD §2 ("persist status as one enum on the deal; never
+// scattered booleans"). buybackDeals.status is the single source of truth, and a
+// deal row is created alongside every request (at DRAFT).
+export const buybackRequests = pgTable(
+  "buyback_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // Human-readable reference shown in the UI and searchable in M23 ('BB-1024').
+    request_no: text("request_no").notNull(),
+    dealer_entity_id: varchar("dealer_entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id),
+    source_channel: buybackSourceChannel("source_channel").default("WEB").notNull(),
+    created_by: uuid("created_by"),
+    submitted_at: timestamp("submitted_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    requestNoUnique: uniqueIndex("buyback_requests_request_no_unique").on(t.request_no),
+    dealerCreatedIdx: index("buyback_requests_dealer_created_idx").on(
+      t.dealer_entity_id,
+      t.created_at,
+    ),
+  }),
+);
+
+export const buybackBatches = pgTable(
+  "buyback_batches",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    request_id: uuid("request_id")
+      .notNull()
+      .references(() => buybackRequests.id, { onDelete: "cascade" }),
+    pickup_address_id: uuid("pickup_address_id").references(() => buybackPickupAddresses.id),
+    status: text().default("OPEN").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    requestIdx: index("buyback_batches_request_idx").on(t.request_id),
+  }),
+);
+
+export const buybackLines = pgTable(
+  "buyback_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    batch_id: uuid("batch_id")
+      .notNull()
+      .references(() => buybackBatches.id, { onDelete: "cascade" }),
+    variant_id: uuid("variant_id")
+      .notNull()
+      .references(() => catalogVariants.id),
+    quantity: integer().notNull(),
+    condition: buybackCondition().notNull(),
+    measured_voltage: numeric("measured_voltage", { precision: 6, scale: 2 }),
+    expected_price_per_unit: numeric("expected_price_per_unit", { precision: 12, scale: 2 }),
+    // Snapshot of the price book, so a later catalog edit never moves an open
+    // request's reference price (M16 AC).
+    price_book_version_at_create: integer("price_book_version_at_create").default(1).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    batchIdx: index("buyback_lines_batch_idx").on(t.batch_id),
+  }),
+);
+
+// qty N → Unit 1..N, auto-generated at line create (BRD P3).
+export const buybackUnits = pgTable(
+  "buyback_units",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    unit_no: integer("unit_no").notNull(),
+    status: text().default("PENDING").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    lineUnitUnique: uniqueIndex("buyback_units_line_unit_unique").on(t.line_id, t.unit_no),
+  }),
+);
+
+// Declared here, not down with the other buyback enums, because buybackPhotos below
+// references it in a column initialiser. `const` is not hoisted: with the declaration
+// further down the file, importing this module threw "Cannot access 'buybackPhotoFlag'
+// before initialization" at load time and took every route that touches the schema with it.
+// TypeScript does not catch that — it is a runtime temporal-dead-zone error, so `tsc` stays
+// green while the app 500s. An enum must be declared above its first use.
+export const buybackPhotoFlag = pgEnum("buyback_photo_flag", [
+  "DUPLICATE_SAME_DEALER",
+  "DUPLICATE_CROSS_DEALER",
+]);
+
+// M03 — min 5 photos per line at submit. phash/dedup is Sprint 3 (NULL for now).
+export const buybackPhotos = pgTable(
+  "buyback_photos",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    unit_id: uuid("unit_id").references(() => buybackUnits.id, { onDelete: "cascade" }),
+    s3_key_original: text("s3_key_original").notNull(),
+    s3_key_display: text("s3_key_display"),
+    phash: text(),
+    exif: jsonb(),
+    taken_at: timestamp("taken_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+
+    // --- M03 dedup (E-188) ---
+    // DUPLICATE_CROSS_DEALER is the fraud case: the same battery photographed
+    // once and sold to us by two different dealers. DUPLICATE_SAME_DEALER is
+    // usually a careless re-upload. Flagged separately because they warrant
+    // completely different responses.
+    //
+    // dup_of_photo_id is a self-reference; declared as a plain uuid (the FK lives
+    // in E-188) to keep Drizzle out of a self-referential type cycle.
+    phash_computed_at: timestamp("phash_computed_at", { withTimezone: true }),
+    dup_of_photo_id: uuid("dup_of_photo_id"),
+    dup_flag: buybackPhotoFlag("dup_flag"),
+    dup_flagged_at: timestamp("dup_flagged_at", { withTimezone: true }),
+    dup_cleared_at: timestamp("dup_cleared_at", { withTimezone: true }),
+    dup_cleared_by: uuid("dup_cleared_by"),
+  },
+  (t) => ({
+    lineIdx: index("buyback_photos_line_idx").on(t.line_id),
+  }),
+);
+
+// M04 — single owner identity per record (BRD P2). scope=LINE is the default;
+// a per-unit override is a second row with scope=UNIT.
+export const provenanceRecords = pgTable(
+  "provenance_records",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    scope: buybackProvScope().notNull(),
+    line_id: uuid("line_id").references(() => buybackLines.id, { onDelete: "cascade" }),
+    unit_id: uuid("unit_id").references(() => buybackUnits.id, { onDelete: "cascade" }),
+    source_type: buybackProvSource("source_type").notNull(),
+    prev_owner_name: text("prev_owner_name"), // usually the driver
+    prev_owner_phone: varchar("prev_owner_phone", { length: 20 }),
+    vehicle_no: text("vehicle_no"),
+    rc_number: text("rc_number"),
+    id_proof_type: text("id_proof_type"),
+    id_proof_s3: text("id_proof_s3"),
+    payment_proof_ref: text("payment_proof_ref"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    lineIdx: index("provenance_records_line_idx").on(t.line_id),
+    unitIdx: index("provenance_records_unit_idx").on(t.unit_id),
+  }),
+);
+
+// M06 / BRD P4 — unit-targeted, so the dealer's banner names exactly the
+// batteries in question ("Unit 2"), not the whole request.
+export const infoRequests = pgTable(
+  "info_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    request_id: uuid("request_id")
+      .notNull()
+      .references(() => buybackRequests.id, { onDelete: "cascade" }),
+    target_line_ids: uuid("target_line_ids").array().default(sql`'{}'`).notNull(),
+    target_unit_ids: uuid("target_unit_ids").array().default(sql`'{}'`).notNull(),
+    checklist: jsonb().default([]).notNull(),
+    note: text(),
+    raised_by: uuid("raised_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => ({
+    requestIdx: index("info_requests_request_idx").on(t.request_id, t.created_at),
+  }),
+);
+
+// The state machine's row. One deal per request.
+export const buybackDeals = pgTable(
+  "buyback_deals",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    request_id: uuid("request_id")
+      .notNull()
+      .references(() => buybackRequests.id, { onDelete: "cascade" }),
+    status: buybackDealStatus().default("DRAFT").notNull(),
+    // Bumped by every reopen (U5). Final offers and lock generations are stamped
+    // with the version they belong to.
+    offer_version: integer("offer_version").default(1).notNull(),
+    floor_total: numeric("floor_total", { precision: 14, scale: 2 }),
+    locked_at: timestamp("locked_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    requestUnique: uniqueIndex("buyback_deals_request_unique").on(t.request_id),
+    statusCreatedIdx: index("buyback_deals_status_created_idx").on(t.status, t.created_at),
+  }),
+);
+
+// M07 — INVARIANT 2: no amount column. Every counter is itemized per SKU in
+// negotiationRoundLines. A lump-sum offer cannot be written to this schema.
+export const negotiationRounds = pgTable(
+  "negotiation_rounds",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    leg: buybackLeg().default("DEALER").notNull(),
+    counterparty_id: varchar("counterparty_id", { length: 255 }),
+    round_no: integer("round_no").notNull(),
+    offered_by: uuid("offered_by"),
+    offered_by_role: text("offered_by_role").notNull(), // 'dealer' | 'admin'
+    note: text(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dealLegRoundUnique: uniqueIndex("negotiation_rounds_deal_leg_round_unique").on(
+      t.deal_id,
+      t.leg,
+      t.round_no,
+    ),
+  }),
+);
+
+export const negotiationRoundLines = pgTable(
+  "negotiation_round_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    round_id: uuid("round_id")
+      .notNull()
+      .references(() => negotiationRounds.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    offered_price_per_unit: numeric("offered_price_per_unit", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
+  },
+  (t) => ({
+    roundLineUnique: uniqueIndex("negotiation_round_lines_round_line_unique").on(
+      t.round_id,
+      t.line_id,
+    ),
+  }),
+);
+
+// M07 / U5 — itemized per SKU, ONE overall accept/decline, versioned.
+export const finalOffers = pgTable(
+  "final_offers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    version_no: integer("version_no").notNull(),
+    status: buybackFinalOfferStatus().default("SENT").notNull(),
+    note: text(),
+    sent_by: uuid("sent_by"),
+    sent_at: timestamp("sent_at", { withTimezone: true }).defaultNow().notNull(),
+    responded_at: timestamp("responded_at", { withTimezone: true }),
+  },
+  (t) => ({
+    dealVersionUnique: uniqueIndex("final_offers_deal_version_unique").on(t.deal_id, t.version_no),
+  }),
+);
+
+export const finalOfferLines = pgTable(
+  "final_offer_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    final_offer_id: uuid("final_offer_id")
+      .notNull()
+      .references(() => finalOffers.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    price_per_unit: numeric("price_per_unit", { precision: 12, scale: 2 }).notNull(),
+  },
+  (t) => ({
+    offerLineUnique: uniqueIndex("final_offer_lines_offer_line_unique").on(
+      t.final_offer_id,
+      t.line_id,
+    ),
+  }),
+);
+
+// M08 — the immutable per-SKU snapshot EVERY document and report reads from.
+// Written once at MARGIN_SET; never updated. A reopen inserts a new
+// offer_version generation. Margin never drifts.
+export const dealLineLocks = pgTable(
+  "deal_line_locks",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    offer_version: integer("offer_version").notNull(),
+    dealer_price: numeric("dealer_price", { precision: 12, scale: 2 }).notNull(),
+    margin_value: numeric("margin_value", { precision: 12, scale: 2 }).notNull(), // resolved rupees
+    margin_mode: buybackMarginMode("margin_mode").notNull(),
+    vendor_ask: numeric("vendor_ask", { precision: 12, scale: 2 }),
+    vendor_price: numeric("vendor_price", { precision: 12, scale: 2 }),
+    locked_by: uuid("locked_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dealLineVersionUnique: uniqueIndex("deal_line_locks_deal_line_version_unique").on(
+      t.deal_id,
+      t.line_id,
+      t.offer_version,
+    ),
+  }),
+);
+
+// M21 — INSERT-only (a DB trigger blocks UPDATE/DELETE, which binds even the
+// table owner). Written in the SAME transaction as the change it records.
+export const buybackActivityLog = pgTable(
+  "buyback_activity_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    request_id: uuid("request_id")
+      .notNull()
+      .references(() => buybackRequests.id, { onDelete: "cascade" }),
+    deal_id: uuid("deal_id").references(() => buybackDeals.id, { onDelete: "cascade" }),
+    actor_id: uuid("actor_id"),
+    role: text().notNull(), // 'dealer' | 'admin' | 'system'
+    action: text().notNull(), // the state-machine action, e.g. 'send_final_offer'
+    before: jsonb(),
+    after: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    requestIdx: index("buyback_activity_log_request_idx").on(t.request_id, t.created_at),
+  }),
+);
+
+// M20 / U4 — the outbound dispatch log. NOT the CRM's in-app `notifications`
+// table (that one is a per-user bell). INVARIANT 6: idempotency_key is UNIQUE,
+// so a retried transition cannot double-emit, and a missing row means a silent
+// transition — i.e. a bug.
+export const buybackNotificationEvents = pgTable(
+  "buyback_notification_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id").references(() => buybackDeals.id, { onDelete: "cascade" }),
+    request_id: uuid("request_id")
+      .notNull()
+      .references(() => buybackRequests.id, { onDelete: "cascade" }),
+    event_type: text("event_type").notNull(),
+    recipient_party: buybackNotifyParty("recipient_party").notNull(),
+    channel: buybackNotifyChannel().notNull(),
+    payload: jsonb().default({}).notNull(),
+    idempotency_key: text("idempotency_key").notNull(), // '{deal_id}:{action}:{offer_version}'
+    delivery_status: buybackNotifyStatus("delivery_status").default("PENDING").notNull(),
+    sent_at: timestamp("sent_at", { withTimezone: true }),
+    error: text(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+
+    // --- Dispatch (E-186) ---
+    // Sprint 1 recorded events and nothing drained them. The dispatcher
+    // (src/lib/buyback/dispatch.ts) claims due rows oldest-first, with backoff.
+    attempts: integer().default(0).notNull(),
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    // Snapshotted at emit time, never re-derived: a vendor's address may be
+    // edited between the transition and the send, and the audit trail must say
+    // where the message actually went — not where it would go if sent today.
+    recipient_ref: text("recipient_ref"),
+    attachment_s3_key: text("attachment_s3_key"),
+  },
+  (t) => ({
+    idemUnique: uniqueIndex("buyback_notification_events_idem_unique").on(t.idempotency_key),
+    dueIdx: index("buyback_notification_events_due_idx").on(t.next_attempt_at),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// --- PEAKAMP BUYBACK — VENDOR LEG & FULFILMENT (E-186, Sprint 2A) ---
+//
+// Carries a deal from MARGIN_SET to PICKED_UP:
+//   VENDOR_ROUTED → VENDOR_NEGOTIATING → VENDOR_AGREED → PO_EXCHANGED
+//                 → PICKUP_SCHEDULED → PICKED_UP
+// Money (invoices, settlement, ledger) is Sprint 2B.
+// Source of truth: drizzle/E-186_buyback_vendor_leg.sql.
+// ---------------------------------------------------------------------------
+
+export const buybackVendorThreadStatus = pgEnum("buyback_vendor_thread_status", [
+  "SENT",
+  "COUNTERED",
+  "AGREED",
+  "LOST",
+]);
+export const buybackPoDirection = pgEnum("buyback_po_direction", ["ISSUED", "RECEIVED"]);
+export const buybackPoStatus = pgEnum("buyback_po_status", [
+  "GENERATED",
+  "SENT",
+  "ACKNOWLEDGED",
+]);
+export const buybackPickupScope = pgEnum("buyback_pickup_scope", ["ORDER", "BATCH", "LINE"]);
+
+// M09/M18 — a vendor IS an `accounts` row + a business_entity_roles row with
+// role='SCRAP_VENDOR'. This table holds only what is vendor-specific.
+export const scrapVendors = pgTable(
+  "scrap_vendors",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    categories: jsonb().default([]).notNull(), // e.g. ["LI_ION","LFP"]
+    regions: text().array().default([]).notNull(),
+    payment_terms: text("payment_terms"),
+    credit_limit: numeric("credit_limit", { precision: 14, scale: 2 }),
+    active: boolean().default(true).notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityUnique: uniqueIndex("scrap_vendors_entity_unique").on(t.entity_id),
+  }),
+);
+
+// M09/M10 — one vendor's conversation about one deal.
+//
+// INVARIANT (P5): NO amount column. Every ask, counter and agreement is
+// itemized on vendorThreadLines. A lump-sum vendor quote is unrepresentable.
+//
+// INVARIANT (M10): the partial unique index vendor_threads_one_agreed_per_deal
+// (in E-186; Drizzle cannot express a partial index, so it lives only in SQL)
+// permits at most ONE AGREED thread per deal. That is what makes "first AGREED
+// wins, others auto-LOST" atomic rather than a read-then-write race.
+export const vendorThreads = pgTable(
+  "vendor_threads",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    vendor_id: uuid("vendor_id")
+      .notNull()
+      .references(() => scrapVendors.id),
+    status: buybackVendorThreadStatus().default("SENT").notNull(),
+    quotation_pdf_s3: text("quotation_pdf_s3"),
+    quotation_no: text("quotation_no"),
+    email_message_id: text("email_message_id"), // proof of dispatch (U6)
+    sent_at: timestamp("sent_at", { withTimezone: true }),
+    responded_at: timestamp("responded_at", { withTimezone: true }),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    close_reason: text("close_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dealVendorUnique: uniqueIndex("vendor_threads_deal_vendor_unique").on(t.deal_id, t.vendor_id),
+    dealIdx: index("vendor_threads_deal_idx").on(t.deal_id),
+  }),
+);
+
+// The itemization (P5). ask = what we asked, counter = their latest per-SKU
+// counter, agreed = what was struck.
+export const vendorThreadLines = pgTable(
+  "vendor_thread_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    thread_id: uuid("thread_id")
+      .notNull()
+      .references(() => vendorThreads.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    ask_price: numeric("ask_price", { precision: 12, scale: 2 }).notNull(),
+    counter_price: numeric("counter_price", { precision: 12, scale: 2 }),
+    agreed_price: numeric("agreed_price", { precision: 12, scale: 2 }),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    threadLineUnique: uniqueIndex("vendor_thread_lines_thread_line_unique").on(
+      t.thread_id,
+      t.line_id,
+    ),
+  }),
+);
+
+// M11 — two per deal, one per leg. Both present ⇒ PO_EXCHANGED.
+// Impossible before VENDOR_AGREED (gated by the state machine).
+export const purchaseOrders = pgTable(
+  "purchase_orders",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    leg: buybackLeg().notNull(),
+    direction: buybackPoDirection().notNull(),
+    number: text().notNull(),
+    pdf_s3: text("pdf_s3"),
+    status: buybackPoStatus().default("GENERATED").notNull(),
+    counterparty_entity_id: varchar("counterparty_entity_id", { length: 255 }).references(
+      () => accounts.id,
+    ),
+    issued_at: timestamp("issued_at", { withTimezone: true }),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dealLegUnique: uniqueIndex("purchase_orders_deal_leg_unique").on(t.deal_id, t.leg),
+    dealIdx: index("purchase_orders_deal_idx").on(t.deal_id),
+  }),
+);
+
+// Prices are COPIED from deal_line_locks at generation, so a later lock
+// generation cannot retro-change a PO that has already gone out.
+//
+// The tax columns are modelled but unpopulated: GST/HSN/reverse-charge is an
+// open item (BRD §10) that gates the first live deal and is Chirag's call.
+// Documents render tax-exclusive until then; his ruling is a data change, not a
+// migration.
+export const purchaseOrderLines = pgTable(
+  "purchase_order_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    po_id: uuid("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    quantity: integer().notNull(),
+    price_per_unit: numeric("price_per_unit", { precision: 12, scale: 2 }).notNull(),
+    hsn_code: text("hsn_code"),
+    taxable_value: numeric("taxable_value", { precision: 14, scale: 2 }),
+    cgst: numeric({ precision: 12, scale: 2 }),
+    sgst: numeric({ precision: 12, scale: 2 }),
+    igst: numeric({ precision: 12, scale: 2 }),
+    reverse_charge: boolean("reverse_charge"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    poLineUnique: uniqueIndex("purchase_order_lines_po_line_unique").on(t.po_id, t.line_id),
+  }),
+);
+
+// M05 — the full BRD shape, but Sprint 2A only writes schedule/contact/
+// completion, which is enough for a deal to legitimately reach PICKED_UP rather
+// than teleport past two states it never entered. The BWM 2022 fields are
+// declared so Sprint 3 needs no DDL.
+export const pickups = pgTable(
+  "pickups",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    batch_id: uuid("batch_id").references(() => buybackBatches.id, { onDelete: "cascade" }),
+    scope: buybackPickupScope().default("BATCH").notNull(),
+    scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
+    address: text(),
+    contact_name: text("contact_name"),
+    contact_phone: varchar("contact_phone", { length: 20 }),
+    // M05 / BWM 2022 — declared in E-186, populated from Sprint 3 (E-188).
+    eway_bill_no: text("eway_bill_no"),
+    eway_bill_s3: text("eway_bill_s3"),
+    weighbridge_slip_s3: text("weighbridge_slip_s3"),
+    expected_counts: jsonb("expected_counts"),
+    actual_counts: jsonb("actual_counts"),
+    variance_flag: boolean("variance_flag").default(false).notNull(),
+    variance_note: text("variance_note"),
+    // THE GATE (M05 AC): the dealer must acknowledge a count variance BEFORE
+    // payout. Making the obligation an explicit column — rather than inferring it
+    // from `variance_flag AND dealer_ack_at IS NULL` in several places — is what
+    // lets the settlement route refuse a dealer payout while it is unmet. Paying
+    // out before the dealer agrees to the count means arguing about money we have
+    // already sent.
+    variance_ack_required: boolean("variance_ack_required").default(false).notNull(),
+    dealer_ack_at: timestamp("dealer_ack_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dealIdx: index("pickups_deal_idx").on(t.deal_id),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// --- PEAKAMP BUYBACK — INVOICES, SETTLEMENT, LEDGER (E-187, Sprint 2B) ---
+//
+// PICKED_UP → INVOICE_RAISED → INVOICE_APPROVED → SETTLED → CLOSED.
+// Source of truth: drizzle/E-187_buyback_money.sql.
+// ---------------------------------------------------------------------------
+
+export const buybackInvoiceStatus = pgEnum("buyback_invoice_status", [
+  "RAISED",
+  "APPROVED",
+  "RETURNED",
+]);
+export const buybackInvoiceParty = pgEnum("buyback_invoice_party", ["DEALER", "ITARANG"]);
+export const buybackSettleMethod = pgEnum("buyback_settle_method", [
+  "MANUAL",
+  "STATEMENT",
+  "API",
+]);
+export const buybackSettleDirection = pgEnum("buyback_settle_direction", ["OUT", "IN"]);
+
+// M12 — two per deal, facing opposite ways: the dealer bills iTarang (we approve
+// or return it), and iTarang bills the vendor.
+//
+// INVARIANT (P5): NO amount column. Amounts live on invoiceLines. That is what
+// makes M12's AC expressible at all — "one edited line blocks approval EVEN IF
+// THE TOTAL MATCHES". You cannot compare line-by-line against a lump sum.
+//
+// A RETURNED invoice is kept, with its reason. The partial unique index
+// invoices_one_live_per_deal_leg (SQL-only — Drizzle cannot express a partial
+// index) allows exactly one LIVE invoice per leg while letting the rejected one
+// survive as evidence of what was wrong.
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    leg: buybackLeg().notNull(),
+    raised_by_party: buybackInvoiceParty("raised_by_party").notNull(),
+    // The DEALER's own number on their own GST series; or ours (INV-5001-V) on
+    // the vendor leg. You may not issue a number on someone else's series.
+    number: text().notNull(),
+    pdf_s3: text("pdf_s3"),
+    status: buybackInvoiceStatus().default("RAISED").notNull(),
+    approved_by: uuid("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    returned_reason: text("returned_reason"),
+    returned_at: timestamp("returned_at", { withTimezone: true }),
+    raised_by: uuid("raised_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dealIdx: index("invoices_deal_idx").on(t.deal_id),
+  }),
+);
+
+// The rows approval compares, ONE AT A TIME, against deal_line_locks.
+// `matched` records the verdict per line, so the failing line is still
+// identifiable months later.
+export const invoiceLines = pgTable(
+  "invoice_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    invoice_id: uuid("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id, { onDelete: "cascade" }),
+    quantity: integer().notNull(),
+    price_per_unit: numeric("price_per_unit", { precision: 12, scale: 2 }).notNull(),
+    matched: boolean(),
+    // Chirag gate (BRD §10) — modelled, not yet ruled on.
+    hsn_code: text("hsn_code"),
+    taxable_value: numeric("taxable_value", { precision: 14, scale: 2 }),
+    cgst: numeric({ precision: 12, scale: 2 }),
+    sgst: numeric({ precision: 12, scale: 2 }),
+    igst: numeric({ precision: 12, scale: 2 }),
+    reverse_charge: boolean("reverse_charge"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    invoiceLineUnique: uniqueIndex("invoice_lines_invoice_line_unique").on(
+      t.invoice_id,
+      t.line_id,
+    ),
+  }),
+);
+
+// M13/U10 — TXN-{n}-D (OUT, dealer payout) + TXN-{n}-V (IN, vendor receipt).
+// Both closed ⇒ SETTLED. The difference between them IS the realised margin,
+// which is what M14's reconciliation invariant checks against the locks.
+//
+// INVARIANT (M13 AC): the settlement_manual_needs_proof CHECK constraint (in
+// E-187) makes an unevidenced MANUAL payout impossible at the DATABASE level —
+// not merely rejected by a route that a script or a backfill could bypass. A
+// payment with no proof is not a payment; it is a claim.
+//
+// Payouts are RECORDED here, never EXECUTED (BRD §10). Razorpay in this codebase
+// is inbound-collection-only and cannot pay anyone out.
+export const settlementTransactions = pgTable(
+  "settlement_transactions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    group_txn_id: text("group_txn_id").notNull(), // 'TXN-1024'
+    leg_sub_id: text("leg_sub_id").notNull(), // 'TXN-1024-D' — UNIQUE
+    leg: buybackLeg().notNull(),
+    direction: buybackSettleDirection().notNull(),
+    method: buybackSettleMethod().default("MANUAL").notNull(),
+    txn_ref: text("txn_ref"),
+    amount: numeric({ precision: 14, scale: 2 }).notNull(),
+    txn_date: date("txn_date").notNull(),
+    proof_s3: text("proof_s3"),
+    note: text(),
+    recorded_by: uuid("recorded_by"),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+
+    // --- E-188 ---
+    // Traces a STATEMENT settlement back to the bank-statement row that evidenced
+    // it. Declared WITHOUT a Drizzle .references(): bank_statement_rows points at
+    // settlement_transactions and this points back, which is a genuine circular
+    // FK. Both directions exist in the SQL (E-188); expressing only one of them
+    // here keeps the TS module free of a cycle.
+    statement_row_id: uuid("statement_row_id"),
+  },
+  (t) => ({
+    legSubUnique: uniqueIndex("settlement_transactions_leg_sub_unique").on(t.leg_sub_id),
+    dealIdx: index("settlement_transactions_deal_idx").on(t.deal_id),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// --- PEAKAMP BUYBACK — COMPLIANCE & TRUST (E-188, Sprints 3–4) ---
+//
+// M03 photo dedup · M05 BWM variance gate · M13 STATEMENT reconcile ·
+// M16 versioned price books · M19 Digio agreements.
+// Source of truth: drizzle/E-188_buyback_compliance_trust.sql.
+// ---------------------------------------------------------------------------
+
+export const buybackAgreementStatus = pgEnum("buyback_agreement_status", [
+  "DRAFT",
+  "SENT",
+  "SIGNED",
+  "DECLINED",
+  "EXPIRED",
+]);
+export const buybackStmtRowStatus = pgEnum("buyback_stmt_row_status", [
+  "UNMATCHED",
+  "SUGGESTED",
+  "MATCHED",
+  "IGNORED",
+]);
+
+// M19/U12 — Digio eSign for dealers AND vendors. The signed webhook flips
+// business_entity_roles.status to ACTIVE, which is what actually unlocks
+// anything: an entity with no ACTIVE role cannot trade.
+//
+// An existing dealer of the same firm does NOT redo KYC — they confirm the firm
+// registration number and sign. That is why firm_registration_no lives here, on
+// the agreement, and there is no second onboarding table.
+export const agreements = pgTable(
+  "agreements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    role: buybackEntityRole().notNull(),
+    digio_doc_id: text("digio_doc_id"),
+    firm_registration_no: text("firm_registration_no"),
+    status: buybackAgreementStatus().default("DRAFT").notNull(),
+    pdf_s3: text("pdf_s3"),
+    signed_pdf_s3: text("signed_pdf_s3"),
+    sent_at: timestamp("sent_at", { withTimezone: true }),
+    signed_at: timestamp("signed_at", { withTimezone: true }),
+    declined_reason: text("declined_reason"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    digioIdx: index("agreements_digio_doc_idx").on(t.digio_doc_id),
+  }),
+);
+
+// M16 — what the price WAS at a given price-book version. The AC ("catalog edits
+// never change open requests' reference price") already holds via
+// buyback_lines.price_book_version_at_create; this answers the question that
+// snapshot alone cannot — what was the price at version 3?
+export const catalogPriceHistory = pgTable(
+  "catalog_price_history",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    variant_id: uuid("variant_id")
+      .notNull()
+      .references(() => catalogVariants.id, { onDelete: "cascade" }),
+    price_book_version: integer("price_book_version").notNull(),
+    unit_price: numeric("unit_price", { precision: 12, scale: 2 }),
+    est_buyback_price_working: numeric("est_buyback_price_working", {
+      precision: 12,
+      scale: 2,
+    }),
+    est_buyback_price_dead: numeric("est_buyback_price_dead", { precision: 12, scale: 2 }),
+    changed_by: uuid("changed_by"),
+    note: text(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    variantVersionUnique: uniqueIndex("catalog_price_history_variant_version_unique").on(
+      t.variant_id,
+      t.price_book_version,
+    ),
+  }),
+);
+
+// When the business last reviewed prices. M16 wants a weekly nudge; without a
+// recorded review date, "weekly" is unenforceable.
+export const catalogPriceReviews = pgTable("catalog_price_reviews", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  reviewed_by: uuid("reviewed_by"),
+  note: text(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// M13/U9 — the STATEMENT method. A matched row becomes a settlement with
+// method=STATEMENT, which legitimately carries no uploaded proof FILE: the bank
+// statement IS the proof. E-187's CHECK demands a file only for MANUAL, precisely
+// so this path does not have to fake one to satisfy a constraint.
+export const bankStatementImports = pgTable("bank_statement_imports", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  filename: text().notNull(),
+  s3_key: text("s3_key"),
+  account_label: text("account_label"),
+  row_count: integer("row_count").default(0).notNull(),
+  matched_count: integer("matched_count").default(0).notNull(),
+  imported_by: uuid("imported_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const bankStatementRows = pgTable(
+  "bank_statement_rows",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    import_id: uuid("import_id")
+      .notNull()
+      .references(() => bankStatementImports.id, { onDelete: "cascade" }),
+    txn_date: date("txn_date").notNull(),
+    // SIGNED: credits positive, debits negative. Storing the sign rather than a
+    // separate direction column means a row cannot claim to be a credit while
+    // carrying a debit's amount.
+    amount: numeric({ precision: 14, scale: 2 }).notNull(),
+    txn_ref: text("txn_ref"),
+    description: text(),
+    status: buybackStmtRowStatus().default("UNMATCHED").notNull(),
+    // What the matcher THINKS this is. Not applied until a human confirms.
+    suggested_deal_id: uuid("suggested_deal_id").references(() => buybackDeals.id, {
+      onDelete: "set null",
+    }),
+    suggested_leg: buybackLeg("suggested_leg"),
+    matched_settlement_id: uuid("matched_settlement_id").references(
+      () => settlementTransactions.id,
+      { onDelete: "set null" },
+    ),
+    matched_by: uuid("matched_by"),
+    matched_at: timestamp("matched_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    importIdx: index("bank_statement_rows_import_idx").on(t.import_id),
+    refIdx: index("bank_statement_rows_ref_idx").on(t.txn_ref),
+  }),
+);
