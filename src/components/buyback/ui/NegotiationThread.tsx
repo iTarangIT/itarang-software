@@ -68,7 +68,7 @@ export default function NegotiationThread({
                 <span className={`text-xs font-bold ${nameColor}`}>{round.actor}</span>
                 {round.isFinal && (
                   <span className="rounded bg-[#F59E0B] px-1.5 py-[1px] text-[9.5px] font-bold text-white">
-                    FINAL v{offerVersion}
+                    FINAL{offerVersion != null && ` v${offerVersion}`}
                   </span>
                 )}
                 {round.isAccept && (

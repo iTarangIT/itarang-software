@@ -1,3 +1,5 @@
+import Card from "./Card";
+
 export interface ActivityEntry {
   at: string;
   actor: string;
@@ -8,11 +10,11 @@ export interface ActivityEntry {
   to?: string;
 }
 
-const ROLE_STYLE: Record<string, string> = {
-  Dealer: "bg-blue-50 text-blue-600",
-  Admin: "bg-slate-100 text-bb-navy",
-  Vendor: "bg-teal-50 text-teal-700",
-  System: "bg-slate-100 text-slate-500",
+const ROLE_COLOR: Record<string, string> = {
+  dealer: "#2563EB",
+  admin: "#0B2239",
+  vendor: "#0D9488",
+  system: "#64748B",
 };
 
 /**
@@ -24,42 +26,66 @@ const ROLE_STYLE: Record<string, string> = {
 export default function ActivityTimeline({
   entries,
   labelFor,
+  note,
 }: {
   entries: ActivityEntry[];
   labelFor?: (action: string) => string;
+  note?: string;
 }) {
-  return (
-    <div>
-      {entries.map((entry, i) => {
-        const roleClass = ROLE_STYLE[entry.role] ?? "bg-slate-100 text-slate-500";
+  const getRoleColor = (role: string): string => {
+    return ROLE_COLOR[role.toLowerCase()] ?? ROLE_COLOR.system;
+  };
 
-        return (
-          <div key={i} className="flex gap-3 py-2.5">
-            <div className="flex flex-col items-center">
-              <div className="h-2 w-2 shrink-0 rounded-full bg-green-600" />
-              {i < entries.length - 1 && <div className="mt-1 w-px flex-1 bg-slate-200" />}
-            </div>
-            <div className="flex-1 pb-1">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
-                  <span className="font-bold text-slate-900">{labelFor ? labelFor(entry.action) : entry.action}</span>
-                  <span className={`rounded px-1.5 text-[10px] font-bold ${roleClass}`}>{entry.role}</span>
-                  <span className="text-slate-500">{entry.actor}</span>
-                </div>
-                <span className="whitespace-nowrap text-[11px] text-slate-400">{entry.at}</span>
+  return (
+    <div className="mt-4">
+      {note && <div className="mb-2.5 text-xs text-slate-400">{note}</div>}
+      <Card className="py-1.5">
+        {entries.map((entry, i) => {
+          const roleColor = getRoleColor(entry.role);
+
+          return (
+            <div key={i} className={`flex gap-3 px-4 py-[11px] ${i < entries.length - 1 ? "border-b border-[#F4F6F9]" : ""}`}>
+              <div className="flex w-[10px] flex-none flex-col items-center">
+                <div
+                  className="mt-1 h-[9px] w-[9px] rounded-full"
+                  style={{ backgroundColor: roleColor }}
+                />
+                {i < entries.length - 1 && <div className="mt-[3px] w-[2px] flex-1 bg-[#EEF2F7]" />}
               </div>
-              {entry.detail && <div className="mt-0.5 text-xs text-slate-500">{entry.detail}</div>}
-              {(entry.from || entry.to) && (
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] tabular-nums text-slate-400">
-                  {entry.from && <span>{entry.from}</span>}
-                  {entry.from && entry.to && <span>→</span>}
-                  {entry.to && <span>{entry.to}</span>}
+              <div className="flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[13px] font-bold">{labelFor ? labelFor(entry.action) : entry.action}</span>
+                  <span
+                    className="rounded-[5px] px-[7px] py-px text-[10px] font-bold text-white"
+                    style={{ backgroundColor: roleColor }}
+                  >
+                    {entry.role}
+                  </span>
                 </div>
-              )}
+                {entry.detail && <div className="mt-0.5 text-[12.5px] text-slate-500">{entry.detail}</div>}
+                {(entry.to || (entry.from && entry.from !== "—")) && (
+                  <div className="mt-1 flex items-center gap-1.5 text-xs tabular-nums">
+                    {entry.from && (
+                      <span className={entry.from === "—" ? "text-slate-400" : "text-slate-400 line-through"}>
+                        {entry.from}
+                      </span>
+                    )}
+                    {entry.to && (
+                      <>
+                        <span className="text-slate-400">→</span>
+                        <span className="font-bold text-slate-900">{entry.to}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+                <div className="mt-[3px] text-[11px] text-slate-400">
+                  {entry.at} · {entry.actor}
+                </div>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </Card>
     </div>
   );
 }
