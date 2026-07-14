@@ -24,7 +24,16 @@ import {
   emiSchedules,
   nbfcRiskAlerts,
 } from "@/lib/db/schema";
+import { loadRiskThresholds } from "@/lib/nbfc/risk-thresholds";
 
+/**
+ * Fallback for the `pci_concern` rule in `nbfc_risk_rules` (BRD default 0.40).
+ *
+ * Prefer `loadRiskThresholds().pci_concern` — the governed value, changeable
+ * through the admin Risk Rule screen behind the two-person approval gate. This
+ * constant is only the default used when that row cannot be read, and the value
+ * `computePciBreakdown` assumes when no caller passes one.
+ */
 export const PCI_LOW_THRESHOLD = 0.4;
 export const PCI_HEALTHY_THRESHOLD = 0.75;
 export const EMI_HISTORY_DEPTH = 6; // last N EMIs considered
@@ -96,7 +105,11 @@ export type PciBreakdown = {
  * most-recent-first. The weight schema is linear-by-rank so the most recent
  * EMI carries the highest weight without starving older history.
  */
-export function computePciBreakdown(rowsRecentFirst: EmiRow[]): PciBreakdown {
+export function computePciBreakdown(
+  rowsRecentFirst: EmiRow[],
+  /** Governed `pci_concern` rule. Defaults to the BRD value when not supplied. */
+  lowThreshold: number = PCI_LOW_THRESHOLD,
+): PciBreakdown {
   const window = rowsRecentFirst.slice(0, EMI_HISTORY_DEPTH);
   const n = window.length;
   const total_weight = (n * (n + 1)) / 2;
@@ -130,7 +143,7 @@ export function computePciBreakdown(rowsRecentFirst: EmiRow[]): PciBreakdown {
     raw_score: round3(raw),
     pci_score,
     band:
-      pci_score < PCI_LOW_THRESHOLD
+      pci_score < lowThreshold
         ? "high_concern"
         : pci_score > PCI_HEALTHY_THRESHOLD
           ? "healthy"
@@ -196,12 +209,16 @@ function groupByLoan(rows: Array<EmiRow & { loan_sanction_id: string }>) {
 /**
  * Run the PCI job. Reads every emi_schedules row, groups by loan, computes
  * PCI, and writes the result back to borrower_risk_scores. Fires a
- * nbfc_risk_alerts row when PCI dips below 0.40.
+ * nbfc_risk_alerts row when PCI dips below the governed `pci_concern` rule.
  */
 export async function computePciForAllLoans(opts?: {
   tenantId?: string;
 }): Promise<PciRunResult> {
   const runAt = new Date();
+  // The governed concern threshold, resolved once for the whole run. Previously
+  // hard-coded to 0.40, which meant the admin Risk Rule screen's `pci_concern`
+  // value was decorative.
+  const { pci_concern: lowThreshold } = await loadRiskThresholds();
   // Pull the ELAPSED EMIs (due on/before today) ordered most-recent-first per
   // loan. We do the grouping in JS because the dataset is small (only active
   // loans, ≤6 per loan) and Drizzle doesn't have a portable LATERAL JOIN
@@ -270,16 +287,18 @@ export async function computePciForAllLoans(opts?: {
 
     computedCount += 1;
 
-    if (pci < PCI_LOW_THRESHOLD) {
+    if (pci < lowThreshold) {
       await db.insert(nbfcRiskAlerts).values({
         tenant_id: row.tenant_id,
         borrower_id: row.borrower_id,
         loan_sanction_id: row.loan_sanction_id,
         type: "pci_low",
-        severity: pci < 0.2 ? "critical" : "high",
+        // Half the concern threshold is the "critical" mark, so this tracks the
+        // governed value instead of staying pinned at a hard-coded 0.2.
+        severity: pci < lowThreshold / 2 ? "critical" : "high",
         payload: {
           pci_score: pci,
-          threshold: PCI_LOW_THRESHOLD,
+          threshold: lowThreshold,
           emi_window: Math.min(emis.length, EMI_HISTORY_DEPTH),
           computed_at: runAt.toISOString(),
         },

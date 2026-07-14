@@ -1,18 +1,28 @@
 /**
- * Phase D — client for the risk-sandbox HTTP service.
+ * Client for the risk-sandbox HTTP service (source: services/risk-sandbox/).
  *
- * The sandbox container (deployed via phase6_risk_sandbox.sh on the VPS) runs
- * a tiny FastAPI app on port 8000 that exec()s LLM-generated Python against
- * tenant data and returns a JSON verdict. We talk to it over HTTP — same
- * docker network as the IoT bridge in production, or a local SSH tunnel in
- * dev (see SANDBOX_URL env).
+ * The sandbox runs a FastAPI app that executes agent-authored Python against
+ * tenant data and returns a JSON verdict. It is the reason the risk engine no
+ * longer asks an LLM to *state* a severity: the model writes the test, the
+ * sandbox runs it, and the numbers come from data. When this service is
+ * unreachable the caller reports `inconclusive` — it does not guess.
  *
- * Phase B used a single-shot tool-call verdict ("ask the LLM what severity
- * this is"). Phase D upgrades that: the LLM produces a Python `evaluate()`
- * function, we run it on real data, the verdict comes from numbers not vibes.
+ * The sandbox is bound to loopback on the CRM's own host (127.0.0.1:8091 →
+ * container :8000) and requires a bearer token.
  */
 
 const SANDBOX_URL = process.env.NBFC_SANDBOX_URL ?? "http://127.0.0.1:8091";
+
+/**
+ * Must match SANDBOX_TOKEN in the sandbox's environment. Without it the service
+ * returns 401 — which surfaces as an inconclusive card rather than a bad verdict,
+ * so a misconfigured token degrades honestly instead of silently.
+ */
+const SANDBOX_TOKEN = process.env.NBFC_SANDBOX_TOKEN ?? "";
+
+function authHeaders(): Record<string, string> {
+  return SANDBOX_TOKEN ? { Authorization: `Bearer ${SANDBOX_TOKEN}` } : {};
+}
 
 export interface SandboxRequest {
   hypothesis_slug: string;
@@ -45,10 +55,17 @@ export async function executeInSandbox(req: SandboxRequest): Promise<SandboxResp
   try {
     const r = await fetch(`${SANDBOX_URL}/execute`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(req),
       signal: controller.signal,
     });
+    if (r.status === 401) {
+      return {
+        ok: false,
+        error: "sandbox rejected our token — check NBFC_SANDBOX_TOKEN matches SANDBOX_TOKEN",
+        elapsed_ms: 0,
+      };
+    }
     if (!r.ok) {
       return { ok: false, error: `sandbox HTTP ${r.status}`, elapsed_ms: 0 };
     }
