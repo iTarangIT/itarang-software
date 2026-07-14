@@ -39,6 +39,9 @@ import {
   Coins,
   Truck,
   BookOpen,
+  Handshake,
+  FolderOpen,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -69,6 +72,12 @@ const BUYBACK_ADMIN_SECTION = {
       href: "/admin/buyback",
     },
     {
+      id: "buyback-negotiations",
+      label: "Negotiations",
+      icon: Handshake,
+      href: "/admin/buyback/negotiations",
+    },
+    {
       id: "buyback-vendors",
       label: "Scrap Vendors",
       icon: Truck,
@@ -79,6 +88,18 @@ const BUYBACK_ADMIN_SECTION = {
       label: "Battery Catalogue",
       icon: BookOpen,
       href: "/admin/buyback/catalog",
+    },
+    {
+      id: "buyback-documents",
+      label: "Documents",
+      icon: FolderOpen,
+      href: "/admin/buyback/documents",
+    },
+    {
+      id: "buyback-payments",
+      label: "Payments & Settlement",
+      icon: Wallet,
+      href: "/admin/buyback/payments",
     },
     {
       id: "buyback-ledger",
