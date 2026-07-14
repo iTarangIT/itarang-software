@@ -1230,7 +1230,7 @@ export default function BuybackIntake() {
             always sends one address per request (see selectAddress), so there is
             no mode state to wire. */}
         <div className="mb-4 flex flex-wrap gap-2">
-          <span className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white">
+          <span className="rounded-lg border border-bb-navy bg-bb-navy px-3 py-1.5 text-[12.5px] font-semibold text-white">
             One address for whole order
           </span>
           {["Per batch", "Per battery row"].map((label) => (
