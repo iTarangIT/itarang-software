@@ -56,8 +56,8 @@ export default function ActivityTimeline({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[13px] font-bold">{labelFor ? labelFor(entry.action) : entry.action}</span>
                   <span
-                    className="rounded-[5px] px-[7px] py-px text-[10px] font-bold text-white"
-                    style={{ backgroundColor: roleColor }}
+                    className="rounded-[5px] bg-slate-100 px-[7px] py-px text-[10px] font-bold"
+                    style={{ color: roleColor }}
                   >
                     {entry.role}
                   </span>
