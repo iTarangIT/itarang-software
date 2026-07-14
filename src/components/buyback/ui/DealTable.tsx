@@ -17,6 +17,10 @@ export interface DealTableHead {
 export interface DealTableRow {
   key: string;
   onClick?: () => void;
+  /** Accessible name for the row when it's a click/Enter navigation target
+   * (e.g. "Open BB-1024") — screen readers otherwise read a <tr> with no
+   * label of its own. Optional: rows without onClick don't need one. */
+  ariaLabel?: string;
   cells: ReactNode[];
 }
 
@@ -74,6 +78,7 @@ export default function DealTable({
                 onClick={r.onClick}
                 tabIndex={r.onClick ? 0 : undefined}
                 onKeyDown={(e) => onRowKeyDown(e, r.onClick)}
+                aria-label={r.ariaLabel}
               >
                 {r.cells.map((c, i) => (
                   <td key={i} className="px-[18px] py-3 align-middle">
