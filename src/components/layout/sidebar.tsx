@@ -1042,6 +1042,18 @@ const roleNavigation: Record<string, any[]> = {
           icon: Coins,
           href: "/dealer-portal/buyback/new",
         },
+        {
+          id: "buyback-pickups",
+          label: "Pickups",
+          icon: Truck,
+          href: "/dealer-portal/buyback/pickups",
+        },
+        {
+          id: "buyback-dealer-payments",
+          label: "Payments",
+          icon: Landmark,
+          href: "/dealer-portal/buyback/payments",
+        },
       ],
     },
   ],

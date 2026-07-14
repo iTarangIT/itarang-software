@@ -110,6 +110,17 @@ export const DEALER_FORBIDDEN_KEYS = [
   "counterparty_id",
   "counterparty_entity_id",
   "pdf_s3",
+  // Ext-8/Ext-9 additions. The pickup row and the settlement row both carry
+  // things that are not the dealer's to see:
+  //   · eway_bill_s3 / weighbridge_slip_s3 — BWM compliance documents, S3
+  //     capabilities like pdf_s3 above
+  //   · proof_s3               — the payment proof, another S3 capability
+  //   · created_by/recorded_by — internal user ids (who scheduled, who paid)
+  "eway_bill_s3",
+  "weighbridge_slip_s3",
+  "proof_s3",
+  "created_by",
+  "recorded_by",
 ] as const;
 
 export function toDealerLine(line: AdminLineView): DealerLineView {
@@ -277,6 +288,128 @@ export function toDealerPo(po: DealerPoSource | null): DealerPoView | null {
     status: po.status,
     issued_at: po.issued_at ?? null,
     pdf_available: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DEALER PICKUP SUMMARY (Ext-8).
+//
+// The dealer is a PARTY to the pickup — they have to be standing next to the
+// batteries when the truck arrives — so the schedule, the address, the contact
+// and the counts are theirs to see. What is NOT theirs: the BWM 2022 compliance
+// documents (eway_bill_s3, weighbridge_slip_s3 — S3 keys are capabilities,
+// same rule as pdf_s3 on the PO) and the internal id of the admin who scheduled
+// it. Built field-by-field, so none of them can ride along.
+// ---------------------------------------------------------------------------
+
+/**
+ * The pickup row as read from `pickups`. It MAY carry the compliance S3 keys
+ * and the scheduler's user id — none of them survive toDealerPickup.
+ */
+export interface DealerPickupSource {
+  scheduled_at: Date | string | null;
+  completed_at: Date | string | null;
+  address: string | null;
+  contact_name?: string | null;
+  contact_phone?: string | null;
+  /** Σ expected_counts quantities — what the dealer declared. Null until completion. */
+  submitted_units?: number | string | null;
+  /** Σ actual_counts quantities — what the collector counted. Null until completion. */
+  actual_units?: number | string | null;
+  // --- Never emitted -------------------------------------------------------
+  eway_bill_s3?: string | null;
+  weighbridge_slip_s3?: string | null;
+  created_by?: string | null;
+}
+
+export interface DealerPickupView {
+  scheduled_at: Date | string | null;
+  completed_at: Date | string | null;
+  address: string | null;
+  /** "Ramesh Kumar · 9820011111" — one display label, built here so screens don't. */
+  contact: string | null;
+  submitted_units: number | null;
+  actual_units: number | null;
+}
+
+function toCount(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function toDealerPickup(pickup: DealerPickupSource | null): DealerPickupView | null {
+  if (!pickup) return null;
+
+  // Built field-by-field: the S3 keys and created_by are never read into the
+  // output. Counts pass through as numbers or null — a scheduled-but-not-yet-
+  // collected pickup has no counts, and the UI must be able to tell.
+  return {
+    scheduled_at: pickup.scheduled_at ?? null,
+    completed_at: pickup.completed_at ?? null,
+    address: pickup.address ?? null,
+    contact:
+      [pickup.contact_name, pickup.contact_phone].filter(Boolean).join(" · ") || null,
+    submitted_units: toCount(pickup.submitted_units),
+    actual_units: toCount(pickup.actual_units),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DEALER PAYOUT SUMMARY (Ext-9).
+//
+// The dealer's own money: the locked dealer total (Σ qty × dealer_price from
+// the current lock generation — computed in lib, the same source the invoice
+// GET bills from) and whether their -D settlement leg has been recorded. The
+// VENDOR leg is excluded with exactly the rule visibleActivityForDealer uses:
+// a second money leg existing at all is half the margin, so a VENDOR-leg row
+// contributes nothing here — not its txn_ref, not its amount, not `paid`.
+// ---------------------------------------------------------------------------
+
+/** A settlement row as read from settlement_transactions. May be either leg. */
+export interface DealerPayoutSettlementSource {
+  leg: string; // 'DEALER' | 'VENDOR'
+  txn_ref?: string | null;
+  // --- Never emitted -------------------------------------------------------
+  amount?: number | string | null;
+  proof_s3?: string | null;
+  recorded_by?: string | null;
+}
+
+export interface DealerPayoutSource {
+  /** Σ qty × dealer_price over the current lock generation. Null = no locks yet. */
+  locked_dealer_total: number | string | null;
+  /** The deal's settlement rows. A VENDOR-leg row never survives. */
+  settlements: DealerPayoutSettlementSource[];
+}
+
+export interface DealerPayoutView {
+  /** What iTarang owes (or paid) them — their own number, never the vendor's. */
+  amount: number;
+  paid: boolean;
+  txn_ref: string | null;
+}
+
+export function toDealerPayout(source: DealerPayoutSource): DealerPayoutView | null {
+  // No locked prices yet = the deal has not reached the money stage. NULL, not
+  // a zero — a ₹0 payout and "no payout yet" are different statements.
+  const total =
+    source.locked_dealer_total === null || source.locked_dealer_total === undefined
+      ? null
+      : Number(source.locked_dealer_total);
+  if (total === null || !Number.isFinite(total)) return null;
+
+  // The same leg filter as visibleActivityForDealer's record_settlement rule:
+  // only the DEALER leg exists as far as this payload is concerned.
+  const mine = source.settlements.find((s) => s.leg === "DEALER") ?? null;
+
+  // Built field-by-field. The vendor row's txn_ref/amount — and even the
+  // dealer row's amount (the payout is the LOCKED total, not a restatement of
+  // whatever was typed into the settlement form) — are never read into this.
+  return {
+    amount: total,
+    paid: mine !== null,
+    txn_ref: mine?.txn_ref ?? null,
   };
 }
 
