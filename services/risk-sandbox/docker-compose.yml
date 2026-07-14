@@ -1,0 +1,36 @@
+services:
+  risk-sandbox:
+    build: .
+    container_name: risk-sandbox
+    restart: unless-stopped
+
+    # Bound to loopback only. The CRM runs on the same box, so the sandbox has
+    # no reason to be reachable from the internet — and it must not be: it
+    # accepts arbitrary Python and is handed borrower loan + telemetry data.
+    ports:
+      - "127.0.0.1:8091:8000"
+
+    environment:
+      # Must match NBFC_SANDBOX_TOKEN in the CRM's .env. No default: the service
+      # refuses to start without it.
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:?SANDBOX_TOKEN must be set}
+
+    # Defence in depth around code we did not write.
+    network_mode: bridge
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 1500m
+    cpus: 1.0
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

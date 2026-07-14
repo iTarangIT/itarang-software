@@ -116,6 +116,37 @@ async function loadCdsBands(): Promise<{ low_mid: number; mid_high: number }> {
   };
 }
 
+type RiskBucket = "critical" | "warning" | "info";
+
+/**
+ * The single definition of the Critical / Warning / Info severity tiles.
+ *
+ *   critical = cds >= mid_high (70)  OR  any open telemetry alert
+ *   warning  = low_mid (40) <= cds < mid_high (70)
+ *   info     = cds < low_mid  OR  no score yet
+ *
+ * An open alert ESCALATES a battery to Critical; it is not a precondition for
+ * it. The previous rule required `open_alerts > 0 AND cds >= 70`, which pinned
+ * the Critical tile at 0 for any fleet whose alert rules aren't firing, and
+ * demoted the worst borrower in the book (CDS 82, 87 DPD) to amber — while the
+ * same row's RISK column, which reads `cds >= 70` via ScoreBadge, rendered HIGH.
+ * The page disagreed with itself about one borrower.
+ *
+ * Buckets are mutually exclusive and exhaustive, and BOTH the tile counts and
+ * the click-to-filter predicates go through this function. They used to be two
+ * hand-maintained copies of the same conditions, which is how they drifted.
+ */
+function riskBucket(
+  r: { cds_score: number | null; open_alerts: number },
+  bands: { low_mid: number; mid_high: number },
+): RiskBucket {
+  if (r.open_alerts > 0) return "critical";
+  if (r.cds_score == null) return "info"; // no elapsed EMIs → no score
+  if (r.cds_score >= bands.mid_high) return "critical";
+  if (r.cds_score >= bands.low_mid) return "warning";
+  return "info";
+}
+
 export default async function BatteryMonitoringView({
   searchParams,
   basePath = "/nbfc/batteries",
@@ -377,14 +408,12 @@ export default async function BatteryMonitoringView({
   const filtered = enriched.filter((r) => {
     if (statusFilter && r.freshness !== statusFilter) return false;
     if (severityFilter === "open" && r.open_alerts === 0) return false;
-    if (riskFilter === "critical") {
-      if (r.open_alerts === 0) return false;
-      if (r.cds_score == null || r.cds_score < bands.mid_high) return false;
-    } else if (riskFilter === "warning") {
-      if (r.cds_score == null || r.cds_score < bands.low_mid) return false;
-      if (r.cds_score >= bands.mid_high && r.open_alerts > 0) return false;
-    } else if (riskFilter === "info") {
-      if ((r.cds_score ?? 0) >= bands.low_mid) return false;
+    if (
+      riskFilter === "critical" ||
+      riskFilter === "warning" ||
+      riskFilter === "info"
+    ) {
+      if (riskBucket(r, bands) !== riskFilter) return false;
     } else if (riskFilter === "geo") {
       if (r.lat == null || r.lon == null) return false;
     }
@@ -420,19 +449,10 @@ export default async function BatteryMonitoringView({
     last_action_badge: r.last_action_badge,
   }));
 
-  const criticalCount = enriched.filter(
-    (r) =>
-      r.open_alerts > 0 && r.cds_score != null && r.cds_score >= bands.mid_high,
-  ).length;
-  const warningCount = enriched.filter(
-    (r) =>
-      r.cds_score != null &&
-      r.cds_score >= bands.low_mid &&
-      (r.cds_score < bands.mid_high || r.open_alerts === 0),
-  ).length;
-  const infoCount = enriched.filter(
-    (r) => r.cds_score == null || r.cds_score < bands.low_mid,
-  ).length;
+  const bucketCounts = { critical: 0, warning: 0, info: 0 };
+  for (const r of enriched) bucketCounts[riskBucket(r, bands)]++;
+  const { critical: criticalCount, warning: warningCount, info: infoCount } =
+    bucketCounts;
   const geoCount = enriched.filter(
     (r) => r.lat != null && r.lon != null,
   ).length;
