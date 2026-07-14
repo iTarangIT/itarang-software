@@ -98,6 +98,7 @@ export default function AdminBuybackQueuePage() {
                   <Link
                     href={`/admin/buyback/${r.request_id}`}
                     className="font-semibold text-slate-900 hover:underline"
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {r.request_no}
                   </Link>
