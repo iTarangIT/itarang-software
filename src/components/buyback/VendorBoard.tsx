@@ -209,7 +209,12 @@ export default function VendorBoard({
     (board.threads.find((t) => t.status === "AGREED") ?? board.threads[0])?.lines ?? [];
 
   const collectValid = collectLines.every((l) => {
-    const n = Number(collectCounts[l.line_id]);
+    // Number("") is 0 — a cleared input must NOT silently read as "0 collected"
+    // (that would record a false count variance and hold the dealer's payout).
+    // The admin has to type the number, even when it is zero.
+    const raw = collectCounts[l.line_id];
+    if (raw == null || raw.trim() === "") return false;
+    const n = Number(raw);
     return Number.isInteger(n) && n >= 0 && n <= l.quantity;
   });
 
@@ -470,7 +475,7 @@ export default function VendorBoard({
                             ? `Blocked: ${inr(t.shortfall)} below the floor. Push the vendor, or reopen the dealer leg.`
                             : undefined
                         }
-                        className="flex-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                        className="flex-1 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                       >
                         Agree
                       </button>
@@ -625,7 +630,7 @@ export default function VendorBoard({
                 <button
                   onClick={openCollect}
                   disabled={busy}
-                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                  className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700"
                 >
                   Mark collected
                 </button>
@@ -802,7 +807,7 @@ export default function VendorBoard({
               <button
                 disabled={busy || !collectValid}
                 onClick={() => void submitCollected()}
-                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
               >
                 {busy ? "Recording…" : "Mark collected"}
               </button>

@@ -4,14 +4,11 @@
  * Documents — per-deal document center, direction matrix (design handoff,
  * iTarang Portal.dc.html `scrDocuments`, lines 983-1005).
  *
- * The request picker is populated from `/api/admin/buyback/queue` — which
- * means, by that endpoint's own WHERE clause, only NON-terminal deals are
- * selectable here (DRAFT/CLOSED/SETTLED/REJECTED/CANCELLED never appear in
- * the queue). That is a real limitation for a screen whose underlying API's
- * own AC is "every CLOSED deal has the full set" — a CLOSED deal's document
- * set cannot be reached from this picker. Constraints for this task are
- * "documents/search/... endpoints consumed as-is" and "ONLY Ext-5/Ext-6"
- * change, so widening the picker's source is out of scope here.
+ * The request picker is populated from `/api/admin/buyback/queue?scope=all`,
+ * which drops the queue's default terminal-status filter (DRAFT stays
+ * excluded — it hasn't been submitted — but CLOSED/SETTLED/REJECTED/CANCELLED
+ * are included). That matches this screen's own AC, "every CLOSED deal has
+ * the full set": a CLOSED deal's document set IS reachable from this picker.
  *
  * Once a request is picked, `/api/admin/buyback/requests/:id/documents`
  * (read verbatim — not modified) returns every document the deal has

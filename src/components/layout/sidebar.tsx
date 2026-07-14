@@ -51,10 +51,10 @@ import { useUIStore } from "@/store/uiStore";
  * peakAmp Battery Buyback — the iTarang-staff side.
  *
  * Shown to exactly the roles that BUYBACK_ADMIN_ROLES allows
- * (src/lib/buyback/auth.ts: admin, ceo, business_head). Kept as one shared const
- * rather than copy-pasted into three role arrays, so the menu cannot drift out of
- * step with who the API actually lets in — a link a role can see but not open is
- * worse than no link.
+ * (src/lib/buyback/roles.ts: admin, ceo, business_head, sales_head). Kept as one
+ * shared const rather than copy-pasted into the role arrays below, so the menu
+ * cannot drift out of step with who the API actually lets in — a link a role can
+ * see but not open is worse than no link.
  */
 const BUYBACK_ADMIN_SECTION = {
   section: "BATTERY BUYBACK",
