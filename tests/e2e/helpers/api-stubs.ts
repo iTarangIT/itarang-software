@@ -227,12 +227,75 @@ export async function stubSupabaseImages(page: Page): Promise<void> {
   );
 }
 
+/**
+ * Stub the app's OWN endpoints that would otherwise trigger a paid third-party
+ * call server-side. page.route only intercepts BROWSER requests, so the only
+ * way to stop a paid call the Next server makes (Bolna, Razorpay order create,
+ * Firecrawl/Apify/Places scrape, Gemini/OpenAI, Gupshup WhatsApp) is to fulfil
+ * the browser→/api hop before it ever reaches the server. Every action a UI
+ * test could click that dispatches one of these is short-circuited here with a
+ * benign success payload.
+ */
+export async function stubPaidTriggers(page: Page): Promise<void> {
+  const ok = (body: unknown = { success: true }) => (route: import('@playwright/test').Route) =>
+    route.fulfill(json(200, body));
+
+  // Bolna voice dialer — call trigger, scheduler, single-call dispatch.
+  await page.route('**/api/bolna/**', ok({ success: true, callId: 'stub-bolna-call' }));
+  await page.route('**/api/calls/**/trigger', ok({ success: true, callId: 'stub-call' }));
+  await page.route('**/api/calls/trigger**', ok({ success: true, callId: 'stub-call' }));
+
+  // Razorpay — order/payment creation from our API + the hosted checkout script.
+  await page.route('**/api/**/razorpay/**', ok({ id: 'order_stub', amount: 0, currency: 'INR' }));
+  await page.route('**/api/payments/**', ok({ id: 'order_stub', status: 'created' }));
+
+  // Scraper trigger endpoints (fan out to Firecrawl / Apify / Google Places).
+  await page.route('**/api/scraper/**/run', ok({ success: true, runId: 'stub-run' }));
+  await page.route('**/api/scraper/**/start', ok({ success: true, runId: 'stub-run' }));
+
+  // AI/LLM-backed routes (Gemini / OpenAI) — analysis, whatsapp intent, summaries.
+  await page.route('**/api/ai/**', ok({ success: true, result: 'stub' }));
+  await page.route('**/api/whatsapp/**', ok({ success: true }));
+  await page.route('**/api/analysis/**', ok({ success: true }));
+}
+
+/**
+ * Hard safety net: abort any BROWSER request to a known paid third-party host.
+ * Defence in depth on top of stubPaidTriggers — if a page fires a client-side
+ * call straight to one of these hosts, kill it so a run can never spend money.
+ * (Server-side calls can't be seen here; those are covered by stubPaidTriggers.)
+ */
+export async function blockPaidHosts(page: Page): Promise<void> {
+  const PAID_HOSTS = [
+    '**/api.razorpay.com/**',
+    '**/checkout.razorpay.com/**',
+    '**/*.bolna.ai/**',
+    '**/api.bolna.dev/**',
+    '**/*.firecrawl.dev/**',
+    '**/api.apify.com/**',
+    '**/*.apify.com/**',
+    '**/places.googleapis.com/**',
+    '**/maps.googleapis.com/**',
+    '**/generativelanguage.googleapis.com/**',
+    '**/api.openai.com/**',
+    '**/*.elevenlabs.io/**',
+    '**/*.gupshup.io/**',
+    '**/api.decentro.tech/**',
+    '**/*.digio.in/**',
+  ];
+  for (const pattern of PAID_HOSTS) {
+    await page.route(pattern, (route) => route.abort());
+  }
+}
+
 /** One-shot installer for the full stubbed-external-world, used by `stubbedApis` fixture. */
 export async function installAllStubs(page: Page): Promise<StubController> {
+  await blockPaidHosts(page);
   await stubS3(page);
   await stubN8N(page);
   await stubSupabaseImages(page);
   await stubDigio(page);
+  await stubPaidTriggers(page);
   const decentro = await stubDecentro(page);
   return decentro;
 }
