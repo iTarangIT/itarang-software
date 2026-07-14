@@ -41,7 +41,15 @@ interface Data {
   payment: { amount: number; txn_ref: string | null; txn_date: string } | null;
 }
 
-export default function DealerInvoicePane({ requestId }: { requestId: string }) {
+export default function DealerInvoicePane({
+  requestId,
+  // Standalone (below the page) it wants a top margin; inside the Documents grid
+  // the caller passes "" so it aligns with the PO card. Logic is untouched.
+  className = "mt-6",
+}: {
+  requestId: string;
+  className?: string;
+}) {
   const [d, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -93,7 +101,7 @@ export default function DealerInvoicePane({ requestId }: { requestId: string }) 
   if (!relevant) return null;
 
   return (
-    <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
+    <div className={`rounded-xl border border-slate-200 bg-white p-5 ${className}`}>
       <div className="text-sm font-bold text-slate-900">Your invoice</div>
 
       {/* The returned reason goes FIRST. A dealer who has to hunt for why their
