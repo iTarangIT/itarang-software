@@ -90,10 +90,16 @@ async function runReport(type: ReportType) {
           // so any existing positional CSV consumer's first 9 columns are
           // untouched.
           "Raised at",
+          // Ext-6 (Payments & Settlement page): the request's id, so a UI can
+          // deep-link `/admin/buyback/{request_id}` without a second lookup.
+          // The LOCKED CTE already selects `request_id` for its own joins —
+          // this just also exposes it. Additive — appended last.
+          "Request ID",
         ],
         rows: (await db.execute(sql`
           SELECT request_no, dealer, COALESCE(vendor, '—') AS vendor, status, units,
-                 dealer_total, vendor_total, planned_margin, realised_margin, raised_at
+                 dealer_total, vendor_total, planned_margin, realised_margin, raised_at,
+                 request_id
           FROM (${LOCKED}) locked
           ORDER BY raised_at DESC
         `)) as unknown as Array<Record<string, unknown>>,

@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * The battery price book (M16).
+ * The battery price book (M16), restyled onto the shared buyback UI kit
+ * (design handoff, iTarang Portal.dc.html `scrCatalog`, lines 968-981).
  *
  * The hard part of this screen is not the table — it is the FEAR. An admin who
  * believes that dropping the Dead price by ₹200 might quietly re-price a request
@@ -12,11 +13,29 @@
  * price_book_version_at_create when the line is created, and every screen,
  * document and report reads the line's own copy. So the screen says so, in
  * plain words, next to the thing it is reassuring them about — once at the top,
- * and again inside the edit row where the hesitation actually occurs.
+ * and again inside the edit panel where the hesitation actually occurs.
+ *
+ * DealTable's row shape has no colSpan/expand-row concept, so the price
+ * history + edit form (previously two extra <tr> injected under the variant's
+ * row) now live in a Card that appears BELOW the table when a row is clicked —
+ * all the same logic (addVariant/saveEdit/loadHistory/deactivate), same
+ * fields, just reached by clicking the row instead of a dedicated "Edit"
+ * cell. The table itself keeps only the brief's 6 columns: Variant · Capacity
+ * · Unit price · Buyback·Working · Buyback·Dead · Status — the last of which
+ * keeps its own quick Active/Retire toggle, since that one action doesn't
+ * need the expanded panel.
+ *
+ * DATA-BINDING NOTE — "Capacity" has no field of its own in catalog_variants;
+ * the schema's only capacity-shaped column is `ah` (already part of the
+ * Variant label). This column renders that same `ah` again, alone, so an
+ * admin scanning capacities across many rows doesn't have to parse it back
+ * out of the compound "60V 120Ah" label each time.
  */
 
 import { useEffect, useState } from "react";
 
+import { Card, DealTable, EmptyState, PageHeader } from "@/components/buyback/ui";
+import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
 import { inr } from "@/lib/buyback/format";
 
 /**
@@ -67,14 +86,22 @@ const trim = (value: string | number) => {
 };
 
 /** "60V 120Ah Li-ion" — the same label the seed and the dealer's picker use. */
-const label = (f: typeof EMPTY_FORM) =>
-  `${trim(f.voltage)}V ${trim(f.ah)}Ah ${f.chemistry}`.trim();
+const label = (f: typeof EMPTY_FORM) => `${trim(f.voltage)}V ${trim(f.ah)}Ah ${f.chemistry}`.trim();
 
 /** "" → undefined, so an untouched field stays NULL rather than becoming 0. */
 const num = (value: string) => (value.trim() === "" ? undefined : Number(value));
 
 const NO_OPEN_REQUEST_IMPACT =
   "Changing a price here only affects requests raised from now on. Open requests keep the price they were quoted — every battery line stores its own copy, and the price-book version it came from.";
+
+const HEADS: DealTableHead[] = [
+  { label: "Variant" },
+  { label: "Capacity" },
+  { label: "Unit price", align: "right" },
+  { label: "Buyback · Working", align: "right" },
+  { label: "Buyback · Dead", align: "right" },
+  { label: "Status" },
+];
 
 export default function BuybackCatalogPage() {
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -89,6 +116,8 @@ export default function BuybackCatalogPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [edit, setEdit] = useState({ working: "", dead: "", note: "" });
 
+  // Which variant's panel (edit form + price history) is open below the
+  // table — set by clicking its row.
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [history, setHistory] = useState<Record<string, HistoryRow[]>>({});
 
@@ -185,17 +214,8 @@ export default function BuybackCatalogPage() {
     }
 
     setEditId(null);
-    // The cached history for this row is now a version out of date; refetch it if
-    // it is on screen, drop it if it is not.
-    if (expandedId === v.id) {
-      await loadHistory(v.id, true);
-    } else {
-      setHistory((h) => {
-        const next = { ...h };
-        delete next[v.id];
-        return next;
-      });
-    }
+    // The cached history for this row is now a version out of date; refetch it.
+    await loadHistory(v.id, true);
     reload();
   };
 
@@ -206,9 +226,10 @@ export default function BuybackCatalogPage() {
     setHistory((h) => ({ ...h, [id]: json?.data?.history ?? [] }));
   };
 
-  const toggleHistory = async (id: string) => {
+  const toggleExpand = async (id: string) => {
     const next = expandedId === id ? null : id;
     setExpandedId(next);
+    setEditId(null);
     if (next) await loadHistory(next);
   };
 
@@ -239,294 +260,260 @@ export default function BuybackCatalogPage() {
     </label>
   );
 
-  return (
-    <div className="mx-auto max-w-6xl px-6 pb-24 pt-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-bold text-slate-900">Battery price book</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            What iTarang offers per battery, by condition. Every voltage + capacity is its own
-            variant.
-          </p>
+  const rows: DealTableRow[] = variants.map((v) => ({
+    key: v.id,
+    onClick: () => toggleExpand(v.id),
+    ariaLabel: `${expandedId === v.id ? "Collapse" : "Expand"} ${v.type}`,
+    cells: [
+      <div key="variant">
+        <div className={`font-bold ${v.active ? "text-slate-900" : "text-slate-400"}`}>
+          {trim(v.voltage)}V {trim(v.ah)}Ah
         </div>
+        <div className="text-[11.5px] text-slate-400">
+          {v.chemistry ?? v.type.replace(/^[\d.]+V\s*\d+Ah\s*/, "").replace(/[()]/g, "") || "—"}
+          {" · v"}
+          {v.price_book_version}
+        </div>
+      </div>,
+      <span key="capacity" className="text-slate-600">
+        {trim(v.ah)}Ah
+      </span>,
+      <span key="unit" className="text-right tabular-nums text-slate-700">
+        {inr(v.unit_price)}
+      </span>,
+      <span key="working" className="text-right font-semibold tabular-nums text-green-700">
+        {inr(v.est_buyback_price_working)}
+      </span>,
+      <span key="dead" className="text-right font-semibold tabular-nums text-red-700">
+        {inr(v.est_buyback_price_dead)}
+      </span>,
+      v.active ? (
         <button
-          onClick={() => {
-            setAddOpen(true);
-            setError(null);
+          key="status"
+          onClick={(e) => {
+            e.stopPropagation();
+            deactivate(v);
           }}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-[3px] text-[11px] font-bold text-green-700 disabled:opacity-50"
+          title="Retire this variant — it disappears from new intake only"
         >
-          Add variant
+          Active
         </button>
-      </div>
+      ) : (
+        <span
+          key="status"
+          className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-[3px] text-[11px] font-bold text-slate-500"
+          title="Retired — hidden from new intake"
+        >
+          Retired
+        </span>
+      ),
+    ],
+  }));
 
-      {/* The nudge. Scrap prices move; a catalog nobody has looked at is quietly
-          mispricing every new request — which never crashes, and so goes unnoticed. */}
-      {!loading && reviewDue && (
-        <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wide text-amber-700">
-              Price review due
+  const expanded = variants.find((v) => v.id === expandedId) ?? null;
+
+  return (
+    <div className="bg-bb-bg px-6 py-6">
+      <div className="mx-auto max-w-[1180px]">
+        <PageHeader
+          title="Battery Catalog"
+          sub="Every Voltage + Ah is a separate variant, priced independently by condition"
+          right={
+            <button
+              onClick={() => {
+                setAddOpen(true);
+                setError(null);
+              }}
+              className="rounded-lg bg-green-600 px-3.5 py-2 text-[12.5px] font-semibold text-white hover:bg-green-700"
+            >
+              + Add variant
+            </button>
+          }
+        />
+
+        {/* The nudge. Scrap prices move; a catalog nobody has looked at is quietly
+            mispricing every new request — which never crashes, and so goes unnoticed. */}
+        {!loading && reviewDue && (
+          <div className="mb-4 flex items-center justify-between gap-4 rounded-[10px] border border-amber-300 bg-amber-50 px-4 py-3">
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-amber-700">
+                Price review due
+              </div>
+              <p className="mt-0.5 text-[13px] text-amber-900">
+                {days === null
+                  ? "These prices have never been reviewed. Every new request is being quoted against numbers nobody has checked."
+                  : `Prices were last reviewed ${days} day${days === 1 ? "" : "s"} ago. Scrap prices move — new requests are being quoted against these numbers.`}
+              </p>
             </div>
-            <p className="mt-0.5 text-sm text-amber-900">
-              {days === null
-                ? "These prices have never been reviewed. Every new request is being quoted against numbers nobody has checked."
-                : `Prices were last reviewed ${days} day${days === 1 ? "" : "s"} ago. Scrap prices move — new requests are being quoted against these numbers.`}
-            </p>
+            <button
+              onClick={markReviewed}
+              disabled={busy}
+              className="shrink-0 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:bg-amber-200"
+            >
+              Mark reviewed
+            </button>
           </div>
-          <button
-            onClick={markReviewed}
-            disabled={busy}
-            className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:bg-amber-200"
-          >
-            Mark reviewed
-          </button>
-        </div>
-      )}
+        )}
 
-      {!loading && !reviewDue && days !== null && (
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-500">
-          Prices reviewed {days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}.
-        </div>
-      )}
-
-      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600">
-        <b className="text-slate-800">Editing a price is safe.</b> {NO_OPEN_REQUEST_IMPACT}
-      </div>
-
-      {error && !addOpen && <div className="mt-3 text-xs text-red-600">{error}</div>}
-
-      <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
-        {loading ? (
-          <div className="p-10 text-center text-sm text-slate-400">Loading…</div>
-        ) : variants.length === 0 ? (
-          <div className="p-10 text-center text-sm text-slate-400">
-            No variants yet. A dealer cannot raise a buyback request until there is at least one.
+        {!loading && !reviewDue && days !== null && (
+          <div className="mb-4 rounded-[10px] border border-gray-200 bg-white px-4 py-2.5 text-xs text-slate-500">
+            Prices reviewed {days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}.
           </div>
+        )}
+
+        <div className="mb-4 rounded-[10px] border border-gray-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600">
+          <b className="text-slate-800">Editing a price is safe.</b> {NO_OPEN_REQUEST_IMPACT}
+        </div>
+
+        {error && !addOpen && !expandedId && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+        {!loading && variants.length === 0 ? (
+          <EmptyState
+            icon="🔋"
+            title="No variants yet"
+            body="A dealer cannot raise a buyback request until there is at least one."
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 text-left text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                  <th className="px-4 py-2.5">Battery</th>
-                  <th className="px-4 py-2.5 text-right">Working</th>
-                  <th className="px-4 py-2.5 text-right">Dead</th>
-                  <th className="px-4 py-2.5 text-right">Version</th>
-                  <th className="px-4 py-2.5 text-right">Open requests</th>
-                  <th className="px-4 py-2.5">Status</th>
-                  <th className="px-4 py-2.5 text-right">Prices</th>
-                </tr>
-              </thead>
-              <tbody>
-                {variants.map((v) => {
-                  const editing = editId === v.id;
-                  const open = v.open_lines ?? 0;
+          <Card>
+            <DealTable
+              heads={HEADS}
+              rows={rows}
+              loading={loading ? "Loading…" : undefined}
+              empty={!loading ? "No variants yet." : undefined}
+            />
+          </Card>
+        )}
 
-                  return [
-                    <tr
-                      key={v.id}
-                      className={`border-t border-slate-50 ${v.active ? "" : "bg-slate-50/60"}`}
+        {expanded && (
+          <Card title={`${expanded.type} — details`} className="mt-4">
+            <div className="p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-slate-500">
+                  {expanded.open_lines
+                    ? `On ${expanded.open_lines} open request line${expanded.open_lines === 1 ? "" : "s"} right now.`
+                    : "Not on any open request line right now."}
+                </div>
+                {editId !== expanded.id && (
+                  <button
+                    onClick={() => startEdit(expanded)}
+                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Edit prices
+                  </button>
+                )}
+              </div>
+
+              {editId === expanded.id && (
+                <div className="mt-3 rounded-lg border border-gray-200 bg-slate-50 p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">
+                        Buyback · Working
+                      </span>
+                      <input
+                        value={edit.working}
+                        inputMode="numeric"
+                        onChange={(e) => setEdit((s) => ({ ...s, working: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm tabular-nums"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Buyback · Dead</span>
+                      <input
+                        value={edit.dead}
+                        inputMode="numeric"
+                        onChange={(e) => setEdit((s) => ({ ...s, dead: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm tabular-nums"
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="text-xs font-semibold text-slate-600">
+                        Why (goes on the price history)
+                      </span>
+                      <input
+                        value={edit.note}
+                        placeholder="Scrap lithium down 8% this week"
+                        onChange={(e) => setEdit((s) => ({ ...s, note: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+
+                  <p className="mt-2 text-xs text-slate-500">
+                    Saving publishes <b>v{expanded.price_book_version + 1}</b> of the price book.{" "}
+                    {NO_OPEN_REQUEST_IMPACT}
+                  </p>
+
+                  {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
+
+                  <div className="mt-3 flex justify-end gap-2">
+                    <button
+                      onClick={() => setEditId(null)}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600"
                     >
-                      <td className="px-4 py-2.5">
-                        <div
-                          className={`font-semibold ${v.active ? "text-slate-800" : "text-slate-400"}`}
-                        >
-                          {v.type}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                          {trim(v.voltage)}V · {trim(v.ah)}Ah
-                          {v.unit_price ? ` · lists at ${inr(v.unit_price)}` : ""}
-                        </div>
-                      </td>
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => saveEdit(expanded)}
+                      disabled={busy || (!edit.working.trim() && !edit.dead.trim())}
+                      className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:bg-slate-200 disabled:text-slate-400"
+                    >
+                      {busy ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              )}
 
-                      <td className="px-4 py-2.5 text-right">
-                        {editing ? (
-                          <input
-                            value={edit.working}
-                            inputMode="numeric"
-                            onChange={(e) => setEdit((s) => ({ ...s, working: e.target.value }))}
-                            className="w-24 rounded-lg border border-slate-300 px-2 py-1 text-right text-sm tabular-nums"
-                          />
-                        ) : (
-                          <span className="font-bold tabular-nums text-emerald-700">
-                            {inr(v.est_buyback_price_working)}
-                          </span>
-                        )}
-                      </td>
+              <div className="mt-4 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                Price history
+              </div>
 
-                      <td className="px-4 py-2.5 text-right">
-                        {editing ? (
-                          <input
-                            value={edit.dead}
-                            inputMode="numeric"
-                            onChange={(e) => setEdit((s) => ({ ...s, dead: e.target.value }))}
-                            className="w-24 rounded-lg border border-slate-300 px-2 py-1 text-right text-sm tabular-nums"
-                          />
-                        ) : (
-                          <span className="font-bold tabular-nums text-slate-700">
-                            {inr(v.est_buyback_price_dead)}
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-2.5 text-right">
-                        <button
-                          onClick={() => toggleHistory(v.id)}
-                          className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 hover:bg-slate-200"
-                          title="Price history"
-                        >
-                          v{v.price_book_version} {expandedId === v.id ? "▴" : "▾"}
-                        </button>
-                      </td>
-
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">
-                        {open || "—"}
-                      </td>
-
-                      <td className="px-4 py-2.5">
-                        {v.active ? (
-                          <button
-                            onClick={() => deactivate(v)}
-                            disabled={busy}
-                            className="group inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 disabled:opacity-50"
-                            title="Retire this variant — it disappears from new intake only"
-                          >
-                            <span className="inline-flex h-4 w-7 items-center rounded-full bg-emerald-500 p-0.5 transition group-hover:bg-slate-300">
-                              <span className="h-3 w-3 translate-x-3 rounded-full bg-white transition group-hover:translate-x-0" />
-                            </span>
-                            Active
-                          </button>
-                        ) : (
-                          // Retiring is one-way from here: reactivation is not a
-                          // catalog edit, it is a pricing decision that needs the
-                          // prices re-checked first.
-                          <span
-                            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400"
-                            title="Retired — hidden from new intake"
-                          >
-                            <span className="inline-flex h-4 w-7 items-center rounded-full bg-slate-200 p-0.5">
-                              <span className="h-3 w-3 rounded-full bg-white" />
-                            </span>
-                            Retired
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-2.5 text-right">
-                        {editing ? (
-                          <div className="flex justify-end gap-2">
-                            <button
-                              onClick={() => setEditId(null)}
-                              className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => saveEdit(v)}
-                              disabled={busy || (!edit.working.trim() && !edit.dead.trim())}
-                              className="rounded-lg bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
-                            >
-                              {busy ? "Saving…" : "Save"}
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => startEdit(v)}
-                            className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                          >
-                            Edit
-                          </button>
-                        )}
-                      </td>
-                    </tr>,
-
-                    editing ? (
-                      <tr key={`${v.id}-edit`} className="bg-slate-50">
-                        <td colSpan={7} className="px-4 py-3">
-                          <div className="flex flex-wrap items-center gap-3">
-                            <label className="flex-1">
-                              <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                                Why (goes on the price history)
-                              </span>
-                              <input
-                                value={edit.note}
-                                placeholder="Scrap lithium down 8% this week"
-                                onChange={(e) => setEdit((s) => ({ ...s, note: e.target.value }))}
-                                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                              />
-                            </label>
-                          </div>
-                          <p className="mt-2 text-xs text-slate-500">
-                            Saving publishes <b>v{v.price_book_version + 1}</b> of the price book.{" "}
-                            {NO_OPEN_REQUEST_IMPACT}
-                          </p>
-                          {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
+              {!history[expanded.id] ? (
+                <div className="py-3 text-xs text-slate-400">Loading…</div>
+              ) : history[expanded.id].length === 0 ? (
+                <div className="py-3 text-xs text-slate-400">No recorded changes yet.</div>
+              ) : (
+                <table className="mt-2 w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                      <th className="py-1.5 pr-4">Version</th>
+                      <th className="py-1.5 pr-4 text-right">Working</th>
+                      <th className="py-1.5 pr-4 text-right">Dead</th>
+                      <th className="py-1.5 pr-4">Changed by</th>
+                      <th className="py-1.5 pr-4">When</th>
+                      <th className="py-1.5">Why</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history[expanded.id].map((h) => (
+                      <tr key={h.id} className="border-t border-slate-200/70">
+                        <td className="py-1.5 pr-4 font-bold text-slate-600">
+                          v{h.price_book_version}
                         </td>
-                      </tr>
-                    ) : null,
-
-                    expandedId === v.id ? (
-                      <tr key={`${v.id}-history`} className="bg-slate-50/70">
-                        <td colSpan={7} className="px-4 py-3">
-                          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                            Price history
-                          </div>
-
-                          {!history[v.id] ? (
-                            <div className="py-3 text-xs text-slate-400">Loading…</div>
-                          ) : history[v.id].length === 0 ? (
-                            <div className="py-3 text-xs text-slate-400">
-                              No recorded changes yet.
-                            </div>
-                          ) : (
-                            <table className="mt-2 w-full text-xs">
-                              <thead>
-                                <tr className="text-left text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                                  <th className="py-1.5 pr-4">Version</th>
-                                  <th className="py-1.5 pr-4 text-right">Working</th>
-                                  <th className="py-1.5 pr-4 text-right">Dead</th>
-                                  <th className="py-1.5 pr-4">Changed by</th>
-                                  <th className="py-1.5 pr-4">When</th>
-                                  <th className="py-1.5">Why</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {history[v.id].map((h) => (
-                                  <tr key={h.id} className="border-t border-slate-200/70">
-                                    <td className="py-1.5 pr-4 font-bold text-slate-600">
-                                      v{h.price_book_version}
-                                    </td>
-                                    <td className="py-1.5 pr-4 text-right tabular-nums text-slate-700">
-                                      {inr(h.est_buyback_price_working)}
-                                    </td>
-                                    <td className="py-1.5 pr-4 text-right tabular-nums text-slate-700">
-                                      {inr(h.est_buyback_price_dead)}
-                                    </td>
-                                    <td className="py-1.5 pr-4 text-slate-500">
-                                      {h.changed_by_name ?? "—"}
-                                    </td>
-                                    <td className="py-1.5 pr-4 text-slate-500">
-                                      {new Date(h.created_at).toLocaleDateString("en-IN")}
-                                    </td>
-                                    <td className="py-1.5 text-slate-500">{h.note ?? "—"}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
-
-                          <p className="mt-2 text-xs text-slate-400">
-                            A request quoted at v2 is still worth what v2 said, whatever the
-                            catalog says today.
-                          </p>
+                        <td className="py-1.5 pr-4 text-right tabular-nums text-slate-700">
+                          {inr(h.est_buyback_price_working)}
                         </td>
+                        <td className="py-1.5 pr-4 text-right tabular-nums text-slate-700">
+                          {inr(h.est_buyback_price_dead)}
+                        </td>
+                        <td className="py-1.5 pr-4 text-slate-500">{h.changed_by_name ?? "—"}</td>
+                        <td className="py-1.5 pr-4 text-slate-500">
+                          {new Date(h.created_at).toLocaleDateString("en-IN")}
+                        </td>
+                        <td className="py-1.5 text-slate-500">{h.note ?? "—"}</td>
                       </tr>
-                    ) : null,
-                  ];
-                })}
-              </tbody>
-            </table>
-          </div>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              <p className="mt-2 text-xs text-slate-400">
+                A request quoted at v2 is still worth what v2 said, whatever the catalog says today.
+              </p>
+            </div>
+          </Card>
         )}
       </div>
 
@@ -571,7 +558,7 @@ export default function BuybackCatalogPage() {
               <button
                 onClick={addVariant}
                 disabled={busy || !Number(form.voltage) || !Number(form.ah)}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
+                className="rounded-lg bg-green-600 px-4 py-2 text-xs font-semibold text-white hover:bg-green-700 disabled:bg-slate-200 disabled:text-slate-400"
               >
                 {busy ? "Adding…" : "Add variant"}
               </button>

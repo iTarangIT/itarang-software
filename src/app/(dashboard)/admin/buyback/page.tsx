@@ -34,6 +34,7 @@ import {
 } from "@/components/buyback/ui";
 import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
 import StatusChip, { statusLabel } from "@/components/buyback/StatusChip";
+import AdminBuybackSearch from "@/components/buyback/AdminBuybackSearch";
 import { inr } from "@/lib/buyback/format";
 
 interface QueueRow {
@@ -201,7 +202,11 @@ export default function AdminBuybackQueuePage() {
   return (
     <div className="bg-bb-bg px-6 py-6">
       <div className="mx-auto max-w-[1180px]">
-        <PageHeader title="Review Queue" sub="Requests awaiting review, negotiation & routing" />
+        <PageHeader
+          title="Review Queue"
+          sub="Requests awaiting review, negotiation & routing"
+          right={<AdminBuybackSearch />}
+        />
 
         {error ? (
           <p className="text-sm text-red-600">{error}</p>

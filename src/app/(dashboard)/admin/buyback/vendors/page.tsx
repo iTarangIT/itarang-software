@@ -1,20 +1,30 @@
 "use client";
 
 /**
- * Scrap vendors (M09 / M18-lite).
+ * Scrap vendors (M09 / M18-lite), restyled onto the shared buyback UI kit
+ * (design handoff, iTarang Portal.dc.html `scrVendors`, lines 958-966).
  *
  * Deliberately thin. Full vendor onboarding — GST and PAN verification, the
  * Digio agreement, the non-circumvention clause — is M18/M19 in Sprint 4. What
  * exists here is the minimum that makes routing real: an admin can add a vendor
  * they have vetted offline, and that vendor becomes selectable.
  *
- * The list only ever shows ROUTABLE vendors (an ACTIVE SCRAP_VENDOR role). When
- * Sprint 4 makes ACTIVE mean "agreement signed", this screen keeps working and
- * M18's AC — "unonboarded vendor unselectable for routing" — starts holding
- * without a line changing here.
+ * The list only ever shows ROUTABLE vendors (an ACTIVE SCRAP_VENDOR role, via
+ * `listRoutableVendors`'s own `WHERE sv.active`). When Sprint 4 makes ACTIVE mean
+ * "agreement signed", this screen keeps working and M18's AC — "unonboarded
+ * vendor unselectable for routing" — starts holding without a line changing here.
+ *
+ * DATA-BINDING NOTE — the "Active" pill is rendered unconditionally rather than
+ * read off an `active` field: `/api/admin/buyback/vendors` (GET) does not expose
+ * `active` in its response, and every row it CAN return is already active by
+ * construction (the query's own WHERE clause). GSTIN and a "Threads" count are
+ * omitted for the same reason — neither is in this endpoint's payload, and this
+ * task's endpoints are consumed as-is (no new field, no new endpoint).
  */
 
 import { useEffect, useState } from "react";
+
+import { Card, EmptyState, PageHeader } from "@/components/buyback/ui";
 
 const EMPTY = {
   name: "",
@@ -33,7 +43,14 @@ interface Vendor {
   phone: string | null;
   city: string | null;
   state: string | null;
+  categories: unknown;
+  regions: string[];
   payment_terms: string | null;
+}
+
+/** ["Li-ion", "Lead-acid"] → "Li-ion, Lead-acid"; empty/missing → "—". */
+function listOrDash(value: unknown): string {
+  return Array.isArray(value) && value.length > 0 ? value.join(", ") : "—";
 }
 
 export default function BuybackVendorsPage() {
@@ -103,52 +120,71 @@ export default function BuybackVendorsPage() {
   );
 
   return (
-    <div className="mx-auto max-w-4xl px-6 pb-24 pt-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-bold text-slate-900">Scrap vendors</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Who iTarang can sell collected batteries to.
-          </p>
-        </div>
-        <button
-          onClick={() => setOpen(true)}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-        >
-          Add vendor
-        </button>
-      </div>
+    <div className="bg-bb-bg px-6 py-6">
+      <div className="mx-auto max-w-[1180px]">
+        <PageHeader
+          title="Vendors"
+          sub="Scrap vendors — no login; admin records their responses"
+          right={
+            <button
+              onClick={() => setOpen(true)}
+              className="rounded-lg bg-green-600 px-3.5 py-2 text-[12.5px] font-semibold text-white hover:bg-green-700"
+            >
+              + Add vendor
+            </button>
+          }
+        />
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        {error && !open && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
         {loading ? (
-          <div className="p-10 text-center text-sm text-slate-400">Loading…</div>
+          <p className="text-sm text-slate-400">Loading…</p>
         ) : vendors.length === 0 ? (
-          <div className="p-10 text-center text-sm text-slate-400">
-            No vendors yet. A deal cannot be quoted out until there is at least one.
-          </div>
+          <EmptyState
+            icon="🏭"
+            title="No vendors yet"
+            body="A deal cannot be quoted out until there is at least one."
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 text-left text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                <th className="px-4 py-2.5">Vendor</th>
-                <th className="px-4 py-2.5">Location</th>
-                <th className="px-4 py-2.5">Contact</th>
-                <th className="px-4 py-2.5">Terms</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vendors.map((v) => (
-                <tr key={v.id} className="border-t border-slate-50">
-                  <td className="px-4 py-2.5 font-semibold text-slate-800">{v.name}</td>
-                  <td className="px-4 py-2.5 text-slate-500">
-                    {[v.city, v.state].filter(Boolean).join(", ") || "—"}
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-500">{v.email ?? "—"}</td>
-                  <td className="px-4 py-2.5 text-slate-500">{v.payment_terms ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            {vendors.map((v) => (
+              <Card key={v.id}>
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="text-[14.5px] font-bold text-slate-900">{v.name}</div>
+                    <span className="inline-flex shrink-0 rounded-full bg-green-100 px-2.5 py-[3px] text-[11px] font-bold text-green-700">
+                      Active
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2.5 text-[12.5px]">
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-400">Categories</div>
+                      <div className="mt-[1px] font-semibold text-slate-700">
+                        {listOrDash(v.categories)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-400">Regions</div>
+                      <div className="mt-[1px] font-semibold text-slate-700">
+                        {listOrDash(v.regions)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-400">Payment terms</div>
+                      <div className="mt-[1px] font-semibold text-slate-700">
+                        {v.payment_terms ?? "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-400">Contact</div>
+                      <div className="mt-[1px] font-semibold text-slate-700">{v.email ?? "—"}</div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
         )}
       </div>
 
@@ -190,7 +226,7 @@ export default function BuybackVendorsPage() {
                   form.gstin.trim().length !== 15 ||
                   !form.contact_email.trim()
                 }
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
+                className="rounded-lg bg-green-600 px-4 py-2 text-xs font-semibold text-white hover:bg-green-700 disabled:bg-slate-200 disabled:text-slate-400"
               >
                 {busy ? "Adding…" : "Add vendor"}
               </button>

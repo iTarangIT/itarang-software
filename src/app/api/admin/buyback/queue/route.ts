@@ -6,6 +6,13 @@
  *
  * Closed/terminal deals drop out; DRAFTs never appear (the dealer hasn't
  * submitted them). Backed by the (status, created_at) index from E-185.
+ *
+ * Ext-5 (admin Negotiations screen): two additive per-row fields —
+ * `neg_rounds` (count of DEALER-leg negotiation_rounds) and
+ * `last_offer_total` (Σ qty × offered_price_per_unit over the DEALER leg's
+ * latest round, NULL when there is no round yet). `offer_version` was
+ * already selected/returned before this change. Nothing existing was
+ * renamed or removed.
  */
 
 import { sql } from "drizzle-orm";
@@ -60,7 +67,27 @@ export const GET = withErrorHandler(async () => {
       -- Same aging, in hours — additive: days_in_queue floors sub-24h requests
       -- to "0d in queue", which reads as broken for anything submitted today.
       GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - coalesce(br.submitted_at, br.created_at))) / 3600))::int
-        AS hours_in_queue
+        AS hours_in_queue,
+
+      -- Ext-5 (Negotiations screen): how many DEALER-leg negotiation rounds this
+      -- deal has been through, and what the dealer's most recent round asked for
+      -- in total. Additive — two new columns, nothing existing renamed/removed.
+      (SELECT count(*)::int
+         FROM negotiation_rounds nr
+        WHERE nr.deal_id = bd.id AND nr.leg = 'DEALER') AS neg_rounds,
+
+      -- Σ qty × offered_price_per_unit over the DEALER leg's latest round only
+      -- (highest round_no) — NULL, not 0, when there is no round yet, so the UI
+      -- can render "—" rather than a misleading ₹0.
+      (SELECT sum(bl.quantity * nrl.offered_price_per_unit)
+         FROM negotiation_round_lines nrl
+         JOIN buyback_lines bl ON bl.id = nrl.line_id
+        WHERE nrl.round_id = (
+          SELECT nr2.id FROM negotiation_rounds nr2
+           WHERE nr2.deal_id = bd.id AND nr2.leg = 'DEALER'
+           ORDER BY nr2.round_no DESC
+           LIMIT 1
+        )) AS last_offer_total
 
     FROM buyback_requests br
     JOIN buyback_deals bd ON bd.request_id = br.id
@@ -89,6 +116,10 @@ export const GET = withErrorHandler(async () => {
       hours_in_queue: Number(r.hours_in_queue),
       created_at: r.created_at,
       submitted_at: r.submitted_at,
+      // Ext-5 — additive. last_offer_total stays null (never 0) when no round
+      // has been made yet.
+      neg_rounds: Number(r.neg_rounds),
+      last_offer_total: r.last_offer_total === null ? null : Number(r.last_offer_total),
     };
   });
 
