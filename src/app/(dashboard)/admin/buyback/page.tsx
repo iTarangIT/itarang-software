@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import StatusChip from "@/components/buyback/StatusChip";
 import { inr } from "@/lib/buyback/format";
@@ -28,9 +29,11 @@ interface QueueRow {
   dealer_quote: number;
   provenance_pct: number;
   days_in_queue: number;
+  hours_in_queue: number;
 }
 
 export default function AdminBuybackQueuePage() {
+  const router = useRouter();
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -82,7 +85,15 @@ export default function AdminBuybackQueuePage() {
             )}
 
             {queue.map((r) => (
-              <tr key={r.request_id} className="border-t border-slate-100 hover:bg-slate-50">
+              <tr
+                key={r.request_id}
+                className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
+                tabIndex={0}
+                onClick={() => router.push(`/admin/buyback/${r.request_id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") router.push(`/admin/buyback/${r.request_id}`);
+                }}
+              >
                 <td className="px-4 py-3">
                   <Link
                     href={`/admin/buyback/${r.request_id}`}
@@ -126,7 +137,9 @@ export default function AdminBuybackQueuePage() {
 
                 <td className="px-4 py-3">
                   <span className="rounded-md bg-amber-100 px-2 py-1 text-[11.5px] font-bold text-amber-700">
-                    {r.days_in_queue}d in queue
+                    {r.days_in_queue >= 1
+                      ? `${r.days_in_queue}d in queue`
+                      : `${r.hours_in_queue}h in queue`}
                   </span>
                 </td>
 

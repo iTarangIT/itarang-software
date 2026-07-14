@@ -21,10 +21,12 @@ import { ForbiddenError, NotFoundError } from "./errors";
 import type { ActorRole } from "./state-machine";
 
 /**
- * Roles that act as iTarang staff on the buyback portal.
+ * Roles that act as iTarang staff on the buyback portal: `admin`, `ceo`,
+ * `business_head`, and `sales_head`.
  *
  * `sales_head` is here because they are the people who actually run the desk —
- * reviewing requests, haggling with dealers, routing to vendors. The state
+ * reviewing requests, haggling with dealers, routing to vendors. `business_head`
+ * has read/oversight access to the admin queue and detail pages. The state
  * machine only knows two actors ("dealer" or "admin"), and every role in this
  * list resolves to "admin" for its purposes.
  *
@@ -36,8 +38,11 @@ import type { ActorRole } from "./state-machine";
  * It is also who gets the in-portal notifications: a duplicate-photo fraud alert,
  * a signed agreement, a vendor's response. Adding a role here starts sending them
  * that traffic, which is the intent.
+ *
+ * The list itself lives in `./roles` (dependency-free, Edge-safe) — re-exported
+ * here so every existing import site (`from "@/lib/buyback/auth"`) keeps working.
  */
-export const BUYBACK_ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head"];
+export { BUYBACK_ADMIN_ROLES } from "./roles";
 
 export interface BuybackActor {
   id: string;
@@ -60,7 +65,7 @@ export async function requireDealer(): Promise<BuybackActor> {
 
 /** The caller must be iTarang staff. */
 export async function requireBuybackAdmin(): Promise<BuybackActor> {
-  const user = await requireRole(BUYBACK_ADMIN_ROLES);
+  const user = await requireRole([...BUYBACK_ADMIN_ROLES]);
   return { id: user.id, role: "admin", entityId: null };
 }
 

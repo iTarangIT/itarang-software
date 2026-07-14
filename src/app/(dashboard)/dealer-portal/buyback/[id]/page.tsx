@@ -96,6 +96,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
   schedule_pickup: "Collection scheduled",
   complete_pickup: "Batteries collected",
   variance_ack: "You confirmed the collected count",
+  acknowledge_variance: "You confirmed the collected count",
   raise_invoice: "You raised your invoice",
   approve_invoice: "Your invoice was approved",
   return_invoice: "Your invoice was returned",
