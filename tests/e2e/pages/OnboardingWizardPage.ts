@@ -28,6 +28,16 @@ export class OnboardingWizardPage {
 
   async goto(): Promise<void> {
     await this.page.goto('/dealer-onboarding');
+    // The page first shows the OnboardingChooser landing ("New Dealer
+    // Onboarding" / "My Drafts"). Starting a new onboarding reveals Step 1
+    // (StepCompany → "Business Details"). When resuming via ?applicationId the
+    // chooser is skipped, so this click is best-effort.
+    const startBtn = this.page
+      .getByRole('button', { name: /New Dealer Onboarding/i })
+      .first();
+    if (await startBtn.isVisible({ timeout: 15_000 }).catch(() => false)) {
+      await startBtn.click();
+    }
     await expect(
       this.page.getByRole('heading', { name: /business details/i }),
     ).toBeVisible({ timeout: 30_000 });

@@ -17,7 +17,9 @@ export async function GET(req: NextRequest) {
         }
         const months = parseInt(searchParams.get('months') || '3', 10);
         const month = searchParams.get('month')?.trim() || undefined; // YYYY-MM
-        const data = await fetchBatteryAhAnalytics(vehicleno, { months, month });
+        const from = searchParams.get('from')?.trim() || undefined;   // YYYY-MM-DD
+        const to = searchParams.get('to')?.trim() || undefined;       // YYYY-MM-DD
+        const data = await fetchBatteryAhAnalytics(vehicleno, { months, month, from, to });
         return NextResponse.json({ success: true, data });
     } catch (error) {
         console.error('[AH Trend] Error:', error);
