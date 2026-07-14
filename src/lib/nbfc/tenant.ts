@@ -15,7 +15,7 @@
  */
 import { cache } from "react";
 import { db } from "@/lib/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, count } from "drizzle-orm";
 import { nbfcLoans, nbfcTenants, nbfcUsers, users } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeNbfcRole } from "@/lib/nbfc/origination-roles";
@@ -28,7 +28,7 @@ export interface TenantContext {
   aum_inr: string | null;
   active_loans: number;
   /** How we resolved this tenant — for diagnostics/logging. */
-  via: "session" | "admin_query_param" | "dev_env" | "first_active";
+  via: "session" | "admin_query_param" | "dev_env" | "first_active" | "cron";
 }
 
 export interface SessionUser {
@@ -77,6 +77,30 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
 /**
  * Resolve the tenant the current request is for. See doc-block at top.
  */
+/**
+ * The live count of the tenant's active loans.
+ *
+ * `nbfc_tenants.active_loans` is a denormalized counter that NOTHING in the
+ * application maintains — it is written once by the seed/import scripts and then
+ * drifts forever. On iTarang Finance it said 14 while `nbfc_loans` held 7, so the
+ * sidebar advertised twice the book the portfolio and risk pages could actually
+ * see, and the risk agent was told it was reasoning about 14 loans.
+ *
+ * Counting the rows is cheap and cannot be wrong. Prefer this over the column.
+ */
+async function countActiveLoans(tenantId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(nbfcLoans)
+    .where(and(eq(nbfcLoans.tenant_id, tenantId), eq(nbfcLoans.is_active, true)));
+  return row?.n ?? 0;
+}
+
+/** Replace the stale stored counter with the real one before anyone reads it. */
+async function withLiveLoanCount<T extends { id: string; active_loans: number }>(t: T): Promise<T> {
+  return { ...t, active_loans: await countActiveLoans(t.id) };
+}
+
 export async function getCurrentTenant(opts?: { tenantSlugOverride?: string }): Promise<TenantContext> {
   const session = await getSessionUser();
 
@@ -101,7 +125,7 @@ export async function getCurrentTenant(opts?: { tenantSlugOverride?: string }): 
         `User ${session.email} is role=nbfc_partner but has no nbfc_users membership. Run scripts/invite-nbfc-user.ts to assign a tenant.`,
       );
     }
-    return { ...rows[0], via: "session" };
+    return withLiveLoanCount({ ...rows[0], via: "session" as const });
   }
 
   // 2. admin/ceo with explicit ?tenant=<slug> override
@@ -111,14 +135,14 @@ export async function getCurrentTenant(opts?: { tenantSlugOverride?: string }): 
     opts?.tenantSlugOverride
   ) {
     const t = await tenantBySlug(opts.tenantSlugOverride);
-    if (t) return { ...t, via: "admin_query_param" };
+    if (t) return withLiveLoanCount({ ...t, via: "admin_query_param" as const });
   }
 
   // 3. Dev fallback via env (used until you onboard a real partner)
   const slug = process.env.NBFC_DEMO_TENANT_SLUG;
   if (slug) {
     const t = await tenantBySlug(slug);
-    if (t) return { ...t, via: "dev_env" };
+    if (t) return withLiveLoanCount({ ...t, via: "dev_env" as const });
   }
 
   // 4. First active tenant — last-resort safety net for dev
@@ -128,15 +152,15 @@ export async function getCurrentTenant(opts?: { tenantSlugOverride?: string }): 
     .where(eq(nbfcTenants.is_active, true))
     .limit(1);
   if (rows[0]) {
-    return {
+    return withLiveLoanCount({
       id: rows[0].id,
       slug: rows[0].slug,
       display_name: rows[0].display_name,
       contact_email: rows[0].contact_email,
       aum_inr: rows[0].aum_inr,
       active_loans: rows[0].active_loans,
-      via: "first_active",
-    };
+      via: "first_active" as const,
+    });
   }
 
   throw new Error(
