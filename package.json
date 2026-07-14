@@ -44,6 +44,7 @@
     "test:e2e:live": "playwright test --project=chromium-live",
     "test:e2e:manual": "playwright test --project=chromium-manual",
     "test:e2e:eval": "cross-env EXCEL_REPORT=1 playwright test",
+    "test:e2e:workflows": "cross-env WORKFLOW_REPORT=1 playwright test tests/e2e/coverage tests/e2e/flows",
     "test:e2e:prod-eval": "infisical run --env=prod -- cross-env HEADED=1 E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
     "test:e2e:prod-eval:mutations": "infisical run --env=prod -- cross-env HEADED=1 E2E_ALLOW_PROD=1 E2E_PROD_MUTATIONS=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
     "test:e2e:prod-eval:headless": "infisical run --env=prod -- cross-env E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1"

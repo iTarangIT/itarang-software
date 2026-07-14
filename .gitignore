@@ -80,6 +80,9 @@ prod.txt
 env.txt
 /eval-reports
 
+# workflow E2E Excel output (npm run test:e2e:workflows)
+/reports
+
 # perf-audit harness output (scripts/perf-audit/)
 /perf-reports
 
