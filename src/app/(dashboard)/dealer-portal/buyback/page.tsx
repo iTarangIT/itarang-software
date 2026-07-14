@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+import DealerBuybackSearch from "@/components/buyback/DealerBuybackSearch";
 import DealerRequestsTable, {
   type DealerRequestRow,
 } from "@/components/buyback/DealerRequestsTable";
@@ -103,9 +104,12 @@ export default function DealerBuybackPage() {
               : "Welcome back — your battery buyback overview"
           }
           right={
-            <Link href="/dealer-portal/buyback/new" className={NEW_REQUEST_BUTTON}>
-              + New Buyback Request
-            </Link>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <DealerBuybackSearch />
+              <Link href="/dealer-portal/buyback/new" className={NEW_REQUEST_BUTTON}>
+                + New Buyback Request
+              </Link>
+            </div>
           }
         />
 

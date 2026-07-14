@@ -18,12 +18,15 @@ import {
   toDealerDeal,
   toDealerLine,
   toDealerNegotiation,
+  toDealerPayout,
+  toDealerPickup,
   toDealerPo,
   toVendorLine,
   toVendorQuotation,
   visibleActivityForDealer,
   type AdminDealView,
   type DealerNegRoundSource,
+  type DealerPickupSource,
   type DealerPoSource,
 } from "../serialize";
 import { NOTIFICATION_FOR } from "../transition";
@@ -292,6 +295,176 @@ describe("dealer PO summary (Ext-2) excludes the S3 key and counterparty id", ()
 
   it("returns null when no PO has been issued to the dealer yet", () => {
     expect(toDealerPo(null)).toBe(null);
+  });
+});
+
+// ===========================================================================
+// EXT-8 — the dealer pickup summary on the list endpoint. The dealer is a
+// party to the pickup, so schedule/address/contact/counts are theirs. The BWM
+// compliance S3 keys and the scheduling admin's user id are not.
+// ===========================================================================
+describe("dealer pickup summary (Ext-8) excludes compliance S3 keys and internal ids", () => {
+  const EWAY_S3 = "buyback/req-1/eway/EWB-4471.pdf";
+  const WEIGHBRIDGE_S3 = "buyback/req-1/weighbridge/slip-88.jpg";
+  const SCHEDULER_UUID = "usr-admin-77";
+
+  const source: DealerPickupSource = {
+    scheduled_at: "2026-07-14T09:00:00Z",
+    completed_at: "2026-07-15T11:30:00Z",
+    address: "Shakti Battery House, MIDC Ambad, Nashik 422010",
+    contact_name: "Ramesh Kumar",
+    contact_phone: "9820011111",
+    submitted_units: "5",
+    actual_units: 4,
+    eway_bill_s3: EWAY_S3,
+    weighbridge_slip_s3: WEIGHBRIDGE_S3,
+    created_by: SCHEDULER_UUID,
+  };
+
+  const pickup = toDealerPickup(source)!;
+  const keys = allKeys(pickup);
+  const values = allValues(pickup);
+
+  it.each(DEALER_FORBIDDEN_KEYS)("the key %s does not appear at any depth", (key) => {
+    expect(keys.has(key)).toBe(false);
+  });
+
+  it("emits the schedule, address, one contact label, and numeric counts", () => {
+    expect(pickup.scheduled_at).toBe("2026-07-14T09:00:00Z");
+    expect(pickup.completed_at).toBe("2026-07-15T11:30:00Z");
+    expect(pickup.address).toBe("Shakti Battery House, MIDC Ambad, Nashik 422010");
+    expect(pickup.contact).toBe("Ramesh Kumar · 9820011111");
+    // The string "5" off a numeric-ish column arrives as the number 5.
+    expect(pickup.submitted_units).toBe(5);
+    expect(pickup.actual_units).toBe(4);
+  });
+
+  it("carries neither compliance S3 key nor the scheduler's user id, under any name", () => {
+    expect(values).not.toContain(EWAY_S3);
+    expect(values).not.toContain(WEIGHBRIDGE_S3);
+    expect(values).not.toContain(SCHEDULER_UUID);
+    expect(keys.has("eway_bill_s3")).toBe(false);
+    expect(keys.has("weighbridge_slip_s3")).toBe(false);
+    expect(keys.has("created_by")).toBe(false);
+  });
+
+  it("counts stay null on a pickup that is scheduled but not yet collected", () => {
+    const scheduled = toDealerPickup({
+      scheduled_at: "2026-07-20T09:00:00Z",
+      completed_at: null,
+      address: null,
+      submitted_units: null,
+      actual_units: null,
+    })!;
+    expect(scheduled.submitted_units).toBe(null);
+    expect(scheduled.actual_units).toBe(null);
+    expect(scheduled.completed_at).toBe(null);
+    expect(scheduled.contact).toBe(null);
+  });
+
+  it("returns null when no pickup exists yet", () => {
+    expect(toDealerPickup(null)).toBe(null);
+  });
+
+  it("a NEW secret column on the source does not ride along", () => {
+    const contaminated = toDealerPickup({
+      ...source,
+      collector_fee: 750,
+    } as never)!;
+    expect(allValues(contaminated)).not.toContain(750);
+    expect(allKeys(contaminated).has("collector_fee")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// EXT-9 — the dealer payout summary on the list endpoint. DEALER leg ONLY:
+// the amount is the locked dealer total, `paid` means a -D settlement exists.
+// A VENDOR-leg settlement row must contribute NOTHING — not paid, not its
+// txn_ref, not its amount — the same exclusion visibleActivityForDealer
+// applies to record_settlement events.
+// ===========================================================================
+describe("dealer payout summary (Ext-9) is DEALER-leg only", () => {
+  const VENDOR_TXN_REF = "NEFT-AXIS-991144";
+  const VENDOR_AMOUNT = 71500;
+  const RECORDER_UUID = "usr-finance-12";
+
+  it("is null until the deal reaches the money stage (no locked prices)", () => {
+    expect(toDealerPayout({ locked_dealer_total: null, settlements: [] })).toBe(null);
+  });
+
+  it("before payment: amount from the locks, unpaid, no txn_ref", () => {
+    const payout = toDealerPayout({ locked_dealer_total: 21800, settlements: [] })!;
+    expect(payout.amount).toBe(21800);
+    expect(payout.paid).toBe(false);
+    expect(payout.txn_ref).toBe(null);
+  });
+
+  it("a VENDOR-leg settlement neither marks it paid nor leaks anything", () => {
+    const payout = toDealerPayout({
+      locked_dealer_total: 21800,
+      settlements: [
+        {
+          leg: "VENDOR",
+          txn_ref: VENDOR_TXN_REF,
+          amount: VENDOR_AMOUNT,
+          proof_s3: "buyback/req-1/proof/vendor-neft.png",
+          recorded_by: RECORDER_UUID,
+        },
+      ],
+    })!;
+
+    // The vendor's receipt is the other half of the margin. It does not exist
+    // as far as this payload is concerned.
+    expect(payout.paid).toBe(false);
+    expect(payout.txn_ref).toBe(null);
+
+    const values = allValues(payout);
+    expect(values).not.toContain(VENDOR_TXN_REF);
+    expect(values).not.toContain(VENDOR_AMOUNT);
+    expect(values).not.toContain(RECORDER_UUID);
+    expect(values).not.toContain("buyback/req-1/proof/vendor-neft.png");
+  });
+
+  it("a DEALER-leg settlement marks it paid, with its txn_ref — locked amount, not typed amount", () => {
+    const payout = toDealerPayout({
+      locked_dealer_total: 21800,
+      settlements: [
+        { leg: "VENDOR", txn_ref: VENDOR_TXN_REF, amount: VENDOR_AMOUNT },
+        {
+          leg: "DEALER",
+          txn_ref: "IMPS-HDFC-777001",
+          // A typo'd amount on the settlement row must not restate the payout.
+          amount: 999999,
+          proof_s3: "buyback/req-1/proof/dealer-imps.png",
+          recorded_by: RECORDER_UUID,
+        },
+      ],
+    })!;
+
+    expect(payout.paid).toBe(true);
+    expect(payout.txn_ref).toBe("IMPS-HDFC-777001");
+    expect(payout.amount).toBe(21800);
+
+    const values = allValues(payout);
+    expect(values).not.toContain(999999);
+    expect(values).not.toContain(VENDOR_TXN_REF);
+    expect(values).not.toContain(VENDOR_AMOUNT);
+  });
+
+  it.each(DEALER_FORBIDDEN_KEYS)("the key %s does not appear at any depth", (key) => {
+    const payout = toDealerPayout({
+      locked_dealer_total: 21800,
+      settlements: [
+        {
+          leg: "DEALER",
+          txn_ref: "IMPS-HDFC-777001",
+          amount: 21800,
+          proof_s3: "buyback/req-1/proof/dealer-imps.png",
+          recorded_by: RECORDER_UUID,
+        },
+      ],
+    })!;
+    expect(allKeys(payout).has(key)).toBe(false);
   });
 });
 

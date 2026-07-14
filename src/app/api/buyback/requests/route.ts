@@ -7,6 +7,16 @@
  *        have nowhere to hold its status.
  * GET  — the caller's own requests (M01). Entity-scoped: a dealer cannot see,
  *        or even detect, another dealer's request.
+ *
+ *        Ext-8/Ext-9 (additive): each row also carries
+ *          · pickup — the latest pickup on the request's batch, dealer-safe
+ *            fields only, via toDealerPickup(); null until one is scheduled;
+ *          · payout — the dealer's OWN money leg (locked total, -D settlement
+ *            existence, its txn_ref), via toDealerPayout(); null until the
+ *            deal reaches the money stage.
+ *        Both are built by serializers with their own release-blocking
+ *        contract tests; the batch reads live in lib (money.ts / pickup.ts),
+ *        so this file never touches the locks or settlement tables.
  */
 
 import { desc, eq, sql } from "drizzle-orm";
@@ -16,7 +26,10 @@ import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
 import { buybackBatches, buybackDeals, buybackRequests } from "@/lib/db/schema";
 import { requireDealer } from "@/lib/buyback/auth";
+import { dealerPayoutSourcesForEntity } from "@/lib/buyback/money";
+import { dealerPickupSourcesForEntity } from "@/lib/buyback/pickup";
 import { nextRequestNo } from "@/lib/buyback/request-no";
+import { toDealerPayout, toDealerPickup } from "@/lib/buyback/serialize";
 
 export const runtime = "nodejs";
 
@@ -114,5 +127,27 @@ export const GET = withErrorHandler(async () => {
     .where(eq(buybackRequests.dealer_entity_id, actor.entityId!))
     .orderBy(desc(buybackRequests.created_at));
 
-  return successResponse({ requests: rows });
+  if (rows.length === 0) {
+    return successResponse({ requests: [] });
+  }
+
+  // Ext-8/Ext-9 — two batch reads for the whole list (both entity-scoped by
+  // the same dealer_entity_id, in lib), then per-row serialization. The
+  // serializers are the redaction boundary: only their output shapes reach
+  // the wire.
+  const [pickupByRequest, payoutByRequest] = await Promise.all([
+    dealerPickupSourcesForEntity(actor.entityId!),
+    dealerPayoutSourcesForEntity(actor.entityId!),
+  ]);
+
+  const requests = rows.map((r) => ({
+    ...r,
+    pickup: toDealerPickup(pickupByRequest.get(r.request_id) ?? null),
+    payout: toDealerPayout({
+      locked_dealer_total: payoutByRequest.get(r.request_id)?.locked_dealer_total ?? null,
+      settlements: payoutByRequest.get(r.request_id)?.settlements ?? [],
+    }),
+  }));
+
+  return successResponse({ requests });
 });

@@ -78,6 +78,84 @@ export async function assertPayoutAllowed(
   );
 }
 
+/**
+ * Ext-8 — the dealer list's pickup summary, BATCHED for one dealer entity and
+ * keyed by request id (latest pickup per deal, if several).
+ *
+ * Selects ONLY the columns the dealer-safe source shape names: schedule,
+ * address, contact, and the two count sums off the completion JSON. The BWM
+ * compliance S3 keys (eway_bill_s3, weighbridge_slip_s3) and created_by exist
+ * on the table but are never in this SELECT — and toDealerPickup() would strip
+ * them even if they were. Two independent barriers.
+ *
+ * Counts: Σ quantity over the expected/actual JSONB written at completion.
+ * NULL until the pickup completes (jsonb_array_elements over NULL yields no
+ * rows, and sum() over no rows is NULL) — a scheduled pickup has no counts,
+ * and "0/0 units" would be a lie.
+ */
+export async function dealerPickupSourcesForEntity(
+  entityId: string,
+): Promise<
+  Map<
+    string,
+    {
+      scheduled_at: Date | string | null;
+      completed_at: Date | string | null;
+      address: string | null;
+      contact_name: string | null;
+      contact_phone: string | null;
+      submitted_units: number | null;
+      actual_units: number | null;
+    }
+  >
+> {
+  const rows = await db.execute(sql`
+    SELECT DISTINCT ON (p.deal_id)
+      bd.request_id,
+      p.scheduled_at,
+      p.completed_at,
+      p.address,
+      p.contact_name,
+      p.contact_phone,
+      (SELECT sum((e.item->>'quantity')::int)
+         FROM jsonb_array_elements(p.expected_counts) AS e(item))::int AS submitted_units,
+      (SELECT sum((a.item->>'quantity')::int)
+         FROM jsonb_array_elements(p.actual_counts) AS a(item))::int AS actual_units
+    FROM pickups p
+    JOIN buyback_deals bd    ON bd.id = p.deal_id
+    JOIN buyback_requests br ON br.id = bd.request_id
+    WHERE br.dealer_entity_id = ${entityId}
+    ORDER BY p.deal_id, p.created_at DESC
+  `);
+
+  const byRequest = new Map<
+    string,
+    {
+      scheduled_at: Date | string | null;
+      completed_at: Date | string | null;
+      address: string | null;
+      contact_name: string | null;
+      contact_phone: string | null;
+      submitted_units: number | null;
+      actual_units: number | null;
+    }
+  >();
+
+  for (const r of rows as unknown as Array<Record<string, unknown>>) {
+    byRequest.set(String(r.request_id), {
+      scheduled_at: (r.scheduled_at as Date | string) ?? null,
+      completed_at: (r.completed_at as Date | string) ?? null,
+      address: (r.address as string) ?? null,
+      contact_name: (r.contact_name as string) ?? null,
+      contact_phone: (r.contact_phone as string) ?? null,
+      submitted_units: r.submitted_units === null ? null : Number(r.submitted_units),
+      actual_units: r.actual_units === null ? null : Number(r.actual_units),
+    });
+  }
+
+  return byRequest;
+}
+
 /** The expected counts for a deal, from the lines themselves. */
 export async function expectedCounts(
   requestId: string,
