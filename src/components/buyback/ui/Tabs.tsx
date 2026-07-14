@@ -52,7 +52,15 @@ export default function Tabs({
       {items.map((item) => (
         <div
           key={item.key}
+          role="tab"
+          tabIndex={0}
           onClick={() => go(item.key)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              go(item.key);
+            }
+          }}
           className={`-mb-px cursor-pointer border-b-2 px-[15px] py-[9px] text-[13px] font-semibold ${
             active === item.key ? "border-green-600 text-bb-navy" : "border-transparent text-slate-500"
           }`}

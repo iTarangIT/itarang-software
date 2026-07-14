@@ -40,6 +40,7 @@ const PHOTO_PLACEHOLDER = "bg-[repeating-linear-gradient(135deg,#E2E8F0,#E2E8F0_
 function ownerProvenanceLine(p: BuybackLineProvenance): string {
   const parts: string[] = [];
   if (p.ownerName) parts.push(p.ownerName);
+  else parts.push("—");
   if (p.phone) parts.push(p.phone);
   if (p.vehicle) parts.push(`Vehicle ${p.vehicle}`);
   if (p.idProof) parts.push(p.idProof);
@@ -78,7 +79,7 @@ export default function LinesCard({
         const photos = line.photos ?? [];
 
         return (
-          <div key={line.id} className={`p-4 ${li < lines.length - 1 ? "border-b border-[#F4F6F9]" : ""}`}>
+          <div key={line.id} className={`px-4 py-3.5 ${li < lines.length - 1 ? "border-b border-[#F4F6F9]" : ""}`}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-[13.5px] font-bold">{line.label}</div>

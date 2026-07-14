@@ -28,7 +28,7 @@ export default function DocPreviewCard({
       <div className="mb-2.5 flex items-center justify-between">
         <div className="text-[13.5px] font-bold text-slate-900">{title}</div>
         {badge && (
-          <span className="rounded-full bg-[#EFF6FF] px-2.5 py-[3px] text-[11px] font-bold text-blue-600">
+          <span className="rounded-full bg-[#EFF6FF] px-[9px] py-[3px] text-[11px] font-bold text-blue-600">
             {badge}
           </span>
         )}
