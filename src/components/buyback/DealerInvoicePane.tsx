@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { EvidenceUpload } from "./ui";
 import { inr } from "@/lib/buyback/format";
 
 interface Line {
@@ -55,6 +56,7 @@ export default function DealerInvoicePane({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [number, setNumber] = useState("");
+  const [pdf, setPdf] = useState<{ key: string; name: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -80,7 +82,10 @@ export default function DealerInvoicePane({
     const res = await fetch(`/api/buyback/requests/${requestId}/invoice`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ number: number.trim() }),
+      body: JSON.stringify({
+        number: number.trim(),
+        ...(pdf ? { pdf_s3: pdf.key } : {}),
+      }),
     });
     const json = await res.json();
     setBusy(false);
@@ -90,6 +95,7 @@ export default function DealerInvoicePane({
       return;
     }
     setNumber("");
+    setPdf(null);
     reload();
   };
 
@@ -154,20 +160,37 @@ export default function DealerInvoicePane({
       {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
 
       {d.can_raise ? (
-        <div className="mt-4 flex gap-2">
-          <input
-            value={number}
-            onChange={(e) => setNumber(e.target.value)}
-            placeholder="Your invoice no. (e.g. SHK/2026/41)"
-            className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
-          <button
-            onClick={submit}
-            disabled={busy || !number.trim()}
-            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
-          >
-            {busy ? "Raising…" : "Raise invoice"}
-          </button>
+        <div className="mt-4">
+          <label className="block text-xs font-semibold text-slate-600">
+            Attach invoice PDF (optional)
+          </label>
+          <div className="mt-1 max-w-xs">
+            <EvidenceUpload
+              endpoint="/api/buyback/uploads"
+              kind="invoice_pdf"
+              requestId={requestId}
+              label="invoice PDF"
+              value={pdf}
+              onChange={setPdf}
+              disabled={busy}
+            />
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            <input
+              value={number}
+              onChange={(e) => setNumber(e.target.value)}
+              placeholder="Your invoice no. (e.g. SHK/2026/41)"
+              className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={submit}
+              disabled={busy || !number.trim()}
+              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            >
+              {busy ? "Raising…" : "Raise invoice"}
+            </button>
+          </div>
         </div>
       ) : d.invoice ? (
         <div className="mt-4 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5">

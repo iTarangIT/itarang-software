@@ -293,9 +293,10 @@ export function toDealerNegotiation(rounds: DealerNegRoundSource[]): DealerNegRo
 // The PO iTarang issues to the dealer (leg=DEALER, direction=ISSUED). Its number,
 // status and issue date are the dealer's to see. Its `pdf_s3` key is a capability
 // we never emit, and `counterparty_entity_id` is an internal account id — both
-// stay structurally absent. There is no dealer-facing route that serves a PO PDF
-// (the media route serves only photos/provenance), so `pdf_available` is false
-// and the Documents card is rendered from the deal's own locked-price lines.
+// stay structurally absent. `pdf_available` tells the dealer detail page WHETHER
+// a PDF exists, without ever handing back the key that would let it be fetched
+// directly — the actual bytes come from GET /api/buyback/requests/:id/po (U1),
+// which re-derives the key server-side, scoped to the caller's own request.
 // ---------------------------------------------------------------------------
 
 export interface DealerPoSource {
@@ -317,12 +318,13 @@ export function toDealerPo(po: DealerPoSource | null): DealerPoView | null {
   if (!po) return null;
 
   // Built field-by-field: pdf_s3 and counterparty_entity_id are structurally
-  // absent. No dealer-facing PO PDF route exists, so pdf_available is false.
+  // absent. pdf_available is a boolean derived FROM pdf_s3, never the key
+  // itself — the source's Boolean-ness rides along, the string does not.
   return {
     number: po.number,
     status: po.status,
     issued_at: po.issued_at ?? null,
-    pdf_available: false,
+    pdf_available: Boolean(po.pdf_s3),
   };
 }
 

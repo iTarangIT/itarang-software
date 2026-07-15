@@ -663,6 +663,16 @@ function DealerRequestDetail() {
                 ),
                 ["Total", inr(detail.dealer_quote_total)],
               ]}
+              action={
+                detail.dealer_po.pdf_available ? (
+                  <a
+                    href={`/api/buyback/requests/${detail.request_id}/po`}
+                    className="block w-full rounded-lg border border-slate-200 py-2 text-center text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Download PO (PDF)
+                  </a>
+                ) : undefined
+              }
             />
           ) : (
             <Card className="p-4">
