@@ -831,30 +831,43 @@ export const auditLogs = pgTable("audit_logs", {
 
 // --- ACCOUNTS ---
 
-export const accounts = pgTable("accounts", {
-  id: varchar({ length: 255 }).primaryKey().notNull(),
-  business_entity_name: text("business_entity_name").notNull(),
-  gstin: varchar({ length: 15 }).notNull(),
-  pan: varchar({ length: 10 }),
-  address_line1: text("address_line1"),
-  address_line2: text("address_line2"),
-  city: text(),
-  state: text(),
-  pincode: varchar({ length: 6 }),
-  bank_name: text("bank_name"),
-  bank_account_number: text("bank_account_number"),
-  ifsc_code: varchar("ifsc_code", { length: 11 }),
-  bank_proof_url: text("bank_proof_url"),
-  dealer_code: varchar("dealer_code", { length: 50 }),
-  contact_name: text("contact_name"),
-  contact_email: text("contact_email"),
-  contact_phone: varchar("contact_phone", { length: 20 }),
-  status: varchar({ length: 20 }).default('active').notNull(),
-  onboarding_status: varchar("onboarding_status", { length: 30 }).default('pending').notNull(),
-  created_by: uuid("created_by"),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    business_entity_name: text("business_entity_name").notNull(),
+    gstin: varchar({ length: 15 }).notNull(),
+    pan: varchar({ length: 10 }),
+    address_line1: text("address_line1"),
+    address_line2: text("address_line2"),
+    city: text(),
+    state: text(),
+    pincode: varchar({ length: 6 }),
+    bank_name: text("bank_name"),
+    bank_account_number: text("bank_account_number"),
+    ifsc_code: varchar("ifsc_code", { length: 11 }),
+    bank_proof_url: text("bank_proof_url"),
+    dealer_code: varchar("dealer_code", { length: 50 }),
+    contact_name: text("contact_name"),
+    contact_email: text("contact_email"),
+    contact_phone: varchar("contact_phone", { length: 20 }),
+    status: varchar({ length: 20 }).default('active').notNull(),
+    onboarding_status: varchar("onboarding_status", { length: 30 }).default('pending').notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // E-192 — GIN trigram, leading-wildcard admin buyback search (M23)
+    // against business_entity_name/gstin. `accounts` is not a buyback table
+    // and exists on every env — see drizzle/E-192_buyback_scale_indexes.sql.
+    businessEntityNameTrgmIdx: index("accounts_business_entity_name_trgm_idx").using(
+      "gin",
+      t.business_entity_name.op("gin_trgm_ops"),
+    ),
+    gstinTrgmIdx: index("accounts_gstin_trgm_idx").using("gin", t.gstin.op("gin_trgm_ops")),
+  }),
+);
 
 // --- PROCUREMENT ---
 
@@ -7581,6 +7594,18 @@ export const buybackRequests = pgTable(
       t.dealer_entity_id,
       t.created_at,
     ),
+    // E-192 — the review queue's own sort (queue/route.ts `ORDER BY
+    // submitted_at NULLS LAST, created_at`), matched exactly (ASC is
+    // Postgres' default for NULLS LAST on an ascending column).
+    submittedCreatedIdx: index("buyback_requests_submitted_created_idx").on(
+      t.submitted_at.nullsLast(),
+      t.created_at,
+    ),
+    // E-192 — GIN trigram, leading-wildcard admin/dealer search (M23).
+    requestNoTrgmIdx: index("buyback_requests_request_no_trgm_idx").using(
+      "gin",
+      t.request_no.op("gin_trgm_ops"),
+    ),
   }),
 );
 
@@ -7637,6 +7662,8 @@ export const buybackLines = pgTable(
   },
   (t) => ({
     batchIdx: index("buyback_lines_batch_idx").on(t.batch_id),
+    // E-192 — FK index; had none.
+    variantIdx: index("buyback_lines_variant_id_idx").on(t.variant_id),
   }),
 );
 
@@ -7701,6 +7728,8 @@ export const buybackPhotos = pgTable(
   },
   (t) => ({
     lineIdx: index("buyback_photos_line_idx").on(t.line_id),
+    // E-192 — FK index; had none.
+    unitIdx: index("buyback_photos_unit_id_idx").on(t.unit_id),
   }),
 );
 
@@ -7726,6 +7755,19 @@ export const provenanceRecords = pgTable(
   (t) => ({
     lineIdx: index("provenance_records_line_idx").on(t.line_id),
     unitIdx: index("provenance_records_unit_idx").on(t.unit_id),
+    // E-192 — GIN trigram, leading-wildcard admin/dealer search (M23).
+    vehicleNoTrgmIdx: index("provenance_records_vehicle_no_trgm_idx").using(
+      "gin",
+      t.vehicle_no.op("gin_trgm_ops"),
+    ),
+    rcNumberTrgmIdx: index("provenance_records_rc_number_trgm_idx").using(
+      "gin",
+      t.rc_number.op("gin_trgm_ops"),
+    ),
+    prevOwnerNameTrgmIdx: index("provenance_records_prev_owner_name_trgm_idx").using(
+      "gin",
+      t.prev_owner_name.op("gin_trgm_ops"),
+    ),
   }),
 );
 
@@ -7913,6 +7955,8 @@ export const buybackActivityLog = pgTable(
   },
   (t) => ({
     requestIdx: index("buyback_activity_log_request_idx").on(t.request_id, t.created_at),
+    // E-192 — deal-scoped activity views had no index of their own.
+    dealIdx: index("buyback_activity_log_deal_id_idx").on(t.deal_id),
   }),
 );
 
@@ -8165,6 +8209,8 @@ export const pickups = pgTable(
   },
   (t) => ({
     dealIdx: index("pickups_deal_idx").on(t.deal_id),
+    // E-192 — FK index; had none.
+    batchIdx: index("pickups_batch_id_idx").on(t.batch_id),
   }),
 );
 
@@ -8302,6 +8348,25 @@ export const settlementTransactions = pgTable(
   (t) => ({
     legSubUnique: uniqueIndex("settlement_transactions_leg_sub_unique").on(t.leg_sub_id),
     dealIdx: index("settlement_transactions_deal_idx").on(t.deal_id),
+    // E-192 — the ledger route's own filter+sort (ledger/route.ts
+    // `WHERE closed_at IS NOT NULL … ORDER BY txn_date DESC`). Partial: open
+    // legs are never queried this way.
+    txnDateIdx: index("settlement_transactions_txn_date_idx")
+      .on(t.txn_date.desc())
+      .where(sql`${t.closed_at} is not null`),
+    // E-192 — GIN trigram, leading-wildcard admin search (M23).
+    legSubIdTrgmIdx: index("settlement_transactions_leg_sub_id_trgm_idx").using(
+      "gin",
+      t.leg_sub_id.op("gin_trgm_ops"),
+    ),
+    groupTxnIdTrgmIdx: index("settlement_transactions_group_txn_id_trgm_idx").using(
+      "gin",
+      t.group_txn_id.op("gin_trgm_ops"),
+    ),
+    txnRefTrgmIdx: index("settlement_transactions_txn_ref_trgm_idx").using(
+      "gin",
+      t.txn_ref.op("gin_trgm_ops"),
+    ),
   }),
 );
 

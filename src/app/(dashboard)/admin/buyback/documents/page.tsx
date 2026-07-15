@@ -4,11 +4,20 @@
  * Documents — per-deal document center, direction matrix (design handoff,
  * iTarang Portal.dc.html `scrDocuments`, lines 983-1005).
  *
- * The request picker is populated from `/api/admin/buyback/queue?scope=all`,
- * which drops the queue's default terminal-status filter (DRAFT stays
- * excluded — it hasn't been submitted — but CLOSED/SETTLED/REJECTED/CANCELLED
- * are included). That matches this screen's own AC, "every CLOSED deal has
- * the full set": a CLOSED deal's document set IS reachable from this picker.
+ * E-192: the request picker used to be a `<select>` populated from
+ * `/api/admin/buyback/queue?scope=all` — every non-DRAFT deal ever, loaded
+ * into one dropdown. At 10K+ dealers that is an unbounded full-history fetch
+ * on every page load. Replaced with the shared AdminBuybackSearch typeahead
+ * (the same one on the review queue's header), which hits
+ * `/api/admin/buyback/search?q=` and only ever returns a handful of matches.
+ * That component navigates by default; here it's used purely as a picker via
+ * its `onSelect` override, so choosing a request stays on this page. Once
+ * picked, the search box is swapped for a small "request_no — firm" note
+ * with a "Change" affordance that brings the search box back.
+ *
+ * That matches this screen's own AC, "every CLOSED deal has the full set":
+ * search still surfaces CLOSED/SETTLED/REJECTED/CANCELLED requests (the
+ * search endpoint has no status filter at all, unlike the queue's default).
  *
  * Once a request is picked, `/api/admin/buyback/requests/:id/documents`
  * (read verbatim — not modified) returns every document the deal has
@@ -17,14 +26,10 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { DocPreviewCard, EmptyState, PageHeader } from "@/components/buyback/ui";
-
-interface QueueRow {
-  request_id: string;
-  request_no: string;
-  dealer_name: string;
-}
+import AdminBuybackSearch, { type SearchHit } from "@/components/buyback/AdminBuybackSearch";
 
 type Direction = "ITARANG_TO_DEALER" | "DEALER_TO_ITARANG" | "ITARANG_TO_VENDOR" | "VENDOR_TO_ITARANG";
 
@@ -57,29 +62,34 @@ const DIRECTION_LABEL: Record<Direction, string> = {
 };
 
 export default function AdminBuybackDocumentsPage() {
-  const [queue, setQueue] = useState<QueueRow[]>([]);
-  const [queueLoading, setQueueLoading] = useState(true);
+  const router = useRouter();
   const [selected, setSelected] = useState("");
+  // E-192 — the picker's own note ("BB-1024 — Acme Traders"), captured
+  // straight off the picked search hit rather than a second lookup that
+  // could drift from what the search endpoint itself displayed.
+  const [selectedNote, setSelectedNote] = useState<{ requestNo: string; dealer: string } | null>(null);
 
   const [docs, setDocs] = useState<DocumentsResponse | null>(null);
   const [docsLoading, setDocsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/admin/buyback/queue?scope=all")
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        setQueue(j?.data?.queue ?? []);
-      })
-      .finally(() => {
-        if (!cancelled) setQueueLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Only REQUEST hits are meaningful for this screen (this is a per-request
+  // document center, not a vendor/transaction one) — a vendor or transaction
+  // hit falls back to the search component's own default: navigate to its href.
+  const handleSelect = (hit: SearchHit) => {
+    if (hit.kind !== "request") {
+      router.push(hit.href);
+      return;
+    }
+    const [dealer] = (hit.sublabel ?? "").split(" · ");
+    setSelected(hit.id);
+    setSelectedNote({ requestNo: hit.label, dealer: dealer || "—" });
+  };
+
+  const changeRequest = () => {
+    setSelected("");
+    setSelectedNote(null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -137,24 +147,25 @@ export default function AdminBuybackDocumentsPage() {
         <PageHeader title="Documents" sub="Per-deal document center — direction matrix" />
 
         <div className="mb-5">
-          <label className="block max-w-md">
-            <span className="text-[12px] font-semibold text-slate-600">Request</span>
-            <select
-              value={selected}
-              onChange={(e) => setSelected(e.target.value)}
-              disabled={queueLoading}
-              className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-slate-700"
-            >
-              <option value="">
-                {queueLoading ? "Loading requests…" : "Select a request…"}
-              </option>
-              {queue.map((r) => (
-                <option key={r.request_id} value={r.request_id}>
-                  {r.request_no} — {r.dealer_name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <span className="mb-1 block text-[12px] font-semibold text-slate-600">Request</span>
+          {selected && selectedNote ? (
+            <div className="flex max-w-md items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+              <span className="text-slate-700">
+                <span className="font-bold text-slate-900">{selectedNote.requestNo}</span>
+                {" — "}
+                {selectedNote.dealer}
+              </span>
+              <button
+                type="button"
+                onClick={changeRequest}
+                className="shrink-0 text-xs font-semibold text-blue-600 hover:underline"
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <AdminBuybackSearch onSelect={handleSelect} />
+          )}
         </div>
 
         {!selected ? (

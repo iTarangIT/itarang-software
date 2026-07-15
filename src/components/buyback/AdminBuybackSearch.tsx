@@ -8,8 +8,8 @@
  * see src/app/api/admin/buyback/search/route.ts for the exact response
  * shape: `{ query, hits: [{ kind, id, label, sublabel, href }] }`). Every hit
  * already carries its own `href` — request/vendor/transaction hits all point
- * somewhere sensible on their own, so this component just navigates there
- * rather than assuming everything is a request.
+ * somewhere sensible on their own, so by default this component just
+ * navigates there rather than assuming everything is a request.
  *
  * The search covers three kinds of hit (request/vendor/transaction), but only
  * REQUEST hits carry a status — its `sublabel` is built server-side as
@@ -17,6 +17,11 @@
  * here to render "request_no bold + firm + StatusChip" exactly as specified.
  * Vendor/transaction hits have no status to show, so they render their
  * label/sublabel plainly with a small kind badge instead.
+ *
+ * `onSelect` (E-192): an optional override so a caller can use this as a
+ * plain picker instead of a navigator — e.g. the Documents screen, which
+ * needs to pick a request WITHOUT leaving the page. When omitted, behaviour
+ * is unchanged (navigates via router.push(hit.href)).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -24,7 +29,7 @@ import { useRouter } from "next/navigation";
 
 import StatusChip from "./StatusChip";
 
-interface SearchHit {
+export interface SearchHit {
   kind: "request" | "vendor" | "transaction";
   id: string;
   label: string;
@@ -34,7 +39,12 @@ interface SearchHit {
 
 const DEBOUNCE_MS = 350;
 
-export default function AdminBuybackSearch() {
+export default function AdminBuybackSearch({
+  onSelect,
+}: {
+  /** Overrides the default navigate-on-select behaviour. */
+  onSelect?: (hit: SearchHit) => void;
+} = {}) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -96,7 +106,11 @@ export default function AdminBuybackSearch() {
 
   const go = (hit: SearchHit) => {
     setOpen(false);
-    router.push(hit.href);
+    if (onSelect) {
+      onSelect(hit);
+    } else {
+      router.push(hit.href);
+    }
   };
 
   return (

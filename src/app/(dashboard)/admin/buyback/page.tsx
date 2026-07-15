@@ -19,6 +19,11 @@
  * quote, SLA aging, Status — plus the Date range. Option lists for Source /
  * Dealer / City / Status are derived from the data itself, so a filter never
  * offers a value with zero rows behind it.
+ *
+ * E-192: the initial fetch caps at `?limit=500`. When the API reports
+ * `has_more`, a "Load more" row appears under the table and fetches the next
+ * page at `?offset=<rows loaded so far>`, appending to `queue`. Filters keep
+ * running client-side over everything loaded so far — unchanged.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -132,6 +137,10 @@ export default function AdminBuybackQueuePage() {
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // E-192 — Load more: hasMore mirrors the API's `has_more`; loadingMore
+  // guards against double-clicks firing overlapping fetches.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [dealerFilter, setDealerFilter] = useState(ALL);
@@ -149,7 +158,7 @@ export default function AdminBuybackQueuePage() {
   useEffect(() => {
     let cancelled = false;
 
-    fetch("/api/admin/buyback/queue")
+    fetch("/api/admin/buyback/queue?limit=500")
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -158,6 +167,7 @@ export default function AdminBuybackQueuePage() {
           return;
         }
         setQueue(j?.data?.queue ?? []);
+        setHasMore(Boolean(j?.data?.has_more));
         setLoadedAt(Date.now());
       })
       .catch(() => {
@@ -171,6 +181,28 @@ export default function AdminBuybackQueuePage() {
       cancelled = true;
     };
   }, []);
+
+  // E-192 — fetches the next 500 rows (offset = rows already loaded) and
+  // appends. Client-side filters (below) keep running over the full,
+  // growing `queue` array unchanged.
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`/api/admin/buyback/queue?limit=500&offset=${queue.length}`);
+      const j = await res.json();
+      if (j?.success === false) {
+        setError(j?.error?.message ?? "Could not load more requests.");
+        return;
+      }
+      setQueue((prev) => [...prev, ...((j?.data?.queue ?? []) as QueueRow[])]);
+      setHasMore(Boolean(j?.data?.has_more));
+    } catch {
+      setError("Could not load more requests.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const statusOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -340,6 +372,18 @@ export default function AdminBuybackQueuePage() {
                 loading={loading ? "Loading…" : undefined}
                 empty={!loading ? "No requests match these filters." : undefined}
               />
+              {/* E-192 — Load more: only the currently-fetched page filters
+                  client-side; this pulls the next 500 in from the server. */}
+              {!loading && hasMore && (
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="w-full border-t border-[#F4F6F9] px-[18px] py-3 text-center text-[12.5px] font-semibold text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loadingMore ? "Loading…" : `Load more (${queue.length} shown)`}
+                </button>
+              )}
             </Card>
           </>
         )}
