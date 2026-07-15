@@ -18,6 +18,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
 import { buybackRequests } from "@/lib/db/schema";
 import { ForbiddenError, NotFoundError } from "./errors";
+import { BUYBACK_ADMIN_ROLES } from "./roles";
 import type { ActorRole } from "./state-machine";
 
 /**
@@ -39,10 +40,14 @@ import type { ActorRole } from "./state-machine";
  * a signed agreement, a vendor's response. Adding a role here starts sending them
  * that traffic, which is the intent.
  *
- * The list itself lives in `./roles` (dependency-free, Edge-safe) — re-exported
- * here so every existing import site (`from "@/lib/buyback/auth"`) keeps working.
+ * The list itself lives in `./roles` (dependency-free, Edge-safe) — imported
+ * above AND re-exported here so every existing import site
+ * (`from "@/lib/buyback/auth"`) keeps working. NOTE it must be a real import,
+ * not `export { X } from "./roles"`: a bare re-export does NOT create a local
+ * binding, so requireBuybackAdmin's use of it below threw a ReferenceError at
+ * runtime and 500'd every admin buyback API call.
  */
-export { BUYBACK_ADMIN_ROLES } from "./roles";
+export { BUYBACK_ADMIN_ROLES };
 
 export interface BuybackActor {
   id: string;
