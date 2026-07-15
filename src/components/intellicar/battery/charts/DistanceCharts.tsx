@@ -21,6 +21,7 @@ import {
     AXIS_LINE,
     ChartCard,
     Headline,
+    Legend,
     TooltipShell,
     bucketLabel,
     formatDuration,
@@ -413,6 +414,172 @@ export function MileageTrendChart({ data }: { data: DischargeKmData | undefined 
                         isAnimationActive={false}
                     />
                 </LineChart>
+            </ResponsiveContainer>
+        </ChartCard>
+    );
+}
+
+/**
+ * Per-Cycle Mileage — km per Ah, one point per discharge cycle, placed at the time it happened.
+ *
+ * This is the finest HONEST grain for mileage, and the closest this data supports to the
+ * "instantaneous" chart the request asks for. True instantaneous mileage (speed ÷ current per
+ * sample) is aliasing: GPS fixes (~8.5 min) and CAN samples (p90 33-62 min) ride independent
+ * clocks, so a per-second line through them is noise dressed as signal — see MileageTrendChart
+ * above and docs/intellicar-calculations.md §22. One discharge cycle is one trip/run, so each
+ * dot is a real driving event, not a resampled point.
+ *
+ * The daily MileageTrendChart answers "how did mileage move day to day"; this answers "which
+ * individual trips were inefficient" — a single overloaded run shows as one low dot at its own
+ * time instead of being averaged into its day. Dots below the dashed pack average (drawn in the
+ * overload colour) are the trips that did little distance for their charge.
+ */
+export function PerCycleMileageChart({ data }: { data: DischargeKmData | undefined }) {
+    const cs = data?.cycleSummary;
+    // Aggregate ratio (Σkm ÷ ΣAh), not the mean of per-cycle ratios — matches the scatter
+    // headline so both per-cycle views quote the same pack average.
+    const packAvg =
+        cs && cs.totalAh > 0 ? Math.round((cs.totalKm / cs.totalAh) * 100) / 100 : null;
+
+    const rows = (data?.cycles ?? [])
+        .filter((c) => c.km_per_ah != null)
+        .map((c) => ({
+            t: new Date(c.start_time).getTime(),
+            mileage: c.km_per_ah as number,
+            km: c.km,
+            ah: c.ah_discharged,
+            dod: c.dod_pct,
+            durationS: c.duration_s,
+            start: c.start_time,
+            end: c.end_time,
+            source: c.km_source,
+        }));
+
+    // Split by the pack average so overloaded trips read as a distinct colour, never colour
+    // alone (a Legend names both). With no average to split on, everything is one series.
+    const belowAvg = packAvg != null ? rows.filter((r) => r.mileage < packAvg) : [];
+    const atOrAbove = packAvg != null ? rows.filter((r) => r.mileage >= packAvg) : rows;
+
+    return (
+        <ChartCard
+            title="Per-Cycle Mileage"
+            subtitle="Kilometres per amp-hour for each discharge cycle, plotted at the time it happened — the finest honest grain (one point per trip/run). Dots below the dashed pack average did little distance for their charge: overload or heavy draw."
+            headline={
+                packAvg != null ? (
+                    <Headline value={packAvg.toFixed(2)} unit="km / Ah avg" sub={`${rows.length} cycles`} />
+                ) : undefined
+            }
+            empty={
+                rows.length === 0
+                    ? (cs?.cyclesWithoutDistance ?? 0) > 0
+                        ? `${cs!.cyclesWithoutDistance} discharge cycle${cs!.cyclesWithoutDistance === 1 ? ' was' : 's were'} detected, but none had usable GPS distance — the GPS feed reported no fixes (or only parked jitter) in this period.`
+                        : 'No discharge cycle in this period covered a measurable distance.'
+                    : undefined
+            }
+            caveat={
+                <p>
+                    Each dot is one cycle&apos;s calibrated GPS distance ÷ its SOC-derived Ah. A
+                    dot from an uncalibrated day shows raw GPS distance — a <strong>lower bound</strong>,
+                    so its true mileage is higher than plotted — and per-cycle mileage inherits the
+                    GPS chord&apos;s calibration bias, which is why the day-level trend above stays the
+                    headline number.
+                </p>
+            }
+        >
+            <Legend
+                items={[
+                    { color: VIZ.distance, label: 'At / above pack average' },
+                    { color: VIZ.discharged, label: 'Below average — overload / heavy draw' },
+                    { color: VIZ.tick, label: 'Pack average', dashed: true },
+                ]}
+            />
+            <ResponsiveContainer width="100%" height={300}>
+                <ScatterChart margin={{ top: 16, right: 24, left: 8, bottom: 14 }}>
+                    <CartesianGrid stroke={VIZ.grid} />
+                    <XAxis
+                        type="number"
+                        dataKey="t"
+                        name="Time"
+                        domain={['dataMin', 'dataMax']}
+                        scale="time"
+                        tick={TICK}
+                        tickLine={false}
+                        axisLine={AXIS_LINE}
+                        tickMargin={8}
+                        tickFormatter={(t: number) => DAY_FMT.format(new Date(t))}
+                        minTickGap={40}
+                    />
+                    <YAxis
+                        type="number"
+                        dataKey="mileage"
+                        name="Mileage"
+                        tick={TICK}
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        width={58}
+                        unit=" km/Ah"
+                    />
+                    <ZAxis range={[60, 60]} />
+                    <Tooltip
+                        cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }}
+                        content={({ active, payload }) => {
+                            const p = payload?.[0]?.payload as (typeof rows)[number] | undefined;
+                            if (!active || !p) return null;
+                            return (
+                                <TooltipShell
+                                    title={DAY_FMT.format(new Date(p.start))}
+                                    sub={`${TIME_FMT.format(new Date(p.start))} → ${TIME_FMT.format(new Date(p.end))}`}
+                                    rows={[
+                                        ['Mileage', `${p.mileage} km/Ah`],
+                                        ['Distance', `${p.km} km${p.source === 'gps' ? ' (GPS lower bound)' : ''}`],
+                                        ['Discharged', `${p.ah} Ah`],
+                                        ['Depth of discharge', p.dod != null ? `${p.dod}%` : '—'],
+                                        ['Duration', formatDuration(p.durationS)],
+                                    ]}
+                                    footer={
+                                        p.source === 'gps' ? (
+                                            <p className="text-[11px] text-amber-600">
+                                                No rollup that day — distance is uncalibrated GPS, so mileage is a lower bound.
+                                            </p>
+                                        ) : undefined
+                                    }
+                                />
+                            );
+                        }}
+                    />
+                    {packAvg != null && (
+                        <ReferenceLine
+                            y={packAvg}
+                            stroke={VIZ.tick}
+                            strokeDasharray="5 4"
+                            label={{
+                                value: `${packAvg.toFixed(2)} km/Ah pack avg`,
+                                position: 'insideTopRight',
+                                fontSize: 10,
+                                fill: VIZ.tick,
+                            }}
+                        />
+                    )}
+                    <Scatter
+                        name="At / above pack average"
+                        data={atOrAbove}
+                        fill={VIZ.distance}
+                        fillOpacity={0.75}
+                        stroke="#fff"
+                        strokeWidth={1.5}
+                        isAnimationActive={false}
+                    />
+                    <Scatter
+                        name="Below average"
+                        data={belowAvg}
+                        fill={VIZ.discharged}
+                        fillOpacity={0.8}
+                        stroke="#fff"
+                        strokeWidth={1.5}
+                        isAnimationActive={false}
+                    />
+                </ScatterChart>
             </ResponsiveContainer>
         </ChartCard>
     );
