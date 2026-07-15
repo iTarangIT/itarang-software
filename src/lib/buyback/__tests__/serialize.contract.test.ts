@@ -304,11 +304,13 @@ describe("dealer PO summary (Ext-2) excludes the S3 key and counterparty id", ()
     expect(keys.has(key)).toBe(false);
   });
 
-  it("emits number, status and issue date, but pdf_available stays false", () => {
+  it("emits number, status, issue date, and whether a PDF exists — never the key itself", () => {
     expect(po.number).toBe("PO-1024-D");
     expect(po.status).toBe("SENT");
     expect(po.issued_at).toBe("2026-07-13T00:00:00Z");
-    expect(po.pdf_available).toBe(false);
+    // U1: pdf_available now mirrors whether pdf_s3 was populated on the source —
+    // the boolean rides along, the S3 key itself never does (asserted below).
+    expect(po.pdf_available).toBe(true);
   });
 
   it("carries neither the S3 key nor the counterparty account id", () => {

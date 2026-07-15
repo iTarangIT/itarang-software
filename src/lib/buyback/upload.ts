@@ -16,7 +16,18 @@ import { db } from "@/lib/db";
 import { buybackBatches, buybackLines, buybackRequests } from "@/lib/db/schema";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 
-export type UploadKind = "photo" | "id_proof" | "purchase_proof";
+export type UploadKind =
+  | "photo"
+  | "id_proof"
+  | "purchase_proof"
+  // --- U1 evidence kinds — attached to a REQUEST, not a battery line: a
+  // settlement payment proof, the BWM 2022 e-way bill / weighbridge slip, a
+  // vendor's own PO PDF, and a dealer's own invoice PDF. -------------------
+  | "settlement_proof"
+  | "eway_bill"
+  | "weighbridge_slip"
+  | "vendor_po"
+  | "invoice_pdf";
 
 // An unconstrained content type would let these endpoints accept anything the
 // dealer liked, so each kind declares exactly what it accepts.
@@ -32,6 +43,12 @@ export const ALLOWED_UPLOAD_TYPES: Record<UploadKind, string[]> = {
   photo: IMAGE_TYPES,
   id_proof: [...IMAGE_TYPES, "application/pdf"],
   purchase_proof: [...IMAGE_TYPES, "application/pdf"],
+  // Same rule as the proofs above — a receipt, bill or PO is very often a scan.
+  settlement_proof: [...IMAGE_TYPES, "application/pdf"],
+  eway_bill: [...IMAGE_TYPES, "application/pdf"],
+  weighbridge_slip: [...IMAGE_TYPES, "application/pdf"],
+  vendor_po: [...IMAGE_TYPES, "application/pdf"],
+  invoice_pdf: [...IMAGE_TYPES, "application/pdf"],
 };
 
 export function assertUploadContentType(kind: UploadKind, contentType: string): void {

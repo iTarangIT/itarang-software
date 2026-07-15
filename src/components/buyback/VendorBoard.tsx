@@ -48,7 +48,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import BatteryLineLabel from "./BatteryLineLabel";
 import LineInputTable, { type EditableLine } from "./LineInputTable";
-import { EmptyState } from "./ui";
+import { EmptyState, EvidenceUpload } from "./ui";
 import { inr } from "@/lib/buyback/format";
 
 interface ThreadLine {
@@ -119,12 +119,17 @@ export default function VendorBoard({
   const [respond, setRespond] = useState<{ thread: Thread; kind: "counter" | "agree" } | null>(null);
   const [prices, setPrices] = useState<Record<string, string>>({});
   const [vendorPo, setVendorPo] = useState("");
+  const [vendorPoPdf, setVendorPoPdf] = useState<{ key: string; name: string } | null>(null);
   const [schedule, setSchedule] = useState("");
 
   // Mark-collected modal state (M05).
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectCounts, setCollectCounts] = useState<Record<string, string>>({});
   const [ewayBill, setEwayBill] = useState("");
+  const [ewayBillProof, setEwayBillProof] = useState<{ key: string; name: string } | null>(null);
+  const [weighbridgeProof, setWeighbridgeProof] = useState<{ key: string; name: string } | null>(
+    null,
+  );
   const [collectNotice, setCollectNotice] = useState<string | null>(null);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -223,6 +228,8 @@ export default function VendorBoard({
       Object.fromEntries(collectLines.map((l) => [l.line_id, String(l.quantity)])),
     );
     setEwayBill("");
+    setEwayBillProof(null);
+    setWeighbridgeProof(null);
     setError(null);
     setCollectOpen(true);
   };
@@ -238,6 +245,8 @@ export default function VendorBoard({
     const body: {
       actual_counts?: Array<{ line_id: string; quantity: number }>;
       eway_bill_no?: string;
+      eway_bill_s3?: string;
+      weighbridge_slip_s3?: string;
     } = {};
     if (collectLines.length > 0) {
       body.actual_counts = collectLines.map((l) => ({
@@ -246,6 +255,8 @@ export default function VendorBoard({
       }));
     }
     if (ewayBill.trim()) body.eway_bill_no = ewayBill.trim();
+    if (ewayBillProof) body.eway_bill_s3 = ewayBillProof.key;
+    if (weighbridgeProof) body.weighbridge_slip_s3 = weighbridgeProof.key;
 
     const res = await fetch(
       `/api/admin/buyback/requests/${board.request_id}/pickup/complete`,
@@ -562,24 +573,38 @@ export default function VendorBoard({
                   )}
 
                   {!po && can("exchange_pos") && leg === "VENDOR" && (
-                    <div className="flex gap-1.5">
-                      <input
-                        value={vendorPo}
-                        onChange={(e) => setVendorPo(e.target.value)}
-                        placeholder="Their PO no."
-                        className="w-28 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                      />
-                      <button
-                        onClick={() =>
-                          post(`/api/admin/buyback/requests/${board.request_id}/po/vendor`, {
-                            number: vendorPo,
-                          })
-                        }
-                        disabled={busy || !vendorPo.trim()}
-                        className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
-                      >
-                        Record
-                      </button>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <div className="flex gap-1.5">
+                        <input
+                          value={vendorPo}
+                          onChange={(e) => setVendorPo(e.target.value)}
+                          placeholder="Their PO no."
+                          className="w-28 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                        />
+                        <button
+                          onClick={() =>
+                            post(`/api/admin/buyback/requests/${board.request_id}/po/vendor`, {
+                              number: vendorPo,
+                              ...(vendorPoPdf ? { pdf_s3: vendorPoPdf.key } : {}),
+                            })
+                          }
+                          disabled={busy || !vendorPo.trim()}
+                          className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
+                        >
+                          Record
+                        </button>
+                      </div>
+                      <div className="w-44">
+                        <EvidenceUpload
+                          endpoint="/api/admin/buyback/uploads"
+                          kind="vendor_po"
+                          requestId={board.request_id}
+                          label="their PO PDF"
+                          value={vendorPoPdf}
+                          onChange={setVendorPoPdf}
+                          disabled={busy}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -791,6 +816,44 @@ export default function VendorBoard({
               placeholder="BWM 2022 chain of custody"
               className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
             />
+
+            {/* Also optional — BWM 2022 evidence, not a submit gate. Neither field
+                blocks "Mark collected"; either can be attached later from the
+                Documents tab if it isn't in hand at pickup. */}
+            <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-500">
+                  E-way bill scan (optional)
+                </label>
+                <div className="mt-1">
+                  <EvidenceUpload
+                    endpoint="/api/admin/buyback/uploads"
+                    kind="eway_bill"
+                    requestId={board.request_id}
+                    label="e-way bill scan"
+                    value={ewayBillProof}
+                    onChange={setEwayBillProof}
+                    disabled={busy}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-500">
+                  Weighbridge slip (optional)
+                </label>
+                <div className="mt-1">
+                  <EvidenceUpload
+                    endpoint="/api/admin/buyback/uploads"
+                    kind="weighbridge_slip"
+                    requestId={board.request_id}
+                    label="weighbridge slip"
+                    value={weighbridgeProof}
+                    onChange={setWeighbridgeProof}
+                    disabled={busy}
+                  />
+                </div>
+              </div>
+            </div>
 
             {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
 

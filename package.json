@@ -51,6 +51,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
+    "@aws-sdk/lib-storage": "^3.1087.0",
     "@aws-sdk/s3-request-presigner": "^3.1073.0",
     "@elevenlabs/elevenlabs-js": "^2.45.0",
     "@emailjs/browser": "^4.4.1",

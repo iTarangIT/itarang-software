@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { EvidenceUpload } from "./ui";
 import { inr } from "@/lib/buyback/format";
 
 interface Verdict {
@@ -85,7 +86,7 @@ export default function MoneyBoard({
   const [settleLeg, setSettleLeg] = useState<"DEALER" | "VENDOR" | null>(null);
   const [txnRef, setTxnRef] = useState("");
   const [txnDate, setTxnDate] = useState(new Date().toISOString().slice(0, 10));
-  const [proofKey, setProofKey] = useState("");
+  const [proof, setProof] = useState<{ key: string; name: string } | null>(null);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
   const can = (a: string) => allowedActions.includes(a);
@@ -122,7 +123,7 @@ export default function MoneyBoard({
     setSettleLeg(null);
     setReason("");
     setTxnRef("");
-    setProofKey("");
+    setProof(null);
     reload();
     // The parent page owns `status`; a hard reload keeps the two in step without
     // threading a callback through.
@@ -367,15 +368,18 @@ export default function MoneyBoard({
               </label>
 
               <label className="block">
-                <span className="text-xs font-semibold text-slate-600">
-                  Proof of payment (S3 key)
-                </span>
-                <input
-                  value={proofKey}
-                  onChange={(e) => setProofKey(e.target.value)}
-                  placeholder="buyback/…/proof.pdf"
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                />
+                <span className="text-xs font-semibold text-slate-600">Proof of payment</span>
+                <div className="mt-1">
+                  <EvidenceUpload
+                    endpoint="/api/admin/buyback/uploads"
+                    kind="settlement_proof"
+                    requestId={requestId}
+                    label="proof of payment"
+                    value={proof}
+                    onChange={setProof}
+                    disabled={busy}
+                  />
+                </div>
                 <span className="mt-1 block text-[11px] text-slate-400">
                   Required. A payment with no evidence is not a payment — the database
                   refuses it.
@@ -396,14 +400,14 @@ export default function MoneyBoard({
                 Cancel
               </button>
               <button
-                disabled={busy || !txnRef.trim() || !proofKey.trim()}
+                disabled={busy || !txnRef.trim() || !proof}
                 onClick={() =>
                   post(`/api/admin/buyback/requests/${requestId}/settlements`, {
                     leg: settleLeg,
                     method: "MANUAL",
                     txn_ref: txnRef.trim(),
                     txn_date: txnDate,
-                    proof_s3: proofKey.trim(),
+                    proof_s3: proof?.key,
                   })
                 }
                 className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
