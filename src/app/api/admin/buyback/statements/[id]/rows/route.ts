@@ -30,6 +30,13 @@ interface StatementRowView {
   suggested_deal_id: string | null;
   suggested_leg: "DEALER" | "VENDOR" | null;
   suggested_request_no: string | null;
+  // U6 — the request's own id, so a CONFIRMED row's UI can deep-link
+  // `/admin/buyback/{request_id}` without a second lookup. `br` is already
+  // joined for suggested_request_no above; this just also exposes its id —
+  // additive, no new join. Still populated on a MATCHED row: the confirm
+  // route re-writes suggested_deal_id/suggested_leg to the CONFIRMED values
+  // rather than clearing them (only the dismissal path clears them).
+  suggested_request_id: string | null;
   suggested_counterparty: string | null;
   matched_leg_sub_id: string | null;
   matched_at: Date | null;
@@ -61,6 +68,7 @@ export const GET = withErrorHandler(
         r.amount, r.txn_ref, r.description, r.status,
         r.suggested_deal_id, r.suggested_leg,
         br.request_no AS suggested_request_no,
+        br.id AS suggested_request_id,
         -- Whoever is on the other side of the SUGGESTED leg: the dealer on a
         -- payout, the agreed vendor on a receipt.
         CASE

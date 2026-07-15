@@ -62,7 +62,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { Card, DealTable, FilterPill, KpiCard, PageHeader } from "@/components/buyback/ui";
+import {
+  Card,
+  DealTable,
+  ExportCsvButton,
+  FilterPill,
+  KpiCard,
+  PageHeader,
+} from "@/components/buyback/ui";
 import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
 import { inr } from "@/lib/buyback/format";
 
@@ -331,6 +338,26 @@ export default function AdminBuybackDashboardPage() {
   const filteredDealerRows = dealerFilter === ALL ? dealerRows : dealerRows.filter((r) => r.dealer === dealerFilter);
   const filteredVendorRows = vendorFilter === ALL ? vendorRows : vendorRows.filter((r) => r.vendor === vendorFilter);
 
+  // U6 — one export button per breakdown table, over its own currently
+  // filtered rows.
+  const dealerCsvRows = filteredDealerRows.map((r) => ({
+    Dealer: r.dealer,
+    Requests: r.requests,
+    Closed: r.closed,
+    Units: r.units,
+    "Paid out": r.paid_out,
+    "Margin earned": r.margin_earned ?? "",
+  }));
+
+  const vendorCsvRows = filteredVendorRows.map((r) => ({
+    Vendor: r.vendor,
+    "Quoted on": r.quoted_on,
+    Won: r.won,
+    "Bid-to-win": r.bid_to_win,
+    Bought: r.bought,
+    "Avg days to pay": r.avg_days_to_pay ?? "",
+  }));
+
   const dealerTableRows: DealTableRow[] = filteredDealerRows.map((r) => ({
     key: r.dealer,
     cells: [
@@ -442,7 +469,10 @@ export default function AdminBuybackDashboardPage() {
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <Card title="Dealer-wise deals">
+              <Card
+                title="Dealer-wise deals"
+                action={<ExportCsvButton filename="buyback-dealers.csv" rows={dealerCsvRows} />}
+              >
                 <DealTable
                   heads={DEALER_HEADS}
                   rows={dealerTableRows}
@@ -450,7 +480,10 @@ export default function AdminBuybackDashboardPage() {
                 />
               </Card>
 
-              <Card title="Vendor-wise deals">
+              <Card
+                title="Vendor-wise deals"
+                action={<ExportCsvButton filename="buyback-vendors.csv" rows={vendorCsvRows} />}
+              >
                 <DealTable
                   heads={VENDOR_HEADS}
                   rows={vendorTableRows}

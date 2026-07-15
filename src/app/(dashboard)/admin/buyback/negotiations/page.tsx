@@ -15,9 +15,16 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { Card, DealTable, EmptyState, PageHeader, SourceBadge } from "@/components/buyback/ui";
+import {
+  Card,
+  DealTable,
+  EmptyState,
+  ExportCsvButton,
+  PageHeader,
+  SourceBadge,
+} from "@/components/buyback/ui";
 import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
-import StatusChip from "@/components/buyback/StatusChip";
+import StatusChip, { statusLabel } from "@/components/buyback/StatusChip";
 import { inr } from "@/lib/buyback/format";
 
 interface QueueRow {
@@ -84,6 +91,16 @@ export default function AdminBuybackNegotiationsPage() {
 
   const live = queue.filter((r) => LIVE_STATUSES.has(r.status));
 
+  // U6 — flat, human-readable CSV mapper over the currently loaded `live` set.
+  const csvRows = live.map((r) => ({
+    Request: r.request_no,
+    Dealer: r.dealer_name,
+    Rounds: r.neg_rounds,
+    "Latest offer": r.last_offer_total ?? "",
+    Version: r.offer_version,
+    Status: statusLabel(r.status),
+  }));
+
   const rows: DealTableRow[] = live.map((r) => ({
     key: r.request_id,
     onClick: () => router.push(`/admin/buyback/${r.request_id}`),
@@ -122,7 +139,11 @@ export default function AdminBuybackNegotiationsPage() {
   return (
     <div className="bg-bb-bg px-6 py-6">
       <div className="mx-auto max-w-[1180px]">
-        <PageHeader title="Negotiations" sub="Live dealer & vendor threads" />
+        <PageHeader
+          title="Negotiations"
+          sub="Live dealer & vendor threads"
+          right={<ExportCsvButton filename="buyback-negotiations.csv" rows={csvRows} />}
+        />
 
         {error ? (
           <p className="text-sm text-red-600">{error}</p>
