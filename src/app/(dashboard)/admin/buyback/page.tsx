@@ -311,6 +311,10 @@ export default function AdminBuybackQueuePage() {
           href={`/admin/buyback/${r.request_id}`}
           className="font-bold text-slate-900 hover:underline"
           onClick={(e) => e.stopPropagation()}
+          // U5 — the row itself is already a keyboard target (role="link",
+          // Enter/Space). Without this the nested Link is a SECOND, redundant
+          // tab stop landing on the same destination.
+          tabIndex={-1}
         >
           {r.request_no}
         </Link>

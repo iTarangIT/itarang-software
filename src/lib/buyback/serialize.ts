@@ -243,6 +243,15 @@ export interface DealerNegRoundView {
   lines: DealerNegLineView[];
   is_final: boolean;
   is_accept: boolean;
+  /**
+   * U5 — the offer_version this specific final offer belongs to. Only ever
+   * set on is_final rounds (a final offer's own version_no); absent on plain
+   * negotiation rounds. Additive: without it, a UI falls back to the deal's
+   * CURRENT offer_version, which is what every caller did before this field
+   * existed — but that mislabels an OLDER final offer still visible after a
+   * reopen, since the deal has since moved on to a later version.
+   */
+  version?: number;
 }
 
 /**
@@ -260,6 +269,9 @@ export interface DealerNegRoundSource {
   lines: Array<{ line_id: string; label: string; price_per_unit: number | string }>;
   is_final?: boolean;
   is_accept?: boolean;
+  /** U5 — this round's own offer_version, when the producer has one (a final
+   * offer's version_no). See DealerNegRoundView.version. */
+  version?: number;
 }
 
 export function toDealerNegRound(round: DealerNegRoundSource): DealerNegRoundView {
@@ -280,6 +292,8 @@ export function toDealerNegRound(round: DealerNegRoundSource): DealerNegRoundVie
     })),
     is_final: round.is_final ?? false,
     is_accept: round.is_accept ?? false,
+    // Additive — only present when the producer set it (final-offer rounds).
+    ...(round.version !== undefined ? { version: round.version } : {}),
   };
 }
 

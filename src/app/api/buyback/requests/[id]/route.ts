@@ -377,23 +377,46 @@ async function dealerNegotiation(dealId: string): Promise<DealerNegRoundSource[]
     ORDER BY fo.version_no ASC
   `);
 
-  const offers = (offerRows as unknown as Array<Record<string, unknown>>).map((o) => ({
-    at: new Date((o.sent_at as string) ?? 0).getTime(),
-    source: {
-      round_no: Number(o.version_no),
-      offered_by_role: "admin",
-      note: (o.note as string) ?? null,
-      created_at: (o.sent_at as string) ?? new Date(0).toISOString(),
-      lines: mapLines(o.lines),
-      is_final: true,
-      is_accept: o.status === "ACCEPTED",
-    } satisfies DealerNegRoundSource,
-  }));
+  // U5 — a final offer with no sent_at was never actually sent to the dealer
+  // (the schema defaults sent_at NOT NULL at insert, but this stays
+  // defensive against any future/legacy row that slips through without one).
+  // It used to fall back to `new Date(0)` and sort to the HEAD of the
+  // thread — an unsent draft outranking everything the dealer has actually
+  // seen. final_offers has no created_at column to fall back to instead, and
+  // the dealer redaction discipline is "only what was sent is theirs to
+  // see" — so excluding the row, not re-dating it, is the correct fix.
+  const offers = (offerRows as unknown as Array<Record<string, unknown>>)
+    .filter((o) => Boolean(o.sent_at))
+    .map((o) => ({
+      at: new Date(o.sent_at as string).getTime(),
+      source: {
+        round_no: Number(o.version_no),
+        offered_by_role: "admin",
+        note: (o.note as string) ?? null,
+        created_at: o.sent_at as string,
+        lines: mapLines(o.lines),
+        is_final: true,
+        is_accept: o.status === "ACCEPTED",
+        // U5 — this final offer's OWN version, not the deal's current one. A
+        // reopened deal's earlier final(s) stay in the thread but must keep
+        // labelling themselves with the version they actually belonged to.
+        version: Number(o.version_no),
+      } satisfies DealerNegRoundSource,
+    }));
 
   return [...rounds, ...offers].sort((a, b) => a.at - b.at).map((x) => x.source);
 }
 
-/** Ext-2 — the PO iTarang issued to this dealer (leg=DEALER, direction=ISSUED). */
+/**
+ * Ext-2 — the PO iTarang issued to this dealer (leg=DEALER, direction=ISSUED).
+ *
+ * U5: `counterparty_entity_id` is dropped from the SELECT — it was fetched on
+ * every dealer detail-page load but never read by anything downstream
+ * (toDealerPo() already never emits it, and DealerPoSource.counterparty_entity_id
+ * stays optional so any future/other caller that DOES pass it is still
+ * redacted). `pdf_s3` stays: toDealerPo() derives `pdf_available` from it
+ * (`Boolean(po.pdf_s3)`), so it's a live read, not dead.
+ */
 async function dealerPurchaseOrder(dealId: string): Promise<DealerPoSource | null> {
   const [po] = await db
     .select({
@@ -401,7 +424,6 @@ async function dealerPurchaseOrder(dealId: string): Promise<DealerPoSource | nul
       status: purchaseOrders.status,
       issued_at: purchaseOrders.issued_at,
       pdf_s3: purchaseOrders.pdf_s3,
-      counterparty_entity_id: purchaseOrders.counterparty_entity_id,
     })
     .from(purchaseOrders)
     .where(

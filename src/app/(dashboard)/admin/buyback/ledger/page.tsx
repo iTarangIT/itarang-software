@@ -81,6 +81,7 @@ const HEADS: DealTableHead[] = [
   { label: "Method" },
   { label: "Date" },
   { label: "By" },
+  { label: "Proof" },
 ];
 
 /** `?from=` value for the given date-range pill selection. */
@@ -229,6 +230,25 @@ export default function BuybackLedgerPage() {
       <span key="by" className="text-slate-500">
         {r.recorded_by ?? "—"}
       </span>,
+      // U5 — /api/buyback/media?evidence= is the authenticated proxy U1
+      // added for the S3 bucket that has no CORS and no credential able to
+      // add it; a bare S3 URL would 403 in the browser.
+      r.proof_s3 ? (
+        <a
+          key="proof"
+          href={`/api/buyback/media?evidence=${encodeURIComponent(r.proof_s3)}`}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="rounded-md border border-gray-200 px-2 py-0.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-50"
+        >
+          Proof
+        </a>
+      ) : (
+        <span key="proof" className="text-slate-300">
+          —
+        </span>
+      ),
     ],
   }));
 
