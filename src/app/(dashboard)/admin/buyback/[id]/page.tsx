@@ -18,7 +18,7 @@
  * payload as before the re-layout — this file moved pixels, not wires.
  */
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import BatteryLineLabel, { ConditionChip } from "@/components/buyback/BatteryLineLabel";
@@ -184,7 +184,10 @@ function AdminBuybackDetail() {
   // Bumping this re-runs the effect. The fetch lives INSIDE the effect so every
   // setState happens after an await, never synchronously in the effect body.
   const [reloadKey, setReloadKey] = useState(0);
-  const reload = () => setReloadKey((k) => k + 1);
+  // Stable across renders — passed to VendorBoard as onMutated so its actions
+  // (routing / agree / PO / pickup / mark-collected) refresh THIS page's
+  // header, stepper, offer version and actions bar, not just the board itself.
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -792,7 +795,7 @@ function AdminBuybackDetail() {
                 {/* Vendor multi-select + "send" — the board's routing section.
                     Same fetch/POST as ever; it renders nothing until the state
                     machine allows route_to_vendors. */}
-                <VendorBoard requestId={id} section="routing" />
+                <VendorBoard requestId={id} section="routing" onMutated={reload} />
               </div>
             </Card>
           </div>
@@ -802,7 +805,7 @@ function AdminBuybackDetail() {
       {/* ============================== VENDOR BOARD ============================== */}
       {tab === "vendors" && (
         <div className="mt-4">
-          <VendorBoard requestId={id} section="threads" />
+          <VendorBoard requestId={id} section="threads" onMutated={reload} />
         </div>
       )}
 

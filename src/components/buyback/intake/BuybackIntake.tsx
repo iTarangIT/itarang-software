@@ -109,7 +109,6 @@ interface DraftRow {
   non_functional_qty: string;
   iot_battery: "" | "YES" | "NO";
   iot_brand_name: string;
-  applyAll: boolean;
   open: boolean;
   saving: boolean;
 }
@@ -148,7 +147,6 @@ const newRow = (): DraftRow => ({
   non_functional_qty: "",
   iot_battery: "",
   iot_brand_name: "",
-  applyAll: true,
   open: false,
   saving: false,
 });
@@ -353,10 +351,20 @@ export default function BuybackIntake() {
         patch(row.key, { saving: true });
 
         const payload = {
+          // Sent on every save, PATCH included — not just CREATE. A dealer who
+          // changes the SKU on a saved row must not have the server silently
+          // keep the old variant while the screen shows the new one (BB-1045).
+          // An unchanged value is harmless: the route only re-validates when it
+          // differs from what is already on the line.
+          variant_id: row.variant_id,
           quantity: row.quantity,
           condition: row.condition,
-          expected_price_per_unit: row.expected_price ? Number(row.expected_price) : null,
-          measured_voltage: row.measured_voltage ? Number(row.measured_voltage) : null,
+          // NaN-safe: a stray non-numeric keystroke ("120Ah") must not fail the
+          // WHOLE line save. `allowZero` matters here — a DEAD battery's
+          // auto-filled measured voltage is legitimately "0.0" and must still
+          // be sent as 0, not dropped to null.
+          expected_price_per_unit: specNum(row.expected_price, { allowZero: true }),
+          measured_voltage: specNum(row.measured_voltage, { allowZero: true }),
           // E-191 spec. Empty inputs go as null (PATCH semantics: null clears),
           // so what the dealer sees and what the server holds never drift.
           brand: row.brand.trim() || null,
@@ -384,7 +392,7 @@ export default function BuybackIntake() {
             : await fetch(`/api/buyback/requests/${requestId}/lines`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ variant_id: row.variant_id, ...payload }),
+                body: JSON.stringify(payload),
               });
           json = await res.json();
         } catch {
@@ -402,6 +410,10 @@ export default function BuybackIntake() {
         const lineId = knownId ?? json.data!.line_id;
         lineIdsRef.current[row.key] = lineId;
         patch(row.key, { line_id: lineId, saving: false });
+        // Progress was just made — the last gate refusal may no longer apply.
+        // A stale banner that never clears while the dealer fixes exactly what
+        // it complained about is worse than no banner at all (BB-1045).
+        setGateIssues([]);
         return lineId;
       };
 
@@ -580,6 +592,10 @@ export default function BuybackIntake() {
             : r,
         ),
       );
+      // A photo just landed — the gate's last "not ready to submit" refusal is
+      // a stale snapshot from before this upload and must not keep showing a
+      // problem the dealer already fixed (BB-1045).
+      setGateIssues([]);
     } catch (e) {
       URL.revokeObjectURL(previewUrl);
 
@@ -700,6 +716,9 @@ export default function BuybackIntake() {
     // Keep the record id: it is what lets a proof thumbnail be served from the
     // server (and therefore survive a page reload) rather than from a local blob.
     patch(row.key, { provenance_id: json.data.provenance_id });
+    // Provenance just saved — clear the stale gate banner, same as a line save
+    // or a photo upload (BB-1045).
+    setGateIssues([]);
   };
 
   /**
@@ -1408,14 +1427,13 @@ export default function BuybackIntake() {
                     </Field>
                   </div>
 
-                  <label className="mt-3 flex items-center gap-2 text-[12.5px] text-slate-500">
-                    <input
-                      type="checkbox"
-                      checked={row.applyAll}
-                      onChange={(e) => patch(row.key, { applyAll: e.target.checked })}
-                    />
-                    Apply this owner and proof to all units in this line (same-source lot)
-                  </label>
+                  {/* Was a checkbox bound to a field nothing read — provenance
+                      saves are line-scoped (scope:"LINE") already, so it applies
+                      to every unit in the line by construction. The control did
+                      nothing; the copy alone still tells the dealer the truth. */}
+                  <p className="mt-3 text-[12.5px] text-slate-500">
+                    Applies to all units in this line (same-source lot).
+                  </p>
                 </div>
               )}
 

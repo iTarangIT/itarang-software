@@ -105,9 +105,18 @@ const THREAD_CHIP: Record<Thread["status"], [string, string, string]> = {
 export default function VendorBoard({
   requestId,
   section = "all",
+  onMutated,
 }: {
   requestId: string;
   section?: "routing" | "threads" | "all";
+  /**
+   * Fired after any action that changes the deal's status, stepper position,
+   * offer version, or allowed_actions — routing, agree, PO, pickup, mark
+   * collected. The board reloads its OWN state via `reload()` regardless; this
+   * is for the PARENT page, whose header/stepper/actions bar otherwise sit
+   * stale until the next full navigation.
+   */
+  onMutated?: () => void;
 }) {
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(true);
@@ -168,6 +177,7 @@ export default function VendorBoard({
     setRespond(null);
     setPicked([]);
     reload();
+    onMutated?.();
     return true;
   };
 
@@ -281,6 +291,7 @@ export default function VendorBoard({
       setCollectNotice(json?.data?.variance ?? "Collected count differs from the declaration.");
     }
     reload();
+    onMutated?.();
   };
 
   return (
@@ -743,7 +754,10 @@ export default function VendorBoard({
       {collectOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
-          onClick={() => setCollectOpen(false)}
+          onClick={() => {
+            setCollectOpen(false);
+            setError(null);
+          }}
         >
           <div
             className="w-full max-w-[480px] rounded-2xl bg-white p-5 shadow-2xl"
