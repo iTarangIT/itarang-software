@@ -41,9 +41,13 @@ import {
   useActiveTab,
 } from "@/components/buyback/ui";
 import type { ActivityEntry, BuybackLineView, NegRound, TabItem } from "@/components/buyback/ui";
-import { formatBatteryLine, inr, perUnitShort } from "@/lib/buyback/format";
+import { formatBatteryLine, inr, perUnitShort, specSummary } from "@/lib/buyback/format";
+import type { SpecSummarySource } from "@/lib/buyback/format";
 
-interface DealerLine {
+// The E-191 dealer-declared spec fields ride along on the payload's lines and
+// are typed by SpecSummarySource (all optional/nullable) — one declaration,
+// shared with the formatter that renders them.
+interface DealerLine extends SpecSummarySource {
   id: string;
   variant_type: string;
   spec_label: string;
@@ -364,6 +368,7 @@ function DealerRequestDetail() {
       qty: l.quantity,
       condition: l.condition_key,
       spec: l.spec_label,
+      details: specSummary(l),
       measured: l.measured_voltage ? `${l.measured_voltage}V` : undefined,
       expectedPerUnit:
         l.expected_price_per_unit != null ? Number(l.expected_price_per_unit) : undefined,

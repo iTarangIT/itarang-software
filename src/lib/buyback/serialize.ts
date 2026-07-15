@@ -27,6 +27,18 @@ export interface AdminLineView {
   condition: BatteryCondition;
   measured_voltage: number | string | null;
   expected_price_per_unit: number | string | null;
+  // --- E-191 dealer-declared spec. The DEALER typed these — not secrets. ----
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
   photo_count: number;
   /** The price the dealer accepted (from the ACCEPTED final offer / lock). */
   dealer_price: number | string | null;
@@ -73,6 +85,18 @@ export interface DealerLineView {
   quantity: number;
   measured_voltage: number | string | null;
   expected_price_per_unit: number | string | null;
+  // E-191 spec — the dealer declared it at intake; it is theirs to see back.
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
   photo_count: number;
   /** What iTarang has agreed to pay them. Their own price is not a secret. */
   dealer_price: number | string | null;
@@ -144,6 +168,17 @@ export function toDealerLine(line: AdminLineView): DealerLineView {
     quantity: line.quantity,
     measured_voltage: line.measured_voltage,
     expected_price_per_unit: line.expected_price_per_unit,
+    brand: line.brand ?? null,
+    chemistry: line.chemistry ?? null,
+    form_factor: line.form_factor ?? null,
+    nominal_voltage: line.nominal_voltage ?? null,
+    nominal_ampere: line.nominal_ampere ?? null,
+    unit_weight_kg: line.unit_weight_kg ?? null,
+    warranty_cycles: line.warranty_cycles ?? null,
+    functional_qty: line.functional_qty ?? null,
+    non_functional_qty: line.non_functional_qty ?? null,
+    iot_battery: line.iot_battery ?? null,
+    iot_brand_name: line.iot_brand_name ?? null,
     photo_count: line.photo_count,
     dealer_price: line.dealer_price,
     line_total: lineTotal(line.quantity, line.dealer_price ?? line.expected_price_per_unit),

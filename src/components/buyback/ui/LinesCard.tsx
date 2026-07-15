@@ -27,6 +27,8 @@ export interface BuybackLineView {
   qty: number;
   condition: string;
   spec?: string;
+  /** The dealer-declared E-191 spec summary (specSummary() from lib/buyback/format). */
+  details?: string | null;
   measured?: string;
   expectedPerUnit?: number;
   lockedPerUnit?: number;
@@ -91,6 +93,9 @@ export default function LinesCard({
                   {line.measured && <span>· measured {line.measured}</span>}
                   {line.expectedPerUnit != null && <span>· Expected {inr(line.expectedPerUnit)}/unit</span>}
                 </div>
+                {line.details && (
+                  <div className="mt-[3px] text-[11.5px] text-slate-500">{line.details}</div>
+                )}
                 {line.lockedPerUnit != null && (
                   <div className="mt-[3px] text-[11.5px] font-bold text-green-700">
                     Locked {inr(line.lockedPerUnit)}/unit

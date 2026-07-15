@@ -13,9 +13,12 @@
  * from `d.lines[0]` alone, so a two-SKU request whose second battery had no
  * paperwork at all still showed 100% and sailed into review.
  *
- * Filters (Status / Dealer / Date range) are client-side over the already-
- * fetched queue — the API (src/app/api/admin/buyback/queue/route.ts) is
- * untouched, and already returns created_at/submitted_at for the date filter.
+ * Filters are client-side over the already-fetched queue — the API
+ * (src/app/api/admin/buyback/queue/route.ts) is untouched. EVERY column has
+ * one: Source (the Request column's badge), Dealer, City, Provenance, Dealer
+ * quote, SLA aging, Status — plus the Date range. Option lists for Source /
+ * Dealer / City / Status are derived from the data itself, so a filter never
+ * offers a value with zero rows behind it.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -62,6 +65,39 @@ const DATE_RANGE_OPTIONS = [
   { value: "90", label: "Last 90 days" },
 ];
 
+const PROVENANCE_OPTIONS = [
+  { value: ALL, label: "All" },
+  { value: "FULL", label: "Complete (100%)" },
+  { value: "PARTIAL", label: "Partial (1–99%)" },
+  { value: "NONE", label: "None (0%)" },
+];
+
+const QUOTE_OPTIONS = [
+  { value: ALL, label: "All" },
+  { value: "LT50K", label: "Under ₹50k" },
+  { value: "50K_2L", label: "₹50k – ₹2L" },
+  { value: "GT2L", label: "Over ₹2L" },
+];
+
+const SLA_OPTIONS = [
+  { value: ALL, label: "All" },
+  { value: "LT24H", label: "Under 24h" },
+  { value: "1_3D", label: "1–3 days" },
+  { value: "GT3D", label: "Over 3 days" },
+];
+
+const SOURCE_LABELS: Record<string, string> = {
+  WEB: "Web",
+  WHATSAPP: "WhatsApp",
+  CSV: "CSV",
+};
+
+/** Queue age in hours — hours_in_queue when the API sent it, else days × 24. */
+function ageHours(r: QueueRow): number {
+  if (typeof r.hours_in_queue === "number") return r.hours_in_queue;
+  return (r.days_in_queue ?? 0) * 24;
+}
+
 const HEADS: DealTableHead[] = [
   { label: "Request" },
   { label: "Dealer" },
@@ -99,6 +135,11 @@ export default function AdminBuybackQueuePage() {
 
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [dealerFilter, setDealerFilter] = useState(ALL);
+  const [cityFilter, setCityFilter] = useState(ALL);
+  const [sourceFilter, setSourceFilter] = useState(ALL);
+  const [provenanceFilter, setProvenanceFilter] = useState(ALL);
+  const [quoteFilter, setQuoteFilter] = useState(ALL);
+  const [slaFilter, setSlaFilter] = useState(ALL);
   const [dateFilter, setDateFilter] = useState(ALL);
   // "Now", for the date-range filter's cutoff — captured once the queue
   // loads rather than read via Date.now() during render/useMemo, which
@@ -153,6 +194,28 @@ export default function AdminBuybackQueuePage() {
     ];
   }, [queue]);
 
+  const cityOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of queue) {
+      if (r.dealer_city) seen.add(r.dealer_city);
+    }
+    return [
+      { value: ALL, label: "All" },
+      ...[...seen].sort().map((city) => ({ value: city, label: city })),
+    ];
+  }, [queue]);
+
+  const sourceOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of queue) {
+      if (r.source_channel) seen.add(r.source_channel);
+    }
+    return [
+      { value: ALL, label: "All" },
+      ...[...seen].sort().map((s) => ({ value: s, label: SOURCE_LABELS[s] ?? s })),
+    ];
+  }, [queue]);
+
   const filtered = useMemo(() => {
     const now = loadedAt ?? 0;
     const cutoff = dateFilter === ALL ? null : now - Number(dateFilter) * 24 * 60 * 60 * 1000;
@@ -160,13 +223,48 @@ export default function AdminBuybackQueuePage() {
     return queue.filter((r) => {
       if (statusFilter !== ALL && r.status !== statusFilter) return false;
       if (dealerFilter !== ALL && r.dealer_name !== dealerFilter) return false;
+      if (cityFilter !== ALL && r.dealer_city !== cityFilter) return false;
+      if (sourceFilter !== ALL && r.source_channel !== sourceFilter) return false;
+
+      if (provenanceFilter !== ALL) {
+        const pct = r.provenance_pct ?? 0;
+        if (provenanceFilter === "FULL" && pct < 100) return false;
+        if (provenanceFilter === "PARTIAL" && (pct <= 0 || pct >= 100)) return false;
+        if (provenanceFilter === "NONE" && pct > 0) return false;
+      }
+
+      if (quoteFilter !== ALL) {
+        const quote = r.dealer_quote ?? 0;
+        if (quoteFilter === "LT50K" && quote >= 50_000) return false;
+        if (quoteFilter === "50K_2L" && (quote < 50_000 || quote > 200_000)) return false;
+        if (quoteFilter === "GT2L" && quote <= 200_000) return false;
+      }
+
+      if (slaFilter !== ALL) {
+        const hours = ageHours(r);
+        if (slaFilter === "LT24H" && hours >= 24) return false;
+        if (slaFilter === "1_3D" && (hours < 24 || hours > 72)) return false;
+        if (slaFilter === "GT3D" && hours <= 72) return false;
+      }
+
       if (cutoff !== null) {
         const ts = rowTimestamp(r, now);
         if (ts === null || ts < cutoff) return false;
       }
       return true;
     });
-  }, [queue, statusFilter, dealerFilter, dateFilter, loadedAt]);
+  }, [
+    queue,
+    statusFilter,
+    dealerFilter,
+    cityFilter,
+    sourceFilter,
+    provenanceFilter,
+    quoteFilter,
+    slaFilter,
+    dateFilter,
+    loadedAt,
+  ]);
 
   const rows: DealTableRow[] = filtered.map((r) => ({
     key: r.request_id,
@@ -215,8 +313,18 @@ export default function AdminBuybackQueuePage() {
         ) : (
           <>
             <div className="mb-4 flex flex-wrap gap-2">
-              <FilterPill label="Status" value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
+              <FilterPill label="Source" value={sourceFilter} options={sourceOptions} onChange={setSourceFilter} />
               <FilterPill label="Dealer" value={dealerFilter} options={dealerOptions} onChange={setDealerFilter} />
+              <FilterPill label="City" value={cityFilter} options={cityOptions} onChange={setCityFilter} />
+              <FilterPill
+                label="Provenance"
+                value={provenanceFilter}
+                options={PROVENANCE_OPTIONS}
+                onChange={setProvenanceFilter}
+              />
+              <FilterPill label="Quote" value={quoteFilter} options={QUOTE_OPTIONS} onChange={setQuoteFilter} />
+              <FilterPill label="SLA" value={slaFilter} options={SLA_OPTIONS} onChange={setSlaFilter} />
+              <FilterPill label="Status" value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
               <FilterPill
                 label="Date range"
                 value={dateFilter}
