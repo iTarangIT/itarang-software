@@ -39,6 +39,7 @@ import {
   ProvenanceBar,
   SlaChip,
   EmptyState,
+  ExportCsvButton,
 } from "@/components/buyback/ui";
 import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
 import StatusChip, { statusLabel } from "@/components/buyback/StatusChip";
@@ -298,6 +299,20 @@ export default function AdminBuybackQueuePage() {
     loadedAt,
   ]);
 
+  // U6 — flat, human-readable CSV mapper over the CURRENTLY loaded+filtered
+  // rows (same `filtered` array the table renders), not the raw API shape.
+  const csvRows = filtered.map((r) => ({
+    Request: r.request_no,
+    Source: SOURCE_LABELS[r.source_channel] ?? r.source_channel,
+    Dealer: r.dealer_name,
+    City: r.dealer_city ?? "",
+    "Total units": r.total_units,
+    "Dealer quote": r.dealer_quote,
+    "Provenance %": r.provenance_pct,
+    "Days in queue": r.days_in_queue,
+    Status: statusLabel(r.status),
+  }));
+
   const rows: DealTableRow[] = filtered.map((r) => ({
     key: r.request_id,
     onClick: () => router.push(`/admin/buyback/${r.request_id}`),
@@ -339,7 +354,12 @@ export default function AdminBuybackQueuePage() {
         <PageHeader
           title="Review Queue"
           sub="Requests awaiting review, negotiation & routing"
-          right={<AdminBuybackSearch />}
+          right={
+            <div className="flex flex-wrap items-center gap-2">
+              <AdminBuybackSearch />
+              <ExportCsvButton filename="buyback-queue.csv" rows={csvRows} />
+            </div>
+          }
         />
 
         {error ? (

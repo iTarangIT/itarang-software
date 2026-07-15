@@ -45,8 +45,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { Card, EmptyState, PageHeader } from "@/components/buyback/ui";
-import StatusChip from "@/components/buyback/StatusChip";
+import { Card, EmptyState, ExportCsvButton, PageHeader } from "@/components/buyback/ui";
+import StatusChip, { statusLabel } from "@/components/buyback/StatusChip";
 import { inr } from "@/lib/buyback/format";
 
 interface MarginRow {
@@ -121,12 +121,29 @@ export default function AdminBuybackPaymentsPage() {
 
   const deals = marginRows.filter((r) => MONEY_STAGE_STATUSES.has(r.status));
 
+  // U6 — one flat row per deal (both legs' amounts + settled state), over the
+  // currently loaded `deals` set.
+  const csvRows = deals.map((d) => {
+    const dealerTxn = legSubId(d.request_no, "DEALER");
+    const vendorTxn = legSubId(d.request_no, "VENDOR");
+    return {
+      Request: d.request_no,
+      Status: statusLabel(d.status),
+      "Dealer payout": d.dealer_total,
+      "Dealer settled": ledgerTxns.has(dealerTxn) ? "Yes" : "No",
+      "Vendor receipt": d.vendor_total,
+      "Vendor settled": ledgerTxns.has(vendorTxn) ? "Yes" : "No",
+      Margin: d.realised_margin,
+    };
+  });
+
   return (
     <div className="bg-bb-bg px-6 py-6">
       <div className="mx-auto max-w-[1180px]">
         <PageHeader
           title="Payments & Settlement"
           sub="Record and track both legs of every deal"
+          right={<ExportCsvButton filename="buyback-payments.csv" rows={csvRows} />}
         />
 
         {error ? (
