@@ -126,6 +126,8 @@ export interface DischargeCycle {
     n_samples: number;
     coulomb_trustworthy: boolean;
     rated_capacity_ah: number | null;
+    /** Where the nameplate came from: the CAN payload, or the E-190 model-spec fallback. */
+    rated_capacity_source?: 'can' | 'spec' | null;
     /** Distance covered inside the cycle window; null = no usable GPS. Route-enriched. */
     km?: number | null;
     /** 'gps' = uncalibrated chord — a lower bound, and the panel says so. */

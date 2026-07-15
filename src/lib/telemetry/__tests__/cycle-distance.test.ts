@@ -130,10 +130,17 @@ describe("windowsCTE", () => {
             start: new Date("2026-06-02T09:00:00Z"),
             end: new Date("2026-06-02T10:30:00Z"),
         };
-        const { text, params } = render(windowsCTE(sql, [w1, w2]));
+        const query = windowsCTE(sql, [w1, w2]);
+        const { text, params } = render(query);
         expect(flat(text)).toBe(
             "windows AS ( SELECT * FROM unnest( $1::int[], $2::timestamptz[], $3::timestamptz[] ) AS w(win_id, start_time, end_time) )",
         );
+        // Each bind must be a sql.array() Parameter, not a bare JS array — postgres.js
+        // binds a bare Date[] as a single timestamptz and the server rejects the
+        // ::timestamptz[] cast at runtime (which the rendered text alone can't reveal;
+        // stringify unwraps Parameters, so the check has to look at the raw args).
+        const args = (query as unknown as { args: Array<{ constructor: { name: string } }> }).args;
+        expect(args.map((a) => a.constructor.name)).toEqual(["Parameter", "Parameter", "Parameter"]);
         expect(params).toEqual([
             [1, 2],
             [w1.start, w2.start],

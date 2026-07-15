@@ -39,6 +39,13 @@ export interface ResolvedBatteryThresholds extends BatteryThresholds {
     modelName?: string | null;
     /** Which fields the model spec overrode — lets the UI attribute a band to the spec. */
     specKeys?: (keyof BatteryThresholds)[];
+    /**
+     * Nameplate Ah from the model spec, when a vehicleno resolved to one. Spec-only by
+     * design — a nameplate is a property of the pack, not a display preference, so it has
+     * no app_settings/env rung. Callers use it as the fallback where the CAN payload's
+     * rated_capacity is absent (the discharge Ah-out series).
+     */
+    ratedCapacityAh?: number | null;
 }
 
 /** Drizzle returns numeric columns as strings; a NULL column means "no limit recorded". */
@@ -60,12 +67,14 @@ async function fetchSettingsPatch(): Promise<Partial<BatteryThresholds> | null> 
 async function fetchSpecPatch(vehicleno: string): Promise<{
     modelName: string | null;
     patch: Partial<Record<keyof BatteryThresholds, number | null>> | null;
+    ratedCapacityAh: number | null;
 }> {
     // A vehicle can appear more than once in device_battery_map (re-deployments);
     // the active row with the latest installed_at is the current pack.
     const [row] = await db
         .select({
             modelName: batterySpecModels.model_name,
+            ratedCapacityAh: batterySpecModels.rated_capacity_ah,
             underVoltageV: batterySpecModels.under_voltage_v,
             overVoltageV: batterySpecModels.over_voltage_v,
             overCurrentA: batterySpecModels.over_current_a,
@@ -84,9 +93,10 @@ async function fetchSpecPatch(vehicleno: string): Promise<{
         )
         .orderBy(desc(deviceBatteryMap.installed_at))
         .limit(1);
-    if (!row) return { modelName: null, patch: null };
+    if (!row) return { modelName: null, patch: null, ratedCapacityAh: null };
     return {
         modelName: row.modelName,
+        ratedCapacityAh: toNum(row.ratedCapacityAh),
         patch: {
             underVoltageV: toNum(row.underVoltageV),
             overVoltageV: toNum(row.overVoltageV),
@@ -107,14 +117,19 @@ export async function getBatteryThresholds(
             fetchSettingsPatch(),
             vehicleno
                 ? fetchSpecPatch(vehicleno)
-                : Promise.resolve({ modelName: null, patch: null }),
+                : Promise.resolve({ modelName: null, patch: null, ratedCapacityAh: null }),
         ]);
         const { thresholds, specKeys } = resolveThresholds(
             defaults,
             settingsPatch,
             spec.patch,
         );
-        return { ...thresholds, modelName: spec.modelName, specKeys };
+        return {
+            ...thresholds,
+            modelName: spec.modelName,
+            specKeys,
+            ratedCapacityAh: spec.ratedCapacityAh,
+        };
     } catch (err) {
         console.error("[Thresholds] Failed to read battery thresholds:", err);
         return defaults;

@@ -73,6 +73,8 @@ export interface DischargeCycle {
     /** False → the coulomb figure is a straight line through a curve nobody saw. */
     coulomb_trustworthy: boolean;
     rated_capacity_ah: number | null;
+    /** Where the nameplate came from: the CAN payload, or the E-190 model-spec fallback. */
+    rated_capacity_source: "can" | "spec" | null;
 }
 
 export async function fetchDischargeAnalytics(
@@ -81,6 +83,10 @@ export async function fetchDischargeAnalytics(
 ) {
     const iot = getIotSql();
     const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
+    // E-190 fallback nameplate: some feeds (the post-AWS-migration poller among them) carry
+    // no rated_capacity in the CAN payload, and without a nameplate every SOC-derived Ah —
+    // the primary discharge series — is null. The model spec fills that hole per pack.
+    const thresholdsPromise = getBatteryThresholds(vehicleno);
 
     const rows = (await iot`
         ${dischargeCTEs(iot, vehicleno, timePredicate)}
@@ -99,10 +105,15 @@ export async function fetchDischargeAnalytics(
         ORDER BY start_time ASC
     `) as unknown as Array<Record<string, unknown>>;
 
+    const specRatedAh = (await thresholdsPromise).ratedCapacityAh ?? null;
+
     const cycles: DischargeCycle[] = rows.map((r) => {
         const startSoc = num(r.start_soc);
         const endSoc = num(r.end_soc);
-        const ratedAh = num(r.rated_capacity_ah);
+        const canRatedAh = num(r.rated_capacity_ah);
+        const ratedAh = canRatedAh != null && canRatedAh > 0 ? canRatedAh : specRatedAh;
+        const ratedSource: DischargeCycle["rated_capacity_source"] =
+            canRatedAh != null && canRatedAh > 0 ? "can" : ratedAh != null ? "spec" : null;
         const nSamples = Number(r.n_samples) || 0;
 
         const socAh = socDerivedAh(startSoc, endSoc, ratedAh);
@@ -129,6 +140,7 @@ export async function fetchDischargeAnalytics(
             n_samples: nSamples,
             coulomb_trustworthy: trustworthy,
             rated_capacity_ah: ratedAh,
+            rated_capacity_source: ratedSource,
         };
     });
 

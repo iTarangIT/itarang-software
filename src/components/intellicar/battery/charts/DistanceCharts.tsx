@@ -175,7 +175,13 @@ export function DischargeVsKmChart({ data }: { data: DischargeKmData | undefined
                     />
                 ) : undefined
             }
-            empty={rows.length === 0 ? 'No discharge cycle in this period covered a measurable distance.' : undefined}
+            empty={
+                rows.length === 0
+                    ? (cs?.cyclesWithoutDistance ?? 0) > 0
+                        ? `${cs!.cyclesWithoutDistance} discharge cycle${cs!.cyclesWithoutDistance === 1 ? ' was' : 's were'} detected, but none had usable GPS distance — the GPS feed reported no fixes (or only parked jitter) in this period.`
+                        : 'No discharge cycle in this period covered a measurable distance.'
+                    : undefined
+            }
             caveat={
                 <>
                     <p>
