@@ -21,13 +21,26 @@ interface PlaceRole {
     evidence: string;
 }
 
+/**
+ * One palette for the four places, shared by the map pins, the on-map legend, and (by matching
+ * hex to Tailwind tone) the cards below. Colours are the card tones — violet-700 / red-600 /
+ * emerald-600 / amber-600 — so a pin and its card read as the same place, and the icon lets the
+ * legend name each without relying on colour alone.
+ */
+const PLACES = [
+    { n: 1, key: 'home', title: 'Home', color: '#6d28d9', Icon: Home },
+    { n: 2, key: 'parking', title: 'Parking', color: '#dc2626', Icon: MapPin },
+    { n: 3, key: 'charging', title: 'Charging', color: '#059669', Icon: PlugZap },
+    { n: 4, key: 'overnight', title: 'Overnight (secondary)', color: '#d97706', Icon: Moon },
+] as const;
+
 function placeRoles(data: BatteryGeoData): PlaceRole[] {
     const roles: PlaceRole[] = [];
     if (data.home) {
         roles.push({
             n: 1,
             title: 'Home',
-            color: '#4a3aa7',
+            color: PLACES[0].color,
             cluster: data.home,
             evidence: `${data.home.nightHours.toFixed(1)} h overnight across ${data.home.nights} nights`,
         });
@@ -36,7 +49,7 @@ function placeRoles(data: BatteryGeoData): PlaceRole[] {
         roles.push({
             n: 2,
             title: 'Parking',
-            color: '#d03b3b',
+            color: PLACES[1].color,
             cluster: data.parking,
             evidence: `${data.parking.hours.toFixed(1)} h stationary · ${data.parking.visits} visits`,
         });
@@ -45,7 +58,7 @@ function placeRoles(data: BatteryGeoData): PlaceRole[] {
         roles.push({
             n: 3,
             title: 'Charging',
-            color: '#1baf7a',
+            color: PLACES[2].color,
             cluster: data.charging,
             evidence: `${data.charging.chargeHours.toFixed(1)} h charging across ${data.charging.chargeSessions} sessions`,
         });
@@ -54,7 +67,7 @@ function placeRoles(data: BatteryGeoData): PlaceRole[] {
         roles.push({
             n: 4,
             title: 'Overnight (secondary)',
-            color: '#d97706',
+            color: PLACES[3].color,
             cluster: data.overnightSecondary,
             evidence: `${data.overnightSecondary.nightHours.toFixed(1)} h across ${data.overnightSecondary.nights} nights`,
         });
@@ -63,6 +76,20 @@ function placeRoles(data: BatteryGeoData): PlaceRole[] {
 }
 
 const cellKey = (c: { lat: number; lon: number }) => `${c.lat},${c.lon}`;
+
+/** Whether a given place role was inferred for this battery — drives the on-map legend. */
+function placeExists(data: BatteryGeoData, key: (typeof PLACES)[number]['key']): boolean {
+    switch (key) {
+        case 'home':
+            return !!data.home;
+        case 'parking':
+            return !!data.parking;
+        case 'charging':
+            return !!data.charging;
+        case 'overnight':
+            return !!data.overnightSecondary;
+    }
+}
 
 /**
  * Where the battery drives, and where it sits.
@@ -155,19 +182,30 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                     : data.dwell.map((d) => [d.lat, d.lon, d.hours]);
 
             if (points.length > 0) {
-                const peak = Math.max(...points.map((p) => p[2]));
+                // Normalise against the 95th-percentile cell, not the single busiest one: one
+                // dominant dwell/route cell would otherwise set the ceiling and wash every other
+                // cell down to minOpacity. Clamping at p95 keeps the hot spots saturated while
+                // letting the quieter roads actually register.
+                const weights = points.map((p) => p[2]).sort((a, b) => a - b);
+                const ceil =
+                    weights[Math.min(weights.length - 1, Math.floor(0.95 * weights.length))] ||
+                    weights[weights.length - 1] ||
+                    1;
                 const norm = points.map(
-                    ([lat, lon, w]) => [lat, lon, peak > 0 ? w / peak : 0] as [number, number, number],
+                    ([lat, lon, w]) =>
+                        [lat, lon, ceil > 0 ? Math.min(1, w / ceil) : 0] as [number, number, number],
                 );
                 heatRef.current = L.heatLayer(norm, {
-                    radius: mode === 'distance' ? 14 : 26,
-                    blur: mode === 'distance' ? 18 : 30,
+                    radius: mode === 'distance' ? 16 : 26,
+                    blur: mode === 'distance' ? 20 : 30,
                     max: 1,
-                    minOpacity: 0.25,
+                    // Higher floor + a lower first gradient stop so low-traffic cells are visible
+                    // instead of fading into the basemap.
+                    minOpacity: 0.4,
                     gradient:
                         mode === 'distance'
-                            ? { 0.2: '#2a78d6', 0.5: '#1baf7a', 0.75: '#eda100', 1.0: '#d03b3b' }
-                            : { 0.2: '#4a3aa7', 0.5: '#7c3aed', 0.8: '#eb6834', 1.0: '#d03b3b' },
+                            ? { 0.1: '#2a78d6', 0.4: '#1baf7a', 0.7: '#eda100', 1.0: '#d03b3b' }
+                            : { 0.1: '#4a3aa7', 0.45: '#7c3aed', 0.8: '#eb6834', 1.0: '#d03b3b' },
                 }).addTo(map);
             }
 
@@ -184,11 +222,11 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
             for (const d of data.dwell.slice(0, 12)) {
                 if (byCell.has(cellKey(d))) continue;
                 const c = L.circleMarker([d.lat, d.lon], {
-                    radius: 5,
+                    radius: 6,
                     color: '#fff',
-                    weight: 1.5,
-                    fillColor: '#52514e',
-                    fillOpacity: 0.85,
+                    weight: 2,
+                    fillColor: '#334155',
+                    fillOpacity: 0.95,
                 })
                     .addTo(map)
                     .bindPopup(
@@ -226,12 +264,15 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
             }
 
             if (data.bbox) {
+                // maxZoom caps how far a tight single-neighbourhood bbox (or a single fix) zooms
+                // in — without it Leaflet slams to level 18 on a pinpoint and the road context is
+                // lost. A far-flung outlier fix still frames wide, which is correct.
                 map.fitBounds(
                     [
                         [data.bbox.minLat, data.bbox.minLon],
                         [data.bbox.maxLat, data.bbox.maxLon],
                     ],
-                    { padding: [28, 28] },
+                    { padding: [28, 28], maxZoom: 15 },
                 );
             }
             // A map created inside a hidden tab measures itself as 0×0. Nudge it once it is up.
@@ -295,9 +336,38 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                     className="w-full rounded-xl overflow-hidden border border-gray-100"
                     style={{ height: 460, background: '#f8fafc' }}
                 />
-                {/* Sibling of the Leaflet container, not a child — Leaflet owns that DOM.
-                    z-[1100] clears Leaflet's internal panes/controls (≤1000). */}
-                {(data?.heat.length ?? 0) === 0 && ready && (
+                {/* On-map legend for the numbered place pins + dwell dots. Sibling of the Leaflet
+                    container (Leaflet owns that DOM); z-[1100] clears its panes/controls (≤1000).
+                    Top-right, clear of the zoom control (top-left) and attribution (bottom-right). */}
+                {ready && data?.bbox && (
+                    <div className="absolute top-3 right-3 z-[1100] rounded-lg border border-gray-200 bg-white/90 backdrop-blur-sm px-3 py-2 shadow-sm text-[11px] space-y-1">
+                        {PLACES.filter((p) => placeExists(data, p.key)).map((p) => (
+                            <div key={p.key} className="flex items-center gap-1.5">
+                                <span
+                                    className="inline-flex items-center justify-center w-4 h-4 rounded-full text-white text-[9px] font-semibold shrink-0"
+                                    style={{ background: p.color }}
+                                >
+                                    {p.n}
+                                </span>
+                                <p.Icon className="w-3 h-3" style={{ color: p.color }} />
+                                <span className="text-gray-600">{p.title}</span>
+                            </div>
+                        ))}
+                        {(data.dwell?.length ?? 0) > 0 && (
+                            <div className="flex items-center gap-1.5">
+                                <span
+                                    className="inline-block w-3 h-3 rounded-full border-2 border-white shrink-0"
+                                    style={{ background: '#334155' }}
+                                />
+                                <span className="text-gray-600">Other dwell spot</span>
+                            </div>
+                        )}
+                    </div>
+                )}
+                {/* Gate the empty overlay on bbox (null ⇒ no usable GPS fixes at all), not on
+                    heat.length — a stationary-only battery has dwell but zero distance-weighted
+                    heat cells, and must not be labelled "No GPS fixes". */}
+                {data != null && data.bbox == null && ready && (
                     <div className="absolute inset-0 z-[1100] flex items-center justify-center pointer-events-none">
                         <p className="rounded-full border border-gray-200 bg-white/90 px-4 py-2 text-sm text-gray-500 shadow-sm">
                             No GPS fixes for this battery in this period.

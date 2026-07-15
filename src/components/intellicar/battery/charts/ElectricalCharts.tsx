@@ -47,6 +47,7 @@ function EnvelopeChart({
     band,
     color,
     thresholds,
+    yDomain,
     headline,
     caveat,
 }: {
@@ -62,6 +63,12 @@ function EnvelopeChart({
     band: [string, string];
     color: string;
     thresholds?: Array<{ value: number; label: string; color: string }>;
+    /**
+     * Explicit y-axis window, tightened to the data envelope so the median line and band fill
+     * the height instead of collapsing to a flat strip. Breach lines outside it clip (recharts
+     * default) and reappear only as the data approaches them — which is exactly when they matter.
+     */
+    yDomain?: [number, number];
     headline?: React.ReactNode;
     caveat?: React.ReactNode;
 }) {
@@ -92,7 +99,8 @@ function EnvelopeChart({
                         tickMargin={8}
                         width={52}
                         unit={unit}
-                        domain={['auto', 'auto']}
+                        domain={yDomain ?? ['auto', 'auto']}
+                        allowDataOverflow={yDomain != null}
                     />
                     <Tooltip
                         cursor={{ stroke: '#cbd5e1', strokeDasharray: '3 3' }}
@@ -201,6 +209,17 @@ export function VoltageTrendChart({
     const t = data?.thresholds;
     const lastMed = rows.length ? rows[rows.length - 1].v_med : null;
 
+    // Tighten the axis to the voltage the pack actually occupied (± ~2 V of headroom). The old
+    // ['auto','auto'] domain folded the far-apart under/over-voltage lines into the extent, so
+    // the real band collapsed into a flat strip. Breach lines clip until the pack drifts toward
+    // them — which is precisely when they carry information.
+    const vMins = rows.map((r) => r.v_min).filter((v): v is number => v != null);
+    const vMaxs = rows.map((r) => r.v_max).filter((v): v is number => v != null);
+    const vDomain: [number, number] | undefined =
+        vMins.length && vMaxs.length
+            ? [Math.floor(Math.min(...vMins) - 2), Math.ceil(Math.max(...vMaxs) + 2)]
+            : undefined;
+
     return (
         <EnvelopeChart
             title="Voltage Trend"
@@ -221,6 +240,7 @@ export function VoltageTrendChart({
                       ]
                     : undefined
             }
+            yDomain={vDomain}
             headline={lastMed != null ? <Headline value={lastMed} unit="V median" sub="latest period" /> : undefined}
             caveat={SAMPLING_NOTE}
         />
@@ -250,6 +270,12 @@ export function CurrentTrendChart({
     const t = data?.thresholds;
     const peak = rows.length ? Math.max(...rows.map((r) => r.i_max ?? 0)) : null;
 
+    // Current is an unsigned magnitude idling near zero, so the band runs 0→peak. Cap the axis at
+    // the observed peak (± a little), not at the far-off over-current line, so the peaks that
+    // matter fill the height instead of being squashed into a sliver under a floating threshold.
+    const iDomain: [number, number] | undefined =
+        peak != null && peak > 0 ? [0, Math.ceil(peak + Math.max(5, peak * 0.08))] : undefined;
+
     return (
         <EnvelopeChart
             title="Current Trend"
@@ -265,6 +291,7 @@ export function CurrentTrendChart({
             thresholds={
                 t ? [{ value: t.overCurrentA, label: `Over ${t.overCurrentA} A`, color: VIZ.criticalLine }] : undefined
             }
+            yDomain={iDomain}
             headline={peak != null ? <Headline value={peak} unit="A peak" sub="across the period" /> : undefined}
             caveat={
                 <>

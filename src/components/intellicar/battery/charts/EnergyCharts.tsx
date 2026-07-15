@@ -194,14 +194,19 @@ export function MonthlyEnergyDistanceChart({
                         radius={[4, 4, 0, 0]}
                         isAnimationActive={false}
                     />
+                    {/* Straight segments, not a monotone spline: each point is one month's total
+                      * distance, not a sample of a continuous signal. A smoothed curve invites
+                      * reading a "peak between months" that the data never claims. Larger dots so
+                      * the four discrete monthly readings are what the eye lands on. */}
                     <Line
                         yAxisId="km"
-                        type="monotone"
+                        type="linear"
                         dataKey="km"
                         name="Distance"
                         stroke={KM_LINE}
                         strokeWidth={2}
-                        dot={{ r: 3, fill: KM_LINE, strokeWidth: 0 }}
+                        dot={{ r: 4, fill: KM_LINE, strokeWidth: 0 }}
+                        activeDot={{ r: 5 }}
                         connectNulls={false}
                         isAnimationActive={false}
                     />

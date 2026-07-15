@@ -255,6 +255,17 @@ export interface DischargeKmData {
     };
 }
 
+// ─── Telemetry cadence ───────────────────────────────────────────────────────
+
+/** Client mirror of `TelemetryCadence` (battery-queries.ts) — the real stored-sample cadence. */
+export interface TelemetryCadence {
+    medianIntervalS: number | null;
+    p90IntervalS: number | null;
+    samplesPerDay: number | null;
+    lastSampleAt: string | null;
+    duplicatePct: number | null;
+}
+
 // ─── Electrical ──────────────────────────────────────────────────────────────
 
 export interface BatteryThresholds {

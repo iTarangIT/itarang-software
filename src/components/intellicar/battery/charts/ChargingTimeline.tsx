@@ -52,10 +52,13 @@ export function ChargingTimeline({
     timeline,
     chargeCycles,
     dischargeCycles,
+    battery,
 }: {
     timeline: SocTimeline | undefined;
     chargeCycles: AhSession[];
     dischargeCycles: DischargeCycle[];
+    /** Selected battery number, shown in each cycle's detail record. */
+    battery?: string;
 }) {
     const [expanded, setExpanded] = useState(false);
     const [selected, setSelected] = useState<Segment | null>(null);
@@ -268,6 +271,9 @@ export function ChargingTimeline({
                                         }}
                                     />
                                     {selected.title}
+                                    {battery && (
+                                        <span className="font-normal text-gray-400">· {battery}</span>
+                                    )}
                                 </span>
                                 <button
                                     type="button"
