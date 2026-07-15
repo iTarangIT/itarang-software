@@ -51,6 +51,11 @@ export const MAX_CYCLES = 100;
 
 const HEADER_FILL = "FF1F4E78";
 const TZ_NOTE = "All timestamps are IST (Asia/Kolkata).";
+// The device streams ~30 s, but the AWS poller subsamples: ~100 rows/day, ~8.5 min median
+// between stored samples. The per-sample "Time Difference (s)" column is the REAL gap — it is
+// not 30 s, and treating it as 30 s under-integrates Ah (see docs/intellicar-calculations.md §5a).
+const CADENCE_NOTE =
+    "Cadence: device streams ~30 s, but stored telemetry is ~8.5 min apart (median; ~100 rows/day). Each sheet's 'Time Difference (s)' is the real gap between rows — not 30 s.";
 
 const IST_FORMAT = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
@@ -187,6 +192,7 @@ export async function buildChargingAnalysisWorkbook(
             cycleSheetName(i + 1),
             cycle,
             samplesByBreakId.get(cycle.break_id) ?? [],
+            vehicleno,
         );
     });
 
@@ -225,7 +231,7 @@ function writeSummarySheet(
         [2, `Battery: ${vehicleno}`],
         [3, `Period: ${periodLabel}`],
         [4, `Generated: ${formatIst(generatedAt)} — ${TZ_NOTE}`],
-        [5, ""],
+        [5, CADENCE_NOTE],
     ] as Array<[number, string]>) {
         const row = sheet.getRow(rowNo);
         row.values = [text];
@@ -316,6 +322,7 @@ function writeCycleSheet(
     name: string,
     cycle: ChargingCycleAggregate,
     cycleSamples: ChargingSample[],
+    vehicleno: string,
 ) {
     const sheet = workbook.addWorksheet(name, {
         views: [{ state: "frozen", ySplit: 1 }],
@@ -356,6 +363,7 @@ function writeCycleSheet(
     // rows are evidence, the aggregate is the number the dashboard shows.
     rowNo += 1;
     for (const [label, value] of [
+        ["Battery Number", vehicleno],
         ["Total Charging Duration", formatDuration(cycle.duration_s)],
         ["Total Charged AH", cycle.ah_charged],
         ["SOC Difference (%)", cycle.soc_difference],

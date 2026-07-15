@@ -93,20 +93,24 @@ export async function fetchFleetDashboardCEO(filter?: { state?: string; city?: s
         ORDER BY 1
     `;
 
-    // Unfiltered path uses the fleet-wide distance_rollup (no vehicleno column).
-    // A location filter can't scope distance_rollup, so derive the same 7-day
-    // average per-vehicle from daily_distance_per_vehicle(day, vehicleno, km).
+    // Avg daily distance from distance_rollup — the only populated distance source.
+    // (daily_distance_per_vehicle was never populated by the aggregator, so reading it
+    // made this KPI silently 0 under any State/City filter.) distance_rollup HAS a
+    // vehicleno column, so the location filter scopes it directly. Both paths must pin
+    // bucket_size='day' — other bucket sizes would dilute the daily average.
     const [distance] = vehicleNos
         ? await iot`
-            SELECT round(avg(km)::numeric, 1)::float AS avg_daily_km
-            FROM daily_distance_per_vehicle
-            WHERE day > (now() - interval '7 days')::date
+            SELECT round(avg(distance_km)::numeric, 1)::float AS avg_daily_km
+            FROM distance_rollup
+            WHERE bucket_size = 'day'
+              AND time > now() - interval '7 days'
               AND vehicleno = ANY(${vehicleNos})
         `
         : await iot`
             SELECT round(avg(distance_km)::numeric, 1)::float AS avg_daily_km
             FROM distance_rollup
-            WHERE time > now() - interval '7 days'
+            WHERE bucket_size = 'day'
+              AND time > now() - interval '7 days'
         `;
 
     const fleetSize = Number(stats?.fleet_size) || 0;

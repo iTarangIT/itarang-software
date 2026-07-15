@@ -279,13 +279,18 @@ export async function fetchDistanceTrend(
     const [rows, dayAggRows] = await Promise.all([
         iot`
             ${sampleCTEs(iot, vehicleno, timePredicate)},
+            -- Bucket in UTC explicitly (AT TIME ZONE 'UTC' both ways) so these keys always match
+            -- the Node-side bucketKey() (UTC) that the energy trend uses — the two are FULL-OUTER
+            -- joined by month on the monthly chart. Without this, a future IoT session TZ other
+            -- than UTC would silently shift distance months and mis-join. Safe no-op while UTC.
             tel AS (
-                SELECT date_trunc(${granularity}, time) AS bucket, count(*)::int AS n
+                SELECT date_trunc(${granularity}, time AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
+                       count(*)::int AS n
                 FROM raw
                 GROUP BY 1
             ),
             dist AS (
-                SELECT date_trunc(${granularity}, time) AS bucket,
+                SELECT date_trunc(${granularity}, time AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
                        sum(distance_km)::float AS km
                 FROM distance_rollup
                 WHERE vehicleno = ${vehicleno}
@@ -362,6 +367,83 @@ export async function fetchDistanceTrend(
                 ? Math.round((totalKm / activeDays) * 10) / 10
                 : 0,
         },
+    };
+}
+
+// ─── Telemetry cadence (how often the poller actually stores a sample) ────────
+
+/**
+ * What the STORED telemetry cadence really is for a battery — the honest counter to the
+ * "reads every 30 s" expectation. The device streams ~30 s, but the AWS poller subsamples to
+ * ~100 rows/day (~8.5 min median between distinct timestamps) and re-inserts duplicates. This
+ * surfaces that reality on the dashboard so nobody mistakes the gaps for 30 s.
+ *
+ * Same DISTINCT-ON + percentile pattern the diagnostic (§1) uses, so the number the UI shows is
+ * the number the analysis runs on.
+ */
+export interface TelemetryCadence {
+    /** Median seconds between distinct stored samples. */
+    medianIntervalS: number | null;
+    /** 90th-percentile gap — the fat tail the median hides. */
+    p90IntervalS: number | null;
+    /** Distinct samples per day over the window. */
+    samplesPerDay: number | null;
+    /** Newest stored sample (ISO), for a "last seen" readout. */
+    lastSampleAt: string | null;
+    /** Share of rows that merely repeat an existing timestamp (poller re-insert). */
+    duplicatePct: number | null;
+}
+
+export async function fetchTelemetryCadence(
+    vehicleno: string,
+    opts: ChargingWindowOpts,
+): Promise<TelemetryCadence> {
+    const iot = getIotSql();
+    const { timePredicate } = buildTimeWindow(iot, opts);
+
+    const [row] = (await iot`
+        WITH d AS (
+            SELECT DISTINCT ON (time) time
+            FROM telemetry_can
+            WHERE vehicleno = ${vehicleno}
+              AND payload->'soc'->>'value' IS NOT NULL
+              ${timePredicate}
+            ORDER BY time
+        ),
+        cnt AS (
+            SELECT count(*)::int AS raw_rows
+            FROM telemetry_can
+            WHERE vehicleno = ${vehicleno}
+              AND payload->'soc'->>'value' IS NOT NULL
+              ${timePredicate}
+        ),
+        g AS (
+            SELECT EXTRACT(EPOCH FROM (time - LAG(time) OVER (ORDER BY time))) AS gap FROM d
+        )
+        SELECT (SELECT raw_rows FROM cnt)                                  AS raw_rows,
+               (SELECT count(*)::int FROM d)                              AS distinct_rows,
+               (SELECT max(time) FROM d)                                  AS last_sample,
+               (SELECT EXTRACT(EPOCH FROM (max(time) - min(time))) FROM d) AS span_s,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY gap)           AS p50,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY gap)           AS p90
+        FROM g WHERE gap IS NOT NULL
+    `) as unknown as Array<Record<string, unknown>>;
+
+    const rawRows = Number(row?.raw_rows) || 0;
+    const distinctRows = Number(row?.distinct_rows) || 0;
+    const spanS = num(row?.span_s);
+    const days = spanS != null && spanS > 0 ? spanS / 86400 : null;
+
+    return {
+        medianIntervalS: num(row?.p50),
+        p90IntervalS: num(row?.p90),
+        samplesPerDay:
+            days != null && days > 0 ? Math.round((distinctRows / days) * 10) / 10 : null,
+        lastSampleAt: row?.last_sample
+            ? new Date(row.last_sample as string).toISOString()
+            : null,
+        duplicatePct:
+            rawRows > 0 ? Math.round((1 - distinctRows / rawRows) * 1000) / 10 : null,
     };
 }
 
