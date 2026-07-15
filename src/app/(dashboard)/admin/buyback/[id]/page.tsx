@@ -44,11 +44,15 @@ import type {
   NegRound,
   TabItem,
 } from "@/components/buyback/ui";
-import { formatBatteryLine, inr } from "@/lib/buyback/format";
+import { formatBatteryLine, inr, specSummary } from "@/lib/buyback/format";
+import type { SpecSummarySource } from "@/lib/buyback/format";
 
 type Modal = "reject" | "negotiate" | "reqinfo" | "final" | null;
 
-interface Line {
+// The E-191 dealer-declared spec fields ride along on the payload's lines and
+// are typed by SpecSummarySource (all optional/nullable) — one declaration,
+// shared with the formatter that renders them.
+interface Line extends SpecSummarySource {
   id: string;
   variant_type: string;
   voltage: string;
@@ -326,6 +330,7 @@ function AdminBuybackDetail() {
       qty: l.quantity,
       condition: l.condition,
       spec: f.specLabel,
+      details: specSummary(l),
       measured: l.measured_voltage ? `${l.measured_voltage}V` : undefined,
       expectedPerUnit:
         l.expected_price_per_unit != null ? Number(l.expected_price_per_unit) : undefined,

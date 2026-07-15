@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   LifeBuoy,
   Lock,
+  Recycle,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -701,6 +702,12 @@ export default function DealerDashboard() {
             description="Asset registration will unlock after your dealer account is activated."
           />
 
+          <LockedActionCard
+            icon={<Recycle className="h-6 w-6" />}
+            title="Battery Buyback"
+            description="Selling old batteries to iTarang will unlock after dealer verification is completed."
+          />
+
           <SupportCard />
         </div>
       ) : (
@@ -737,6 +744,24 @@ export default function DealerDashboard() {
                 <div>
                   <h3 className="mb-1 text-xl font-bold text-gray-900">Add Asset</h3>
                   <p className="text-sm text-gray-500">Register new vehicle/battery</p>
+                </div>
+              </div>
+            </Link>
+
+            {/* The peakAmp buyback portal's entry point in the main CRM flow —
+                dealers reach it from here (or the sidebar), never a separate
+                login or URL they have to remember. */}
+            <Link
+              href="/dealer-portal/buyback"
+              className="group relative rounded-2xl border border-gray-100 bg-white p-6 shadow-card transition-transform hover:-translate-y-1 hover:shadow-lg"
+            >
+              <div className="flex min-h-[140px] flex-col justify-between">
+                <div className="w-fit rounded-xl bg-green-50 p-3 text-green-600">
+                  <Recycle className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="mb-1 text-xl font-bold text-gray-900">Battery Buyback</h3>
+                  <p className="text-sm text-gray-500">Sell old batteries to iTarang</p>
                 </div>
               </div>
             </Link>

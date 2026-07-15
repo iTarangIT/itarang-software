@@ -54,6 +54,18 @@ export async function linesForRequest(
       bl.condition,
       bl.measured_voltage,
       bl.expected_price_per_unit,
+      -- E-191 dealer-declared spec (all nullable; required subset gated at submit).
+      bl.brand,
+      bl.chemistry,
+      bl.form_factor,
+      bl.nominal_voltage,
+      bl.nominal_ampere,
+      bl.unit_weight_kg,
+      bl.warranty_cycles,
+      bl.functional_qty,
+      bl.non_functional_qty,
+      bl.iot_battery,
+      bl.iot_brand_name,
       (SELECT count(*)::int FROM buyback_photos p WHERE p.line_id = bl.id) AS photo_count,
       -- Provenance is satisfied by a LINE record, or by a UNIT record on every
       -- unit of the line. Anything less is a gap the submit gate must catch.
@@ -111,6 +123,17 @@ export async function linesForRequest(
     condition: r.condition as "WORKING" | "DEAD",
     measured_voltage: (r.measured_voltage as string) ?? null,
     expected_price_per_unit: (r.expected_price_per_unit as string) ?? null,
+    brand: (r.brand as string) ?? null,
+    chemistry: (r.chemistry as string) ?? null,
+    form_factor: (r.form_factor as string) ?? null,
+    nominal_voltage: (r.nominal_voltage as string) ?? null,
+    nominal_ampere: (r.nominal_ampere as string) ?? null,
+    unit_weight_kg: (r.unit_weight_kg as string) ?? null,
+    warranty_cycles: r.warranty_cycles == null ? null : Number(r.warranty_cycles),
+    functional_qty: r.functional_qty == null ? null : Number(r.functional_qty),
+    non_functional_qty: r.non_functional_qty == null ? null : Number(r.non_functional_qty),
+    iot_battery: r.iot_battery == null ? null : Boolean(r.iot_battery),
+    iot_brand_name: (r.iot_brand_name as string) ?? null,
     photo_count: Number(r.photo_count),
     dealer_price: (r.dealer_price as string) ?? null,
     margin_value: (r.margin_value as string) ?? null,
@@ -138,6 +161,16 @@ export function toGateLines(
     quantity: l.quantity,
     photo_count: l.photo_count,
     has_provenance: l.has_provenance,
+    // E-191 spec — the gate enforces the required subset at submit time.
+    brand: l.brand,
+    chemistry: l.chemistry,
+    nominal_voltage: l.nominal_voltage,
+    nominal_ampere: l.nominal_ampere,
+    unit_weight_kg: l.unit_weight_kg,
+    iot_battery: l.iot_battery,
+    iot_brand_name: l.iot_brand_name,
+    functional_qty: l.functional_qty,
+    non_functional_qty: l.non_functional_qty,
   }));
 }
 

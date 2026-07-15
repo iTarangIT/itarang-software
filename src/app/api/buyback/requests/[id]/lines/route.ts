@@ -25,6 +25,7 @@ import {
 } from "@/lib/db/schema";
 import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
+import { lineSpecSchema, specColumnsFromBody } from "@/lib/buyback/line-spec";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
 
 export const runtime = "nodejs";
@@ -32,14 +33,19 @@ export const runtime = "nodejs";
 /** A sane ceiling: the intake UI only renders 20 unit chips before collapsing. */
 const MAX_QTY_PER_LINE = 500;
 
-const bodySchema = z.object({
-  variant_id: z.string().uuid(),
-  quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE),
-  condition: z.enum(["WORKING", "DEAD"]),
-  /** Dealer-editable. Defaults to the catalog estimate for the chosen condition. */
-  expected_price_per_unit: z.number().nonnegative().nullish(),
-  measured_voltage: z.number().nonnegative().nullish(),
-});
+const bodySchema = z
+  .object({
+    variant_id: z.string().uuid(),
+    quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE),
+    condition: z.enum(["WORKING", "DEAD"]),
+    /** Dealer-editable. Defaults to the catalog estimate for the chosen condition. */
+    expected_price_per_unit: z.number().nonnegative().nullish(),
+    measured_voltage: z.number().nonnegative().nullish(),
+  })
+  // E-191 — the dealer-declared battery spec. All optional HERE (the intake
+  // autosaves before the dealer has typed them); the required subset is
+  // enforced by the submit gate.
+  .merge(lineSpecSchema);
 
 export const POST = withErrorHandler(
   async (req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -93,6 +99,8 @@ export const POST = withErrorHandler(
             body.expected_price_per_unit?.toString() ?? catalogPrice ?? null,
           // Snapshot, so a later catalog edit cannot move this request.
           price_book_version_at_create: variant.price_book_version,
+          // E-191 spec — whatever the dealer has provided so far.
+          ...specColumnsFromBody(body),
         })
         .returning();
 

@@ -36,18 +36,22 @@ import { db } from "@/lib/db";
 import { buybackBatches, buybackLines, buybackUnits } from "@/lib/db/schema";
 import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError } from "@/lib/buyback/errors";
+import { lineSpecSchema, specColumnsFromBody } from "@/lib/buyback/line-spec";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
 
 export const runtime = "nodejs";
 
 const MAX_QTY_PER_LINE = 500;
 
-const bodySchema = z.object({
-  quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE).optional(),
-  condition: z.enum(["WORKING", "DEAD"]).optional(),
-  expected_price_per_unit: z.number().nonnegative().nullish(),
-  measured_voltage: z.number().nonnegative().nullish(),
-});
+const bodySchema = z
+  .object({
+    quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE).optional(),
+    condition: z.enum(["WORKING", "DEAD"]).optional(),
+    expected_price_per_unit: z.number().nonnegative().nullish(),
+    measured_voltage: z.number().nonnegative().nullish(),
+  })
+  // E-191 spec — absent = leave alone, null = clear, value = set.
+  .merge(lineSpecSchema);
 
 /** The line, proven to belong to a DRAFT request this dealer owns. */
 async function loadEditableLine(requestId: string, lineId: string) {
@@ -105,6 +109,8 @@ export const PATCH = withErrorHandler(
                   body.measured_voltage === null ? null : body.measured_voltage.toString(),
               }
             : {}),
+          // E-191 spec — only the fields present in the body are touched.
+          ...specColumnsFromBody(body),
         })
         .where(eq(buybackLines.id, line.id));
 

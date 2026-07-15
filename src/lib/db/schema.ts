@@ -7617,6 +7617,22 @@ export const buybackLines = pgTable(
     // Snapshot of the price book, so a later catalog edit never moves an open
     // request's reference price (M16 AC).
     price_book_version_at_create: integer("price_book_version_at_create").default(1).notNull(),
+    // E-191 — dealer-declared battery spec. All nullable: the intake autosaves
+    // the line before the dealer has typed the spec; the REQUIRED subset
+    // (brand, chemistry, nominal V/Ah, unit weight, IOT yes/no) is enforced by
+    // the submit gate, not by NOT NULL. Chemistry/form_factor are TEXT
+    // validated by zod (src/lib/buyback/line-spec.ts), not enums.
+    brand: text(),
+    chemistry: text(),
+    form_factor: text("form_factor"),
+    nominal_voltage: numeric("nominal_voltage", { precision: 8, scale: 2 }),
+    nominal_ampere: numeric("nominal_ampere", { precision: 10, scale: 2 }),
+    unit_weight_kg: numeric("unit_weight_kg", { precision: 10, scale: 3 }),
+    warranty_cycles: integer("warranty_cycles"),
+    functional_qty: integer("functional_qty"),
+    non_functional_qty: integer("non_functional_qty"),
+    iot_battery: boolean("iot_battery"),
+    iot_brand_name: text("iot_brand_name"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
