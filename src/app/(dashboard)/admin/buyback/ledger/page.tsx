@@ -14,13 +14,15 @@
  * a report is lying and someone must know TODAY, not at the next audit. So the
  * banner is shown whether it passes or fails, rather than only surfacing on
  * failure: a silent green check that nobody has seen is indistinguishable from a
- * check that never ran.
+ * check that never ran. The reconciliation numbers are always all-time — the
+ * route computes them from the full ledger regardless of the row list's window.
  *
- * Direction / Method / Date range are now CLIENT-SIDE filters over one
- * unfiltered fetch (matching the review queue's pattern) rather than the old
- * `?direction=` server round-trip — the endpoint itself is untouched, the
- * mini-stats and reconciliation always describe the FULL ledger regardless of
- * which rows the pills are narrowing the table to.
+ * E-192-B: the route now bounds the ROW LIST (default last 90 days, `?limit=`
+ * capped at 5000) rather than returning every settlement ever recorded. Date
+ * range moved from a client-side filter to a SERVER param — changing it
+ * refetches page 1 rather than re-slicing an already-loaded array — with a
+ * "Load more" row underneath when `has_more`. Direction / Method stay
+ * client-side filters over whatever page(s) are loaded, unchanged from before.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -42,30 +44,32 @@ interface Row {
   amount: string;
 }
 
-interface Data {
-  rows: Row[];
-  totals: { in: number; out: number; net: number };
-  reconciliation: {
-    scope: string;
-    ledger_net: number;
-    /** Σ qty × (vendor_price − dealer_price) — what the locks say we EARNED. */
-    expected_margin: number;
-    /** Σ qty × margin_value — what we set out to earn. */
-    planned_margin: number;
-    /** What the vendor negotiation was worth. */
-    uplift: number;
-    difference: number;
-    reconciled: boolean;
-  };
+interface Reconciliation {
+  scope: string;
+  ledger_net: number;
+  /** Σ qty × (vendor_price − dealer_price) — what the locks say we EARNED. */
+  expected_margin: number;
+  /** Σ qty × margin_value — what we set out to earn. */
+  planned_margin: number;
+  /** What the vendor negotiation was worth. */
+  uplift: number;
+  difference: number;
+  reconciled: boolean;
 }
 
 const ALL = "ALL";
+const FETCH_LIMIT = 1000;
+const MAX_CSV_LIMIT = 5000;
+// An explicit far-past date, rather than omitting `from`/`to` altogether — the
+// route defaults an unqualified request to the last 90 days, so "All time"
+// here opts back OUT of that default instead of silently landing on it.
+const ALL_TIME_FROM = "2000-01-01";
 
 const DATE_RANGE_OPTIONS = [
   { value: ALL, label: "All time" },
   { value: "7", label: "Last 7 days" },
   { value: "30", label: "Last 30 days" },
-  { value: "90", label: "Last 90 days" },
+  { value: "90", label: "Last 90 days (default)" },
 ];
 
 const HEADS: DealTableHead[] = [
@@ -79,48 +83,87 @@ const HEADS: DealTableHead[] = [
   { label: "By" },
 ];
 
+/** `?from=` value for the given date-range pill selection. */
+function fromParam(dateFilter: string): string {
+  if (dateFilter === ALL) return ALL_TIME_FROM;
+  const days = Number(dateFilter);
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 export default function BuybackLedgerPage() {
-  const [d, setData] = useState<Data | null>(null);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [reconciliation, setReconciliation] = useState<Reconciliation | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [directionFilter, setDirectionFilter] = useState(ALL);
   const [methodFilter, setMethodFilter] = useState(ALL);
-  const [dateFilter, setDateFilter] = useState(ALL);
-  // Captured once the ledger loads, not read via Date.now() during render/
-  // useMemo — react-hooks/purity, same pattern as the review queue's
-  // `loadedAt`.
-  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  // Server-driven now (was a client-side filter) — defaults to "Last 90 days",
+  // matching the route's own default window.
+  const [dateFilter, setDateFilter] = useState("90");
 
+  // Fetches page 1 whenever the date-range pill changes.
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setRows([]);
+    setHasMore(false);
+
     (async () => {
       try {
-        const res = await fetch("/api/admin/buyback/ledger");
+        const res = await fetch(
+          `/api/admin/buyback/ledger?limit=${FETCH_LIMIT}&from=${fromParam(dateFilter)}`,
+        );
         const json = await res.json();
         if (cancelled) return;
         if (json?.success === false) {
           setError(json?.error?.message ?? "Could not load the transaction history.");
           return;
         }
-        setData(json?.data ?? null);
-        setLoadedAt(Date.now());
+        setRows(json?.data?.rows ?? []);
+        setReconciliation(json?.data?.reconciliation ?? null);
+        setHasMore(Boolean(json?.data?.has_more));
       } catch {
         if (!cancelled) setError("Could not load the transaction history.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [dateFilter]);
+
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(
+        `/api/admin/buyback/ledger?limit=${FETCH_LIMIT}&offset=${rows.length}&from=${fromParam(dateFilter)}`,
+      );
+      const json = await res.json();
+      if (json?.success === false) {
+        setError(json?.error?.message ?? "Could not load more transactions.");
+        return;
+      }
+      setRows((prev) => [...prev, ...((json?.data?.rows ?? []) as Row[])]);
+      setHasMore(Boolean(json?.data?.has_more));
+    } catch {
+      setError("Could not load more transactions.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const methodOptions = useMemo(() => {
     const seen = new Set<string>();
-    for (const r of d?.rows ?? []) seen.add(r.method);
+    for (const r of rows) seen.add(r.method);
     return [{ value: ALL, label: "All" }, ...[...seen].sort().map((m) => ({ value: m, label: m }))];
-  }, [d]);
+  }, [rows]);
 
   const directionOptions = [
     { value: ALL, label: "All" },
@@ -128,21 +171,24 @@ export default function BuybackLedgerPage() {
     { value: "OUT", label: "OUT" },
   ];
 
+  // Direction / Method stay client-side over whichever page(s) are loaded —
+  // the date range itself is now applied server-side, above.
   const filteredRows = useMemo(() => {
-    const rows = d?.rows ?? [];
-    const now = loadedAt ?? 0;
-    const cutoff = dateFilter === ALL ? null : now - Number(dateFilter) * 24 * 60 * 60 * 1000;
-
     return rows.filter((r) => {
       if (directionFilter !== ALL && r.direction !== directionFilter) return false;
       if (methodFilter !== ALL && r.method !== methodFilter) return false;
-      if (cutoff !== null) {
-        const t = new Date(r.txn_date).getTime();
-        if (Number.isNaN(t) || t < cutoff) return false;
-      }
       return true;
     });
-  }, [d, directionFilter, methodFilter, dateFilter, loadedAt]);
+  }, [rows, directionFilter, methodFilter]);
+
+  // Total IN/OUT/NET describe the full loaded window (ignoring the
+  // Direction/Method pills, same as before this change), recomputed
+  // client-side so they stay correct as more pages are loaded in.
+  const totals = useMemo(() => {
+    const totalIn = rows.filter((r) => r.direction === "IN").reduce((s, r) => s + Number(r.amount), 0);
+    const totalOut = rows.filter((r) => r.direction === "OUT").reduce((s, r) => s + Number(r.amount), 0);
+    return { in: totalIn, out: totalOut, net: totalIn - totalOut };
+  }, [rows]);
 
   const tableRows: DealTableRow[] = filteredRows.map((r) => ({
     key: r.txn,
@@ -186,7 +232,7 @@ export default function BuybackLedgerPage() {
     ],
   }));
 
-  const r = d?.reconciliation;
+  const r = reconciliation;
 
   return (
     <div className="bg-bb-bg px-6 py-6">
@@ -196,7 +242,7 @@ export default function BuybackLedgerPage() {
           sub="Flat ledger of all settlement transactions"
           right={
             <a
-              href="/api/admin/buyback/ledger?format=csv"
+              href={`/api/admin/buyback/ledger?format=csv&limit=${MAX_CSV_LIMIT}&from=${fromParam(dateFilter)}`}
               className="rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-[12.5px] font-semibold text-slate-600 hover:bg-slate-50"
             >
               Export CSV
@@ -245,15 +291,15 @@ export default function BuybackLedgerPage() {
           </div>
         )}
 
-        {!loading && d && (
+        {!loading && (
           <>
             <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-              <KpiCard label="Total IN" value={inr(d.totals.in)} accent="text-green-600" />
-              <KpiCard label="Total OUT" value={inr(d.totals.out)} accent="text-slate-600" />
+              <KpiCard label="Total IN" value={inr(totals.in)} accent="text-green-600" />
+              <KpiCard label="Total OUT" value={inr(totals.out)} accent="text-slate-600" />
               <KpiCard
                 label="NET MARGIN REALIZED"
-                value={inr(d.totals.net)}
-                note="Money in minus money out"
+                value={inr(totals.net)}
+                note="Money in minus money out, for the loaded window"
                 variant="navy"
               />
             </div>
@@ -288,6 +334,18 @@ export default function BuybackLedgerPage() {
             loading={loading ? "Loading…" : undefined}
             empty={!loading ? "No settlements recorded yet." : undefined}
           />
+          {/* Load more: the date-window page is capped at FETCH_LIMIT rows;
+              this pulls the next page in from the server. */}
+          {!loading && hasMore && (
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={loadingMore}
+              className="w-full border-t border-[#F4F6F9] px-[18px] py-3 text-center text-[12.5px] font-semibold text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loadingMore ? "Loading…" : `Load more (${rows.length} shown)`}
+            </button>
+          )}
         </Card>
       </div>
     </div>
