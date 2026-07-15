@@ -46,6 +46,18 @@
  * Earned is the single reconciled ledger figure — narrowing either without a
  * new endpoint parameter is out of scope (constraints: "no other endpoint
  * changes").
+ *
+ * E-192-C: `/reports` (margin/funnel/dealer/vendor, all fetched with no
+ * params below) now defaults to the last 12 months server-side when neither
+ * `from` nor `to` is passed. Every number on this page — including the "All
+ * time" pill option, which used to mean exactly that — is therefore scoped
+ * to the last 12 months; the pill is relabelled "Last 12 months" rather than
+ * silently keeping a name it no longer delivers on. `reports?type=dealer`'s
+ * row count (Total Dealers) and `?type=vendor`'s breakdown table are also
+ * now capped at 200 rows server-side (`has_more` is not surfaced here — this
+ * is an operations overview, not a paginated list; Payments & Settlement and
+ * the Ledger page are where a stuck old deal must never silently disappear,
+ * and those explicitly opt out of the window instead).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -108,7 +120,10 @@ const DATE_OPTIONS = [
   { value: "30", label: "Last 30 days" },
   { value: "90", label: "Last 90 days" },
   { value: "180", label: "Last 180 days" },
-  { value: ALL, label: "All time" },
+  // The underlying /reports fetches now default to a 12-month server-side
+  // window (E-192-C) — this option no longer means true all-time, so it is
+  // labelled to match what it actually shows.
+  { value: ALL, label: "Last 12 months" },
 ];
 
 const NEGOTIATION_STATUSES = new Set([
@@ -205,8 +220,11 @@ export default function AdminBuybackDashboardPage() {
         const [marginJson, funnelJson, dealerJson, vendorJson, ledgerJson] = await Promise.all([
           fetch("/api/admin/buyback/reports?type=margin").then((r) => r.json()),
           fetch("/api/admin/buyback/reports?type=funnel").then((r) => r.json()),
-          fetch("/api/admin/buyback/reports?type=dealer").then((r) => r.json()),
-          fetch("/api/admin/buyback/reports?type=vendor").then((r) => r.json()),
+          // Total Dealers (KPI) is dealerRows.length — request the max
+          // breakdown limit so that headline number isn't quietly capped at
+          // the route's default 200.
+          fetch("/api/admin/buyback/reports?type=dealer&limit=1000").then((r) => r.json()),
+          fetch("/api/admin/buyback/reports?type=vendor&limit=1000").then((r) => r.json()),
           fetch("/api/admin/buyback/ledger").then((r) => r.json()),
         ]);
 
@@ -344,7 +362,10 @@ export default function AdminBuybackDashboardPage() {
   return (
     <div className="bg-bb-bg px-6 py-6">
       <div className="mx-auto max-w-[1180px]">
-        <PageHeader title="Buyback Dashboard" sub="iTarang buyback operations — network overview" />
+        <PageHeader
+          title="Buyback Dashboard"
+          sub="iTarang buyback operations — network overview, last 12 months"
+        />
 
         {error ? (
           <p className="text-sm text-red-600">{error}</p>

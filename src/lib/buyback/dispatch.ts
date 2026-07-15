@@ -23,6 +23,19 @@
  * — which can duplicate a message. Exactly-once is not achievable against an
  * external mail API, so we do not pretend: retries are bounded, and every send
  * records its provider message id.
+ *
+ * E-192-D (scale pack): the claim batch is 50 (was 20 — see the 30s ticker in
+ * instrumentation-node.ts, so this raises the throughput ceiling from ~2,400/hr
+ * to ~6,000/hr). The claimed batch sends in PARALLEL CHUNKS of 5
+ * (`Promise.allSettled`, not `Promise.all` — one recipient's bounce or a
+ * provider timeout must never abort its four batch-mates, and allSettled is
+ * what guarantees that). Per-event try/catch semantics are otherwise
+ * unchanged: each event still gets its own SENT/PENDING/FAILED write. An
+ * `attachment_s3_key` shared by more than one claimed event (the same
+ * quotation PDF going to several vendor-thread events in one tick) is fetched
+ * from S3 exactly once via a `Map<key, Promise<Buffer | null>>` scoped to
+ * THIS call — a fresh Map every `dispatchPending()` invocation, never reused
+ * across ticks, so a since-replaced attachment is never served stale.
  */
 
 import { sql } from "drizzle-orm";
@@ -70,7 +83,7 @@ interface DueEvent {
  * same row and double-sending. Today only one runs — but the day someone adds a
  * second web instance, this must not start emailing vendors twice.
  */
-export async function dispatchPending(limit = 20): Promise<DispatchSummary> {
+export async function dispatchPending(limit = 50): Promise<DispatchSummary> {
   const summary: DispatchSummary = { claimed: 0, sent: 0, failed: 0, exhausted: 0 };
 
   // --- 1. Lease. One short transaction: claim and push the retry time out, so
@@ -105,10 +118,13 @@ export async function dispatchPending(limit = 20): Promise<DispatchSummary> {
   if (claimed.length === 0) return summary;
 
   // --- 2. Send. Outside the transaction: a mail API call must never hold a DB
-  //        lock, and a slow provider must not stall the whole batch.
-  for (const event of claimed) {
+  //        lock, and a slow provider must not stall the whole batch. Fresh per
+  //        call, never reused across ticks — see file docblock.
+  const attachmentCache = new Map<string, Promise<Buffer | null>>();
+
+  const sendOne = async (event: DueEvent): Promise<void> => {
     try {
-      const messageId = await deliver(event);
+      const messageId = await deliver(event, attachmentCache);
 
       await db.execute(sql`
         UPDATE buyback_notification_events
@@ -149,13 +165,30 @@ export async function dispatchPending(limit = 20): Promise<DispatchSummary> {
           `(attempt ${event.attempts}/${MAX_ATTEMPTS})${exhausted ? " — GIVING UP" : ""}: ${message}`,
       );
     }
+  };
+
+  // Parallel chunks of 5 — allSettled so one rejection can never affect its
+  // chunk-mates (each event already has its own try/catch above; this is
+  // belt-and-braces against sendOne itself ever throwing synchronously).
+  for (const chunk of chunkArray(claimed, 5)) {
+    await Promise.allSettled(chunk.map(sendOne));
   }
 
   return summary;
 }
 
+/** Splits `arr` into consecutive chunks of at most `size`. */
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 /** Route one event to its channel. Returns the provider's message id, if any. */
-async function deliver(event: DueEvent): Promise<string | null> {
+async function deliver(
+  event: DueEvent,
+  attachmentCache: Map<string, Promise<Buffer | null>>,
+): Promise<string | null> {
   const { subject, body } = renderMessage(event);
 
   switch (event.channel) {
@@ -166,14 +199,23 @@ async function deliver(event: DueEvent): Promise<string | null> {
 
       const attachments = [];
       if (event.attachment_s3_key) {
-        const bytes = await getObject(BUYBACK_BUCKET, event.attachment_s3_key);
+        const key = event.attachment_s3_key;
+        // Shared across every claimed event in THIS tick that names the same
+        // key — the same quotation PDF fanning out to several vendor-thread
+        // events no longer fetches it once per event.
+        let bytesPromise = attachmentCache.get(key);
+        if (!bytesPromise) {
+          bytesPromise = getObject(BUYBACK_BUCKET, key);
+          attachmentCache.set(key, bytesPromise);
+        }
+        const bytes = await bytesPromise;
         if (!bytes) {
           // The quotation IS the email. Sending a "please quote" with no
           // quotation attached would be worse than retrying.
-          throw new Error(`attachment missing from storage: ${event.attachment_s3_key}`);
+          throw new Error(`attachment missing from storage: ${key}`);
         }
         attachments.push({
-          filename: event.attachment_s3_key.split("/").pop() || "quotation.pdf",
+          filename: key.split("/").pop() || "quotation.pdf",
           content: bytes,
           contentType: "application/pdf",
         });

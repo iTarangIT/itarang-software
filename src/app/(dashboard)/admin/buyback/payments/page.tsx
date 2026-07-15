@@ -32,6 +32,14 @@
  * set of statuses MoneyBoard itself renders a settlement UI for — a deal
  * listed here is guaranteed to have a working "Record" button on the other
  * end of the deep link.
+ *
+ * E-192-B/C: both `/reports` and `/ledger` now default to a bounded window
+ * (12 months / 90 days respectively) when called with no `from`/`to`. This
+ * page explicitly opts OUT of both defaults (`from=` a far-past date) — it is
+ * a money-tracking page whose entire job is to surface deals still owed a
+ * settlement, and those are exactly the deals most likely to be OLD. Silently
+ * truncating to "recent" here would make a genuinely stuck 13-month-old
+ * invoice disappear rather than flag it.
  */
 
 import Link from "next/link";
@@ -59,6 +67,10 @@ interface LedgerRow {
 // The money-stage statuses MoneyBoard itself gates settlement UI on.
 const MONEY_STAGE_STATUSES = new Set(["INVOICE_RAISED", "INVOICE_APPROVED", "SETTLED", "CLOSED"]);
 
+// Explicit opt-out of the reports/ledger routes' own default windows (see
+// file docblock) — this page must never silently drop an old unsettled deal.
+const ALL_TIME_FROM = "2000-01-01";
+
 /** 'BB-1024' → 'TXN-1024' — mirrors lib/buyback/money.ts#groupTxnId. */
 function groupTxnId(requestNo: string): string {
   return `TXN-${requestNo.replace(/^BB-/, "")}`;
@@ -81,8 +93,8 @@ export default function AdminBuybackPaymentsPage() {
     (async () => {
       try {
         const [marginJson, ledgerJson] = await Promise.all([
-          fetch("/api/admin/buyback/reports?type=margin").then((r) => r.json()),
-          fetch("/api/admin/buyback/ledger").then((r) => r.json()),
+          fetch(`/api/admin/buyback/reports?type=margin&from=${ALL_TIME_FROM}`).then((r) => r.json()),
+          fetch(`/api/admin/buyback/ledger?from=${ALL_TIME_FROM}&limit=5000`).then((r) => r.json()),
         ]);
 
         if (cancelled) return;

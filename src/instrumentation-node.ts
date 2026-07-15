@@ -219,7 +219,10 @@ export async function startZohoSyncTicker() {
 // ---------------------------------------------------------------------------
 export async function startBuybackDispatchTicker() {
   const DISPATCH_INTERVAL_MS = 30_000;
-  const BATCH = 20;
+  // E-192-D: 20 → 50 (dispatch.ts now sends the claimed batch in parallel
+  // chunks of 5, so a bigger batch no longer means a proportionally slower
+  // tick) — raises the throughput ceiling from ~2,400/hr to ~6,000/hr.
+  const BATCH = 50;
 
   let inFlight = false;
 
