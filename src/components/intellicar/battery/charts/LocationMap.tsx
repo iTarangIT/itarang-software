@@ -109,6 +109,10 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                 attribution: '&copy; OpenStreetMap contributors',
             }).addTo(map);
 
+            // A Leaflet map without a view loads zero tiles — a battery with no GPS fixes
+            // (bbox null, so the fitBounds below never runs) would render as a blank box.
+            map.setView([20.5937, 78.9629], 5);
+
             // Click-to-enable wheel zoom: the guard above is right for scrolling past the map,
             // but wrong once the reader is actually using it.
             map.on('click', () => map.scrollWheelZoom.enable());
@@ -285,17 +289,22 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                 </div>
             </div>
 
-            <div className="px-2">
+            <div className="px-2 relative">
                 <div
                     ref={containerRef}
                     className="w-full rounded-xl overflow-hidden border border-gray-100"
                     style={{ height: 460, background: '#f8fafc' }}
                 />
+                {/* Sibling of the Leaflet container, not a child — Leaflet owns that DOM.
+                    z-[1100] clears Leaflet's internal panes/controls (≤1000). */}
+                {(data?.heat.length ?? 0) === 0 && ready && (
+                    <div className="absolute inset-0 z-[1100] flex items-center justify-center pointer-events-none">
+                        <p className="rounded-full border border-gray-200 bg-white/90 px-4 py-2 text-sm text-gray-500 shadow-sm">
+                            No GPS fixes for this battery in this period.
+                        </p>
+                    </div>
+                )}
             </div>
-
-            {(data?.heat.length ?? 0) === 0 && ready && (
-                <p className="px-6 pt-3 text-sm text-gray-400">No GPS fixes for this battery in this period.</p>
-            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6 pt-4">
                 <PlaceCard

@@ -67,9 +67,13 @@ export function windowsCTE(iot: IotSql, windows: CycleWindow[]): SqlFragment {
     const ids = windows.map((w) => w.id);
     const starts = windows.map((w) => w.start);
     const ends = windows.map((w) => w.end);
+    // sql.array() is load-bearing: a plain JS array of Dates is bound as a SINGLE
+    // timestamptz (postgres.js infers from the first element), and the server then
+    // rejects the ::timestamptz[] cast — which 500'd every consumer of this CTE
+    // (discharge-vs-km, battery geo) and read as "no data" in the UI.
     return iot`windows AS (
         SELECT * FROM unnest(
-            ${ids}::int[], ${starts}::timestamptz[], ${ends}::timestamptz[]
+            ${iot.array(ids)}::int[], ${iot.array(starts)}::timestamptz[], ${iot.array(ends)}::timestamptz[]
         ) AS w(win_id, start_time, end_time)
     )`;
 }
