@@ -67,22 +67,35 @@ export default function AdminBuybackNegotiationsPage() {
   useEffect(() => {
     let cancelled = false;
 
-    fetch("/api/admin/buyback/queue")
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        if (j?.success === false) {
-          setError(j?.error?.message ?? "Could not load negotiations.");
-          return;
+    // The queue defaults to 500 rows (oldest-submitted first), which would
+    // silently drop the NEWEST live negotiations once >500 deals are active —
+    // the one page whose job is "what's being negotiated right now". Page
+    // through has_more so the client-side status filter below always sees the
+    // complete active set.
+    (async () => {
+      try {
+        const rows: QueueRow[] = [];
+        let offset = 0;
+        for (;;) {
+          const res = await fetch(`/api/admin/buyback/queue?limit=1000&offset=${offset}`);
+          const j = await res.json();
+          if (cancelled) return;
+          if (j?.success === false) {
+            setError(j?.error?.message ?? "Could not load negotiations.");
+            return;
+          }
+          const page: QueueRow[] = j?.data?.queue ?? [];
+          rows.push(...page);
+          if (!j?.data?.has_more || page.length === 0) break;
+          offset += page.length;
         }
-        setQueue(j?.data?.queue ?? []);
-      })
-      .catch(() => {
+        setQueue(rows);
+      } catch {
         if (!cancelled) setError("Could not load negotiations.");
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;

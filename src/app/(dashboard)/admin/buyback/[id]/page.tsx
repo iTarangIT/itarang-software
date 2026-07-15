@@ -428,22 +428,29 @@ function AdminBuybackDetail() {
     })),
     // Final offers live in their own table, not in negotiation_rounds — weave
     // them into the thread so the FINAL (and, once accepted, ACCEPTED) chips
-    // appear where the prototype put them.
-    ...(d.final_offers ?? []).map((o) => ({
-      at: new Date(o.sent_at ?? 0).getTime(),
-      round: {
-        actor: "iTarang",
-        side: "admin" as const,
-        note: o.note ?? undefined,
-        at: fmtWhen(o.sent_at),
-        isFinal: true,
-        isAccept: o.status === "ACCEPTED",
-        lines: o.lines.map((fl) => ({
-          label: labelFor(fl.line_id, fl.quantity),
-          amount: Number(fl.price_per_unit),
-        })),
-      } satisfies NegRound,
-    })),
+    // appear where the prototype put them. Unsent finals (null sent_at —
+    // defensive, the schema inserts it NOT NULL) are dropped rather than
+    // sorted to epoch-1970, mirroring the dealer-side U5 fix. Each offer
+    // carries its OWN version_no so a reopened deal's historic finals don't
+    // all get stamped with today's offer_version.
+    ...(d.final_offers ?? [])
+      .filter((o) => Boolean(o.sent_at))
+      .map((o) => ({
+        at: new Date(o.sent_at as string).getTime(),
+        round: {
+          actor: "iTarang",
+          side: "admin" as const,
+          note: o.note ?? undefined,
+          at: fmtWhen(o.sent_at),
+          isFinal: true,
+          isAccept: o.status === "ACCEPTED",
+          version: o.version_no,
+          lines: o.lines.map((fl) => ({
+            label: labelFor(fl.line_id, fl.quantity),
+            amount: Number(fl.price_per_unit),
+          })),
+        } satisfies NegRound,
+      })),
   ]
     .sort((a, b) => a.at - b.at)
     .map((x) => x.round);
