@@ -1105,6 +1105,16 @@ interface NavGroupForActive {
   items: NavItemForActive[];
 }
 
+// U5 — /dealer-portal/buyback/<id> detail routes have no nav entry of their
+// own. "Buyback Dashboard" is `exact` (Task 6), so it never matches by
+// prefix here, and no sibling item's href (new/requests/pickups/payments) is
+// a prefix of a detail route either — so the longest-match loop below finds
+// nothing and the sidebar goes dark on a page the dealer reached FROM this
+// section. Folded into "My Requests" (buyback-requests), which is where a
+// detail page is conceptually reached from.
+const DEALER_BUYBACK_PREFIX = "/dealer-portal/buyback/";
+const DEALER_BUYBACK_STATIC_SIBLINGS = new Set(["new", "requests", "pickups", "payments"]);
+
 function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): string | null {
   let winnerId: string | null = null;
   let winnerLength = -1;
@@ -1123,6 +1133,16 @@ function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): stri
       }
     }
   }
+
+  // Fallback only — never overrides a real match above, so the admin
+  // longest-match logic (and every other section) is untouched.
+  if (winnerId === null && pathname.startsWith(DEALER_BUYBACK_PREFIX)) {
+    const firstSegment = pathname.slice(DEALER_BUYBACK_PREFIX.length).split("/")[0];
+    if (firstSegment && !DEALER_BUYBACK_STATIC_SIBLINGS.has(firstSegment)) {
+      winnerId = "buyback-requests";
+    }
+  }
+
   return winnerId;
 }
 

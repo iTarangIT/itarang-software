@@ -80,6 +80,10 @@ interface NegRoundPayload {
   lines: Array<{ line_id: string; label: string; price_per_unit: number }>;
   is_final: boolean;
   is_accept: boolean;
+  /** U5 — present only on is_final rounds: the offer_version THIS final
+   * offer belongs to, so a reopened deal's earlier finals keep their own
+   * "FINAL vN" label rather than all showing the deal's current version. */
+  version?: number;
 }
 
 interface DealerPo {
@@ -421,6 +425,9 @@ function DealerRequestDetail() {
     isFinal: r.is_final,
     isAccept: r.is_accept,
     lines: r.lines.map((l) => ({ label: l.label, amount: l.price_per_unit })),
+    // U5 — per-round version, when the API sent one (final-offer rounds).
+    // NegotiationThread falls back to the offerVersion prop when absent.
+    version: r.version,
   }));
 
   // ---- Activity tab: payload → the ActivityTimeline atom's shape -----------

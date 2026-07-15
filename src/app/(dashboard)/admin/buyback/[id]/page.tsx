@@ -64,6 +64,10 @@ interface Line extends SpecSummarySource {
   photo_count: number;
   dealer_price: string | null;
   margin_value: string | null;
+  /** U5 — already on the API payload (AdminLineView), just not typed here
+   * before now. Non-null together with margin_value once the line is
+   * locked (MARGIN_SET or later). */
+  margin_mode: "FLAT" | "PCT" | null;
   vendor_ask: string | null;
   has_provenance?: boolean;
   photos?: Array<{ id: string }>;
@@ -228,6 +232,25 @@ function AdminBuybackDetail() {
     };
   }, [id, reloadKey]);
 
+  // U5 — once the deal is locked (MARGIN_SET or later, i.e. margin_value/
+  // margin_mode are non-null on the lines), seed the shared margin inputs
+  // from the FIRST locked line rather than leaving them on their pre-lock
+  // default ("1300"/FLAT) or whatever the admin last typed before locking.
+  // Only fires when a locked line exists — which is exactly when the inputs
+  // are disabled (marginEditable=false below), so this can never clobber an
+  // in-progress edit. Note: deal_line_locks only ever stores the RESOLVED
+  // RUPEE margin, never the original percentage — so for a PCT-mode deal
+  // this seeds marginValue with that resolved rupee figure (the best
+  // available number), not the % that was typed at lock time. That's a
+  // display nicety only; the per-SKU table below reads margin_value
+  // directly, unaffected by this approximation.
+  useEffect(() => {
+    const lockedLine = d?.lines.find((l) => l.margin_value != null && l.margin_mode != null);
+    if (!lockedLine) return;
+    setMarginMode(lockedLine.margin_mode as "FLAT" | "PCT");
+    setMarginValue(String(Math.round(Number(lockedLine.margin_value))));
+  }, [d]);
+
   const post = async (url: string, body?: unknown) => {
     setBusy(true);
     setError(null);
@@ -302,10 +325,18 @@ function AdminBuybackDetail() {
     year: "numeric",
   });
 
+  // U5 — once a line is locked, its row shows what was ACTUALLY locked
+  // (deal_line_locks.margin_value, already resolved to rupees) rather than a
+  // live recomputation from the shared mode/value input — those inputs can
+  // legitimately differ per SKU under PCT mode, and after a reload they may
+  // not even reflect what was submitted at lock time. Pre-lock, behavior is
+  // unchanged: a live preview from the shared inputs.
   const marginPreview = d.lines.map((l) => {
     const dealer = Number(l.dealer_price ?? 0);
-    const m =
-      marginMode === "FLAT"
+    const locked = l.margin_value != null && l.margin_mode != null;
+    const m = locked
+      ? Math.round(Number(l.margin_value))
+      : marginMode === "FLAT"
         ? Math.round(Number(marginValue) || 0)
         : Math.round((dealer * (Number(marginValue) || 0)) / 100);
     return { line: l, dealer, margin: m, ask: dealer + m };

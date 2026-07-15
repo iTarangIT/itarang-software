@@ -55,6 +55,15 @@ const IN_PROGRESS_STATES = new Set([
 const NEW_REQUEST_BUTTON =
   "rounded-lg bg-green-600 px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-green-700";
 
+// U5 — same skeleton approach as the admin dashboard
+// (admin/buyback/dashboard/page.tsx DashboardSkeleton): while `loading`, the
+// KPI row rendered computed-zero KpiCards (Submitted/Pending/etc. all start
+// at 0 before `requests` has loaded), which reads as "everything is zero"
+// for a beat rather than "loading". Skeleton tiles instead.
+function SkeletonBlock({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} />;
+}
+
 export default function DealerBuybackPage() {
   const { user } = useAuth();
   const [requests, setRequests] = useState<DealerRequestRow[]>([]);
@@ -115,7 +124,18 @@ export default function DealerBuybackPage() {
 
         {error ? (
           <p className="text-sm text-red-600">{error}</p>
-        ) : !loading && requests.length === 0 ? (
+        ) : loading ? (
+          <>
+            <div className="mb-[22px] grid grid-cols-4 gap-3.5">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <SkeletonBlock key={i} className="h-[84px]" />
+              ))}
+            </div>
+            <Card title="Recent requests">
+              <DealerRequestsTable requests={[]} loading emptyMessage="No requests yet." />
+            </Card>
+          </>
+        ) : requests.length === 0 ? (
           <EmptyState
             icon="🔋"
             title="No requests yet"

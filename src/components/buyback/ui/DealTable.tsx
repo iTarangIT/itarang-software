@@ -24,6 +24,17 @@ export interface DealTableRow {
   cells: ReactNode[];
 }
 
+/**
+ * A row with `onClick` behaves as a navigation target (role="link", Enter/
+ * Space activate it, like the rest of this kit's "row IS the link" pattern).
+ * If any cell renders its OWN nested `<Link>`/`<a>` (kept for
+ * middle-click/open-in-new-tab, e.g. the queue page's Request column), give
+ * that nested link `tabIndex={-1}` — otherwise the row is reachable by
+ * keyboard TWICE (once for the row, once for the inner link), which reads as
+ * a broken/duplicated tab stop. The nested link's own onClick should still
+ * `stopPropagation()` so a click on it doesn't ALSO fire the row's onClick.
+ */
+
 export default function DealTable({
   heads,
   rows,
@@ -38,6 +49,13 @@ export default function DealTable({
   const onRowKeyDown = (e: KeyboardEvent<HTMLTableRowElement>, onClick?: () => void) => {
     if (!onClick) return;
     if (e.key === "Enter") onClick();
+    // Space activates a link/button for keyboard users, but it ALSO scrolls
+    // the page by default — preventDefault stops the scroll, matching how a
+    // native <a>/<button> behaves.
+    if (e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
   };
 
   return (
@@ -77,6 +95,7 @@ export default function DealTable({
                 className={`border-b border-[#F4F6F9] hover:bg-slate-50 ${r.onClick ? "cursor-pointer" : ""}`}
                 onClick={r.onClick}
                 tabIndex={r.onClick ? 0 : undefined}
+                role={r.onClick ? "link" : undefined}
                 onKeyDown={(e) => onRowKeyDown(e, r.onClick)}
                 aria-label={r.ariaLabel}
               >

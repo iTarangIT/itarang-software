@@ -18,6 +18,14 @@ export interface NegRound {
   isAccept?: boolean;
   isInfo?: boolean;
   isReject?: boolean;
+  /**
+   * The offer_version THIS round's final offer actually belongs to — not
+   * necessarily the deal's CURRENT offer_version. A reopened deal keeps its
+   * earlier finals in the thread; without a per-round version they'd all
+   * render whatever version the deal happens to be on today. Falls back to
+   * the component-level `offerVersion` prop when absent (U5).
+   */
+  version?: number;
 }
 
 /**
@@ -68,7 +76,10 @@ export default function NegotiationThread({
                 <span className={`text-xs font-bold ${nameColor}`}>{round.actor}</span>
                 {round.isFinal && (
                   <span className="rounded bg-[#F59E0B] px-1.5 py-[1px] text-[9.5px] font-bold text-white">
-                    FINAL{offerVersion != null && ` v${offerVersion}`}
+                    {/* U5: each round's OWN version if the producer plumbed one
+                        (a reopened deal's history), else the component-level
+                        offerVersion prop — same as before this change. */}
+                    FINAL{(round.version ?? offerVersion) != null && ` v${round.version ?? offerVersion}`}
                   </span>
                 )}
                 {round.isAccept && (
