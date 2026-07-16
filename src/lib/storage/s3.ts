@@ -20,6 +20,8 @@ import {
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Upload } from "@aws-sdk/lib-storage";
+import type { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
 export const STORAGE_BACKEND = (process.env.STORAGE_BACKEND || "supabase").toLowerCase();
 export const isS3Backend = STORAGE_BACKEND === "s3";
@@ -97,6 +99,38 @@ export async function putObject(
       CacheControl: opts.cacheControl,
     }),
   );
+}
+
+/**
+ * Streaming PUT for uploads that pass through the app server (evidence PDFs
+ * and scans posted via the same-origin upload routes — see
+ * src/app/api/buyback/uploads and src/app/api/admin/buyback/uploads).
+ *
+ * `putObject()` above takes a Buffer, which means the caller must first read
+ * the whole file into memory (`Buffer.from(await file.arrayBuffer())`). For a
+ * 25MB upload on a memory-constrained box, that doubles peak memory per
+ * concurrent request for no reason — the bytes are going straight to S3 and
+ * never need to exist as one contiguous buffer in this process. `Upload` from
+ * @aws-sdk/lib-storage streams the body straight through instead.
+ */
+export async function putObjectStream(
+  logicalBucket: string,
+  key: string,
+  body: StreamingBlobPayloadInputTypes,
+  contentType = "application/octet-stream",
+  opts: { cacheControl?: string } = {},
+): Promise<void> {
+  const upload = new Upload({
+    client: client(),
+    params: {
+      Bucket: physicalBucket(),
+      Key: s3Key(logicalBucket, key),
+      Body: body,
+      ContentType: contentType,
+      CacheControl: opts.cacheControl,
+    },
+  });
+  await upload.done();
 }
 
 /** Download an object's bytes, or null if it doesn't exist. */

@@ -220,3 +220,73 @@ export async function settlementsForDeal(
   `);
   return rows as unknown as SettlementRow[];
 }
+
+/**
+ * Ext-9 — the dealer list's payout summary, BATCHED for one dealer entity and
+ * keyed by request id, so GET /api/buyback/requests does not run one
+ * dealMoney() per row.
+ *
+ * Lives HERE, not in the route, for the same reason dealMoney does: the
+ * permissions contract test forbids a dealer-facing route file from so much as
+ * mentioning the locks or settlement tables. The route sees only this Map and
+ * feeds it through toDealerPayout(), which is where the redaction contract is
+ * enforced (and contract-tested).
+ *
+ * Two deliberate scopings:
+ *  · the locked total is Σ qty × dealer_price over the CURRENT lock generation
+ *    (bd.offer_version = dll.offer_version), exactly like dealMoney — and the
+ *    vendor_price/margin_value columns are never selected;
+ *  · only DEALER-leg settlement rows are selected (WHERE leg = 'DEALER').
+ *    toDealerPayout() filters by leg again regardless — two independent
+ *    barriers, same as toVendorLine.
+ *
+ * A request with no lock rows has no entry, so its payout serializes to null —
+ * the deal has not reached the money stage.
+ */
+export async function dealerPayoutSourcesForEntity(
+  entityId: string,
+): Promise<Map<string, { locked_dealer_total: number; settlements: Array<{ leg: string; txn_ref: string | null }> }>> {
+  const lockRows = await db.execute(sql`
+    SELECT bd.request_id, sum(bl.quantity * dll.dealer_price)::float8 AS locked_dealer_total
+    FROM deal_line_locks dll
+    JOIN buyback_deals bd    ON bd.id = dll.deal_id
+                            AND bd.offer_version = dll.offer_version
+    JOIN buyback_requests br ON br.id = bd.request_id
+    JOIN buyback_lines bl    ON bl.id = dll.line_id
+    WHERE br.dealer_entity_id = ${entityId}
+    GROUP BY bd.request_id
+  `);
+
+  const settlementRows = await db.execute(sql`
+    SELECT bd.request_id, st.leg, st.txn_ref
+    FROM settlement_transactions st
+    JOIN buyback_deals bd    ON bd.id = st.deal_id
+    JOIN buyback_requests br ON br.id = bd.request_id
+    WHERE br.dealer_entity_id = ${entityId}
+      AND st.leg = 'DEALER'
+    ORDER BY st.created_at
+  `);
+
+  const byRequest = new Map<
+    string,
+    { locked_dealer_total: number; settlements: Array<{ leg: string; txn_ref: string | null }> }
+  >();
+
+  for (const r of lockRows as unknown as Array<Record<string, unknown>>) {
+    byRequest.set(String(r.request_id), {
+      locked_dealer_total: Number(r.locked_dealer_total),
+      settlements: [],
+    });
+  }
+
+  for (const s of settlementRows as unknown as Array<Record<string, unknown>>) {
+    // A settlement presupposes locks, so the entry exists; if the data is ever
+    // inconsistent, a settlement without locks stays invisible — the safe side.
+    byRequest.get(String(s.request_id))?.settlements.push({
+      leg: String(s.leg),
+      txn_ref: (s.txn_ref as string) ?? null,
+    });
+  }
+
+  return byRequest;
+}

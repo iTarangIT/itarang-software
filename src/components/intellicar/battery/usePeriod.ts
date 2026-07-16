@@ -32,6 +32,11 @@ export interface Period {
     setGranularity: (g: Granularity) => void;
     /** Query-string fragment appended to every analytics endpoint. */
     periodParam: string;
+    /**
+     * The window WITHOUT the granularity axis — for charts pinned to one grain (the
+     * monthly energy overview), so flipping the granularity pill cannot refetch them.
+     */
+    windowParam: string;
     /** Human label for a chart caption. */
     periodLabel: string;
     /** Slug for a downloaded filename. */
@@ -70,12 +75,12 @@ export function usePeriod(initial: Months = 3): Period {
     // Granularity is a separate axis from the window: it says how finely the window is sliced,
     // not how long it is. It rides along on the same query string so a chart can never bucket
     // by a grain the server did not group by.
-    const periodParam =
-        (range
-            ? `from=${range.from}&to=${range.to}`
-            : month
-              ? `month=${month}`
-              : `months=${months}`) + `&granularity=${granularity}`;
+    const windowParam = range
+        ? `from=${range.from}&to=${range.to}`
+        : month
+          ? `month=${month}`
+          : `months=${months}`;
+    const periodParam = windowParam + `&granularity=${granularity}`;
 
     const periodLabel = range
         ? `${range.from} to ${range.to}`
@@ -95,6 +100,7 @@ export function usePeriod(initial: Months = 3): Period {
         setRange,
         setGranularity,
         periodParam,
+        windowParam,
         periodLabel,
         fileSuffix,
     };

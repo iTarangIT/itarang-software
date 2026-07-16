@@ -126,6 +126,13 @@ export interface DischargeCycle {
     n_samples: number;
     coulomb_trustworthy: boolean;
     rated_capacity_ah: number | null;
+    /** Where the nameplate came from: the CAN payload, or the E-190 model-spec fallback. */
+    rated_capacity_source?: 'can' | 'spec' | null;
+    /** Distance covered inside the cycle window; null = no usable GPS. Route-enriched. */
+    km?: number | null;
+    /** 'gps' = uncalibrated chord — a lower bound, and the panel says so. */
+    km_source?: 'calibrated' | 'gps' | null;
+    km_per_ah?: number | null;
 }
 
 export interface DischargeAnalytics {
@@ -176,6 +183,9 @@ export interface DistanceData {
         activeBuckets: number;
         bucketsWithoutDistance: number;
         avgKmPerActiveBucket: number;
+        /** Days with km > 0 — day-grained regardless of the chart's granularity. */
+        activeDays: number;
+        avgKmPerActiveDay: number;
     };
 }
 
@@ -204,11 +214,38 @@ export interface DischargeKmPoint {
     km: number;
     ah_discharged: number;
     ah_per_km: number | null;
+    /** Mileage as a driver reads it: km per Ah. Feeds the mileage trend line. */
+    km_per_ah: number | null;
     cycles: number;
+}
+
+/** One discharge cycle with the distance covered inside its own window. */
+export interface DischargeKmCyclePoint {
+    break_id: number;
+    start_time: string;
+    end_time: string;
+    duration_s: number;
+    dod_pct: number | null;
+    km: number;
+    /** 'gps' = uncalibrated chord, a lower bound — say so in the tooltip. */
+    km_source: 'calibrated' | 'gps';
+    ah_discharged: number;
+    ah_per_km: number | null;
+    km_per_ah: number | null;
 }
 
 export interface DischargeKmData {
     points: DischargeKmPoint[];
+    cycles: DischargeKmCyclePoint[];
+    cycleSummary: {
+        cycles: number;
+        totalKm: number;
+        totalAh: number;
+        avgAhPerKm: number | null;
+        cyclesWithoutDistance: number;
+        /** % of plotted cycles whose km was calibrated against the daily rollup. */
+        calibratedPct: number | null;
+    };
     summary: {
         days: number;
         totalKm: number;
@@ -216,6 +253,17 @@ export interface DischargeKmData {
         avgAhPerKm: number | null;
         daysWithoutDischarge: number;
     };
+}
+
+// ─── Telemetry cadence ───────────────────────────────────────────────────────
+
+/** Client mirror of `TelemetryCadence` (battery-queries.ts) — the real stored-sample cadence. */
+export interface TelemetryCadence {
+    medianIntervalS: number | null;
+    p90IntervalS: number | null;
+    samplesPerDay: number | null;
+    lastSampleAt: string | null;
+    duplicatePct: number | null;
 }
 
 // ─── Electrical ──────────────────────────────────────────────────────────────
@@ -279,6 +327,14 @@ export interface DwellCluster {
     visits: number;
     nightHours: number;
     nights: number;
+    /** Most recent IST date it spent night hours here. */
+    lastNight?: string | null;
+}
+
+/** The charging spot: a dwell cluster plus its charge-window evidence. */
+export interface ChargingSpot extends DwellCluster {
+    chargeHours: number;
+    chargeSessions: number;
 }
 
 export interface BatteryGeoData {
@@ -288,6 +344,10 @@ export interface BatteryGeoData {
     parking: DwellCluster | null;
     /** Where it sleeps — a behavioural inference, never an address. */
     home: DwellCluster | null;
+    /** Where it charges — stationary time inside rising-SOC charge windows, ≥2 sessions. */
+    charging: ChargingSpot | null;
+    /** The runner-up overnight place, distinct from home. */
+    overnightSecondary: DwellCluster | null;
     bbox: { minLat: number; maxLat: number; minLon: number; maxLon: number } | null;
     summary: {
         /** Straight-line hops between fixes — a LOWER BOUND. Never quote it as a distance. */
@@ -305,5 +365,7 @@ export interface BatteryGeoData {
         nightStartHour: number;
         nightEndHour: number;
         gridDeg: number;
+        chargingSpotMinSessions: number;
+        secondaryOvernightMinNights: number;
     };
 }

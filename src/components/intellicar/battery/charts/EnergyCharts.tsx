@@ -1,8 +1,8 @@
 'use client';
 
 import {
-    AreaChart,
-    Area,
+    Bar,
+    ComposedChart,
     LineChart,
     Line,
     XAxis,
@@ -21,75 +21,109 @@ import {
     TooltipShell,
     bucketLabel,
 } from './chart-kit';
-import type { EnergyData, Granularity } from '../types';
+import type { DistanceData, EnergyData } from '../types';
 
 /**
- * Cumulative Charge and Cumulative Discharge — both Ah, so both on ONE axis.
- *
- * They are the same measure in opposite directions, and a second y-scale would let the reader
- * compare two lines whose heights mean different things. Sharing an axis is what makes the
- * *gap* between the lines legible, and that gap is the whole point: on a battery that starts
- * and ends the window near the same SOC, energy in and energy out should track each other. A
- * pair that steadily diverges means one of the two measurements is wrong — a battery cannot
- * create charge.
+ * Km wears violet here, not VIZ.distance: distance's own hue is the same hex as charged,
+ * and two identities cannot share a hue on one canvas. The blue/orange/violet trio clears
+ * the CVD separation floor (worst adjacent pair ΔE 96.7, validated 2026-07-14).
  */
-export function CumulativeEnergyChart({
-    data,
-    granularity,
+const KM_LINE = '#7c3aed';
+
+/**
+ * Monthly Charge / Discharge / Distance — the energy overview.
+ *
+ * ## The one dual-axis chart on this tab
+ *
+ * Everywhere else a second y-scale is banned for the reason documented in
+ * DistanceCharts.tsx: it lets a reader compare two heights that mean different things.
+ * Here the CEO's question is "for each month: Ah in, Ah out, km" in ONE view, so the km
+ * series gets a right axis with these mitigations, which are load-bearing — keep them:
+ *
+ *  - different MARK TYPES: Ah are bars, km is a dotted line, so heights are never
+ *    visually compared across axes;
+ *  - each axis is labelled with its unit, and the right axis' ticks are tinted the km
+ *    line's own colour so the pairing is explicit;
+ *  - the legend names the axis for the km series.
+ *
+ * Months where the rollup wrote no distance BREAK the line (connectNulls off) — a
+ * missing month is unknown, not zero. Months with no detected cycles show zero-height
+ * bars, which is what "no detected cycle" honestly measures.
+ */
+export function MonthlyEnergyDistanceChart({
+    energy,
+    distance,
 }: {
-    data: EnergyData | undefined;
-    granularity: Granularity;
+    energy: EnergyData | undefined;
+    distance: DistanceData | undefined;
 }) {
-    const buckets = data?.buckets ?? [];
-    const s = data?.summary;
+    const s = energy?.summary;
 
-    const rows = buckets.map((b) => ({
-        t: bucketLabel(b.bucket, granularity),
-        bucket: b.bucket,
-        charged: b.cum_charged,
-        discharged: b.cum_discharged,
-        inCharged: b.ah_charged,
-        inDischarged: b.ah_discharged,
-    }));
+    // Join on the YYYY-MM prefix, not full ISO equality: energy buckets come from Node's
+    // bucketKey() (UTC) while distance buckets come from date_trunc in the DB session, and
+    // the 7-char prefix is immune to tz-representation drift between the two.
+    const merged = new Map<
+        string,
+        { bucket: string; charged: number; discharged: number; km: number | null }
+    >();
+    for (const b of energy?.buckets ?? []) {
+        merged.set(b.bucket.slice(0, 7), {
+            bucket: b.bucket,
+            charged: b.ah_charged,
+            discharged: b.ah_discharged,
+            km: null,
+        });
+    }
+    for (const d of distance?.buckets ?? []) {
+        const key = d.bucket.slice(0, 7);
+        const row = merged.get(key);
+        if (row) {
+            row.km = d.km;
+        } else {
+            merged.set(key, { bucket: d.bucket, charged: 0, discharged: 0, km: d.km });
+        }
+    }
+    const rows = [...merged.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([, r]) => ({ ...r, t: bucketLabel(r.bucket, 'month') }));
 
-    const ratio =
-        s && s.totalDischarged > 0 ? s.totalCharged / s.totalDischarged : null;
+    const totalKm = distance?.summary.totalKm ?? 0;
 
     return (
         <ChartCard
-            title="Cumulative Charge & Discharge"
-            subtitle="Amp-hours into the pack and out of it, accumulating across the period. Discharge is derived from the SOC swing against the nameplate — see the note below."
+            title="Monthly Charge, Discharge & Distance"
+            subtitle="Per month: amp-hours into the pack (bars, left axis), amp-hours out, and kilometres driven (line, right axis)."
             headline={
                 s ? (
                     <Headline
-                        value={s.totalCharged}
+                        value={s.totalCharged.toLocaleString()}
                         unit="Ah in"
-                        sub={`${s.totalDischarged} Ah out · ${s.chargingCycles} charges / ${s.dischargeCycles} discharges`}
+                        sub={`${s.totalDischarged.toLocaleString()} Ah out · ${totalKm.toLocaleString()} km`}
                     />
                 ) : undefined
             }
-            empty={rows.length === 0 ? 'No charge or discharge cycles in this period.' : undefined}
+            empty={
+                rows.length === 0
+                    ? 'No charge cycles, discharge cycles, or distance in this period.'
+                    : undefined
+            }
             caveat={
                 <>
                     <p>
                         Discharge is measured from the SOC endpoints, not by integrating current:
                         discharge current swings between 0 and ~57 A with traffic, and at our sampling
-                        rate an integral of it is a straight line through a curve nobody saw. SOC is a
-                        state, so two endpoints are enough.
+                        rate an integral of it is a straight line through a curve nobody saw.
                     </p>
-                    {ratio != null && (
-                        <p>
-                            Energy in ÷ energy out = <strong>{ratio.toFixed(2)}</strong>.{' '}
-                            {ratio > 0.8 && ratio < 1.25
-                                ? 'Two independent measurements agreeing this closely is the strongest evidence available that neither is badly wrong.'
-                                : 'These should track each other over a long window. A persistent imbalance this large means one of the two measurements is off — a pack cannot create charge.'}
-                        </p>
-                    )}
+                    <p>
+                        A month where the distance line breaks has no rollup row — its distance is{' '}
+                        <strong>unknown, not zero</strong>. The two bar heights and the line height are
+                        on different scales; read each against its own axis.
+                    </p>
                 </>
             }
         >
             <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={rows} margin={{ top: 16, right: 24, left: 8, bottom: 8 }}>
+                <ComposedChart data={rows} margin={{ top: 16, right: 8, left: 8, bottom: 8 }}>
                     <CartesianGrid horizontal vertical={false} stroke={VIZ.grid} />
                     <XAxis
                         dataKey="t"
@@ -100,8 +134,8 @@ export function CumulativeEnergyChart({
                         interval="preserveStartEnd"
                         minTickGap={28}
                     />
-                    {/* One axis. Both series are Ah. */}
                     <YAxis
+                        yAxisId="ah"
                         tick={TICK}
                         tickLine={false}
                         axisLine={false}
@@ -109,72 +143,83 @@ export function CumulativeEnergyChart({
                         width={58}
                         unit=" Ah"
                     />
+                    {/* Right axis ticks are tinted the km line's colour — the pairing is explicit. */}
+                    <YAxis
+                        yAxisId="km"
+                        orientation="right"
+                        tick={{ fontSize: 11, fill: KM_LINE }}
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        width={58}
+                        unit=" km"
+                    />
                     <Tooltip
-                        content={<EnergyTooltip granularity={granularity} />}
-                        cursor={{ stroke: '#cbd5e1', strokeDasharray: '3 3' }}
+                        cursor={{ fill: 'rgba(148,163,184,0.08)' }}
+                        content={({ active, payload }) => {
+                            const p = payload?.[0]?.payload as (typeof rows)[number] | undefined;
+                            if (!active || !p) return null;
+                            return (
+                                <TooltipShell
+                                    title={bucketLabel(p.bucket, 'month')}
+                                    rows={[
+                                        ['Charged', `${p.charged} Ah`],
+                                        ['Discharged', `${p.discharged} Ah`],
+                                        ['Distance', p.km != null ? `${p.km} km` : 'unknown'],
+                                    ]}
+                                    footer={
+                                        p.km == null ? (
+                                            <p className="text-[11px] text-amber-600">
+                                                No distance row this month — unknown, not zero.
+                                            </p>
+                                        ) : undefined
+                                    }
+                                />
+                            );
+                        }}
                     />
-                    <Area
-                        type="monotone"
+                    <Bar
+                        yAxisId="ah"
                         dataKey="charged"
-                        name="Cumulative charged"
-                        stroke={VIZ.charged}
-                        strokeWidth={2}
+                        name="Charged"
                         fill={VIZ.charged}
-                        fillOpacity={0.08}
+                        radius={[4, 4, 0, 0]}
                         isAnimationActive={false}
                     />
-                    <Area
-                        type="monotone"
+                    <Bar
+                        yAxisId="ah"
                         dataKey="discharged"
-                        name="Cumulative discharged"
-                        stroke={VIZ.discharged}
-                        strokeWidth={2}
+                        name="Discharged"
                         fill={VIZ.discharged}
-                        fillOpacity={0.08}
+                        radius={[4, 4, 0, 0]}
                         isAnimationActive={false}
                     />
-                </AreaChart>
+                    {/* Straight segments, not a monotone spline: each point is one month's total
+                      * distance, not a sample of a continuous signal. A smoothed curve invites
+                      * reading a "peak between months" that the data never claims. Larger dots so
+                      * the four discrete monthly readings are what the eye lands on. */}
+                    <Line
+                        yAxisId="km"
+                        type="linear"
+                        dataKey="km"
+                        name="Distance"
+                        stroke={KM_LINE}
+                        strokeWidth={2}
+                        dot={{ r: 4, fill: KM_LINE, strokeWidth: 0 }}
+                        activeDot={{ r: 5 }}
+                        connectNulls={false}
+                        isAnimationActive={false}
+                    />
+                </ComposedChart>
             </ResponsiveContainer>
             <Legend
                 items={[
-                    { color: VIZ.charged, label: 'Charged (Ah in)' },
-                    { color: VIZ.discharged, label: 'Discharged (Ah out)' },
+                    { color: VIZ.charged, label: 'Charged (Ah in, left axis)' },
+                    { color: VIZ.discharged, label: 'Discharged (Ah out, left axis)' },
+                    { color: KM_LINE, label: 'Distance (km, right axis)' },
                 ]}
             />
         </ChartCard>
-    );
-}
-
-interface EnergyRow {
-    bucket: string;
-    charged: number;
-    discharged: number;
-    inCharged: number;
-    inDischarged: number;
-}
-
-function EnergyTooltip({
-    active,
-    payload,
-    granularity,
-}: {
-    active?: boolean;
-    payload?: Array<{ payload: EnergyRow }>;
-    granularity?: Granularity;
-}) {
-    const p = payload?.[0]?.payload;
-    if (!active || !p) return null;
-    return (
-        <TooltipShell
-            title={bucketLabel(p.bucket, granularity ?? 'day')}
-            rows={[
-                ['Charged this period', `${p.inCharged} Ah`],
-                ['Discharged this period', `${p.inDischarged} Ah`],
-                ['Cumulative charged', `${p.charged} Ah`],
-                ['Cumulative discharged', `${p.discharged} Ah`],
-                ['Net (in − out)', `${Math.round((p.charged - p.discharged) * 10) / 10} Ah`],
-            ]}
-        />
     );
 }
 

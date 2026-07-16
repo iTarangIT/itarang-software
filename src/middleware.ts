@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
+
 // Prevents browsers from serving stale HTML across deploys. Applied to HTML
 // responses only — _next/static assets are excluded by the matcher and keep
 // their default long-lived, immutable caching (they're content-hashed).
@@ -255,6 +257,10 @@ export async function middleware(request: NextRequest) {
       "ceo",
       "sales_head",
     ],
+    // Battery-buyback admin pages (M06). Must be above the bare "/admin"
+    // entry below — it admits business_head to buyback only, and the bare
+    // "/admin" entry (without business_head) would otherwise match first.
+    "/admin/buyback": [...BUYBACK_ADMIN_ROLES],
     // Part 0 Module 3 — the admin / ops workspace. The Ops-Manager persona is
     // held by the sales_head account, so sales_head gets full access (admin +
     // CEO too). This bare "/admin" prefix is LAST so the specific entries

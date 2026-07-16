@@ -1,30 +1,35 @@
 "use client";
 
 /**
- * M01 — the dealer's buyback dashboard.
+ * M01 — the dealer's buyback dashboard, rebuilt to the prototype
+ * (iTarang Portal.dc.html scrDealerDash, lines 439-464): a KPI row plus a
+ * "Recent requests" card, on the shared buyback UI kit
+ * (src/components/buyback/ui) rather than the page's own ad hoc table.
  *
  * Entity-scoped by the API: /api/buyback/requests only ever returns rows whose
  * dealer_entity_id matches the caller's. Another dealer's request is not just
  * hidden here — it 404s at the API too.
+ *
+ * Drafts: the prototype's four KPI buckets deliberately exclude DRAFT (see
+ * handoff:446-449 — "Submitted" is `status !== DRAFT`, and none of the other
+ * three buckets include it either), so there is no dedicated "Drafts" tile
+ * here, unlike the page this replaces. The affordance is not gone though: a
+ * draft still shows up as its own row (with a "Draft" status chip) in Recent
+ * requests and on My Requests, so it stays findable — just folded into the
+ * shared table instead of a standalone count.
  */
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import StatusChip, { OfferVersionChip } from "@/components/buyback/StatusChip";
+import { useAuth } from "@/components/auth/AuthProvider";
+import DealerBuybackSearch from "@/components/buyback/DealerBuybackSearch";
+import DealerRequestsTable, {
+  type DealerRequestRow,
+} from "@/components/buyback/DealerRequestsTable";
+import { Card, EmptyState, KpiCard, PageHeader } from "@/components/buyback/ui";
 
-interface RequestRow {
-  request_id: string;
-  request_no: string;
-  status: string;
-  offer_version: number;
-  line_count: number;
-  total_units: number;
-  created_at: string;
-  submitted_at: string | null;
-}
-
-const OPEN_STATES = new Set([
+const PENDING_STATES = new Set([
   "SUBMITTED",
   "UNDER_REVIEW",
   "INFO_REQUESTED",
@@ -32,126 +37,142 @@ const OPEN_STATES = new Set([
   "FINAL_OFFER_SENT",
 ]);
 
-export default function DealerBuybackPage() {
-  const [requests, setRequests] = useState<RequestRow[]>([]);
-  const [loading, setLoading] = useState(true);
+const IN_PROGRESS_STATES = new Set([
+  "DEALER_ACCEPTED",
+  "MARGIN_SET",
+  "VENDOR_ROUTED",
+  "VENDOR_NEGOTIATING",
+  "VENDOR_AGREED",
+  "PO_EXCHANGED",
+  "PICKUP_SCHEDULED",
+  "PICKED_UP",
+  "INVOICE_RAISED",
+  "INVOICE_APPROVED",
+  "SETTLED",
+  "CLOSED",
+]);
 
-  useEffect(() => {
-    fetch("/api/buyback/requests")
-      .then((r) => r.json())
-      .then((j) => setRequests(j?.data?.requests ?? []))
-      .finally(() => setLoading(false));
-  }, []);
+const NEW_REQUEST_BUTTON =
+  "rounded-lg bg-green-600 px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-green-700";
 
-  const drafts = requests.filter((r) => r.status === "DRAFT").length;
-  const open = requests.filter((r) => OPEN_STATES.has(r.status)).length;
-  const needsYou = requests.filter(
-    (r) => r.status === "INFO_REQUESTED" || r.status === "FINAL_OFFER_SENT",
-  ).length;
-
-  return (
-    <div className="mx-auto max-w-6xl px-6 py-6">
-      <header className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-            Battery Buyback
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Sell your end-of-life batteries to iTarang.
-          </p>
-        </div>
-        <Link
-          href="/dealer-portal/buyback/new"
-          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-        >
-          + New Request
-        </Link>
-      </header>
-
-      <div className="mb-6 grid grid-cols-3 gap-4">
-        <Kpi label="Awaiting your action" value={needsYou} accent={needsYou > 0} />
-        <Kpi label="In progress" value={open} />
-        <Kpi label="Drafts" value={drafts} />
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-            <tr>
-              <th className="px-4 py-3 text-left">Request</th>
-              <th className="px-4 py-3 text-left">Batteries</th>
-              <th className="px-4 py-3 text-left">Units</th>
-              <th className="px-4 py-3 text-left">Raised</th>
-              <th className="px-4 py-3 text-left">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                  Loading…
-                </td>
-              </tr>
-            )}
-
-            {!loading && requests.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-12 text-center">
-                  <div className="text-3xl">🔋</div>
-                  <p className="mt-2 font-semibold text-slate-700">No buyback requests yet</p>
-                  <p className="text-sm text-slate-500">
-                    Raise one to sell your end-of-life batteries.
-                  </p>
-                </td>
-              </tr>
-            )}
-
-            {requests.map((r) => (
-              <tr key={r.request_id} className="border-t border-slate-100 hover:bg-slate-50">
-                <td className="px-4 py-3">
-                  <Link
-                    href={`/dealer-portal/buyback/${r.request_id}`}
-                    className="font-semibold text-slate-900 hover:underline"
-                  >
-                    {r.request_no}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-slate-600">{r.line_count}</td>
-                <td className="px-4 py-3 tabular-nums text-slate-600">{r.total_units}</td>
-                <td className="px-4 py-3 text-slate-500">
-                  {new Date(r.submitted_at ?? r.created_at).toLocaleDateString("en-IN")}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <StatusChip status={r.status} />
-                    <OfferVersionChip version={r.offer_version} />
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+// U5 — same skeleton approach as the admin dashboard
+// (admin/buyback/dashboard/page.tsx DashboardSkeleton): while `loading`, the
+// KPI row rendered computed-zero KpiCards (Submitted/Pending/etc. all start
+// at 0 before `requests` has loaded), which reads as "everything is zero"
+// for a beat rather than "loading". Skeleton tiles instead.
+function SkeletonBlock({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} />;
 }
 
-function Kpi({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+export default function DealerBuybackPage() {
+  const { user } = useAuth();
+  const [requests, setRequests] = useState<DealerRequestRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/buyback/requests")
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        if (j?.success === false) {
+          setError(j?.error?.message ?? "Could not load your buyback requests.");
+          return;
+        }
+        setRequests(j?.data?.requests ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Could not load your buyback requests.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const submitted = requests.filter((r) => r.status !== "DRAFT").length;
+  const pending = requests.filter((r) => PENDING_STATES.has(r.status)).length;
+  const inProgress = requests.filter((r) => IN_PROGRESS_STATES.has(r.status)).length;
+  const rejected = requests.filter((r) => r.status === "REJECTED").length;
+
+  const recent = requests.slice(0, 5);
+
   return (
-    <div
-      className={`rounded-xl border bg-white p-4 ${
-        accent ? "border-amber-300 bg-amber-50" : "border-slate-200"
-      }`}
-    >
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-        {label}
-      </div>
-      <div
-        className={`mt-1 text-2xl font-extrabold tabular-nums ${
-          accent ? "text-amber-700" : "text-slate-900"
-        }`}
-      >
-        {value}
+    <div className="bg-bb-bg px-6 py-6">
+      <div className="mx-auto max-w-[1180px]">
+        <PageHeader
+          title="Dashboard"
+          sub={
+            user?.name
+              ? `Welcome back, ${user.name} — your battery buyback overview`
+              : "Welcome back — your battery buyback overview"
+          }
+          right={
+            <div className="flex flex-wrap items-center gap-2.5">
+              <DealerBuybackSearch />
+              <Link href="/dealer-portal/buyback/new" className={NEW_REQUEST_BUTTON}>
+                + New Buyback Request
+              </Link>
+            </div>
+          }
+        />
+
+        {error ? (
+          <p className="text-sm text-red-600">{error}</p>
+        ) : loading ? (
+          <>
+            <div className="mb-[22px] grid grid-cols-4 gap-3.5">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <SkeletonBlock key={i} className="h-[84px]" />
+              ))}
+            </div>
+            <Card title="Recent requests">
+              <DealerRequestsTable requests={[]} loading emptyMessage="No requests yet." />
+            </Card>
+          </>
+        ) : requests.length === 0 ? (
+          <EmptyState
+            icon="🔋"
+            title="No requests yet"
+            body="Create your first buyback request to get started."
+          />
+        ) : (
+          <>
+            <div className="mb-[22px] grid grid-cols-4 gap-3.5">
+              <KpiCard label="Submitted" value={submitted} accent="text-blue-600" />
+              <KpiCard label="Pending" value={pending} accent="text-amber-500" />
+              <KpiCard
+                label="Accepted / In Progress"
+                value={inProgress}
+                accent="text-green-600"
+              />
+              <KpiCard label="Rejected" value={rejected} accent="text-red-600" />
+            </div>
+
+            <Card
+              title="Recent requests"
+              action={
+                <Link
+                  href="/dealer-portal/buyback/requests"
+                  className="text-[12.5px] font-semibold text-blue-600 hover:underline"
+                >
+                  View all →
+                </Link>
+              }
+            >
+              <DealerRequestsTable
+                requests={recent}
+                loading={loading}
+                emptyMessage="No requests yet."
+              />
+            </Card>
+          </>
+        )}
       </div>
     </div>
   );

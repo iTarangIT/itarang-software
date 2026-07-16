@@ -1,0 +1,4 @@
+Date,Narration,Reference,Debit,Credit
+05-Jan-2026,NEFT/BB-1024/ACME Battery Traders dealer payout,UTR2026010512345,53200.00,
+07-Jan-2026,IMPS/BB-1024/AmpFusion Recyclers vendor receipt,UTR2026010798765,,61000.00
+10-Jan-2026,Bank charges - a/c maintenance,,150.00,

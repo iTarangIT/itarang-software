@@ -118,3 +118,12 @@ export function ahPerKm(ahDischarged: number | null, km: number | null): number 
     if (ahDischarged == null || km == null || km <= 0) return null;
     return Math.round((ahDischarged / km) * 1000) / 1000;
 }
+
+/**
+ * Mileage: kilometres per amp-hour — the same ratio as ahPerKm read the way a driver
+ * reads fuel economy (bigger is better). Two decimals: the fleet sits around 0.8-1.5.
+ */
+export function kmPerAh(km: number | null, ahDischarged: number | null): number | null {
+    if (km == null || km <= 0 || ahDischarged == null || ahDischarged <= 0) return null;
+    return Math.round((km / ahDischarged) * 100) / 100;
+}

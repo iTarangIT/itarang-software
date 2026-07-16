@@ -9,6 +9,7 @@ import { BatteryPicker } from './BatteryPicker';
 import { PeriodFilterBar } from './PeriodFilterBar';
 import { ExportChargingAnalysis } from './ExportChargingAnalysis';
 import { BatteryStatCards } from './BatteryStatCards';
+import { DriverBehaviourCards } from './DriverBehaviourCards';
 import { usePeriod } from './usePeriod';
 import type {
     AhAnalytics,
@@ -20,6 +21,7 @@ import type {
     ElectricalData,
     SocTimeline,
     BatteryGeoData,
+    TelemetryCadence,
 } from './types';
 
 // recharts is ~100 KB of client JS, and there are a dozen charts here. Each sub-tab loads its
@@ -41,8 +43,8 @@ const CapacityByPeriodChart = dynamic(
     () => import('./charts/CapacityByPeriodChart').then((m) => m.CapacityByPeriodChart),
     { ssr: false, loading: ChartFallback },
 );
-const CumulativeEnergyChart = dynamic(
-    () => import('./charts/EnergyCharts').then((m) => m.CumulativeEnergyChart),
+const MonthlyEnergyDistanceChart = dynamic(
+    () => import('./charts/EnergyCharts').then((m) => m.MonthlyEnergyDistanceChart),
     { ssr: false, loading: ChartFallback },
 );
 const DeepDischargeChart = dynamic(
@@ -53,12 +55,16 @@ const DistanceTrendChart = dynamic(
     () => import('./charts/DistanceCharts').then((m) => m.DistanceTrendChart),
     { ssr: false, loading: ChartFallback },
 );
-const CumulativeDistanceChart = dynamic(
-    () => import('./charts/DistanceCharts').then((m) => m.CumulativeDistanceChart),
+const MileageTrendChart = dynamic(
+    () => import('./charts/DistanceCharts').then((m) => m.MileageTrendChart),
     { ssr: false, loading: ChartFallback },
 );
 const DischargeVsKmChart = dynamic(
     () => import('./charts/DistanceCharts').then((m) => m.DischargeVsKmChart),
+    { ssr: false, loading: ChartFallback },
+);
+const PerCycleMileageChart = dynamic(
+    () => import('./charts/DistanceCharts').then((m) => m.PerCycleMileageChart),
     { ssr: false, loading: ChartFallback },
 );
 const VoltageTrendChart = dynamic(
@@ -96,9 +102,9 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
 ];
 
 /** Which endpoints each sub-tab actually needs. Nothing else is fetched. */
-const NEEDS: Record<SubTab, { ah?: true; discharge?: true; deep?: true; distance?: true; energy?: true; km?: true; electrical?: true; timeline?: true; geo?: true }> = {
+const NEEDS: Record<SubTab, { ah?: true; discharge?: true; deep?: true; distance?: true; monthly?: true; km?: true; electrical?: true; timeline?: true; geo?: true }> = {
     capacity: { ah: true },
-    energy: { energy: true, deep: true },
+    energy: { monthly: true, deep: true },
     usage: { distance: true, km: true },
     location: { geo: true },
     electrical: { electrical: true },
@@ -112,6 +118,63 @@ async function getJson<T>(url: string): Promise<T> {
         throw new Error(body?.error?.message ?? 'Request failed');
     }
     return (await res.json()).data as T;
+}
+
+// "Read every 30 s": each active-tab query re-fetches on this interval (only the enabled
+// queries for the current tab poll, and only while the tab is focused). Honest caveat lives on
+// the cadence readout — the stored feed updates ~every 8.5 min, so most refetches return the
+// same values; polling faster than the poller writes does not raise resolution.
+const LIVE_30S = { refetchInterval: 30_000 } as const;
+
+function fmtInterval(s: number | null): string {
+    if (s == null) return '—';
+    if (s < 90) return `${Math.round(s)} s`;
+    if (s < 5400) return `${(s / 60).toFixed(s < 600 ? 1 : 0)} min`;
+    return `${(s / 3600).toFixed(1)} h`;
+}
+
+function fmtAge(iso: string | null): string {
+    if (!iso) return '—';
+    const min = (Date.now() - new Date(iso).getTime()) / 60_000;
+    if (min < 1) return 'just now';
+    if (min < 90) return `${Math.round(min)} min ago`;
+    const h = min / 60;
+    return h < 48 ? `${Math.round(h)} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+/**
+ * The honest telemetry-cadence line under the stat cards. It says out loud what "reads every
+ * 30 s" really means here: the page refreshes every 30 s, but the poller stores samples ~8.5 min
+ * apart, so most refreshes re-read the same values. Better to state the real cadence than to let
+ * a fast refresh imply a fast feed.
+ */
+function CadenceReadout({ cadence }: { cadence: TelemetryCadence | undefined }) {
+    if (!cadence) return null;
+    return (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-gray-400">
+            <span className="inline-flex items-center gap-1.5 text-emerald-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                Live · refreshes every 30 s
+            </span>
+            <span className="text-gray-300">·</span>
+            <span>
+                stored telemetry ~{fmtInterval(cadence.medianIntervalS)} apart (median)
+                {cadence.samplesPerDay != null ? `, ~${cadence.samplesPerDay}/day` : ''}
+            </span>
+            {cadence.lastSampleAt && (
+                <>
+                    <span className="text-gray-300">·</span>
+                    <span>last sample {fmtAge(cadence.lastSampleAt)}</span>
+                </>
+            )}
+            <span
+                className="text-gray-400/90 underline decoration-dotted underline-offset-2"
+                title="The device streams every ~30 s, but the AWS poller subsamples to ~100 rows/day. Refreshing every 30 s re-reads the same stored samples between writes — it does not raise the data's resolution."
+            >
+                why not 30 s?
+            </span>
+        </div>
+    );
 }
 
 /**
@@ -136,10 +199,25 @@ export function BatteryAnalytics() {
     });
     const batteries = Array.isArray(devicesData) ? devicesData : [];
 
+    // E-190: keyed by battery so a vehicle mapped to a spec model gets its model's
+    // limits on the capacity bands and red flags, not the fleet-wide placeholders.
     const { data: thresholds } = useQuery<BatteryThresholds>({
-        queryKey: ['intellicar-thresholds'],
-        queryFn: () => getJson<BatteryThresholds>('/api/telemetry/analytics/thresholds'),
+        queryKey: ['intellicar-thresholds', battery],
+        queryFn: () =>
+            getJson<BatteryThresholds>(
+                `/api/telemetry/analytics/thresholds${battery ? `?vehicleno=${encodeURIComponent(battery)}` : ''}`,
+            ),
         staleTime: 5 * 60_000,
+    });
+
+    // Real stored-sample cadence for the header readout — always on when a battery is picked,
+    // and polled every 30 s so the "last sample" age stays live.
+    const { data: cadence } = useQuery<TelemetryCadence>({
+        queryKey: ['intellicar-cadence', battery, qp],
+        enabled: !!battery,
+        placeholderData: keepPreviousData,
+        ...LIVE_30S,
+        queryFn: () => getJson<TelemetryCadence>(`/api/telemetry/analytics/cadence?vehicleno=${encodeURIComponent(battery)}&${qp}`),
     });
 
     const v = encodeURIComponent(battery);
@@ -148,6 +226,7 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-ah-trend', battery, qp],
         enabled: on(needs.ah),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<AhAnalytics>(`/api/telemetry/analytics/ah-trend?vehicleno=${v}&${qp}`),
     });
 
@@ -155,6 +234,7 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-discharge', battery, qp],
         enabled: on(needs.discharge),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<DischargeAnalytics>(`/api/telemetry/analytics/discharge-cycles?vehicleno=${v}&${qp}`),
     });
 
@@ -162,20 +242,39 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-deep-discharge', battery, qp],
         enabled: on(needs.deep),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<DeepDischargeData>(`/api/telemetry/analytics/deep-discharge?vehicleno=${v}&${qp}`),
     });
 
-    const { data: energy } = useQuery<EnergyDataT>({
-        queryKey: ['intellicar-energy', battery, qp],
-        enabled: on(needs.energy),
+    // The monthly overview is pinned to granularity=month whatever the pill says, and keyed
+    // by the granularity-free windowParam so flipping the pill cannot refetch it.
+    const wp = period.windowParam;
+    const { data: energyMonthly } = useQuery<EnergyDataT>({
+        queryKey: ['intellicar-energy-monthly', battery, wp],
+        enabled: on(needs.monthly),
         placeholderData: keepPreviousData,
-        queryFn: () => getJson<EnergyDataT>(`/api/telemetry/analytics/energy-trend?vehicleno=${v}&${qp}`),
+        ...LIVE_30S,
+        queryFn: () =>
+            getJson<EnergyDataT>(
+                `/api/telemetry/analytics/energy-trend?vehicleno=${v}&${wp}&granularity=month`,
+            ),
+    });
+    const { data: distanceMonthly } = useQuery<DistanceData>({
+        queryKey: ['intellicar-distance-monthly', battery, wp],
+        enabled: on(needs.monthly),
+        placeholderData: keepPreviousData,
+        ...LIVE_30S,
+        queryFn: () =>
+            getJson<DistanceData>(
+                `/api/telemetry/analytics/distance-trend?vehicleno=${v}&${wp}&granularity=month`,
+            ),
     });
 
     const { data: distance } = useQuery<DistanceData>({
         queryKey: ['intellicar-distance', battery, qp],
         enabled: on(needs.distance),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<DistanceData>(`/api/telemetry/analytics/distance-trend?vehicleno=${v}&${qp}`),
     });
 
@@ -183,6 +282,7 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-discharge-km', battery, qp],
         enabled: on(needs.km),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<DischargeKmData>(`/api/telemetry/analytics/discharge-vs-km?vehicleno=${v}&${qp}`),
     });
 
@@ -190,6 +290,7 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-electrical', battery, qp],
         enabled: on(needs.electrical),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<ElectricalData>(`/api/telemetry/analytics/electrical-trend?vehicleno=${v}&${qp}`),
     });
 
@@ -197,6 +298,7 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-geo', battery, qp],
         enabled: on(needs.geo),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<BatteryGeoData>(`/api/telemetry/analytics/geo?vehicleno=${v}&${qp}`),
     });
 
@@ -204,6 +306,7 @@ export function BatteryAnalytics() {
         queryKey: ['intellicar-soc-timeline', battery, qp],
         enabled: on(needs.timeline),
         placeholderData: keepPreviousData,
+        ...LIVE_30S,
         queryFn: () => getJson<SocTimeline>(`/api/telemetry/analytics/soc-timeline?vehicleno=${v}&${qp}`),
     });
 
@@ -211,8 +314,9 @@ export function BatteryAnalytics() {
     const plottedCycles = sessions.filter((s) => s.estimated_capacity_ah != null).length;
 
     // Only the time-bucketed charts have a grain to choose. Showing the toggle on the capacity
-    // tab, where every point is one cycle, would be a control that does nothing.
-    const showGranularity = tab === 'energy' || tab === 'usage' || tab === 'electrical';
+    // tab, where every point is one cycle, would be a control that does nothing — and the
+    // energy tab is all-monthly now, so it lost the pill too.
+    const showGranularity = tab === 'usage' || tab === 'electrical';
 
     return (
         <div className="space-y-6">
@@ -239,7 +343,10 @@ export function BatteryAnalytics() {
                 </div>
             ) : (
                 <>
-                    <BatteryStatCards summary={ah?.summary} plottedCycles={plottedCycles} />
+                    <div className="space-y-2">
+                        <BatteryStatCards summary={ah?.summary} plottedCycles={plottedCycles} />
+                        <CadenceReadout cadence={cadence} />
+                    </div>
 
                     <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl overflow-x-auto">
                         {SUB_TABS.map((t) => (
@@ -282,7 +389,7 @@ export function BatteryAnalytics() {
 
                     {tab === 'energy' && (
                         <div className="space-y-6">
-                            <CumulativeEnergyChart data={energy} granularity={period.granularity} />
+                            <MonthlyEnergyDistanceChart energy={energyMonthly} distance={distanceMonthly} />
                             <DeepDischargeChart
                                 byMonth={deep?.byMonth ?? []}
                                 enterPct={deep?.gates.deepEnterPct ?? 20}
@@ -294,9 +401,11 @@ export function BatteryAnalytics() {
 
                     {tab === 'usage' && (
                         <div className="space-y-6">
+                            <DriverBehaviourCards data={distance} />
                             <DistanceTrendChart data={distance} granularity={period.granularity} />
-                            <CumulativeDistanceChart data={distance} granularity={period.granularity} />
                             <DischargeVsKmChart data={km} />
+                            <MileageTrendChart data={km} />
+                            <PerCycleMileageChart data={km} />
                         </div>
                     )}
 
@@ -315,6 +424,7 @@ export function BatteryAnalytics() {
                             timeline={timeline}
                             chargeCycles={sessions}
                             dischargeCycles={discharge?.cycles ?? []}
+                            battery={battery}
                         />
                     )}
                 </>

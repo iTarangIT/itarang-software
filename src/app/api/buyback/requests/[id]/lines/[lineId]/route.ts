@@ -33,21 +33,30 @@ import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
-import { buybackBatches, buybackLines, buybackUnits } from "@/lib/db/schema";
+import { buybackBatches, buybackLines, buybackUnits, catalogVariants } from "@/lib/db/schema";
 import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError } from "@/lib/buyback/errors";
+import { lineSpecSchema, specColumnsFromBody } from "@/lib/buyback/line-spec";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
 
 export const runtime = "nodejs";
 
 const MAX_QTY_PER_LINE = 500;
 
-const bodySchema = z.object({
-  quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE).optional(),
-  condition: z.enum(["WORKING", "DEAD"]).optional(),
-  expected_price_per_unit: z.number().nonnegative().nullish(),
-  measured_voltage: z.number().nonnegative().nullish(),
-});
+const bodySchema = z
+  .object({
+    // A dealer switching the SKU on a saved row used to be invisible to the
+    // server — it kept whatever variant the line was created with while the
+    // screen showed the new one, so gate errors and the PO/invoice named a
+    // battery the dealer could no longer see (BB-1045).
+    variant_id: z.string().uuid().optional(),
+    quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE).optional(),
+    condition: z.enum(["WORKING", "DEAD"]).optional(),
+    expected_price_per_unit: z.number().nonnegative().nullish(),
+    measured_voltage: z.number().nonnegative().nullish(),
+  })
+  // E-191 spec — absent = leave alone, null = clear, value = set.
+  .merge(lineSpecSchema);
 
 /** The line, proven to belong to a DRAFT request this dealer owns. */
 async function loadEditableLine(requestId: string, lineId: string) {
@@ -56,6 +65,7 @@ async function loadEditableLine(requestId: string, lineId: string) {
       id: buybackLines.id,
       quantity: buybackLines.quantity,
       batch_id: buybackLines.batch_id,
+      variant_id: buybackLines.variant_id,
     })
     .from(buybackLines)
     .innerJoin(buybackBatches, eq(buybackLines.batch_id, buybackBatches.id))
@@ -86,9 +96,28 @@ export const PATCH = withErrorHandler(
 
       const line = await loadEditableLine(request.id, lineId);
 
+      // A SKU change re-validates against the live catalog and re-snapshots the
+      // price book — same lookup as CREATE. An unchanged variant_id (the
+      // client now sends it on every save) is a no-op here, not a re-lookup.
+      let variantUpdate: { variant_id: string; price_book_version_at_create: number } | null =
+        null;
+      if (body.variant_id !== undefined && body.variant_id !== line.variant_id) {
+        const [variant] = await tx
+          .select()
+          .from(catalogVariants)
+          .where(and(eq(catalogVariants.id, body.variant_id), eq(catalogVariants.active, true)))
+          .limit(1);
+        if (!variant) throw new NotFoundError("Battery variant not found in the catalog.");
+        variantUpdate = {
+          variant_id: variant.id,
+          price_book_version_at_create: variant.price_book_version,
+        };
+      }
+
       await tx
         .update(buybackLines)
         .set({
+          ...(variantUpdate ?? {}),
           ...(body.quantity !== undefined ? { quantity: body.quantity } : {}),
           ...(body.condition !== undefined ? { condition: body.condition } : {}),
           ...(body.expected_price_per_unit !== undefined
@@ -105,6 +134,8 @@ export const PATCH = withErrorHandler(
                   body.measured_voltage === null ? null : body.measured_voltage.toString(),
               }
             : {}),
+          // E-191 spec — only the fields present in the body are touched.
+          ...specColumnsFromBody(body),
         })
         .where(eq(buybackLines.id, line.id));
 

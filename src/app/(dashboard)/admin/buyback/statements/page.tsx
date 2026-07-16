@@ -20,8 +20,10 @@
  *    the thing the confirm route is built to prevent.
  */
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { PageHeader } from "@/components/buyback/ui";
 import { inr } from "@/lib/buyback/format";
 
 interface StatementImport {
@@ -45,8 +47,20 @@ interface StatementRow {
   status: "UNMATCHED" | "SUGGESTED" | "MATCHED" | "IGNORED";
   suggested_leg: "DEALER" | "VENDOR" | null;
   suggested_request_no: string | null;
+  // U6 — present on both SUGGESTED and MATCHED rows (see route docblock);
+  // lets a confirmed row deep-link to its deal without a client-side lookup.
+  suggested_request_id: string | null;
   suggested_counterparty: string | null;
   matched_leg_sub_id: string | null;
+}
+
+/** U6 — the selected import's rows, by status. From GET .../rows `counts`. */
+interface RowCounts {
+  total: number;
+  suggested: number;
+  matched: number;
+  ignored: number;
+  unmatched: number;
 }
 
 const STATUS_CHIP: Record<StatementRow["status"], string> = {
@@ -60,6 +74,7 @@ export default function BuybackStatementsPage() {
   const [imports, setImports] = useState<StatementImport[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [rows, setRows] = useState<StatementRow[]>([]);
+  const [rowCounts, setRowCounts] = useState<RowCounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -106,6 +121,9 @@ export default function BuybackStatementsPage() {
       if (cancelled) return;
 
       setRows(json?.data?.rows ?? []);
+      // U6 — the route already computes this per-import breakdown; it just
+      // had no UI consumer until now.
+      setRowCounts(json?.data?.counts ?? null);
       setRowsLoading(false);
     })();
 
@@ -172,13 +190,10 @@ export default function BuybackStatementsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 pb-24 pt-6">
-      <div>
-        <h1 className="text-lg font-bold text-slate-900">Bank reconciliation</h1>
-        <p className="mt-0.5 text-sm text-slate-500">
-          Import the bank statement and confirm the rows that settle a deal. A confirmed row becomes
-          a settlement — the statement is its proof, so no separate receipt is needed.
-        </p>
-      </div>
+      <PageHeader
+        title="Bank reconciliation"
+        sub="Import the bank statement and confirm the rows that settle a deal. A confirmed row becomes a settlement — the statement is its proof, so no separate receipt is needed."
+      />
 
       {/* --- Upload --- */}
       <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
@@ -266,8 +281,31 @@ export default function BuybackStatementsPage() {
       {/* --- Rows of the selected import --- */}
       {selected && (
         <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="border-b border-slate-100 px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-400">
-            Transactions
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-400">
+              Transactions
+            </span>
+            {/* U6 — per-import summary chip row; the route already computes
+                this breakdown (GET .../rows `counts`), it just had no UI
+                consumer until now. */}
+            {rowCounts && (
+              <div className="flex flex-wrap gap-1.5 text-[11px] font-semibold">
+                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-emerald-700">
+                  {rowCounts.matched} matched
+                </span>
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-amber-700">
+                  {rowCounts.suggested} pending
+                </span>
+                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-slate-400">
+                  {rowCounts.ignored} ignored
+                </span>
+                {rowCounts.unmatched > 0 && (
+                  <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-slate-500">
+                    {rowCounts.unmatched} unmatched
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {rowsLoading ? (
@@ -320,9 +358,22 @@ export default function BuybackStatementsPage() {
                           {r.status}
                         </span>
                         {r.status === "MATCHED" && r.matched_leg_sub_id && (
-                          <span className="ml-2 text-xs font-semibold text-slate-500">
-                            {r.matched_leg_sub_id}
-                          </span>
+                          // U6 — deep-link to the deal this row settled.
+                          // suggested_request_id rides along on a MATCHED row
+                          // too (the confirm route re-writes suggested_deal_id
+                          // to the CONFIRMED deal rather than clearing it).
+                          r.suggested_request_id ? (
+                            <Link
+                              href={`/admin/buyback/${r.suggested_request_id}`}
+                              className="ml-2 text-xs font-semibold text-blue-600 hover:underline"
+                            >
+                              {r.matched_leg_sub_id}
+                            </Link>
+                          ) : (
+                            <span className="ml-2 text-xs font-semibold text-slate-500">
+                              {r.matched_leg_sub_id}
+                            </span>
+                          )
                         )}
                         {r.status === "SUGGESTED" && r.suggested_request_no && (
                           <span className="ml-2 text-xs text-slate-600">

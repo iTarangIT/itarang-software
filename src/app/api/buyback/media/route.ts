@@ -1,9 +1,23 @@
 /**
  * GET /api/buyback/media?photo=<id>&size=thumb|full
  * GET /api/buyback/media?provenance=<id>&field=id_proof|purchase_proof
+ * GET /api/buyback/media?evidence=<s3_key>
  *
- * Serves buyback evidence — battery photos, ID proofs, purchase receipts — to the
- * people entitled to see it, and to nobody else.
+ * Serves buyback evidence — battery photos, ID proofs, purchase receipts, and
+ * (U1) admin-captured evidence: settlement proofs, e-way bills, weighbridge
+ * slips, vendor POs, dealer invoice PDFs — to the people entitled to see it,
+ * and to nobody else.
+ *
+ * The `evidence` form takes the S3 KEY directly, unlike `photo`/`provenance`
+ * which take a row id and look the key up themselves. Those documents don't
+ * have their own id-bearing table to join through the way a photo or a
+ * provenance record does — the key IS the identifier (see evidenceKeyFor,
+ * src/lib/buyback/storage.ts) — so authorization instead reads the
+ * `{requestId}` segment straight out of the key
+ * (`buyback/{requestId}/evidence/…`) and checks it against a real request the
+ * caller may see. The key is trusted to name the request ONLY after that
+ * lookup succeeds; before that it is just an attacker-suppliable string, which
+ * is why it is validated (no `..`, must start with `buyback/`) before use.
  *
  * WHY THIS EXISTS RATHER THAN /api/files/dealer-documents/<key>:
  *
@@ -27,17 +41,20 @@
  * cannot be satisfied by guessing a UUID.
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
+import { buybackRequests } from "@/lib/db/schema";
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
 import { getObject } from "@/lib/storage/s3";
 
 export const runtime = "nodejs";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Guess a content type from the key. S3 has it, but we would need a HEAD to ask. */
 function contentTypeFor(key: string): string {
@@ -71,6 +88,7 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   const photoId = url.searchParams.get("photo");
   const provenanceId = url.searchParams.get("provenance");
+  const evidenceKey = url.searchParams.get("evidence");
 
   let key: string | null = null;
 
@@ -115,8 +133,39 @@ export const GET = withErrorHandler(async (req: Request) => {
     if (!record) throw new NotFoundError("Not found.");
 
     key = field === "id_proof" ? record.id_proof_s3 : record.payment_proof_ref;
+  } else if (evidenceKey) {
+    // U1 admin-captured evidence: buyback/{requestId}/evidence/{kind}-{uuid}.ext
+    // (see evidenceKeyFor, src/lib/buyback/storage.ts). No `..` and it must sit
+    // under the buyback/ prefix — otherwise the "requestId" segment below could
+    // be pointed anywhere, including outside this bucket's buyback/ tree.
+    if (!evidenceKey.startsWith("buyback/") || evidenceKey.includes("..")) {
+      throw new NotFoundError("Not found.");
+    }
+
+    const evidenceRequestId = evidenceKey.split("/")[1];
+    // Malformed, not merely absent: a non-UUID segment cannot match any real
+    // request, and letting it reach the query would send Postgres a value it
+    // cannot cast to uuid — an unhandled DB error (500), not the clean 404
+    // every other bad `evidence` value gets here.
+    if (!evidenceRequestId || !UUID_RE.test(evidenceRequestId)) {
+      throw new NotFoundError("Not found.");
+    }
+
+    const [owner] = await db
+      .select({ dealer_entity_id: buybackRequests.dealer_entity_id })
+      .from(buybackRequests)
+      .where(eq(buybackRequests.id, evidenceRequestId))
+      .limit(1);
+
+    // Same rule as photo/provenance above: admin, or the request's own dealer.
+    // A non-existent request and someone else's request are indistinguishable.
+    if (!owner || (!isAdmin && owner.dealer_entity_id !== dealerEntityId)) {
+      throw new NotFoundError("Not found.");
+    }
+
+    key = evidenceKey;
   } else {
-    throw new ValidationError("Pass either ?photo= or ?provenance=.");
+    throw new ValidationError("Pass ?photo=, ?provenance= or ?evidence=.");
   }
 
   if (!key) throw new NotFoundError("Not found.");

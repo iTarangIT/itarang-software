@@ -1,12 +1,95 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { MapPin, Home, Route, Clock, Info } from 'lucide-react';
+import { MapPin, Home, Moon, PlugZap, Route, Clock, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import 'leaflet/dist/leaflet.css';
 import type { BatteryGeoData, DwellCluster } from '../types';
 
 type Mode = 'distance' | 'dwell';
+
+/**
+ * The four numbered places, in the order the pins are numbered. Every role a cell plays
+ * is rendered on ONE pin ("1·2"), never as stacked pins — for an e-rickshaw, home,
+ * parking and charging are very often the same 100 m cell.
+ */
+interface PlaceRole {
+    n: number;
+    title: string;
+    color: string;
+    cluster: DwellCluster;
+    evidence: string;
+}
+
+/**
+ * One palette for the four places, shared by the map pins, the on-map legend, and (by matching
+ * hex to Tailwind tone) the cards below. Colours are the card tones — violet-700 / red-600 /
+ * emerald-600 / amber-600 — so a pin and its card read as the same place, and the icon lets the
+ * legend name each without relying on colour alone.
+ */
+const PLACES = [
+    { n: 1, key: 'home', title: 'Home', color: '#6d28d9', Icon: Home },
+    { n: 2, key: 'parking', title: 'Parking', color: '#dc2626', Icon: MapPin },
+    { n: 3, key: 'charging', title: 'Charging', color: '#059669', Icon: PlugZap },
+    { n: 4, key: 'overnight', title: 'Overnight (secondary)', color: '#d97706', Icon: Moon },
+] as const;
+
+function placeRoles(data: BatteryGeoData): PlaceRole[] {
+    const roles: PlaceRole[] = [];
+    if (data.home) {
+        roles.push({
+            n: 1,
+            title: 'Home',
+            color: PLACES[0].color,
+            cluster: data.home,
+            evidence: `${data.home.nightHours.toFixed(1)} h overnight across ${data.home.nights} nights`,
+        });
+    }
+    if (data.parking) {
+        roles.push({
+            n: 2,
+            title: 'Parking',
+            color: PLACES[1].color,
+            cluster: data.parking,
+            evidence: `${data.parking.hours.toFixed(1)} h stationary · ${data.parking.visits} visits`,
+        });
+    }
+    if (data.charging) {
+        roles.push({
+            n: 3,
+            title: 'Charging',
+            color: PLACES[2].color,
+            cluster: data.charging,
+            evidence: `${data.charging.chargeHours.toFixed(1)} h charging across ${data.charging.chargeSessions} sessions`,
+        });
+    }
+    if (data.overnightSecondary) {
+        roles.push({
+            n: 4,
+            title: 'Overnight (secondary)',
+            color: PLACES[3].color,
+            cluster: data.overnightSecondary,
+            evidence: `${data.overnightSecondary.nightHours.toFixed(1)} h across ${data.overnightSecondary.nights} nights`,
+        });
+    }
+    return roles;
+}
+
+const cellKey = (c: { lat: number; lon: number }) => `${c.lat},${c.lon}`;
+
+/** Whether a given place role was inferred for this battery — drives the on-map legend. */
+function placeExists(data: BatteryGeoData, key: (typeof PLACES)[number]['key']): boolean {
+    switch (key) {
+        case 'home':
+            return !!data.home;
+        case 'parking':
+            return !!data.parking;
+        case 'charging':
+            return !!data.charging;
+        case 'overnight':
+            return !!data.overnightSecondary;
+    }
+}
 
 /**
  * Where the battery drives, and where it sits.
@@ -53,6 +136,10 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                 attribution: '&copy; OpenStreetMap contributors',
             }).addTo(map);
 
+            // A Leaflet map without a view loads zero tiles — a battery with no GPS fixes
+            // (bbox null, so the fitBounds below never runs) would render as a blank box.
+            map.setView([20.5937, 78.9629], 5);
+
             // Click-to-enable wheel zoom: the guard above is right for scrolling past the map,
             // but wrong once the reader is actually using it.
             map.on('click', () => map.scrollWheelZoom.enable());
@@ -95,62 +182,51 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                     : data.dwell.map((d) => [d.lat, d.lon, d.hours]);
 
             if (points.length > 0) {
-                const peak = Math.max(...points.map((p) => p[2]));
+                // Normalise against the 95th-percentile cell, not the single busiest one: one
+                // dominant dwell/route cell would otherwise set the ceiling and wash every other
+                // cell down to minOpacity. Clamping at p95 keeps the hot spots saturated while
+                // letting the quieter roads actually register.
+                const weights = points.map((p) => p[2]).sort((a, b) => a - b);
+                const ceil =
+                    weights[Math.min(weights.length - 1, Math.floor(0.95 * weights.length))] ||
+                    weights[weights.length - 1] ||
+                    1;
                 const norm = points.map(
-                    ([lat, lon, w]) => [lat, lon, peak > 0 ? w / peak : 0] as [number, number, number],
+                    ([lat, lon, w]) =>
+                        [lat, lon, ceil > 0 ? Math.min(1, w / ceil) : 0] as [number, number, number],
                 );
                 heatRef.current = L.heatLayer(norm, {
-                    radius: mode === 'distance' ? 14 : 26,
-                    blur: mode === 'distance' ? 18 : 30,
+                    radius: mode === 'distance' ? 16 : 26,
+                    blur: mode === 'distance' ? 20 : 30,
                     max: 1,
-                    minOpacity: 0.25,
+                    // Higher floor + a lower first gradient stop so low-traffic cells are visible
+                    // instead of fading into the basemap.
+                    minOpacity: 0.4,
                     gradient:
                         mode === 'distance'
-                            ? { 0.2: '#2a78d6', 0.5: '#1baf7a', 0.75: '#eda100', 1.0: '#d03b3b' }
-                            : { 0.2: '#4a3aa7', 0.5: '#7c3aed', 0.8: '#eb6834', 1.0: '#d03b3b' },
+                            ? { 0.1: '#2a78d6', 0.4: '#1baf7a', 0.7: '#eda100', 1.0: '#d03b3b' }
+                            : { 0.1: '#4a3aa7', 0.45: '#7c3aed', 0.8: '#eb6834', 1.0: '#d03b3b' },
                 }).addTo(map);
             }
 
-            const pin = (
-                cluster: DwellCluster,
-                label: string,
-                color: string,
-                title: string,
-            ) => {
-                const icon = L.divIcon({
-                    className: '',
-                    html: `<div style="
-                        background:${color};color:#fff;font:600 11px/1 system-ui;
-                        width:26px;height:26px;border-radius:50% 50% 50% 0;
-                        transform:rotate(-45deg);display:flex;align-items:center;
-                        justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.4);
-                        border:2px solid #fff;
-                      "><span style="transform:rotate(45deg)">${label}</span></div>`,
-                    iconSize: [26, 26],
-                    iconAnchor: [13, 26],
-                });
-                const m = L.marker([cluster.lat, cluster.lon], { icon, title })
-                    .addTo(map)
-                    .bindPopup(
-                        `<strong>${title}</strong><br/>` +
-                            `${cluster.hours.toFixed(1)} h total · ${cluster.visits} visits<br/>` +
-                            `${cluster.nightHours.toFixed(1)} h overnight across ${cluster.nights} nights<br/>` +
-                            `<span style="color:#64748b">${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</span>`,
-                    );
-                markersRef.current.push(m);
-            };
+            // One pin per CELL, carrying every role that lands there ("1·2"), never two
+            // stacked pins fighting for the same 100 m square.
+            const roles = placeRoles(data);
+            const byCell = new Map<string, PlaceRole[]>();
+            for (const r of roles) {
+                const key = cellKey(r.cluster);
+                byCell.set(key, [...(byCell.get(key) ?? []), r]);
+            }
 
-            // Other dwell spots first, so the two named pins sit on top of them.
+            // Other dwell spots first, so the numbered pins sit on top of them.
             for (const d of data.dwell.slice(0, 12)) {
-                const isParking = data.parking && d.lat === data.parking.lat && d.lon === data.parking.lon;
-                const isHome = data.home && d.lat === data.home.lat && d.lon === data.home.lon;
-                if (isParking || isHome) continue;
+                if (byCell.has(cellKey(d))) continue;
                 const c = L.circleMarker([d.lat, d.lon], {
-                    radius: 5,
+                    radius: 6,
                     color: '#fff',
-                    weight: 1.5,
-                    fillColor: '#52514e',
-                    fillOpacity: 0.85,
+                    weight: 2,
+                    fillColor: '#334155',
+                    fillOpacity: 0.95,
                 })
                     .addTo(map)
                     .bindPopup(
@@ -159,18 +235,44 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                 markersRef.current.push(c);
             }
 
-            if (data.parking) pin(data.parking, 'P', '#d03b3b', 'Parking spot — most time stationary');
-            if (data.home && !(data.parking && data.home.lat === data.parking.lat && data.home.lon === data.parking.lon)) {
-                pin(data.home, 'H', '#4a3aa7', 'Overnight location');
+            for (const group of byCell.values()) {
+                const first = group[0];
+                const label = group.map((g) => g.n).join('·');
+                const w = 22 + label.length * 5; // "1·2·3" needs a wider teardrop than "1"
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="
+                        background:${first.color};color:#fff;font:600 11px/1 system-ui;
+                        width:${w}px;height:26px;border-radius:50% 50% 50% 0;
+                        transform:rotate(-45deg);display:flex;align-items:center;
+                        justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.4);
+                        border:2px solid #fff;
+                      "><span style="transform:rotate(45deg)">${label}</span></div>`,
+                    iconSize: [w, 26],
+                    iconAnchor: [Math.round(w / 2), 26],
+                });
+                const title = group.map((g) => g.title).join(' + ');
+                const m = L.marker([first.cluster.lat, first.cluster.lon], { icon, title })
+                    .addTo(map)
+                    .bindPopup(
+                        group
+                            .map((g) => `<strong>${g.n} · ${g.title}</strong><br/>${g.evidence}`)
+                            .join('<br/>') +
+                            `<br/><span style="color:#64748b">${first.cluster.lat.toFixed(5)}, ${first.cluster.lon.toFixed(5)}</span>`,
+                    );
+                markersRef.current.push(m);
             }
 
             if (data.bbox) {
+                // maxZoom caps how far a tight single-neighbourhood bbox (or a single fix) zooms
+                // in — without it Leaflet slams to level 18 on a pinpoint and the road context is
+                // lost. A far-flung outlier fix still frames wide, which is correct.
                 map.fitBounds(
                     [
                         [data.bbox.minLat, data.bbox.minLon],
                         [data.bbox.maxLat, data.bbox.maxLon],
                     ],
-                    { padding: [28, 28] },
+                    { padding: [28, 28], maxZoom: 15 },
                 );
             }
             // A map created inside a hidden tab measures itself as 0×0. Nudge it once it is up.
@@ -228,36 +330,94 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                 </div>
             </div>
 
-            <div className="px-2">
+            <div className="px-2 relative">
                 <div
                     ref={containerRef}
                     className="w-full rounded-xl overflow-hidden border border-gray-100"
                     style={{ height: 460, background: '#f8fafc' }}
                 />
+                {/* On-map legend for the numbered place pins + dwell dots. Sibling of the Leaflet
+                    container (Leaflet owns that DOM); z-[1100] clears its panes/controls (≤1000).
+                    Top-right, clear of the zoom control (top-left) and attribution (bottom-right). */}
+                {ready && data?.bbox && (
+                    <div className="absolute top-3 right-3 z-[1100] rounded-lg border border-gray-200 bg-white/90 backdrop-blur-sm px-3 py-2 shadow-sm text-[11px] space-y-1">
+                        {PLACES.filter((p) => placeExists(data, p.key)).map((p) => (
+                            <div key={p.key} className="flex items-center gap-1.5">
+                                <span
+                                    className="inline-flex items-center justify-center w-4 h-4 rounded-full text-white text-[9px] font-semibold shrink-0"
+                                    style={{ background: p.color }}
+                                >
+                                    {p.n}
+                                </span>
+                                <p.Icon className="w-3 h-3" style={{ color: p.color }} />
+                                <span className="text-gray-600">{p.title}</span>
+                            </div>
+                        ))}
+                        {(data.dwell?.length ?? 0) > 0 && (
+                            <div className="flex items-center gap-1.5">
+                                <span
+                                    className="inline-block w-3 h-3 rounded-full border-2 border-white shrink-0"
+                                    style={{ background: '#334155' }}
+                                />
+                                <span className="text-gray-600">Other dwell spot</span>
+                            </div>
+                        )}
+                    </div>
+                )}
+                {/* Gate the empty overlay on bbox (null ⇒ no usable GPS fixes at all), not on
+                    heat.length — a stationary-only battery has dwell but zero distance-weighted
+                    heat cells, and must not be labelled "No GPS fixes". */}
+                {data != null && data.bbox == null && ready && (
+                    <div className="absolute inset-0 z-[1100] flex items-center justify-center pointer-events-none">
+                        <p className="rounded-full border border-gray-200 bg-white/90 px-4 py-2 text-sm text-gray-500 shadow-sm">
+                            No GPS fixes for this battery in this period.
+                        </p>
+                    </div>
+                )}
             </div>
-
-            {(data?.heat.length ?? 0) === 0 && ready && (
-                <p className="px-6 pt-3 text-sm text-gray-400">No GPS fixes for this battery in this period.</p>
-            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6 pt-4">
                 <PlaceCard
+                    icon={Home}
+                    tone="violet"
+                    title={samePlace ? '1 · Home (same cell as parking)' : '1 · Home'}
+                    cluster={data?.home ?? null}
+                    detail={(c) =>
+                        `${c.nightHours.toFixed(0)} hours between ${data?.gates.nightStartHour}:00 and ${data?.gates.nightEndHour}:00, across ${c.nights} nights${c.lastNight ? ` — last on ${c.lastNight}` : ''}.`
+                    }
+                    emptyText="No overnight pattern in this period."
+                />
+                <PlaceCard
                     icon={MapPin}
                     tone="critical"
-                    title="Parking spot"
+                    title="2 · Parking"
                     cluster={data?.parking ?? null}
                     detail={(c) =>
                         `${c.hours.toFixed(0)} hours stationary across ${c.visits} separate visits — more than anywhere else.`
                     }
+                    emptyText="Not enough stationary time to identify one."
                 />
                 <PlaceCard
-                    icon={Home}
-                    tone="violet"
-                    title={samePlace ? 'Overnight location (same as parking)' : 'Overnight location'}
-                    cluster={data?.home ?? null}
-                    detail={(c) =>
-                        `${c.nightHours.toFixed(0)} hours between ${data?.gates.nightStartHour}:00 and ${data?.gates.nightEndHour}:00, across ${c.nights} nights.`
+                    icon={PlugZap}
+                    tone="green"
+                    title="3 · Charging"
+                    cluster={data?.charging ?? null}
+                    detail={() =>
+                        data?.charging
+                            ? `${data.charging.chargeHours.toFixed(0)} hours stationary inside charge cycles, across ${data.charging.chargeSessions} separate sessions.`
+                            : ''
                     }
+                    emptyText={`No repeated charging spot — needs at least ${data?.gates.chargingSpotMinSessions ?? 2} charge sessions at one place.`}
+                />
+                <PlaceCard
+                    icon={Moon}
+                    tone="amber"
+                    title="4 · Overnight (secondary)"
+                    cluster={data?.overnightSecondary ?? null}
+                    detail={(c) =>
+                        `${c.nightHours.toFixed(0)} hours across ${c.nights} nights — a second place it sleeps, distinct from home.`
+                    }
+                    emptyText="No second overnight place — it sleeps in one spot."
                 />
             </div>
 
@@ -291,12 +451,16 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
                 <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-900 space-y-1.5">
                     <p>
-                        <strong>The overnight location is an inference, not an address.</strong> It is the
-                        place this vehicle sits between {data?.gates.nightStartHour}:00 and{' '}
-                        {data?.gates.nightEndHour}:00 across many nights — which in practice is usually where
-                        the driver lives, but the data says &ldquo;it parks here at night&rdquo; and nothing
-                        more. It is not reverse-geocoded to a street address, and it should not be treated as
-                        one.
+                        <strong>These places are inferences, not addresses.</strong> Home is where this
+                        vehicle sits between {data?.gates.nightStartHour}:00 and {data?.gates.nightEndHour}
+                        :00 across many nights — which in practice is usually where the driver lives, but the
+                        data says &ldquo;it parks here at night&rdquo; and nothing more. Nothing here is
+                        reverse-geocoded to a street address, and none of it should be treated as one.
+                    </p>
+                    <p>
+                        <strong>The charging spot is inferred from rising-SOC cycles</strong>, because this
+                        feed never reports a charging flag — so a place the pack only ever fast-charges
+                        between two polls can be missed entirely.
                     </p>
                     {s && s.inferredDwellPct > 0 && (
                         <p>
@@ -318,20 +482,29 @@ export function LocationMap({ data }: { data: BatteryGeoData | undefined }) {
     );
 }
 
+const TONE_COLOR = {
+    critical: 'text-red-600',
+    violet: 'text-violet-700',
+    green: 'text-emerald-600',
+    amber: 'text-amber-600',
+} as const;
+
 function PlaceCard({
     icon: Icon,
     tone,
     title,
     cluster,
     detail,
+    emptyText,
 }: {
     icon: React.ElementType;
-    tone: 'critical' | 'violet';
+    tone: keyof typeof TONE_COLOR;
     title: string;
     cluster: DwellCluster | null;
     detail: (c: DwellCluster) => string;
+    emptyText?: string;
 }) {
-    const color = tone === 'critical' ? 'text-red-600' : 'text-violet-700';
+    const color = TONE_COLOR[tone];
     return (
         <div className="p-4 rounded-xl border border-gray-100 bg-gray-50/60">
             <div className="flex items-center gap-2 mb-1.5">
@@ -354,7 +527,9 @@ function PlaceCard({
                     </a>
                 </>
             ) : (
-                <p className="text-sm text-gray-400">Not enough stationary time to identify one.</p>
+                <p className="text-sm text-gray-400">
+                    {emptyText ?? 'Not enough stationary time to identify one.'}
+                </p>
             )}
         </div>
     );

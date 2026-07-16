@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import Lightbox, { type LightboxItem } from "@/components/buyback/Lightbox";
+import { PageHeader } from "@/components/buyback/ui";
 import { useRouter } from "next/navigation";
 
 import { inr } from "@/lib/buyback/format";
@@ -90,7 +91,24 @@ interface DraftRow {
   /** Local object URLs, shown until the record exists on the server. */
   id_proof_preview: string | null;
   purchase_proof_preview: string | null;
-  applyAll: boolean;
+  /**
+   * E-191 — the dealer-declared battery spec. Kept as strings (they are form
+   * inputs); converted to numbers/booleans in the save payload. The * fields
+   * (brand, chemistry, nominal V/Ah, unit weight, IOT yes/no + IOT brand when
+   * yes) are required by the SERVER's submit gate — same one-implementation
+   * rule as the photo minimum, so this form never disagrees with the API.
+   */
+  brand: string;
+  chemistry: "" | "NMC" | "LFP";
+  form_factor: "" | "CELL" | "PRISMATIC" | "CYLINDRICAL";
+  nominal_voltage: string;
+  nominal_ampere: string;
+  unit_weight_kg: string;
+  warranty_cycles: string;
+  functional_qty: string;
+  non_functional_qty: string;
+  iot_battery: "" | "YES" | "NO";
+  iot_brand_name: string;
   open: boolean;
   saving: boolean;
 }
@@ -118,7 +136,17 @@ const newRow = (): DraftRow => ({
   provenance_id: null,
   id_proof_preview: null,
   purchase_proof_preview: null,
-  applyAll: true,
+  brand: "",
+  chemistry: "",
+  form_factor: "",
+  nominal_voltage: "",
+  nominal_ampere: "",
+  unit_weight_kg: "",
+  warranty_cycles: "",
+  functional_qty: "",
+  non_functional_qty: "",
+  iot_battery: "",
+  iot_brand_name: "",
   open: false,
   saving: false,
 });
@@ -137,6 +165,22 @@ function catalogPrice(v: Variant | undefined, condition: Condition): string {
   if (!v) return "";
   const p = condition === "DEAD" ? v.est_buyback_price_dead : v.est_buyback_price_working;
   return p ? String(Math.round(Number(p))) : "";
+}
+
+/**
+ * A spec input's string → the API's number, or null for anything unusable.
+ * Null never blocks a save — it means "not provided yet", and the submit gate
+ * is what flags a required field as missing. Sending NaN or a zero voltage to
+ * zod instead would fail the WHOLE line save (quantity, price and all) over
+ * one bad keystroke in an optional-for-now field.
+ */
+function specNum(s: string, opts?: { int?: boolean; allowZero?: boolean }): number | null {
+  if (s.trim() === "") return null;
+  let n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  if (opts?.int) n = Math.trunc(n);
+  if (n < 0 || (!opts?.allowZero && n === 0)) return null;
+  return n;
 }
 
 /**
@@ -307,10 +351,34 @@ export default function BuybackIntake() {
         patch(row.key, { saving: true });
 
         const payload = {
+          // Sent on every save, PATCH included — not just CREATE. A dealer who
+          // changes the SKU on a saved row must not have the server silently
+          // keep the old variant while the screen shows the new one (BB-1045).
+          // An unchanged value is harmless: the route only re-validates when it
+          // differs from what is already on the line.
+          variant_id: row.variant_id,
           quantity: row.quantity,
           condition: row.condition,
-          expected_price_per_unit: row.expected_price ? Number(row.expected_price) : null,
-          measured_voltage: row.measured_voltage ? Number(row.measured_voltage) : null,
+          // NaN-safe: a stray non-numeric keystroke ("120Ah") must not fail the
+          // WHOLE line save. `allowZero` matters here — a DEAD battery's
+          // auto-filled measured voltage is legitimately "0.0" and must still
+          // be sent as 0, not dropped to null.
+          expected_price_per_unit: specNum(row.expected_price, { allowZero: true }),
+          measured_voltage: specNum(row.measured_voltage, { allowZero: true }),
+          // E-191 spec. Empty inputs go as null (PATCH semantics: null clears),
+          // so what the dealer sees and what the server holds never drift.
+          brand: row.brand.trim() || null,
+          chemistry: row.chemistry || null,
+          form_factor: row.form_factor || null,
+          nominal_voltage: specNum(row.nominal_voltage),
+          nominal_ampere: specNum(row.nominal_ampere),
+          unit_weight_kg: specNum(row.unit_weight_kg),
+          warranty_cycles: specNum(row.warranty_cycles, { int: true, allowZero: true }),
+          functional_qty: specNum(row.functional_qty, { int: true, allowZero: true }),
+          non_functional_qty: specNum(row.non_functional_qty, { int: true, allowZero: true }),
+          iot_battery: row.iot_battery === "" ? null : row.iot_battery === "YES",
+          iot_brand_name:
+            row.iot_battery === "YES" ? row.iot_brand_name.trim() || null : null,
         };
 
         let json: { success?: boolean; error?: { message?: string }; data?: { line_id: string } } | null;
@@ -324,7 +392,7 @@ export default function BuybackIntake() {
             : await fetch(`/api/buyback/requests/${requestId}/lines`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ variant_id: row.variant_id, ...payload }),
+                body: JSON.stringify(payload),
               });
           json = await res.json();
         } catch {
@@ -342,6 +410,10 @@ export default function BuybackIntake() {
         const lineId = knownId ?? json.data!.line_id;
         lineIdsRef.current[row.key] = lineId;
         patch(row.key, { line_id: lineId, saving: false });
+        // Progress was just made — the last gate refusal may no longer apply.
+        // A stale banner that never clears while the dealer fixes exactly what
+        // it complained about is worse than no banner at all (BB-1045).
+        setGateIssues([]);
         return lineId;
       };
 
@@ -423,6 +495,10 @@ export default function BuybackIntake() {
       variant_id: variantId,
       expected_price: catalogPrice(v, row.condition),
       measured_voltage: v ? measuredFor(Number(v.voltage), row.condition) : "",
+      // E-191: the nominal spec prefills from the catalog SKU — editable, the
+      // dealer's declaration wins over the catalog's.
+      nominal_voltage: v ? trim(v.voltage) : row.nominal_voltage,
+      nominal_ampere: v ? trim(v.ah) : row.nominal_ampere,
     };
     patch(row.key, next);
     void saveLine({ ...row, ...next } as DraftRow);
@@ -516,6 +592,10 @@ export default function BuybackIntake() {
             : r,
         ),
       );
+      // A photo just landed — the gate's last "not ready to submit" refusal is
+      // a stale snapshot from before this upload and must not keep showing a
+      // problem the dealer already fixed (BB-1045).
+      setGateIssues([]);
     } catch (e) {
       URL.revokeObjectURL(previewUrl);
 
@@ -636,6 +716,9 @@ export default function BuybackIntake() {
     // Keep the record id: it is what lets a proof thumbnail be served from the
     // server (and therefore survive a page reload) rather than from a local blob.
     patch(row.key, { provenance_id: json.data.provenance_id });
+    // Provenance just saved — clear the stale gate banner, same as a line save
+    // or a photo upload (BB-1045).
+    setGateIssues([]);
   };
 
   /**
@@ -748,22 +831,18 @@ export default function BuybackIntake() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 pb-32 pt-6">
-      <header className="mb-6 flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-            New Buyback Request
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Add battery lines, attach provenance, choose pickup — one page, no wizard.
-          </p>
-        </div>
-        {requestNo && (
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600">
-            <span className="h-[7px] w-[7px] rounded-full bg-emerald-500" />
-            Autosaved · {requestNo}
-          </div>
-        )}
-      </header>
+      <PageHeader
+        title="New Buyback Request"
+        sub="Add battery lines, attach provenance, choose pickup — one page, no wizard."
+        right={
+          requestNo ? (
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-green-600">
+              <span className="h-[7px] w-[7px] rounded-full bg-green-600" />
+              Autosaved · {requestNo}
+            </div>
+          ) : undefined
+        }
+      />
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -877,6 +956,169 @@ export default function BuybackIntake() {
               </div>
             </div>
 
+            {/* E-191 — the dealer-declared battery details. Fields marked * are
+                required to SUBMIT (the server's gate enforces them, exactly like
+                the 5-photo minimum), not to autosave — so a half-typed row never
+                blocks. Selects save immediately; text/number inputs on blur. */}
+            <div className="border-t border-slate-100 px-4 py-3">
+              <Label>Battery details — fields marked * are required to submit</Label>
+              <div className="grid grid-cols-4 gap-3">
+                <Field label="Brand *">
+                  <input
+                    value={row.brand}
+                    onChange={(e) => patch(row.key, { brand: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="e.g. Exide"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                  />
+                </Field>
+
+                <Field label="Chemistry *">
+                  <select
+                    value={row.chemistry}
+                    onChange={(e) => {
+                      const next = { chemistry: e.target.value as DraftRow["chemistry"] };
+                      patch(row.key, next);
+                      void saveLine({ ...row, ...next } as DraftRow);
+                    }}
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                  >
+                    <option value="">Select…</option>
+                    <option value="NMC">NMC</option>
+                    <option value="LFP">LFP</option>
+                  </select>
+                </Field>
+
+                <Field label="Form factor">
+                  <select
+                    value={row.form_factor}
+                    onChange={(e) => {
+                      const next = { form_factor: e.target.value as DraftRow["form_factor"] };
+                      patch(row.key, next);
+                      void saveLine({ ...row, ...next } as DraftRow);
+                    }}
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                  >
+                    <option value="">Select…</option>
+                    <option value="CELL">Cell</option>
+                    <option value="PRISMATIC">Prismatic</option>
+                    <option value="CYLINDRICAL">Cylindrical</option>
+                  </select>
+                </Field>
+
+                <Field label="Nominal voltage (V) *">
+                  <input
+                    type="number"
+                    min={0}
+                    value={row.nominal_voltage}
+                    onChange={(e) => patch(row.key, { nominal_voltage: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="e.g. 51.2"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                  />
+                </Field>
+
+                <Field label="Nominal ampere (Ah) *">
+                  <input
+                    type="number"
+                    min={0}
+                    value={row.nominal_ampere}
+                    onChange={(e) => patch(row.key, { nominal_ampere: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="e.g. 100"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                  />
+                </Field>
+
+                <Field label="Unit weight (kg) *">
+                  <input
+                    type="number"
+                    min={0}
+                    value={row.unit_weight_kg}
+                    onChange={(e) => patch(row.key, { unit_weight_kg: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="e.g. 12.5"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                  />
+                </Field>
+
+                <Field label="Warranty cycles">
+                  <input
+                    type="number"
+                    min={0}
+                    value={row.warranty_cycles}
+                    onChange={(e) => patch(row.key, { warranty_cycles: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="e.g. 800"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                  />
+                </Field>
+
+                <Field label="IOT battery *">
+                  <select
+                    value={row.iot_battery}
+                    onChange={(e) => {
+                      const next = { iot_battery: e.target.value as DraftRow["iot_battery"] };
+                      patch(row.key, next);
+                      void saveLine({ ...row, ...next } as DraftRow);
+                    }}
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                  >
+                    <option value="">Select…</option>
+                    <option value="YES">Yes</option>
+                    <option value="NO">No</option>
+                  </select>
+                </Field>
+
+                <Field label="Functional qty">
+                  <input
+                    type="number"
+                    min={0}
+                    value={row.functional_qty}
+                    onChange={(e) => patch(row.key, { functional_qty: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="working units"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                  />
+                </Field>
+
+                <Field label="Non-functional qty">
+                  <input
+                    type="number"
+                    min={0}
+                    value={row.non_functional_qty}
+                    onChange={(e) => patch(row.key, { non_functional_qty: e.target.value })}
+                    onBlur={() => commitRow(row)}
+                    placeholder="dead units"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                  />
+                </Field>
+
+                {row.iot_battery === "YES" && (
+                  <Field label="IOT brand name *">
+                    <input
+                      value={row.iot_brand_name}
+                      onChange={(e) => patch(row.key, { iot_brand_name: e.target.value })}
+                      onBlur={() => commitRow(row)}
+                      placeholder="e.g. BoltIoT"
+                      className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                    />
+                  </Field>
+                )}
+              </div>
+
+              {/* Live version of the gate's QTY_SPLIT_MISMATCH rule, so the
+                  dealer sees it while typing rather than at submit. */}
+              {row.functional_qty !== "" &&
+                row.non_functional_qty !== "" &&
+                Number(row.functional_qty) + Number(row.non_functional_qty) !==
+                  row.quantity && (
+                  <p className="mt-2 text-[11.5px] text-red-600">
+                    ⚠ Functional + non-functional must add up to Qty ({row.quantity}).
+                  </p>
+                )}
+            </div>
+
             {/* Units 1..N */}
             {row.variant_id && (
               <div className="px-4 pb-3">
@@ -901,9 +1143,9 @@ export default function BuybackIntake() {
             )}
 
             {/* Photos — six slots, min five */}
-            <div className="flex items-center gap-3 px-4 pb-3.5">
-              <div>
-                <Label>Photos for all units (min {MIN_PHOTOS_PER_LINE})</Label>
+            <div className="px-4 pb-3.5">
+              <Label>Photos for all units (min {MIN_PHOTOS_PER_LINE})</Label>
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="flex gap-1.5">
                   {Array.from({ length: 6 }, (_, i) => {
                     const photo = row.photos[i];
@@ -991,22 +1233,20 @@ export default function BuybackIntake() {
                     );
                   })}
                 </div>
-              </div>
 
-              <div className="self-end pb-1">
                 <span
-                  className={`rounded-md px-2 py-1 text-[11px] font-bold ${
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
                     photoCount < MIN_PHOTOS_PER_LINE
                       ? "bg-amber-100 text-amber-700"
-                      : "bg-emerald-100 text-emerald-700"
+                      : "bg-green-100 text-green-700"
                   }`}
                 >
                   {photoCount}/6 photos
                 </span>
                 {photoCount < MIN_PHOTOS_PER_LINE && (
-                  <p className="mt-1 text-[11.5px] text-red-600">
+                  <span className="text-[11.5px] text-red-600">
                     ⚠ Minimum {MIN_PHOTOS_PER_LINE} required
-                  </p>
+                  </span>
                 )}
               </div>
             </div>
@@ -1187,14 +1427,13 @@ export default function BuybackIntake() {
                     </Field>
                   </div>
 
-                  <label className="mt-3 flex items-center gap-2 text-[12.5px] text-slate-500">
-                    <input
-                      type="checkbox"
-                      checked={row.applyAll}
-                      onChange={(e) => patch(row.key, { applyAll: e.target.checked })}
-                    />
-                    Apply this owner and proof to all units in this line (same-source lot)
-                  </label>
+                  {/* Was a checkbox bound to a field nothing read — provenance
+                      saves are line-scoped (scope:"LINE") already, so it applies
+                      to every unit in the line by construction. The control did
+                      nothing; the copy alone still tells the dealer the truth. */}
+                  <p className="mt-3 text-[12.5px] text-slate-500">
+                    Applies to all units in this line (same-source lot).
+                  </p>
                 </div>
               )}
 
@@ -1219,7 +1458,7 @@ export default function BuybackIntake() {
 
       <button
         onClick={() => setRows((rs) => [...rs, newRow()])}
-        className="mb-6 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+        className="mb-6 rounded-lg border border-green-200 bg-white px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-50"
       >
         + Add Battery
       </button>
@@ -1229,6 +1468,26 @@ export default function BuybackIntake() {
         <h3 className="text-sm font-bold text-slate-900">Pickup address</h3>
         <p className="mb-3 text-xs text-slate-500">How should we pick up this order?</p>
 
+        {/* Pickup mode — only "one address" is supported today; the per-batch /
+            per-row modes are shown but disabled ("coming soon") so the roadmap is
+            visible without pretending it works. Purely presentational: the intake
+            always sends one address per request (see selectAddress), so there is
+            no mode state to wire. */}
+        <div className="mb-4 flex flex-wrap gap-2">
+          <span className="rounded-lg border border-bb-navy bg-bb-navy px-3 py-1.5 text-[12.5px] font-semibold text-white">
+            One address for whole order
+          </span>
+          {["Per batch", "Per battery row"].map((label) => (
+            <span
+              key={label}
+              title="Coming soon"
+              className="cursor-not-allowed rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-300"
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+
         {addresses.length > 0 && (
           <div className="mb-3 grid grid-cols-2 gap-3">
             {addresses.map((a) => (
@@ -1237,12 +1496,17 @@ export default function BuybackIntake() {
                 onClick={() => void selectAddress(a.id)}
                 className={`rounded-lg border p-3 text-left ${
                   addressId === a.id
-                    ? "border-emerald-500 bg-emerald-50"
+                    ? "border-green-600 bg-green-50"
                     : "border-slate-200 bg-white"
                 }`}
               >
-                <div className="text-sm font-semibold text-slate-900">{a.label}</div>
-                <div className="text-xs text-slate-500">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-900">{a.label}</div>
+                  {addressId === a.id && (
+                    <span className="text-sm font-bold text-green-600">✓</span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
                   {a.address_line1}
                   {a.city ? `, ${a.city}` : ""} {a.pincode ?? ""}
                 </div>
@@ -1327,17 +1591,20 @@ export default function BuybackIntake() {
       )}
 
       {/*
-        The totals bar.
+        The totals bar — a fixed footer, per the prototype (scrNewRequest:584).
 
-        `sticky`, not `fixed`. It was `fixed bottom-0 left-0 right-0`, which pins
-        it to the VIEWPORT — so it ran the full width of the screen, underneath
-        the sidebar, and the first characters of "Total units" were hidden behind
-        it. Sticky keeps it inside this page's own column, where it belongs, and
-        it needs no hard-coded sidebar width to stay out of the way (that number
-        would be wrong the moment the sidebar collapses on a narrow screen).
+        `fixed`, offset by the sidebar. It is pinned to the viewport bottom but
+        starts at `md:left-64` — the 256px CRM sidebar width, matching
+        LayoutWrapper's `md:ml-64` — so it spans exactly the content column and
+        never runs under the sidebar (the old `fixed left-0 right-0` did, which is
+        why "Total units" was once clipped). On phones the sidebar is an
+        off-canvas drawer, so `left-0` is correct there. The page reserves
+        `pb-32` up top so the last card is never hidden behind this bar, and the
+        inner row is capped at `max-w-5xl mx-auto` to line up with the page
+        column above.
       */}
-      <div className="sticky bottom-0 -mx-6 mt-6 border-t border-slate-200 bg-white/95 px-6 py-3.5 backdrop-blur shadow-[0_-4px_18px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white px-6 py-3.5 shadow-[0_-4px_18px_rgba(15,23,42,0.06)] md:left-64">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
           <div className="flex gap-8">
             <Stat label="Total units" value={String(totalUnits)} />
             <Stat label="Estimated value" value={inr(estimatedValue)} accent />
@@ -1353,7 +1620,7 @@ export default function BuybackIntake() {
             <button
               onClick={() => void submit()}
               disabled={submitting || !requestId}
-              className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+              className="rounded-lg bg-green-600 px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             >
               {submitting ? "Submitting…" : "Submit request"}
             </button>
@@ -1439,7 +1706,7 @@ function ProofUpload({
 
   if (fileName) {
     return (
-      <div className="flex flex-1 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-1.5">
+      <div className="flex flex-1 items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-1.5">
         {/* A thumbnail, not a tick. An admin — and the dealer — needs to see WHICH
             document went where; "✓ uploaded" on five battery lines tells you
             nothing and is exactly how the wrong scan ends up on the wrong battery. */}
@@ -1447,10 +1714,10 @@ function ProofUpload({
           type="button"
           onClick={onView}
           title="View"
-          className="h-9 w-9 shrink-0 overflow-hidden rounded border border-emerald-300 bg-white"
+          className="h-9 w-9 shrink-0 overflow-hidden rounded border border-green-300 bg-white"
         >
           {isPdf || !previewUrl ? (
-            <span className="flex h-full w-full items-center justify-center text-[9px] font-bold text-emerald-700">
+            <span className="flex h-full w-full items-center justify-center text-[9px] font-bold text-green-700">
               PDF
             </span>
           ) : (
@@ -1464,7 +1731,7 @@ function ProofUpload({
         </button>
 
         <span
-          className="min-w-0 flex-1 truncate text-xs font-medium text-emerald-800"
+          className="min-w-0 flex-1 truncate text-xs font-medium text-green-800"
           title={fileName}
         >
           {fileName}
@@ -1473,7 +1740,7 @@ function ProofUpload({
         <button
           type="button"
           onClick={onClear}
-          className="shrink-0 pr-1 text-xs font-semibold text-emerald-700 hover:underline"
+          className="shrink-0 pr-1 text-xs font-semibold text-green-700 hover:underline"
         >
           Replace
         </button>
@@ -1519,7 +1786,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
       </div>
       <div
         className={`text-xl font-extrabold tabular-nums ${
-          accent ? "text-emerald-600" : "text-slate-900"
+          accent ? "text-green-600" : "text-slate-900"
         }`}
       >
         {value}
