@@ -91,9 +91,22 @@ def _worker_env() -> dict[str, str]:
     The minimum environment the interpreter needs to boot, and nothing more.
     Notably absent: SANDBOX_TOKEN, and anything else in the API process's env.
     On Windows, CPython needs SystemRoot to initialise; on Linux this is just PATH.
+
+    HOME and LANG are NOT optional: numpy's C-extension init resolves `~` and
+    reads locale during import. Under the container's `USER sandbox` (uid 10001,
+    --no-create-home) with HOME unset, that resolution fails and numpy re-raises
+    it as the misleading "you should not try to import numpy from its source
+    directory" ImportError — so every hypothesis card returned
+    "sandbox missing dependency: Error importing numpy". Point HOME at the
+    writable tmpfs (/tmp) so any cache write also succeeds on the read-only FS.
     """
-    env = {"PATH": os.environ.get("PATH", ""), "PYTHONHASHSEED": "0"}
-    for passthrough in ("SystemRoot", "COMSPEC"):  # Windows dev boxes only
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONHASHSEED": "0",
+        "HOME": os.environ.get("HOME") or "/tmp",
+        "LANG": os.environ.get("LANG") or "C.UTF-8",
+    }
+    for passthrough in ("SystemRoot", "COMSPEC", "TMPDIR"):  # Windows dev boxes + tmp
         if passthrough in os.environ:
             env[passthrough] = os.environ[passthrough]
     return env
