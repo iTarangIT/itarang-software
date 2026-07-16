@@ -1,8 +1,17 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 // force-rebuild: vercel
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Pin the workspace root to THIS project. A stray package-lock.json in a
+  // parent dir (e.g. C:\Users\<user>\package-lock.json) makes Next infer the
+  // whole home folder as the root, so file-tracing + the webpack cache try to
+  // walk all of it (OneDrive, Downloads, every node_modules) and blow the heap:
+  //   RangeError: Array buffer allocation failed  (PackFileCacheStrategy)
+  // Scoping tracing to __dirname stops the OOM and fixes the standalone bundle
+  // copying the wrong tree.
+  outputFileTracingRoot: path.join(__dirname),
   generateBuildId: async () => process.env.GITHUB_SHA?.slice(0, 12) || "dev",
   images: {
     unoptimized: true,
