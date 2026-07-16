@@ -89,7 +89,7 @@ not the primary path). Register one webhook in each dashboard:
 | Dashboard | Events | URL (sandbox) | Secret |
 | --- | --- | --- | --- |
 | **RazorpayX** → Settings → Webhooks | `payout.processed`, `payout.reversed`, `payout.failed` (the `payout.*` family) | `https://sandbox.itarang.com/api/payments/razorpay/payout-webhook` | `RAZORPAYX_WEBHOOK_SECRET` |
-| **Payment Gateway** → Settings → Webhooks | `payment_link.paid`, `payment_link.cancelled`, `payment_link.expired` (the `payment_link.*` family) | `https://sandbox.itarang.com/api/payments/razorpay/buyback-link-webhook` | `RAZORPAY_BUYBACK_LINK_WEBHOOK_SECRET` (or `RAZORPAY_WEBHOOK_SECRET` if you left the dedicated one unset) |
+| **Payment Gateway** → Settings → Webhooks | `payment_link.paid`, `payment_link.cancelled`, `payment_link.expired`, `payment_link.partially_paid` (the `payment_link.*` family — `partially_paid` matters: it is the only path that raises the partial-payment admin alert) | `https://sandbox.itarang.com/api/payments/razorpay/buyback-link-webhook` | `RAZORPAY_BUYBACK_LINK_WEBHOOK_SECRET` (or `RAZORPAY_WEBHOOK_SECRET` if you left the dedicated one unset) |
 
 For production, swap the host for `https://crm.itarang.com`.
 

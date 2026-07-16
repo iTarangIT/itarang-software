@@ -305,6 +305,18 @@ function renderMessage(event: DueEvent): { subject: string; body: string } {
     };
   }
 
+  // E-193 — gateway anomaly alerts (reversed payout, payment on a dead link,
+  // amount mismatch, failed attempt). ADMIN/PORTAL only, and the whole story is
+  // already written into payload.message by gateway.ts — surface it verbatim
+  // rather than letting the generic default swallow it into "request — event".
+  if (p.kind === "gateway_alert") {
+    const prefix = p.severity === "critical" ? "URGENT: " : "";
+    return {
+      subject: `${prefix}Payment alert — ${requestNo}`,
+      body: `<p>${escapeHtml(String(p.message ?? "A payment-gateway anomaly needs review."))}</p>`,
+    };
+  }
+
   switch (event.event_type) {
     case "route_to_vendors":
       return {
