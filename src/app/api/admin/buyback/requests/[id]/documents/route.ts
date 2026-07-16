@@ -25,8 +25,19 @@ import { db } from "@/lib/db";
 import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError } from "@/lib/buyback/errors";
 import { dealHeader } from "@/lib/buyback/queries";
-import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
-import { filesProxyPath } from "@/lib/storage/s3";
+
+/**
+ * Build the authenticated evidence link (U1) rather than filesProxyPath. That
+ * proxy (src/lib/storage/s3.ts) is DELIBERATELY unauthenticated — it exists for
+ * the pre-login dealer onboarding flow — and buyback documents include a
+ * previous owner's identity documents and a signed settlement proof; minting
+ * an unauthenticated link for those would mean anyone holding it could read
+ * them, forever, with no session. /api/buyback/media checks the caller against
+ * the request before serving the object — see that route's header comment.
+ */
+function evidenceHref(key: string | null): string | null {
+  return key ? `/api/buyback/media?evidence=${encodeURIComponent(key)}` : null;
+}
 
 export const runtime = "nodejs";
 
@@ -80,7 +91,7 @@ export const GET = withErrorHandler(
         number,
         status,
         s3_key,
-        href: s3_key ? filesProxyPath(BUYBACK_BUCKET, s3_key) : null,
+        href: evidenceHref(s3_key),
         present: Boolean(s3_key),
       });
     };
@@ -219,7 +230,7 @@ export const GET = withErrorHandler(
         number: s?.leg_sub_id ?? null,
         status: s ? (s.proof_s3 ? "FILE" : "BANK STATEMENT") : null,
         s3_key: s?.proof_s3 ?? null,
-        href: s?.proof_s3 ? filesProxyPath(BUYBACK_BUCKET, s.proof_s3) : null,
+        href: evidenceHref(s?.proof_s3 ?? null),
         present: evidenced,
       });
     }

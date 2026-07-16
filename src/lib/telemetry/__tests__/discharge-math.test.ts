@@ -5,6 +5,7 @@ import {
     MIN_DISCHARGE_SAMPLES,
     MIN_DISCHARGE_SOC_DROP,
     ahPerKm,
+    kmPerAh,
     depthOfDischarge,
     dischargeDivergencePct,
     socDerivedAh,
@@ -65,6 +66,20 @@ describe("ahPerKm", () => {
         expect(ahPerKm(84, 0)).toBeNull();
         expect(ahPerKm(84, null)).toBeNull();
         expect(ahPerKm(null, 100)).toBeNull();
+    });
+});
+
+describe("kmPerAh", () => {
+    it("is the mileage number — the inverse reading of the same ratio", () => {
+        expect(kmPerAh(100, 84)).toBe(1.19);
+        expect(kmPerAh(9.6, 8)).toBe(1.2);
+    });
+
+    it("declines when either side is missing or non-positive, rather than dividing by zero", () => {
+        expect(kmPerAh(100, 0)).toBeNull();
+        expect(kmPerAh(100, null)).toBeNull();
+        expect(kmPerAh(null, 84)).toBeNull();
+        expect(kmPerAh(0, 84)).toBeNull();
     });
 });
 

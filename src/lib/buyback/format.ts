@@ -108,3 +108,55 @@ export function lineTotal(
   if (!Number.isFinite(n)) return null;
   return quantity * n;
 }
+
+/** The E-191 spec fields a line row may carry. Everything optional/nullable. */
+export interface SpecSummarySource {
+  brand?: string | null;
+  chemistry?: string | null;
+  form_factor?: string | null;
+  nominal_voltage?: number | string | null;
+  nominal_ampere?: number | string | null;
+  unit_weight_kg?: number | string | null;
+  warranty_cycles?: number | null;
+  functional_qty?: number | null;
+  non_functional_qty?: number | null;
+  iot_battery?: boolean | null;
+  iot_brand_name?: string | null;
+}
+
+/**
+ * One "·"-joined summary of the dealer-declared battery spec (E-191), for the
+ * meta row under a battery line: "Exide · NMC · Prismatic · 51.2V 100Ah nom ·
+ * 12.5kg/unit · 800 warranty cycles · 2 functional / 1 non-functional ·
+ * IOT: BoltIoT". Fields the dealer never provided simply don't appear; a line
+ * with no spec at all returns null so callers can skip the row entirely.
+ *
+ * Same shared-formatter rule as formatBatteryLine: do not rebuild this string
+ * per screen.
+ */
+export function specSummary(line: SpecSummarySource): string | null {
+  const parts: string[] = [];
+
+  if (line.brand) parts.push(line.brand);
+  if (line.chemistry) parts.push(line.chemistry);
+  if (line.form_factor) {
+    const ff = line.form_factor.toLowerCase();
+    parts.push(ff.charAt(0).toUpperCase() + ff.slice(1));
+  }
+  if (line.nominal_voltage != null || line.nominal_ampere != null) {
+    const v = line.nominal_voltage != null ? `${trimNumber(line.nominal_voltage)}V` : null;
+    const a = line.nominal_ampere != null ? `${trimNumber(line.nominal_ampere)}Ah` : null;
+    parts.push(`${[v, a].filter(Boolean).join(" ")} nom`);
+  }
+  if (line.unit_weight_kg != null) parts.push(`${trimNumber(line.unit_weight_kg)}kg/unit`);
+  if (line.warranty_cycles != null) parts.push(`${line.warranty_cycles} warranty cycles`);
+  if (line.functional_qty != null || line.non_functional_qty != null) {
+    parts.push(
+      `${line.functional_qty ?? 0} functional / ${line.non_functional_qty ?? 0} non-functional`,
+    );
+  }
+  if (line.iot_battery === true) parts.push(`IOT: ${line.iot_brand_name || "yes"}`);
+  else if (line.iot_battery === false) parts.push("Non-IOT");
+
+  return parts.length > 0 ? parts.join(" · ") : null;
+}

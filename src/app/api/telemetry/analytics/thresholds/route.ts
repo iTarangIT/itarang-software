@@ -11,10 +11,13 @@ import { analyticsError } from '../_params';
 // NOT change what the alert poller fires on — that lives in iot_stack, outside this repo.
 // See docs/intellicar-calculations.md §17.
 
-export async function GET() {
+export async function GET(req: NextRequest) {
     try {
         await requireRole(['ceo']);
-        return NextResponse.json({ success: true, data: await getBatteryThresholds() });
+        // E-190: with a vehicleno, fields the vehicle's battery_spec_models row defines
+        // override the fleet-wide settings; the response says which via modelName/specKeys.
+        const vehicleno = req.nextUrl.searchParams.get('vehicleno')?.trim() || undefined;
+        return NextResponse.json({ success: true, data: await getBatteryThresholds(vehicleno) });
     } catch (error) {
         return analyticsError('Thresholds GET', error);
     }

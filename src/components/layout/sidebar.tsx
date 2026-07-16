@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -39,6 +39,9 @@ import {
   Coins,
   Truck,
   BookOpen,
+  Handshake,
+  FolderOpen,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -48,19 +51,31 @@ import { useUIStore } from "@/store/uiStore";
  * peakAmp Battery Buyback — the iTarang-staff side.
  *
  * Shown to exactly the roles that BUYBACK_ADMIN_ROLES allows
- * (src/lib/buyback/auth.ts: admin, ceo, business_head). Kept as one shared const
- * rather than copy-pasted into three role arrays, so the menu cannot drift out of
- * step with who the API actually lets in — a link a role can see but not open is
- * worse than no link.
+ * (src/lib/buyback/roles.ts: admin, ceo, business_head, sales_head). Kept as one
+ * shared const rather than copy-pasted into the role arrays below, so the menu
+ * cannot drift out of step with who the API actually lets in — a link a role can
+ * see but not open is worse than no link.
  */
 const BUYBACK_ADMIN_SECTION = {
   section: "BATTERY BUYBACK",
   items: [
     {
+      id: "buyback-dashboard",
+      label: "Buyback Dashboard",
+      icon: LayoutDashboard,
+      href: "/admin/buyback/dashboard",
+    },
+    {
       id: "buyback-queue",
       label: "Buyback Requests",
       icon: Recycle,
       href: "/admin/buyback",
+    },
+    {
+      id: "buyback-negotiations",
+      label: "Negotiations",
+      icon: Handshake,
+      href: "/admin/buyback/negotiations",
     },
     {
       id: "buyback-vendors",
@@ -73,6 +88,18 @@ const BUYBACK_ADMIN_SECTION = {
       label: "Battery Catalogue",
       icon: BookOpen,
       href: "/admin/buyback/catalog",
+    },
+    {
+      id: "buyback-documents",
+      label: "Documents",
+      icon: FolderOpen,
+      href: "/admin/buyback/documents",
+    },
+    {
+      id: "buyback-payments",
+      label: "Payments & Settlement",
+      icon: Wallet,
+      href: "/admin/buyback/payments",
     },
     {
       id: "buyback-ledger",
@@ -993,15 +1020,39 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "buyback",
-          label: "My Buyback Requests",
+          label: "Buyback Dashboard",
           icon: Recycle,
           href: "/dealer-portal/buyback",
+          // Task 6: /dealer-portal/buyback now has children (requests, new,
+          // [id]) as well as siblings that share its prefix. Without `exact`,
+          // the default startsWith match (see isActive below) highlights this
+          // tile on every one of them too — most visibly alongside "My
+          // Requests" on /dealer-portal/buyback/requests.
+          exact: true,
+        },
+        {
+          id: "buyback-requests",
+          label: "My Requests",
+          icon: FileText,
+          href: "/dealer-portal/buyback/requests",
         },
         {
           id: "buyback-new",
           label: "Sell Batteries",
           icon: Coins,
           href: "/dealer-portal/buyback/new",
+        },
+        {
+          id: "buyback-pickups",
+          label: "Pickups",
+          icon: Truck,
+          href: "/dealer-portal/buyback/pickups",
+        },
+        {
+          id: "buyback-dealer-payments",
+          label: "Payments",
+          icon: Landmark,
+          href: "/dealer-portal/buyback/payments",
         },
       ],
     },
@@ -1022,6 +1073,79 @@ const roleNavigation: Record<string, any[]> = {
   ],
 };
 
+/**
+ * Which single nav item (by id) should render as active for the current
+ * pathname.
+ *
+ * The old rule matched each item independently — exact match, or
+ * `pathname.startsWith(itemPath + "/")` — so whenever one item's href was a
+ * literal prefix of a sibling/child's, both matched and both lit up. That was
+ * already patched once for the dealer buyback section via a per-item `exact`
+ * flag (Task 6), but `exact` can't fix the admin buyback section: "Buyback
+ * Requests" (/admin/buyback) must stay ACTIVE on `/admin/buyback/<id>` detail
+ * pages (a real child route with no nav entry of its own), which rules out
+ * marking it exact — yet it must NOT stay active on `/admin/buyback/dashboard`
+ * now that that has its own nav entry.
+ *
+ * So instead of an independent boolean per item, every item that matches at
+ * all is a candidate, and the longest (most specific) itemPath wins — the
+ * `exact` flag still applies per-candidate (it just means "only ever a
+ * candidate via exact match, never via prefix"). On /admin/buyback/dashboard,
+ * both "/admin/buyback" and "/admin/buyback/dashboard" match by prefix/exact,
+ * but the latter is longer and wins. On /admin/buyback/<id>, only
+ * "/admin/buyback" matches at all, so it wins by default — unchanged from
+ * before.
+ */
+interface NavItemForActive {
+  id: string;
+  href: string;
+  exact?: boolean;
+}
+interface NavGroupForActive {
+  items: NavItemForActive[];
+}
+
+// U5 — /dealer-portal/buyback/<id> detail routes have no nav entry of their
+// own. "Buyback Dashboard" is `exact` (Task 6), so it never matches by
+// prefix here, and no sibling item's href (new/requests/pickups/payments) is
+// a prefix of a detail route either — so the longest-match loop below finds
+// nothing and the sidebar goes dark on a page the dealer reached FROM this
+// section. Folded into "My Requests" (buyback-requests), which is where a
+// detail page is conceptually reached from.
+const DEALER_BUYBACK_PREFIX = "/dealer-portal/buyback/";
+const DEALER_BUYBACK_STATIC_SIBLINGS = new Set(["new", "requests", "pickups", "payments"]);
+
+function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): string | null {
+  let winnerId: string | null = null;
+  let winnerLength = -1;
+  for (const group of menuItems) {
+    for (const item of group.items) {
+      // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
+      const itemPath = item.href.split("?")[0];
+      const matches = item.exact
+        ? pathname === itemPath
+        : pathname === itemPath ||
+          (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
+      if (!matches) continue;
+      if (itemPath.length > winnerLength) {
+        winnerId = item.id;
+        winnerLength = itemPath.length;
+      }
+    }
+  }
+
+  // Fallback only — never overrides a real match above, so the admin
+  // longest-match logic (and every other section) is untouched.
+  if (winnerId === null && pathname.startsWith(DEALER_BUYBACK_PREFIX)) {
+    const firstSegment = pathname.slice(DEALER_BUYBACK_PREFIX.length).split("/")[0];
+    if (firstSegment && !DEALER_BUYBACK_STATIC_SIBLINGS.has(firstSegment)) {
+      winnerId = "buyback-requests";
+    }
+  }
+
+  return winnerId;
+}
+
 // Shared inner content rendered by BOTH the desktop sidebar and the mobile
 // drawer. Receives the already-computed (role-aware, finance-gated, badged)
 // menuItems so all that logic stays in Sidebar(). `onNavigate` lets the drawer
@@ -1041,6 +1165,14 @@ function SidebarNav({
   inferredRole: string;
   onNavigate?: () => void;
 }) {
+  // Computed once for the whole tree per pathname/menu change — see
+  // getActiveItemId's doc comment for why this has to be a single
+  // most-specific-match-wins pass rather than a per-item boolean.
+  const activeItemId = useMemo(
+    () => getActiveItemId(menuItems, pathname),
+    [menuItems, pathname],
+  );
+
   return (
     <>
       {/* Logo lockup */}
@@ -1061,11 +1193,7 @@ function SidebarNav({
             </h3>
             <div>
               {group.items.map((item: any) => {
-                // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
-                const itemPath = item.href.split("?")[0];
-                const isActive =
-                  pathname === itemPath ||
-                  (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
+                const isActive = item.id === activeItemId;
                 return (
                   <Link
                     key={item.id}

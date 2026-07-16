@@ -31,6 +31,14 @@ const STATUS: Record<string, { label: string; className: string }> = {
   CANCELLED: { label: "Cancelled", className: "bg-red-100 text-red-700" },
 };
 
+/** The human label for a status, e.g. "UNDER_REVIEW" → "Under Review" —
+ * shared with StatusChip itself so a status filter's option list reads the
+ * same as the chip it's filtering. Falls back to the raw status for values
+ * outside the map (never blanks an unknown status). */
+export function statusLabel(status: string): string {
+  return STATUS[status]?.label ?? status;
+}
+
 export default function StatusChip({ status }: { status: DealState | string }) {
   const s = STATUS[status] ?? { label: status, className: "bg-slate-100 text-slate-600" };
 
