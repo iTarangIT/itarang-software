@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Risk Alerts — full E2E flow chart</title>
+<style>
+  :root {
+    --ink:#0d1b2a; --ink-2:#37475a; --ink-3:#6b7d90;
+    --ground:#f5f7f9; --panel:#fff; --rule:#dbe2e9; --rule-soft:#e9eef3;
+    --navy:#12395c; --teal:#0f7d78; --teal-soft:#e3f2f0;
+
+    /* one hue per system — used everywhere, consistently */
+    --ext:#7c6f64;   --ext-bg:#f1eeeb;   /* third party        */
+    --vps:#b06d10;   --vps-bg:#fdf3e3;   /* VPS / IoT          */
+    --rds:#1e5fa8;   --rds-bg:#e7f0fb;   /* AWS RDS (CRM DB)   */
+    --app:#0f7d78;   --app-bg:#e3f2f0;   /* Next.js app        */
+    --llm:#6d51b8;   --llm-bg:#efeafb;   /* OpenAI             */
+    --sbx:#b03a6e;   --sbx-bg:#fce9f1;   /* risk-sandbox       */
+    --dead:#c8322e;  --dead-bg:#fdeceb;  /* not running        */
+
+    --high:#c8322e; --warn:#b5761b; --ok:#16785e; --incon:#64748b; --err:#6d51b8;
+    --high-bg:#fdeceb; --warn-bg:#fdf2e0; --ok-bg:#e4f4ee; --incon-bg:#eef1f4; --err-bg:#f0ebfb;
+
+    --mono: ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans: ui-sans-serif,system-ui,"Segoe UI",Inter,Roboto,Arial,sans-serif;
+    --shadow: 0 1px 2px rgba(13,27,42,.05), 0 4px 14px -6px rgba(13,27,42,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:#e6edf3; --ink-2:#aebac7; --ink-3:#7d8b9a;
+      --ground:#0b1219; --panel:#131e28; --rule:#26343f; --rule-soft:#1b2630;
+      --navy:#9dc4e4; --teal:#4ecdc0; --teal-soft:#10312f;
+      --ext:#b8aa9d; --ext-bg:#241f1b;
+      --vps:#e3a95c; --vps-bg:#2b2011;
+      --rds:#7db4ec; --rds-bg:#122539;
+      --app:#4ecdc0; --app-bg:#10312f;
+      --llm:#b39ff0; --llm-bg:#1f1930;
+      --sbx:#eb8fb8; --sbx-bg:#2e1421;
+      --dead:#f2837c; --dead-bg:#2c1614;
+      --high:#f2837c; --warn:#e3ac5c; --ok:#5cc9a5; --incon:#94a3b3; --err:#b39ff0;
+      --high-bg:#2c1614; --warn-bg:#2b2011; --ok-bg:#10281f; --incon-bg:#1b242d; --err-bg:#1f1930;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px -8px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="light"]{
+    --ink:#0d1b2a;--ink-2:#37475a;--ink-3:#6b7d90;--ground:#f5f7f9;--panel:#fff;--rule:#dbe2e9;--rule-soft:#e9eef3;
+    --navy:#12395c;--teal:#0f7d78;--teal-soft:#e3f2f0;
+    --ext:#7c6f64;--ext-bg:#f1eeeb;--vps:#b06d10;--vps-bg:#fdf3e3;--rds:#1e5fa8;--rds-bg:#e7f0fb;
+    --app:#0f7d78;--app-bg:#e3f2f0;--llm:#6d51b8;--llm-bg:#efeafb;--sbx:#b03a6e;--sbx-bg:#fce9f1;
+    --dead:#c8322e;--dead-bg:#fdeceb;
+    --high:#c8322e;--warn:#b5761b;--ok:#16785e;--incon:#64748b;--err:#6d51b8;
+    --high-bg:#fdeceb;--warn-bg:#fdf2e0;--ok-bg:#e4f4ee;--incon-bg:#eef1f4;--err-bg:#f0ebfb;
+  }
+  :root[data-theme="dark"]{
+    --ink:#e6edf3;--ink-2:#aebac7;--ink-3:#7d8b9a;--ground:#0b1219;--panel:#131e28;--rule:#26343f;--rule-soft:#1b2630;
+    --navy:#9dc4e4;--teal:#4ecdc0;--teal-soft:#10312f;
+    --ext:#b8aa9d;--ext-bg:#241f1b;--vps:#e3a95c;--vps-bg:#2b2011;--rds:#7db4ec;--rds-bg:#122539;
+    --app:#4ecdc0;--app-bg:#10312f;--llm:#b39ff0;--llm-bg:#1f1930;--sbx:#eb8fb8;--sbx-bg:#2e1421;
+    --dead:#f2837c;--dead-bg:#2c1614;
+    --high:#f2837c;--warn:#e3ac5c;--ok:#5cc9a5;--incon:#94a3b3;--err:#b39ff0;
+    --high-bg:#2c1614;--warn-bg:#2b2011;--ok-bg:#10281f;--incon-bg:#1b242d;--err-bg:#1f1930;
+  }
+
+  *,*::before,*::after{box-sizing:border-box}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+       font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  h1,h2,h3{text-wrap:balance;line-height:1.2;margin:0}
+  p{margin:0}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+
+  .wrap{max-width:78rem;margin:0 auto;padding:0 clamp(1rem,3vw,2rem)}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;color:var(--teal);margin:0}
+
+  header.hero{background:var(--panel);border-bottom:1px solid var(--rule);padding:3rem 0 2.25rem}
+  .hero h1{font-size:clamp(1.9rem,1.4rem+2vw,2.9rem);letter-spacing:-.02em;color:var(--navy);margin-top:.5rem}
+  .hero p.lede{color:var(--ink-2);margin-top:.9rem;max-width:46rem;font-size:1.05rem}
+
+  section{padding:3rem 0;border-bottom:1px solid var(--rule)}
+  .head{margin-bottom:1.75rem}
+  .head h2{font-size:clamp(1.4rem,1.2rem+.8vw,1.95rem);color:var(--navy);margin-top:.4rem;letter-spacing:-.015em}
+  .head p{color:var(--ink-2);margin-top:.6rem;max-width:46rem}
+
+  /* ── system legend ── */
+  .legend{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1.25rem}
+  .sys{display:inline-flex;align-items:center;gap:.4rem;font-family:var(--mono);font-size:.72rem;
+       padding:.3rem .55rem;border-radius:5px;border:1px solid;white-space:nowrap}
+  .sys i{width:.55rem;height:.55rem;border-radius:2px;flex:none}
+  .s-ext{color:var(--ext);background:var(--ext-bg);border-color:var(--ext)}
+  .s-vps{color:var(--vps);background:var(--vps-bg);border-color:var(--vps)}
+  .s-rds{color:var(--rds);background:var(--rds-bg);border-color:var(--rds)}
+  .s-app{color:var(--app);background:var(--app-bg);border-color:var(--app)}
+  .s-llm{color:var(--llm);background:var(--llm-bg);border-color:var(--llm)}
+  .s-sbx{color:var(--sbx);background:var(--sbx-bg);border-color:var(--sbx)}
+  .s-dead{color:var(--dead);background:var(--dead-bg);border-color:var(--dead)}
+
+  /* ── the master flow ── */
+  .flow{display:flex;flex-direction:column;gap:0}
+  .band{display:grid;grid-template-columns:7.5rem 1fr;gap:0 1.25rem;padding:1.25rem 0;border-top:1px dashed var(--rule)}
+  .band:first-child{border-top:0;padding-top:0}
+  .band-label{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;
+              color:var(--ink-3);padding-top:.9rem;line-height:1.4}
+  .band-label b{display:block;color:var(--teal);font-size:.78rem;font-weight:700}
+  .band-body{min-width:0;display:flex;flex-direction:column;gap:.65rem}
+
+  .row{display:flex;flex-wrap:wrap;gap:.65rem;align-items:stretch}
+
+  .box{border:1px solid var(--rule);background:var(--panel);border-radius:8px;padding:.7rem .8rem;
+       box-shadow:var(--shadow);display:flex;flex-direction:column;gap:.3rem;flex:1 1 15rem;min-width:0}
+  .box .kind{font-family:var(--mono);font-size:.65rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3)}
+  .box .fn{font-family:var(--mono);font-size:.82rem;font-weight:700;color:var(--ink);word-break:break-word}
+  .box .what{font-size:.8rem;color:var(--ink-2);line-height:1.45}
+  .box .io{display:flex;flex-direction:column;gap:.15rem;margin-top:.15rem;
+           font-family:var(--mono);font-size:.68rem;line-height:1.5;word-break:break-word}
+  .io .in::before{content:"IN  ";color:var(--rds);font-weight:700}
+  .io .out::before{content:"OUT ";color:var(--dead);font-weight:700}
+  .io .in,.io .out{color:var(--ink-3);white-space:pre-wrap}
+
+  .box.ext{border-color:var(--ext);background:var(--ext-bg)}
+  .box.vps{border-color:var(--vps);background:var(--vps-bg)}
+  .box.rds{border-color:var(--rds);background:var(--rds-bg)}
+  .box.app{border-color:var(--app);background:var(--app-bg)}
+  .box.llm{border-color:var(--llm);background:var(--llm-bg)}
+  .box.sbx{border-color:var(--sbx);background:var(--sbx-bg)}
+  .box.dead{border-color:var(--dead);background:var(--dead-bg);border-style:dashed}
+  .box.dead .fn{text-decoration:line-through;text-decoration-thickness:1px;color:var(--dead)}
+
+  .arrow{align-self:center;font-family:var(--mono);color:var(--ink-3);font-size:1rem;flex:none;padding:0 .1rem}
+  .down{font-family:var(--mono);color:var(--ink-3);font-size:.9rem;padding-left:.2rem}
+
+  .gate{border:1px solid var(--warn);background:var(--warn-bg);border-radius:8px;padding:.6rem .8rem;
+        font-size:.82rem;color:var(--ink-2);flex:1 1 100%}
+  .gate b{color:var(--ink);font-family:var(--mono);font-size:.8rem}
+
+  /* ── tables ── */
+  .t-scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:8px;background:var(--panel);box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;font-size:.82rem;min-width:52rem}
+  th,td{text-align:left;padding:.6rem .8rem;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  thead th{font-family:var(--mono);font-size:.67rem;text-transform:uppercase;letter-spacing:.07em;
+           color:var(--ink-3);font-weight:600;background:var(--rule-soft);border-bottom:1px solid var(--rule);
+           position:sticky;top:0}
+  tbody tr:last-child td{border-bottom:0}
+  td.mono,th.mono{font-family:var(--mono);font-size:.76rem}
+  td .fnname{font-family:var(--mono);font-size:.76rem;font-weight:600;color:var(--ink);word-break:break-word}
+  .tag{display:inline-block;font-family:var(--mono);font-size:.63rem;font-weight:700;text-transform:uppercase;
+       letter-spacing:.05em;padding:.12rem .35rem;border-radius:4px;white-space:nowrap;border:1px solid}
+  .tag.ext{color:var(--ext);background:var(--ext-bg);border-color:var(--ext)}
+  .tag.vps{color:var(--vps);background:var(--vps-bg);border-color:var(--vps)}
+  .tag.rds{color:var(--rds);background:var(--rds-bg);border-color:var(--rds)}
+  .tag.app{color:var(--app);background:var(--app-bg);border-color:var(--app)}
+  .tag.llm{color:var(--llm);background:var(--llm-bg);border-color:var(--llm)}
+  .tag.sbx{color:var(--sbx);background:var(--sbx-bg);border-color:var(--sbx)}
+  .tag.dead{color:var(--dead);background:var(--dead-bg);border-color:var(--dead)}
+
+  .chip{display:inline-block;font-family:var(--mono);font-size:.65rem;font-weight:700;text-transform:uppercase;
+        letter-spacing:.05em;padding:.14rem .4rem;border-radius:4px;white-space:nowrap}
+  .chip.high{color:var(--high);background:var(--high-bg)}
+  .chip.warn{color:var(--warn);background:var(--warn-bg)}
+  .chip.ok{color:var(--ok);background:var(--ok-bg)}
+  .chip.incon{color:var(--incon);background:var(--incon-bg)}
+  .chip.err{color:var(--err);background:var(--err-bg)}
+
+  pre{margin:0;padding:.85rem 1rem;background:var(--panel);border:1px solid var(--rule);border-radius:8px;
+      overflow-x:auto;font-family:var(--mono);font-size:.76rem;line-height:1.55;color:var(--ink-2)}
+  pre b{color:var(--ink);font-weight:700}
+
+  .note{border-left:3px solid var(--teal);padding:.15rem 0 .15rem .9rem;font-size:.86rem;color:var(--ink-2);max-width:48rem}
+  .note strong{color:var(--ink)}
+  .note.danger{border-left-color:var(--dead)}
+  .stack{display:flex;flex-direction:column;gap:1rem}
+  footer{padding:2.5rem 0 4rem;color:var(--ink-3);font-size:.78rem}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">iTarang · NBFC Portal · end-to-end</p>
+    <h1>Risk Alerts — the complete flow chart</h1>
+    <p class="lede">
+      From the moment someone clicks <strong>Re-run analysis</strong>, all the way back to an IoT tracker
+      bolted to an e-rickshaw, and forward again to the cards on screen. Every process, every function,
+      every table and column, and every place a number could come from.
+    </p>
+    <div class="legend">
+      <span class="sys s-ext"><i style="background:var(--ext)"></i> Third party</span>
+      <span class="sys s-vps"><i style="background:var(--vps)"></i> VPS · IoT Postgres + TimescaleDB</span>
+      <span class="sys s-rds"><i style="background:var(--rds)"></i> AWS RDS · CRM Postgres</span>
+      <span class="sys s-app"><i style="background:var(--app)"></i> Next.js CRM</span>
+      <span class="sys s-llm"><i style="background:var(--llm)"></i> OpenAI</span>
+      <span class="sys s-sbx"><i style="background:var(--sbx)"></i> risk-sandbox</span>
+      <span class="sys s-dead"><i style="background:var(--dead)"></i> Does not run today</span>
+    </div>
+  </div>
+</header>
+
+<!-- ════════════ THE BIG IDEA ════════════ -->
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Before the chart</p>
+      <h2>Two databases that have never met</h2>
+      <p>
+        Everything below exists to marry two halves that live on different machines, in different clouds,
+        with no foreign key between them.
+      </p>
+    </div>
+    <pre>  <b>VPS Postgres (TimescaleDB)</b>              <b>AWS RDS Postgres</b>
+  knows what the VEHICLE is DOING            knows what the BORROWER OWES
+  vehicle_state · telemetry_gps              nbfc_loans · risk_hypotheses
+  telemetry_can · distance_rollup            risk_card_runs · risk_runs
+              │                                          │
+              └──────────────┬───────────────────────────┘
+                             │
+                    joined on ONE column:
+                        <b>vehicleno</b>
+                             │
+                             ▼
+        "this borrower is 30 days late  <b>(RDS)</b>
+         and their van hasn't reported GPS in a week  <b>(VPS)</b>"
+                             │
+                             ▼
+                        <b>A RISK CARD</b></pre>
+    <div class="note" style="margin-top:1.25rem">
+      <strong>There is no foreign key, no shared transaction, no single database.</strong> The vehicle
+      registration number is the only thing holding the two halves together. Every risk card is a sentence
+      that combines one fact from each side.
+    </div>
+    <div class="note" style="margin-top:.9rem">
+      <strong>Where the join key lives.</strong> On the loan side it is <span class="mono">nbfc_loans.vehicleno</span>.
+      The wider mapping of device → battery → vehicle → dealer is
+      <span class="mono">device_battery_map</span> (on AWS RDS) — that's the bridge table other telemetry screens use
+      to resolve which vehicles belong to whom before querying the VPS. If a loan's
+      <span class="mono">vehicleno</span> doesn't match a <span class="mono">vehicle_state.vehicleno</span> exactly,
+      that borrower is simply invisible to every telemetry card — no error, just silently excluded.
+    </div>
+    <div class="note danger" style="margin-top:.9rem">
+      <strong>There is a second, dormant ingestion path — don't confuse it with this one.</strong>
+      <span class="mono">POST /api/iot/ingest</span> is a push endpoint (device → CRM, JWT-authed, ±5 min stale
+      guard) that writes <span class="mono">telemetry_events</span> and
+      <span class="mono">telemetry_ingestion_log</span> on <strong>AWS RDS</strong>. Nothing actually POSTs to it,
+      so those tables are empty. <strong>The risk engine does not read any of them.</strong> All real telemetry
+      arrives via the Intellicar → poller → VPS path charted below.
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ MASTER FLOW ════════════ -->
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">The master chart</p>
+      <h2>End to end, top to bottom</h2>
+      <p>
+        Bands A–D run <em>continuously, in the background</em> — they are already finished long before anyone
+        opens the page. Bands 1–9 are what a single click actually triggers.
+      </p>
+    </div>
+
+    <div class="flow">
+
+      <!-- ─── BACKGROUND: INGESTION ─── -->
+      <div class="band">
+        <div class="band-label"><b>Band A</b>Source</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box ext">
+              <span class="kind">Third party · not ours · pull only</span>
+              <span class="fn">Intellicar API</span>
+              <span class="what">The company that makes the IoT trackers bolted to the e-rickshaws. They don't give us the raw radio signal — they give us a web API. This is the source of <em>every</em> fact about a vehicle.</span>
+              <span class="io">
+                <span class="in">apiplatform.intellicar.in/api/standard · POST /gettoken → Bearer (cached 55 min)</span>
+                <span class="out">listvehicledevicemapping · getgpshistory · getbatterymetricshistory · getlatestcan · getdistancetravelled · getlastgpsstatus</span>
+              </span>
+            </div>
+          </div>
+          <div class="note danger" style="font-size:.82rem">
+            <strong>If Intellicar is down, nothing downstream can invent the missing data.</strong> Every number
+            you will ever see on a risk card entered the building through this one door.
+          </div>
+          <div class="note" style="font-size:.82rem">
+            <strong>Careful — there is a decoy in the repo.</strong> <span class="mono">src/lib/intellicar/client.ts</span>
+            is a complete TypeScript Intellicar client with <strong>zero callers</strong>. It is dead code: a
+            re-implementation of what the VPS poller already does. <span class="mono">INTELLICAR_USERNAME</span> /
+            <span class="mono">INTELLICAR_PASSWORD</span> sit in <span class="mono">.env.local</span> and are never
+            read at runtime. If you go looking for "where does the CRM call Intellicar", the honest answer is
+            <em>it doesn't</em> — the poller does, and the poller is not in this repository.
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band B</b>Ingest<br />every 30s</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box vps">
+              <span class="kind">Python · loop, every 30 s · on the VPS</span>
+              <span class="fn">poller</span>
+              <span class="what">Wakes up, asks Intellicar "what's new?", writes down the answer. The API will not push to us, so we ask — forever.</span>
+              <span class="io">
+                <span class="in">Intellicar API</span>
+                <span class="out">telemetry_gps · telemetry_can · telemetry_battery · vehicle_state · alerts</span>
+              </span>
+            </div>
+            <span class="arrow">⇄</span>
+            <div class="box vps" style="flex:0 1 15rem">
+              <span class="kind">Redis · in-memory</span>
+              <span class="fn">poller cache</span>
+              <span class="what">Scratch paper. Remembers "which packet did I last see for this vehicle" so it doesn't re-insert identical data every 30 s.</span>
+              <span class="io"><span class="out">nothing durable — wipe it and the poller just does one cycle of redundant work</span></span>
+            </div>
+          </div>
+          <div class="note danger" style="font-size:.82rem">
+            <strong>If the poller stops, you get no error.</strong> Everything downstream keeps working and
+            quietly serves older and older data. A stopped poller looks exactly like a fleet of parked vehicles —
+            which is why the <span class="mono">dpd-7-no-telemetry</span> card cannot tell
+            <em>"the borrower unplugged the tracker"</em> from <em>"our poller died"</em>.
+          </div>
+          <div class="note" style="font-size:.82rem">
+            <strong>The poller lives on the VPS, not in this repo.</strong> You will not find it by searching the
+            codebase. It also has a known defect worth knowing about: it re-inserts the latest CAN frame on every
+            poll whether or not the device produced a new one, so <strong>~96% of <span class="mono">telemetry_can</span>
+            rows repeat a timestamp</strong>. That is why SOH degradation maths is noisy — roughly 100 genuinely
+            distinct samples per battery per day.
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band C</b>Roll up<br />automatic</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box vps">
+              <span class="kind">TimescaleDB · continuous aggregate · self-refreshing</span>
+              <span class="fn">distance_rollup</span>
+              <span class="what">A pre-computed daily kilometre total per vehicle. <strong>Nobody schedules this and no cron owns it</strong> — Timescale keeps it current by itself as new GPS rows land.</span>
+              <span class="io">
+                <span class="in">raw telemetry (Timescale hypertable chunks)</span>
+                <span class="out">distance_rollup(time, vehicleno, distance_km, bucket_size='day')</span>
+              </span>
+            </div>
+          </div>
+          <div class="note" style="font-size:.82rem">
+            Two of the five hand-coded cards — <span class="mono">usage-drop-7d</span> and
+            <span class="mono">low-utilization-active-loan</span> — live or die on this one table.
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band D</b>Join<br />nightly</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box dead">
+              <span class="kind">Python cron · <strong>NEVER RAN</strong></span>
+              <span class="fn">aggregator</span>
+              <span class="what">Was supposed to read the loan book from AWS RDS, read telemetry from the VPS, stitch them on <span class="mono">vehicleno</span>, and write <span class="mono">dashboard_*</span> tables back into the VPS. It has never run: <span class="mono">aggregator_runs</span> is empty.</span>
+              <span class="io">
+                <span class="in">(would read) AWS RDS nbfc_loans + VPS raw tables</span>
+                <span class="out">(would write) dashboard_nbfc_loans_with_iot · battery_health_metrics · geofence_events · charge_events · fault_codes · immobilizer_state</span>
+              </span>
+            </div>
+          </div>
+          <div class="note danger" style="font-size:.82rem">
+            <strong>This dead box is why <span class="mono">iot-queries.ts</span> is 985 lines.</strong> Because the
+            aggregator's tables are empty, the CRM had to learn to do the aggregator's job <em>live, on every
+            request</em> — roughly half that file is fallback code compensating for one process nobody ever started.
+            It also caused a real shipped bug: <span class="mono">low-utilization-active-loan</span> originally read
+            an aggregator table, found it empty, concluded every vehicle drove 0 km, and fired a false
+            <span class="chip high">High Alert</span>. The fix was to repoint it at <span class="mono">distance_rollup</span>,
+            which maintains itself.
+            <br /><br />
+            <strong>The risk engine does not use the aggregator, and does not use Redis.</strong> Neither appears
+            anywhere in bands 1–9 below.
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── TRIGGER ─── -->
+      <div class="band">
+        <div class="band-label"><b>Band 1</b>Trigger</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app">
+              <span class="kind">React client component</span>
+              <span class="fn">RerunButton.onClick()</span>
+              <span class="what">The operator clicks. Sends an empty POST — the tenant comes from the session, never from the request body. Then it waits 30–60 s.</span>
+              <span class="io"><span class="out">POST /api/nbfc/risk/run</span></span>
+            </div>
+            <span class="arrow">or</span>
+            <div class="box app">
+              <span class="kind">VPS crontab · 01:30 daily</span>
+              <span class="fn">/api/cron/nbfc/risk-analysis</span>
+              <span class="what">The real keeper of freshness. Sweeps <em>every</em> active tenant through the identical workflow. Auth by <span class="mono">Bearer $CRON_SECRET</span>.</span>
+              <span class="io">
+                <span class="in">listActiveTenants() → nbfc_tenants WHERE is_active</span>
+                <span class="out">runRiskWorkflow(tenant, trigger:'cron') per tenant</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band 2</b>Auth</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app">
+              <span class="kind">Route handler · maxDuration 120 s</span>
+              <span class="fn">POST /api/nbfc/risk/run</span>
+              <span class="what">Resolves who is asking and which NBFC they may ask about.</span>
+              <span class="io"><span class="out">runRiskWorkflow(tenant, {trigger:'manual', actorUserId})</span></span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box rds">
+              <span class="kind">AWS RDS</span>
+              <span class="fn">getCurrentTenant()<br />requireNbfcAccess()</span>
+              <span class="what">An NBFC partner may only run against a tenant they belong to. Admin and CEO may run against any.</span>
+              <span class="io"><span class="in">nbfc_users(user_id, tenant_id) ⋈ nbfc_tenants(id, slug, display_name, is_active)</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band 3</b>Lock</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box rds">
+              <span class="kind">AWS RDS · the concurrency gate</span>
+              <span class="fn">beginRiskRun()</span>
+              <span class="what">Inserts the run row. A <strong>partial unique index</strong> on <span class="mono">(tenant_id) WHERE status='running'</span> means two callers physically cannot both win — the loser takes a Postgres <span class="mono">23505</span> unique violation.</span>
+              <span class="io">
+                <span class="out">INSERT risk_runs(tenant_id, triggered_by, actor_user_id, status='running', started_at)</span>
+              </span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box app" style="flex:0 1 16rem">
+              <span class="kind">Failure path</span>
+              <span class="fn">RunInFlightError → HTTP 409</span>
+              <span class="what">"Analysis already running — wait for it to finish." A run still <span class="mono">'running'</span> after 15 min is presumed dead and reaped, so a crash can't wedge the tenant forever.</span>
+            </div>
+          </div>
+          <div class="gate">
+            <b>Why:</b> before this, double-clicking the button fired two complete workflows at the same tenant.
+            Both wrote a full set of cards, and whichever finished last silently shadowed the other. The lock is a
+            database constraint, not an application check — so it also holds between the nightly cron and a manual click.
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── THE GRAPH ─── -->
+      <div class="band">
+        <div class="band-label"><b>Band 4</b>LangGraph<br />node 1 of 6</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app">
+              <span class="kind">LangGraph node · pure TypeScript · NO AI</span>
+              <span class="fn">runHandCodedCards()</span>
+              <span class="what">Runs the 5 human-written evaluators. This node never touches OpenAI and never touches the sandbox — it is ordinary arithmetic over two databases.</span>
+              <span class="io">
+                <span class="out">INSERT risk_card_runs (verdict_source='hand_coded', llm_model='hand-coded')</span>
+              </span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="box rds">
+              <span class="kind">AWS RDS · the loan half</span>
+              <span class="fn">getTenantLoanSlice()</span>
+              <span class="what">The borrower facts. One row per active loan.</span>
+              <span class="io"><span class="in">nbfc_loans(loan_application_id, vehicleno, current_dpd, emi_amount, outstanding_amount) WHERE tenant_id=? AND is_active</span></span>
+            </div>
+            <div class="box rds">
+              <span class="kind">AWS RDS · the governed thresholds</span>
+              <span class="fn">loadRiskThresholds()</span>
+              <span class="what">Resolved <strong>once per run</strong>, so every card is judged by the same numbers — then snapshotted into each card's evidence.</span>
+              <span class="io"><span class="in">nbfc_risk_rules(rule_key, current_value) → usage_drop_pct 40 · emi_overdue_days 30 · offline_alert_hours 24 · geo_shift_km 100</span></span>
+            </div>
+            <div class="box vps">
+              <span class="kind">VPS · the vehicle half</span>
+              <span class="fn">iot-queries.ts</span>
+              <span class="what">The <em>only</em> file in the codebase allowed to open a socket to the VPS. Four queries feed the risk engine — see the table below.</span>
+              <span class="io"><span class="in">vehicle_state · distance_rollup · telemetry_gps · telemetry_can</span></span>
+            </div>
+          </div>
+          <div class="gate">
+            <b>The join happens here, in TypeScript memory.</b> Not in SQL — the two halves are on different
+            servers. We pull loans from RDS, pull telemetry from the VPS, and match them on
+            <span class="mono">vehicleno</span> in a JS <span class="mono">Map</span>.
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band 5</b>LangGraph<br />node 2</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app">
+              <span class="kind">LangGraph node</span>
+              <span class="fn">loadCatalogue()</span>
+              <span class="what">Loads the AI-authored hypotheses we already have — <em>and the Python they were tested by</em>. A hypothesis with no stored code cannot be re-run, so it is skipped rather than guessed at.</span>
+              <span class="io">
+                <span class="in">risk_hypotheses WHERE source='llm-v1' AND retired_at IS NULL AND test_definition-&gt;&gt;'python_code' IS NOT NULL</span>
+                <span class="out">graph state: hypotheses[]</span>
+              </span>
+            </div>
+          </div>
+          <div class="gate">
+            <b>This is what makes a run reproducible.</b> The catalogue used to be write-only: propose, test once,
+            throw the code away, invent different ones next time. Nothing was ever re-measured, so no card could be
+            compared to itself over time.
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band 6</b>LangGraph<br />nodes 3 &amp; 4<br /><span style="color:var(--llm)">OpenAI</span></div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app" style="flex:0 1 100%">
+              <span class="kind">Gate — checked before either LLM call</span>
+              <span class="fn">if (hypotheses.length &gt;= MAX_ACTIVE_LLM_HYPOTHESES /* 12 */) → skip both nodes</span>
+              <span class="what">At capacity the run proposes nothing, re-executes the tests it already has, and <strong>never calls OpenAI at all</strong> — zero tokens spent.</span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="box llm">
+              <span class="kind">OpenAI · gpt-4o-mini · temp 0.2</span>
+              <span class="fn">planDimensions()</span>
+              <span class="what">Picks 3–4 risk themes to explore this run.</span>
+              <span class="io">
+                <span class="in">PLAN_PROMPT + tenant display_name, active_loans</span>
+                <span class="out">["asset_health", "behavioural_usage", "financial_repayment", …]</span>
+              </span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box llm">
+              <span class="kind">OpenAI · one call per dimension</span>
+              <span class="fn">proposeHypotheses()</span>
+              <span class="what">Writes 1–2 new hypotheses per dimension — <strong>and the Python that tests each one</strong>. A proposal with no code is discarded on the spot. New slugs are de-duped against the entire catalogue.</span>
+              <span class="io">
+                <span class="in">PROPOSE_PROMPT + dimension + every slug already taken</span>
+                <span class="out">[{slug, title, description, test_plan, python_code}]</span>
+              </span>
+            </div>
+          </div>
+          <div class="gate" style="border-color:var(--llm);background:var(--llm-bg)">
+            <b>THIS IS THE ONLY THING OPENAI DOES.</b> It proposes the <em>question</em> and writes the
+            <em>code</em>. It is never asked for a severity, never asked for a count, and its answer never
+            reaches a card directly. Every number is computed downstream.
+          </div>
+          <pre style="margin-top:.2rem"># the contract every generated test must satisfy
+def evaluate(loans, vehicle_states, daily_km):
+    # loans          → DataFrame: loan_application_id, vehicleno, current_dpd, emi_amount, outstanding_amount
+    # vehicle_states → DataFrame: vehicleno, online, last_gps_at, sec_since_gps, lat, lon,
+    #                             speed_kph, ignition, soc_pct, soh_pct, pack_voltage, pack_temp_c
+    # daily_km       → DataFrame: day, vehicleno, km   (last 14 days)
+    return {<b>"severity"</b>: "high"|"warn"|"ok", <b>"affected_count"</b>: int, <b>"total_count"</b>: int,
+            <b>"finding_summary"</b>: str, <b>"evidence"</b>: {"sample_rows": [...], "notes": [...]}}
+
+# pandas + numpy only. no imports, no file I/O, no network, no exec/eval. under 60 lines.</pre>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band 7</b>LangGraph<br />node 5<br /><span style="color:var(--sbx)">sandbox</span></div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app">
+              <span class="kind">LangGraph node · the only place severity is decided</span>
+              <span class="fn">runTest()</span>
+              <span class="what">Health-checks the sandbox <em>once</em>, fetches the tenant's data <em>once</em>, then executes each hypothesis's stored Python against it.</span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="box app">
+              <span class="kind">Builds the payload</span>
+              <span class="fn">fetchSandboxData()</span>
+              <span class="what">One fetch, reused for every hypothesis in the run. Three arrays that become three pandas DataFrames.</span>
+              <span class="io">
+                <span class="in">RDS nbfc_loans · VPS getVehicleStates() · VPS getDailyKm(vnos, 14)</span>
+                <span class="out">{loans[], vehicle_states[], daily_km[]}</span>
+              </span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box sbx">
+              <span class="kind">FastAPI · Docker · 127.0.0.1:8091 → :8000 · loopback only</span>
+              <span class="fn">POST /execute</span>
+              <span class="what">A soundproof room for code an AI wrote 30 seconds ago. An <strong>AST allowlist</strong> (not a blocklist) rejects anything that isn't <span class="mono">pd</span>, <span class="mono">np</span>, the three DataFrames, and ~20 safe builtins — no imports, no <span class="mono">eval</span>/<span class="mono">exec</span>/<span class="mono">open</span>, no <span class="mono">__</span>-prefixed attribute (that's the <span class="mono">__subclasses__</span> escape), and no module-level statement other than <span class="mono">def evaluate</span>.</span>
+              <span class="io">
+                <span class="in">{hypothesis_slug, code, data:{loans, vehicle_states, daily_km}} + Bearer SANDBOX_TOKEN</span>
+                <span class="out">{ok, result:{severity, affected_count, total_count, finding_summary, evidence}, elapsed_ms}</span>
+              </span>
+            </div>
+          </div>
+          <div class="gate" style="border-color:var(--sbx);background:var(--sbx-bg)">
+            <b>The sandbox has no database connection of its own.</b> The CRM ships the DataFrames <em>with</em> the
+            request. That is what makes it safe to hand it model-authored code: even a malicious
+            <span class="mono">evaluate()</span> has nothing to reach for. It answers with a verdict and forgets
+            everything — stateless by design.
+          </div>
+          <pre style="margin-top:.2rem">the jail, innermost first
+  <b>RLIMIT_NPROC = 0</b>      the code physically cannot fork a process
+  <b>RLIMIT_AS    = 1 GiB</b>   memory ceiling
+  <b>RLIMIT_CPU   = 25 s</b>
+  wall clock     = 30 s    the service kills the child
+  client abort   = 35 s    the CRM stops waiting
+  container      non-root uid 10001 · read_only · cap_drop ALL · no-new-privileges · pids_limit 64
+  worker env     bare — PATH and PYTHONHASHSEED only; SANDBOX_TOKEN is deliberately NOT inherited
+
+the verdict is validated on the way back out, too:
+  severity ∈ {high, warn, ok} · counts are non-negative ints · <b>affected_count &lt;= total_count</b>
+  sample_rows capped at 10 · finding_summary capped at 500 chars</pre>
+
+          <div class="t-scroll" style="margin-top:.4rem">
+            <table style="min-width:44rem">
+              <thead><tr><th>Outcome of the test</th><th>Card becomes</th><th>verdict_source</th></tr></thead>
+              <tbody>
+                <tr><td>Python ran, returned a recognised severity</td><td><span class="chip high">high</span> <span class="chip warn">warn</span> <span class="chip ok">ok</span></td><td class="mono">sandbox</td></tr>
+                <tr><td>Sandbox unreachable, <em>or</em> IoT database unreachable</td><td><span class="chip incon">inconclusive</span></td><td class="mono">none</td></tr>
+                <tr><td>Ran, but returned a severity we don't recognise</td><td><span class="chip incon">inconclusive</span></td><td class="mono">none</td></tr>
+                <tr><td>The generated Python raised, or the call failed</td><td><span class="chip err">error</span></td><td class="mono">none</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note danger" style="font-size:.82rem">
+            <strong>There is deliberately no LLM fallback here.</strong> Ask a model to <em>state</em> an
+            <span class="mono">affected_count</span> and it will produce a number that looks exactly like a measured
+            one and isn't. Before <strong>E-185</strong>, that is precisely what happened when the sandbox was down:
+            the engine asked <span class="mono">gpt-4o-mini</span> to state the severity, and
+            <strong>84 out of 84 rows came back <span class="chip ok">ok</span></strong> — a perfectly healthy
+            portfolio, invented. Those numbers landed in the same columns and rendered in the same chip as the
+            computed ones. That fallback is gone. When we cannot execute, the card says so.
+          </div>
+        </div>
+      </div>
+
+      <div class="band">
+        <div class="band-label"><b>Band 8</b>LangGraph<br />node 6<br />write</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app">
+              <span class="kind">LangGraph node</span>
+              <span class="fn">writeCards()</span>
+              <span class="what">Persists brand-new hypotheses (with their Python, so tomorrow re-runs <em>this exact test</em>), applies the promotion cap, then writes one card row per hypothesis.</span>
+              <span class="io">
+                <span class="out">INSERT risk_hypotheses(slug, title, description, test_method='python', test_definition={kind, test_plan, python_code}, source='llm-v1')</span>
+                <span class="out">INSERT risk_card_runs(tenant_id, hypothesis_id, run_id, severity, verdict_source, finding_summary, affected_count, total_count, evidence_json, llm_critique, llm_model, llm_prompt_tokens, llm_completion_tokens)</span>
+              </span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box app" style="flex:0 1 17rem">
+              <span class="kind">E-188 · the safety cap</span>
+              <span class="fn">capUnpromotedSeverity()</span>
+              <span class="what">An unpromoted AI hypothesis reporting <span class="chip high">high</span> is written as <span class="chip warn">warn</span>, with the reason appended to its critique and <span class="mono">severity_capped</span> flagged in its evidence.</span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="box app" style="flex:0 1 24rem">
+              <span class="kind">Self-cleaning</span>
+              <span class="fn">retireIfPersistentlyBroken()</span>
+              <span class="what">Python that has errored on its last <strong>3 consecutive runs</strong> is retired — it keeps its full history but is never executed or rendered again. A test that always crashes is a bug, not a risk signal.</span>
+              <span class="io"><span class="out">UPDATE risk_hypotheses SET retired_at, retire_reason</span></span>
+            </div>
+            <div class="box rds" style="flex:0 1 22rem">
+              <span class="kind">Close out the run</span>
+              <span class="fn">completeRiskRun() / failRiskRun()</span>
+              <span class="what">Releases the lock and records the outcome — a run that died carries a reason.</span>
+              <span class="io"><span class="out">UPDATE risk_runs SET status='completed'|'failed', finished_at, cards_generated, cards_computed, cards_inconclusive, cards_errored, prompt_tokens, completion_tokens, error</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── RENDER ─── -->
+      <div class="band">
+        <div class="band-label"><b>Band 9</b>Render</div>
+        <div class="band-body">
+          <div class="row">
+            <div class="box app" style="flex:0 1 15rem">
+              <span class="kind">Client</span>
+              <span class="fn">router.refresh()</span>
+              <span class="what">The button shows <em>"10 of 12 hypotheses tested · 2 inconclusive"</em> and asks the server component to re-render.</span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box app">
+              <span class="kind">Server component · force-dynamic</span>
+              <span class="fn">RiskPage() → loadCards()</span>
+              <span class="what">Reads every non-retired hypothesis, takes the <strong>latest</strong> card row for each, and renders. It re-computes nothing — except the first-load fallback below.</span>
+              <span class="io">
+                <span class="in">risk_hypotheses WHERE retired_at IS NULL ⋈ latest risk_card_runs per hypothesis (tenant_id=?)</span>
+                <span class="in">getRunFreshness() → risk_runs (latest) · stale after 36 h</span>
+              </span>
+            </div>
+            <span class="arrow">→</span>
+            <div class="box app" style="flex:0 1 15rem">
+              <span class="kind">Client</span>
+              <span class="fn">SeverityTabs → RiskCard</span>
+              <span class="what">Four tabs. <span class="chip err">error</span> folds into <strong>Inconclusive</strong> for the operator, but stays distinct in the DB and on the chip.</span>
+            </div>
+          </div>
+          <div class="gate">
+            <b>The first-load fallback:</b> if a <em>hand-coded</em> hypothesis has no stored run at all, the page
+            runs its evaluator live, on the spot, so a brand-new tenant isn't staring at an empty screen — that's the
+            <em>"Never run — computed live on page load"</em> notice. An <em>AI</em> hypothesis with no stored run has
+            no evaluator to fall back on, so it honestly renders as <em>"Never tested."</em>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ WHERE EVERY NUMBER COMES FROM ════════════ -->
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Data lineage</p>
+      <h2>Every card, and the exact column it reads</h2>
+      <p>
+        The five hand-coded cards, traced from the SQL in <span class="mono">iot-queries.ts</span> back to the
+        table the poller wrote.
+      </p>
+    </div>
+
+    <div class="t-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Card (slug)</th>
+            <th>Query fn</th>
+            <th>VPS table.column</th>
+            <th>RDS table.column</th>
+            <th>Rule</th>
+            <th>High / Warn</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">usage-drop-7d</td>
+            <td class="mono">getDailyKm(vnos, 14)</td>
+            <td class="mono">distance_rollup(time, vehicleno, distance_km) WHERE bucket_size='day'</td>
+            <td class="mono">nbfc_loans.vehicleno</td>
+            <td>Last-7d km vs prior-7d km. Needs ≥ 50 km prior-week baseline.</td>
+            <td class="mono">≥5% / ≥1%</td>
+          </tr>
+          <tr>
+            <td class="mono">dpd-7-no-telemetry</td>
+            <td class="mono">getVehicleStates(vnos)</td>
+            <td class="mono">vehicle_state(vehicleno, last_gps_at, sec_since_gps)</td>
+            <td class="mono">nbfc_loans.current_dpd</td>
+            <td>Past due <em>and</em> GPS-silent. Governed: <span class="mono">emi_overdue_days</span> 30, <span class="mono">offline_alert_hours</span> 24.</td>
+            <td class="mono">≥3% / ≥1%</td>
+          </tr>
+          <tr>
+            <td class="mono">geo-shift</td>
+            <td class="mono">getGeoShiftDistances(vnos, 30)</td>
+            <td class="mono">telemetry_gps(time, vehicleno, lat, lon) + vehicle_state(lat, lon)</td>
+            <td class="mono">nbfc_loans.vehicleno</td>
+            <td>Distance from its own home cluster (most-visited ~11 km cell, ≥50 fixes). Governed: <span class="mono">geo_shift_km</span> 100.</td>
+            <td class="mono">≥0.5% / ≥0.1%</td>
+          </tr>
+          <tr>
+            <td class="mono">battery-soh-decay</td>
+            <td class="mono">getSohDelta30d(vnos)</td>
+            <td class="mono">telemetry_can(time, vehicleno, payload-&gt;'soh'-&gt;&gt;'value')</td>
+            <td class="mono">nbfc_loans.vehicleno</td>
+            <td>&gt; 5 pp SOH drop over 30 d (newest vs oldest reading). <strong>Hard-coded</strong> — no battery rule exists in the catalogue.</td>
+            <td class="mono">≥2% / ≥0.5%</td>
+          </tr>
+          <tr>
+            <td class="mono">low-utilization-active-loan</td>
+            <td class="mono">getDailyKm(vnos, 14)</td>
+            <td class="mono">distance_rollup(time, vehicleno, distance_km)</td>
+            <td class="mono">nbfc_loans.emi_amount &gt; 0</td>
+            <td>Avg &lt; 20 km/day over the days it <em>actually reported</em>; needs ≥ 7 of 14 days. <strong>Hard-coded.</strong></td>
+            <td class="mono">≥10% / ≥4%</td>
+          </tr>
+          <tr>
+            <td class="mono">AI cards <span class="tag llm">llm-v1</span></td>
+            <td class="mono">fetchSandboxData()</td>
+            <td class="mono">all three DataFrames above</td>
+            <td class="mono">nbfc_loans (all 5 cols)</td>
+            <td>Whatever the model proposed — computed by its own Python in the sandbox.</td>
+            <td class="mono">≥5% / ≥1%<br />then <strong>capped to warn</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note" style="margin-top:1.5rem">
+      <strong>The denominator is the whole game.</strong> Each card scores against the population it can actually
+      <em>measure</em>, not the whole loan book. A vehicle with no GPS history has no home base, so it is excluded
+      from <span class="mono">geo-shift</span> rather than counted as "not diverted". That's what
+      <span class="mono">4 / 5 affected</span> on a card means: four of the five loans we could <em>assess</em>.
+    </div>
+    <div class="note danger" style="margin-top:.9rem">
+      <strong>Scope, stated plainly.</strong> The risk engine's only input from the CRM database is
+      <span class="mono">nbfc_loans</span>. It does <em>not</em> read <span class="mono">borrower_risk_scores</span>
+      or <span class="mono">emi_schedules</span>. Everything else it knows comes from the VPS.
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ FUNCTION LEDGER ════════════ -->
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Every function in the path</p>
+      <h2>The function ledger</h2>
+      <p>In call order. One line each: what it does, what it reads, what it writes.</p>
+    </div>
+
+    <div class="t-scroll">
+      <table>
+        <thead>
+          <tr><th style="width:2rem">#</th><th>Function</th><th>Where</th><th>What it does</th><th>Reads</th><th>Writes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><span class="fnname">RerunButton.onClick()</span></td><td><span class="tag app">app</span></td><td>Fires the empty POST, handles the 409, then refreshes the page.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>2</td><td><span class="fnname">POST /api/nbfc/risk/run</span></td><td><span class="tag app">app</span></td><td>Entry point. Auths, then blocks for 30–60 s while the workflow runs.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>3</td><td><span class="fnname">getCurrentTenant()</span></td><td><span class="tag rds">rds</span></td><td>Which NBFC is this? From the session's membership row.</td><td class="mono">nbfc_users ⋈ nbfc_tenants</td><td class="mono">—</td></tr>
+          <tr><td>4</td><td><span class="fnname">requireNbfcAccess()</span></td><td><span class="tag rds">rds</span></td><td>May this user run against this tenant? Partner = members only; admin/ceo = any.</td><td class="mono">nbfc_users</td><td class="mono">—</td></tr>
+          <tr><td>5</td><td><span class="fnname">runRiskWorkflow()</span></td><td><span class="tag app">app</span></td><td>Takes the lock, compiles and invokes the graph, closes out the run.</td><td class="mono">—</td><td class="mono">risk_runs</td></tr>
+          <tr><td>6</td><td><span class="fnname">beginRiskRun()</span></td><td><span class="tag rds">rds</span></td><td>Claims the right to run, or throws <span class="mono">RunInFlightError</span> → 409.</td><td class="mono">risk_runs (status='running')</td><td class="mono">risk_runs INSERT</td></tr>
+          <tr><td>7</td><td><span class="fnname">reapStaleRuns()</span></td><td><span class="tag rds">rds</span></td><td>Marks runs stuck &gt; 15 min as failed so a crash can't hold the lock forever.</td><td class="mono">risk_runs</td><td class="mono">risk_runs UPDATE</td></tr>
+          <tr><td>8</td><td><span class="fnname">buildRiskGraph()</span></td><td><span class="tag app">app</span></td><td>Wires the six LangGraph nodes: run_hand_coded → load_catalogue → plan_dimensions → propose_hypotheses → run_test → write_cards.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>9</td><td><span class="fnname">runHandCodedCards()</span> <em>node 1</em></td><td><span class="tag app">app</span></td><td>Runs the 5 human evaluators and persists their verdicts. No AI.</td><td class="mono">risk_hypotheses WHERE source='human'</td><td class="mono">risk_card_runs INSERT ×5</td></tr>
+          <tr><td>10</td><td><span class="fnname">getTenantLoanSlice()</span></td><td><span class="tag rds">rds</span></td><td>The loan half of every card.</td><td class="mono">nbfc_loans (5 cols) WHERE tenant_id, is_active</td><td class="mono">—</td></tr>
+          <tr><td>11</td><td><span class="fnname">loadRiskThresholds()</span></td><td><span class="tag rds">rds</span></td><td>The governed cut-offs, resolved once and snapshotted into every card. Never throws — falls back to BRD defaults.</td><td class="mono">nbfc_risk_rules(rule_key, current_value)</td><td class="mono">—</td></tr>
+          <tr><td>12</td><td><span class="fnname">getVehicleStates()</span></td><td><span class="tag vps">vps</span></td><td>Latest known state of each van. <em>Current-state table — it never answers "where was it Tuesday".</em></td><td class="mono">vehicle_state</td><td class="mono">—</td></tr>
+          <tr><td>13</td><td><span class="fnname">getDailyKm()</span></td><td><span class="tag vps">vps</span></td><td>Daily km per vehicle from the Timescale continuous aggregate.</td><td class="mono">distance_rollup</td><td class="mono">—</td></tr>
+          <tr><td>14</td><td><span class="fnname">getGeoShiftDistances()</span></td><td><span class="tag vps">vps</span></td><td>Bins 30 d of GPS into ~11 km cells, takes the most-visited as "home", measures distance from it.</td><td class="mono">telemetry_gps + vehicle_state</td><td class="mono">—</td></tr>
+          <tr><td>15</td><td><span class="fnname">getSohDelta30d()</span></td><td><span class="tag vps">vps</span></td><td>Newest minus oldest state-of-health reading in the CAN payload over 30 d.</td><td class="mono">telemetry_can.payload-&gt;'soh'</td><td class="mono">—</td></tr>
+          <tr><td>16</td><td><span class="fnname">pickSeverity()</span></td><td><span class="tag app">app</span></td><td>affected ÷ assessable vs two cut-offs → high / warn / ok. The whole severity rule, in three lines.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>17</td><td><span class="fnname">notAssessable()</span></td><td><span class="tag app">app</span></td><td>Returns <span class="chip incon">inconclusive</span> when the measurable population is empty — <em>not</em> a green 0/0.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>18</td><td><span class="fnname">loadCatalogue()</span> <em>node 2</em></td><td><span class="tag rds">rds</span></td><td>Loads live AI hypotheses that still carry their Python.</td><td class="mono">risk_hypotheses WHERE source='llm-v1', retired_at IS NULL</td><td class="mono">—</td></tr>
+          <tr><td>19</td><td><span class="fnname">planDimensions()</span> <em>node 3</em></td><td><span class="tag llm">openai</span></td><td>Picks 3–4 risk themes. <strong>Skipped entirely at the 12-hypothesis cap.</strong></td><td class="mono">PLAN_PROMPT</td><td class="mono">graph state</td></tr>
+          <tr><td>20</td><td><span class="fnname">proposeHypotheses()</span> <em>node 4</em></td><td><span class="tag llm">openai</span></td><td>Writes new hypotheses + the Python that tests them. Code is mandatory.</td><td class="mono">PROPOSE_PROMPT + taken slugs</td><td class="mono">graph state</td></tr>
+          <tr><td>21</td><td><span class="fnname">parseHypothesisArray()</span></td><td><span class="tag app">app</span></td><td>Pulls JSON out of the model's reply, tolerating ```fences and trailing commas — the alternative is silently dropping a whole dimension of work.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>22</td><td><span class="fnname">sandboxHealthy()</span></td><td><span class="tag sbx">sandbox</span></td><td>One <span class="mono">GET /healthz</span> per run (2 s cap). Down → every AI card is inconclusive.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>23</td><td><span class="fnname">fetchSandboxData()</span></td><td><span class="tag rds">rds</span> <span class="tag vps">vps</span></td><td>Builds the three DataFrames once and reuses them for every hypothesis.</td><td class="mono">nbfc_loans + vehicle_state + distance_rollup</td><td class="mono">—</td></tr>
+          <tr><td>24</td><td><span class="fnname">executeInSandbox()</span></td><td><span class="tag sbx">sandbox</span></td><td><span class="mono">POST /execute</span> with code + data. 35 s client cap; the sandbox itself kills at 30 s.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>25</td><td><span class="fnname">runTest()</span> <em>node 5</em></td><td><span class="tag app">app</span></td><td><strong>The only place severity is decided.</strong> No LLM fallback — if it can't execute, it says so.</td><td class="mono">—</td><td class="mono">graph state: results[]</td></tr>
+          <tr><td>26</td><td><span class="fnname">capUnpromotedSeverity()</span></td><td><span class="tag app">app</span></td><td>Unpromoted AI hypothesis: <span class="chip high">high</span> → <span class="chip warn">warn</span>. A machine-written test can't declare a crisis on its own say-so.</td><td class="mono">risk_hypotheses.promoted_at</td><td class="mono">—</td></tr>
+          <tr><td>27</td><td><span class="fnname">writeCards()</span> <em>node 6</em></td><td><span class="tag rds">rds</span></td><td>Persists new hypotheses (with their Python) and one card row each.</td><td class="mono">—</td><td class="mono">risk_hypotheses INSERT · risk_card_runs INSERT</td></tr>
+          <tr><td>28</td><td><span class="fnname">retireIfPersistentlyBroken()</span></td><td><span class="tag rds">rds</span></td><td>3 consecutive errors → soft-retire. History kept, never run again.</td><td class="mono">risk_card_runs (last 3)</td><td class="mono">risk_hypotheses.retired_at</td></tr>
+          <tr><td>29</td><td><span class="fnname">completeRiskRun() / failRiskRun()</span></td><td><span class="tag rds">rds</span></td><td>Releases the lock, records counts + tokens, or the error that killed it.</td><td class="mono">—</td><td class="mono">risk_runs UPDATE</td></tr>
+          <tr><td>30</td><td><span class="fnname">RiskPage() → loadCards()</span></td><td><span class="tag rds">rds</span></td><td>Latest card per non-retired hypothesis. Falls back to a live hand-coded evaluation when a hypothesis has never run.</td><td class="mono">risk_hypotheses ⋈ risk_card_runs</td><td class="mono">—</td></tr>
+          <tr><td>31</td><td><span class="fnname">getRunFreshness()</span></td><td><span class="tag rds">rds</span></td><td>Last run time, in-flight flag, and the 36-hour staleness verdict.</td><td class="mono">risk_runs (latest)</td><td class="mono">—</td></tr>
+          <tr><td>32</td><td><span class="fnname">SeverityTabs / RiskCard</span></td><td><span class="tag app">app</span></td><td>Four tabs; the AI badge (<span class="mono">source !== 'human'</span>); the X / Y bar — shown <em>only</em> when the verdict was computed.</td><td class="mono">—</td><td class="mono">—</td></tr>
+          <tr><td>33</td><td><span class="fnname">POST /api/nbfc/risk/hypotheses/[id]/promote</span></td><td><span class="tag rds">rds</span></td><td>A human vouches for an AI hypothesis, lifting its severity cap. <span class="mono">DELETE</span> on the same route retires it.</td><td class="mono">—</td><td class="mono">risk_hypotheses.promoted_at, promoted_by</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ COMPONENT ROSTER ════════════ -->
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">The machines</p>
+      <h2>Component roster — what each box is, and whether it's on</h2>
+    </div>
+    <div class="t-scroll">
+      <table>
+        <thead><tr><th>Component</th><th>What it is</th><th>Runs where</th><th>Role in the risk flow</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="tag ext">ext</span> <span class="fnname">Intellicar API</span></td>
+            <td>Third-party IoT tracker vendor's web API</td>
+            <td class="mono">their cloud</td>
+            <td>The origin of every vehicle fact. We poll it; it never pushes.</td>
+            <td>✅ live</td>
+          </tr>
+          <tr>
+            <td><span class="tag vps">vps</span> <span class="fnname">poller</span></td>
+            <td>Python loop, every 30 s</td>
+            <td class="mono">VPS</td>
+            <td>The only door telemetry enters through. Writes the raw tables.</td>
+            <td>✅ running</td>
+          </tr>
+          <tr>
+            <td><span class="tag vps">vps</span> <span class="fnname">Redis</span></td>
+            <td>In-memory cache</td>
+            <td class="mono">VPS</td>
+            <td><strong>None.</strong> Poller-internal dedupe scratch paper. The risk engine never touches it.</td>
+            <td>✅ assumed</td>
+          </tr>
+          <tr>
+            <td><span class="tag vps">vps</span> <span class="fnname">Postgres + TimescaleDB</span></td>
+            <td>Time-series Postgres. Timescale chops tables into time-sliced chunks so <span class="mono">WHERE time &gt; last week</span> doesn't scan five years.</td>
+            <td class="mono">VPS · reached via <span class="mono">ssh -N iot-bastion</span> in dev</td>
+            <td>Holds <span class="mono">vehicle_state</span>, <span class="mono">telemetry_gps/can/battery</span>, and the <span class="mono">distance_rollup</span> continuous aggregate. Read-only from the CRM.</td>
+            <td>✅ running</td>
+          </tr>
+          <tr>
+            <td><span class="tag dead">dead</span> <span class="fnname">aggregator</span></td>
+            <td>Python cron — the only process that would ever read AWS RDS <em>into</em> the VPS</td>
+            <td class="mono">VPS</td>
+            <td><strong>None — it has never run.</strong> Its would-be <span class="mono">dashboard_*</span> tables are empty, and the CRM re-derives that work live instead.</td>
+            <td>❌ never ran</td>
+          </tr>
+          <tr>
+            <td><span class="tag rds">rds</span> <span class="fnname">AWS RDS Postgres</span></td>
+            <td>The CRM's own database (<span class="mono">DATABASE_URL</span>)</td>
+            <td class="mono">AWS</td>
+            <td>Loans, tenants, risk rules — <em>and</em> all three risk tables. Every card ever produced is stored here.</td>
+            <td>✅ running</td>
+          </tr>
+          <tr>
+            <td><span class="tag app">app</span> <span class="fnname">Next.js CRM</span></td>
+            <td>The application. Owns all IoT <em>presentation</em>; the VPS renders nothing.</td>
+            <td class="mono">Hostinger VPS · PM2</td>
+            <td>Runs the LangGraph workflow. The only caller of the sandbox, and the only thing that talks to both databases.</td>
+            <td>✅ running</td>
+          </tr>
+          <tr>
+            <td><span class="tag llm">llm</span> <span class="fnname">OpenAI</span></td>
+            <td><span class="mono">gpt-4o-mini</span> (env <span class="mono">NBFC_OPENAI_MODEL</span>), temp 0.2</td>
+            <td class="mono">OpenAI cloud</td>
+            <td>Proposes hypotheses and writes their Python. <strong>Never states a verdict.</strong> Not called at all once the catalogue is full.</td>
+            <td>✅ configured</td>
+          </tr>
+          <tr>
+            <td><span class="tag sbx">sbx</span> <span class="fnname">risk-sandbox</span></td>
+            <td>FastAPI service. AST allowlist, child process, 30 s / 1 GiB / no subprocesses, no network, no DB.</td>
+            <td class="mono">127.0.0.1:8091 · loopback only</td>
+            <td>Executes model-authored Python against DataFrames the CRM ships it. Returns a verdict and forgets everything.</td>
+            <td>⚠️ must be configured — <span class="mono">NBFC_SANDBOX_URL</span></td>
+          </tr>
+          <tr>
+            <td><span class="tag app">app</span> <span class="fnname">Upstash Redis + BullMQ</span></td>
+            <td>The CRM's <em>own</em> Redis — a different instance from the poller's</td>
+            <td class="mono">Upstash</td>
+            <td><strong>None.</strong> It drives the Bolna AI call queue. Unrelated to risk. Don't confuse the two Redises.</td>
+            <td>✅ running</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note danger" style="margin-top:1.5rem">
+      <strong>What breaks what.</strong>
+      Tunnel down → every hand-coded card throws → amber banner, cards render as <span class="chip err">error</span>.
+      Sandbox unset → every AI card is <span class="chip incon">inconclusive</span>.
+      Poller stopped → cards stay green and silently describe a week-old fleet.
+      <span class="mono">OPENAI_API_KEY</span> missing → "Re-run analysis" throws immediately.
+      <strong>None of these can ever turn a card green.</strong> That is the entire design.
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>iTarang — NBFC Risk Alerts, end-to-end. Generated from the code on branch <span class="mono">Rushikesh-claude</span>, 14 July 2026.</p>
+    <p>Engine <span class="mono">src/lib/ai/langgraph/risk-hypothesis-graph.ts</span> · Evaluators <span class="mono">src/lib/risk/hand-coded-cards.ts</span> · VPS SQL <span class="mono">src/lib/db/iot-queries.ts</span> · Page <span class="mono">src/app/(dashboard)/nbfc/risk/page.tsx</span> · Sandbox <span class="mono">services/risk-sandbox/</span></p>
+  </div>
+</footer>
+
+</body>
+</html>

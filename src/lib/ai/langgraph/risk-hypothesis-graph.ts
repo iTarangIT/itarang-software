@@ -77,7 +77,7 @@ interface HypothesisDraft {
  * them once, and abandoned them — the catalogue hit 45 with only ~8 current, so
  * the page filled with stale one-shot verdicts that reshuffled on every click.
  */
-const MAX_ACTIVE_LLM_HYPOTHESES = 12;
+export const MAX_ACTIVE_LLM_HYPOTHESES = 12;
 
 /** Consecutive failed runs after which a hypothesis is retired as broken. */
 const RETIRE_AFTER_CONSECUTIVE_ERRORS = 3;
@@ -125,7 +125,7 @@ Return ONLY a JSON array of dimension names, no prose. Examples:
  * code away, and next run invented entirely different ones. Nothing was ever
  * re-measured, so no card could be compared to itself over time.
  */
-async function loadCatalogue(state: State): Promise<Partial<State>> {
+export async function loadCatalogue(state: State): Promise<Partial<State>> {
   const rows = await db
     .select()
     .from(riskHypotheses)
@@ -155,7 +155,7 @@ async function loadCatalogue(state: State): Promise<Partial<State>> {
   return { hypotheses: drafts };
 }
 
-async function planDimensions(state: State): Promise<Partial<State>> {
+export async function planDimensions(state: State): Promise<Partial<State>> {
   // At capacity: re-run what we have rather than inventing more. This is the
   // single change that stops the catalogue growing without bound — and it also
   // skips two LLM calls per run.
@@ -242,7 +242,7 @@ actionable condition that a minority of borrowers meet.
 Return ONLY the JSON array — no prose, no markdown fences.
 `;
 
-async function proposeHypotheses(state: State): Promise<Partial<State>> {
+export async function proposeHypotheses(state: State): Promise<Partial<State>> {
   const existing = state.hypotheses; // loaded from the catalogue by loadCatalogue
   if (state.dimensions.length === 0) {
     return { hypotheses: existing }; // at capacity — nothing to propose
@@ -354,7 +354,7 @@ function inconclusive(h: HypothesisDraft, why: string, evidence: Record<string, 
  * model to *state* an affected_count produces a number that looks exactly like a
  * measured one and is not. When we cannot execute, we say so.
  */
-async function runTest(state: State): Promise<Partial<State>> {
+export async function runTest(state: State): Promise<Partial<State>> {
   const results: HypothesisResult[] = [];
 
   // Probe the sandbox once per run rather than per-hypothesis.
@@ -532,7 +532,7 @@ function capUnpromotedSeverity(
   return { severity, capped: false };
 }
 
-async function writeCards(state: State): Promise<Partial<State>> {
+export async function writeCards(state: State): Promise<Partial<State>> {
   for (const r of state.results) {
     let hypId: string;
     let promoted: boolean;
