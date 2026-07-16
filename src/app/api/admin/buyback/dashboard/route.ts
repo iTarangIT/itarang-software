@@ -121,6 +121,10 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   // Per-deal economics from the CURRENT lock generation only — the lockedCte of
   // reports/route.ts, reshaped to one row per deal. Frozen prices, never catalog.
+  // Bounded to the widest window any block consumes — [prevFrom, to), the KPI
+  // delta's previous window — so this never full-scans deal_line_locks (the
+  // E-192-C lesson from /reports). Every caller re-filters by its own narrower
+  // window/conds after joining on deal_id, so the superset bound is lossless.
   const perDeal = sql`
     SELECT dll.deal_id,
            SUM(bl.quantity)                                                   AS units,
@@ -129,6 +133,9 @@ export const GET = withErrorHandler(async (req: Request) => {
            SUM(bl.quantity * COALESCE(dll.vendor_price, 0))                   AS vendor_total
     FROM deal_line_locks dll
     JOIN buyback_deals bd2 ON bd2.id = dll.deal_id AND bd2.offer_version = dll.offer_version
+    JOIN buyback_requests br2 ON br2.id = bd2.request_id
+      AND br2.created_at >= ${prevFromIso}::timestamptz
+      AND br2.created_at <  ${toIso}::timestamptz
     JOIN buyback_lines bl  ON bl.id = dll.line_id
     GROUP BY dll.deal_id
   `;
