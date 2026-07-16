@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Risk Alerts — how a card gets made</title>
+<style>
+  /* ── Tokens ───────────────────────────────────────────────────────────── */
+  :root {
+    --ink:        #0d1b2a;
+    --ink-2:      #37475a;
+    --ink-3:      #6b7d90;
+    --ground:     #f6f8fa;
+    --panel:      #ffffff;
+    --rule:       #dce3ea;
+    --rule-soft:  #e8edf2;
+
+    --navy:       #12395c;   /* structure, headings */
+    --teal:       #0f7d78;   /* the one accent — signal, links, active state */
+    --teal-soft:  #e2f2f0;
+
+    --high:       #c8322e;
+    --warn:       #b5761b;
+    --ok:         #16785e;
+    --incon:      #64748b;
+    --err:        #6d51b8;
+
+    --high-bg:    #fdeceb;
+    --warn-bg:    #fdf2e0;
+    --ok-bg:      #e4f4ee;
+    --incon-bg:   #eef1f4;
+    --err-bg:     #f0ebfb;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    --step--1: clamp(.75rem, .72rem + .12vw, .8125rem);
+    --step-0:  clamp(.9375rem, .91rem + .14vw, 1rem);
+    --step-1:  clamp(1.0625rem, 1rem + .3vw, 1.1875rem);
+    --step-2:  clamp(1.3rem, 1.18rem + .6vw, 1.65rem);
+    --step-3:  clamp(1.7rem, 1.45rem + 1.2vw, 2.4rem);
+    --step-4:  clamp(2.1rem, 1.7rem + 2vw, 3.1rem);
+
+    --shadow: 0 1px 2px rgba(13,27,42,.05), 0 4px 14px -6px rgba(13,27,42,.10);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:       #e6edf3;
+      --ink-2:     #aebac7;
+      --ink-3:     #7d8b9a;
+      --ground:    #0c141c;
+      --panel:     #131e28;
+      --rule:      #253442;
+      --rule-soft: #1c2833;
+
+      --navy:      #9dc4e4;
+      --teal:      #4ecdc0;
+      --teal-soft: #10312f;
+
+      --high:      #f2837c;
+      --warn:      #e3ac5c;
+      --ok:        #5cc9a5;
+      --incon:     #94a3b3;
+      --err:       #b39ff0;
+
+      --high-bg:   #2c1614;
+      --warn-bg:   #2b2011;
+      --ok-bg:     #10281f;
+      --incon-bg:  #1b242d;
+      --err-bg:    #1f1930;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px -8px rgba(0,0,0,.5);
+    }
+  }
+  /* The viewer's own toggle must win over the OS preference, both directions. */
+  :root[data-theme="light"] {
+    --ink:#0d1b2a; --ink-2:#37475a; --ink-3:#6b7d90; --ground:#f6f8fa; --panel:#fff;
+    --rule:#dce3ea; --rule-soft:#e8edf2; --navy:#12395c; --teal:#0f7d78; --teal-soft:#e2f2f0;
+    --high:#c8322e; --warn:#b5761b; --ok:#16785e; --incon:#64748b; --err:#6d51b8;
+    --high-bg:#fdeceb; --warn-bg:#fdf2e0; --ok-bg:#e4f4ee; --incon-bg:#eef1f4; --err-bg:#f0ebfb;
+    --shadow: 0 1px 2px rgba(13,27,42,.05), 0 4px 14px -6px rgba(13,27,42,.10);
+  }
+  :root[data-theme="dark"] {
+    --ink:#e6edf3; --ink-2:#aebac7; --ink-3:#7d8b9a; --ground:#0c141c; --panel:#131e28;
+    --rule:#253442; --rule-soft:#1c2833; --navy:#9dc4e4; --teal:#4ecdc0; --teal-soft:#10312f;
+    --high:#f2837c; --warn:#e3ac5c; --ok:#5cc9a5; --incon:#94a3b3; --err:#b39ff0;
+    --high-bg:#2c1614; --warn-bg:#2b2011; --ok-bg:#10281f; --incon-bg:#1b242d; --err-bg:#1f1930;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px -8px rgba(0,0,0,.5);
+  }
+
+  /* ── Base ─────────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: var(--step-0);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { text-wrap: balance; line-height: 1.2; margin: 0; }
+  p { margin: 0; }
+  a { color: var(--teal); text-underline-offset: 3px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 3px;
+  }
+  code, .mono { font-family: var(--mono); font-size: .875em; }
+  code:not(pre code) {
+    background: var(--rule-soft); padding: .1em .38em; border-radius: 4px;
+    color: var(--ink); white-space: nowrap;
+  }
+
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 2.5rem); }
+  .prose { max-width: 40rem; }           /* ~65ch of running text */
+  .stack   { display: flex; flex-direction: column; gap: 1rem; }
+  .stack-2 { display: flex; flex-direction: column; gap: 1.5rem; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: var(--step--1);
+    text-transform: uppercase; letter-spacing: .12em;
+    color: var(--teal); margin: 0;
+  }
+
+  /* ── Header ───────────────────────────────────────────────────────────── */
+  header.hero {
+    border-bottom: 1px solid var(--rule);
+    background: var(--panel);
+    padding: clamp(2.5rem, 6vw, 4.5rem) 0 clamp(2rem, 4vw, 3rem);
+  }
+  .hero h1 { font-size: var(--step-4); letter-spacing: -.02em; margin-top: .6rem; color: var(--navy); }
+  .hero .lede { font-size: var(--step-1); color: var(--ink-2); margin-top: 1.1rem; }
+  .hero .lede strong { color: var(--ink); font-weight: 650; }
+
+  .thesis {
+    margin-top: 2rem; padding: 1.1rem 1.25rem;
+    border-left: 3px solid var(--teal);
+    background: var(--teal-soft);
+    border-radius: 0 6px 6px 0;
+    max-width: 44rem;
+  }
+  .thesis p { color: var(--ink); }
+
+  /* ── Sections ─────────────────────────────────────────────────────────── */
+  section { padding: clamp(2.75rem, 6vw, 4.25rem) 0; border-bottom: 1px solid var(--rule); }
+  section > .wrap > .head { margin-bottom: 2rem; }
+  .head h2 { font-size: var(--step-3); letter-spacing: -.015em; color: var(--navy); margin-top: .5rem; }
+  .head p  { color: var(--ink-2); margin-top: .75rem; max-width: 42rem; }
+
+  /* ── Pipeline diagram ─────────────────────────────────────────────────── */
+  .pipe-scroll { overflow-x: auto; padding-bottom: .5rem; }
+  .pipe {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(9.5rem, 1fr));
+    gap: .5rem; align-items: stretch; min-width: 58rem;
+  }
+  .node {
+    position: relative; background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 8px; padding: .85rem .9rem; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: .3rem;
+  }
+  .node::after {
+    content: ""; position: absolute; right: -.5rem; top: 50%;
+    width: .5rem; height: 1px; background: var(--rule); z-index: 1;
+  }
+  .node:last-child::after { display: none; }
+  .node .n {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .node .t { font-family: var(--mono); font-size: .8rem; font-weight: 600; color: var(--ink); }
+  .node .d { font-size: .78rem; line-height: 1.45; color: var(--ink-2); }
+  .node.llm  { border-color: var(--err);  background: var(--err-bg); }
+  .node.calc { border-color: var(--ok);   background: var(--ok-bg); }
+  .node.calc .t, .node.llm .t { color: var(--ink); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-top: 1.25rem; font-size: var(--step--1); color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: .45rem; }
+  .swatch { width: .8rem; height: .8rem; border-radius: 3px; border: 1px solid var(--rule); flex: none; }
+
+  /* ── Steps ────────────────────────────────────────────────────────────── */
+  ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; counter-reset: s; }
+  ol.steps > li {
+    counter-increment: s;
+    display: grid; grid-template-columns: 2.5rem 1fr; gap: 0 1.25rem;
+    padding: 1.5rem 0; border-top: 1px solid var(--rule-soft);
+  }
+  ol.steps > li:first-child { border-top: 0; padding-top: 0; }
+  ol.steps > li::before {
+    content: counter(s, decimal-leading-zero);
+    font-family: var(--mono); font-size: .8rem; font-weight: 600;
+    color: var(--teal); padding-top: .2rem; font-variant-numeric: tabular-nums;
+  }
+  .step-body { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
+  .step-body h3 { font-size: var(--step-1); color: var(--ink); }
+  .step-body p  { color: var(--ink-2); max-width: 42rem; }
+  .where {
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-3);
+    word-break: break-all;
+  }
+  .where b { color: var(--teal); font-weight: 600; }
+
+  .note {
+    border-left: 2px solid var(--rule); padding: .1rem 0 .1rem .9rem;
+    font-size: .875rem; color: var(--ink-2); max-width: 42rem;
+  }
+  .note.why { border-left-color: var(--teal); }
+  .note strong { color: var(--ink); }
+
+  /* ── Tables ───────────────────────────────────────────────────────────── */
+  .t-scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-size: .875rem; min-width: 34rem; }
+  th, td { text-align: left; padding: .7rem .9rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: .7rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--ink-3); font-weight: 600; background: var(--rule-soft); border-bottom: 1px solid var(--rule);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td .mono, th .mono { font-size: .8rem; }
+
+  /* ── Severity chips ───────────────────────────────────────────────────── */
+  .chip {
+    display: inline-block; font-family: var(--mono); font-size: .68rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em;
+    padding: .18rem .45rem; border-radius: 4px; white-space: nowrap;
+  }
+  .chip.high  { color: var(--high);  background: var(--high-bg); }
+  .chip.warn  { color: var(--warn);  background: var(--warn-bg); }
+  .chip.ok    { color: var(--ok);    background: var(--ok-bg); }
+  .chip.incon { color: var(--incon); background: var(--incon-bg); }
+  .chip.err   { color: var(--err);   background: var(--err-bg); }
+
+  /* ── Rails / cards ────────────────────────────────────────────────────── */
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 1.1rem 1.2rem; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: .5rem;
+  }
+  .card h3 { font-size: var(--step-0); color: var(--ink); }
+  .card p  { font-size: .875rem; color: var(--ink-2); }
+  .card .tag {
+    font-family: var(--mono); font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--ink-3);
+  }
+
+  /* ── The screen-decoder ───────────────────────────────────────────────── */
+  .decode { display: grid; gap: 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .decode > div {
+    display: grid; grid-template-columns: minmax(9rem, 15rem) 1fr; gap: 1.25rem;
+    padding: .95rem 1.1rem; border-bottom: 1px solid var(--rule-soft); align-items: start;
+  }
+  .decode > div:last-child { border-bottom: 0; }
+  .decode .ui {
+    font-family: var(--mono); font-size: .8rem; color: var(--ink);
+    background: var(--rule-soft); padding: .35rem .5rem; border-radius: 5px;
+    justify-self: start;
+  }
+  .decode .means { font-size: .875rem; color: var(--ink-2); }
+  .decode .means strong { color: var(--ink); }
+
+  /* ── Callout ──────────────────────────────────────────────────────────── */
+  .callout {
+    border: 1px solid var(--err); background: var(--err-bg);
+    border-radius: 8px; padding: 1.15rem 1.3rem; display: flex; flex-direction: column; gap: .55rem;
+  }
+  .callout h3 { font-size: var(--step-0); color: var(--ink); }
+  .callout p  { font-size: .875rem; color: var(--ink-2); }
+  .callout .tag { font-family: var(--mono); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; color: var(--err); font-weight: 600; }
+
+  /* ── Q&A ──────────────────────────────────────────────────────────────── */
+  details {
+    border: 1px solid var(--rule); border-radius: 8px; background: var(--panel);
+    padding: .85rem 1.1rem;
+  }
+  details + details { margin-top: .6rem; }
+  summary { cursor: pointer; font-weight: 600; color: var(--ink); list-style: none; display: flex; gap: .6rem; align-items: baseline; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "?"; font-family: var(--mono); color: var(--teal); font-weight: 700; flex: none; }
+  details[open] summary { margin-bottom: .7rem; }
+  details p { font-size: .875rem; color: var(--ink-2); max-width: 44rem; }
+  details p + p { margin-top: .6rem; }
+
+  footer { padding: 2.5rem 0 4rem; color: var(--ink-3); font-size: var(--step--1); }
+  footer .wrap { display: flex; flex-direction: column; gap: .4rem; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">iTarang · NBFC Portal · /nbfc/risk</p>
+    <h1>How a Risk Alert card gets made</h1>
+    <p class="lede prose">
+      The complete path from the <strong>Re-run analysis</strong> button to the cards on screen —
+      every step, every table written, and every place a number could come from.
+    </p>
+
+    <div class="thesis">
+      <p class="eyebrow" style="color:var(--teal)">The one rule</p>
+      <p style="margin-top:.4rem">
+        <strong>The language model never states a verdict.</strong> It proposes questions and writes
+        the code that answers them. Every severity and every count on this page is computed —
+        either by a hand-written TypeScript evaluator, or by Python executed against real data.
+        If we cannot compute it, the card says <em>Inconclusive</em>. It never says OK.
+      </p>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="overview">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">The 60-second version</p>
+      <h2>Six stages, one click</h2>
+      <p>
+        The button fires a LangGraph workflow. It runs the same six nodes every time, in this order.
+        Two of them talk to the language model; the rest are ordinary code and SQL.
+      </p>
+    </div>
+
+    <div class="pipe-scroll">
+      <div class="pipe">
+        <div class="node calc">
+          <span class="n">Node 1</span>
+          <span class="t">run_hand_coded</span>
+          <span class="d">Runs the 5 human-written evaluators. Pure TypeScript arithmetic — no AI involved at all.</span>
+        </div>
+        <div class="node">
+          <span class="n">Node 2</span>
+          <span class="t">load_catalogue</span>
+          <span class="d">Loads the AI-authored hypotheses we already have, with the Python they were tested by.</span>
+        </div>
+        <div class="node llm">
+          <span class="n">Node 3 · LLM</span>
+          <span class="t">plan_dimensions</span>
+          <span class="d">Picks 3–4 risk themes to explore. Skipped entirely once we hold 12 hypotheses.</span>
+        </div>
+        <div class="node llm">
+          <span class="n">Node 4 · LLM</span>
+          <span class="t">propose_hypotheses</span>
+          <span class="d">Writes new hypotheses <em>and</em> the Python that tests each one. No code, no hypothesis.</span>
+        </div>
+        <div class="node calc">
+          <span class="n">Node 5</span>
+          <span class="t">run_test</span>
+          <span class="d">Executes that Python in a sandbox against real loans + telemetry. This is the only place severity is decided.</span>
+        </div>
+        <div class="node">
+          <span class="n">Node 6</span>
+          <span class="t">write_cards</span>
+          <span class="d">Persists one row per hypothesis to <span class="mono">risk_card_runs</span>. The page reads these.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--ok-bg); border-color:var(--ok)"></i> Computes the numbers</span>
+      <span><i class="swatch" style="background:var(--err-bg); border-color:var(--err)"></i> Talks to the LLM (proposes only — never judges)</span>
+      <span><i class="swatch" style="background:var(--panel)"></i> Reads / writes the database</span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="families">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Before the walkthrough</p>
+      <h2>There are two kinds of card, and they behave differently</h2>
+      <p>
+        This is the single most useful thing to understand. Every card on the Risk page is one of these
+        two — and the badge on the card tells you which.
+      </p>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <span class="tag">source = "human" · no badge</span>
+        <h3>Hand-coded cards (5 of them)</h3>
+        <p>
+          Written by us, reviewed by us, in <span class="mono">hand-coded-cards.ts</span>. Each is a
+          TypeScript function that reads the loan book and the IoT telemetry and does the arithmetic itself.
+        </p>
+        <p>
+          They can raise a <span class="chip high">High Alert</span> on their own authority, because a
+          human wrote the test and a human agreed to the thresholds.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">source = "llm-v1" · badge: AI</span>
+        <h3>Agent-authored cards (up to 12 live)</h3>
+        <p>
+          The model invented the question and wrote the Python that answers it. The Python is stored and
+          re-run every night, so the same test is measured over time — it is not re-invented each run.
+        </p>
+        <p>
+          Until a human <strong>promotes</strong> it, a card like this is <strong>capped at</strong>
+          <span class="chip warn">Warning</span>. A machine-written test does not get to declare a crisis
+          on its own say-so.
+        </p>
+      </div>
+    </div>
+
+    <div class="note why" style="margin-top:1.5rem">
+      <strong>Why the cap matters.</strong> Without it, the model could invent a test like
+      “vehicles that have an ignition status”, match 7 of 7 loans, and put a scarlet
+      <em>High Alert · 7 of 7 affected</em> into a credit officer's queue — a statement that is
+      technically true, completely useless, and indistinguishable from a real emergency.
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="walkthrough">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">End to end</p>
+      <h2>The full walkthrough</h2>
+      <p>Every step, in order, with the file that does it.</p>
+    </div>
+
+    <ol class="steps">
+
+      <li>
+        <div class="step-body">
+          <h3>The operator clicks “Re-run analysis”</h3>
+          <p>
+            The button POSTs to the run endpoint with no body — the tenant is resolved from the session,
+            not from the request. It then sits and waits: this is a synchronous call that blocks for
+            roughly 30–60 seconds.
+          </p>
+          <p class="where"><b>POST</b> /api/nbfc/risk/run &nbsp;·&nbsp; src/app/(dashboard)/nbfc/risk/_components/RerunButton.tsx</p>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>The route authenticates and resolves the tenant</h3>
+          <p>
+            An NBFC partner may only run against a tenant they belong to; admin and CEO may run against any.
+            The route caps itself at 120 seconds.
+          </p>
+          <p class="where">src/app/api/nbfc/risk/run/route.ts &nbsp;·&nbsp; <b>getCurrentTenant()</b> → <b>requireNbfcAccess()</b> → <b>runRiskWorkflow()</b></p>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>It takes a per-tenant lock — or returns 409</h3>
+          <p>
+            A row is inserted into <span class="mono">risk_runs</span> with
+            <span class="mono">status = 'running'</span>. A partial unique index on
+            <span class="mono">(tenant_id) WHERE status='running'</span> means two callers physically cannot
+            both win — the loser gets a unique violation and is turned into a <strong>409</strong>:
+            <em>“Analysis already running — wait for it to finish.”</em>
+          </p>
+          <p>
+            Runs still marked <em>running</em> after <strong>15 minutes</strong> are presumed dead and reaped,
+            so a crashed process can't wedge the tenant forever.
+          </p>
+          <p class="where">src/lib/nbfc/risk-run.ts &nbsp;·&nbsp; <b>beginRiskRun()</b> · migration <b>E-187</b></p>
+          <div class="note why">
+            <strong>Why:</strong> before this, double-clicking the button fired two complete workflows at the
+            same tenant. Both wrote a full set of cards, and whichever finished last silently shadowed the other.
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>Node 1 — the 5 hand-coded evaluators run</h3>
+          <p>
+            The workflow pulls this tenant's active loans, resolves the governed thresholds
+            <em>once</em> (so every card in the run is judged by the same numbers), then executes each
+            human-written evaluator and writes its verdict straight to
+            <span class="mono">risk_card_runs</span> with
+            <span class="mono">verdict_source = 'hand_coded'</span>.
+          </p>
+          <p>
+            If an evaluator throws — almost always because the IoT telemetry database is unreachable —
+            the card is written as <span class="chip err">Error</span>, <strong>not</strong> as OK.
+          </p>
+          <p class="where">src/lib/risk/hand-coded-cards.ts &nbsp;·&nbsp; <b>HAND_CODED_CARDS</b> (5 evaluators)</p>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>Node 2 — load the AI hypothesis catalogue</h3>
+          <p>
+            Loads every <span class="mono">source = 'llm-v1'</span> hypothesis that has not been retired
+            <em>and</em> still has its stored Python. A hypothesis with no code cannot be re-run, so it is
+            skipped rather than guessed at.
+          </p>
+          <p class="where">src/lib/ai/langgraph/risk-hypothesis-graph.ts &nbsp;·&nbsp; <b>loadCatalogue()</b></p>
+          <div class="note why">
+            <strong>This is why 56 hypotheses exist but only 12 are live.</strong> Older AI rows were created
+            before the Python was persisted alongside them. They still <em>render</em> as cards (their history is
+            real), but they can never be re-executed — so they sit at Inconclusive or as legacy verdicts forever.
+            Only rows that carry their own test code participate in a run.
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>Nodes 3 &amp; 4 — the LLM proposes (only if there's room)</h3>
+          <p>
+            <strong>If the catalogue already holds 12 live hypotheses, both of these nodes do nothing.</strong>
+            The run becomes a pure re-execution of the tests we already have, and the model is never called.
+          </p>
+          <p>
+            Below 12, the model picks 3–4 risk dimensions, then for each one proposes hypotheses as JSON —
+            slug, title, description, and <strong>mandatory</strong> Python defining
+            <span class="mono">evaluate(loans, vehicle_states, daily_km)</span>. A proposal with no code
+            is discarded on the spot. New slugs are de-duplicated against the entire catalogue.
+          </p>
+          <p class="where">Model: <b>gpt-4o-mini</b> (env <span class="mono">NBFC_OPENAI_MODEL</span>), temperature 0.2 &nbsp;·&nbsp; cap <b>MAX_ACTIVE_LLM_HYPOTHESES = 12</b></p>
+          <div class="note why">
+            <strong>Why the cap:</strong> without it every click minted 6–8 fresh hypotheses, tested them once,
+            and abandoned them. The catalogue reached 45 entries with only ~8 current, so the page filled with
+            stale one-shot verdicts that reshuffled on every click.
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>Node 5 — run the tests. This is the only place severity is decided.</h3>
+          <p>
+            First the sandbox is health-checked <em>once</em>. Then the tenant's real data is fetched once and
+            reused for every hypothesis: <strong>loans</strong> (from the CRM database),
+            <strong>vehicle_states</strong> and <strong>14 days of daily km</strong> (from the IoT telemetry
+            database). Each hypothesis's stored Python is executed against those DataFrames.
+          </p>
+          <p>There is deliberately <strong>no LLM fallback</strong> here. Four outcomes, and only one of them is a verdict:</p>
+          <div class="t-scroll" style="margin-top:.35rem">
+            <table>
+              <thead>
+                <tr><th>What happened</th><th>Card becomes</th><th>verdict_source</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Python ran, returned <span class="mono">high</span> / <span class="mono">warn</span> / <span class="mono">ok</span></td>
+                  <td><span class="chip high">High</span> <span class="chip warn">Warn</span> <span class="chip ok">OK</span></td>
+                  <td class="mono">sandbox</td>
+                </tr>
+                <tr>
+                  <td>Sandbox is down, <em>or</em> the IoT database is unreachable</td>
+                  <td><span class="chip incon">Inconclusive</span></td>
+                  <td class="mono">none</td>
+                </tr>
+                <tr>
+                  <td>Python ran but returned a severity we don't recognise</td>
+                  <td><span class="chip incon">Inconclusive</span></td>
+                  <td class="mono">none</td>
+                </tr>
+                <tr>
+                  <td>The generated Python raised, or the sandbox call failed</td>
+                  <td><span class="chip err">Error</span></td>
+                  <td class="mono">none</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="where" style="margin-top:.6rem"><b>runTest()</b> &nbsp;·&nbsp; sandbox: <span class="mono">services/risk-sandbox</span> (FastAPI, bearer token)</p>
+          <div class="note why">
+            <strong>The sandbox is a real jail, not a figure of speech.</strong> It is a separate Python service
+            that parses the model's code and rejects it unless every name is on an allowlist —
+            <span class="mono">pandas</span> and <span class="mono">numpy</span> only. No imports, no
+            <span class="mono">eval</span>, no <span class="mono">open</span>, no network. Execution runs in a
+            child process capped at 30 seconds, 1 GiB, and zero subprocesses. We are executing code a language
+            model wrote; it does not get to touch anything.
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>Node 6 — write the cards (and apply the cap)</h3>
+          <p>
+            Brand-new hypotheses are inserted into <span class="mono">risk_hypotheses</span> with their Python
+            stored in <span class="mono">test_definition</span>, so tomorrow's run re-executes <em>this exact
+            test</em> rather than inventing a new one. They start <strong>unpromoted</strong>.
+          </p>
+          <p>
+            Then the cap is applied: an unpromoted AI hypothesis reporting <span class="chip high">High</span>
+            is written as <span class="chip warn">Warning</span>, with the reason appended to its critique and
+            <span class="mono">severity_capped</span> flagged in its evidence. Finally one row per hypothesis
+            lands in <span class="mono">risk_card_runs</span>.
+          </p>
+          <p class="where"><b>writeCards()</b> · <b>capUnpromotedSeverity()</b> &nbsp;·&nbsp; migration <b>E-188</b></p>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>Persistently broken tests retire themselves</h3>
+          <p>
+            If an AI hypothesis's Python has errored on its last <strong>3 consecutive runs</strong>, it is
+            retired: <span class="mono">retired_at</span> and a reason are set. It keeps its full card history
+            but is never executed or rendered again.
+          </p>
+          <p class="where"><b>retireIfPersistentlyBroken()</b> · RETIRE_AFTER_CONSECUTIVE_ERRORS = 3</p>
+          <div class="note why">
+            <strong>Why:</strong> a generated test that always crashes isn't a risk signal, it's a bug — and left
+            alone it would burn a sandbox slot every single night, forever.
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>The run is closed out, and the summary comes back to the button</h3>
+          <p>
+            The <span class="mono">risk_runs</span> row is marked <span class="mono">completed</span> with its
+            counts and token usage — or <span class="mono">failed</span> with the error, so a dead run always
+            carries a reason. The button turns that into the little line beside it:
+            <em>“10 of 12 hypotheses tested · 2 inconclusive”</em>, then calls
+            <span class="mono">router.refresh()</span>.
+          </p>
+          <p class="where"><b>completeRiskRun()</b> / <b>failRiskRun()</b></p>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-body">
+          <h3>The page re-renders from the database</h3>
+          <p>
+            The Risk page is a server component. It loads every non-retired hypothesis, finds the
+            <strong>latest</strong> <span class="mono">risk_card_runs</span> row for each, and renders it.
+            It does not re-compute anything — with one exception below.
+          </p>
+          <p>
+            <strong>The first-load fallback:</strong> if a hand-coded hypothesis has no stored run at all, the
+            page runs its evaluator live, on the spot, so a brand-new tenant isn't staring at an empty screen.
+            That's why the header can say <em>“Never run — these cards are computed live on page load.”</em>
+            An AI hypothesis with no stored run has no evaluator to fall back on, so it honestly renders as
+            <em>“Never tested.”</em>
+          </p>
+          <p class="where">src/app/(dashboard)/nbfc/risk/page.tsx &nbsp;·&nbsp; <b>loadCards()</b></p>
+        </div>
+      </li>
+
+    </ol>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="severity">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Where the colour comes from</p>
+      <h2>How a number becomes a severity</h2>
+      <p>
+        Every card computes a fraction — <em>affected ÷ assessable</em> — and compares it to two cutoffs.
+        The cutoffs differ per card, because 1% of vehicles leaving their operating area is not the same
+        kind of event as 1% of vehicles driving a bit less.
+      </p>
+    </div>
+
+    <div class="t-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Hand-coded card</th>
+            <th>What it measures</th>
+            <th class="num">High at</th>
+            <th class="num">Warn at</th>
+            <th>Threshold source</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mono">usage-drop-7d</span></td>
+            <td>Week-over-week collapse in km driven</td>
+            <td class="num">≥ 5%</td>
+            <td class="num">≥ 1%</td>
+            <td>Governed — <span class="mono">usage_drop_pct</span> (default 40%)</td>
+          </tr>
+          <tr>
+            <td><span class="mono">dpd-7-no-telemetry</span></td>
+            <td>Past-due <em>and</em> gone silent on GPS</td>
+            <td class="num">≥ 3%</td>
+            <td class="num">≥ 1%</td>
+            <td>Governed — <span class="mono">emi_overdue_days</span> (30), <span class="mono">offline_alert_hours</span> (24)</td>
+          </tr>
+          <tr>
+            <td><span class="mono">geo-shift</span></td>
+            <td>Vehicle far from its own 30-day home cluster</td>
+            <td class="num">≥ 0.5%</td>
+            <td class="num">≥ 0.1%</td>
+            <td>Governed — <span class="mono">geo_shift_km</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">battery-soh-decay</span></td>
+            <td>&gt; 5pp state-of-health drop in 30 days</td>
+            <td class="num">≥ 2%</td>
+            <td class="num">≥ 0.5%</td>
+            <td>Hard-coded — no battery rule exists in the catalogue</td>
+          </tr>
+          <tr>
+            <td><span class="mono">low-utilization-active-loan</span></td>
+            <td>Active EMI, averaging &lt; 20 km/day</td>
+            <td class="num">≥ 10%</td>
+            <td class="num">≥ 4%</td>
+            <td>Hard-coded window (14d, min 7 reporting days)</td>
+          </tr>
+          <tr>
+            <td><span class="mono">AI-authored cards</span> <span class="chip err" style="margin-left:.3rem">AI</span></td>
+            <td>Whatever the model proposed</td>
+            <td class="num">≥ 5%</td>
+            <td class="num">≥ 1%</td>
+            <td>Rule-of-thumb given to the model in its prompt — then <strong>capped to Warn</strong> unless promoted</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note why" style="margin-top:1.5rem">
+      <strong>The denominator is the point.</strong> Each card scores against the population it can actually
+      <em>measure</em>, not the whole loan book. A vehicle with no GPS history has no home base, so it is
+      excluded from <span class="mono">geo-shift</span> rather than counted as “not diverted”. Vehicles that
+      reported on fewer than 7 of the last 14 days are excluded from the utilisation card rather than counted
+      as idle. That's what “<span class="mono">4 / 5 affected</span>” on a card means: four of the five loans
+      we could <em>assess</em> — not four of five in the portfolio.
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="rails">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">The part that's easy to miss</p>
+      <h2>Five rails that stop the engine lying to you</h2>
+      <p>
+        Every one of these exists because the alternative already happened. This is the section worth
+        dwelling on — it's the difference between an alert system and a random number generator.
+      </p>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <span class="tag">Rail 1</span>
+        <h3>“Inconclusive” is not “OK”</h3>
+        <p>
+          <span class="chip ok">OK</span> means <em>we ran the test and found nothing</em>.
+          <span class="chip incon">Inconclusive</span> means <em>we could not run the test</em>.
+          <span class="chip err">Error</span> means <em>the test blew up</em>. Collapsing those three into
+          a green OK is exactly what made a broken engine render as a healthy portfolio.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Rail 2</span>
+        <h3>The LLM never states a number</h3>
+        <p>
+          Ask a model for an <span class="mono">affected_count</span> and it will produce one that looks
+          exactly like a measured number and isn't. So it only ever writes the <em>code</em>. When we can't
+          execute that code, we say so instead of guessing.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Rail 3</span>
+        <h3>Unreviewed AI cards can't cry wolf</h3>
+        <p>
+          High → Warning, until a human promotes the hypothesis. You do that by opening the card and clicking
+          <strong>Promote</strong> in the detail drawer — where you can read the question it asks, the code
+          that answers it, and the rows it matched <em>before</em> you vouch for it. <strong>Retire</strong>
+          sits next to it, for tests that are simply wrong.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Rail 4</span>
+        <h3>Every card records what judged it</h3>
+        <p>
+          The thresholds in force are snapshotted into each card's evidence at run time. Without that, a card
+          read six months from now would be silently reinterpreted against whatever the rules say <em>then</em>.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Rail 5</span>
+        <h3>Cards go stale, and say so</h3>
+        <p>
+          Anything older than <strong>36 hours</strong> is flagged <em>Stale</em> in the header — the nightly
+          cron should have replaced it. A card carries the time it was produced, so a March number and a
+          five-minute-old number no longer look identical.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Rail 6</span>
+        <h3>The same test, every night</h3>
+        <p>
+          The Python is stored with the hypothesis and re-executed. That's what makes a card comparable to
+          <em>itself</em> over time — previously the code was thrown away and next run invented an entirely
+          different test.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="decoder">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Reading the actual screen</p>
+      <h2>What every element on the Risk page is telling you</h2>
+      <p>Using the live numbers from the current iTarang Finance view.</p>
+    </div>
+
+    <div class="decode">
+      <div>
+        <span class="ui">35 of 56 hypotheses<br />produced a computed verdict</span>
+        <span class="means">
+          <strong>56</strong> = every non-retired hypothesis in the catalogue (hand-coded + AI).
+          <strong>35</strong> = how many of them have a verdict someone actually <em>computed</em>
+          (<span class="mono">hand_coded</span> or <span class="mono">sandbox</span>).
+          The gap of 21 is the honest admission: those cards were not measured this run.
+        </span>
+      </div>
+      <div>
+        <span class="ui">Last analysis<br />7/14/2026, 10:15 AM</span>
+        <span class="means">
+          The most recent <span class="mono">risk_runs</span> row. If it were older than 36 hours you'd see a
+          <strong>Stale</strong> pill next to it; if one were running right now it would say
+          <em>“Analysis running now…”</em>.
+        </span>
+      </div>
+      <div>
+        <span class="ui" style="color:var(--err)">16 cards pre-date<br />verdict tracking (E-185)</span>
+        <span class="means">
+          These rows were written <strong>before</strong> we started recording where a number came from. Back then
+          an LLM could state its own severity and count. They're backfilled to
+          <span class="mono">legacy_llm</span> and marked <strong>unverified</strong> —
+          <strong>re-running the analysis replaces them.</strong> This banner disappears when it does.
+        </span>
+      </div>
+      <div>
+        <span class="ui">High Alert 9 · Warning 7<br />Inconclusive 5 · OK 35</span>
+        <span class="means">
+          The four tabs. Note <span class="chip err">Error</span> cards are folded into the
+          <strong>Inconclusive</strong> tab — from an operator's point of view both mean “this produced no
+          verdict” — but they stay distinct in the database and on the card's chip, so we can still tell a
+          crash from a missing sandbox.
+        </span>
+      </div>
+      <div>
+        <span class="ui">AI</span>
+        <span class="means">
+          The hypothesis was written by the model (<span class="mono">source !== 'human'</span>). No badge means
+          one of the 5 hand-coded evaluators.
+        </span>
+      </div>
+      <div>
+        <span class="ui">7 <span style="color:var(--ink-3)">/ 7 affected</span></span>
+        <span class="means">
+          <strong>affected ÷ assessable</strong>, and the bar underneath is that same share — the one that
+          picked the card's colour. It is <em>not</em> a share of the whole portfolio.
+        </span>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:1.75rem">
+      <span class="tag">Worth raising in the meeting</span>
+      <h3>Every card in the current High Alert tab is badged AI — and that shouldn't be possible</h3>
+      <p>
+        An unpromoted AI hypothesis is capped at <strong>Warning</strong>. So a High Alert badged
+        <strong>AI</strong> can only be one of two things: a hypothesis a human has explicitly
+        <em>promoted</em>, or a <strong>legacy row written before the cap existed</strong> — which is exactly
+        what the violet 16-card banner above it is warning about.
+      </p>
+      <p>
+        That is the banner and the High Alert tab describing <em>the same problem</em>. Re-running the analysis
+        is what resolves it: those 16 legacy cards get replaced with computed verdicts, and any AI card that
+        still wants to be a High Alert has to be promoted by a human first.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="cron">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">The other trigger</p>
+      <h2>Nobody is supposed to need that button</h2>
+    </div>
+    <div class="prose stack">
+      <p>
+        The button exists for an operator who wants an answer <em>now</em>. What actually keeps the cards fresh
+        is a nightly cron on the VPS, at <strong>01:30</strong>, which sweeps <em>every</em> active tenant
+        through the identical workflow:
+      </p>
+      <div class="t-scroll" style="background:var(--panel)">
+        <table>
+          <tbody>
+            <tr><td class="mono" style="white-space:nowrap">30 1 * * *</td><td class="mono">POST /api/cron/nbfc/risk-analysis &nbsp;<span style="color:var(--ink-3)">(Bearer CRON_SECRET)</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        It takes the same per-tenant lock, so a cron sweep that collides with someone's manual click is
+        <strong>skipped, not queued</strong>. And one tenant's failure doesn't abort the sweep for the rest —
+        its run row is marked failed with the reason, and the loop moves on.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="tables">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Where it all lands</p>
+      <h2>The three tables</h2>
+    </div>
+    <div class="t-scroll">
+      <table>
+        <thead>
+          <tr><th>Table</th><th>Holds</th><th>Key columns</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">risk_hypotheses</td>
+            <td>The catalogue — the <em>questions</em>. One row per hypothesis, forever.</td>
+            <td class="mono">slug · title · source ('human' | 'llm-v1') · test_definition (the Python) · promoted_at · retired_at · retire_reason</td>
+          </tr>
+          <tr>
+            <td class="mono">risk_card_runs</td>
+            <td>The verdicts — the <em>answers</em>. One row per hypothesis per run. This is what the page renders.</td>
+            <td class="mono">tenant_id · hypothesis_id · run_id · severity · verdict_source · finding_summary · affected_count · total_count · evidence_json · llm_critique · run_at</td>
+          </tr>
+          <tr>
+            <td class="mono">risk_runs</td>
+            <td>The runs themselves — the lock, the audit trail, and the freshness clock.</td>
+            <td class="mono">tenant_id · triggered_by ('manual' | 'cron') · actor_user_id · status · started_at · finished_at · error · cards_computed · token counts</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note" style="margin-top:1rem">
+      Migrations: <strong>E-185</strong> added <span class="mono">verdict_source</span> (the provenance of every
+      number) · <strong>E-186</strong> aligned hypothesis text with the code that tests it ·
+      <strong>E-187</strong> added <span class="mono">risk_runs</span> and the lock ·
+      <strong>E-188</strong> added human promotion.
+    </p>
+
+    <div class="note why" style="margin-top:1.25rem">
+      <strong>Scope, stated plainly.</strong> The engine's only input from the CRM database is
+      <span class="mono">nbfc_loans</span> — it does <em>not</em> read
+      <span class="mono">borrower_risk_scores</span> or <span class="mono">emi_schedules</span>. Everything else
+      it knows comes from the IoT telemetry database. And this flow writes no alert rows and no audit-log entries:
+      the Action Framework table at the bottom of the Risk page <em>describes</em> the approval and audit chain —
+      it doesn't execute one. If your team leader asks “where does the alert go”, the honest answer today is:
+      it goes on this page, and nowhere else.
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="faq" style="border-bottom:0">
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Anticipated</p>
+      <h2>The questions you'll get asked</h2>
+    </div>
+
+    <details open>
+      <summary>“So is this thing AI, or is it rules?”</summary>
+      <p>
+        Both, and the split is the whole design. The AI's job is <strong>generating the questions</strong> —
+        it proposes hypotheses a human might not have thought to write, and it writes the code to test them.
+        The <strong>answers</strong> are always computed: hand-written TypeScript for the 5 core cards, sandboxed
+        Python for the AI ones. The model is a research assistant, not a judge.
+      </p>
+    </details>
+
+    <details>
+      <summary>“Why does it say 35 of 56 — what happened to the other 21?”</summary>
+      <p>
+        They have no computed verdict. Either they're legacy rows from before we tracked provenance (the 16 in
+        the violet banner), or their test couldn't run this time — sandbox down, telemetry unreachable, or the
+        generated Python crashed. The page refuses to present those as measurements. Re-running is what shrinks
+        that gap.
+      </p>
+    </details>
+
+    <details>
+      <summary>“Can the AI put a false emergency in front of a credit officer?”</summary>
+      <p>
+        Not on its own. An AI hypothesis nobody has reviewed is capped at <strong>Warning</strong>, no matter what
+        its Python computes. To become a High Alert it has to be promoted by a human, which is a deliberate action
+        on a specific endpoint. The High Alerts visible today are legacy rows that pre-date that cap — see the
+        callout above.
+      </p>
+    </details>
+
+    <details>
+      <summary>“What happens if the IoT telemetry database is down?”</summary>
+      <p>
+        The run still completes, and every card that needed telemetry says it wasn't tested — a coverage gap, not
+        an engine failure. The page shows an amber banner naming the problem. Critically, none of those cards turn
+        green: an unreachable database can never be mistaken for a healthy portfolio.
+      </p>
+      <p>
+        In local development this is the single most common cause of a page full of Inconclusive cards — the IoT
+        database is only reachable through the <span class="mono">ssh -N iot-bastion</span> tunnel.
+      </p>
+    </details>
+
+    <details>
+      <summary>“Does clicking the button twice run it twice?”</summary>
+      <p>
+        No. The second click gets a 409 and the message <em>“Analysis already running — wait for it to finish.”</em>
+        The lock is a database constraint, not a check in application code, so it holds even across separate
+        processes — the nightly cron and a manual click can't collide either.
+      </p>
+    </details>
+
+    <details>
+      <summary>“Why doesn't the catalogue just keep growing?”</summary>
+      <p>
+        It's capped at 12 live AI hypotheses. At the cap, a run proposes nothing and simply re-executes the tests
+        it already has — which also means it skips both LLM calls entirely and costs nothing in tokens. Tests that
+        crash on 3 consecutive runs retire themselves out of the pool.
+      </p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>iTarang — NBFC Risk Alerts. Generated from the code on branch <span class="mono">Rushikesh-claude</span>.</p>
+    <p>
+      Engine: <span class="mono">src/lib/ai/langgraph/risk-hypothesis-graph.ts</span> ·
+      Evaluators: <span class="mono">src/lib/risk/hand-coded-cards.ts</span> ·
+      Page: <span class="mono">src/app/(dashboard)/nbfc/risk/page.tsx</span>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
