@@ -84,6 +84,15 @@ const HEADS: DealTableHead[] = [
   { label: "Proof" },
 ];
 
+/** Human label for a settlement method. `API` rows are online RazorpayX payouts /
+ *  Razorpay payment-link receipts (settlement_transactions.method = 'API', minted
+ *  by lib/buyback/gateway.ts) — "Razorpay" reads better than the raw enum, and
+ *  those rows carry no proof file (proof_s3 is NULL), which the Proof cell already
+ *  renders as an em dash rather than a broken link. */
+function methodLabel(method: string): string {
+  return method === "API" ? "Razorpay" : method;
+}
+
 /** `?from=` value for the given date-range pill selection. */
 function fromParam(dateFilter: string): string {
   if (dateFilter === ALL) return ALL_TIME_FROM;
@@ -163,7 +172,10 @@ export default function BuybackLedgerPage() {
   const methodOptions = useMemo(() => {
     const seen = new Set<string>();
     for (const r of rows) seen.add(r.method);
-    return [{ value: ALL, label: "All" }, ...[...seen].sort().map((m) => ({ value: m, label: m }))];
+    return [
+      { value: ALL, label: "All" },
+      ...[...seen].sort().map((m) => ({ value: m, label: methodLabel(m) })),
+    ];
   }, [rows]);
 
   const directionOptions = [
@@ -222,7 +234,7 @@ export default function BuybackLedgerPage() {
         key="method"
         className="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600"
       >
-        {r.method}
+        {methodLabel(r.method)}
       </span>,
       <span key="date" className="text-slate-500">
         {r.txn_date}
