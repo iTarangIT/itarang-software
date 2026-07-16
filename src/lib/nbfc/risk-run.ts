@@ -153,7 +153,22 @@ export async function getRunFreshness(tenantId: string): Promise<RunFreshness> {
 }
 
 function isUniqueViolation(e: unknown): boolean {
-  return typeof e === "object" && e !== null && "code" in e && (e as { code?: string }).code === "23505";
+  // Drizzle wraps the driver error: the pg error carrying code '23505' is on
+  // `.cause`, not the top-level object (the thrown error's message is just
+  // "Failed query: insert into ..."). Walk the cause chain so a wrapped
+  // unique-violation is still recognised — otherwise beginRiskRun re-throws it
+  // and the route returns a 500 instead of the intended 409 "already running".
+  for (let err: unknown = e, depth = 0; err != null && depth < 5; depth++) {
+    if (
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: string }).code === "23505"
+    ) {
+      return true;
+    }
+    err = (err as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
