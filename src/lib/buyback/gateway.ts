@@ -187,6 +187,17 @@ const toJsonb = (v: unknown): string | null =>
   v === undefined || v === null ? null : JSON.stringify(v);
 
 /**
+ * Today's calendar date in IST (Asia/Kolkata — a fixed +5:30 with no DST), as
+ * 'YYYY-MM-DD'. A bare `new Date().toISOString().slice(0,10)` stamps the UTC
+ * date, which is YESTERDAY between 00:00 and 05:29 IST — a settlement minted just
+ * after midnight in India would carry the previous day. Adding the fixed offset
+ * before taking the UTC calendar date yields the IST calendar date.
+ */
+function istToday(): string {
+  return new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
  * An ADMIN-facing PORTAL alert that is NOT the product of a state transition —
  * an anomaly nobody planned for (a reversed payout, a payment on a dead link, an
  * amount that does not reconcile). Mirrors applyTransition's insert into
@@ -334,8 +345,10 @@ export async function applyGatewayOutcome(
             kind: "gateway_alert",
             severity: "warning",
             message:
-              `A payment arrived on a ${row.status.toLowerCase()} payment link for deal ` +
-              `${ref.request_no} — recording it, but verify it is genuinely this deal's money.`,
+              `A payment arrived on a ${row.status.toLowerCase()} ${
+                row.kind === "PAYOUT" ? "payout" : "payment link"
+              } for deal ${ref.request_no} — recording it, but verify it is ` +
+              `genuinely this deal's money.`,
             gateway_txn_id: row.id,
             request_no: ref.request_no,
           },
@@ -584,8 +597,10 @@ export async function applyGatewayOutcome(
         txn_ref: txnRef,
         amount: expected.toString(),
         // Recorded = closed, exactly like the manual route: the amount is derived
-        // from the locks, so it is paid in full or not recorded at all.
-        txn_date: new Date().toISOString().slice(0, 10),
+        // from the locks, so it is paid in full or not recorded at all. The date
+        // is the IST calendar date (istToday) — a UTC slice would stamp yesterday
+        // for a payout that processed between 00:00 and 05:29 IST.
+        txn_date: istToday(),
         proof_s3: null,
         note: `via ${row.provider} ${row.kind} ${row.provider_ref ?? ""}`.trim(),
         recorded_by: row.initiated_by,
@@ -747,33 +762,169 @@ export function mapPaymentLinkStatus(
   }
 }
 
-/** Reconcile ONE stale in-flight payout row against RazorpayX. */
-async function sweepPayoutRow(row: GatewayRow): Promise<ApplyGatewayResult | null> {
+// ─────────────────── correlation + shaping helpers (R4–R6) ──────────────────
+// Read/adopt/shape helpers the HTTP surface (initiation routes, webhooks, the
+// refresh route) shares. All the raw gateway-row SQL — enum casts and the
+// provider_ref race guards — lives HERE, in the domain module, not scattered
+// across route files.
+
+/** A single attempt by id, or null. */
+export async function getGatewayTxn(id: string): Promise<GatewayRow | null> {
+  const rows = await db.execute(sql`
+    SELECT ${GATEWAY_COLUMNS}
+    FROM buyback_gateway_transactions
+    WHERE id = ${id}::uuid
+  `);
+  return (rows as unknown as GatewayRow[])[0] ?? null;
+}
+
+/** Correlate a webhook to its attempt by the provider's id (unique index). */
+export async function findGatewayTxnByProviderRef(
+  providerRef: string,
+): Promise<GatewayRow | null> {
+  const rows = await db.execute(sql`
+    SELECT ${GATEWAY_COLUMNS}
+    FROM buyback_gateway_transactions
+    WHERE provider_ref = ${providerRef}
+    LIMIT 1
+  `);
+  return (rows as unknown as GatewayRow[])[0] ?? null;
+}
+
+/**
+ * Claim a provider_ref for an attempt that has none yet. Guarded by
+ * `WHERE provider_ref IS NULL` AND the provider_ref unique index: if a concurrent
+ * path (a webhook and the poller racing to adopt the same payout) already set it,
+ * this updates 0 rows and returns false — the caller must NOT act on its stale
+ * NULL-provider_ref snapshot; whoever won reconciles the fresh row on its pass.
+ */
+export async function adoptGatewayProviderRef(
+  txnId: string,
+  providerRef: string,
+): Promise<boolean> {
+  try {
+    const rows = await db.execute(sql`
+      UPDATE buyback_gateway_transactions
+         SET provider_ref = ${providerRef}, updated_at = now()
+       WHERE id = ${txnId}::uuid AND provider_ref IS NULL
+      RETURNING id
+    `);
+    return (rows as unknown as unknown[]).length > 0;
+  } catch {
+    // provider_ref unique violation: another attempt already owns this id.
+    return false;
+  }
+}
+
+/**
+ * Stamp the provider's identifiers onto a freshly-created attempt, immediately
+ * after its create call returns. provider_ref is unique and set exactly once.
+ * Guarded on status='INITIATED' so that if a webhook has already advanced the row
+ * (the create response and the first webhook can race), this no-ops instead of
+ * clobbering the status the webhook moved forward — that webhook's adopt path set
+ * provider_ref itself.
+ */
+export async function attachProviderRef(
+  txnId: string,
+  opts: { providerRef: string; raw: unknown; shortUrl?: string | null; status?: "PENDING" },
+): Promise<void> {
+  const sets = [
+    sql`provider_ref = ${opts.providerRef}`,
+    sql`raw_payload = ${toJsonb(opts.raw)}::jsonb`,
+    sql`updated_at = now()`,
+  ];
+  if (opts.shortUrl !== undefined) sets.push(sql`short_url = ${opts.shortUrl}`);
+  if (opts.status) sets.push(sql`status = ${opts.status}::buyback_gateway_status`);
+  await db.execute(sql`
+    UPDATE buyback_gateway_transactions
+       SET ${sql.join(sets, sql`, `)}
+     WHERE id = ${txnId}::uuid AND status = 'INITIATED'
+  `);
+}
+
+/** The request a deal hangs off — for a webhook/route's audit + alert copy. */
+export async function dealRequestRef(
+  dealId: string,
+): Promise<{ request_id: string; request_no: string } | null> {
+  const rows = (await db.execute(sql`
+    SELECT br.id AS request_id, br.request_no
+    FROM buyback_deals bd
+    JOIN buyback_requests br ON br.id = bd.request_id
+    WHERE bd.id = ${dealId}::uuid
+  `)) as unknown as Array<{ request_id: string; request_no: string }>;
+  return rows[0] ?? null;
+}
+
+/**
+ * The redacted attempt projection the admin UI consumes — the SAME shape the
+ * invoice GET's gateway.txns entries use. Never carries raw_payload, the internal
+ * settlement id, initiated_by, provider_ref, or payment_id.
+ */
+export interface GatewayTxnView {
+  id: string;
+  leg: "DEALER" | "VENDOR";
+  kind: "PAYOUT" | "PAYMENT_LINK";
+  status: string;
+  short_url: string | null;
+  utr: string | null;
+  failure_reason: string | null;
+  created_at: Date | string;
+}
+export function gatewayTxnView(row: GatewayRow): GatewayTxnView {
+  return {
+    id: row.id,
+    leg: row.leg,
+    kind: row.kind,
+    status: row.status,
+    short_url: row.short_url,
+    utr: row.utr,
+    failure_reason: row.failure_reason,
+    created_at: row.created_at,
+  };
+}
+
+// ─────────────────────────── the poller's row work ──────────────────────────
+
+/** Whether a reconciled row moved (applied) and whether it reached terminality. */
+export interface GatewaySweepRowResult {
+  /** applyGatewayOutcome changed state (false on a no-op against a terminal row). */
+  applied: boolean;
+  /** the applied outcome moved the row to a terminal state (not a progress ping). */
+  terminal: boolean;
+}
+
+/** Apply an outcome and classify it for the sweep/refresh summary. A `progress`
+ *  outcome is an in-flight check-in, NOT an advance to a terminal state — the two
+ *  are counted separately so the summary is not misleading. */
+async function applyAndClassify(
+  rowId: string,
+  outcome: GatewayOutcome,
+): Promise<GatewaySweepRowResult> {
+  const result = await applyGatewayOutcome(rowId, outcome);
+  return { applied: result.applied, terminal: outcome.type !== "progress" };
+}
+
+/** Reconcile ONE in-flight payout row against RazorpayX. */
+async function sweepPayoutRow(row: GatewayRow): Promise<GatewaySweepRowResult | null> {
   // The attempt committed but we have no provider ref — the create call may have
   // succeeded without our storing the id (a crash between call and commit), or
   // it may never have happened.
   if (!row.provider_ref && row.status === "INITIATED") {
     const found = await findPayoutByReference(row.id);
     if (found) {
-      // Adopt the ref. The provider_ref unique index refuses a second adopter; a
-      // lost race means another path already owns this payout — leave it.
-      try {
-        await db.execute(sql`
-          UPDATE buyback_gateway_transactions
-             SET provider_ref = ${found.id}, updated_at = now()
-           WHERE id = ${row.id}::uuid AND provider_ref IS NULL
-        `);
-      } catch {
-        return null;
-      }
+      // Adopt the ref. If a concurrent adopter (a racing webhook) already won,
+      // the guarded UPDATE matches 0 rows → skip and let the winner reconcile the
+      // fresh row, rather than acting on our stale NULL-provider_ref snapshot.
+      const adopted = await adoptGatewayProviderRef(row.id, found.id);
+      if (!adopted) return null;
       const outcome = mapPayoutStatus(found.status, found);
-      return outcome ? applyGatewayOutcome(row.id, outcome) : null;
+      return outcome ? applyAndClassify(row.id, outcome) : null;
     }
     // Never reached the provider. Give a create 30 minutes before declaring it
     // dead — one may still be in flight in another request.
     const ageMs = Date.now() - new Date(row.created_at).getTime();
     if (ageMs > 30 * 60 * 1000) {
-      return applyGatewayOutcome(row.id, {
+      return applyAndClassify(row.id, {
         type: "failure",
         status: "FAILED",
         reason: "never reached provider",
@@ -786,11 +937,11 @@ async function sweepPayoutRow(row: GatewayRow): Promise<ApplyGatewayResult | nul
   if (!row.provider_ref) return null; // in-flight, no ref, not INITIATED — wait
   const payout = await fetchPayout(row.provider_ref);
   const outcome = mapPayoutStatus(payout.status, payout);
-  return outcome ? applyGatewayOutcome(row.id, outcome) : null;
+  return outcome ? applyAndClassify(row.id, outcome) : null;
 }
 
-/** Reconcile ONE stale in-flight payment-link row against Razorpay. */
-async function sweepLinkRow(row: GatewayRow): Promise<ApplyGatewayResult | null> {
+/** Reconcile ONE in-flight payment-link row against Razorpay. */
+async function sweepLinkRow(row: GatewayRow): Promise<GatewaySweepRowResult | null> {
   if (!row.provider_ref) return null;
   const link = await fetchBuybackPaymentLink(row.provider_ref);
   const raw = (link.raw ?? {}) as Record<string, unknown>;
@@ -802,20 +953,35 @@ async function sweepLinkRow(row: GatewayRow): Promise<ApplyGatewayResult | null>
   const paid = paymentsArr.find((p) => p && (p.status === "captured" || p.payment_id));
   const paymentId = paid?.payment_id ? String(paid.payment_id) : null;
   const outcome = mapPaymentLinkStatus(link.status, { paymentId, amountPaidPaise, raw: link.raw });
-  return outcome ? applyGatewayOutcome(row.id, outcome) : null;
+  return outcome ? applyAndClassify(row.id, outcome) : null;
 }
 
 /**
- * The poller's unit of work (this task builds it; a later task ticks it).
+ * Reconcile ONE attempt against its provider on demand (the refresh route) — the
+ * same per-row work the poller does, minus the staleness filter. The caller owns
+ * the provider-config gate and re-reads the row afterward for the response.
+ */
+export async function reconcileGatewayRow(
+  row: GatewayRow,
+): Promise<GatewaySweepRowResult | null> {
+  return row.kind === "PAYOUT" ? sweepPayoutRow(row) : sweepLinkRow(row);
+}
+
+/**
+ * The poller's unit of work (the ticker in instrumentation-node.ts drives it).
  *
  * Reads in-flight rows that have gone quiet for >10 minutes, oldest first, and
  * reconciles each against its provider. Every row is wrapped in try/catch: a
  * provider error on ONE row (a transient 5xx, a rate limit) must not abort the
  * sweep — the next row may be a different provider entirely.
+ *
+ * `advanced` counts only rows that reached a TERMINAL state; a mere in-flight
+ * progress check-in is counted in `progressed`, so the summary never overstates
+ * how many attempts actually resolved.
  */
 export async function sweepInflightGatewayTxns(
   limit = 20,
-): Promise<{ checked: number; advanced: number; failed: number }> {
+): Promise<{ checked: number; advanced: number; progressed: number; failed: number }> {
   const rows = (await db.execute(sql`
     SELECT ${GATEWAY_COLUMNS}
     FROM buyback_gateway_transactions
@@ -827,6 +993,7 @@ export async function sweepInflightGatewayTxns(
 
   let checked = 0;
   let advanced = 0;
+  let progressed = 0;
   let failed = 0;
 
   for (const row of rows) {
@@ -837,13 +1004,15 @@ export async function sweepInflightGatewayTxns(
       if (row.kind === "PAYOUT" && !payoutsConfigured()) continue;
       if (row.kind === "PAYMENT_LINK" && !buybackLinksConfigured()) continue;
 
-      const result =
-        row.kind === "PAYOUT" ? await sweepPayoutRow(row) : await sweepLinkRow(row);
-      if (result?.applied) advanced += 1;
+      const result = await reconcileGatewayRow(row);
+      if (result?.applied) {
+        if (result.terminal) advanced += 1;
+        else progressed += 1;
+      }
     } catch {
       failed += 1;
     }
   }
 
-  return { checked, advanced, failed };
+  return { checked, advanced, progressed, failed };
 }
