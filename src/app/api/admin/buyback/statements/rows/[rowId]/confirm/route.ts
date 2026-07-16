@@ -35,6 +35,7 @@ import { settlementTransactions } from "@/lib/db/schema";
 import { requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError, ValidationError } from "@/lib/buyback/errors";
 import { inr } from "@/lib/buyback/format";
+import { assertNoInflightGateway } from "@/lib/buyback/gateway";
 import {
   dealMoney,
   dealerPayout,
@@ -187,6 +188,11 @@ export const POST = withErrorHandler(
       // agreeing to the count. Every path that creates a DEALER settlement must
       // pass through here.
       await assertPayoutAllowed(locked.id, leg, tx);
+
+      // Same M13 race guard as the manual route: a bank-statement match must not
+      // settle a leg that an online payout/link is still resolving, or the money
+      // lands twice.
+      await assertNoInflightGateway(locked.id, leg, tx);
 
       const money = await dealMoney(locked.id, tx);
       const receipt = vendorReceipt(money);
