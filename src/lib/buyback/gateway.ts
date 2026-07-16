@@ -942,7 +942,31 @@ async function sweepPayoutRow(row: GatewayRow): Promise<GatewaySweepRowResult | 
 
 /** Reconcile ONE in-flight payment-link row against Razorpay. */
 async function sweepLinkRow(row: GatewayRow): Promise<GatewaySweepRowResult | null> {
-  if (!row.provider_ref) return null;
+  // The attempt committed but the plink id was never stored (a crash between
+  // provider-accept and attachProviderRef). Unlike payouts there is no
+  // documented lookup-by-reference_id to adopt the ref, so after the same
+  // 30-minute grace the row is auto-resolved — to CANCELLED, not FAILED, on
+  // purpose: if the stray link somehow gets paid later, the paid webhook
+  // (correlating via the notes fallback) hits the success-on-CANCELLED
+  // exception and the money is still recorded. No vendor ever saw the URL —
+  // the email outbox insert only happens after attachProviderRef — and the
+  // failure path's admin alert tells a human to check the Razorpay dashboard
+  // for the stray link. Without this, the one-inflight-per-leg index would
+  // block the VENDOR leg (new links AND manual settlement) forever.
+  if (!row.provider_ref) {
+    if (row.status !== "INITIATED") return null;
+    const ageMs = Date.now() - new Date(row.created_at).getTime();
+    if (ageMs > 30 * 60 * 1000) {
+      return applyAndClassify(row.id, {
+        type: "failure",
+        status: "CANCELLED",
+        reason:
+          "link creation never confirmed locally — auto-cancelled; check the Razorpay dashboard for a stray link",
+        raw: null,
+      });
+    }
+    return null;
+  }
   const link = await fetchBuybackPaymentLink(row.provider_ref);
   const raw = (link.raw ?? {}) as Record<string, unknown>;
   const amountPaidPaise = Number((raw.amount_paid as number | undefined) ?? 0);
