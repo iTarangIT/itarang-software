@@ -191,3 +191,4 @@ export async function listActiveTenants(): Promise<TenantContext[]> {
 
   return rows.map((r) => ({ ...r, via: "cron" as const }));
 }
+
