@@ -24,6 +24,18 @@ import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
 import StatusChip from "@/components/buyback/StatusChip";
 import { inr } from "@/lib/buyback/format";
 
+/** One reason a DRAFT can't be submitted — mirrors GateIssue on the server. */
+export interface DraftBlocker {
+  line_id: string | null;
+  code:
+    | "NO_LINES"
+    | "TOO_FEW_PHOTOS"
+    | "MISSING_PROVENANCE"
+    | "MISSING_SPECS"
+    | "QTY_SPLIT_MISMATCH";
+  message: string;
+}
+
 /** The dealer's own view of a request row — GET /api/buyback/requests. */
 export interface DealerRequestRow {
   request_id: string;
@@ -34,6 +46,13 @@ export interface DealerRequestRow {
   submitted_at: string | null;
   total_units: number;
   dealer_quote: number;
+  /**
+   * Why this draft can't be submitted yet. Null for anything already
+   * submitted — the question doesn't apply, and [] there would read as
+   * "nothing is blocking it". Straight from the submit gate, so it says
+   * exactly what the Submit button would.
+   */
+  draft_blockers?: DraftBlocker[] | null;
 }
 
 const HEADS: DealTableHead[] = [

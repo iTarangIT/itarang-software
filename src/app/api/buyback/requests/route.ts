@@ -28,8 +28,10 @@ import { buybackBatches, buybackDeals, buybackRequests } from "@/lib/db/schema";
 import { requireDealer } from "@/lib/buyback/auth";
 import { dealerPayoutSourcesForEntity } from "@/lib/buyback/money";
 import { dealerPickupSourcesForEntity } from "@/lib/buyback/pickup";
+import { draftBlockersFor, draftBlockersForEntity } from "@/lib/buyback/queries";
 import { nextRequestNo } from "@/lib/buyback/request-no";
 import { toDealerPayout, toDealerPickup } from "@/lib/buyback/serialize";
+import type { GateIssue } from "@/lib/buyback/submit-gate";
 
 export const runtime = "nodejs";
 
@@ -135,9 +137,17 @@ export const GET = withErrorHandler(async () => {
   // the same dealer_entity_id, in lib), then per-row serialization. The
   // serializers are the redaction boundary: only their output shapes reach
   // the wire.
-  const [pickupByRequest, payoutByRequest] = await Promise.all([
+  // E-194 adds a third: why each DRAFT can't be submitted. Only fetched when
+  // the dealer actually has a draft — the common case is none, and there is no
+  // point querying lines for a list that has nothing to explain.
+  const hasDrafts = rows.some((r) => r.status === "DRAFT");
+
+  const [pickupByRequest, payoutByRequest, draftBlockers] = await Promise.all([
     dealerPickupSourcesForEntity(actor.entityId!),
     dealerPayoutSourcesForEntity(actor.entityId!),
+    hasDrafts
+      ? draftBlockersForEntity(actor.entityId!)
+      : Promise.resolve(new Map<string, GateIssue[]>()),
   ]);
 
   const requests = rows.map((r) => ({
@@ -147,6 +157,10 @@ export const GET = withErrorHandler(async () => {
       locked_dealer_total: payoutByRequest.get(r.request_id)?.locked_dealer_total ?? null,
       settlements: payoutByRequest.get(r.request_id)?.settlements ?? [],
     }),
+    // Null for anything already submitted — the question only applies to a
+    // draft, and an empty array there would read as "nothing is blocking it".
+    draft_blockers:
+      r.status === "DRAFT" ? draftBlockersFor(draftBlockers, r.request_id) : null,
   }));
 
   return successResponse({ requests });

@@ -77,9 +77,11 @@ export function missingSpecFields(line: GateLine): string[] {
   if (blank(line.unit_weight_kg)) missing.push("unit weight (kg)");
   if (line.iot_battery === null || line.iot_battery === undefined) {
     missing.push("IOT battery (yes/no)");
-  } else if (line.iot_battery === true && blank(line.iot_brand_name)) {
-    missing.push("IOT brand name");
   }
+  // The IOT brand name is deliberately NOT required. A dealer buying a pack
+  // second-hand often cannot know who made the IOT module, and demanding it
+  // only bought us guesses. Blank now resolves to DEFAULT_IOT_BRAND at write
+  // time (see line-spec.ts) rather than blocking the submit.
   return missing;
 }
 
@@ -122,16 +124,23 @@ export function checkSubmitReadiness(lines: GateLine[]): GateResult {
     }
 
     // The functional / non-functional split is optional — but if the dealer
-    // declares it, it has to add up. A line claiming 5 functional out of 3, or
-    // 2 + 2 out of 3, is a data bug the review queue should never receive.
+    // declares it, it cannot exceed what is in the lot. A line claiming 5
+    // functional out of 3, or 2 + 2 out of 3, is a data bug the review queue
+    // should never receive.
+    //
+    // It must NOT EXCEED the quantity, not EQUAL it. This demanded equality
+    // until E-194, which rejected the ordinary case of a dealer who tested
+    // some of the lot and not the rest: 5 working + 3 dead out of 10 is a
+    // truthful declaration with 2 untested, and the gate called it a data bug.
+    // The remainder is simply unclassified.
     const f = line.functional_qty;
     const nf = line.non_functional_qty;
     if (f !== null && nf !== null && f !== undefined && nf !== undefined) {
-      if (f + nf !== line.quantity) {
+      if (f + nf > line.quantity) {
         issues.push({
           line_id: line.id,
           code: "QTY_SPLIT_MISMATCH",
-          message: `${line.label}: functional (${f}) + non-functional (${nf}) must equal the quantity (${line.quantity}).`,
+          message: `${line.label}: functional (${f}) + non-functional (${nf}) cannot exceed the quantity (${line.quantity}).`,
         });
       }
     } else if ((f ?? nf) !== null && (f ?? nf) !== undefined && (f ?? nf)! > line.quantity) {

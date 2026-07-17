@@ -4,10 +4,25 @@
  * The review queue (BRD M06). Columns match the design handoff:
  * Request · Dealer · Provenance · Dealer quote · SLA aging · Status.
  *
- * Closed/terminal deals drop out; DRAFTs never appear (the dealer hasn't
- * submitted them). ORDER BY is backed by the E-192
- * buyback_requests_submitted_created_idx (submitted_at NULLS LAST,
- * created_at) — there was no supporting index for this sort before.
+ * Closed/terminal deals drop out. DRAFTs are hidden by default (the dealer
+ * hasn't submitted them) — `?include_drafts=1` asks for them anyway.
+ *
+ * Newest first. It sorted oldest-first until E-194 — defensible for a work
+ * queue you drain FIFO, but this screen is also where an admin looks to
+ * confirm a request they were just told about, and that one was on the last
+ * page. The E-192 index (submitted_at NULLS LAST, created_at) can't serve
+ * this: reverse-scanning it yields DESC NULLS FIRST, which would float every
+ * unsubmitted row to the top. E-194 adds the matching
+ * buyback_requests_submitted_created_desc_idx (submitted_at DESC NULLS LAST,
+ * created_at DESC).
+ *
+ * A dealer with only DRAFTs is invisible here by default, and that is correct
+ * — but it reads as "their request vanished". It is why this screen looked
+ * broken: on db-1, 24 of the first 32 requests were abandoned drafts and only
+ * one of four dealers had ever submitted, so the queue truthfully showed a
+ * single dealer and got blamed for it. Two answers, neither of which is
+ * loosening the gate: `?include_drafts=1` here, and the dealer-side draft
+ * banner that tells them the request was saved but never sent.
  *
  * Ext-5 (admin Negotiations screen): two additive per-row fields —
  * `neg_rounds` (count of DEALER-leg negotiation_rounds) and
@@ -69,11 +84,42 @@ export const GET = withErrorHandler(async (request: Request) => {
   const limit = parseIntParam(searchParams.get("limit"), DEFAULT_LIMIT, { min: 1, max: MAX_LIMIT });
   const offset = parseIntParam(searchParams.get("offset"), 0, { min: 0 });
 
-  // Documents picker uses scope=all to reach CLOSED/SETTLED deals for audit
+  // Documents picker uses scope=all to reach CLOSED/SETTLED deals for audit.
+  const terminal = scope === "all" ? [] : ["CLOSED", "SETTLED", "REJECTED", "CANCELLED"];
+
+  // `?include_drafts=1` (E-194) surfaces requests the dealer has saved but not
+  // submitted. Off by default and deliberately so: a draft is the dealer's
+  // unfinished workspace, and on db-1 they outnumbered real requests 24 to 8.
+  // But invisible-by-default is what made three dealers' requests look like
+  // they were never saved, so an admin can now ask for them explicitly.
+  const includeDrafts = searchParams.get("include_drafts") === "1";
+  const hidden = includeDrafts ? terminal : ["DRAFT", ...terminal];
+
   const statusFilter =
-    scope === "all"
-      ? sql`bd.status NOT IN ('DRAFT')`
-      : sql`bd.status NOT IN ('DRAFT', 'CLOSED', 'SETTLED', 'REJECTED', 'CANCELLED')`;
+    hidden.length === 0
+      ? sql`TRUE`
+      : sql`bd.status NOT IN (${sql.join(
+          hidden.map((s) => sql`${s}`),
+          sql`, `,
+        )})`;
+
+  // Newest first — but "newest" means different columns for the two scopes.
+  //
+  // A draft has submitted_at NULL by definition, so the default
+  // `submitted_at DESC NULLS LAST` sorts EVERY draft after EVERY submitted
+  // request. With a 500-row page that puts the drafts on the last page of a
+  // busy queue: an admin ticks "Include drafts", 500 identical submitted rows
+  // come back, and the pill appears to do nothing. Which is precisely the
+  // last-page problem the DESC flip was made to fix, reintroduced for the exact
+  // rows the scope exists to surface.
+  //
+  // So when drafts are asked for, sort by created_at alone — the one column
+  // both populations actually have. The default path keeps submitted_at, which
+  // is the column an admin means by "recent" for work that is waiting on them,
+  // and which the E-194 index backs.
+  const orderBy = includeDrafts
+    ? sql`br.created_at DESC`
+    : sql`br.submitted_at DESC NULLS LAST, br.created_at DESC`;
 
   const rows = await db.execute(sql`
     SELECT
@@ -149,7 +195,7 @@ export const GET = withErrorHandler(async (request: Request) => {
       WHERE bb.request_id = br.id
     ) agg ON true
     WHERE ${statusFilter}
-    ORDER BY br.submitted_at ASC NULLS LAST, br.created_at ASC
+    ORDER BY ${orderBy}
     LIMIT ${limit + 1} OFFSET ${offset}
   `);
 

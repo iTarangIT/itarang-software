@@ -12,9 +12,32 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { formatBatteryLine } from "./format";
 import type { AdminLineView } from "./serialize";
-import type { GateLine } from "./submit-gate";
+import { checkSubmitReadiness, type GateIssue, type GateLine } from "./submit-gate";
 import type { DealState } from "./state-machine";
 import type { BuybackTx } from "./tx";
+
+/**
+ * Provenance is satisfied by a LINE record, or by a UNIT record on every unit
+ * of the line. Anything less is a gap the submit gate must catch.
+ *
+ * One fragment, two readers (linesForRequest and draftBlockersForEntity).
+ * Written out twice it would drift, and the two would then disagree about
+ * whether a request is submittable — the gate saying yes on one screen and no
+ * on the other. Assumes the caller aliases buyback_lines as `bl`.
+ */
+const HAS_PROVENANCE = sql`(
+  EXISTS (SELECT 1 FROM provenance_records pr
+          WHERE pr.line_id = bl.id AND pr.scope = 'LINE')
+  OR (
+    (SELECT count(*) FROM buyback_units u WHERE u.line_id = bl.id) > 0
+    AND NOT EXISTS (
+      SELECT 1 FROM buyback_units u
+      WHERE u.line_id = bl.id
+        AND NOT EXISTS (SELECT 1 FROM provenance_records pr
+                        WHERE pr.unit_id = u.id AND pr.scope = 'UNIT')
+    )
+  )
+)`;
 
 export interface DealHeader {
   request_id: string;
@@ -67,21 +90,7 @@ export async function linesForRequest(
       bl.iot_battery,
       bl.iot_brand_name,
       (SELECT count(*)::int FROM buyback_photos p WHERE p.line_id = bl.id) AS photo_count,
-      -- Provenance is satisfied by a LINE record, or by a UNIT record on every
-      -- unit of the line. Anything less is a gap the submit gate must catch.
-      (
-        EXISTS (SELECT 1 FROM provenance_records pr
-                WHERE pr.line_id = bl.id AND pr.scope = 'LINE')
-        OR (
-          (SELECT count(*) FROM buyback_units u WHERE u.line_id = bl.id) > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM buyback_units u
-            WHERE u.line_id = bl.id
-              AND NOT EXISTS (SELECT 1 FROM provenance_records pr
-                              WHERE pr.unit_id = u.id AND pr.scope = 'UNIT')
-          )
-        )
-      ) AS has_provenance,
+      ${HAS_PROVENANCE} AS has_provenance,
       -- The dealer's accepted price: the lock if margin is set, else the price on
       -- the ACCEPTED final offer at the current version.
       COALESCE(
@@ -172,6 +181,108 @@ export function toGateLines(
     functional_qty: l.functional_qty,
     non_functional_qty: l.non_functional_qty,
   }));
+}
+
+/**
+ * Why each of a dealer's DRAFT requests cannot be submitted yet, keyed by
+ * request id (E-194).
+ *
+ * A draft is invisible to admin by design, which is correct but reads as "my
+ * request vanished" — on db-1, 24 of the first 32 requests died this way, and
+ * three of four dealers had never landed a single one in the review queue.
+ * Nothing told them: 14 drafts had no battery lines at all and 10 had lines
+ * with zero photos against a minimum of five.
+ *
+ * One query for the whole list rather than linesForRequest per draft, matching
+ * dealerPickupSourcesForEntity / dealerPayoutSourcesForEntity. It answers via
+ * checkSubmitReadiness — the same function the submit button and the submit
+ * route call — so the banner cannot claim a request is ready when the server
+ * would refuse it, or the reverse.
+ *
+ * A request with no lines has no rows here at all, so callers must treat a
+ * missing entry as NO_LINES rather than as "ready" — see draftBlockersFor().
+ */
+export async function draftBlockersForEntity(
+  entityId: string,
+): Promise<Map<string, GateIssue[]>> {
+  const rows = await db.execute(sql`
+    SELECT
+      bb.request_id,
+      bl.id,
+      cv.voltage,
+      cv.ah,
+      bl.quantity,
+      bl.condition,
+      bl.brand,
+      bl.chemistry,
+      bl.nominal_voltage,
+      bl.nominal_ampere,
+      bl.unit_weight_kg,
+      bl.iot_battery,
+      bl.iot_brand_name,
+      bl.functional_qty,
+      bl.non_functional_qty,
+      (SELECT count(*)::int FROM buyback_photos p WHERE p.line_id = bl.id) AS photo_count,
+      ${HAS_PROVENANCE} AS has_provenance
+    FROM buyback_lines bl
+    JOIN buyback_batches  bb ON bb.id = bl.batch_id
+    JOIN buyback_requests br ON br.id = bb.request_id
+    JOIN buyback_deals    bd ON bd.request_id = br.id
+    JOIN catalog_variants cv ON cv.id = bl.variant_id
+    WHERE br.dealer_entity_id = ${entityId}
+      AND bd.status = 'DRAFT'
+    ORDER BY bb.request_id, bl.created_at
+  `);
+
+  const byRequest = new Map<string, GateLine[]>();
+  for (const r of rows as unknown as Array<Record<string, unknown>>) {
+    const requestId = String(r.request_id);
+    const line: GateLine = {
+      id: String(r.id),
+      label: formatBatteryLine({
+        id: String(r.id),
+        quantity: Number(r.quantity),
+        condition: r.condition as "WORKING" | "DEAD",
+        voltage: r.voltage as string,
+        ah: r.ah as string,
+      }).full,
+      quantity: Number(r.quantity),
+      photo_count: Number(r.photo_count),
+      has_provenance: Boolean(r.has_provenance),
+      brand: (r.brand as string) ?? null,
+      chemistry: (r.chemistry as string) ?? null,
+      nominal_voltage: (r.nominal_voltage as string) ?? null,
+      nominal_ampere: (r.nominal_ampere as string) ?? null,
+      unit_weight_kg: (r.unit_weight_kg as string) ?? null,
+      iot_battery: r.iot_battery == null ? null : Boolean(r.iot_battery),
+      iot_brand_name: (r.iot_brand_name as string) ?? null,
+      functional_qty: r.functional_qty == null ? null : Number(r.functional_qty),
+      non_functional_qty: r.non_functional_qty == null ? null : Number(r.non_functional_qty),
+    };
+    const bucket = byRequest.get(requestId);
+    if (bucket) bucket.push(line);
+    else byRequest.set(requestId, [line]);
+  }
+
+  const out = new Map<string, GateIssue[]>();
+  for (const [requestId, lines] of byRequest) {
+    out.set(requestId, checkSubmitReadiness(lines).issues);
+  }
+  return out;
+}
+
+/**
+ * The blockers for one DRAFT request, given the map above.
+ *
+ * A lineless draft contributes no rows to the query, so it is absent from the
+ * map — which is precisely the request that is furthest from submittable. Ask
+ * the gate with an empty list rather than reading absence as "fine".
+ */
+export function draftBlockersFor(
+  blockers: Map<string, GateIssue[]>,
+  requestId: string,
+): GateIssue[] {
+  return blockers.get(requestId) ?? checkSubmitReadiness([]).issues;
 }
 
 /** Header for a request, with the dealer's firm details for the admin queue. */
