@@ -1682,7 +1682,7 @@ export default function BuybackIntake({
                       Ramesh" is an unverifiable claim — which is how a stolen
                       battery gets laundered through a buyback scheme. */}
                   <div className="mt-3 grid grid-cols-2 gap-3">
-                    <Field label="ID proof (PAN / DL / Aadhaar)">
+                    <Field label="ID proof (PAN / DL / Aadhaar) — PDF or image">
                       <div className="flex gap-2">
                         <select
                           value={row.id_proof_type}
@@ -1745,7 +1745,7 @@ export default function BuybackIntake({
                       </div>
                     </Field>
 
-                    <Field label="Purchase proof (optional)">
+                    <Field label="Purchase proof (optional) — PDF or image">
                       <ProofUpload
                         fileName={row.purchase_proof_name}
                         previewUrl={
