@@ -930,6 +930,15 @@ export interface VendorThreadView {
    * rather than merely ghosted.
    */
   can_respond: boolean;
+  /**
+   * Whether the vendor may raise their PO (E-196). True once they have AGREED
+   * and have not already sent one. Derived from `has_vendor_po` for the same
+   * reason as can_respond — the button is present exactly when the action is,
+   * not ghosted after the fact.
+   */
+  can_raise_po: boolean;
+  /** Their proforma, once iTarang has issued it against their PO — step 3/4. */
+  proforma: { number: string; total: number; pdf_available: boolean } | null;
 }
 
 export interface VendorThreadSource {
@@ -941,6 +950,10 @@ export interface VendorThreadSource {
   lines: VendorLineSource[];
   sent_at: Date | string | null;
   responded_at: Date | string | null;
+  /** Whether a VENDOR-leg PO already exists on this deal. */
+  has_vendor_po?: boolean;
+  /** The live proforma raised against this vendor's PO, if any. */
+  proforma?: { number: string; total: number | string; pdf_s3: string | null } | null;
 }
 
 function sumBy(
@@ -972,5 +985,16 @@ export function toVendorThread(input: VendorThreadSource): VendorThreadView {
     // A struck or lost thread is over. The server still refuses either way —
     // this only stops us showing a button that would 409.
     can_respond: input.status === "SENT" || input.status === "COUNTERED",
+    // AGREED and no PO yet. The server enforces both (loadOwnThread checks
+    // AGREED; the pair check prevents a duplicate) — this only decides whether
+    // to show the upload card.
+    can_raise_po: input.status === "AGREED" && !input.has_vendor_po,
+    proforma: input.proforma
+      ? {
+          number: input.proforma.number,
+          total: Number(input.proforma.total),
+          pdf_available: input.proforma.pdf_s3 !== null,
+        }
+      : null,
   };
 }

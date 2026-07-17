@@ -92,6 +92,14 @@ interface Gateway {
   txns: GatewayTxn[];
 }
 
+interface Proforma {
+  id: string;
+  number: string;
+  total: string;
+  pdf_s3: string | null;
+  issued_at: string;
+}
+
 interface Money {
   request_id: string;
   status: string;
@@ -99,6 +107,9 @@ interface Money {
   match: Match | null;
   history: Array<{ number: string; returned_reason: string | null }>;
   vendor_invoice: Invoice | null;
+  proforma: Proforma | null;
+  /** The vendor's PO number — a proforma answers it; null = no PO to answer. */
+  vendor_po_number: string | null;
   gateway: Gateway | null;
 }
 
@@ -581,6 +592,50 @@ export default function MoneyBoard({
               );
             })}
           </div>
+
+          {/* The Proforma Invoice (E-196) — step 3 of the vendor flow. iTarang
+              raises it against the vendor's PO; the vendor pays against it. Only
+              shown once the POs are exchanged, because a proforma answers a PO.
+              vendor_po_number gates the raise: no PO, nothing to answer. */}
+          {m.vendor_po_number && (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-slate-700">Proforma invoice</span>
+                {m.proforma ? (
+                  <>
+                    <span className="text-[12.5px] font-bold tabular-nums text-slate-900">
+                      {m.proforma.number} · {inr(Number(m.proforma.total))}
+                    </span>
+                    <button
+                      disabled={busy}
+                      onClick={() => post(`/api/admin/buyback/requests/${requestId}/proforma`)}
+                      className="ml-auto rounded-md border border-slate-300 px-2.5 py-1 text-[11.5px] font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+                    >
+                      Re-issue
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[11.5px] text-slate-500">
+                      Against the vendor&apos;s PO {m.vendor_po_number}
+                    </span>
+                    <button
+                      disabled={busy}
+                      onClick={() => post(`/api/admin/buyback/requests/${requestId}/proforma`)}
+                      className="ml-auto rounded-lg bg-bb-navy px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      Raise proforma
+                    </button>
+                  </>
+                )}
+              </div>
+              {m.proforma && (
+                <p className="mt-1.5 text-[11px] text-slate-400">
+                  Re-issuing supersedes {m.proforma.number}; the vendor sees only the current one.
+                </p>
+              )}
+            </div>
+          )}
 
           {can("close_deal") && (
             <button

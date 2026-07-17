@@ -23,12 +23,12 @@
  * billed the vendor is a deal that leaks money.
  */
 
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
-import { invoiceLines, invoices } from "@/lib/db/schema";
+import { invoiceLines, invoices, proformaInvoices, purchaseOrders } from "@/lib/db/schema";
 import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError, ValidationError } from "@/lib/buyback/errors";
 import { gatewayTxnsForDeal } from "@/lib/buyback/gateway";
@@ -153,6 +153,27 @@ export const GET = withErrorHandler(
       loadAgreedVendorContact(header.deal_id),
     ]);
 
+    // The live proforma (E-196), and whether a vendor PO exists to raise one
+    // against. The screen needs both to decide between "raise" and "re-issue"
+    // and to disable the control when there is no PO yet.
+    const [livePi] = await db
+      .select({
+        id: proformaInvoices.id,
+        number: proformaInvoices.number,
+        total: proformaInvoices.total,
+        pdf_s3: proformaInvoices.pdf_s3,
+        issued_at: proformaInvoices.issued_at,
+      })
+      .from(proformaInvoices)
+      .where(and(eq(proformaInvoices.deal_id, header.deal_id), eq(proformaInvoices.status, "ISSUED")))
+      .limit(1);
+
+    const [vendorPo] = await db
+      .select({ number: purchaseOrders.number })
+      .from(purchaseOrders)
+      .where(and(eq(purchaseOrders.deal_id, header.deal_id), eq(purchaseOrders.leg, "VENDOR")))
+      .limit(1);
+
     return successResponse({
       request_id: request.id,
       status: header.status,
@@ -160,6 +181,8 @@ export const GET = withErrorHandler(
       match,
       history: all.filter((i) => i.status === "RETURNED"),
       vendor_invoice: all.find((i) => i.leg === "VENDOR") ?? null,
+      proforma: livePi ?? null,
+      vendor_po_number: vendorPo?.number ?? null,
       // The settlement legs live here too, so the money pane fetches once.
       settlements: await settlementsForDeal(header.deal_id),
       gateway: {

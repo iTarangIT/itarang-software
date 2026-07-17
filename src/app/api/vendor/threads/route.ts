@@ -42,6 +42,8 @@ export const GET = withErrorHandler(async () => {
       pickup_state: t.pickup_state,
       sent_at: t.sent_at,
       responded_at: t.responded_at,
+      has_vendor_po: t.has_vendor_po,
+      proforma: t.proforma,
       lines: t.lines.map((l) => ({
         line_id: l.line_id,
         quantity: l.quantity,

@@ -206,6 +206,10 @@ export interface VendorOwnThreadRow {
   pickup_city: string | null;
   pickup_state: string | null;
   lines: ThreadLineRow[];
+  /** E-196 — has this vendor already raised their PO on this deal? */
+  has_vendor_po: boolean;
+  /** E-196 — the live proforma iTarang issued against their PO, if any. */
+  proforma: { number: string; total: number | string; pdf_s3: string | null } | null;
 }
 
 /**
@@ -234,6 +238,20 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
       vt.responded_at,
       COALESCE(pa.city,  da.city)  AS pickup_city,
       COALESCE(pa.state, da.state) AS pickup_state,
+      -- E-196: whether this vendor has already raised their PO, and the live
+      -- proforma iTarang has issued against it. Scalar subqueries — no GROUP BY
+      -- entanglement, and no dealer-side money: a PI carries only the vendor's
+      -- own agreed total.
+      EXISTS (
+        SELECT 1 FROM purchase_orders po
+         WHERE po.deal_id = vt.deal_id AND po.leg = 'VENDOR'
+      ) AS has_vendor_po,
+      (
+        SELECT json_build_object('number', pi.number, 'total', pi.total, 'pdf_s3', pi.pdf_s3)
+          FROM proforma_invoices pi
+         WHERE pi.deal_id = vt.deal_id AND pi.status = 'ISSUED'
+         LIMIT 1
+      ) AS proforma,
       COALESCE(
         json_agg(
           json_build_object(
@@ -276,6 +294,8 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
     pickup_city: (r.pickup_city as string) ?? null,
     pickup_state: (r.pickup_state as string) ?? null,
     lines: (r.lines as ThreadLineRow[]) ?? [],
+    has_vendor_po: Boolean(r.has_vendor_po),
+    proforma: (r.proforma as VendorOwnThreadRow["proforma"]) ?? null,
   }));
 }
 
