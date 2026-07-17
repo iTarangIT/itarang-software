@@ -550,13 +550,55 @@ const DEALER_HIDDEN_ACTIONS = new Set([
   // The vendor's PO arriving is a vendor-leg event; only the completed
   // exchange (which the dealer is party to) is theirs to see.
   "record_vendor_po",
+  // E-195 — the same two moves made FIRST-HAND by a vendor with a login. They
+  // hide for the identical reason as their record_* twins above: what a vendor
+  // offered is our margin. Listed explicitly rather than caught by an
+  // `e.role === "vendor"` blanket — see the filter below for why that blanket
+  // was a trap.
+  "vendor_counter",
+  "vendor_agree",
+  "vendor_declined",
+]);
+
+/**
+ * Actions a vendor performs that the dealer IS entitled to see.
+ *
+ * Tiny by design, and separate from the hide-list on purpose: this is the
+ * exception to "a vendor's actions are not the dealer's business", and an
+ * exception should be enumerable at a glance.
+ *
+ * `exchange_pos` is the case that matters. It fires inside whichever
+ * transaction completes the PO pair — so once a vendor can upload their own PO,
+ * the SAME event carries role='admin' or role='vendor' depending purely on who
+ * happened to upload second.
+ */
+const DEALER_VISIBLE_VENDOR_ACTIONS = new Set([
+  "exchange_pos",
+  "schedule_pickup",
+  "complete_pickup",
 ]);
 
 export function visibleActivityForDealer<
   T extends { action: string; role: string; after?: unknown },
 >(entries: T[]): T[] {
   return entries.filter((e) => {
-    if (e.role === "vendor" || DEALER_HIDDEN_ACTIONS.has(e.action)) return false;
+    // FILTER BY ACTION, NOT BY ROLE.
+    //
+    // This was `if (e.role === "vendor" || ...)` — a blanket that was correct
+    // only by coincidence. It was written when `vendor` appeared on exactly two
+    // actions (vendor_counter, vendor_agree), both of which must be hidden, so
+    // role and action agreed. E-195 gave vendors a login and broke that
+    // coincidence: `exchange_pos` fires inside whichever transaction completes
+    // the PO pair, so it carries role='vendor' when the vendor uploads second
+    // and role='admin' when the admin does. Under the blanket, the dealer's own
+    // PO-exchange row — an event the hide-list's own comment says they "must
+    // see" — would vanish from their audit trail if and only if the vendor
+    // happened to be second. Non-deterministic visibility of the dealer's own
+    // deal, decided by a race.
+    //
+    // What decides visibility is WHAT HAPPENED, never who typed it.
+    if (e.role === "vendor" && !DEALER_VISIBLE_VENDOR_ACTIONS.has(e.action)) return false;
+    if (DEALER_HIDDEN_ACTIONS.has(e.action)) return false;
 
     // Settlements are per-leg under one action name. The dealer's own payout
     // is theirs to see; the VENDOR receipt is the other half of the margin —

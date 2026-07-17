@@ -696,6 +696,62 @@ describe("vendor payload excludes dealer identity — ABSENT, not null", () => {
 // Widening a masked type is the riskiest edit in this module: every field added
 // here is a field that now leaves the building.
 // ===========================================================================
+// ===========================================================================
+// E-195 fallout: the dealer's activity filter used to key off ROLE, which was
+// only ever correct by coincidence. Giving vendors a login broke the
+// coincidence — these pin the fix.
+// ===========================================================================
+describe("dealer activity is filtered by ACTION, never by who typed it", () => {
+  it("shows the PO exchange whichever counterparty uploaded second", () => {
+    // THE BUG THE OLD FILTER HAD. exchange_pos fires inside whichever
+    // transaction completes the PO pair, so it carries role='admin' or
+    // role='vendor' purely by race. A blanket `role === "vendor" -> hide` made
+    // the dealer's sight of their OWN PO exchange depend on that race.
+    const viaAdmin = visibleActivityForDealer([{ action: "exchange_pos", role: "admin" }]);
+    const viaVendor = visibleActivityForDealer([{ action: "exchange_pos", role: "vendor" }]);
+    expect(viaAdmin).toHaveLength(1);
+    expect(viaVendor).toHaveLength(1);
+  });
+
+  it("hides a vendor's first-hand counter and agreement", () => {
+    // What a vendor offered IS the margin. These hide for the same reason as
+    // their record_* twins — not because a vendor typed them.
+    const out = visibleActivityForDealer([
+      { action: "vendor_counter", role: "vendor" },
+      { action: "vendor_agree", role: "vendor" },
+      { action: "vendor_declined", role: "vendor" },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("hides them even if an admin somehow performed them", () => {
+    // Belt and braces: the hide-list is keyed on the action, so a
+    // mis-attributed row still cannot leak the vendor leg.
+    const out = visibleActivityForDealer([
+      { action: "vendor_counter", role: "admin" },
+      { action: "record_vendor_agreement", role: "admin" },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("still hides an unknown vendor action — new vendor actions fail SAFE", () => {
+    // The allow-list is the point: a vendor-leg action added later is hidden by
+    // omission rather than by somebody remembering to hide it.
+    const out = visibleActivityForDealer([
+      { action: "some_future_vendor_thing", role: "vendor" },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("still shows the dealer their own fulfilment events", () => {
+    const out = visibleActivityForDealer([
+      { action: "schedule_pickup", role: "vendor" },
+      { action: "complete_pickup", role: "admin" },
+    ]);
+    expect(out).toHaveLength(2);
+  });
+});
+
 describe("vendor line carries the battery spec (E-191) but never the dealer", () => {
   const SPEC = {
     line_id: "line-1",
