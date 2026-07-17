@@ -105,8 +105,12 @@ describe("a vendor's reach stops at their own leg", () => {
     }
   });
 
-  it("has no vendor edge after agreement either", () => {
-    // Once agreed, the price is a commitment to a third party (M07's boundary).
+  it("cannot NEGOTIATE after agreement — the price is a commitment (M07)", () => {
+    // A vendor may still ACT after agreement — E-196 lets them raise their own
+    // PO from VENDOR_AGREED (exchange_pos). What they may never do again is move
+    // the PRICE: vendor_counter / vendor_agree are gone. The boundary is about
+    // the money, not about the vendor's involvement ending.
+    const PRICE_MOVES = new Set(["vendor_counter", "vendor_agree", "record_vendor_counter", "record_vendor_agreement"]);
     const after: DealState[] = [
       "VENDOR_AGREED",
       "PO_EXCHANGED",
@@ -119,12 +123,23 @@ describe("a vendor's reach stops at their own leg", () => {
     ];
     for (const state of after) {
       for (const [action, edge] of Object.entries(TRANSITIONS[state])) {
+        if (!PRICE_MOVES.has(action)) continue;
         expect(
           edge.roles.includes("vendor"),
           `${state} + ${action} must not admit a vendor`,
         ).toBe(false);
       }
     }
+  });
+
+  it("lets a vendor raise their own PO from VENDOR_AGREED, and nowhere else", () => {
+    // E-196. The vendor is the buyer on their leg, and the buyer initiates.
+    expect(transition("VENDOR_AGREED", "exchange_pos", "vendor").ok).toBe(true);
+    // But not before agreement — there is no agreed price to invoice against.
+    expect(transition("VENDOR_NEGOTIATING", "exchange_pos", "vendor").ok).toBe(false);
+    expect(transition("MARGIN_SET", "exchange_pos", "vendor").ok).toBe(false);
+    // And a dealer never touches the vendor leg.
+    expect(transition("VENDOR_AGREED", "exchange_pos", "dealer").ok).toBe(false);
   });
 
   it("gives a vendor no say in the dealer leg or the money", () => {

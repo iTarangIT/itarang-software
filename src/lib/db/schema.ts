@@ -8378,6 +8378,66 @@ export const invoiceLines = pgTable(
   }),
 );
 
+// --- E-196: the Proforma Invoice ------------------------------------------
+// A SEPARATE table from `invoices`, which is the TAX slot. A proforma answers
+// the vendor's PO before payment; a tax invoice follows payment and needs the
+// GST treatment nobody has ruled on. Distinct series, distinct lifecycle, no
+// tax columns. See drizzle/E-196.
+export const buybackProformaStatus = pgEnum("buyback_proforma_status", [
+  "ISSUED",
+  "SUPERSEDED",
+  "CANCELLED",
+]);
+
+export const proformaInvoices = pgTable(
+  "proforma_invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    /** The vendor PO this answers. NOT NULL — no PO, no PI. */
+    po_id: uuid("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id),
+    number: text().notNull(), // 'PI-1001-V'
+    pdf_s3: text("pdf_s3"),
+    status: buybackProformaStatus().default("ISSUED").notNull(),
+    /** Server-derived from deal_line_locks.vendor_price (vendorReceipt), never the client. */
+    total: numeric({ precision: 14, scale: 2 }).notNull(),
+    issued_at: timestamp("issued_at", { withTimezone: true }).defaultNow().notNull(),
+    valid_until: timestamp("valid_until", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    numberUnique: uniqueIndex("proforma_invoices_number_unique").on(t.number),
+    poIdx: index("proforma_invoices_po_idx").on(t.po_id),
+    // One-live-per-deal is a PARTIAL unique index (WHERE status = 'ISSUED') and
+    // lives in the SQL migration — drizzle cannot express the predicate.
+  }),
+);
+
+export const proformaInvoiceLines = pgTable(
+  "proforma_invoice_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    proforma_id: uuid("proforma_id")
+      .notNull()
+      .references(() => proformaInvoices.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id),
+    quantity: integer().notNull(),
+    price_per_unit: numeric("price_per_unit", { precision: 12, scale: 2 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    lineUnique: uniqueIndex("proforma_invoice_lines_unique").on(t.proforma_id, t.line_id),
+  }),
+);
+
 // M13/U10 — TXN-{n}-D (OUT, dealer payout) + TXN-{n}-V (IN, vendor receipt).
 // Both closed ⇒ SETTLED. The difference between them IS the realised margin,
 // which is what M14's reconciliation invariant checks against the locks.

@@ -265,7 +265,16 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
   VENDOR_AGREED: {
     // Fires automatically inside the transaction that records whichever PO
     // completes the pair. POs are impossible before this state (M11 AC).
-    exchange_pos: { to: "PO_EXCHANGED", roles: ["admin"] },
+    //
+    // `vendor` joins `admin` here (E-196): with a login, the vendor raises their
+    // OWN PO instead of an admin recording it — and on the vendor leg the vendor
+    // IS the buyer, so this is the buyer initiating, exactly as intended. The
+    // action does not change: exchange_pos fires when the PAIR completes,
+    // whoever uploaded the second half. That is why the dealer's activity filter
+    // now keys on the action, not the role (serialize.ts) — the same event
+    // carries role='admin' or role='vendor' by pure race, and the dealer must
+    // see their PO exchange either way.
+    exchange_pos: { to: "PO_EXCHANGED", roles: ["admin", "vendor"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
 

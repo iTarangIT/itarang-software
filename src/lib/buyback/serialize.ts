@@ -548,8 +548,11 @@ const DEALER_HIDDEN_ACTIONS = new Set([
   "record_vendor_counter",
   "record_vendor_agreement",
   // The vendor's PO arriving is a vendor-leg event; only the completed
-  // exchange (which the dealer is party to) is theirs to see.
+  // exchange (which the dealer is party to) is theirs to see. Both spellings:
+  // record_vendor_po (admin recorded it) and submit_vendor_po (the vendor
+  // uploaded it themselves, E-196).
   "record_vendor_po",
+  "submit_vendor_po",
   // E-195 — the same two moves made FIRST-HAND by a vendor with a login. They
   // hide for the identical reason as their record_* twins above: what a vendor
   // offered is our margin. Listed explicitly rather than caught by an
