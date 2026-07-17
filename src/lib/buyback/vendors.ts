@@ -8,6 +8,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { NotFoundError } from "./errors";
 import type { BuybackTx } from "./tx";
 
 export interface VendorRow {
@@ -229,7 +230,7 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
 }
 
 /**
- * Load one of a vendor's own threads, or 404 (E-195).
+ * Load one of a vendor's own threads, or null (E-195).
  *
  * Someone else's thread is indistinguishable from a non-existent one — the same
  * reason loadOwnRequest 404s rather than 403s. A 403 would confirm the thread
@@ -241,6 +242,53 @@ export async function loadOwnThread(
 ): Promise<VendorOwnThreadRow | null> {
   const all = await threadsForVendor(entityId);
   return all.find((t) => t.thread_id === threadId) ?? null;
+}
+
+/**
+ * The INTERNAL context a thread's write path needs — floor total, request no,
+ * vendor name and email.
+ *
+ * SERVER-SIDE ONLY, and unscoped by design: it is the input to
+ * applyVendorResponse, which needs the floor to refuse a below-cost agreement.
+ * The caller is responsible for authorisation FIRST — the admin route proves
+ * staff, the vendor route proves ownership via loadOwnThread. Nothing in here
+ * may be serialized to a vendor: `floorTotal` is dealer_price + margin, which
+ * is our whole position.
+ *
+ * Shared by both write paths so the two cannot disagree about what a thread is.
+ */
+export async function threadContextFor(threadId: string) {
+  const rows = await db.execute(sql`
+    SELECT
+      vt.id, vt.deal_id, vt.vendor_id, vt.status, vt.quotation_no,
+      bd.request_id, bd.floor_total,
+      br.request_no,
+      a.business_entity_name AS vendor_name,
+      a.contact_email        AS vendor_email
+    FROM vendor_threads vt
+    JOIN buyback_deals bd    ON bd.id = vt.deal_id
+    JOIN buyback_requests br ON br.id = bd.request_id
+    JOIN scrap_vendors sv    ON sv.id = vt.vendor_id
+    JOIN accounts a          ON a.id = sv.entity_id
+    WHERE vt.id = ${threadId}
+    LIMIT 1
+  `);
+
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  if (!row) throw new NotFoundError("Vendor thread not found.");
+
+  return {
+    id: String(row.id),
+    dealId: String(row.deal_id),
+    vendorId: String(row.vendor_id),
+    status: String(row.status) as "SENT" | "COUNTERED" | "AGREED" | "LOST",
+    quotationNo: (row.quotation_no as string) ?? null,
+    requestId: String(row.request_id),
+    requestNo: String(row.request_no),
+    floorTotal: row.floor_total as string | null,
+    vendorName: String(row.vendor_name),
+    vendorEmail: (row.vendor_email as string) ?? null,
+  };
 }
 
 /**

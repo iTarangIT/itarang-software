@@ -374,6 +374,27 @@ export function allowedActions(state: DealState, role: ActorRole): DealAction[] 
 }
 
 /**
+ * Which action a vendor's counter/agreement becomes, given who is entering it.
+ *
+ * Lives here, with the vocabulary it maps into, because it is pure — and
+ * because its home (vendor-response.ts) imports the db, which would make this
+ * one-line decision untestable without a database.
+ *
+ * The distinction is not cosmetic. `record_vendor_*` by an admin is HEARSAY —
+ * they are transcribing an email. The bare verb by a vendor is TESTIMONY. Both
+ * reach the same state, so it would be easy to collapse them; that would launder
+ * one into the other in an INSERT-only audit log whose whole purpose is that
+ * someone can later tell the difference.
+ */
+export function vendorActionFor(
+  kind: "counter" | "agree",
+  role: "admin" | "vendor",
+): DealAction {
+  if (role === "vendor") return kind === "counter" ? "vendor_counter" : "vendor_agree";
+  return kind === "counter" ? "record_vendor_counter" : "record_vendor_agreement";
+}
+
+/**
  * The tooltip text for a ghosted action (BRD M06 — "ghosted+tooltip after").
  * The prototype has no ghosted state at all, so this copy is ours.
  */
