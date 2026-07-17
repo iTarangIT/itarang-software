@@ -144,6 +144,105 @@ export async function threadsForDeal(
   }));
 }
 
+/** One of a vendor's own threads, before serialization. */
+export interface VendorOwnThreadRow {
+  thread_id: string;
+  deal_id: string;
+  status: "SENT" | "COUNTERED" | "AGREED" | "LOST";
+  quotation_no: string | null;
+  sent_at: Date | null;
+  responded_at: Date | null;
+  pickup_city: string | null;
+  pickup_state: string | null;
+  lines: ThreadLineRow[];
+}
+
+/**
+ * The threads routed to ONE vendor — the read behind their dashboard (E-195).
+ *
+ * Scoped by the vendor's OWN accounts.id, in the WHERE. Same rule as
+ * loadOwnRequest: not fetched-then-filtered, so there is no window in which
+ * another vendor's thread is in memory relying on us to remember to drop it.
+ *
+ * NOTE WHAT IS NOT SELECTED. No dealer name, no dealer entity id, no address
+ * line, no dealer_price, no margin, no deal status. A vendor who can identify
+ * the dealer can go around us, and a vendor who knows what we paid knows our
+ * margin — this query is the first of the two places that has to hold that
+ * line (toVendorThread is the second, and the contract test asserts on it).
+ * The pickup city/state is the same masking pickupLocation() applies for the
+ * quotation PDF: enough to price transport, not enough to find the seller.
+ */
+export async function threadsForVendor(entityId: string): Promise<VendorOwnThreadRow[]> {
+  const rows = await db.execute(sql`
+    SELECT
+      vt.id        AS thread_id,
+      vt.deal_id,
+      vt.status,
+      vt.quotation_no,
+      vt.sent_at,
+      vt.responded_at,
+      COALESCE(pa.city,  da.city)  AS pickup_city,
+      COALESCE(pa.state, da.state) AS pickup_state,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'line_id',       vtl.line_id,
+            'quantity',      bl.quantity,
+            'condition',     bl.condition,
+            'voltage',       cv.voltage,
+            'ah',            cv.ah,
+            'ask_price',     vtl.ask_price,
+            'counter_price', vtl.counter_price,
+            'agreed_price',  vtl.agreed_price
+          )
+          ORDER BY cv.voltage, cv.ah
+        ) FILTER (WHERE vtl.id IS NOT NULL),
+        '[]'
+      ) AS lines
+    FROM vendor_threads vt
+    JOIN scrap_vendors sv     ON sv.id = vt.vendor_id
+    JOIN buyback_deals bd     ON bd.id = vt.deal_id
+    JOIN buyback_requests br  ON br.id = bd.request_id
+    LEFT JOIN buyback_batches bb        ON bb.request_id = br.id
+    LEFT JOIN buyback_pickup_addresses pa ON pa.id = bb.pickup_address_id
+    LEFT JOIN accounts da                 ON da.id = br.dealer_entity_id
+    LEFT JOIN vendor_thread_lines vtl ON vtl.thread_id = vt.id
+    LEFT JOIN buyback_lines bl        ON bl.id = vtl.line_id
+    LEFT JOIN catalog_variants cv     ON cv.id = bl.variant_id
+    -- The scope. Part of the query, not a check we might forget.
+    WHERE sv.entity_id = ${entityId}
+    GROUP BY vt.id, pa.city, pa.state, da.city, da.state
+    ORDER BY vt.sent_at DESC NULLS LAST, vt.created_at DESC
+  `);
+
+  return (rows as unknown as Array<Record<string, unknown>>).map((r) => ({
+    thread_id: String(r.thread_id),
+    deal_id: String(r.deal_id),
+    status: r.status as VendorOwnThreadRow["status"],
+    quotation_no: (r.quotation_no as string) ?? null,
+    sent_at: (r.sent_at as Date) ?? null,
+    responded_at: (r.responded_at as Date) ?? null,
+    pickup_city: (r.pickup_city as string) ?? null,
+    pickup_state: (r.pickup_state as string) ?? null,
+    lines: (r.lines as ThreadLineRow[]) ?? [],
+  }));
+}
+
+/**
+ * Load one of a vendor's own threads, or 404 (E-195).
+ *
+ * Someone else's thread is indistinguishable from a non-existent one — the same
+ * reason loadOwnRequest 404s rather than 403s. A 403 would confirm the thread
+ * exists, and a vendor who can enumerate thread ids can map our deal flow.
+ */
+export async function loadOwnThread(
+  entityId: string,
+  threadId: string,
+): Promise<VendorOwnThreadRow | null> {
+  const all = await threadsForVendor(entityId);
+  return all.find((t) => t.thread_id === threadId) ?? null;
+}
+
 /**
  * Where the batteries are, at the granularity a vendor is allowed to know.
  *
