@@ -61,6 +61,9 @@ export const NOTIFICATION_FOR: Record<
   accept: { party: "DEALER", channel: "PORTAL" },
   reject: { party: "DEALER", channel: "PORTAL" },
   negotiate: { party: "DEALER", channel: "PORTAL" },
+  // The admin's counter is iTarang's price TO the dealer — they must hear it.
+  // NOT a dealer-must-not-hear action (it carries no margin, no vendor).
+  admin_counter: { party: "DEALER", channel: "PORTAL" },
   request_info: { party: "DEALER", channel: "PORTAL" },
   send_final_offer: { party: "DEALER", channel: "PORTAL" },
   reopen: { party: "DEALER", channel: "PORTAL" },

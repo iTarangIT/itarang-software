@@ -62,6 +62,13 @@ export const DEAL_ACTIONS = [
   "accept",
   "reject",
   "negotiate",
+  // Admin — counter WITHIN an open negotiation (item 7). The mirror of
+  // dealer_counter: before this, the dealer could counter forever but the admin
+  // could only `negotiate` once (to open it) and was then forced to
+  // send_final_offer to say another number. That asymmetry is what made "Send
+  // final offer" feel like a wrong extra button — the desk was not asking to
+  // delete the final-offer artifact, only to stop being forced into it.
+  "admin_counter",
   "request_info",
   // Admin — the rest of the dealer leg
   "send_final_offer",
@@ -202,8 +209,12 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
 
   NEGOTIATING: {
     // Counters stay in NEGOTIATING and are itemized per SKU (BRD P5); a round is
-    // appended each time. The self-loop is intentional.
+    // appended each time. The self-loop is intentional — and now SYMMETRIC: the
+    // admin can counter here too (item 7), instead of being forced to
+    // send_final_offer to name another price. send_final_offer stays: it is a
+    // deliberate "this is my last word", not the only way to say a number.
     dealer_counter: { to: "NEGOTIATING", roles: ["dealer"] },
+    admin_counter: { to: "NEGOTIATING", roles: ["admin"] },
     send_final_offer: { to: "FINAL_OFFER_SENT", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
