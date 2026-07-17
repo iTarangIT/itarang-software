@@ -692,6 +692,164 @@ describe("vendor payload excludes dealer identity — ABSENT, not null", () => {
 });
 
 // ===========================================================================
+// Item 14 — the battery spec reaches the vendor, and the dealer still does not.
+// Widening a masked type is the riskiest edit in this module: every field added
+// here is a field that now leaves the building.
+// ===========================================================================
+describe("vendor line carries the battery spec (E-191) but never the dealer", () => {
+  const SPEC = {
+    line_id: "line-1",
+    quantity: 10,
+    condition: "WORKING" as const,
+    voltage: 60,
+    ah: 120,
+    ask_price: 6500,
+    variant_type: "LI_ION",
+    brand: "Exide",
+    chemistry: "LFP",
+    form_factor: "PRISMATIC",
+    nominal_voltage: 60,
+    nominal_ampere: 120,
+    unit_weight_kg: 12.5,
+    warranty_cycles: 2000,
+    functional_qty: 6,
+    non_functional_qty: 3,
+    iot_battery: true,
+    iot_brand_name: null,
+  };
+
+  it("gives a scrap buyer what they actually price on: chemistry and kilograms", () => {
+    const l = toVendorLine(SPEC);
+    expect(l.chemistry).toBe("LFP");
+    expect(l.unit_weight_kg).toBe(12.5);
+    // 10 × 12.5 — the number the quotation never had.
+    expect(l.line_weight_kg).toBe(125);
+  });
+
+  it("marks an assumed IOT brand as assumed, in the same string as the brand", () => {
+    // Unstrippable on purpose: a template cannot render the brand and drop the
+    // caveat, because there is no bare brand to render.
+    expect(toVendorLine(SPEC).iot_brand_label).toBe("Intellicar (assumed)");
+  });
+
+  it("does not mark the dealer's own answer as assumed", () => {
+    expect(toVendorLine({ ...SPEC, iot_brand_name: "BoltIoT" }).iot_brand_label).toBe("BoltIoT");
+  });
+
+  it("says nothing about IOT brand for a non-IOT pack", () => {
+    expect(toVendorLine({ ...SPEC, iot_battery: false }).iot_brand_label).toBeNull();
+  });
+
+  it("counts the untested remainder rather than hiding it", () => {
+    // 6 + 3 of 10. The gate allows a partial declaration, so the vendor must be
+    // told about the 1 nobody tested — not left to infer it is working.
+    expect(toVendorLine(SPEC).condition_split_label).toBe("6 working · 3 non-working · 1 untested");
+  });
+
+  it("omits the zero parts of the split", () => {
+    expect(
+      toVendorLine({ ...SPEC, functional_qty: 10, non_functional_qty: 0 }).condition_split_label,
+    ).toBe("10 working");
+  });
+
+  it("says nothing when the dealer declared no split at all", () => {
+    expect(
+      toVendorLine({ ...SPEC, functional_qty: null, non_functional_qty: null })
+        .condition_split_label,
+    ).toBeNull();
+  });
+
+  it("a NEW dealer column still cannot ride in via the spec path", () => {
+    // The contamination test, re-run now that the source type is much wider.
+    const q = toVendorQuotation({
+      quotation_no: "QTN-1",
+      pickup_city: "Nashik",
+      pickup_state: "Maharashtra",
+      lines: [
+        {
+          ...SPEC,
+          dealer_name: "Shakti Battery House",
+          dealer_price: 5200,
+          margin_value: 1300,
+        } as never,
+      ],
+    });
+    const leaked = allValues(q);
+    expect(leaked).not.toContain("Shakti Battery House");
+    expect(leaked).not.toContain(5200);
+    expect(leaked).not.toContain(1300);
+  });
+
+  it.each(VENDOR_FORBIDDEN_KEYS)("%s still absent with every spec field populated", (key) => {
+    const q = toVendorQuotation({
+      quotation_no: "QTN-1",
+      pickup_city: "Nashik",
+      pickup_state: "Maharashtra",
+      lines: [SPEC],
+    });
+    expect(allKeys(q).has(key)).toBe(false);
+  });
+});
+
+describe("lot weight never overstates what was declared", () => {
+  const line = (id: string, qty: number, w: number | null) => ({
+    line_id: id,
+    quantity: qty,
+    condition: "WORKING" as const,
+    voltage: 60,
+    ah: 120,
+    ask_price: 100,
+    unit_weight_kg: w,
+  });
+
+  it("sums the declared weights", () => {
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, 12.5), line("b", 2, 5)],
+    });
+    expect(q.total_weight_kg).toBe(135);
+    expect(q.weight_caveat).toBeNull();
+  });
+
+  it("carries a caveat when only some lines declared — never a silent partial total", () => {
+    // The failure this module keeps repeating: a number true of a subset,
+    // rendered as though true of the whole. 125kg over a 2-SKU lot reads as the
+    // lot's weight; it is one SKU's.
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, 12.5), line("b", 2, null)],
+    });
+    expect(q.total_weight_kg).toBe(125);
+    expect(q.weight_caveat).toBe("1 of 2 SKUs declared a weight");
+  });
+
+  it("is null — not zero — when nobody declared a weight", () => {
+    // Zero would read as "these batteries weigh nothing".
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, null)],
+    });
+    expect(q.total_weight_kg).toBeNull();
+  });
+
+  it("treats a nonsensical declared weight as undeclared", () => {
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, 0)],
+    });
+    expect(q.total_weight_kg).toBeNull();
+  });
+});
+
+// ===========================================================================
 // E-195 — the vendor dashboard. Same clause as the quotation, new surface:
 // a vendor with a login can now READ, not just receive a PDF. Everything the
 // quotation must not say, the dashboard must not say either.

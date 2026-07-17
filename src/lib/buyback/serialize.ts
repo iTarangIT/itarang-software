@@ -14,6 +14,8 @@
  */
 
 import { formatBatteryLine, lineTotal, type BatteryCondition } from "./format";
+// No cycle: line-spec imports only zod.
+import { resolveIotBrand } from "./line-spec";
 import type { DealState } from "./state-machine";
 
 /** The full internal shape, as read from the DB by the admin queries. */
@@ -603,6 +605,30 @@ export interface VendorLineView {
   agreed_price: number | string | null;
   // NOTE what is absent: dealer_price and margin_value. A vendor who knows both
   // our ask and what we paid the dealer knows our margin exactly.
+
+  // --- E-191 dealer-declared spec. Properties of the BATTERY, so a vendor may
+  //     see all of it: none of it identifies who is selling.
+  variant_type: string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  /** Per unit, as declared. */
+  unit_weight_kg: number | string | null;
+  /** qty × unit_weight_kg — the number a scrap buyer actually prices against. */
+  line_weight_kg: number | null;
+  /** RATED life, not consumed life. The template must label it as rated. */
+  warranty_cycles: number | null;
+  iot_battery: boolean | null;
+  /**
+   * The IOT brand WITH its provenance baked in — "Intellicar (assumed)" when the
+   * dealer left it blank. One string, so a template cannot render the brand and
+   * drop the caveat.
+   */
+  iot_brand_label: string | null;
+  /** "6 working · 3 non-working · 1 untested", zero-parts omitted. */
+  condition_split_label: string | null;
 }
 
 /** The masked quotation. This — and only this — is what the PDF template sees. */
@@ -615,6 +641,23 @@ export interface VendorQuotationView {
   total_units: number;
   /** Σ qty × ask. The vendor is being asked for a number, so they get one. */
   ask_total: number | null;
+  /**
+   * Σ line_weight_kg over the lines that DECLARED a weight — the single most
+   * valuable number to a scrap buyer, who prices by the kilogram.
+   *
+   * Null when no line declares one. Never treats an undeclared weight as zero:
+   * that would understate the lot, and understating the thing the vendor prices
+   * on is how you get a quote you cannot honour.
+   */
+  total_weight_kg: number | null;
+  /**
+   * Says so when the total covers only some of the lot — "4 of 6 SKUs declared".
+   *
+   * Null when every line declared a weight. A partial total presented as a whole
+   * one is the exact failure this module keeps making: a number that is true
+   * about a subset, rendered as though it were true about everything.
+   */
+  weight_caveat: string | null;
   issued_on: Date | string;
 }
 
@@ -656,6 +699,29 @@ export interface VendorLineSource {
   ask_price: number | string | null;
   counter_price?: number | string | null;
   agreed_price?: number | string | null;
+  // --- E-191 dealer-declared spec. All optional: a caller that has not fetched
+  //     it passes nothing and the view simply omits it. Every one of these is a
+  //     property of the BATTERY, never of the dealer.
+  variant_type?: string | null;
+  brand?: string | null;
+  chemistry?: string | null;
+  form_factor?: string | null;
+  nominal_voltage?: number | string | null;
+  nominal_ampere?: number | string | null;
+  unit_weight_kg?: number | string | null;
+  warranty_cycles?: number | null;
+  functional_qty?: number | null;
+  non_functional_qty?: number | null;
+  iot_battery?: boolean | null;
+  iot_brand_name?: string | null;
+}
+
+/** Σ of a line's declared unit weight, or null when the dealer didn't declare one. */
+function lineWeightKg(line: VendorLineSource): number | null {
+  if (line.unit_weight_kg === null || line.unit_weight_kg === undefined) return null;
+  const per = Number(line.unit_weight_kg);
+  if (!Number.isFinite(per) || per <= 0) return null;
+  return Math.round(per * line.quantity * 1000) / 1000;
 }
 
 export function toVendorLine(line: VendorLineSource): VendorLineView {
@@ -680,7 +746,60 @@ export function toVendorLine(line: VendorLineSource): VendorLineView {
     ask_price: line.ask_price,
     counter_price: line.counter_price ?? null,
     agreed_price: line.agreed_price ?? null,
+    // E-191 spec — what a scrap buyer actually prices against. The quotation
+    // said "60V 120Ah · Working ×3" and nothing else, while every one of these
+    // sat unread on buyback_lines. A recycler prices by CHEMISTRY and by
+    // KILOGRAMS, and we told them neither.
+    variant_type: line.variant_type ?? null,
+    brand: line.brand ?? null,
+    chemistry: line.chemistry ?? null,
+    form_factor: line.form_factor ?? null,
+    nominal_voltage: line.nominal_voltage ?? null,
+    nominal_ampere: line.nominal_ampere ?? null,
+    unit_weight_kg: line.unit_weight_kg ?? null,
+    line_weight_kg: lineWeightKg(line),
+    warranty_cycles: line.warranty_cycles ?? null,
+    iot_battery: line.iot_battery ?? null,
+    // ONE string, not a brand plus a flag the template could render without.
+    // resolveIotBrand's assumption has to be unstrippable: a vendor pricing an
+    // "Intellicar" pack is entitled to know we guessed that, and a caller who
+    // could render the brand and drop the caveat would eventually do exactly
+    // that. Same reason condition_split_label below is a string, not three ints.
+    iot_brand_label: iotBrandLabel(line),
+    condition_split_label: conditionSplitLabel(line),
   };
+}
+
+/** "Intellicar (assumed)" vs the dealer's own answer — or null for a non-IOT pack. */
+function iotBrandLabel(line: VendorLineSource): string | null {
+  const resolved = resolveIotBrand(line.iot_battery, line.iot_brand_name);
+  if (!resolved) return null;
+  return resolved.assumed ? `${resolved.brand} (assumed)` : resolved.brand;
+}
+
+/**
+ * "6 working · 3 non-working · 1 untested", omitting the zero parts.
+ *
+ * A string rather than three numbers because the UNTESTED remainder is the part
+ * a template would forget: the submit gate treats the split as a ceiling, not an
+ * equality (5 + 3 of 10 is a truthful partial declaration), so a vendor shown
+ * only "5 working, 3 non-working" of a lot of 10 would silently misread two
+ * batteries as one or the other.
+ */
+function conditionSplitLabel(line: VendorLineSource): string | null {
+  const f = line.functional_qty;
+  const nf = line.non_functional_qty;
+  if ((f === null || f === undefined) && (nf === null || nf === undefined)) return null;
+
+  const working = f ?? 0;
+  const dead = nf ?? 0;
+  const untested = Math.max(0, line.quantity - working - dead);
+
+  const parts: string[] = [];
+  if (working > 0) parts.push(`${working} working`);
+  if (dead > 0) parts.push(`${dead} non-working`);
+  if (untested > 0) parts.push(`${untested} untested`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 export function toVendorQuotation(input: {
@@ -697,6 +816,13 @@ export function toVendorQuotation(input: {
     return t === null ? sum : (sum ?? 0) + t;
   }, null);
 
+  // Weigh only what was declared, and say so when that is not everything.
+  const declared = lines.filter((l) => l.line_weight_kg !== null);
+  const totalWeight =
+    declared.length === 0
+      ? null
+      : Math.round(declared.reduce((sum, l) => sum + (l.line_weight_kg ?? 0), 0) * 1000) / 1000;
+
   return {
     quotation_no: input.quotation_no,
     pickup_city: input.pickup_city,
@@ -704,6 +830,11 @@ export function toVendorQuotation(input: {
     lines,
     total_units: lines.reduce((n, l) => n + l.quantity, 0),
     ask_total: askTotal,
+    total_weight_kg: totalWeight,
+    weight_caveat:
+      declared.length > 0 && declared.length < lines.length
+        ? `${declared.length} of ${lines.length} SKUs declared a weight`
+        : null,
     issued_on: input.issued_on ?? new Date(),
   };
 }
