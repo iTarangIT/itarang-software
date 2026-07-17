@@ -109,6 +109,8 @@ export default function LoginPage() {
 
             if (appUser.role === 'dealer') {
                 navigateTo('/dealer-portal');
+            } else if (appUser.role === 'scrap_vendor') {
+                navigateTo('/vendor-portal');
             } else if (appUser.role === 'admin') {
                 navigateTo('/admin');
             } else if (appUser.role === 'ceo') {

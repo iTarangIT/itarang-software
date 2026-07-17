@@ -923,6 +923,30 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  /**
+   * peakAmp Battery Buyback — the scrap vendor's side (E-195).
+   *
+   * Small on purpose. A vendor's whole relationship with iTarang is: here are
+   * the lots we've quoted you, answer them. They are not staff and not a
+   * dealer — nothing else in this application is any of their business, and
+   * anything added here is a new surface that has to be checked for dealer
+   * identity before it ships (see toVendorThread in lib/buyback/serialize.ts).
+   */
+  scrap_vendor: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "vendor-dashboard",
+          label: "Quotations",
+          icon: Recycle,
+          href: "/vendor-portal",
+          exact: true,
+        },
+      ],
+    },
+  ],
+
   dealer: [
     {
       section: "OVERVIEW",
@@ -1294,6 +1318,7 @@ export function Sidebar() {
   const inferredRole = (() => {
     if (user?.role) return user.role.toLowerCase();
     if (pathname.startsWith("/dealer-portal")) return "dealer";
+    if (pathname.startsWith("/vendor-portal")) return "scrap_vendor";
     if (pathname.startsWith("/admin")) return "admin";
     if (pathname.startsWith("/ceo")) return "ceo";
     if (pathname.startsWith("/sales-head")) return "sales_head";
@@ -1344,10 +1369,15 @@ export function Sidebar() {
         }))
       : rawMenuItems;
 
-  // Universal nav items (e.g. Submit Expense) appended to every role except
-  // the "user" fallback (unauthenticated path-inferred view).
-  let menuItems =
-    inferredRole === "user" ? filteredMenuItems : [...filteredMenuItems, ...COMMON_ITEMS];
+  // Universal nav items (e.g. Submit Expense) appended to every role except:
+  //  · "user" — the unauthenticated path-inferred fallback view;
+  //  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
+  //    files a business expense for a CEO to approve; offering that to the firm
+  //    we are selling scrap to is not a universal action, it is a wrong one.
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor"]);
+  let menuItems = NO_COMMON_ITEMS.has(inferredRole)
+    ? filteredMenuItems
+    : [...filteredMenuItems, ...COMMON_ITEMS];
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue

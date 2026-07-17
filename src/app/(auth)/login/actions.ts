@@ -63,6 +63,10 @@ export async function login(formData: FormData) {
     redirect("/dealer-portal");
   }
 
+  if (appUser.role === "scrap_vendor") {
+    redirect("/vendor-portal");
+  }
+
   if (appUser.role === "admin") {
     redirect("/admin");
   }

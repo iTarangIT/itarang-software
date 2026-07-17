@@ -41,6 +41,13 @@ export const users = pgTable("users", {
   name: text().notNull(),
   role: varchar({ length: 50 }).notNull(),
   dealer_id: varchar("dealer_id", { length: 255 }),
+  /**
+   * E-195 — accounts.id of the scrap vendor this login acts for; NULL for
+   * everyone else. Deliberately not dealer_id above: that column is joined
+   * against `dealers` by dealer_code app-wide and a scrap vendor has no
+   * dealers row, so those joins would return nothing rather than fail.
+   */
+  vendor_entity_id: varchar("vendor_entity_id", { length: 255 }),
   phone: text(),
   avatar_url: text("avatar_url"),
   is_active: boolean("is_active").default(true).notNull(),

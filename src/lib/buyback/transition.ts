@@ -75,6 +75,22 @@ export const NOTIFICATION_FOR: Record<
   record_vendor_counter: { party: "ADMIN", channel: "PORTAL" },
   record_vendor_agreement: { party: "ADMIN", channel: "PORTAL" },
 
+  // --- Vendor leg, first-hand (E-195 — the vendor login) ---
+  // A counterparty moved, so the desk hears about it in-portal — the same shape
+  // as dealer_counter/dealer_accept above, for the same reason.
+  //
+  // NOT the dealer, on either. A dealer must never learn what a vendor offered:
+  // the gap between the two prices is iTarang's margin, and telling the seller
+  // what the buyer paid is the one disclosure this whole module is built to
+  // prevent. Same rule that makes record_settlement fan out rather than
+  // broadcast.
+  //
+  // vendor_agree's route overrides with a fanOut, exactly as
+  // record_vendor_agreement does, so every losing vendor still gets the
+  // courteous close rather than silence.
+  vendor_counter: { party: "ADMIN", channel: "PORTAL" },
+  vendor_agree: { party: "ADMIN", channel: "PORTAL" },
+
   // Fulfilment — the dealer is the one who has to be somewhere at a time, so
   // these reach them on WhatsApp. The vendor's own PO copy is handled by the
   // fan-out on exchange_pos.

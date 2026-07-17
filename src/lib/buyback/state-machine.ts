@@ -70,12 +70,23 @@ export const DEAL_ACTIONS = [
   "cancel",
   // Admin — the vendor leg & fulfilment (Sprint 2A, M09–M11 + minimal M05).
   //
-  // There is no `vendor` actor role: v1 ships WITHOUT vendor login (BRD M24),
-  // so a vendor's counter or agreement reaches the system as an admin RECORDING
-  // it off an email. Hence `record_*`.
+  // `record_*` because an admin is transcribing what a vendor said in an email.
+  // These are NOT deprecated by the vendor login (E-195): a vendor who replies
+  // by email rather than logging in still has to reach the system somehow, and
+  // that is still an admin recording it. The two paths coexist, and the audit
+  // log tells them apart by actor role — `record_vendor_counter` by an admin is
+  // hearsay, `vendor_counter` by a vendor is first-hand.
   "route_to_vendors",
   "record_vendor_counter",
   "record_vendor_agreement",
+  // Vendor — the same two moves, made by the vendor themselves (E-195, M24).
+  //
+  // There is no `vendor_reject`: a vendor walking away sets their THREAD to
+  // LOST and moves no deal status, because the deal is still live with every
+  // other vendor it was routed to. Same reason record_vendor_* has no "lost"
+  // action. See VendorBoard's three buttons.
+  "vendor_counter",
+  "vendor_agree",
   "exchange_pos",
   "schedule_pickup",
   "complete_pickup",
@@ -90,9 +101,22 @@ export const DEAL_ACTIONS = [
 
 export type DealAction = (typeof DEAL_ACTIONS)[number];
 
-export type ActorRole = "dealer" | "admin";
+/**
+ * Who can act on a deal.
+ *
+ * `vendor` arrived with the vendor login (E-195). Before it, a vendor's counter
+ * or agreement reached the system only as an admin recording it off an email —
+ * which is why admin/vendor actions were tangled on one screen, and why "the
+ * vendor raises the PO" was impossible to model: there was nobody to raise it.
+ *
+ * A vendor is scoped to their OWN thread. Nothing here grants a vendor sight of
+ * a deal they were not routed to, and nothing grants them the dealer's identity
+ * — that is enforced by the route's scoping and the vendor serializer, not by
+ * this table, which only knows the (state, action, role) triple.
+ */
+export type ActorRole = "dealer" | "admin" | "vendor";
 
-export const ACTOR_ROLES: readonly ActorRole[] = ["dealer", "admin"] as const;
+export const ACTOR_ROLES: readonly ActorRole[] = ["dealer", "admin", "vendor"] as const;
 
 /**
  * The four review actions (BRD M06). Legal ONLY in SUBMITTED / UNDER_REVIEW —
@@ -216,6 +240,10 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
     record_vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["admin"] },
     // ...or came straight back with a yes, at our ask.
     record_vendor_agreement: { to: "VENDOR_AGREED", roles: ["admin"] },
+    // The same two moves made first-hand, from the vendor's own dashboard.
+    // Same destinations: who typed it changes the evidence, not the deal.
+    vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["vendor"] },
+    vendor_agree: { to: "VENDOR_AGREED", roles: ["vendor"] },
     reopen: { to: "NEGOTIATING", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
@@ -226,6 +254,8 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
     // status (the deal is still live with the other vendors).
     record_vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["admin"] },
     record_vendor_agreement: { to: "VENDOR_AGREED", roles: ["admin"] },
+    vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["vendor"] },
+    vendor_agree: { to: "VENDOR_AGREED", roles: ["vendor"] },
     reopen: { to: "NEGOTIATING", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
