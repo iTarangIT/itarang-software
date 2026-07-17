@@ -269,21 +269,43 @@ export default function LoginPage() {
                             </button>
                         </div>
 
+                        {/* One form, two ways in. The sign-in box above is
+                            role-agnostic — a vendor signs in there like anyone
+                            else, and the redirect chain sends them to
+                            /vendor-portal. What needed saying is where a vendor
+                            who has NO account goes: "Create one" led to
+                            dealer-onboarding, a six-step KYC wizard for people
+                            borrowing money, which is not what a recycler wants. */}
                         <div className="relative py-4">
                             <div className="absolute inset-0 flex items-center">
                                 <div className="w-full border-t border-gray-200" />
                             </div>
-                            <div className="relative flex justify-center text-sm">
-                                 <span className="px-2 bg-white text-gray-500">
-                                    Don&apos;t have an account?{" "}
-                                    <Link
-                                        href="/dealer-onboarding"
-                                        className="font-medium text-blue-600 hover:text-blue-500"
-                                    >
-                                    Create one
-                                    </Link>
+                            <div className="relative flex justify-center">
+                                <span className="bg-white px-2 text-xs font-medium uppercase tracking-wide text-gray-400">
+                                    New to iTarang?
                                 </span>
                             </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <Link
+                                href="/dealer-onboarding"
+                                className="rounded-lg border border-gray-200 px-3 py-2.5 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                            >
+                                Register as a dealer
+                                <span className="mt-0.5 block text-[11px] font-normal text-gray-400">
+                                    Sell batteries, access finance
+                                </span>
+                            </Link>
+                            <Link
+                                href="/vendor-onboarding"
+                                className="rounded-lg border border-gray-200 px-3 py-2.5 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                            >
+                                Register as a vendor
+                                <span className="mt-0.5 block text-[11px] font-normal text-gray-400">
+                                    Buy end-of-life battery lots
+                                </span>
+                            </Link>
                         </div>
                     </form>
                 </div>
