@@ -185,6 +185,70 @@ export function toDealerLine(line: AdminLineView): DealerLineView {
   };
 }
 
+/**
+ * A line of the dealer's OWN DRAFT, shaped for the intake editor to reload.
+ *
+ * Why this exists rather than reusing DealerLineView: the editor needs
+ * `variant_id` to re-select the SKU in the picker, and DealerLineView has no
+ * such field — it carries `spec_label` for display. Adding an id to the
+ * read-only view to serve the editor would widen a redaction boundary for a
+ * reason unrelated to it.
+ *
+ * Why not just hand back the AdminLineView the query already produced: because
+ * it carries dealer_price, margin_value, vendor_ask and vendor_price. On a
+ * DRAFT every one of those is null — there are no locks and no offers yet — so
+ * shipping the raw row would "work". It would also mean the only thing between
+ * a dealer and our margin is that the deal happens to be young. Built
+ * field-by-field like every other serializer here, so it stays impossible
+ * rather than merely currently-empty.
+ */
+export interface DraftLineView {
+  line_id: string;
+  variant_id: string;
+  quantity: number;
+  condition: BatteryCondition;
+  /** The dealer's OWN asking price. Not dealer_price — that is what we settled on. */
+  expected_price_per_unit: number | string | null;
+  measured_voltage: number | string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
+}
+
+export function toDraftLine(line: AdminLineView): DraftLineView {
+  return {
+    line_id: line.id,
+    variant_id: line.variant_id,
+    quantity: line.quantity,
+    condition: line.condition,
+    expected_price_per_unit: line.expected_price_per_unit,
+    measured_voltage: line.measured_voltage,
+    brand: line.brand ?? null,
+    chemistry: line.chemistry ?? null,
+    form_factor: line.form_factor ?? null,
+    nominal_voltage: line.nominal_voltage ?? null,
+    nominal_ampere: line.nominal_ampere ?? null,
+    unit_weight_kg: line.unit_weight_kg ?? null,
+    warranty_cycles: line.warranty_cycles ?? null,
+    functional_qty: line.functional_qty ?? null,
+    non_functional_qty: line.non_functional_qty ?? null,
+    iot_battery: line.iot_battery ?? null,
+    // Null stays null: the Intellicar assumption is a read-time display concern
+    // (resolveIotBrand), and the editor must show the dealer what they actually
+    // typed — pre-filling the box with a guess would turn it into their answer
+    // the moment they saved.
+    iot_brand_name: line.iot_brand_name ?? null,
+  };
+}
+
 export function toDealerDeal(deal: AdminDealView): DealerDealView {
   const lines = deal.lines.map(toDealerLine);
 
@@ -641,5 +705,96 @@ export function toVendorQuotation(input: {
     total_units: lines.reduce((n, l) => n + l.quantity, 0),
     ask_total: askTotal,
     issued_on: input.issued_on ?? new Date(),
+  };
+}
+
+/**
+ * The vendor's own status on their own thread (E-195 — the vendor dashboard).
+ *
+ * DELIBERATELY NOT the deal status. `buyback_deals.status` is a 21-state
+ * narrative of the DEALER leg — DEALER_ACCEPTED, MARGIN_SET, INVOICE_APPROVED —
+ * and handing it to a vendor would tell them we had already bought the lot and
+ * roughly when, which is a negotiating position. The vendor's thread status is
+ * the whole truth a vendor is entitled to about where they stand.
+ */
+export type VendorThreadStatus = "SENT" | "COUNTERED" | "AGREED" | "LOST";
+
+/**
+ * One routed quotation as the vendor themselves sees it, on their dashboard.
+ *
+ * A superset of VendorQuotationView by intent — same masking, plus where the
+ * haggle has got to. Everything a vendor needs to answer "what is this lot,
+ * where is it, what did they ask, what did I say, and did I win?" and nothing
+ * that answers "who is the seller?" or "what did iTarang pay for it?".
+ *
+ * Built field-by-field from a source type that has no dealer identity on it, so
+ * this is the same structural promise toVendorQuotation makes rather than a
+ * discipline someone has to remember.
+ */
+export interface VendorThreadView {
+  thread_id: string;
+  quotation_no: string;
+  status: VendorThreadStatus;
+  /** City + state only. Enough to price transport; not enough to find the dealer. */
+  pickup_city: string | null;
+  pickup_state: string | null;
+  lines: VendorLineView[];
+  total_units: number;
+  /** Σ qty × ask — what we are asking this vendor for. */
+  ask_total: number | null;
+  /** Σ qty × counter — what they have offered, once they have. */
+  counter_total: number | null;
+  /** Σ qty × agreed — the struck price, once struck. */
+  agreed_total: number | null;
+  sent_at: Date | string | null;
+  responded_at: Date | string | null;
+  /**
+   * Whether this vendor may still act. Derived, so the dashboard does not
+   * re-implement the state machine — and so a LOST vendor's buttons are gone
+   * rather than merely ghosted.
+   */
+  can_respond: boolean;
+}
+
+export interface VendorThreadSource {
+  thread_id: string;
+  quotation_no: string;
+  status: VendorThreadStatus;
+  pickup_city: string | null;
+  pickup_state: string | null;
+  lines: VendorLineSource[];
+  sent_at: Date | string | null;
+  responded_at: Date | string | null;
+}
+
+function sumBy(
+  lines: VendorLineView[],
+  pick: (l: VendorLineView) => number | string | null,
+): number | null {
+  return lines.reduce<number | null>((sum, l) => {
+    const t = lineTotal(l.quantity, pick(l));
+    return t === null ? sum : (sum ?? 0) + t;
+  }, null);
+}
+
+export function toVendorThread(input: VendorThreadSource): VendorThreadView {
+  const lines = input.lines.map(toVendorLine);
+
+  return {
+    thread_id: input.thread_id,
+    quotation_no: input.quotation_no,
+    status: input.status,
+    pickup_city: input.pickup_city,
+    pickup_state: input.pickup_state,
+    lines,
+    total_units: lines.reduce((n, l) => n + l.quantity, 0),
+    ask_total: sumBy(lines, (l) => l.ask_price),
+    counter_total: sumBy(lines, (l) => l.counter_price),
+    agreed_total: sumBy(lines, (l) => l.agreed_price),
+    sent_at: input.sent_at,
+    responded_at: input.responded_at,
+    // A struck or lost thread is over. The server still refuses either way —
+    // this only stops us showing a button that would 409.
+    can_respond: input.status === "SENT" || input.status === "COUNTERED",
   };
 }
