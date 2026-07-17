@@ -656,6 +656,29 @@ export const GOLDEN_TRANSITIONS: GoldenTransition[] = [
     why: "Fires inside the tx that records whichever PO completes the pair (M11).",
   },
   {
+    // E-196 — the vendor raises their own PO. On the vendor leg the vendor is
+    // the buyer, and the buyer initiates the PO.
+    state: "VENDOR_AGREED",
+    action: "exchange_pos",
+    role: "vendor",
+    expect: "PO_EXCHANGED",
+    why: "The vendor raised their own PO; the same edge, whoever completes the pair (E-196).",
+  },
+  {
+    state: "VENDOR_AGREED",
+    action: "exchange_pos",
+    role: "dealer",
+    expect: REFUSED,
+    why: "A dealer has no part in the vendor leg — the batteries have been sold on.",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "exchange_pos",
+    role: "vendor",
+    expect: REFUSED,
+    why: "No PO before agreement, even by the vendor — there is no agreed price to invoice against.",
+  },
+  {
     state: "VENDOR_NEGOTIATING",
     action: "exchange_pos",
     role: "admin",

@@ -1,5 +1,12 @@
 /**
- * The invoice iTarang issues to the VENDOR (M12).
+ * The vendor-facing money document iTarang issues (M12 / E-196).
+ *
+ * Renders BOTH the proforma invoice (PI-{n}-V, which answers the vendor's PO
+ * before payment) and the tax-invoice slot (INV-{n}-V), via `variant`. It was
+ * always going to: this template already declared itself "not yet a GST tax
+ * invoice", i.e. it was a proforma pretending to be an invoice. E-196 makes the
+ * distinction honest — same masking, same tax-pending stance, two correct
+ * titles — rather than forking a near-identical second file.
  *
  * A PURE template. It is vendor-facing, so it inherits the same rule as the
  * quotation: NO DEALER IDENTITY, and no margin. The input type below has a field
@@ -40,6 +47,23 @@ export interface VendorInvoiceInput {
   total: number;
   /** Their PO to us, so they can match it in their own system. */
   their_po_number?: string | null;
+  /**
+   * Which document this is (E-196).
+   *
+   *   "invoice"  — the existing INV-{n}-V, the TAX slot. Default, so every
+   *                current caller is unchanged.
+   *   "proforma" — the PI-{n}-V that answers the vendor's PO before payment.
+   *                Titles itself "Proforma Invoice" and says outright it is not a
+   *                demand for payment.
+   *
+   * A flag rather than a second template: this file was ALREADY a proforma in
+   * substance — its footer literally reads "not yet a GST tax invoice". Forking
+   * 130 lines to change a heading and a footer line would leave two files to keep
+   * masked and in step. One renderer, two honest titles.
+   */
+  variant?: "invoice" | "proforma";
+  /** Proforma only — when the quoted price stops being held. */
+  valid_until?: Date | string | null;
 }
 
 const esc = (s: unknown): string =>
@@ -74,6 +98,9 @@ export function renderVendorInvoiceHtml(input: VendorInvoiceInput): string {
 
   const units = input.lines.reduce((n, l) => n + l.quantity, 0);
   const where = [input.buyer.city, input.buyer.state].filter(Boolean).join(", ");
+  const isProforma = input.variant === "proforma";
+  const docTitle = isProforma ? "Proforma Invoice" : "Invoice";
+  const docWord = isProforma ? "Proforma" : "Invoice";
 
   return `
 <meta charset="utf-8" />
@@ -116,13 +143,14 @@ export function renderVendorInvoiceHtml(input: VendorInvoiceInput): string {
 <div class="head">
   <div class="brand">iTarang<small>Battery Buyback</small></div>
   <div class="meta">
-    <div>Invoice <b>${esc(input.number)}</b></div>
+    <div>${docWord} <b>${esc(input.number)}</b></div>
     <div>Issued <b>${day(input.issued_on)}</b></div>
     ${input.their_po_number ? `<div>Your PO <b>${esc(input.their_po_number)}</b></div>` : ""}
+    ${isProforma && input.valid_until ? `<div>Valid until <b>${day(input.valid_until)}</b></div>` : ""}
   </div>
 </div>
 
-<h1>Invoice</h1>
+<h1>${docTitle}</h1>
 
 <div class="parties">
   <div class="party">
@@ -169,7 +197,12 @@ export function renderVendorInvoiceHtml(input: VendorInvoiceInput): string {
 <div class="note">
   <b>Tax treatment pending.</b> Figures are exclusive of GST. The applicable
   GST / HSN classification and reverse-charge treatment will be confirmed before
-  payment is due. This document is a commercial invoice, not yet a GST tax invoice.
+  payment is due.
+  ${
+    isProforma
+      ? "This is a <b>proforma invoice</b> — a statement of what will be charged, issued against your purchase order. It is not a GST tax invoice and not a demand for payment; a tax invoice follows."
+      : "This document is a commercial invoice, not yet a GST tax invoice."
+  }
 </div>
 
 <div class="foot">
