@@ -153,6 +153,102 @@ interface DraftRow {
   saving: boolean;
 }
 
+// ---- Draft resume (GET /api/buyback/requests/:id/draft) --------------------
+
+interface DraftLinePayload {
+  line_id: string;
+  variant_id: string;
+  quantity: number;
+  condition: Condition;
+  expected_price_per_unit: number | string | null;
+  measured_voltage: number | string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
+  photos: Array<{ id: string; has_thumb: boolean }>;
+  provenance: {
+    id: string;
+    source_type: string;
+    prev_owner_name: string | null;
+    prev_owner_phone: string | null;
+    vehicle_no: string | null;
+    id_proof_type: string | null;
+    has_id_proof: boolean;
+    has_purchase_proof: boolean;
+  } | null;
+}
+
+interface DraftPayload {
+  request_id: string;
+  request_no: string;
+  batch_id: string | null;
+  pickup_address_id: string | null;
+  lines: DraftLinePayload[];
+}
+
+/** Numbers arrive as strings from postgres NUMERIC; the form wants strings anyway. */
+const str = (v: number | string | null | undefined): string =>
+  v === null || v === undefined ? "" : String(v);
+
+const ID_PROOF_TYPES = ["PAN", "DL", "AADHAAR", "OTHER"] as const;
+
+/**
+ * Rebuild an editable row from a saved draft line.
+ *
+ * Starts from newRow() and assigns each field, so a field the payload does not
+ * carry keeps its blank default rather than becoming `undefined` inside state
+ * — the same reason splitRow builds from a blank.
+ *
+ * `id_proof_key` / `purchase_proof_key` stay null on purpose even when the
+ * server says a proof exists: the key is a capability the API never hands out,
+ * and the thumbnail is fetched through /api/buyback/media using provenance_id.
+ * `*_name` is what the UI shows for an already-uploaded file.
+ */
+function rowFromDraftLine(line: DraftLinePayload): DraftRow {
+  const blank = newRow();
+  const p = line.provenance;
+  const idProofType = ID_PROOF_TYPES.find((t) => t === p?.id_proof_type) ?? "PAN";
+
+  return {
+    ...blank,
+    line_id: line.line_id,
+    variant_id: line.variant_id,
+    quantity: line.quantity,
+    condition: line.condition,
+    expected_price: str(line.expected_price_per_unit),
+    measured_voltage: str(line.measured_voltage),
+    brand: line.brand ?? "",
+    chemistry: (line.chemistry as DraftRow["chemistry"]) ?? "",
+    form_factor: (line.form_factor as DraftRow["form_factor"]) ?? "",
+    nominal_voltage: str(line.nominal_voltage),
+    nominal_ampere: str(line.nominal_ampere),
+    unit_weight_kg: str(line.unit_weight_kg),
+    warranty_cycles: str(line.warranty_cycles),
+    functional_qty: str(line.functional_qty),
+    non_functional_qty: str(line.non_functional_qty),
+    iot_battery: line.iot_battery === null ? "" : line.iot_battery ? "YES" : "NO",
+    iot_brand_name: line.iot_brand_name ?? "",
+    // Already on the server, so never "uploading" and never a local object URL.
+    photos: line.photos.map((ph) => ({ id: ph.id, uploading: false })),
+    provenance_id: p?.id ?? null,
+    provenance: p?.source_type === "DEALER_STOCK" ? "STOCK" : "OWNER",
+    owner_name: p?.prev_owner_name ?? "",
+    owner_phone: p?.prev_owner_phone ?? "",
+    vehicle_no: p?.vehicle_no ?? "",
+    id_proof_type: idProofType,
+    id_proof_name: p?.has_id_proof ? "Uploaded" : null,
+    purchase_proof_name: p?.has_purchase_proof ? "Uploaded" : null,
+  };
+}
+
 /**
  * The live echo of the gate's QTY_SPLIT_MISMATCH rule, mirroring BOTH of
  * checkSubmitReadiness's branches — both sides declared, and only one.
@@ -289,7 +385,12 @@ async function uploadBytes(
   return json.data.s3_key as string;
 }
 
-export default function BuybackIntake() {
+export default function BuybackIntake({
+  /** A draft to reopen (`?request_id=`), or null to start a new one. */
+  resumeId = null,
+}: {
+  resumeId?: string | null;
+} = {}) {
   const router = useRouter();
 
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -334,6 +435,18 @@ export default function BuybackIntake() {
   );
 
   // ---- bootstrap: catalog, addresses, and the DRAFT request ----------------
+  //
+  // Two modes, decided by `?request_id=`:
+  //
+  //   absent  — start a new draft (POST). What this page always did.
+  //   present — REOPEN that draft (GET .../draft) and rebuild the form from it.
+  //
+  // The resume mode is the whole reason drafts stopped being a dead end. This
+  // page used to POST unconditionally on mount, so a dealer who left halfway
+  // had no way back: "New Buyback Request" was the only door, and it made
+  // another draft every time. On db-1 that produced 24 abandoned drafts out of
+  // 32 requests. The guard that matters is below — a resume must NEVER fall
+  // through to the POST, or the bug reappears as "resuming makes a duplicate".
   useEffect(() => {
     let cancelled = false;
 
@@ -350,6 +463,37 @@ export default function BuybackIntake() {
         setVariants(cat?.data?.variants ?? []);
         const list: PickupAddress[] = addr?.data?.addresses ?? [];
         setAddresses(list);
+
+        if (resumeId) {
+          const res = await fetch(`/api/buyback/requests/${resumeId}/draft`);
+          const json = await res.json();
+          if (cancelled) return;
+
+          if (!json?.success) {
+            // Deliberately NOT falling back to POST. A resume that quietly
+            // starts a new request is how a dealer ends up with two half-filled
+            // drafts and no idea which one they were editing.
+            setError(
+              json?.error?.message ??
+                "Could not reopen that draft. Go back to your requests and try again.",
+            );
+            return;
+          }
+
+          const d = json.data as DraftPayload;
+          setRequestId(d.request_id);
+          setRequestNo(d.request_no);
+          setAddressId(d.pickup_address_id ?? list[0]?.id ?? null);
+          // An empty draft (no lines yet — 14 of db-1's 24 were exactly this)
+          // still needs one blank row to type into.
+          const rows = d.lines.map(rowFromDraftLine);
+          setRows(rows.length > 0 ? rows : [newRow()]);
+          for (const row of rows) {
+            if (row.line_id) lineIdsRef.current[row.key] = row.line_id;
+          }
+          return;
+        }
+
         setAddressId(list[0]?.id ?? null);
 
         // Open the draft up front so lines/photos have something to attach to.
@@ -370,8 +514,8 @@ export default function BuybackIntake() {
           setError(draft?.error?.message ?? "Could not start a new request.");
         }
       } catch {
-        // Network-level failure on any of the three bootstrap calls. Named for
-        // what the dealer can do about it — not "Failed to fetch".
+        // Network-level failure on any of the bootstrap calls. Named for what
+        // the dealer can do about it — not "Failed to fetch".
         if (!cancelled)
           setError(
             "Could not reach the server to start a request — check your connection and reload the page.",
@@ -382,7 +526,7 @@ export default function BuybackIntake() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [resumeId]);
 
   const patch = useCallback((key: string, next: Partial<DraftRow>) => {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...next } : r)));
@@ -1011,8 +1155,14 @@ export default function BuybackIntake() {
   return (
     <div className="mx-auto max-w-5xl px-6 pb-32 pt-6">
       <PageHeader
-        title="New Buyback Request"
-        sub="Add battery lines, attach provenance, choose pickup — one page, no wizard."
+        // Resuming BB-1055 under a heading that says "New" is how a dealer ends
+        // up unsure whether they are about to create a second one.
+        title={resumeId ? `Finish ${requestNo ?? "your draft"}` : "New Buyback Request"}
+        sub={
+          resumeId
+            ? "Picking up where you left off — nothing here has been sent to iTarang yet."
+            : "Add battery lines, attach provenance, choose pickup — one page, no wizard."
+        }
         right={
           requestNo ? (
             <div className="flex items-center gap-1.5 text-xs font-semibold text-green-600">

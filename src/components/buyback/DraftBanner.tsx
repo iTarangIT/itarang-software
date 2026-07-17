@@ -80,18 +80,7 @@ export default function DraftBanner({ drafts }: { drafts: DealerRequestRow[] }) 
           </h2>
           <p className="mt-0.5 text-[12.5px] text-amber-800">
             Drafts are saved to your account, but iTarang can&apos;t see or price them until you
-            submit.{" "}
-            {/* Reopening a draft to add the missing photos is not built yet —
-                "New Buyback Request" always starts a fresh one. Saying so is
-                unpleasant but it is the truth, and it is very likely WHY these
-                piled up: a dealer who cannot resume starts over, and abandons
-                that one too. A button labelled "Finish it" that lands on a
-                read-only page would just move the dead end somewhere less
-                visible. */}
-            <span className="font-semibold">
-              Reopening a draft to finish it isn&apos;t available yet — for now you&apos;ll
-              need to raise a new request.
-            </span>
+            submit.
           </p>
 
           <ul className="mt-3 flex flex-col gap-2">
@@ -111,15 +100,16 @@ export default function DraftBanner({ drafts }: { drafts: DealerRequestRow[] }) 
                   <span className="text-[12.5px] text-slate-500">
                     {reasons.length > 0 ? reasons.join(" · ") : "Nothing missing — never sent"}
                   </span>
-                  {/* "View", not "Finish it"/"Submit it": the detail page has no
-                      line editor, no draft photo upload and no submit call, so
-                      those labels promised an action no route in the app can
-                      perform. */}
+                  {/* Reopens the draft in the intake editor. This label was a
+                      lie until the resume route existed: it pointed at the
+                      read-only detail page, so a dealer told "1 battery needs
+                      more photos → Finish it" landed somewhere with no photo
+                      box and went back to raise yet another request. */}
                   <Link
-                    href={`/dealer-portal/buyback/${d.request_id}`}
+                    href={`/dealer-portal/buyback/new?request_id=${d.request_id}`}
                     className="ml-auto rounded-md border border-amber-300 px-2.5 py-1 text-[12px] font-semibold text-amber-900 hover:bg-amber-50"
                   >
-                    View
+                    {reasons.length > 0 ? "Finish it" : "Submit it"}
                   </Link>
                 </li>
               );

@@ -55,6 +55,20 @@ export interface DealerRequestRow {
   draft_blockers?: DraftBlocker[] | null;
 }
 
+/**
+ * Where a request row goes when clicked.
+ *
+ * A DRAFT is unfinished, so it opens in the intake editor with its lines,
+ * photos and provenance rehydrated. Everything else is submitted and opens
+ * read-only — a dealer must not be able to edit the goods after iTarang has
+ * started pricing them.
+ */
+function hrefFor(r: DealerRequestRow): string {
+  return r.status === "DRAFT"
+    ? `/dealer-portal/buyback/new?request_id=${r.request_id}`
+    : `/dealer-portal/buyback/${r.request_id}`;
+}
+
 const HEADS: DealTableHead[] = [
   { label: "Request" },
   { label: "Date" },
@@ -74,14 +88,20 @@ export default function DealerRequestsTable({
 }) {
   const router = useRouter();
 
-  const rows: DealTableRow[] = requests.map((r) => ({
+  const rows: DealTableRow[] = requests.map((r) => {
+    // A draft opens in the EDITOR; anything submitted opens read-only. The
+    // detail page has no line editor, no photo box and no submit — so sending a
+    // draft there is a dead end, and a dead end is what left 24 of db-1's first
+    // 32 requests unsent.
+    const href = hrefFor(r);
+    return {
     key: r.request_id,
-    onClick: () => router.push(`/dealer-portal/buyback/${r.request_id}`),
-    ariaLabel: `Open ${r.request_no}`,
+    onClick: () => router.push(href),
+    ariaLabel: `${r.status === "DRAFT" ? "Finish" : "Open"} ${r.request_no}`,
     cells: [
       <div key="request" className="flex items-center gap-2">
         <Link
-          href={`/dealer-portal/buyback/${r.request_id}`}
+          href={href}
           className="font-bold text-slate-900 hover:underline"
           onClick={(e) => e.stopPropagation()}
           // U5 — the row itself is already a keyboard target (role="link",
@@ -104,7 +124,8 @@ export default function DealerRequestsTable({
       </div>,
       <StatusChip key="status" status={r.status} />,
     ],
-  }));
+    };
+  });
 
   return (
     <DealTable

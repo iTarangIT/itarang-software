@@ -23,6 +23,7 @@ import {
   toDealerPo,
   toVendorLine,
   toVendorQuotation,
+  toVendorThread,
   visibleActivityForDealer,
   type AdminDealView,
   type DealerNegRoundSource,
@@ -687,5 +688,116 @@ describe("vendor payload excludes dealer identity — ABSENT, not null", () => {
     expect("dealer_price" in line).toBe(false);
     expect("margin_value" in line).toBe(false);
     expect("dealer_name" in line).toBe(false);
+  });
+});
+
+// ===========================================================================
+// E-195 — the vendor dashboard. Same clause as the quotation, new surface:
+// a vendor with a login can now READ, not just receive a PDF. Everything the
+// quotation must not say, the dashboard must not say either.
+// ===========================================================================
+describe("vendor thread payload (E-195) excludes dealer identity and our economics", () => {
+  const thread = toVendorThread({
+    thread_id: "thr-1",
+    quotation_no: "QTN-1024-1",
+    status: "COUNTERED",
+    pickup_city: "Nashik",
+    pickup_state: "Maharashtra",
+    sent_at: "2026-07-13T00:00:00Z",
+    responded_at: "2026-07-14T00:00:00Z",
+    lines: [
+      {
+        line_id: "line-1",
+        quantity: 3,
+        condition: "WORKING",
+        voltage: 60,
+        ah: 120,
+        ask_price: 6500,
+        counter_price: 6000,
+        agreed_price: null,
+      },
+      {
+        line_id: "line-2",
+        quantity: 2,
+        condition: "DEAD",
+        voltage: 58,
+        ah: 110,
+        ask_price: 3900,
+        counter_price: 3500,
+        agreed_price: null,
+      },
+    ],
+  });
+
+  const keys = allKeys(thread);
+
+  it.each(VENDOR_FORBIDDEN_KEYS)("the key %s does not appear at any depth", (key) => {
+    expect(keys.has(key)).toBe(false);
+  });
+
+  it("never carries the deal status — that is the dealer leg's narrative", () => {
+    // DEALER_ACCEPTED/MARGIN_SET would tell a vendor we had already bought the
+    // lot and roughly when. Their own thread status is all they are entitled to.
+    expect(keys.has("status")).toBe(true);
+    expect(thread.status).toBe("COUNTERED");
+    expect(keys.has("deal_status")).toBe(false);
+    expect(keys.has("offer_version")).toBe(false);
+    expect(keys.has("deal_id")).toBe(false);
+    expect(keys.has("request_id")).toBe(false);
+  });
+
+  it("gives the vendor their own numbers, both directions", () => {
+    expect(thread.ask_total).toBe(3 * 6500 + 2 * 3900);
+    expect(thread.counter_total).toBe(3 * 6000 + 2 * 3500);
+    expect(thread.agreed_total).toBeNull();
+    expect(thread.total_units).toBe(5);
+  });
+
+  it("closes the door on a struck or lost thread", () => {
+    const base = {
+      thread_id: "thr-1",
+      quotation_no: "QTN-1024-1",
+      pickup_city: null,
+      pickup_state: null,
+      sent_at: null,
+      responded_at: null,
+      lines: [],
+    };
+    expect(toVendorThread({ ...base, status: "SENT" }).can_respond).toBe(true);
+    expect(toVendorThread({ ...base, status: "COUNTERED" }).can_respond).toBe(true);
+    expect(toVendorThread({ ...base, status: "AGREED" }).can_respond).toBe(false);
+    expect(toVendorThread({ ...base, status: "LOST" }).can_respond).toBe(false);
+  });
+
+  it("a NEW dealer column cannot ride along into a thread", () => {
+    const contaminated = toVendorThread({
+      thread_id: "thr-2",
+      quotation_no: "QTN-1024-2",
+      status: "SENT",
+      pickup_city: "Nashik",
+      pickup_state: "Maharashtra",
+      sent_at: null,
+      responded_at: null,
+      lines: [
+        {
+          line_id: "line-1",
+          quantity: 3,
+          condition: "WORKING",
+          voltage: 60,
+          ah: 120,
+          ask_price: 6500,
+          dealer_name: "Shakti Battery House",
+          dealer_price: 5200,
+          margin_value: 1300,
+        } as never,
+      ],
+    });
+
+    const leaked = allValues(contaminated);
+    expect(leaked).not.toContain("Shakti Battery House");
+    expect(leaked).not.toContain(5200);
+    expect(leaked).not.toContain(1300);
+    expect(allKeys(contaminated).has("dealer_name")).toBe(false);
+    expect(allKeys(contaminated).has("dealer_price")).toBe(false);
   });
 });
