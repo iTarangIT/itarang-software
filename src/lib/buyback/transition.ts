@@ -52,14 +52,19 @@ export const NOTIFICATION_FOR: Record<
   dealer_accept: { party: "ADMIN", channel: "PORTAL" },
   dealer_decline: { party: "ADMIN", channel: "PORTAL" },
 
-  // Admin acted → tell the dealer, on WhatsApp.
-  accept: { party: "DEALER", channel: "WHATSAPP" },
-  reject: { party: "DEALER", channel: "WHATSAPP" },
-  negotiate: { party: "DEALER", channel: "WHATSAPP" },
-  request_info: { party: "DEALER", channel: "WHATSAPP" },
-  send_final_offer: { party: "DEALER", channel: "WHATSAPP" },
-  reopen: { party: "DEALER", channel: "WHATSAPP" },
-  cancel: { party: "DEALER", channel: "WHATSAPP" },
+  // Admin acted → tell the dealer, in their in-app bell (item 12).
+  //
+  // These were WHATSAPP. WhatsApp is out of scope and unwired, so a dealer's
+  // accept/reject/negotiate notifications went to a channel that never fired and
+  // never reached a bell — the dealer was told nothing. PORTAL routes them to
+  // the dealer's own bell instead, which is the delivery that actually exists.
+  accept: { party: "DEALER", channel: "PORTAL" },
+  reject: { party: "DEALER", channel: "PORTAL" },
+  negotiate: { party: "DEALER", channel: "PORTAL" },
+  request_info: { party: "DEALER", channel: "PORTAL" },
+  send_final_offer: { party: "DEALER", channel: "PORTAL" },
+  reopen: { party: "DEALER", channel: "PORTAL" },
+  cancel: { party: "DEALER", channel: "PORTAL" },
 
   // Internal bookkeeping — the dealer does not need to hear that an admin
   // opened their request, or what margin was set (they must never hear that).
@@ -91,20 +96,20 @@ export const NOTIFICATION_FOR: Record<
   vendor_counter: { party: "ADMIN", channel: "PORTAL" },
   vendor_agree: { party: "ADMIN", channel: "PORTAL" },
 
-  // Fulfilment — the dealer is the one who has to be somewhere at a time, so
-  // these reach them on WhatsApp. The vendor's own PO copy is handled by the
-  // fan-out on exchange_pos.
-  exchange_pos: { party: "DEALER", channel: "WHATSAPP" },
-  schedule_pickup: { party: "DEALER", channel: "WHATSAPP" },
-  complete_pickup: { party: "DEALER", channel: "WHATSAPP" },
+  // Fulfilment — the dealer has to be somewhere at a time, so they hear about
+  // it (in-app; was WhatsApp). The vendor's own PO copy is the fan-out on
+  // exchange_pos.
+  exchange_pos: { party: "DEALER", channel: "PORTAL" },
+  schedule_pickup: { party: "DEALER", channel: "PORTAL" },
+  complete_pickup: { party: "DEALER", channel: "PORTAL" },
 
   // --- Money leg (Sprint 2B) ---
   // The dealer raised it, so the admins are the ones who need to know.
   raise_invoice: { party: "ADMIN", channel: "PORTAL" },
-  // These two are the dealer's money. They hear about both — especially the
-  // rejection, which carries the reason and needs them to act.
-  approve_invoice: { party: "DEALER", channel: "WHATSAPP" },
-  return_invoice: { party: "DEALER", channel: "WHATSAPP" },
+  // These two are the dealer's money. They hear about both (in-app; was
+  // WhatsApp) — especially the rejection, which carries the reason to act on.
+  approve_invoice: { party: "DEALER", channel: "PORTAL" },
+  return_invoice: { party: "DEALER", channel: "PORTAL" },
   // Default recipient; the routes override with a fanOut so the party who was
   // actually paid is the one told (a dealer must not be notified that a VENDOR
   // paid us, and must never learn the vendor's figure).
