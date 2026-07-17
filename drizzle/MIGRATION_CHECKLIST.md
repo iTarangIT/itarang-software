@@ -143,8 +143,8 @@ least trustworthy column (drift began ~E-145).
 | E-162_nbfc_custom_rbac | nbfc custom rbac | ☐ | ☐ | ☐ | ☐ |
 | E-163_nbfc_notification_channels | nbfc notification channels | ☐ | ☐ | ☐ | ☐ |
 | E-164_dealer_onboarding_draft_step | dealer onboarding draft step | ☐ | ☐ | ☐ | ☐ |
-| E-165_nbfc_byo_provider_handoff | nbfc byo provider handoff | ☐ | ☐ | ☐ | ☐ |
-| E-166_nbfc_provider_credentials | nbfc provider credentials | ☐ | ☐ | ☐ | ☐ |
+| E-165_nbfc_byo_provider_handoff | nbfc byo provider handoff | ☐ | ✅ | ☐ | ☐ |
+| E-166_nbfc_provider_credentials | nbfc provider credentials | ☐ | ✅ | ☐ | ☐ |
 | E-167_whatsapp_onboarding | whatsapp onboarding | ☐ | ☐ | ☐ | ☐ |
 | E-168_intent_qualification_band | intent qualification band | ☐ | ☐ | ☐ | ☐ |
 | E-169_campaign_dropped_empty_not_failed | campaign dropped empty not failed | ☐ | ☐ | ☐ | ☐ |
@@ -158,20 +158,20 @@ least trustworthy column (drift began ~E-145).
 | E-173_emi_partial_payments | emi partial payments | ☐ | ☐ | ☐ | ☐ |
 | E-174_leads_source_channel | leads source channel | ☐ | ☐ | ☐ | ☐ |
 | E-174_zoho_invoice_payment_reference | zoho invoice payment reference | ☐ | ☐ | ☐ | ☐ |
-| E-175_dealer_owner_aadhaar | dealer_onboarding_applications.owner_aadhaar_no + owner_aadhaar_verified (dealer agreement Aadhaar match) | ☐ | ☐ | ☐ | ☐ |
-| E-176_consent_signer_name_score | consent_records.signer_name_match_score (Aadhaar e-sign name-match signal) | ✅ | ☐ | ☐ | ☐ |
-| E-177_loan_calculator | dealer loan calculator: calc_* tables (nbfcs/schemes/model_caps/component_prices/coverage/settings/config_versions/audit_log/leads) + guard indexes & checks | ✅ | ☐ | ☐ | ☐ |
-| E-178_calc_otp_search_history | calc_otp_verifications + calc_leads otp/wa columns (OTP-gated calculator, WhatsApp results, admin search history) | ✅ | ☐ | ☐ | ☐ |
-| E-179_lead_registry | lead_registry — central capture of every new lead (dealer/customer/oem/nbfc, web+whatsapp) with name/phone + source link | ✅ | ☐ | ☐ | ☐ |
-| E-180_consent_otp_verifications | consent_otp_verifications + consent_records otp_verification_id/otp_verified_at (OTP-based customer consent, replaces Digio Aadhaar e-sign) | ✅ | ☐ | ☐ | ☐ |
-| E-181_nbfc_emi_tracker_overrides | nbfc_emi_tracker_overrides — per-loan display overrides for the EMI Tracker table (borrower/serial/emi/next_due/last_paid/progress/status/dpd/mandate/next_auto_debit) | ✅ | ☐ | ☐ | ☐ |
-| E-182_emi_tracker_financier | nbfc_emi_tracker_overrides.financier — free-text financier label shown in a new Finance column on the EMI Tracker | ✅ | ☐ | ☐ | ☐ |
-| E-183_emi_tracker_standalone | nbfc_emi_tracker_overrides.is_standalone + loan_application_id made nullable + partial unique index on (tenant, lower(vehicleno)) WHERE is_standalone — force-import bulk-upload rows with no matching loan as display-only tracker entries | ✅ | ☐ | ☐ | ☐ |
+| E-175_dealer_owner_aadhaar | dealer_onboarding_applications.owner_aadhaar_no + owner_aadhaar_verified (dealer agreement Aadhaar match) | ✅ | ✅ | ☐ | ☐ |
+| E-176_consent_signer_name_score | consent_records.signer_name_match_score (Aadhaar e-sign name-match signal) | ✅ | ✅ | ☐ | ☐ |
+| E-177_loan_calculator | dealer loan calculator: calc_* tables (nbfcs/schemes/model_caps/component_prices/coverage/settings/config_versions/audit_log/leads) + guard indexes & checks | ✅ | ✅ | ☐ | ☐ |
+| E-178_calc_otp_search_history | calc_otp_verifications + calc_leads otp/wa columns (OTP-gated calculator, WhatsApp results, admin search history) | ✅ | ✅ | ☐ | ☐ |
+| E-179_lead_registry | lead_registry — central capture of every new lead (dealer/customer/oem/nbfc, web+whatsapp) with name/phone + source link | ✅ | ✅ | ☐ | ☐ |
+| E-180_consent_otp_verifications | consent_otp_verifications + consent_records otp_verification_id/otp_verified_at (OTP-based customer consent, replaces Digio Aadhaar e-sign) | ✅ | ✅ | ☐ | ☐ |
+| E-181_nbfc_emi_tracker_overrides | nbfc_emi_tracker_overrides — per-loan display overrides for the EMI Tracker table (borrower/serial/emi/next_due/last_paid/progress/status/dpd/mandate/next_auto_debit) | ✅ | ✅ | ☐ | ☐ |
+| E-182_emi_tracker_financier | nbfc_emi_tracker_overrides.financier — free-text financier label shown in a new Finance column on the EMI Tracker | ✅ | ✅ | ☐ | ☐ |
+| E-183_emi_tracker_standalone | nbfc_emi_tracker_overrides.is_standalone + loan_application_id made nullable + partial unique index on (tenant, lower(vehicleno)) WHERE is_standalone — force-import bulk-upload rows with no matching loan as display-only tracker entries | ✅ | ✅ | ☐ | ☐ |
 | E-184_device_battery_map_location | device_battery_map.state + city (Intellicar Fleet Overview State/City filters) | ✅ | ✅ | ✅ | ✅ |
-| E-185_risk_card_verdict_source | risk_card_runs.verdict_source (hand_coded/sandbox/none/legacy_llm) + backfill; severity vocabulary widened to include inconclusive/error so a failed test stops rendering as a green OK card | ✅ | ☐ | ☐ | ☐ |
+| E-185_risk_card_verdict_source | risk_card_runs.verdict_source (hand_coded/sandbox/none/legacy_llm) + backfill; severity vocabulary widened to include inconclusive/error so a failed test stops rendering as a green OK card | ✅ | ✅ | ☐ | ☐ |
 | E-186_risk_hypothesis_text_matches_code | Rewrites the 5 hand-coded risk_hypotheses descriptions so the text shown to operators matches the test that runs (geo-shift said "100 km from onboarding centroid" but checked an India bounding box) and stops hard-coding threshold values now governed by nbfc_risk_rules | ✅ | ☐ | ☐ | ☐ |
-| E-187_risk_runs | risk_runs table (one row per risk-engine invocation) + risk_card_runs.run_id. Partial unique index (tenant_id) WHERE status='running' is the concurrency lock; the table is also the freshness source for the Risk page | ✅ | ☐ | ☐ | ☐ |
-| E-188_risk_hypothesis_promotion | risk_hypotheses.promoted_at/promoted_by/retire_reason. An unvetted llm-v1 hypothesis is capped at severity=warn and cannot raise a High Alert until a human promotes it; hand-coded rows backfilled as promoted. Enables catalogue reuse + retirement instead of unbounded growth | ☐ | ☐ | ☐ | ☐ |
+| E-187_risk_runs | risk_runs table (one row per risk-engine invocation) + risk_card_runs.run_id. Partial unique index (tenant_id) WHERE status='running' is the concurrency lock; the table is also the freshness source for the Risk page | ✅ | ✅ | ☐ | ☐ |
+| E-188_risk_hypothesis_promotion | risk_hypotheses.promoted_at/promoted_by/retire_reason. An unvetted llm-v1 hypothesis is capped at severity=warn and cannot raise a High Alert until a human promotes it; hand-coded rows backfilled as promoted. Enables catalogue reuse + retirement instead of unbounded growth | ☐ | ✅ | ☐ | ☐ |
 | E-189_inventory_transfers_canonical_ids | Rebuilds inventory_transfers on canonical id types (varchar(64) PK, varchar(255) dealer ids → accounts.id, uuid actor ids → users.id). This DB still had the pre-0038 integer-PK/integer-FK/rejected_* design, so every transfer read blew up with 22P02 "invalid input syntax for type integer: ACC-…". Supersedes 0038; guarded — drops only when the stale schema is present AND empty, else RAISEs | ☐ | ☐ | ☐ | ☐ |
 | E-185_buyback_core | peakAmp Battery Buyback Portal core schema (BRD §3) — buyback_deal_status enum (all 21 states) + catalog_variants, business_entity_roles, buyback_pickup_addresses, buyback_requests/batches/lines/units, buyback_photos, provenance_records, info_requests, buyback_deals, negotiation_rounds(+_lines), final_offers(+_lines), deal_line_locks, buyback_activity_log (INSERT-only trigger), buyback_notification_events | ☐ | ✅ | ✅ | ☐ |
 | E-186_buyback_vendor_leg | peakAmp vendor leg & fulfilment (M09–M11 + minimal M05) — scrap_vendors, vendor_threads (partial UNIQUE: one AGREED vendor per deal), vendor_thread_lines, purchase_orders(+_lines, tax cols modelled not ruled), pickups, buyback_po_no_seq; buyback_notification_events gains attempts/next_attempt_at/recipient_ref/attachment_s3_key for dispatch; deal_line_locks becomes FILL-ONCE via trigger (only vendor_price, only once). **Apply AFTER E-185.** | ☐ | ✅ | ✅ | ☐ |

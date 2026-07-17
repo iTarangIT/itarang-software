@@ -1,0 +1,2744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>database-2 — empty tables &amp; empty columns</title>
+<style>
+  :root {
+    --ink:#0d1b2a; --ink-2:#37475a; --ink-3:#6b7d90;
+    --ground:#f6f8fa; --panel:#ffffff; --rule:#dce3ea; --rule-soft:#e8edf2;
+    --navy:#12395c; --teal:#0f7d78; --teal-soft:#e2f2f0;
+    --warn:#b5761b; --warn-bg:#fdf2e0; --incon:#64748b; --incon-bg:#eef1f4;
+    --mono: ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans: ui-sans-serif,system-ui,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --shadow: 0 1px 2px rgba(13,27,42,.05), 0 4px 14px -6px rgba(13,27,42,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:#e6edf3; --ink-2:#aebac7; --ink-3:#7d8b9a;
+      --ground:#0c141c; --panel:#131e28; --rule:#253442; --rule-soft:#1c2833;
+      --navy:#9dc4e4; --teal:#4fbdb2; --teal-soft:#123330;
+      --warn:#e0a44c; --warn-bg:#2e2415; --incon:#94a3b8; --incon-bg:#1b2530;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px -6px rgba(0,0,0,.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; padding:2.5rem 1.25rem 5rem; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:1rem; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:60rem; margin:0 auto; }
+  h1 { font-size:clamp(1.7rem,1.45rem + 1.2vw,2.4rem); line-height:1.15; margin:0 0 .4rem; color:var(--navy); letter-spacing:-.02em; }
+  h2 {
+    font-size:clamp(1.3rem,1.18rem + .6vw,1.65rem); color:var(--navy);
+    margin:3rem 0 .3rem; letter-spacing:-.01em;
+    padding-top:1.5rem; border-top:1px solid var(--rule);
+  }
+  .lede { color:var(--ink-2); margin:0 0 .35rem; }
+  .sub { color:var(--ink-3); font-size:.8125rem; margin:0 0 2rem; }
+  .mono { font-family:var(--mono); font-size:.8125rem; }
+  .dim { color:var(--ink-3); }
+
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr)); gap:.75rem; margin:1.75rem 0 .5rem; }
+  .stat { background:var(--panel); border:1px solid var(--rule); border-radius:.6rem; padding:.9rem 1rem; box-shadow:var(--shadow); }
+  .stat .n { font-size:1.65rem; font-weight:650; color:var(--navy); letter-spacing:-.02em; line-height:1.1; }
+  .stat .n.accent { color:var(--teal); }
+  .stat .l { font-size:.75rem; color:var(--ink-3); margin-top:.15rem; }
+
+  .note {
+    background:var(--warn-bg); border:1px solid var(--rule); border-left:3px solid var(--warn);
+    border-radius:.5rem; padding:.85rem 1rem; margin:1.25rem 0; font-size:.875rem; color:var(--ink-2);
+  }
+  .note strong { color:var(--ink); }
+
+  .scroll { overflow-x:auto; background:var(--panel); border:1px solid var(--rule); border-radius:.6rem; box-shadow:var(--shadow); }
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:.5rem .85rem; border-bottom:1px solid var(--rule-soft); white-space:nowrap; }
+  th { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); font-weight:600; background:var(--incon-bg); position:sticky; top:0; }
+  tbody tr:last-child td { border-bottom:0; }
+  td.num { text-align:right; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+  .cap { max-height:32rem; overflow-y:auto; }
+
+  details.tbl { background:var(--panel); border:1px solid var(--rule); border-radius:.6rem; margin:.6rem 0; box-shadow:var(--shadow); overflow:hidden; }
+  details.tbl summary { cursor:pointer; padding:.7rem .9rem; display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline; }
+  details.tbl summary::marker { color:var(--ink-3); }
+  details.tbl .name { color:var(--teal); font-weight:600; }
+  details.tbl .meta { font-size:.75rem; color:var(--ink-3); }
+  table.inner { border-top:1px solid var(--rule-soft); }
+  table.inner th { background:transparent; position:static; }
+
+  .filter { width:100%; padding:.55rem .75rem; margin:.75rem 0 0; border:1px solid var(--rule); border-radius:.5rem;
+            background:var(--panel); color:var(--ink); font-family:var(--mono); font-size:.8125rem; }
+  .filter:focus { outline:2px solid var(--teal); outline-offset:1px; }
+
+  .bar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:1.25rem 0 0; }
+  .btn {
+    appearance:none; cursor:pointer; font:inherit; font-size:.8125rem; font-weight:550;
+    padding:.5rem .9rem; border-radius:.5rem; border:1px solid var(--teal);
+    background:var(--teal); color:#fff; box-shadow:var(--shadow);
+  }
+  .btn:hover { filter:brightness(1.08); }
+  .btn:focus-visible { outline:2px solid var(--navy); outline-offset:2px; }
+  .btn.ghost { background:var(--panel); color:var(--teal); }
+  .bar .hint { font-size:.75rem; color:var(--ink-3); }
+  @media (prefers-color-scheme: dark) { .btn { color:#08211f; } }
+  .hidden { display:none !important; }
+  footer { margin-top:3.5rem; padding-top:1.25rem; border-top:1px solid var(--rule); color:var(--ink-3); font-size:.8125rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>database-2 — empty tables &amp; empty columns</h1>
+  <p class="lede">Every table holding <strong>zero rows</strong>, and every column that is <strong>NULL in all rows</strong>.</p>
+  <p class="sub">Source: <span class="mono">database-2.c9w88wq6qyco.ap-south-1.rds.amazonaws.com/postgres</span> · schema <span class="mono">public</span> · generated 16 Jul 2026 · read-only audit (session <span class="mono">transaction_read_only=on</span>; database-2 was not modified)</p>
+
+  <div class="bar">
+    <a class="btn" href="database-2-empty-audit.xlsx" download>&#8595;&nbsp; Download Excel (.xlsx)</a>
+    <span class="hint">4 sheets — Summary, Empty Tables, Empty Columns, Columns by Table. Sits beside this file; works offline.</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">243</div><div class="l">tables total</div></div>
+    <div class="stat"><div class="n accent">122</div><div class="l">empty tables</div></div>
+    <div class="stat"><div class="n">121</div><div class="l">tables with rows</div></div>
+    <div class="stat"><div class="n accent">386</div><div class="l">all-NULL columns</div></div>
+    <div class="stat"><div class="n">77</div><div class="l">tables affected</div></div>
+  </div>
+
+  <h2>1 · Empty tables <span class="dim mono">(122)</span></h2>
+  <p class="lede">Tables where <span class="mono">count(*) = 0</span>.</p>
+  <input id="f1" class="filter" type="search" placeholder="Filter tables…" aria-label="Filter empty tables" />
+  <div class="scroll cap" style="margin-top:.6rem">
+    <table>
+      <thead><tr><th>Table</th><th style="text-align:right">Columns</th></tr></thead>
+      <tbody id="t1">
+<tr><td class="mono">admin_audit_log_exports</td><td class="num">9</td></tr>
+<tr><td class="mono">admin_kyc_reviews</td><td class="num">12</td></tr>
+<tr><td class="mono">agreements</td><td class="num">14</td></tr>
+<tr><td class="mono">app_settings</td><td class="num">3</td></tr>
+<tr><td class="mono">approvals</td><td class="num">14</td></tr>
+<tr><td class="mono">asm_territories</td><td class="num">8</td></tr>
+<tr><td class="mono">assignment_change_logs</td><td class="num">10</td></tr>
+<tr><td class="mono">auction_auto_bids</td><td class="num">7</td></tr>
+<tr><td class="mono">auction_bids</td><td class="num">5</td></tr>
+<tr><td class="mono">auction_settlements</td><td class="num">8</td></tr>
+<tr><td class="mono">bank_statement_imports</td><td class="num">8</td></tr>
+<tr><td class="mono">bank_statement_rows</td><td class="num">13</td></tr>
+<tr><td class="mono">battery_alerts</td><td class="num">11</td></tr>
+<tr><td class="mono">bolna_calls</td><td class="num">17</td></tr>
+<tr><td class="mono">business_entity_roles</td><td class="num">7</td></tr>
+<tr><td class="mono">buyback_activity_log</td><td class="num">9</td></tr>
+<tr><td class="mono">buyback_batches</td><td class="num">5</td></tr>
+<tr><td class="mono">buyback_deals</td><td class="num">8</td></tr>
+<tr><td class="mono">buyback_gateway_transactions</td><td class="num">18</td></tr>
+<tr><td class="mono">buyback_lines</td><td class="num">20</td></tr>
+<tr><td class="mono">buyback_notification_events</td><td class="num">16</td></tr>
+<tr><td class="mono">buyback_photos</td><td class="num">15</td></tr>
+<tr><td class="mono">buyback_pickup_addresses</td><td class="num">13</td></tr>
+<tr><td class="mono">buyback_requests</td><td class="num">8</td></tr>
+<tr><td class="mono">buyback_units</td><td class="num">5</td></tr>
+<tr><td class="mono">calc_dealer_margin_overrides</td><td class="num">6</td></tr>
+<tr><td class="mono">call_records</td><td class="num">12</td></tr>
+<tr><td class="mono">call_sessions</td><td class="num">11</td></tr>
+<tr><td class="mono">campaign_segments</td><td class="num">14</td></tr>
+<tr><td class="mono">campaigns</td><td class="num">17</td></tr>
+<tr><td class="mono">catalog_price_history</td><td class="num">9</td></tr>
+<tr><td class="mono">catalog_price_reviews</td><td class="num">4</td></tr>
+<tr><td class="mono">catalog_variants</td><td class="num">12</td></tr>
+<tr><td class="mono">co_borrower_documents</td><td class="num">13</td></tr>
+<tr><td class="mono">conversation_messages</td><td class="num">5</td></tr>
+<tr><td class="mono">coupon_audit_log</td><td class="num">10</td></tr>
+<tr><td class="mono">coupon_batches</td><td class="num">11</td></tr>
+<tr><td class="mono">coupon_codes</td><td class="num">20</td></tr>
+<tr><td class="mono">deal_line_locks</td><td class="num">11</td></tr>
+<tr><td class="mono">dealer_nbfc_assignments</td><td class="num">7</td></tr>
+<tr><td class="mono">dealer_subscriptions</td><td class="num">8</td></tr>
+<tr><td class="mono">deals</td><td class="num">25</td></tr>
+<tr><td class="mono">device_battery_map</td><td class="num">15</td></tr>
+<tr><td class="mono">dual_approval_action_config</td><td class="num">4</td></tr>
+<tr><td class="mono">duplicate_merge_requests</td><td class="num">13</td></tr>
+<tr><td class="mono">facilitation_payments</td><td class="num">27</td></tr>
+<tr><td class="mono">final_offer_lines</td><td class="num">4</td></tr>
+<tr><td class="mono">final_offers</td><td class="num">8</td></tr>
+<tr><td class="mono">holiday_calendar</td><td class="num">7</td></tr>
+<tr><td class="mono">info_requests</td><td class="num">9</td></tr>
+<tr><td class="mono">interest_level_overrides</td><td class="num">8</td></tr>
+<tr><td class="mono">inventory_transfers</td><td class="num">19</td></tr>
+<tr><td class="mono">inventory_write_offs</td><td class="num">15</td></tr>
+<tr><td class="mono">invoice_lines</td><td class="num">13</td></tr>
+<tr><td class="mono">invoices</td><td class="num">14</td></tr>
+<tr><td class="mono">iot_devices</td><td class="num">21</td></tr>
+<tr><td class="mono">kyc_data_audit</td><td class="num">9</td></tr>
+<tr><td class="mono">lead_assignments</td><td class="num">9</td></tr>
+<tr><td class="mono">lead_documents</td><td class="num">10</td></tr>
+<tr><td class="mono">lead_products</td><td class="num">7</td></tr>
+<tr><td class="mono">loan_applications</td><td class="num">25</td></tr>
+<tr><td class="mono">loan_details</td><td class="num">16</td></tr>
+<tr><td class="mono">loan_files</td><td class="num">27</td></tr>
+<tr><td class="mono">loan_offers</td><td class="num">13</td></tr>
+<tr><td class="mono">loan_payments</td><td class="num">11</td></tr>
+<tr><td class="mono">manual_dealer_sales</td><td class="num">9</td></tr>
+<tr><td class="mono">manual_handoffs</td><td class="num">17</td></tr>
+<tr><td class="mono">nbfc_anomaly_flags</td><td class="num">6</td></tr>
+<tr><td class="mono">nbfc_auction_cancel_requests</td><td class="num">8</td></tr>
+<tr><td class="mono">nbfc_auction_lot_actions</td><td class="num">8</td></tr>
+<tr><td class="mono">nbfc_audit_log_exports</td><td class="num">12</td></tr>
+<tr><td class="mono">nbfc_battery_evaluations</td><td class="num">9</td></tr>
+<tr><td class="mono">nbfc_bulk_immobilisation_batches</td><td class="num">8</td></tr>
+<tr><td class="mono">nbfc_buyback_requests</td><td class="num">11</td></tr>
+<tr><td class="mono">nbfc_consent_scopes</td><td class="num">6</td></tr>
+<tr><td class="mono">nbfc_consent_withdrawals</td><td class="num">6</td></tr>
+<tr><td class="mono">nbfc_cor_expiry_alerts</td><td class="num">4</td></tr>
+<tr><td class="mono">nbfc_director_kyc_verifications</td><td class="num">8</td></tr>
+<tr><td class="mono">nbfc_entity_kyc_verifications</td><td class="num">9</td></tr>
+<tr><td class="mono">nbfc_loan_restructures</td><td class="num">10</td></tr>
+<tr><td class="mono">nbfc_notification_channels</td><td class="num">22</td></tr>
+<tr><td class="mono">nbfc_pii_access_grants</td><td class="num">9</td></tr>
+<tr><td class="mono">nbfc_provider_credentials</td><td class="num">13</td></tr>
+<tr><td class="mono">nbfc_recovery_pipeline</td><td class="num">7</td></tr>
+<tr><td class="mono">nbfc_retention_tombstones</td><td class="num">7</td></tr>
+<tr><td class="mono">nbfc_risk_rule_change_requests</td><td class="num">9</td></tr>
+<tr><td class="mono">nbfc_risk_rule_thresholds</td><td class="num">8</td></tr>
+<tr><td class="mono">nbfc_risk_rules</td><td class="num">7</td></tr>
+<tr><td class="mono">nbfc_role_permissions</td><td class="num">2</td></tr>
+<tr><td class="mono">nbfc_roles</td><td class="num">9</td></tr>
+<tr><td class="mono">nbfc_score_input_snapshots</td><td class="num">8</td></tr>
+<tr><td class="mono">nbfc_score_overrides</td><td class="num">9</td></tr>
+<tr><td class="mono">nbfc_score_runs</td><td class="num">7</td></tr>
+<tr><td class="mono">nbfc_wallet_inflows</td><td class="num">10</td></tr>
+<tr><td class="mono">negotiation_round_lines</td><td class="num">4</td></tr>
+<tr><td class="mono">negotiation_rounds</td><td class="num">9</td></tr>
+<tr><td class="mono">oem_contacts</td><td class="num">12</td></tr>
+<tr><td class="mono">oem_inventory_for_pdi</td><td class="num">9</td></tr>
+<tr><td class="mono">oems</td><td class="num">18</td></tr>
+<tr><td class="mono">order_disputes</td><td class="num">17</td></tr>
+<tr><td class="mono">orders</td><td class="num">26</td></tr>
+<tr><td class="mono">otp_confirmations</td><td class="num">16</td></tr>
+<tr><td class="mono">pdi_records</td><td class="num">30</td></tr>
+<tr><td class="mono">pickups</td><td class="num">21</td></tr>
+<tr><td class="mono">provenance_records</td><td class="num">13</td></tr>
+<tr><td class="mono">provisions</td><td class="num">13</td></tr>
+<tr><td class="mono">purchase_order_lines</td><td class="num">12</td></tr>
+<tr><td class="mono">purchase_orders</td><td class="num">13</td></tr>
+<tr><td class="mono">scrap_vendors</td><td class="num">10</td></tr>
+<tr><td class="mono">scrape_batches</td><td class="num">17</td></tr>
+<tr><td class="mono">scraper_city_queue</td><td class="num">11</td></tr>
+<tr><td class="mono">service_tickets</td><td class="num">21</td></tr>
+<tr><td class="mono">settlement_transactions</td><td class="num">16</td></tr>
+<tr><td class="mono">slas</td><td class="num">13</td></tr>
+<tr><td class="mono">telemetry_alerts</td><td class="num">9</td></tr>
+<tr><td class="mono">telemetry_daily_summary</td><td class="num">13</td></tr>
+<tr><td class="mono">telemetry_events</td><td class="num">17</td></tr>
+<tr><td class="mono">telemetry_ingestion_log</td><td class="num">4</td></tr>
+<tr><td class="mono">user_preferences</td><td class="num">6</td></tr>
+<tr><td class="mono">vendor_thread_lines</td><td class="num">8</td></tr>
+<tr><td class="mono">vendor_threads</td><td class="num">13</td></tr>
+<tr><td class="mono">whatsapp_dealer_sessions</td><td class="num">12</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>2 · Columns that are NULL in every row <span class="dim mono">(386)</span></h2>
+  <p class="lede">Grouped by table. The table has rows, but these columns were never written to.</p>
+  <div class="note">
+    <strong>Only tables that contain rows are listed here.</strong> In the 122 empty tables above, every
+    column is trivially NULL — that says nothing about the column, so including them would add noise. A column
+    below is genuinely unused: real data sits beside it, and this column stayed NULL for all of it.
+  </div>
+  <input id="f2" class="filter" type="search" placeholder="Filter by table or column…" aria-label="Filter columns" />
+  <div style="margin-top:.6rem" id="t2">
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">accounts</span>
+      <span class="meta">6 all-NULL columns · 31 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">address_line2</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_beneficiary_name</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_proof_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">city</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">pincode</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">state</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">admin_verification_queue</span>
+      <span class="meta">2 all-NULL columns · 52 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">assigned_to</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">submitted_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">after_sales_records</span>
+      <span class="meta">3 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">closed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">customer_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">lead_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">ai_call_logs</span>
+      <span class="meta">3 all-NULL columns · 626 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">agent_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">model_used</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">started_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">assignment_config</span>
+      <span class="meta">1 all-NULL column · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">updated_by</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">audit_logs</span>
+      <span class="meta">1 all-NULL column · 1,779 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">old_data</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_battery_models</span>
+      <span class="meta">3 all-NULL columns · 20 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">capacity_ah</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">charger_sku</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">voltage</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_component_prices</span>
+      <span class="meta">1 all-NULL column · 100 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">valid_to</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_leads</span>
+      <span class="meta">5 all-NULL columns · 196 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">crm_lead_id</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">crm_synced_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">idempotency_key</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">pincode</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">state</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_nbfc_coverage</span>
+      <span class="meta">1 all-NULL column · 28 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">valid_to</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_nbfc_model_caps</span>
+      <span class="meta">1 all-NULL column · 20 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">valid_to</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_otp_verifications</span>
+      <span class="meta">1 all-NULL column · 9 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">locked_until</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_schemes</span>
+      <span class="meta">1 all-NULL column · 13 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">valid_to</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">calc_settings</span>
+      <span class="meta">1 all-NULL column · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">valid_to</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">co_borrowers</span>
+      <span class="meta">1 all-NULL column · 2 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">address</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">consent_otp_verifications</span>
+      <span class="meta">2 all-NULL columns · 11 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">consumed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">locked_until</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">consent_records</span>
+      <span class="meta">13 all-NULL columns · 11 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">channel</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_link_expires_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_token</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_certificate_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_error_code</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_error_message</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_provider</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">reviewer_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">signer_aadhaar_masked</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">signer_name_match_score</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dealer_lead_commercials</span>
+      <span class="meta">6 all-NULL columns · 6 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">brochure_sent_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">brochure_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">deal_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">quote_document_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">withdrawn_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dealer_lead_status_history</span>
+      <span class="meta">1 all-NULL column · 146 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">from_lost_reason</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dealer_leads</span>
+      <span class="meta">14 all-NULL columns · 7,974 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">address_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">ai_session_id</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">approved_by</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">assigned_to</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">brochure_sent_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">dealer_id</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">deleted_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">lost_reason_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">onboarding_dropout_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">onboarding_dropout_reason</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">preliminary_payment_intent</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">previous_lost_reason</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_by</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">timezone</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dealer_onboarding_applications</span>
+      <span class="meta">26 all-NULL columns · 81 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">admin_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">agreement_audit_trail_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">agreement_expired_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">agreement_failed_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">agreement_failure_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">agreement_id</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">agreement_last_initiated_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">approved_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">contact_email</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">correction_requested_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">deal_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_2_email</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_2_mobile</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_2_name</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">owner_landline</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">payment_intent_note</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">pincode</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">proposed_terms_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">quote_document_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_remarks</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">revalidated_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">source_ai_recording_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">source_ai_session_id</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dealer_onboarding_documents</span>
+      <span class="meta">5 all-NULL columns · 373 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">admin_comment</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">verification_provider</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">verified_at</td>
+        <td class="mono dim">timestamp without time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">verified_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dealers</span>
+      <span class="meta">2 all-NULL columns · 23 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">bank_account_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_branch</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">deployed_assets</span>
+      <span class="meta">15 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">battery_health_percent</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">deal_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">deployment_location</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">last_maintenance_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">last_soc</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">last_telemetry_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">last_voltage</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">latitude</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">lead_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">longitude</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">next_maintenance_due</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">qr_code_data</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">qr_code_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">telemetry_data</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">total_cycles</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dialer_campaigns</span>
+      <span class="meta">1 all-NULL column · 14 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">category</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">digilocker_transactions</span>
+      <span class="meta">4 all-NULL columns · 17 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">link_opened_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">session_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">short_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">sms_failed_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">dual_approval_requests</span>
+      <span class="meta">4 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">borrower_notice_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">expired_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">emi_payment_attempts</span>
+      <span class="meta">10 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">document_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">failure_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">note</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">provider_raw_payload</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">provider_raw_status</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_customer_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_order_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_payment_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_token_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">reference_no</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">emi_schedules</span>
+      <span class="meta">3 all-NULL columns · 129 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">interest_component</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">last_attempt_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">principal_component</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">enach_mandates</span>
+      <span class="meta">15 all-NULL columns · 4 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">account_masked</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_name</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">failure_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">max_amount</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">proof_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">provider_name</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">provider_raw_payload</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_customer_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_order_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">razorpay_token_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">registered_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">registration_method</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">umrn</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">valid_from</td>
+        <td class="mono dim">date</td>
+      </tr>
+      <tr>
+        <td class="mono">valid_to</td>
+        <td class="mono dim">date</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">expense_submissions</span>
+      <span class="meta">1 all-NULL column · 4 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">field_investigation_photos</span>
+      <span class="meta">1 all-NULL column · 137 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">exif_data</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">field_investigations</span>
+      <span class="meta">7 all-NULL columns · 9 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">address_match_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">address_text_match</td>
+        <td class="mono dim">boolean</td>
+      </tr>
+      <tr>
+        <td class="mono">customer_present_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">distance_from_address_m</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">proof_urls</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">stated_lat</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">stated_lng</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">inventory</span>
+      <span class="meta">16 all-NULL columns · 75 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">batch_number</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">deal_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">expiry_date</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">manufacturing_date</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">oem_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">oem_invoice_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">oem_warranty_clauses</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">pdi_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">pdi_completed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">product_catalog_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">product_manual_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">received_date</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">soc_last_sync_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">soc_percent</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">sold_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">warranty_document_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">inventory_upload_reports</span>
+      <span class="meta">2 all-NULL columns · 15 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">file_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">kyc_documents</span>
+      <span class="meta">7 all-NULL columns · 62 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">api_response</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">failed_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">purged_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">uploaded_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">verified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">verified_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">lead_escalations</span>
+      <span class="meta">8 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">ceo_comment</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">ceo_recommendation</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">ceo_recommended_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">resolution_action</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">resolution_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">resolved_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">resolved_by</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">suggested_action</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">lead_touchpoints</span>
+      <span class="meta">2 all-NULL columns · 216 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">external_event_id</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">external_system</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">lead_visits</span>
+      <span class="meta">2 all-NULL columns · 50 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">gps_check_in_lat</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">gps_check_in_lng</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">leads</span>
+      <span class="meta">68 all-NULL columns · 32 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">ai_owner</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">ai_priority_score</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">asset_price</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">assigned_to</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">battery_order_expected</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">battery_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">business_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_delivery_channel</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_link_expires_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_link_sent_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_link_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_rejected_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_rejected_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_rejection_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_rejection_reason</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_verification_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_verified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">consent_verified_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">conversation_summary</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">converted_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">converted_deal_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">driving_experience</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_certificate_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_completed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_error_code</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_error_message</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_failed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_transaction_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">family_members</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">financing_decline_category</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">financing_unavailable_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">google_business_status</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">google_business_types</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">google_maps_uri</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">google_place_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">google_rating</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">google_ratings_count</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">intent_band</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">intent_details</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">intent_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">intent_score</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">intent_scored_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">investment_capacity</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">kyc_completed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">last_ai_action_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">last_ai_call_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">last_call_outcome</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">last_call_status</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">local_address</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">next_call_after</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">next_call_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">normalized_phone</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">ocr_error</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">ocr_status</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">qualification_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">qualified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">qualified_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">raw_source_payload</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">scrape_batch_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">scrape_query</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">scraped_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">shop_address</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">sm_assigned_to</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">sold_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">source</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">step_status</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">submitted_to_sm_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">website</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">loan_sanctions</span>
+      <span class="meta">9 all-NULL columns · 8 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">closed_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">dealer_approved_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">dealer_approved_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">file_charge</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">loan_file_number</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">recovery_flagged_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">recovery_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">subvention</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc</span>
+      <span class="meta">2 all-NULL columns · 7 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">docs_verified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">docs_verified_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_charge_catalogue</span>
+      <span class="meta">2 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">commercial_doc_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">tenant_id</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_compliance_documents</span>
+      <span class="meta">6 all-NULL columns · 63 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">rejected_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rejected_by</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">verified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">verified_by</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">verifier_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_correction_items</span>
+      <span class="meta">3 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">new_file_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">previous_file_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">target_ref_id</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_correction_rounds</span>
+      <span class="meta">1 all-NULL column · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">summary_remarks</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_directors</span>
+      <span class="meta">2 all-NULL columns · 7 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">aadhaar_last4</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">rc_number</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_emi_tracker_overrides</span>
+      <span class="meta">5 all-NULL columns · 7 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">dpd</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">mandate</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">next_auto_debit</td>
+        <td class="mono dim">date</td>
+      </tr>
+      <tr>
+        <td class="mono">next_due</td>
+        <td class="mono dim">date</td>
+      </tr>
+      <tr>
+        <td class="mono">status</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_financing_offers</span>
+      <span class="meta">6 all-NULL columns · 8 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">ceo_approval_request_id</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">ceo_decided_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">ceo_decided_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">conditions</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">deviation_fields</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">deviation_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_immobilisation_actions</span>
+      <span class="meta">1 all-NULL column · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">borrower_notified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_loan_agreements</span>
+      <span class="meta">3 all-NULL columns · 2 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">audit_trail_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">failure_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">provider_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_loan_products</span>
+      <span class="meta">1 all-NULL column · 10 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">file_charge_fixed</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_lsp_agreement_signers</span>
+      <span class="meta">1 all-NULL column · 14 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">signing_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_lsp_agreements</span>
+      <span class="meta">9 all-NULL columns · 7 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">audit_trail_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">created_by</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">initiated_by</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_1_email</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_1_name</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_2_email</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">itarang_signatory_2_name</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">nbfc_signatory_email</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">nbfc_signatory_name</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_risk_alerts</span>
+      <span class="meta">1 all-NULL column · 14 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">resolved_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_service_config</span>
+      <span class="meta">3 all-NULL columns · 3 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">esign_endpoint_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_provider</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">esign_webhook_secret</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_step_owners</span>
+      <span class="meta">1 all-NULL column · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">city</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_tenants</span>
+      <span class="meta">1 all-NULL column · 7 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">aum_inr</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_users</span>
+      <span class="meta">1 all-NULL column · 8 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">role_id</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_wallet_ledger</span>
+      <span class="meta">1 all-NULL column · 2 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">provider_event_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">nbfc_wallets</span>
+      <span class="meta">9 all-NULL columns · 3 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">auto_nach_last_fired_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">auto_nach_recharge_amount</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">auto_nach_threshold</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">auto_nach_token_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">va_account_number</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">va_ifsc</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">va_provider_account_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">va_status</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">va_upi_vpa</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">notifications</span>
+      <span class="meta">1 all-NULL column · 291 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">read_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">other_document_requests</span>
+      <span class="meta">4 all-NULL columns · 2 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">description</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">document_name</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">document_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">rejection_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">personal_details</span>
+      <span class="meta">16 all-NULL columns · 25 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">address_confidence</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">asset_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_account_number</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_branch</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_ifsc</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">bank_name</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">dob_confidence</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">email</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">finance_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">financier</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">income</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">loan_type</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">marital_status</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">name_confidence</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">spouse_name</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">vehicle_rc</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">product_selections</span>
+      <span class="meta">2 all-NULL columns · 4 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">charger_serial</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">sub_category</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">region_groups</span>
+      <span class="meta">1 all-NULL column · 2 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">created_by</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">scraped_dealer_leads</span>
+      <span class="meta">5 all-NULL columns · 13,349 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">assigned_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">assigned_by</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">assigned_to</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">converted_lead_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">exploration_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">scraper_leads_duplicates</span>
+      <span class="meta">1 all-NULL column · 30,529 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">email</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">scraper_schedules</span>
+      <span class="meta">2 all-NULL columns · 2 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">day_of_week</td>
+        <td class="mono dim">integer</td>
+      </tr>
+      <tr>
+        <td class="mono">last_run_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">upload_batches</span>
+      <span class="meta">3 all-NULL columns · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">rolled_back_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">rolled_back_by</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">source_label</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">users</span>
+      <span class="meta">1 all-NULL column · 43 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">avatar_url</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">video_kyc_attempts</span>
+      <span class="meta">1 all-NULL column · 7 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">provider_txn_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">video_kyc_verifications</span>
+      <span class="meta">6 all-NULL columns · 3 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">admin_action_notes</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">face_match_score</td>
+        <td class="mono dim">numeric</td>
+      </tr>
+      <tr>
+        <td class="mono">failure_reason</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">geo_location</td>
+        <td class="mono dim">jsonb</td>
+      </tr>
+      <tr>
+        <td class="mono">prerecorded_risk</td>
+        <td class="mono dim">boolean</td>
+      </tr>
+      <tr>
+        <td class="mono">static_risk</td>
+        <td class="mono dim">boolean</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">whatsapp_messages</span>
+      <span class="meta">3 all-NULL columns · 2,278 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">dealer_session_id</td>
+        <td class="mono dim">uuid</td>
+      </tr>
+      <tr>
+        <td class="mono">storage_path</td>
+        <td class="mono dim">text</td>
+      </tr>
+      <tr>
+        <td class="mono">template_name</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">whatsapp_onboarding_sessions</span>
+      <span class="meta">2 all-NULL columns · 39 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">last_reminder_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      <tr>
+        <td class="mono">provider_conversation_id</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">zoho_invoices</span>
+      <span class="meta">3 all-NULL columns · 112 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">last_payment_date</td>
+        <td class="mono dim">date</td>
+      </tr>
+      <tr>
+        <td class="mono">payment_id</td>
+        <td class="mono dim">character varying</td>
+      </tr>
+      <tr>
+        <td class="mono">payment_reference</td>
+        <td class="mono dim">text</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="tbl" open>
+    <summary>
+      <span class="mono name">zoho_sync_state</span>
+      <span class="meta">1 all-NULL column · 1 rows</span>
+    </summary>
+    <table class="inner">
+      <thead><tr><th>Column</th><th>Type</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="mono">last_invoice_modified_at</td>
+        <td class="mono dim">timestamp with time zone</td>
+      </tr>
+      </tbody>
+    </table>
+  </details>
+  </div>
+
+  <footer>
+    Empty tables detected with <span class="mono">count(*)</span>; empty columns with <span class="mono">count(&lt;col&gt;)</span>,
+    which ignores NULLs — a result of <span class="mono">0</span> against a non-zero row count means the column is NULL throughout.
+    Counts are exact, not planner estimates.
+  </footer>
+</div>
+
+<script>
+  // Filters are plain substring matches over the rendered text.
+  const wire = (inputId, containerId, unitSel) => {
+    const input = document.getElementById(inputId);
+    const units = [...document.getElementById(containerId).querySelectorAll(unitSel)];
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      for (const u of units) u.classList.toggle('hidden', q !== '' && !u.textContent.toLowerCase().includes(q));
+    });
+  };
+  wire('f1', 't1', 'tr');
+  wire('f2', 't2', 'details.tbl');
+</script>
+</body>
+</html>

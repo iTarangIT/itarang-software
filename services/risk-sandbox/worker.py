@@ -33,17 +33,28 @@ SAFE_BUILTINS = {
 
 
 def _apply_resource_limits() -> None:
-    """CPU and address-space caps. POSIX only; a no-op on Windows dev machines."""
+    """
+    CPU and address-space caps. POSIX only; a no-op on Windows dev machines.
+
+    MUST be called *after* numpy/pandas are imported — see main(). Every limit
+    here is hostile to a C extension's initialisation and harmless once it has
+    finished initialising.
+    """
     try:
         import resource  # noqa: PLC0415 — POSIX-only, intentionally imported late
     except ImportError:
         return
     # 25s of CPU: below the parent's 30s wall clock, so a busy loop dies here first.
     resource.setrlimit(resource.RLIMIT_CPU, (25, 25))
-    # 1 GiB of address space: a runaway allocation fails as MemoryError instead
-    # of pushing the VPS into the OOM killer, which would take the CRM with it.
-    resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
-    # No forking. The code cannot spawn its way out.
+    # 3 GiB of *address space* — deliberately looser than it looks. OpenBLAS
+    # reserves a large virtual arena at import, which a 1 GiB RLIMIT_AS refused,
+    # killing the import outright. Virtual reservations are not resident memory:
+    # the real ceiling is the container's `mem_limit: 1500m` cgroup, which caps
+    # RSS and is what actually protects the VPS. RLIMIT_AS is only a backstop to
+    # turn a runaway allocation into a catchable MemoryError.
+    resource.setrlimit(resource.RLIMIT_AS, (3 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024))
+    # No forking. The code cannot spawn its way out. Safe to set to 0 only
+    # because numpy has already built its (single, see _worker_env) thread pool.
     resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
 
 
@@ -100,6 +111,24 @@ def _coerce_result(raw: object) -> dict:
 
 
 def main() -> int:
+    # Import BEFORE _apply_resource_limits(). numpy's OpenBLAS backend builds a
+    # thread pool during import; under RLIMIT_NPROC=0 the pthread_create fails,
+    # numpy swallows the real error and re-raises the misleading "you should not
+    # try to import numpy from its source directory" ImportError — which the
+    # except below reported as "sandbox missing dependency: Error importing
+    # numpy" on every single hypothesis card. RLIMIT_AS=1GiB refused OpenBLAS's
+    # virtual arena for the same net effect. Neither reproduced on Windows dev
+    # boxes, where _apply_resource_limits() is a no-op (no `resource` module).
+    #
+    # Importing first costs nothing: the limits exist to cage the agent-authored
+    # code exec()'d below, and they are all in force before that happens.
+    try:
+        import numpy as np
+        import pandas as pd
+    except ImportError as e:
+        print(json.dumps({"ok": False, "error": f"sandbox missing dependency: {e}"}))
+        return 0
+
     _apply_resource_limits()
 
     try:
@@ -110,13 +139,6 @@ def main() -> int:
 
     code = job.get("code") or ""
     data = job.get("data") or {}
-
-    try:
-        import numpy as np
-        import pandas as pd
-    except ImportError as e:
-        print(json.dumps({"ok": False, "error": f"sandbox missing dependency: {e}"}))
-        return 0
 
     try:
         frames = {name: pd.DataFrame(rows or []) for name, rows in data.items()}
