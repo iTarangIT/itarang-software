@@ -69,12 +69,26 @@ interface DealerBank {
   beneficiary: string | null;
 }
 
+/**
+ * The agreed vendor — who the payment link is ADDRESSED to.
+ *
+ * Null until a vendor has agreed: before that there is no recipient, and the
+ * server refuses to raise a link at all.
+ */
+interface VendorContact {
+  name: string;
+  email: string | null;
+}
+
 interface Gateway {
   payouts_enabled: boolean;
   links_enabled: boolean;
   dealer_amount: number | null;
   vendor_amount: number | null;
+  /** Who we PAY (OUT). */
   dealer_bank: DealerBank;
+  /** Who PAYS US (IN). Absent until E-196; the whole reason the vendor leg had no name on screen. */
+  vendor_contact: VendorContact | null;
   txns: GatewayTxn[];
 }
 
@@ -135,6 +149,8 @@ export default function MoneyBoard({
   // bank-details sub-view inside the same modal (forced open when the bank is
   // incomplete, optional otherwise).
   const [payoutOpen, setPayoutOpen] = useState(false);
+  /** The vendor-leg confirm step — the counterpart to payoutOpen. */
+  const [confirmLink, setConfirmLink] = useState(false);
   const [bankFormOpen, setBankFormOpen] = useState(false);
   const [bankName, setBankName] = useState("");
   const [bankAccount, setBankAccount] = useState("");
@@ -526,11 +542,17 @@ export default function MoneyBoard({
                       {showLink && (
                         <button
                           disabled={busy}
-                          onClick={() =>
-                            post(
-                              `/api/admin/buyback/requests/${requestId}/settlements/payment-link`,
-                            )
-                          }
+                          // Opens a confirm step; it used to POST on this click.
+                          //
+                          // That asymmetry IS the reported bug. The payout beside
+                          // it has always opened a modal naming the beneficiary,
+                          // the account and the amount before spending a rupee.
+                          // The link fired instantly and showed nothing — not the
+                          // vendor's name, not the email, not the figure — so
+                          // "the link went to the wrong party" could not be
+                          // checked from the screen, only believed. The routing
+                          // was right the whole time.
+                          onClick={() => setConfirmLink(true)}
                           className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                         >
                           {failed ? "Retry — Generate payment link" : "Generate payment link"}
@@ -846,6 +868,93 @@ export default function MoneyBoard({
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ---- The vendor leg's confirm step ------------------------------------
+          The counterpart to the payout modal above, and the fix for "the system
+          sent the link to the wrong party". It was never sent to the wrong
+          party — loadAgreedVendorContact has always addressed it to the AGREED
+          vendor — but this screen never said so, so the claim could not be
+          checked. Everything below was already on the wire and thrown away:
+          vendor_amount was computed server-side, shipped, declared in the type,
+          and rendered nowhere.
+
+          It states the DIRECTION in words, because that is the confusion: the
+          button beside this one spends iTarang's money, and this one collects
+          someone else's. */}
+      {confirmLink && m?.gateway && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-[420px] rounded-xl bg-white p-5 shadow-xl">
+            <h3 className="text-sm font-bold text-slate-900">Generate payment link</h3>
+
+            <p className="mt-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900">
+              ↓ This link COLLECTS money. It goes to the vendor who buys the batteries — not
+              to the dealer you buy them from.
+            </p>
+
+            <div className="mt-4 space-y-1.5 rounded-lg bg-slate-50 px-3 py-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">Amount to collect</span>
+                <span className="tabular-nums font-bold text-slate-900">
+                  {inr(m.gateway.vendor_amount)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">Recipient</span>
+                <span className="font-medium text-slate-700">
+                  {m.gateway.vendor_contact?.name ?? "—"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">Sent to</span>
+                <span className="font-medium text-slate-700">
+                  {m.gateway.vendor_contact?.email ?? "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* A vendor with no email on file: the route creates the link and
+                skips delivery SILENTLY (payment-link/route.ts). Undelivered and
+                misdelivered look identical from here, which is very likely part
+                of what was reported — so say it before sending, not after. */}
+            {m.gateway.vendor_contact && !m.gateway.vendor_contact.email && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] font-semibold text-amber-900">
+                This vendor has no email on file. The link will be created but NOT sent — you
+                will need to copy it and pass it on yourself.
+              </p>
+            )}
+
+            <p className="mt-3 text-[11px] text-slate-400">
+              The amount comes from the locked prices. You confirm it; you do not name it.
+            </p>
+
+            {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setConfirmLink(false);
+                  setError(null);
+                }}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={busy}
+                onClick={async () => {
+                  await post(
+                    `/api/admin/buyback/requests/${requestId}/settlements/payment-link`,
+                  );
+                  setConfirmLink(false);
+                }}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
+              >
+                {busy ? "Generating…" : `Generate link for ${inr(m.gateway.vendor_amount)}`}
+              </button>
+            </div>
           </div>
         </div>
       )}

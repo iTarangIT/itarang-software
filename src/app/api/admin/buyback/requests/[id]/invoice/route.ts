@@ -42,6 +42,7 @@ import {
   toLockedLines,
   vendorReceipt,
 } from "@/lib/buyback/money";
+import { loadAgreedVendorContact } from "@/lib/buyback/parties";
 import { renderVendorInvoiceHtml } from "@/lib/buyback/pdf/vendor-invoice-template";
 import { dealHeader } from "@/lib/buyback/queries";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
@@ -133,9 +134,23 @@ export const GET = withErrorHandler(
     // The online-money pane, fetched in the same GET so the admin's money view
     // is one round-trip. `txns` is a redacted projection of the attempts — the
     // raw provider snapshot and the internal settlement id never leave here.
-    const [bank, gatewayTxns] = await Promise.all([
+    const [bank, gatewayTxns, agreedVendorContact] = await Promise.all([
       dealerBank(header.dealer_entity_id),
       gatewayTxnsForDeal(header.deal_id),
+      // WHO THE PAYMENT LINK IS ADDRESSED TO. The exact function the link route
+      // uses to address it (payment-link/route.ts), so the screen cannot claim a
+      // different recipient than the one that gets emailed.
+      //
+      // Its absence is why "the system sent the QR to the wrong party" was
+      // believed and could not be checked: this pane showed dealer_bank (who we
+      // PAY) and nothing at all about who PAYS US, so the vendor leg had no
+      // named recipient anywhere on the screen. An unfalsifiable claim about
+      // money is worse than a wrong one.
+      //
+      // Admin-only route, and it already returns the dealer's full bank details
+      // — a vendor's name and email is no new exposure and crosses no redaction
+      // boundary. Null until a vendor has AGREED; there is no recipient before that.
+      loadAgreedVendorContact(header.deal_id),
     ]);
 
     return successResponse({
@@ -152,7 +167,12 @@ export const GET = withErrorHandler(
         links_enabled: buybackLinksConfigured(),
         dealer_amount: dealerPayout(money),
         vendor_amount: vendorReceipt(money),
+        // Who we PAY (dealer, OUT) and who PAYS US (vendor, IN). Both named, so
+        // the two legs can stop being interchangeable on screen.
         dealer_bank: bank,
+        vendor_contact: agreedVendorContact
+          ? { name: agreedVendorContact.name, email: agreedVendorContact.email }
+          : null,
         txns: gatewayTxns.map((t) => ({
           id: t.id,
           leg: t.leg,
