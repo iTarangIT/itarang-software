@@ -128,6 +128,17 @@ interface DraftRow {
   id_proof_preview: string | null;
   purchase_proof_preview: string | null;
   /**
+   * E-197 — the previous owner's identity and payee details, so iTarang can pay
+   * the driver directly when the dealer only brokered the battery. Aadhaar is
+   * captured as LAST FOUR ONLY: the full number never enters the form.
+   */
+  owner_pan: string;
+  owner_aadhaar_last4: string;
+  payee_account: string;
+  payee_ifsc: string;
+  payee_bank: string;
+  payee_beneficiary: string;
+  /**
    * E-191 — the dealer-declared battery spec. Kept as strings (they are form
    * inputs); converted to numbers/booleans in the save payload. The * fields
    * (brand, chemistry, nominal V/Ah, unit weight, IOT yes/no) are required by
@@ -183,6 +194,12 @@ interface DraftLinePayload {
     id_proof_type: string | null;
     has_id_proof: boolean;
     has_purchase_proof: boolean;
+    prev_owner_pan: string | null;
+    prev_owner_aadhaar_last4: string | null;
+    payee_account_number: string | null;
+    payee_ifsc: string | null;
+    payee_bank_name: string | null;
+    payee_beneficiary_name: string | null;
   } | null;
 }
 
@@ -246,6 +263,12 @@ function rowFromDraftLine(line: DraftLinePayload): DraftRow {
     id_proof_type: idProofType,
     id_proof_name: p?.has_id_proof ? "Uploaded" : null,
     purchase_proof_name: p?.has_purchase_proof ? "Uploaded" : null,
+    owner_pan: p?.prev_owner_pan ?? "",
+    owner_aadhaar_last4: p?.prev_owner_aadhaar_last4 ?? "",
+    payee_account: p?.payee_account_number ?? "",
+    payee_ifsc: p?.payee_ifsc ?? "",
+    payee_bank: p?.payee_bank_name ?? "",
+    payee_beneficiary: p?.payee_beneficiary_name ?? "",
   };
 }
 
@@ -304,6 +327,12 @@ const newRow = (): DraftRow => ({
   provenance_id: null,
   id_proof_preview: null,
   purchase_proof_preview: null,
+  owner_pan: "",
+  owner_aadhaar_last4: "",
+  payee_account: "",
+  payee_ifsc: "",
+  payee_bank: "",
+  payee_beneficiary: "",
   brand: "",
   chemistry: "",
   form_factor: "",
@@ -1005,6 +1034,15 @@ export default function BuybackIntake({
             id_proof_type: row.id_proof_key ? row.id_proof_type : null,
             id_proof_s3: row.id_proof_key,
             payment_proof_ref: row.purchase_proof_key,
+            // E-197 — owner identity + payee. Empty strings go as null; the
+            // Aadhaar box is a 4-digit input, so only the last four ever leaves
+            // the browser.
+            prev_owner_pan: row.owner_pan.trim() || null,
+            prev_owner_aadhaar_last4: row.owner_aadhaar_last4.trim() || null,
+            payee_account_number: row.payee_account.trim() || null,
+            payee_ifsc: row.payee_ifsc.trim() || null,
+            payee_bank_name: row.payee_bank.trim() || null,
+            payee_beneficiary_name: row.payee_beneficiary.trim() || null,
           };
 
     const res = await fetch(`/api/buyback/requests/${requestId}/provenance`, {
@@ -1788,6 +1826,100 @@ export default function BuybackIntake({
                         }}
                       />
                     </Field>
+                  </div>
+
+                  {/* E-197 — a separate card per document, as asked. The owner's
+                      tax identity, and where to pay them if the battery is bought
+                      from them directly rather than from the dealer. Aadhaar is
+                      LAST FOUR ONLY — the box takes four digits; the full number
+                      is never entered, sent, or stored. */}
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
+                    <div className="text-[11.5px] font-bold uppercase tracking-wide text-slate-400">
+                      Owner tax identity
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-3">
+                      <Field label="PAN">
+                        <input
+                          value={row.owner_pan}
+                          onChange={(e) => patch(row.key, { owner_pan: e.target.value })}
+                          onBlur={() => void saveProvenance(row)}
+                          placeholder="ABCDE1234F"
+                          maxLength={10}
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm uppercase"
+                        />
+                      </Field>
+                      <Field label="Aadhaar — last 4 digits only">
+                        <input
+                          value={row.owner_aadhaar_last4}
+                          onChange={(e) =>
+                            patch(row.key, {
+                              // Digits only, never more than four — the full
+                              // number can't be typed here even by accident.
+                              owner_aadhaar_last4: e.target.value.replace(/\D/g, "").slice(0, 4),
+                            })
+                          }
+                          onBlur={() => void saveProvenance(row)}
+                          placeholder="1234"
+                          inputMode="numeric"
+                          maxLength={4}
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                        />
+                      </Field>
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-slate-400">
+                      We store only the last four digits of the Aadhaar, never the full number.
+                    </p>
+                  </div>
+
+                  {/* Bank details — collected ONLY because a driver can now be
+                      paid directly (E-197). Optional: not every owner is paid
+                      this way. Full account, because you cannot pay a masked one. */}
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
+                    <div className="text-[11.5px] font-bold uppercase tracking-wide text-slate-400">
+                      Pay the owner directly (optional)
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-3">
+                      <Field label="Account number">
+                        <input
+                          value={row.payee_account}
+                          onChange={(e) => patch(row.key, { payee_account: e.target.value })}
+                          onBlur={() => void saveProvenance(row)}
+                          placeholder="Bank account number"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm tabular-nums"
+                        />
+                      </Field>
+                      <Field label="IFSC">
+                        <input
+                          value={row.payee_ifsc}
+                          onChange={(e) => patch(row.key, { payee_ifsc: e.target.value })}
+                          onBlur={() => void saveProvenance(row)}
+                          placeholder="HDFC0001234"
+                          maxLength={11}
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm uppercase"
+                        />
+                      </Field>
+                      <Field label="Bank name">
+                        <input
+                          value={row.payee_bank}
+                          onChange={(e) => patch(row.key, { payee_bank: e.target.value })}
+                          onBlur={() => void saveProvenance(row)}
+                          placeholder="e.g. HDFC Bank"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                        />
+                      </Field>
+                      <Field label="Name on the account">
+                        <input
+                          value={row.payee_beneficiary}
+                          onChange={(e) => patch(row.key, { payee_beneficiary: e.target.value })}
+                          onBlur={() => void saveProvenance(row)}
+                          placeholder="Account holder's name"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                        />
+                      </Field>
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-slate-400">
+                      Only if iTarang pays this owner directly instead of the dealer.
+                    </p>
                   </div>
 
                   {/* Was a checkbox bound to a field nothing read — provenance

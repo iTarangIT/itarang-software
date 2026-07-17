@@ -53,6 +53,15 @@ interface DraftProvenance {
   id_proof_type: string | null;
   has_id_proof: boolean;
   has_purchase_proof: boolean;
+  // E-197 — so a resumed draft does not lose the owner identity/payee the dealer
+  // already typed. PAN, Aadhaar last-4 and bank details are not secrets a media
+  // proxy guards; they hydrate straight back into the form.
+  prev_owner_pan: string | null;
+  prev_owner_aadhaar_last4: string | null;
+  payee_account_number: string | null;
+  payee_ifsc: string | null;
+  payee_bank_name: string | null;
+  payee_beneficiary_name: string | null;
 }
 
 export const GET = withErrorHandler(
@@ -96,7 +105,13 @@ export const GET = withErrorHandler(
             'vehicle_no', pr.vehicle_no,
             'id_proof_type', pr.id_proof_type,
             'has_id_proof', pr.id_proof_s3 IS NOT NULL,
-            'has_purchase_proof', pr.payment_proof_ref IS NOT NULL
+            'has_purchase_proof', pr.payment_proof_ref IS NOT NULL,
+            'prev_owner_pan', pr.prev_owner_pan,
+            'prev_owner_aadhaar_last4', pr.prev_owner_aadhaar_last4,
+            'payee_account_number', pr.payee_account_number,
+            'payee_ifsc', pr.payee_ifsc,
+            'payee_bank_name', pr.payee_bank_name,
+            'payee_beneficiary_name', pr.payee_beneficiary_name
           )
           FROM provenance_records pr
           WHERE pr.line_id = bl.id AND pr.scope = 'LINE'
