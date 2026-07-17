@@ -7565,6 +7565,10 @@ export const buybackPickupAddresses = pgTable(
     contact_phone: varchar("contact_phone", { length: 20 }),
     is_default: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
+    // E-194 — DEALER | VENDOR | CUSTOMER. TEXT + CHECK (in SQL), not an enum:
+    // same reasoning as buyback_lines.chemistry, the set may grow. entity_id
+    // says which account this hangs off; this says what role it plays.
+    owner_kind: text("owner_kind").default("DEALER").notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
@@ -7597,12 +7601,21 @@ export const buybackRequests = pgTable(
       t.dealer_entity_id,
       t.created_at,
     ),
-    // E-192 — the review queue's own sort (queue/route.ts `ORDER BY
-    // submitted_at NULLS LAST, created_at`), matched exactly (ASC is
-    // Postgres' default for NULLS LAST on an ascending column).
+    // E-192 — was the review queue's own sort. The queue moved to newest-first
+    // in E-194 (below), but this stays: /reports and any FIFO reader still
+    // want ascending, and dropping it would be a destructive change to a
+    // shared DB for no gain.
     submittedCreatedIdx: index("buyback_requests_submitted_created_idx").on(
       t.submitted_at.nullsLast(),
       t.created_at,
+    ),
+    // E-194 — the review queue's sort now (queue/route.ts `ORDER BY
+    // submitted_at DESC NULLS LAST, created_at DESC`). Not a duplicate of the
+    // ASC index above: reverse-scanning that one gives DESC NULLS FIRST, which
+    // would float every unsubmitted request to the top of the queue.
+    submittedCreatedDescIdx: index("buyback_requests_submitted_created_desc_idx").on(
+      t.submitted_at.desc().nullsLast(),
+      t.created_at.desc(),
     ),
     // E-192 — GIN trigram, leading-wildcard admin/dealer search (M23).
     requestNoTrgmIdx: index("buyback_requests_request_no_trgm_idx").using(

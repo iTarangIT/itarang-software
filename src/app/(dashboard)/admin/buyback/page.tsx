@@ -93,6 +93,13 @@ const SLA_OPTIONS = [
   { value: "GT3D", label: "Over 3 days" },
 ];
 
+// Unlike its neighbours this one re-queries rather than filtering loaded rows:
+// the queue's WHERE excludes DRAFT, so they are not in `queue` to filter.
+const DRAFT_OPTIONS = [
+  { value: "0", label: "Submitted only" },
+  { value: "1", label: "Include drafts" },
+];
+
 // Pipeline stage — the same 5 buckets the dashboard funnel deep-links to via
 // `?stage=<key>` (src/lib/buyback/flow.ts). Selecting one keeps every row whose
 // status folds into that bucket.
@@ -163,6 +170,10 @@ function AdminBuybackQueue() {
     return s && STAGE_BUCKETS.some((b) => b.key === s) ? s : ALL;
   });
   const [dealerFilter, setDealerFilter] = useState<string>(() => searchParams.get("dealer") ?? ALL);
+  // Drafts are a server-side scope, not a client filter: they are excluded by
+  // the queue's own WHERE, so no amount of filtering the loaded rows reveals
+  // them. Off by default — on db-1 the drafts outnumbered real requests 24:8.
+  const [includeDrafts, setIncludeDrafts] = useState(false);
   const [cityFilter, setCityFilter] = useState(ALL);
   const [sourceFilter, setSourceFilter] = useState(ALL);
   const [provenanceFilter, setProvenanceFilter] = useState(ALL);
@@ -176,8 +187,12 @@ function AdminBuybackQueue() {
 
   useEffect(() => {
     let cancelled = false;
+    // Toggling drafts re-queries from offset 0, so drop the old page rather
+    // than appending a differently-scoped one to it.
+    setLoading(true);
+    setError(null);
 
-    fetch("/api/admin/buyback/queue?limit=500")
+    fetch(`/api/admin/buyback/queue?limit=500${includeDrafts ? "&include_drafts=1" : ""}`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -199,7 +214,7 @@ function AdminBuybackQueue() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [includeDrafts]);
 
   // E-192 — fetches the next 500 rows (offset = rows already loaded) and
   // appends. Client-side filters (below) keep running over the full,
@@ -208,7 +223,11 @@ function AdminBuybackQueue() {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/admin/buyback/queue?limit=500&offset=${queue.length}`);
+      const res = await fetch(
+        `/api/admin/buyback/queue?limit=500&offset=${queue.length}${
+          includeDrafts ? "&include_drafts=1" : ""
+        }`,
+      );
       const j = await res.json();
       if (j?.success === false) {
         setError(j?.error?.message ?? "Could not load more requests.");
@@ -319,6 +338,51 @@ function AdminBuybackQueue() {
     loadedAt,
   ]);
 
+  // Every client-side filter currently narrowing the table, for the banner.
+  // `includeDrafts` is deliberately absent: it widens the result rather than
+  // hiding anything, so it cannot explain a missing request.
+  const activeFilters = useMemo(() => {
+    const active: { key: string; label: string }[] = [];
+    const add = (key: string, value: string, label: string) => {
+      if (value !== ALL) active.push({ key, label });
+    };
+    add("dealer", dealerFilter, `Dealer: ${dealerFilter}`);
+    add("city", cityFilter, `City: ${cityFilter}`);
+    add("source", sourceFilter, `Source: ${SOURCE_LABELS[sourceFilter] ?? sourceFilter}`);
+    add("status", statusFilter, `Status: ${statusLabel(statusFilter)}`);
+    add("stage", stageFilter, `Stage: ${stageFilter}`);
+    add("provenance", provenanceFilter, `Provenance: ${provenanceFilter}`);
+    add("quote", quoteFilter, `Quote: ${quoteFilter}`);
+    add("sla", slaFilter, `SLA: ${slaFilter}`);
+    add("date", dateFilter, `Date: last ${dateFilter} days`);
+    return active;
+  }, [
+    dealerFilter,
+    cityFilter,
+    sourceFilter,
+    statusFilter,
+    stageFilter,
+    provenanceFilter,
+    quoteFilter,
+    slaFilter,
+    dateFilter,
+  ]);
+
+  const clearFilters = () => {
+    setDealerFilter(ALL);
+    setCityFilter(ALL);
+    setSourceFilter(ALL);
+    setStatusFilter(ALL);
+    setStageFilter(ALL);
+    setProvenanceFilter(ALL);
+    setQuoteFilter(ALL);
+    setSlaFilter(ALL);
+    setDateFilter(ALL);
+    // The deep-link params seeded these; strip them so a reload doesn't
+    // silently re-apply what the user just cleared.
+    router.replace("/admin/buyback");
+  };
+
   // U6 — flat, human-readable CSV mapper over the CURRENTLY loaded+filtered
   // rows (same `filtered` array the table renders), not the raw API shape.
   const csvRows = filtered.map((r) => ({
@@ -408,7 +472,34 @@ function AdminBuybackQueue() {
                 options={DATE_RANGE_OPTIONS}
                 onChange={setDateFilter}
               />
+              <FilterPill
+                label="Drafts"
+                value={includeDrafts ? "1" : "0"}
+                options={DRAFT_OPTIONS}
+                onChange={(v) => setIncludeDrafts(v === "1")}
+              />
             </div>
+
+            {/* A dealer deep-link (?dealer=) pins the queue to one dealer, and
+                the Dealer pill alone doesn't read as "3 of 27 hidden" — which
+                is how a filtered queue gets mistaken for a broken one. */}
+            {activeFilters.length > 0 && (
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px]">
+                <span className="font-semibold text-amber-900">
+                  Showing {filtered.length} of {queue.length} loaded requests
+                </span>
+                <span className="text-amber-700">
+                  — filtered by {activeFilters.map((f) => f.label).join(", ")}
+                </span>
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="ml-auto rounded-md border border-amber-300 bg-white px-2.5 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+                >
+                  Clear filters
+                </button>
+              </div>
+            )}
 
             <Card>
               <DealTable

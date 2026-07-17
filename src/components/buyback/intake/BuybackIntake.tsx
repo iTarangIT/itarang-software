@@ -13,6 +13,17 @@
  * server's gate result, so the button and the API can never disagree. (The
  * prototype only *warned* about missing photos and let you submit anyway.)
  *
+ * Any live, client-side echo of a gate rule (the photo counter, the
+ * functional/non-functional check) must track submit-gate.ts exactly. When they
+ * drift the dealer is told one thing and the server does another, which is
+ * worse than having no hint at all — E-194 found the split check still
+ * demanding equality after the gate had moved to a ceiling.
+ *
+ * E-194 also adds Split: one SKU row divides into two independently-described
+ * lines, because a lot of ten identical packs often has more than one story
+ * (different sellers, different brands, different test coverage). The halves
+ * share nothing — each needs its own photos and its own provenance.
+ *
  * Photos upload in the background while the dealer keeps typing — through the
  * same-origin /api/buyback/uploads route (the server writes to S3 itself). The
  * BRD's presigned-PUT path exists (/api/buyback/photos/presign) but a browser
@@ -27,6 +38,7 @@ import { PageHeader } from "@/components/buyback/ui";
 import { useRouter } from "next/navigation";
 
 import { inr } from "@/lib/buyback/format";
+import { DEFAULT_IOT_BRAND } from "@/lib/buyback/line-spec";
 import { MIN_PHOTOS_PER_LINE } from "@/lib/buyback/submit-gate";
 
 interface Variant {
@@ -38,12 +50,36 @@ interface Variant {
   est_buyback_price_dead: string | null;
 }
 
+/** E-194 — whose doorstep this is. Mirrors the owner_kind CHECK constraint. */
+type AddressOwnerKind = "DEALER" | "VENDOR" | "CUSTOMER";
+
+/**
+ * Who the address belongs to, said in the dealer's language rather than the
+ * column's. "CUSTOMER" is the case that needed naming: when iTarang pays the
+ * driver or previous owner directly, the batteries are collected from THEM, not
+ * from the dealer's shop — a different place with a different contact, which
+ * had nowhere to live before.
+ */
+const OWNER_KIND_OPTIONS: { value: AddressOwnerKind; label: string; hint: string }[] = [
+  { value: "DEALER", label: "My premises", hint: "Your shop or warehouse" },
+  { value: "CUSTOMER", label: "Driver / owner", hint: "Collect from the person being paid" },
+  { value: "VENDOR", label: "Recycler", hint: "A vendor's collection point" },
+];
+
+const OWNER_KIND_LABEL: Record<AddressOwnerKind, string> = {
+  DEALER: "My premises",
+  CUSTOMER: "Driver / owner",
+  VENDOR: "Recycler",
+};
+
 interface PickupAddress {
   id: string;
   label: string;
   address_line1: string;
   city: string | null;
   pincode: string | null;
+  /** Optional: rows written before E-194 have no owner_kind on the wire. */
+  owner_kind?: AddressOwnerKind;
 }
 
 type Condition = "WORKING" | "DEAD";
@@ -94,9 +130,13 @@ interface DraftRow {
   /**
    * E-191 — the dealer-declared battery spec. Kept as strings (they are form
    * inputs); converted to numbers/booleans in the save payload. The * fields
-   * (brand, chemistry, nominal V/Ah, unit weight, IOT yes/no + IOT brand when
-   * yes) are required by the SERVER's submit gate — same one-implementation
-   * rule as the photo minimum, so this form never disagrees with the API.
+   * (brand, chemistry, nominal V/Ah, unit weight, IOT yes/no) are required by
+   * the SERVER's submit gate — same one-implementation rule as the photo
+   * minimum, so this form never disagrees with the API.
+   *
+   * E-194 dropped the IOT brand name from that set: a dealer often cannot know
+   * who made the module, and blank now resolves to DEFAULT_IOT_BRAND at write
+   * time rather than blocking the submit.
    */
   brand: string;
   chemistry: "" | "NMC" | "LFP";
@@ -111,6 +151,38 @@ interface DraftRow {
   iot_brand_name: string;
   open: boolean;
   saving: boolean;
+}
+
+/**
+ * The live echo of the gate's QTY_SPLIT_MISMATCH rule, mirroring BOTH of
+ * checkSubmitReadiness's branches — both sides declared, and only one.
+ *
+ * Kept as functions beside newRow rather than inline in the JSX because the
+ * inline version silently covered only the two-sided case: `functional 11,
+ * non-functional blank` against a quantity of 10 drew nothing on screen and a
+ * refusal from the server. A rule echoed in two places has to be echoed whole.
+ */
+function splitError(row: DraftRow): string | null {
+  const f = row.functional_qty === "" ? null : Number(row.functional_qty);
+  const nf = row.non_functional_qty === "" ? null : Number(row.non_functional_qty);
+
+  if (f !== null && nf !== null) {
+    return f + nf > row.quantity
+      ? `Functional + non-functional (${f + nf}) cannot exceed Qty (${row.quantity}).`
+      : null;
+  }
+  const one = f ?? nf;
+  if (one !== null && one > row.quantity) {
+    return `The declared split (${one}) cannot exceed Qty (${row.quantity}).`;
+  }
+  return null;
+}
+
+/** Units the dealer has left unclassified, or null when there is nothing to say. */
+function splitRemainder(row: DraftRow): number | null {
+  if (row.functional_qty === "" || row.non_functional_qty === "") return null;
+  const rest = row.quantity - Number(row.functional_qty) - Number(row.non_functional_qty);
+  return rest > 0 ? rest : null;
 }
 
 const newRow = (): DraftRow => ({
@@ -242,11 +314,18 @@ export default function BuybackIntake() {
   /** The inline "add a pickup address" form. */
   const [addingAddress, setAddingAddress] = useState(false);
   const [savingAddress, setSavingAddress] = useState(false);
-  const [addressForm, setAddressForm] = useState({
+  const [addressForm, setAddressForm] = useState<{
+    label: string;
+    address_line1: string;
+    city: string;
+    pincode: string;
+    owner_kind: AddressOwnerKind;
+  }>({
     label: "",
     address_line1: "",
     city: "",
     pincode: "",
+    owner_kind: "DEALER",
   });
 
   const variantById = useMemo(
@@ -486,6 +565,89 @@ export default function BuybackIntake() {
     delete lineIdsRef.current[row.key];
     delete saveChainsRef.current[row.key];
     setRows((rs) => rs.filter((r) => r.key !== row.key));
+  };
+
+  /**
+   * Split one row into two, so a lot of the same SKU can be described in parts.
+   *
+   * A dealer with 10 identical-looking packs frequently does not have one story
+   * to tell about them: 5 came from one driver and 5 from another, or half are
+   * a different brand, or half were tested and half weren't. Until now the
+   * intake forced a single spec across the whole quantity, so the dealer either
+   * lied or started a second request.
+   *
+   * The copy inherits the BATTERY (SKU, condition, declared spec) and nothing
+   * else. Photos, provenance, previous-owner identity, ID and purchase proofs
+   * all start blank — that is the point of splitting: these are different
+   * batteries with a different story, and inheriting the first half's story
+   * would answer the very question the dealer split the row to ask. Reusing the
+   * photos would also feed the M03 duplicate detection a genuine duplicate.
+   * The honest cost is that splitting DOUBLES the photo requirement (5 per line).
+   *
+   * The declared functional/non-functional split resets on both sides: it
+   * counted units of the old quantity and means nothing against the new one.
+   */
+  const splitRow = (row: DraftRow) => {
+    // Re-entrancy guard: `row` is the render closure, so two clicks inside one
+    // frame would both split the ORIGINAL quantity and leave 3 lines totalling
+    // more units than the dealer has.
+    if (row.quantity < 2 || row.saving) return;
+
+    const keep = Math.ceil(row.quantity / 2);
+    const moved = row.quantity - keep;
+
+    const original: DraftRow = {
+      ...row,
+      quantity: keep,
+      functional_qty: "",
+      non_functional_qty: "",
+    };
+
+    // Start from a BLANK row and copy forward only what is a property of the
+    // BATTERY. Spreading `...row` and clearing the evidence afterwards is what
+    // shipped first, and it silently kept the fields that ARE the provenance —
+    // owner name, phone, vehicle number — so submit() would POST a
+    // PREV_OWNER_DOCS record asserting that a driver the dealer never named had
+    // sold us these five packs too. That is a fabricated ownership claim, on the
+    // table the duplicate-detection indexes read. Blank-and-add-back is the only
+    // shape where forgetting a field fails safe.
+    const blank = newRow();
+    const copy: DraftRow = {
+      ...blank,
+      // Its own key and its own line server-side. Sharing the id would make the
+      // second row a second view of the first, and every edit would fight it.
+      key: blank.key,
+      line_id: null,
+      // The battery: same SKU, same condition, same declared spec. These are
+      // facts about the packs, and the packs did not change by being counted
+      // into two piles.
+      variant_id: row.variant_id,
+      condition: row.condition,
+      quantity: moved,
+      expected_price: row.expected_price,
+      measured_voltage: row.measured_voltage,
+      brand: row.brand,
+      chemistry: row.chemistry,
+      form_factor: row.form_factor,
+      nominal_voltage: row.nominal_voltage,
+      nominal_ampere: row.nominal_ampere,
+      unit_weight_kg: row.unit_weight_kg,
+      warranty_cycles: row.warranty_cycles,
+      iot_battery: row.iot_battery,
+      iot_brand_name: row.iot_brand_name,
+      // Everything else — provenance, owner identity, photos, proofs — stays at
+      // its blank default. The dealer split this lot precisely BECAUSE the other
+      // half has a different story; inheriting the first half's story would
+      // answer the question the split was asked to pose.
+    };
+
+    setRows((rs) => rs.flatMap((r) => (r.key === row.key ? [original, copy] : [r])));
+
+    // Persist both: the original shrinks (PATCH), the copy is born (POST).
+    // Without the first call the server would still hold quantity 10 while the
+    // page shows 5 + 5 — the exact drift saveLine's docblock was written about.
+    void saveLine(original);
+    void saveLine(copy);
   };
 
   /** Picking a SKU auto-fills the spec, the price and the measured voltage. */
@@ -761,7 +923,18 @@ export default function BuybackIntake() {
         address_line1: addressForm.address_line1.trim(),
         city: addressForm.city.trim() || null,
         pincode: addressForm.pincode.trim() || null,
-        is_default: addresses.length === 0,
+        owner_kind: addressForm.owner_kind,
+        // The first of the dealer's OWN premises becomes the standing default.
+        //
+        // Not `addresses.length === 0 && kind === DEALER`: that only ever fires
+        // on the very first address, so a dealer whose first entry was a
+        // driver's doorstep could never acquire a default at all — and with
+        // every row false, GET's created_at tiebreak would hand the intake that
+        // doorstep as addresses[0] and persist it onto every future request.
+        // There is no PATCH route to promote one, so it would never recover.
+        is_default:
+          addressForm.owner_kind === "DEALER" &&
+          !addresses.some((a) => (a.owner_kind ?? "DEALER") === "DEALER"),
       }),
     });
     const json = await res.json().catch(() => null);
@@ -777,7 +950,13 @@ export default function BuybackIntake() {
     const created: PickupAddress = json.data.address;
     setAddresses((as) => [...as, created]);
     setAddingAddress(false);
-    setAddressForm({ label: "", address_line1: "", city: "", pincode: "" });
+    setAddressForm({
+      label: "",
+      address_line1: "",
+      city: "",
+      pincode: "",
+      owner_kind: "DEALER",
+    });
     void selectAddress(created.id);
   };
 
@@ -919,6 +1098,21 @@ export default function BuybackIntake() {
                   <option value="DEAD">Dead</option>
                 </select>
               </Field>
+
+              {/* Describe part of this lot differently — 5 of these 10 from one
+                  driver, 5 from another. Hidden below qty 2, where there is
+                  nothing to divide. */}
+              {row.quantity > 1 && row.variant_id && (
+                <button
+                  onClick={() => splitRow(row)}
+                  title={`Split into ${Math.ceil(row.quantity / 2)} + ${
+                    row.quantity - Math.ceil(row.quantity / 2)
+                  } — each half gets its own details and its own ${MIN_PHOTOS_PER_LINE} photos`}
+                  className="h-9 whitespace-nowrap rounded-lg border border-slate-300 px-2.5 text-[12.5px] font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Split
+                </button>
+              )}
 
               {rows.length > 1 && (
                 <button
@@ -1094,29 +1288,48 @@ export default function BuybackIntake() {
                   />
                 </Field>
 
+                {/* No "*" (E-194): the gate stopped requiring this. A dealer
+                    reselling a second-hand pack usually cannot know who made
+                    the IOT module, and the asterisk only bought us guesses.
+                    Blank stays blank in the column — the placeholder says what
+                    we will ASSUME, and the hint below says we are assuming it,
+                    because a guess that reads as an answer is worse than a gap. */}
                 {row.iot_battery === "YES" && (
-                  <Field label="IOT brand name *">
+                  <Field label="IOT brand name">
                     <input
                       value={row.iot_brand_name}
                       onChange={(e) => patch(row.key, { iot_brand_name: e.target.value })}
                       onBlur={() => commitRow(row)}
-                      placeholder="e.g. BoltIoT"
+                      placeholder={`${DEFAULT_IOT_BRAND} (if you don't know)`}
                       className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
                     />
+                    {row.iot_brand_name.trim() === "" && (
+                      <p className="mt-1 text-[11.5px] text-slate-500">
+                        Leave blank and we&apos;ll record it as {DEFAULT_IOT_BRAND} (assumed).
+                      </p>
+                    )}
                   </Field>
                 )}
               </div>
 
               {/* Live version of the gate's QTY_SPLIT_MISMATCH rule, so the
-                  dealer sees it while typing rather than at submit. */}
-              {row.functional_qty !== "" &&
-                row.non_functional_qty !== "" &&
-                Number(row.functional_qty) + Number(row.non_functional_qty) !==
-                  row.quantity && (
-                  <p className="mt-2 text-[11.5px] text-red-600">
-                    ⚠ Functional + non-functional must add up to Qty ({row.quantity}).
-                  </p>
-                )}
+                  dealer sees it while typing rather than at submit. Must track
+                  submit-gate.ts EXACTLY — including its one-sided branch, which
+                  this echo used to skip: functional 11 of 10 with the other box
+                  blank drew no error here and a refusal from the server. */}
+              {splitError(row) && (
+                <p className="mt-2 text-[11.5px] text-red-600">⚠ {splitError(row)}</p>
+              )}
+
+              {/* The remainder is legitimate — some of the lot is untested —
+                  so this is a note, not an error. Saying nothing at all made
+                  dealers think the numbers had to balance. */}
+              {splitRemainder(row) !== null && (
+                <p className="mt-2 text-[11.5px] text-slate-500">
+                  {splitRemainder(row)} of {row.quantity} left unclassified — fine if you
+                  haven&apos;t tested them all.
+                </p>
+              )}
             </div>
 
             {/* Units 1..N */}
@@ -1510,6 +1723,15 @@ export default function BuybackIntake() {
                   {a.address_line1}
                   {a.city ? `, ${a.city}` : ""} {a.pincode ?? ""}
                 </div>
+                {/* Which of the three doorsteps this is. Only shown for the
+                    non-obvious ones — badging every dealer address "My
+                    premises" is noise when that is what almost all of them are
+                    (and what every pre-E-194 row is). */}
+                {a.owner_kind && a.owner_kind !== "DEALER" && (
+                  <span className="mt-1.5 inline-block rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600">
+                    {OWNER_KIND_LABEL[a.owner_kind]}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -1517,6 +1739,32 @@ export default function BuybackIntake() {
 
         {addingAddress ? (
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            {/* Whose address, asked first — it changes what the rest of the
+                form means. A driver's doorstep and your warehouse are both
+                "an address"; only one of them is where you keep stock. */}
+            <div className="mb-3">
+              <div className="mb-1.5 text-[11.5px] font-semibold text-slate-500">
+                Whose address is this?
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {OWNER_KIND_OPTIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    title={o.hint}
+                    onClick={() => setAddressForm((f) => ({ ...f, owner_kind: o.value }))}
+                    className={`rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold ${
+                      addressForm.owner_kind === o.value
+                        ? "border-bb-navy bg-bb-navy text-white"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <Field label="Label">
                 <input
