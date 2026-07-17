@@ -50,7 +50,12 @@ const bodySchema = z.object({
   // cannot sell to — so it is asked for now rather than patched in later. It is
   // NOT verified here; that is M18.
   gstin: z.string().trim().length(15, "A GSTIN is 15 characters."),
-  pan: z.string().trim().length(10).optional(),
+  // PAN is OPTIONAL supplementary data at self-registration, not a gate — GSTIN
+  // is what we invoice against. A strict length(10) hard-blocked a vendor from
+  // creating a login over a non-critical field (and reported it as a cryptic
+  // "too small"). Kept lenient here; a proper PAN check belongs in admin
+  // activation / KYC, not in the door.
+  pan: z.string().trim().max(10).optional(),
   contact_phone: z.string().trim().min(8).max(20).optional(),
   city: z.string().trim().max(120).optional(),
   state: z.string().trim().max(120).optional(),
