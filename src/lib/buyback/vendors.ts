@@ -145,6 +145,56 @@ export async function threadsForDeal(
   }));
 }
 
+/** A vendor awaiting approval, plus what they told us about themselves. */
+export interface PendingVendorRow extends VendorRow {
+  gstin: string | null;
+  pan: string | null;
+  /** 'vendor_self' — they registered themselves; 'vendor_manual' — an admin added them. */
+  onboarding_status: string | null;
+  registered_at: Date | null;
+  /** Whether a login exists for this vendor (self-registration always makes one). */
+  has_login: boolean;
+}
+
+/**
+ * Vendors who have registered but nobody has vetted (E-195).
+ *
+ * The counterpart to listRoutableVendors, and the reason self-serve sign-up is
+ * safe: a registrant lands with business_entity_roles.status = 'PENDING', which
+ * that query joins away, so they cannot be routed a single deal. But a PENDING
+ * vendor nobody can SEE is a vendor nobody can approve — self-registration
+ * without this list would be a trapdoor, not a queue.
+ *
+ * Deliberately shows gstin/pan: this list is where a human decides whether the
+ * firm is real, and those are what they check.
+ */
+export async function listPendingVendors(): Promise<PendingVendorRow[]> {
+  const rows = await db.execute(sql`
+    SELECT
+      sv.id, sv.entity_id, sv.categories, sv.regions, sv.payment_terms, sv.active,
+      a.business_entity_name AS name,
+      a.contact_email        AS email,
+      a.contact_phone        AS phone,
+      a.city, a.state, a.gstin, a.pan,
+      a.onboarding_status,
+      sv.created_at AS registered_at,
+      EXISTS (SELECT 1 FROM users u WHERE u.vendor_entity_id = sv.entity_id) AS has_login
+    FROM scrap_vendors sv
+    JOIN accounts a ON a.id = sv.entity_id
+    JOIN business_entity_roles ber
+      ON ber.entity_id = sv.entity_id
+     AND ber.role = 'SCRAP_VENDOR'
+     AND ber.status = 'PENDING'
+    ORDER BY sv.created_at DESC
+  `);
+
+  return (rows as unknown as PendingVendorRow[]).map((r) => ({
+    ...r,
+    regions: r.regions ?? [],
+    has_login: Boolean(r.has_login),
+  }));
+}
+
 /** One of a vendor's own threads, before serialization. */
 export interface VendorOwnThreadRow {
   thread_id: string;
