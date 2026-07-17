@@ -16,6 +16,24 @@
  * that gates the first live deal and is Chirag's call — so the document is
  * explicitly tax-exclusive and says so, rather than quietly implying a treatment
  * nobody has agreed to.
+ *
+ * Item 14 widened what it shows, not what it may show. The rule is unchanged and
+ * the signature still enforces it; what changed is that the view now carries the
+ * E-191 battery spec, so the document finally states the two things a scrap
+ * buyer actually prices on — CHEMISTRY and KILOGRAMS. It used to say "60V 120Ah
+ * · Working ×3" and stop.
+ *
+ * Two of those fields are single strings rather than data + a flag, and that is
+ * deliberate: `iot_brand_label` carries "(assumed)" inside it, and
+ * `condition_split_label` carries the untested remainder inside it. A template
+ * cannot render the fact and drop the caveat, because there is no bare fact to
+ * render. The same reasoning as the type having no dealer fields: make the
+ * mistake unrepresentable rather than forbidden.
+ *
+ * This file no longer caps the photo count. It used to `.slice(0, 3)` whatever
+ * it was handed, which meant a caller that computed a byte budget for six was
+ * computing fiction, and any "showing N of M" caption would have been a document
+ * lying about itself. The route caps; this renders what it is given.
  */
 
 import { inr } from "../format";
@@ -24,8 +42,17 @@ import type { VendorQuotationView } from "../serialize";
 export interface QuotationTemplateInput {
   quotation: VendorQuotationView;
   vendorName: string;
-  /** Already-inlined data: URIs, keyed by line_id. The template does no fetching. */
-  photosByLine?: Record<string, string[]>;
+  /**
+   * How many photos ride with the EMAIL as attachments (E-198).
+   *
+   * The document does not embed them any more. It used to inline base64 data
+   * URIs — which forced a 2-per-line cap and a 54x40px render, at which size a
+   * swollen cell and a healthy one are indistinguishable, defeating the reason
+   * for sending photos at all. Now the mailer attaches the real files and this
+   * is only so the PDF can TELL the reader they exist; a document that shows no
+   * photos and says nothing about them reads as a document with no photos.
+   */
+  photoCount?: number;
   /** BRD §6 — quotes expire (72h default). */
   validUntil?: Date | string | null;
 }
@@ -45,23 +72,45 @@ const day = (d: Date | string | null | undefined): string => {
 };
 
 export function renderQuotationHtml(input: QuotationTemplateInput): string {
-  const { quotation: q, vendorName, photosByLine = {}, validUntil } = input;
+  const { quotation: q, vendorName, photoCount = 0, validUntil } = input;
 
   const location = [q.pickup_city, q.pickup_state].filter(Boolean).join(", ") || "—";
 
   const rows = q.lines
     .map((line) => {
-      const photos = (photosByLine[line.line_id] ?? [])
-        .slice(0, 3)
-        .map((src) => `<img class="ph" src="${src}" alt="" />`)
-        .join("");
+      // What a scrap buyer actually prices on. Every part is a property of the
+      // BATTERY — none of it identifies the seller. Null parts are OMITTED, not
+      // rendered as "—": a dash reads as "we asked and it has none", which is a
+      // different claim from "the dealer did not declare this".
+      const meta = [
+        line.variant_type,
+        line.brand,
+        line.chemistry,
+        line.form_factor,
+        line.nominal_voltage && line.nominal_ampere
+          ? `${line.nominal_voltage}V ${line.nominal_ampere}Ah nominal`
+          : null,
+        line.unit_weight_kg ? `${line.unit_weight_kg} kg/unit` : null,
+        line.line_weight_kg ? `${line.line_weight_kg} kg total` : null,
+        // "rated", always. warranty_cycles is design life, not consumed life —
+        // printing it bare would let a vendor read it as the cycle count they
+        // asked for, which we do not have.
+        line.warranty_cycles ? `${line.warranty_cycles} cycles rated` : null,
+        line.condition_split_label,
+        // Already carries "(assumed)" when we guessed. One string, so it cannot
+        // be rendered without its provenance.
+        line.iot_battery === false ? "Non-IOT" : line.iot_brand_label,
+      ]
+        .filter(Boolean)
+        .map((part) => esc(part))
+        .join(" · ");
 
       return `
       <tr>
         <td>
           <div class="spec">${esc(line.spec_label)}</div>
           <div class="cond ${line.condition_key === "WORKING" ? "ok" : "dead"}">${esc(line.condition)}</div>
-          ${photos ? `<div class="photos">${photos}</div>` : ""}
+          ${meta ? `<div class="linemeta">${meta}</div>` : ""}
         </td>
         <td class="num">${line.quantity}</td>
         <td class="num">${esc(inr(line.ask_price))}</td>
@@ -99,9 +148,12 @@ export function renderQuotationHtml(input: QuotationTemplateInput): string {
           border-radius: 5px; margin-top: 4px; }
   .cond.ok   { background: #DCFCE7; color: #15803D; }
   .cond.dead { background: #FEE2E2; color: #B91C1C; }
-  .photos { margin-top: 7px; display: flex; gap: 4px; }
-  .ph { width: 54px; height: 40px; object-fit: cover; border-radius: 4px; border: 1px solid #E5E7EB; }
+  .linemeta { margin-top: 5px; font-size: 10.5px; color: #475569; line-height: 1.5; }
+  .photonote { background: #EFF6FF; border: 1px solid #BFDBFE; color: #1E40AF; border-radius: 8px;
+               padding: 9px 12px; font-size: 10.5px; margin-bottom: 12px; }
   tfoot td { border-top: 2px solid #0B2239; border-bottom: none; font-weight: 800; padding-top: 10px; }
+  .wt { display: block; margin-top: 3px; font-size: 10.5px; font-weight: 600; color: #475569; }
+  .wt em { font-style: normal; font-weight: 500; color: #94A3B8; }
   .note { background: #FFFBEB; border: 1px solid #FDE68A; color: #92400E; border-radius: 8px;
           padding: 9px 12px; font-size: 10.5px; margin-bottom: 12px; }
   .foot { margin-top: 20px; padding-top: 10px; border-top: 1px solid #E5E7EB;
@@ -145,13 +197,38 @@ export function renderQuotationHtml(input: QuotationTemplateInput): string {
   <tbody>${rows}</tbody>
   <tfoot>
     <tr>
-      <td>Total — ${q.total_units} unit${q.total_units === 1 ? "" : "s"}</td>
+      <td>
+        Total — ${q.total_units} unit${q.total_units === 1 ? "" : "s"}
+        ${
+          // The number a scrap buyer actually prices on, and the one the
+          // document never carried. The caveat rides WITH it: a total covering
+          // 4 of 6 SKUs, printed bare, reads as the weight of the lot.
+          q.total_weight_kg !== null
+            ? `<span class="wt">${esc(q.total_weight_kg)} kg${
+                q.weight_caveat ? ` <em>(${esc(q.weight_caveat)})</em>` : ""
+              }</span>`
+            : ""
+        }
+      </td>
       <td class="num"></td>
       <td class="num"></td>
       <td class="num">${esc(inr(q.ask_total))}</td>
     </tr>
   </tfoot>
 </table>
+
+${
+  // The photos are attached to the email, not embedded here. Say so: a
+  // quotation with no images and no mention of any reads as a lot nobody
+  // photographed — which is the opposite of the truth (the submit gate demands
+  // at least five per battery line before a request can even be sent).
+  photoCount > 0
+    ? `<div class="photonote">
+  <b>${photoCount} battery photo${photoCount === 1 ? "" : "s"} attached to this email.</b>
+  Full quality, front / back / label / serial. You do not need an account to view them.
+</div>`
+    : ""
+}
 
 <div class="note">
   <b>Tax treatment pending.</b> All figures above are exclusive of GST. The

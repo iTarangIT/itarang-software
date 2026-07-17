@@ -72,6 +72,8 @@ interface DueEvent {
   channel: "WHATSAPP" | "EMAIL" | "PORTAL";
   recipient_ref: string | null;
   attachment_s3_key: string | null;
+  /** E-198 — extra files (the battery photos). Null/empty for most events. */
+  attachment_s3_keys: string[] | null;
   payload: Record<string, unknown>;
   attempts: number;
 }
@@ -109,7 +111,8 @@ export async function dispatchPending(limit = 50): Promise<DispatchSummary> {
       FROM due
       WHERE e.id = due.id
       RETURNING e.id, e.deal_id, e.request_id, e.event_type, e.recipient_party,
-                e.channel, e.recipient_ref, e.attachment_s3_key, e.payload, e.attempts
+                e.channel, e.recipient_ref, e.attachment_s3_key,
+                e.attachment_s3_keys, e.payload, e.attempts
     `);
 
     return rows as unknown as DueEvent[];
@@ -179,6 +182,25 @@ export async function dispatchPending(limit = 50): Promise<DispatchSummary> {
 }
 
 /** Splits `arr` into consecutive chunks of at most `size`. */
+/**
+ * Content type from an S3 key's extension.
+ *
+ * The keys are server-derived (uploadKeyFor picks the extension from a
+ * content-type we already validated against ALLOWED_UPLOAD_TYPES), so the
+ * extension is trustworthy here in a way a client filename would not be.
+ * Falling back to octet-stream makes a mail client offer a download rather
+ * than render a broken image.
+ */
+function mimeForKey(key: string): string {
+  const ext = key.toLowerCase().split(".").pop() ?? "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "heic") return "image/heic";
+  if (ext === "pdf") return "application/pdf";
+  return "application/octet-stream";
+}
+
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -198,18 +220,20 @@ async function deliver(
         throw new Error("EMAIL event has no recipient_ref — nothing to send to");
       }
 
-      const attachments = [];
-      if (event.attachment_s3_key) {
-        const key = event.attachment_s3_key;
-        // Shared across every claimed event in THIS tick that names the same
-        // key — the same quotation PDF fanning out to several vendor-thread
-        // events no longer fetches it once per event.
+      /** Fetch once per key per tick — several vendor events name the same PDF. */
+      const fetchOnce = (key: string): Promise<Buffer | null> => {
         let bytesPromise = attachmentCache.get(key);
         if (!bytesPromise) {
           bytesPromise = getObject(BUYBACK_BUCKET, key);
           attachmentCache.set(key, bytesPromise);
         }
-        const bytes = await bytesPromise;
+        return bytesPromise;
+      };
+
+      const attachments = [];
+      if (event.attachment_s3_key) {
+        const key = event.attachment_s3_key;
+        const bytes = await fetchOnce(key);
         if (!bytes) {
           // The quotation IS the email. Sending a "please quote" with no
           // quotation attached would be worse than retrying.
@@ -219,6 +243,26 @@ async function deliver(
           filename: key.split("/").pop() || "quotation.pdf",
           content: bytes,
           contentType: "application/pdf",
+        });
+      }
+
+      // E-198 — the battery photos. A scrap buyer judges condition from these,
+      // and they are the reason the quotation email exists in the shape it does:
+      // "the vendor should not have to log in just to see the battery".
+      //
+      // OPPOSITE FAILURE POLICY TO THE PDF ABOVE, deliberately. A missing
+      // quotation makes the message meaningless, so it throws and retries. A
+      // missing photo does not: skipping it sends nine of ten photos, while
+      // throwing sends none, retries six times, and eventually gives up — the
+      // vendor gets no email at all because one object was gone. Evidence is
+      // not worth stranding the message over.
+      for (const key of event.attachment_s3_keys ?? []) {
+        const bytes = await fetchOnce(key);
+        if (!bytes) continue;
+        attachments.push({
+          filename: key.split("/").pop() || "photo",
+          content: bytes,
+          contentType: mimeForKey(key),
         });
       }
 

@@ -127,6 +127,16 @@ export interface NotificationTarget {
   channel: "WHATSAPP" | "EMAIL" | "PORTAL";
   recipientRef?: string | null;
   attachmentS3Key?: string | null;
+  /**
+   * E-198 — extra files beyond the primary one (the battery photos on a vendor
+   * quotation). Snapshotted here for the same reason as the recipient: a photo
+   * can be deleted or replaced between the transition and the send, and the
+   * audit trail must record what actually went out.
+   *
+   * Different failure policy from attachmentS3Key: a missing one of these is
+   * skipped, not retried. See dispatch.ts's deliver().
+   */
+  attachmentS3Keys?: string[] | null;
   /** Makes this event's idempotency key unique among the transition's fan-out. */
   discriminator: string | number;
   payload?: Record<string, unknown>;
@@ -304,6 +314,7 @@ export async function applyTransition({
       channel: target.channel,
       recipient_ref: resolveRef(target),
       attachment_s3_key: target.attachmentS3Key ?? null,
+      attachment_s3_keys: target.attachmentS3Keys?.length ? target.attachmentS3Keys : null,
       idempotency_key: eventKey(
         dealId,
         action,
