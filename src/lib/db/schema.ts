@@ -7773,6 +7773,29 @@ export const provenanceRecords = pgTable(
     id_proof_type: text("id_proof_type"),
     id_proof_s3: text("id_proof_s3"),
     payment_proof_ref: text("payment_proof_ref"),
+    // --- E-197: who the previous owner is, and how to pay them ---------------
+    /** Full. A tax identity (TDS/reporting), and not a credential. */
+    prev_owner_pan: text("prev_owner_pan"),
+    /**
+     * LAST FOUR ONLY — a DB CHECK (`^[0-9]{4}$`) makes a full Aadhaar
+     * unstorable. Under DPDP/UIDAI we have no need to hold the number; the
+     * Decentro ref below is the actual evidence.
+     */
+    prev_owner_aadhaar_last4: varchar("prev_owner_aadhaar_last4", { length: 4 }),
+    prev_owner_aadhaar_ref: text("prev_owner_aadhaar_ref"),
+    prev_owner_aadhaar_verified_at: timestamp("prev_owner_aadhaar_verified_at", {
+      withTimezone: true,
+    }),
+    /**
+     * Full — you cannot pay a masked account. Held ONLY because
+     * settlement_transactions.payee_provenance_id makes paying this person
+     * expressible. Do not collect a bank account for someone we cannot pay.
+     */
+    payee_account_number: text("payee_account_number"),
+    payee_ifsc: varchar("payee_ifsc", { length: 11 }),
+    payee_bank_name: text("payee_bank_name"),
+    /** Not always prev_owner_name — a driver may bank as their firm. */
+    payee_beneficiary_name: text("payee_beneficiary_name"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
@@ -8394,6 +8417,20 @@ export const settlementTransactions = pgTable(
     // FK. Both directions exist in the SQL (E-188); expressing only one of them
     // here keeps the TS module free of a cycle.
     statement_row_id: uuid("statement_row_id"),
+    /**
+     * E-197 — who received this OUT payment, when it was not the dealer.
+     *
+     * NULL means the dealer (every existing row, and still the default). Set
+     * means the battery's previous owner was paid directly, because the dealer
+     * brokered a battery they never owned.
+     *
+     * NOT a new leg: same leg, same amount (the locked dealer_price), different
+     * beneficiary — which is why M14 still holds. A driver-AND-dealer SPLIT is a
+     * different thing entirely and is deliberately not modelled. A DB CHECK
+     * confines this to the DEALER leg: the vendor leg is money IN, so there is
+     * no beneficiary to redirect.
+     */
+    payee_provenance_id: uuid("payee_provenance_id"),
   },
   (t) => ({
     legSubUnique: uniqueIndex("settlement_transactions_leg_sub_unique").on(t.leg_sub_id),
