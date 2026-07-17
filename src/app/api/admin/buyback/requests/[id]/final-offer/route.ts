@@ -9,7 +9,7 @@
  * than mutating v1. The v1 rows stay on disk for the audit trail.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -62,15 +62,29 @@ export const POST = withErrorHandler(
       }
 
       // One offer per version. Re-sending at the same version replaces the
-      // still-unanswered offer rather than creating a duplicate the dealer
-      // could accept twice.
+      // dealer's outstanding one rather than creating a duplicate they could
+      // accept twice.
+      //
+      // NOT `status = 'SENT'`, which was a dead end: dealer_decline moves the
+      // deal to NEGOTIATING WITHOUT bumping offer_version and leaves a DECLINED
+      // row at that version. Deleting only SENT rows left it there, so the
+      // INSERT below collided with final_offers_deal_version_unique and 500'd —
+      // and `reopen` is refused from NEGOTIATING (it is not in
+      // REOPENABLE_STATES), so the admin could neither re-offer nor reopen. A
+      // declined deal was stuck forever. It has never happened only because
+      // dealer_decline has been used zero times.
+      //
+      // ACCEPTED is excluded and must stay excluded: it is the record of what
+      // the dealer actually agreed to, and deal_line_locks reads its prices.
+      // Deleting one would erase the basis of a deal in flight. It also cannot
+      // collide — send_final_offer is illegal from DEALER_ACCEPTED anyway.
       await tx
         .delete(finalOffers)
         .where(
           and(
             eq(finalOffers.deal_id, deal.id),
             eq(finalOffers.version_no, deal.offer_version),
-            eq(finalOffers.status, "SENT"),
+            ne(finalOffers.status, "ACCEPTED"),
           ),
         );
 
