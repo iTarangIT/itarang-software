@@ -8015,6 +8015,12 @@ export const buybackNotificationEvents = pgTable(
     // where the message actually went — not where it would go if sent today.
     recipient_ref: text("recipient_ref"),
     attachment_s3_key: text("attachment_s3_key"),
+    /**
+     * E-198 — extra files beyond the primary one (the battery photos on a
+     * vendor quotation). A missing key here is skipped at send; a missing
+     * attachment_s3_key above throws, because the quotation IS the email.
+     */
+    attachment_s3_keys: text("attachment_s3_keys").array(),
   },
   (t) => ({
     idemUnique: uniqueIndex("buyback_notification_events_idem_unique").on(t.idempotency_key),
