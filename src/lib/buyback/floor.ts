@@ -42,6 +42,46 @@ export function totalOf(lines: FloorCheckLine[]): number {
   return lines.reduce((sum, l) => sum + l.quantity * Number(l.price ?? 0), 0);
 }
 
+/**
+ * The dealer's accepted price for a line, or a refusal — the number the floor
+ * is built ON, validated before anything is built on it.
+ *
+ * Pure, and here rather than inline in margin/route.ts, because the route
+ * imports the db and a guard you cannot test without a database is a guard
+ * nobody tests. This one was wrong for exactly that long.
+ *
+ * WHAT IT IS DEFENDING AGAINST. The route wrote:
+ *
+ *     const dealerPrice = Number(line.dealer_price);
+ *     if (!Number.isFinite(dealerPrice)) throw ...
+ *
+ * which reads as "reject a price that isn't a number". It isn't. `Number(null)`
+ * is `0` and `Number.isFinite(0)` is `true`, so an UNPRICED line sailed through
+ * and was locked at ₹0 into deal_line_locks — a table that is INSERT-only and
+ * fill-once. The dealer's own price for that deal became permanently zero, the
+ * floor collapsed to margin alone, and nothing anywhere said a word.
+ *
+ * A null price and a zero price are different facts and must fail differently:
+ * null means nobody has agreed a price yet, zero means someone agreed a
+ * nonsensical one. Both are refusals; conflating them is what hid the bug.
+ */
+export function resolveDealerPrice(
+  price: number | string | null | undefined,
+): { ok: true; price: number } | { ok: false; reason: "missing" | "unusable"; raw: string } {
+  if (price === null || price === undefined || price === "") {
+    return { ok: false, reason: "missing", raw: String(price) };
+  }
+
+  const n = Number(price);
+  // <= 0 is "unusable", not "missing": a real zero got written by something, and
+  // buying a battery for nothing is not a price anyone negotiated.
+  if (!Number.isFinite(n) || n <= 0) {
+    return { ok: false, reason: "unusable", raw: String(price) };
+  }
+
+  return { ok: true, price: n };
+}
+
 export function checkFloor(lines: FloorCheckLine[], floorTotal: number | string | null): FloorCheck {
   const total = totalOf(lines);
   const floor = Number(floorTotal ?? 0);
