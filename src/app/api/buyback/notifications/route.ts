@@ -33,7 +33,7 @@
  * fixed; until then a dealer's feed is honestly empty rather than wrong.
  */
 
-import { and, desc, eq, inArray, isNot, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -46,8 +46,16 @@ export const runtime = "nodejs";
 /** The one filter. Both verbs use it — that is the point. */
 const BUYBACK_ONLY = like(notifications.type, "buyback.%");
 
-/** Nullable column: `= false` would skip NULL, which is unread. */
-const UNREAD = isNot(notifications.read, true);
+/**
+ * Nullable column: `= false` would skip NULL, which is unread. `IS NOT TRUE`
+ * matches both false and NULL, which is exactly what "unread" means here.
+ *
+ * A raw sql fragment, not a drizzle helper: `isNot` does not exist in drizzle-orm
+ * (it type-checked but is undefined at runtime — the build caught what tsc did
+ * not), and `ne(read, true)` is `read <> true`, which is UNKNOWN for NULL and so
+ * silently drops every NULL-read notification from the count.
+ */
+const UNREAD = sql`${notifications.read} IS NOT TRUE`;
 
 const FEED_LIMIT = 30;
 

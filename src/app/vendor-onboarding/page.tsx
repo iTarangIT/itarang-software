@@ -22,6 +22,20 @@
 import { useState } from "react";
 import Link from "next/link";
 
+/** Server zod paths → the label a human sees on the form, for clear errors. */
+const FIELD_LABELS: Record<string, string> = {
+  email: "Email",
+  password: "Password",
+  contact_name: "Contact person",
+  name: "Business name",
+  gstin: "GSTIN",
+  pan: "PAN",
+  contact_phone: "Phone",
+  city: "City",
+  state: "State",
+  regions: "States you collect from",
+};
+
 const CHEMISTRY_OPTIONS = [
   { value: "NMC", label: "NMC" },
   { value: "LFP", label: "LFP" },
@@ -83,9 +97,17 @@ export default function VendorOnboardingPage() {
     setSubmitting(false);
 
     if (!json?.success) {
-      // Zod refusals arrive per-field in details; show the first one, since it
-      // names the field, rather than the generic envelope message.
-      const detail = json?.error?.details?.[0]?.message;
+      // Zod refusals arrive per-field in `details` as { path, message }. The
+      // message alone ("Too small: expected string to have >=10 characters") is
+      // useless without the field, so prepend a human label for the path — a
+      // vendor should know it is the PAN, not hunt every box on the form.
+      const issue = json?.error?.details?.[0] as { path?: string; message?: string } | undefined;
+      const label = issue?.path ? (FIELD_LABELS[issue.path] ?? issue.path) : null;
+      const detail = issue?.message
+        ? label
+          ? `${label}: ${issue.message}`
+          : issue.message
+        : null;
       setError(detail ?? json?.error?.message ?? "Could not complete your registration.");
       return;
     }
