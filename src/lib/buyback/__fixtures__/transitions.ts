@@ -234,7 +234,31 @@ export const GOLDEN_TRANSITIONS: GoldenTransition[] = [
     action: "dealer_counter",
     role: "admin",
     expect: REFUSED,
-    why: "An admin counters via `negotiate`/`send_final_offer`, not the dealer's action.",
+    why: "The dealer's action is the dealer's. An admin counters via admin_counter.",
+  },
+  {
+    // item 7 — the admin's own counter, the mirror of dealer_counter. Makes the
+    // negotiation symmetric: the admin no longer has to send a final offer just
+    // to name another price.
+    state: "NEGOTIATING",
+    action: "admin_counter",
+    role: "admin",
+    expect: "NEGOTIATING",
+    why: "Self-loop: the admin counters per SKU and stays in NEGOTIATING, exactly as the dealer does.",
+  },
+  {
+    state: "NEGOTIATING",
+    action: "admin_counter",
+    role: "dealer",
+    expect: REFUSED,
+    why: "The admin's action is the admin's — a dealer counters via dealer_counter.",
+  },
+  {
+    state: "SUBMITTED",
+    action: "admin_counter",
+    role: "admin",
+    expect: REFUSED,
+    why: "There is no open negotiation to counter within yet — `negotiate` opens it first.",
   },
   {
     state: "NEGOTIATING",
