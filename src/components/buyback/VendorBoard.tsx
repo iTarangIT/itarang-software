@@ -102,6 +102,19 @@ const THREAD_CHIP: Record<Thread["status"], [string, string, string]> = {
   LOST: ["Lost", "bg-slate-100", "text-slate-500"],
 };
 
+/**
+ * The admin can technically RECORD a vendor's counter / agreement / PO on the
+ * vendor's behalf — the `record_vendor_*` fallback for a vendor who negotiates
+ * over phone or email. Now that vendors self-serve in /vendor-portal, that
+ * overlap is HIDDEN from the admin UI so the two surfaces don't duplicate the
+ * same step and an admin can't quietly move a deal the vendor never actually
+ * agreed to. Nothing else changes: routing, the dealer-leg PO, reopening,
+ * pickup and settlement stay — those are iTarang's own actions, not the
+ * vendor's. The server actions and routes are untouched and still callable, so
+ * flipping this to `true` restores the fallback with no API change or migration.
+ */
+const ADMIN_CAN_ACT_AS_VENDOR: boolean = false;
+
 export default function VendorBoard({
   requestId,
   section = "all",
@@ -480,7 +493,7 @@ export default function VendorBoard({
                     <div className="mt-2 text-[11px] text-slate-400">{t.close_reason}</div>
                   )}
 
-                  {open && can("record_vendor_counter") && (
+                  {open && can("record_vendor_counter") && ADMIN_CAN_ACT_AS_VENDOR && (
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => openRespond(t, "counter")}
@@ -583,7 +596,7 @@ export default function VendorBoard({
                     </button>
                   )}
 
-                  {!po && can("exchange_pos") && leg === "VENDOR" && (
+                  {!po && can("exchange_pos") && leg === "VENDOR" && ADMIN_CAN_ACT_AS_VENDOR && (
                     <div className="flex flex-col items-end gap-1.5">
                       <div className="flex gap-1.5">
                         <input
@@ -692,7 +705,7 @@ export default function VendorBoard({
       )}
 
       {/* --------------------------------------------------- RESPONSE MODAL */}
-      {respond && (
+      {respond && ADMIN_CAN_ACT_AS_VENDOR && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
             <div className="text-sm font-bold text-slate-900">
