@@ -26,9 +26,9 @@
  * running client-side over everything loaded so far — unchanged.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   PageHeader,
@@ -45,6 +45,7 @@ import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
 import StatusChip, { statusLabel } from "@/components/buyback/StatusChip";
 import AdminBuybackSearch from "@/components/buyback/AdminBuybackSearch";
 import { inr } from "@/lib/buyback/format";
+import { STAGE_BUCKETS, stageForStatus } from "@/lib/buyback/flow";
 
 interface QueueRow {
   request_id: string;
@@ -92,6 +93,14 @@ const SLA_OPTIONS = [
   { value: "GT3D", label: "Over 3 days" },
 ];
 
+// Pipeline stage — the same 5 buckets the dashboard funnel deep-links to via
+// `?stage=<key>` (src/lib/buyback/flow.ts). Selecting one keeps every row whose
+// status folds into that bucket.
+const STAGE_OPTIONS = [
+  { value: ALL, label: "All" },
+  ...STAGE_BUCKETS.map((b) => ({ value: b.key, label: b.label })),
+];
+
 const SOURCE_LABELS: Record<string, string> = {
   WEB: "Web",
   WHATSAPP: "WhatsApp",
@@ -133,8 +142,13 @@ function rowTimestamp(r: QueueRow, now: number): number | null {
   return null;
 }
 
-export default function AdminBuybackQueuePage() {
+function AdminBuybackQueue() {
   const router = useRouter();
+  // Deep-links from the dashboard: `?stage=<STAGE_BUCKETS key>` pre-applies the
+  // pipeline-stage filter, `?dealer=<name>` pre-applies the dealer filter (the
+  // queue filters dealers by name — its rows carry no entity id). Read once via
+  // a lazy initializer so the filter is applied on the first render, no flicker.
+  const searchParams = useSearchParams();
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -144,7 +158,11 @@ export default function AdminBuybackQueuePage() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [statusFilter, setStatusFilter] = useState(ALL);
-  const [dealerFilter, setDealerFilter] = useState(ALL);
+  const [stageFilter, setStageFilter] = useState<string>(() => {
+    const s = searchParams.get("stage");
+    return s && STAGE_BUCKETS.some((b) => b.key === s) ? s : ALL;
+  });
+  const [dealerFilter, setDealerFilter] = useState<string>(() => searchParams.get("dealer") ?? ALL);
   const [cityFilter, setCityFilter] = useState(ALL);
   const [sourceFilter, setSourceFilter] = useState(ALL);
   const [provenanceFilter, setProvenanceFilter] = useState(ALL);
@@ -255,6 +273,7 @@ export default function AdminBuybackQueuePage() {
 
     return queue.filter((r) => {
       if (statusFilter !== ALL && r.status !== statusFilter) return false;
+      if (stageFilter !== ALL && stageForStatus(r.status) !== stageFilter) return false;
       if (dealerFilter !== ALL && r.dealer_name !== dealerFilter) return false;
       if (cityFilter !== ALL && r.dealer_city !== cityFilter) return false;
       if (sourceFilter !== ALL && r.source_channel !== sourceFilter) return false;
@@ -289,6 +308,7 @@ export default function AdminBuybackQueuePage() {
   }, [
     queue,
     statusFilter,
+    stageFilter,
     dealerFilter,
     cityFilter,
     sourceFilter,
@@ -380,6 +400,7 @@ export default function AdminBuybackQueuePage() {
               />
               <FilterPill label="Quote" value={quoteFilter} options={QUOTE_OPTIONS} onChange={setQuoteFilter} />
               <FilterPill label="SLA" value={slaFilter} options={SLA_OPTIONS} onChange={setSlaFilter} />
+              <FilterPill label="Stage" value={stageFilter} options={STAGE_OPTIONS} onChange={setStageFilter} />
               <FilterPill label="Status" value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
               <FilterPill
                 label="Date range"
@@ -413,5 +434,18 @@ export default function AdminBuybackQueuePage() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * useSearchParams() (read for the `?stage=`/`?dealer=` deep-links) requires a
+ * Suspense boundary above it for the build-time prerender pass — same wrapper
+ * pattern as the buyback detail page.
+ */
+export default function AdminBuybackQueuePage() {
+  return (
+    <Suspense fallback={<div className="p-10 text-slate-400">Loading…</div>}>
+      <AdminBuybackQueue />
+    </Suspense>
   );
 }

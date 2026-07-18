@@ -366,3 +366,61 @@ export async function startBuybackDedupTicker() {
 
   console.log("[instrumentation] buyback-dedup (6h) + price-review nudge (24h) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// peakAmp buyback — online gateway poller (E-193/R6).
+//
+// The backstop for RazorpayX payouts and Razorpay payment links: webhooks are the
+// fast path, but a webhook that is never delivered fails silently forever. This
+// ticker reconciles any in-flight attempt that has gone quiet for >10 minutes
+// against its provider, so a dropped webhook self-heals on the next pass. Same
+// runtime argument as the dispatcher/dedup tickers — Vercel crons do not fire on
+// pm2, and this in-process ticker is the only driver besides the webhooks.
+//
+// DARK UNLESS CONFIGURED: with no RazorpayX vars and no payment-link flag the tick
+// body returns immediately, before any DB or provider work.
+// ---------------------------------------------------------------------------
+export async function startBuybackGatewayTicker() {
+  const TICK_INTERVAL_MS = 60_000;
+  const BATCH = 20;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow provider must not stack ticks
+    inFlight = true;
+    try {
+      const { payoutsConfigured } = await import("@/lib/razorpayx");
+      const { buybackLinksConfigured } = await import("@/lib/razorpay");
+      // Neither provider configured → nothing this ticker could ever reconcile.
+      if (!payoutsConfigured() && !buybackLinksConfigured()) return;
+
+      const { sweepInflightGatewayTxns } = await import("@/lib/buyback/gateway");
+      const r = await sweepInflightGatewayTxns(BATCH);
+      if (r.checked > 0) {
+        console.log(
+          `[instrumentation:buyback-gateway] checked=${r.checked} advanced=${r.advanced} ` +
+            `progressed=${r.progressed} failed=${r.failed}`,
+        );
+      }
+    } catch (err) {
+      // Never let a sweep failure kill the ticker: the rows are durable and still
+      // in flight, so the next tick retries them.
+      console.error(
+        "[instrumentation:buyback-gateway] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered behind the dialer (5s), Zoho (20s), dispatch (35s) and dedup (60s).
+  const kickoff = setTimeout(tick, 45_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] buyback-gateway poller (60s) started in-process");
+}

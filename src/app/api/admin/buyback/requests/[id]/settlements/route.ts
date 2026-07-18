@@ -39,6 +39,7 @@ import {
   settlementsForDeal,
   vendorReceipt,
 } from "@/lib/buyback/money";
+import { assertNoInflightGateway } from "@/lib/buyback/gateway";
 import { assertPayoutAllowed } from "@/lib/buyback/pickup";
 import { dealHeader } from "@/lib/buyback/queries";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";
@@ -47,8 +48,14 @@ export const runtime = "nodejs";
 
 const bodySchema = z.object({
   leg: z.enum(["DEALER", "VENDOR"]),
-  /** MANUAL is the only method built. STATEMENT/API are declared for Sprint 3/5. */
-  method: z.enum(["MANUAL", "STATEMENT", "API"]).default("MANUAL"),
+  /**
+   * MANUAL is the only method this route may mint. STATEMENT rows are created
+   * server-side by the statement-confirm route; API rows are minted only by a
+   * terminal gateway success (applyGatewayOutcome). A client that could post
+   * either here would forge a settlement the ledger cannot trace back to its
+   * evidence — so the method is pinned, not merely defaulted.
+   */
+  method: z.literal("MANUAL").default("MANUAL"),
   /** UTR / bank reference. Mandatory for MANUAL — a payment with no reference is untraceable. */
   txn_ref: z.string().min(1).max(120).optional(),
   txn_date: z.string(),
@@ -106,6 +113,11 @@ export const POST = withErrorHandler(
       // building. Refuses the DEALER leg only: the vendor's receipt has nothing to
       // do with what the dealer handed over.
       await assertPayoutAllowed(deal.id, body.leg, tx);
+
+      // A manual settlement must not collide with an online one still in flight
+      // (M13 race guard). A queued RazorpayX payout cannot be recalled; recording
+      // this leg by hand while it lands is exactly how a dealer gets paid twice.
+      await assertNoInflightGateway(deal.id, body.leg, tx);
 
       const subId = legSubId(request.request_no, body.leg);
 

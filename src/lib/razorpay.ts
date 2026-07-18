@@ -446,4 +446,88 @@ export function calculateDiscount(
     return Math.min(discount, baseAmount);
 }
 
+// ─────────────── Buyback vendor-collection Payment Links (E-193/R2) ────────
+// Razorpay Payment Links for collecting the buyback vendor's payment (the IN
+// leg of a settlement). Flag-gated: `buybackLinksConfigured()` must be true
+// before a caller may use these — RAZORPAY_BUYBACK_LINKS_ENABLED stays unset
+// (feature dark) until a later task wires the route. Dead code in this batch.
+
+/** RAZORPAY_BUYBACK_LINKS_ENABLED === "1" and the core Razorpay keys are set. */
+export function buybackLinksConfigured(): boolean {
+  return (
+    process.env.RAZORPAY_BUYBACK_LINKS_ENABLED === "1" &&
+    Boolean(process.env.RAZORPAY_KEY_ID) &&
+    Boolean(process.env.RAZORPAY_KEY_SECRET)
+  );
+}
+
+export interface BuybackPaymentLinkParams {
+  amountPaise: number;
+  referenceId: string;
+  description: string;
+  customer: { name: string; email?: string | null; contact?: string | null };
+  expireBy: number; // unix seconds
+  notes: Record<string, string>;
+}
+
+export interface BuybackPaymentLink {
+  id: string;
+  short_url: string;
+  status: string;
+  raw: unknown;
+}
+
+// Structural subset of the SDK's `PaymentLinks.RazorpayPaymentLink` — enough
+// to map any of create/fetch/cancel's responses without importing the SDK's
+// internal type path.
+interface RazorpayPaymentLinkLike {
+  id: string;
+  short_url: string;
+  status: string;
+}
+
+function toBuybackPaymentLink(entity: RazorpayPaymentLinkLike): BuybackPaymentLink {
+  return { id: entity.id, short_url: entity.short_url, status: entity.status, raw: entity };
+}
+
+/**
+ * Create a Payment Link for a buyback vendor to pay iTarang (the IN leg).
+ * Notifications are disabled (`notify: { sms: false, email: false }`) —
+ * delivery of the link is the caller's job (E-193 later tasks), not Razorpay's.
+ */
+export async function createBuybackPaymentLink(
+  p: BuybackPaymentLinkParams,
+): Promise<BuybackPaymentLink> {
+  const customer: { name: string; email?: string; contact?: string } = { name: p.customer.name };
+  if (p.customer.email) customer.email = p.customer.email;
+  if (p.customer.contact) customer.contact = p.customer.contact;
+
+  const entity = await getRazorpay().paymentLink.create({
+    amount: p.amountPaise,
+    currency: "INR",
+    accept_partial: false,
+    reference_id: p.referenceId,
+    description: p.description,
+    customer,
+    notify: { sms: false, email: false },
+    reminder_enable: false,
+    expire_by: p.expireBy,
+    notes: p.notes,
+  });
+  return toBuybackPaymentLink(entity);
+}
+
+/** Fetch a Payment Link's current state, including the `payments` array once paid. */
+export async function fetchBuybackPaymentLink(
+  id: string,
+): Promise<BuybackPaymentLink & { payments?: unknown }> {
+  const entity = await getRazorpay().paymentLink.fetch(id);
+  return { ...toBuybackPaymentLink(entity), payments: entity.payments ?? undefined };
+}
+
+export async function cancelBuybackPaymentLink(id: string): Promise<BuybackPaymentLink> {
+  const entity = await getRazorpay().paymentLink.cancel(id);
+  return toBuybackPaymentLink(entity);
+}
+
 export default getRazorpay;
