@@ -34,6 +34,11 @@ import {
     cycleCTEs,
     type ChargingWindowOpts,
 } from "@/lib/telemetry/charging-sql";
+import {
+    assessWarrantyFeed,
+    classifySohFeed,
+    type SohTrendPoint,
+} from "@/lib/telemetry/soh-math";
 
 // ─── Fleet Dashboard ─────────────────────────────────────────────────────────
 
@@ -43,11 +48,14 @@ function emptyFleetDashboardCEO() {
         kpis: {
             fleetSize: 0,
             utilization: 0,
-            avgSOH: 0,
-            warrantyAtRisk: 0,
+            // No vehicles matched the filter, so nothing was measured. `null`, not 0 —
+            // an empty selection has no average SOH, and "0 at-risk" out of no packs is
+            // a pass mark nobody earned.
+            avgSOH: null as number | null,
+            warrantyAtRisk: null as number | null,
             activeAlerts: 0,
         },
-        warrantyRisk: { trend: [] as unknown[], atRiskDevices: 0 },
+        sohFeed: assessWarrantyFeed(0, 0, []),
         dealerPerformance: [] as unknown[],
         serviceMetrics: { fleetUptime: 0, avgDailyDistance: 0, offlineDevices: 0 },
     };
@@ -72,7 +80,14 @@ export async function fetchFleetDashboardCEO(filter?: { state?: string; city?: s
             count(*)::int                                                       AS fleet_size,
             count(*) FILTER (WHERE online)::int                                 AS active_now,
             round(avg(soh_pct)::numeric, 1)::float                              AS avg_soh,
-            count(*) FILTER (WHERE soh_pct IS NOT NULL AND soh_pct < 80)::int   AS warranty_at_risk
+            count(*) FILTER (WHERE soh_pct IS NOT NULL AND soh_pct < 80)::int   AS warranty_at_risk,
+            count(*) FILTER (WHERE soh_pct IS NOT NULL)::int                    AS soh_assessed,
+            count(*) FILTER (WHERE soh_pct IS NULL)::int                        AS soh_unassessable,
+            -- Whether the two SOH KPIs above are measuring anything at all. Every pack
+            -- reporting the identical value means avg_soh is that value by construction
+            -- and warranty_at_risk is 0 by construction — neither is a finding.
+            array_agg(DISTINCT round(soh_pct::numeric, 1)::float)
+                FILTER (WHERE soh_pct IS NOT NULL)                              AS soh_distinct
         FROM vehicle_state
         ${stateWhere}
     `;
@@ -81,16 +96,6 @@ export async function fetchFleetDashboardCEO(filter?: { state?: string; city?: s
         SELECT count(*)::int AS active_alerts
         FROM alerts
         WHERE resolved_at IS NULL ${locAnd}
-    `;
-
-    const sohTrend = await iot`
-        SELECT
-            date_trunc('day', time)::date          AS date,
-            round(avg(soh_pct)::numeric, 1)::float AS avg_soh
-        FROM telemetry_battery
-        WHERE time > now() - interval '30 days' AND soh_pct IS NOT NULL ${locAnd}
-        GROUP BY 1
-        ORDER BY 1
     `;
 
     // Avg daily distance from distance_rollup — the only populated distance source.
@@ -118,19 +123,27 @@ export async function fetchFleetDashboardCEO(filter?: { state?: string; city?: s
     const utilization =
         fleetSize > 0 ? Math.round((activeNow / fleetSize) * 100) : 0;
 
+    // Does the BMS SOH feed vary at all? If not, avgSOH and warrantyAtRisk are restating
+    // the stuck value rather than describing the fleet, and both are withheld: a KPI card
+    // reading "100%" / "0" is read as a measurement, and there is no way to render that
+    // number honestly. `sohFeed` tells the card what to say instead.
+    const sohFeed = assessWarrantyFeed(
+        Number(stats?.soh_assessed ?? 0),
+        Number(stats?.soh_unassessable ?? 0),
+        (stats?.soh_distinct as number[] | null) ?? [],
+    );
+    const sohMeasured = !sohFeed.constantFeed && sohFeed.assessed > 0;
+
     return {
         role: "ceo" as const,
         kpis: {
             fleetSize,
             utilization,
-            avgSOH: Number(stats?.avg_soh) || 0,
-            warrantyAtRisk: Number(stats?.warranty_at_risk) || 0,
+            avgSOH: sohMeasured ? (Number(stats?.avg_soh) || 0) : null,
+            warrantyAtRisk: sohMeasured ? (Number(stats?.warranty_at_risk) || 0) : null,
             activeAlerts: Number(alertCount?.active_alerts) || 0,
         },
-        warrantyRisk: {
-            trend: sohTrend,
-            atRiskDevices: Number(stats?.warranty_at_risk) || 0,
-        },
+        sohFeed,
         dealerPerformance: await fetchDealerPerformanceInner(filter),
         serviceMetrics: {
             fleetUptime: utilization,
@@ -526,9 +539,27 @@ export async function updateAlertConfig(
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
+/**
+ * The fleet SOH trend, **with a verdict on whether it means anything**.
+ *
+ * The series itself is unchanged. What is new is that it no longer travels alone: on this
+ * fleet every reporting pack returns exactly 100.0, so plotting it draws a flat line at
+ * 100 that reads as "every battery is perfect" when it actually means "the BMS SOH feed
+ * is stuck". classifySohFeed() decides which of those the reader is looking at, and the
+ * caller renders accordingly.
+ *
+ * Deliberately a *detection*, not a hardcoded "this feed is dead": the day the poller
+ * starts writing real values the verdict flips to `informative` and the chart returns
+ * with no code change.
+ *
+ * NOTE: this is the BMS's *reported* SOH, not a measurement. Measured capacity comes from
+ * extrapolateCapacity() over a detected charging cycle — see CapacityDegradationChart,
+ * which already does this per pack. A fleet-wide rollup of that needs per-vehicle cycle
+ * detection and is not built yet; until it is, "unmeasured" is the honest fleet answer.
+ */
 export async function fetchSOHTrend(days = 30) {
     const iot = getIotSql();
-    return iot`
+    const trend = await iot`
         SELECT
             date_trunc('day', time)::date          AS date,
             round(avg(soh_pct)::numeric, 1)::float AS avg_soh,
@@ -540,6 +571,10 @@ export async function fetchSOHTrend(days = 30) {
         GROUP BY 1
         ORDER BY 1
     `;
+    return {
+        trend: trend as unknown as SohTrendPoint[],
+        verdict: classifySohFeed(trend as unknown as SohTrendPoint[]),
+    };
 }
 
 export async function fetchSOCTrends(days = 30) {
@@ -1003,22 +1038,51 @@ export async function countChargingSamples(
     return Number(row?.n ?? 0);
 }
 
+/**
+ * Packs below the warranty SOH floor — **and whether that question could be asked at all**.
+ *
+ * `soh_pct < 80` returns zero rows on this fleet, and always will: all 297 reporting packs
+ * sit at exactly 100.0. An empty list rendered as "No at-risk devices" is the dead sensor
+ * wearing a clean bill of health. So the list now travels with an assessment saying how
+ * many packs the test could even run on, how many reported nothing (unmeasured — *not*
+ * healthy), and whether the readings are all identical, which makes a zero count
+ * uninformative by construction.
+ */
 export async function fetchWarrantyRisk() {
     const iot = getIotSql();
-    const rows = await iot`
-        SELECT
-            vs.vehicleno    AS device_id,
-            vs.vehicleno    AS vehicle_number,
-            vs.soh_pct      AS soh,
-            vs.last_battery_at AS last_reading,
-            v.owner         AS customer_name
-        FROM vehicle_state vs
-        LEFT JOIN vehicles v USING (vehicleno)
-        WHERE vs.soh_pct IS NOT NULL AND vs.soh_pct < 80
-        ORDER BY vs.soh_pct ASC
-    `;
+    const [rows, [feed]] = await Promise.all([
+        iot`
+            SELECT
+                vs.vehicleno    AS device_id,
+                vs.vehicleno    AS vehicle_number,
+                vs.soh_pct      AS soh,
+                vs.last_battery_at AS last_reading,
+                v.owner         AS customer_name
+            FROM vehicle_state vs
+            LEFT JOIN vehicles v USING (vehicleno)
+            WHERE vs.soh_pct IS NOT NULL AND vs.soh_pct < 80
+            ORDER BY vs.soh_pct ASC
+        `,
+        // One pass over vehicle_state: how many packs answer, how many stay silent, and
+        // how many *different* answers exist. A single distinct value across hundreds of
+        // packs of different ages is a stuck signal, not a fleet in agreement.
+        iot`
+            SELECT
+                count(*) FILTER (WHERE soh_pct IS NOT NULL)::int AS assessed,
+                count(*) FILTER (WHERE soh_pct IS NULL)::int     AS unassessable,
+                array_agg(DISTINCT round(soh_pct::numeric, 1)::float)
+                    FILTER (WHERE soh_pct IS NOT NULL)           AS distinct_values
+            FROM vehicle_state
+        `,
+    ]);
 
-    if (rows.length === 0) return [];
+    const assessment = assessWarrantyFeed(
+        Number(feed?.assessed ?? 0),
+        Number(feed?.unassessable ?? 0),
+        (feed?.distinct_values as number[] | null) ?? [],
+    );
+
+    if (rows.length === 0) return { devices: [] as Array<Record<string, unknown>>, assessment };
     const vehicleNos = Array.from(
         new Set(rows.map((r) => String(r.device_id)).filter(Boolean)),
     );
@@ -1036,7 +1100,7 @@ export async function fetchWarrantyRisk() {
             .map((m) => [m.vehicle_number as string, m]),
     );
 
-    return rows.map((r) => {
+    const devices = rows.map((r) => {
         const m = byVehicle.get(String(r.device_id));
         return {
             ...r,
@@ -1044,6 +1108,7 @@ export async function fetchWarrantyRisk() {
             customer_name: m?.customer_name ?? r.customer_name ?? null,
         };
     });
+    return { devices, assessment };
 }
 
 export async function fetchDealerComparison() {

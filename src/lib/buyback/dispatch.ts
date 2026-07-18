@@ -72,6 +72,8 @@ interface DueEvent {
   channel: "WHATSAPP" | "EMAIL" | "PORTAL";
   recipient_ref: string | null;
   attachment_s3_key: string | null;
+  /** E-198 — extra files (the battery photos). Null/empty for most events. */
+  attachment_s3_keys: string[] | null;
   payload: Record<string, unknown>;
   attempts: number;
 }
@@ -109,7 +111,8 @@ export async function dispatchPending(limit = 50): Promise<DispatchSummary> {
       FROM due
       WHERE e.id = due.id
       RETURNING e.id, e.deal_id, e.request_id, e.event_type, e.recipient_party,
-                e.channel, e.recipient_ref, e.attachment_s3_key, e.payload, e.attempts
+                e.channel, e.recipient_ref, e.attachment_s3_key,
+                e.attachment_s3_keys, e.payload, e.attempts
     `);
 
     return rows as unknown as DueEvent[];
@@ -179,6 +182,25 @@ export async function dispatchPending(limit = 50): Promise<DispatchSummary> {
 }
 
 /** Splits `arr` into consecutive chunks of at most `size`. */
+/**
+ * Content type from an S3 key's extension.
+ *
+ * The keys are server-derived (uploadKeyFor picks the extension from a
+ * content-type we already validated against ALLOWED_UPLOAD_TYPES), so the
+ * extension is trustworthy here in a way a client filename would not be.
+ * Falling back to octet-stream makes a mail client offer a download rather
+ * than render a broken image.
+ */
+function mimeForKey(key: string): string {
+  const ext = key.toLowerCase().split(".").pop() ?? "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "heic") return "image/heic";
+  if (ext === "pdf") return "application/pdf";
+  return "application/octet-stream";
+}
+
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -198,18 +220,20 @@ async function deliver(
         throw new Error("EMAIL event has no recipient_ref — nothing to send to");
       }
 
-      const attachments = [];
-      if (event.attachment_s3_key) {
-        const key = event.attachment_s3_key;
-        // Shared across every claimed event in THIS tick that names the same
-        // key — the same quotation PDF fanning out to several vendor-thread
-        // events no longer fetches it once per event.
+      /** Fetch once per key per tick — several vendor events name the same PDF. */
+      const fetchOnce = (key: string): Promise<Buffer | null> => {
         let bytesPromise = attachmentCache.get(key);
         if (!bytesPromise) {
           bytesPromise = getObject(BUYBACK_BUCKET, key);
           attachmentCache.set(key, bytesPromise);
         }
-        const bytes = await bytesPromise;
+        return bytesPromise;
+      };
+
+      const attachments = [];
+      if (event.attachment_s3_key) {
+        const key = event.attachment_s3_key;
+        const bytes = await fetchOnce(key);
         if (!bytes) {
           // The quotation IS the email. Sending a "please quote" with no
           // quotation attached would be worse than retrying.
@@ -222,12 +246,43 @@ async function deliver(
         });
       }
 
+      // E-198 — the battery photos. A scrap buyer judges condition from these,
+      // and they are the reason the quotation email exists in the shape it does:
+      // "the vendor should not have to log in just to see the battery".
+      //
+      // OPPOSITE FAILURE POLICY TO THE PDF ABOVE, deliberately. A missing
+      // quotation makes the message meaningless, so it throws and retries. A
+      // missing photo does not: skipping it sends nine of ten photos, while
+      // throwing sends none, retries six times, and eventually gives up — the
+      // vendor gets no email at all because one object was gone. Evidence is
+      // not worth stranding the message over.
+      for (const key of event.attachment_s3_keys ?? []) {
+        const bytes = await fetchOnce(key);
+        if (!bytes) continue;
+        attachments.push({
+          filename: key.split("/").pop() || "photo",
+          content: bytes,
+          contentType: mimeForKey(key),
+        });
+      }
+
       const result = await sendEmail({
         to: event.recipient_ref,
         subject,
         html: body,
         attachments,
       });
+
+      // Also drop it in the recipient's bell if they have a login — a vendor
+      // who received a quotation email sees "new quotation" in the portal too.
+      // BEST-EFFORT: the email has already been sent, so a bell failure must not
+      // throw and cause the whole event to retry — that would send the email a
+      // second time. The bell is the lesser record; the email is the delivery.
+      try {
+        await writeBell(event, subject, body);
+      } catch {
+        // swallowed on purpose — see above
+      }
 
       return result.messageId ?? null;
     }
@@ -241,14 +296,11 @@ async function deliver(
     }
 
     case "PORTAL": {
-      // Reuses the CRM's existing in-app bell (the `notifications` table). No
-      // new UI: buyback events show up where admins already look.
-      await notifyRoles([...BUYBACK_ADMIN_ROLES], {
-        type: `buyback.${event.event_type}`,
-        title: subject,
-        message: stripHtml(body),
-        data: { request_id: event.request_id, deal_id: event.deal_id, ...event.payload },
-      });
+      // In-app only, no external send. Honours recipient_party (E-195/item 12):
+      // an admin, a dealer or a vendor bell, decided by who the event is FOR.
+      // It used to hardwire the admins, so a DEALER- or VENDOR-addressed portal
+      // event landed in the admins' bell and nowhere the recipient could see it.
+      await writeBell(event, subject, body);
       return null;
     }
 
@@ -258,6 +310,69 @@ async function deliver(
 }
 
 const stripHtml = (s: string): string => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+
+/**
+ * Write one buyback event into its recipient's in-app bell (item 12).
+ *
+ * The bell is scoped by user_id and by `type LIKE 'buyback.%'`, so this must set
+ * user_id, not dealer_id — the /api/buyback/notifications reader filters user_id
+ * (a dealer_id filter returned zero buyback rows, which is why the dealer bell
+ * was empty). notifyRoles already fans out per user; the dealer and vendor cases
+ * do the same inline, resolving the users from the event's own request/vendor.
+ *
+ * REDACTION HOLDS HERE TOO. The party is decided upstream in NOTIFICATION_FOR,
+ * and the message body is already the redacted copy renderMessage produced — a
+ * DEALER-addressed event never carries a vendor price, a VENDOR-addressed one
+ * never carries the dealer. This function only decides WHO, never rewrites WHAT.
+ */
+async function writeBell(event: DueEvent, subject: string, body: string): Promise<void> {
+  const type = `buyback.${event.event_type}`;
+  const title = subject;
+  const message = stripHtml(body);
+  const data = JSON.stringify({
+    request_id: event.request_id,
+    deal_id: event.deal_id,
+    ...event.payload,
+  });
+
+  if (event.recipient_party === "ADMIN") {
+    await notifyRoles([...BUYBACK_ADMIN_ROLES], {
+      type,
+      title,
+      message,
+      data: { request_id: event.request_id, deal_id: event.deal_id, ...event.payload },
+    });
+    return;
+  }
+
+  if (event.recipient_party === "DEALER") {
+    // Every active login of the request's dealer. dealer_id holds the dealer
+    // code, which IS buyback_requests.dealer_entity_id (accounts.id).
+    await db.execute(sql`
+      INSERT INTO notifications (id, user_id, type, title, message, data, read, created_at)
+      SELECT gen_random_uuid()::text, u.id, ${type}, ${title}, ${message}, ${data}::jsonb, false, now()
+        FROM users u
+        JOIN buyback_requests br ON br.id = ${event.request_id}::uuid
+       WHERE u.dealer_id = br.dealer_entity_id AND u.is_active = TRUE
+    `);
+    return;
+  }
+
+  // VENDOR — the login the event was addressed to, matched by the email the
+  // dispatcher is sending to. A vendor with no login (email-only) simply gets no
+  // bell row; the email still goes out. Scoped to role, so a shared address
+  // cannot notify a dealer.
+  if (event.recipient_ref) {
+    await db.execute(sql`
+      INSERT INTO notifications (id, user_id, type, title, message, data, read, created_at)
+      SELECT gen_random_uuid()::text, u.id, ${type}, ${title}, ${message}, ${data}::jsonb, false, now()
+        FROM users u
+       WHERE u.role = 'scrap_vendor'
+         AND lower(u.email) = lower(${event.recipient_ref})
+         AND u.is_active = TRUE
+    `);
+  }
+}
 
 /**
  * Message copy, per action.

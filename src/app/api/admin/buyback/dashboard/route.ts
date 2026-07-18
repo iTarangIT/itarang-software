@@ -54,6 +54,41 @@ const NEGOTIATION_STATUSES = [
   "VENDOR_NEGOTIATING",
 ] as const;
 
+/**
+ * Deals whose margin is known: the vendor has agreed a price, so
+ * vendor_price − dealer_price is a real number rather than a hope.
+ *
+ * This is the difference between the two margin KPIs. "Earned" counts CLOSED
+ * only and reconciles against the ledger (M14). "Locked" starts here, at
+ * VENDOR_AGREED — a deal bought at ₹4,100 and sold at ₹6,000 shows its ₹1,900
+ * the moment the vendor agrees, instead of reading ₹0 for the weeks it spends
+ * in pickup and invoicing. Reporting only the CLOSED figure made the dashboard
+ * look broken to anyone who had just agreed a deal.
+ *
+ * IT RUNS THROUGH CLOSED, so margin_locked is a SUPERSET of margin, not a
+ * complement. The two must never be presented as things you add together — a
+ * month where everything closed shows the same number twice. Stopping the list
+ * at INVOICE_APPROVED would make them additive, but then "locked" would mean
+ * "locked but not yet settled", which is not what anyone asks the dashboard.
+ *
+ * REJECTED/CANCELLED are absent deliberately: a dead deal earns nothing, even
+ * if it had locked a vendor price before it died — and `realised` alone would
+ * not exclude them, since it only zeroes deals with NO vendor price. So is
+ * DEALER_REOPENED — it is declared but unreachable (a reopen returns to
+ * NEGOTIATING and bumps offer_version), and the old generation's locks stop
+ * being read at that point because perDeal joins on the current one.
+ */
+const MARGIN_LOCKED_STATUSES = [
+  "VENDOR_AGREED",
+  "PO_EXCHANGED",
+  "PICKUP_SCHEDULED",
+  "PICKED_UP",
+  "INVOICE_RAISED",
+  "INVOICE_APPROVED",
+  "SETTLED",
+  "CLOSED",
+] as const;
+
 function badRequest(message: string): never {
   // 400 for malformed filter input, via the shared {success:false,error} envelope.
   throw new HttpError(message, 400);
@@ -145,6 +180,11 @@ export const GET = withErrorHandler(async (req: Request) => {
     sql`, `,
   )})`;
 
+  const lockedIn = sql`(${sql.join(
+    MARGIN_LOCKED_STATUSES.map((s) => sql`${s}`),
+    sql`, `,
+  )})`;
+
   const [kpiRows, moneyRows, funnelRows, chemistryRows, brandRows, dealerRows, vendorRows] =
     await Promise.all([
       // ---- KPIs (current + previous window, one pass) --------------------
@@ -169,7 +209,9 @@ export const GET = withErrorHandler(async (req: Request) => {
           COUNT(*) FILTER (WHERE is_current AND status IN ${negIn})::int       AS neg_cur,
           COUNT(*) FILTER (WHERE NOT is_current AND status IN ${negIn})::int   AS neg_prev,
           COALESCE(SUM(realised) FILTER (WHERE is_current AND status = 'CLOSED'), 0)     AS margin_cur,
-          COALESCE(SUM(realised) FILTER (WHERE NOT is_current AND status = 'CLOSED'), 0) AS margin_prev
+          COALESCE(SUM(realised) FILTER (WHERE NOT is_current AND status = 'CLOSED'), 0) AS margin_prev,
+          COALESCE(SUM(realised) FILTER (WHERE is_current AND status IN ${lockedIn}), 0)     AS margin_locked_cur,
+          COALESCE(SUM(realised) FILTER (WHERE NOT is_current AND status IN ${lockedIn}), 0) AS margin_locked_prev
         FROM d
       `),
 
@@ -313,7 +355,12 @@ export const GET = withErrorHandler(async (req: Request) => {
     dealers: kpi(num(k.dealers_cur), num(k.dealers_prev)),
     requests: kpi(num(k.requests_cur), num(k.requests_prev)),
     active_negotiations: kpi(num(k.neg_cur), num(k.neg_prev)),
+    // `margin` keeps its name and its CLOSED-only meaning — it is the figure
+    // the M14 reconciliation invariant is stated against (ledger net for CLOSED
+    // deals == Total Margin Earned), so widening it would have quietly broken
+    // that. margin_locked is the additive companion, not a replacement.
     margin: kpi(num(k.margin_cur), num(k.margin_prev)),
+    margin_locked: kpi(num(k.margin_locked_cur), num(k.margin_locked_prev)),
   };
 
   const money_flow = (moneyRows as unknown as Array<Record<string, unknown>>).map((r) => ({

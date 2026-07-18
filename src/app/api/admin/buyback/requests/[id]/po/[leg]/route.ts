@@ -99,12 +99,36 @@ export const POST = withErrorHandler(
     let lines: Array<{ line_id: string; quantity: number; price_per_unit: string }> = [];
 
     if (leg === "VENDOR") {
-      // The vendor is the buyer here — they raise the PO, we record it.
+      // The vendor is the buyer here — they raise the PO, we record it. This is
+      // the ONE place the admin and vendor paths converge: an admin recording an
+      // emailed PO and the vendor uploading their own describe the same event,
+      // so both go through recordVendorPo (E-196). Nothing to render — the
+      // vendor's number is the record and their PDF is the evidence.
       if (!body.number) {
         throw new ValidationError("The vendor's purchase order number is required.");
       }
-      number = body.number;
-      pdfKey = body.pdf_s3 ?? null;
+
+      const outcome = await db.transaction((tx) =>
+        recordVendorPo({
+          tx,
+          requestId: request.id,
+          number: body.number!,
+          pdfS3: body.pdf_s3,
+          // 'admin' — recorded on the vendor's behalf, which the audit action
+          // (record_vendor_po) reflects.
+          actor: { id: actor.id, role: "admin" },
+          requestNo: request.request_no,
+        }),
+      );
+
+      return successResponse({
+        request_id: request.id,
+        leg,
+        po_id: outcome.po_id,
+        number: outcome.number,
+        status: outcome.status,
+        exchanged: outcome.exchanged,
+      });
     } else {
       // We are the buyer. Generate the PO from the locks.
       const locks = await currentLocks(header.deal_id);
@@ -171,6 +195,9 @@ export const POST = withErrorHandler(
     }
 
     // ------------------------------------------------------------------ commit
+    // Only the DEALER leg reaches here — the VENDOR leg returned above via
+    // recordVendorPo. We are the buyer, so this PO is ISSUED and SENT, with its
+    // lines copied from the locks.
     const outcome = await db.transaction(async (tx) => {
       const deal = await loadDealForUpdate(tx, request.id);
       if (!deal) throw new NotFoundError("Deal not found.");
@@ -179,33 +206,30 @@ export const POST = withErrorHandler(
         .insert(purchaseOrders)
         .values({
           deal_id: deal.id,
-          leg,
-          direction: leg === "DEALER" ? "ISSUED" : "RECEIVED",
+          leg: "DEALER",
+          direction: "ISSUED",
           number,
           pdf_s3: pdfKey,
-          status: leg === "DEALER" ? "SENT" : "ACKNOWLEDGED",
-          counterparty_entity_id: leg === "DEALER" ? request.dealer_entity_id : null,
+          status: "SENT",
+          counterparty_entity_id: request.dealer_entity_id,
           issued_at: new Date(),
-          acknowledged_at: leg === "VENDOR" ? new Date() : null,
           created_by: actor.id,
         })
         .returning({ id: purchaseOrders.id });
 
-      if (lines.length > 0) {
-        await tx.insert(purchaseOrderLines).values(
-          lines.map((l) => ({
-            po_id: po.id,
-            line_id: l.line_id,
-            quantity: l.quantity,
-            price_per_unit: l.price_per_unit,
-            // Tax columns stay NULL. GST/HSN/reverse-charge is Chirag's open item
-            // (BRD §10); the document says "tax treatment pending" rather than
-            // implying a treatment nobody has agreed to.
-          })),
-        );
-      }
+      await tx.insert(purchaseOrderLines).values(
+        lines.map((l) => ({
+          po_id: po.id,
+          line_id: l.line_id,
+          quantity: l.quantity,
+          price_per_unit: l.price_per_unit,
+          // Tax columns stay NULL. GST/HSN/reverse-charge is Chirag's open item
+          // (BRD §10); the document says "tax treatment pending" rather than
+          // implying a treatment nobody has agreed to.
+        })),
+      );
 
-      // Do we now have both?
+      // Does the vendor PO already exist? If so, the dealer PO completes the pair.
       const both = await tx
         .select({ leg: purchaseOrders.leg })
         .from(purchaseOrders)
@@ -215,16 +239,15 @@ export const POST = withErrorHandler(
       const complete = legs.has("DEALER") && legs.has("VENDOR");
 
       if (!complete) {
-        // One down, one to go. A real change, so it is audited — but the deal has
-        // not moved, so no transition and no notification.
+        // The vendor PO is not in yet. Audited, but the deal has not moved.
         const { recordActivity } = await import("@/lib/buyback/transition");
         await recordActivity({
           tx,
           requestId: request.id,
           dealId: deal.id,
           actor: { id: actor.id, role: "admin" },
-          action: leg === "DEALER" ? "issue_dealer_po" : "record_vendor_po",
-          after: { po_id: po.id, leg, number },
+          action: "issue_dealer_po",
+          after: { po_id: po.id, leg: "DEALER", number },
         });
 
         return { status: deal.status, po_id: po.id, number, exchanged: false };
@@ -239,7 +262,7 @@ export const POST = withErrorHandler(
         offerVersion: deal.offer_version,
         action: "exchange_pos",
         actor: { id: actor.id, role: "admin" },
-        after: { po_id: po.id, leg, number, both_legs: true },
+        after: { po_id: po.id, leg: "DEALER", number, both_legs: true },
         notificationPayload: { request_no: request.request_no, po_number: number },
       });
 

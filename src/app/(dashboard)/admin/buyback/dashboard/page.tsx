@@ -35,7 +35,14 @@ interface DashboardPayload {
     dealers: Kpi;
     requests: Kpi;
     active_negotiations: Kpi;
+    /** CLOSED deals only — the figure the ledger reconciles against (M14). */
     margin: Kpi;
+    /**
+     * VENDOR_AGREED onward — margin whose vendor price is struck, whether or
+     * not the money has moved. A SUPERSET of `margin` (the list runs through
+     * SETTLED and CLOSED), so the two are never additive.
+     */
+    margin_locked: Kpi;
   };
   money_flow: { month: string; received: number; paid_out: number; margin_locked: number }[];
   funnel: { stage: string; key: string; deals: number; units: number; value_at_stake: number }[];
@@ -49,14 +56,54 @@ interface DashboardPayload {
 
 const ALL = "ALL";
 
+const CUSTOM = "custom";
+
 const DATE_OPTIONS = [
   { value: "30", label: "Last 30 days" },
   { value: "90", label: "Last 90 days" },
   { value: "180", label: "Last 180 days" },
   { value: "365", label: "Last 365 days" },
+  { value: CUSTOM, label: "Custom range…" },
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The route clamps a span to 400 days; say so here rather than let it 400. */
+const MAX_RANGE_DAYS = 400;
+
+/** `yyyy-mm-dd` (what <input type="date"> speaks) → ms at local midnight. */
+function dayStartMs(iso: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Validate a custom range, or say why not.
+ *
+ * `to` is pushed to the END of the chosen day: the API's window is half-open
+ * `[from, to)`, so passing midnight would silently drop everything that
+ * happened on the day the user picked — a Mon–Mon range would show 7 days, not
+ * 8, and the last day's deals would vanish.
+ */
+function resolveCustomRange(
+  fromIso: string,
+  toIso: string,
+): { from: Date; to: Date; days: number } | { error: string } | null {
+  if (!fromIso || !toIso) return null; // incomplete — not an error yet
+  const fromMs = dayStartMs(fromIso);
+  const toMs = dayStartMs(toIso);
+  if (fromMs === null || toMs === null) return { error: "Enter both dates." };
+  if (toMs < fromMs) return { error: "The end date is before the start date." };
+
+  const toEnd = toMs + DAY_MS;
+  const days = Math.round((toEnd - fromMs) / DAY_MS);
+  if (days > MAX_RANGE_DAYS) {
+    return { error: `Pick a range of ${MAX_RANGE_DAYS} days or fewer (that one is ${days}).` };
+  }
+  return { from: new Date(fromMs), to: new Date(toEnd), days };
+}
 
 const DEALER_HEADS: DealTableHead[] = [
   { label: "Dealer" },
@@ -165,10 +212,58 @@ function DashboardSkeleton() {
   );
 }
 
+/**
+ * The always-visible from→to range inputs that sit beside the Date presets.
+ *
+ * Native <input type="date"> rather than a picker library: the repo carries no
+ * date-picker dependency, and the browser's own control is keyboard- and
+ * locale-correct for free. Styled to sit level with the FilterPill row.
+ */
+function DateRangeInput({
+  from,
+  to,
+  onFrom,
+  onTo,
+}: {
+  from: string;
+  to: string;
+  onFrom: (v: string) => void;
+  onTo: (v: string) => void;
+}) {
+  const box =
+    "rounded-lg border border-gray-200 bg-white px-2.5 py-[6px] text-[12.5px] font-semibold text-slate-600";
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        type="date"
+        aria-label="Range start"
+        value={from}
+        max={to || undefined}
+        onChange={(e) => onFrom(e.target.value)}
+        className={box}
+      />
+      <span className="text-[12.5px] text-slate-400">→</span>
+      <input
+        type="date"
+        aria-label="Range end"
+        value={to}
+        min={from || undefined}
+        onChange={(e) => onTo(e.target.value)}
+        className={box}
+      />
+    </div>
+  );
+}
+
 export default function AdminBuybackDashboardPage() {
   const router = useRouter();
 
   const [preset, setPreset] = useState("90");
+  // Custom range (E-194) — "Monday to Monday" was not expressible with the
+  // fixed presets. The API already parsed `from`/`to` and clamped the span, so
+  // this is a UI affordance over an existing capability, not a new one.
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [dealerFilter, setDealerFilter] = useState(ALL);
   const [vendorFilter, setVendorFilter] = useState(ALL);
   const [mixDim, setMixDim] = useState<"chemistry" | "brand">("chemistry");
@@ -184,7 +279,18 @@ export default function AdminBuybackDashboardPage() {
   const [dealerOptions, setDealerOptions] = useState([{ value: ALL, label: "All dealers" }]);
   const [vendorOptions, setVendorOptions] = useState([{ value: ALL, label: "All vendors" }]);
 
-  const presetDays = Number(preset);
+  const isCustom = preset === CUSTOM;
+  const customRange = useMemo(
+    () => (isCustom ? resolveCustomRange(customFrom, customTo) : null),
+    [isCustom, customFrom, customTo],
+  );
+  const customError = customRange && "error" in customRange ? customRange.error : null;
+  const customOk = customRange && !("error" in customRange) ? customRange : null;
+
+  // Drives the "vs previous N days" delta caption. A custom range's delta is
+  // against the equally-long window immediately before it — which is what the
+  // route already computes, so the caption just needs the same span.
+  const presetDays = isCustom ? (customOk?.days ?? 0) : Number(preset);
 
   // Filter changes / retry flip loading+error from the EVENT (idiomatic), not
   // synchronously inside the effect (which react-hooks/set-state-in-effect
@@ -199,8 +305,20 @@ export default function AdminBuybackDashboardPage() {
   useEffect(() => {
     let cancelled = false;
 
+    // A half-typed or impossible custom range must not re-query: the first
+    // keystroke of a year makes "0002-01-01", which is a 700,000-day span the
+    // route would reject with a 400 while the user is still typing. No
+    // setState here — this page flips loading from the event (see beginLoad);
+    // the render branches on the same condition instead.
+    if (isCustom && !customOk) return;
+
     const params = new URLSearchParams();
-    params.set("from", new Date(Date.now() - presetDays * DAY_MS).toISOString());
+    if (customOk) {
+      params.set("from", customOk.from.toISOString());
+      params.set("to", customOk.to.toISOString());
+    } else {
+      params.set("from", new Date(Date.now() - presetDays * DAY_MS).toISOString());
+    }
     if (dealerFilter !== ALL) params.set("dealer", dealerFilter);
     if (vendorFilter !== ALL) params.set("vendor", vendorFilter);
 
@@ -235,7 +353,7 @@ export default function AdminBuybackDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [preset, dealerFilter, vendorFilter, reloadKey, presetDays]);
+  }, [preset, dealerFilter, vendorFilter, reloadKey, presetDays, isCustom, customOk]);
 
   // ---- Derived view data ---------------------------------------------------
   const moneyAllZero = useMemo(
@@ -335,12 +453,34 @@ export default function AdminBuybackDashboardPage() {
           sub="iTarang buyback operations — money moved, margin made, pipeline health"
         />
 
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           <FilterPill
             label="Date"
             value={preset}
             options={DATE_OPTIONS}
-            onChange={(v) => beginLoad(() => setPreset(v))}
+            onChange={(v) =>
+              beginLoad(() => {
+                setPreset(v);
+                // Picking a quick preset abandons any typed range, so the pill
+                // and the date inputs never disagree about which window is live.
+                if (v !== CUSTOM) {
+                  setCustomFrom("");
+                  setCustomTo("");
+                }
+              })
+            }
+          />
+          {/* The exact from→to range is ALWAYS visible, not buried behind the
+              "Custom range…" preset — an admin should see that a date-range
+              filter exists without having to discover it in a dropdown. Typing
+              a date moves every number on the page to that window (and flips the
+              Date pill to "Custom range…"). */}
+          <span className="text-[12px] font-semibold text-slate-400">or range</span>
+          <DateRangeInput
+            from={customFrom}
+            to={customTo}
+            onFrom={(v) => beginLoad(() => { setCustomFrom(v); setPreset(CUSTOM); })}
+            onTo={(v) => beginLoad(() => { setCustomTo(v); setPreset(CUSTOM); })}
           />
           <FilterPill
             label="Dealer"
@@ -369,12 +509,22 @@ export default function AdminBuybackDashboardPage() {
               </button>
             </div>
           </Card>
+        ) : /* An unusable custom range must not leave the previous window's
+              numbers on screen under the dates the user just typed — that
+              reads as an answer. It also can't fall through to the skeleton,
+              because no fetch is coming to end it. */
+        isCustom && !customOk ? (
+          <Card>
+            <p className="px-6 py-10 text-center text-sm text-slate-500">
+              {customError ?? "Pick a start and end date to apply a custom range."}
+            </p>
+          </Card>
         ) : loading || !data ? (
           <DashboardSkeleton />
         ) : (
           <>
             {/* ---- KPI row ---- */}
-            <div className="mb-[22px] grid grid-cols-2 gap-3.5 sm:grid-cols-4">
+            <div className="mb-[22px] grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5">
               <KpiCard
                 label="Total Dealers"
                 value={
@@ -403,10 +553,35 @@ export default function AdminBuybackDashboardPage() {
                   />
                 }
               />
+              {/* Two margins, because there are two and conflating them is what
+                  made this card look broken. It read "TOTAL MARGIN / Locked deal
+                  values" while summing CLOSED deals only — so a deal whose vendor
+                  price was locked at ₹6,000 against ₹4,100 showed ₹0 on a card
+                  that claimed to be showing locked values, for as long as it sat
+                  in pickup and invoicing. The note was the bug, not the sum. */}
+              {/* "Vendor agreed onward", not "not yet banked": the list runs
+                  through SETTLED and CLOSED, so this INCLUDES the earned figure
+                  beside it. Captioning it "not yet banked" invited exactly the
+                  misreading the other card was just fixed for — two identical
+                  numbers side by side, one of them captioned as if it were
+                  additional, and a reader summing them to double the margin. */}
               <KpiCard
-                label="TOTAL MARGIN"
+                label="MARGIN LOCKED"
+                accent="text-green-600"
+                note="Vendor agreed onward — includes earned"
+                value={
+                  <KpiValue
+                    main={inr(data.kpis.margin_locked.value)}
+                    delta={data.kpis.margin_locked.delta}
+                    money
+                    presetDays={presetDays}
+                  />
+                }
+              />
+              <KpiCard
+                label="MARGIN EARNED"
                 variant="navy"
-                note="Locked deal values"
+                note="Closed deals only"
                 value={
                   <KpiValue
                     main={inr(data.kpis.margin.value)}

@@ -62,6 +62,15 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       });
     }
 
+    if (round.status === "cancelled") {
+      return NextResponse.json({
+        success: false,
+        state: "cancelled",
+        message:
+          "This correction request was cancelled by iTarang. No action is needed.",
+      });
+    }
+
     if (round.status === "submitted" || round.status === "applied") {
       return NextResponse.json({
         success: false,

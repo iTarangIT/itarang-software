@@ -524,9 +524,19 @@ function AdminBuybackDetail() {
               onClick={() => setModal("reject")}
             />
             <ActionButton
-              label="Negotiate"
+              // "Negotiate" opens the haggle from the review window; "Counter"
+              // is the admin's per-SKU reply once it is open (item 7). The
+              // button used to key off `negotiate`, which is a review action and
+              // ghosts in NEGOTIATING — so the admin had no way to counter and
+              // was pushed into Send Final Offer. In NEGOTIATING it now keys off
+              // admin_counter, which is legal there.
+              label={d.status === "NEGOTIATING" ? "Counter" : "Negotiate"}
               tone="amber"
-              state={actionOf("negotiate")}
+              state={
+                d.status === "NEGOTIATING"
+                  ? { action: "admin_counter", enabled: can("admin_counter"), blocked_reason: null }
+                  : actionOf("negotiate")
+              }
               busy={busy}
               onClick={() => {
                 seedPrices();
@@ -934,7 +944,18 @@ function AdminBuybackDetail() {
                   lines,
                   note: note || null,
                 });
+              } else if (d.status === "NEGOTIATING") {
+                // The deal is already in negotiation, so this is a COUNTER, not
+                // an opening. `negotiate` is a review action (legal only in
+                // SUBMITTED/UNDER_REVIEW) — posting it here used to 409, which is
+                // why "Send counter" appeared broken once negotiation opened.
+                // admin_counter (item 7) is the mirror of the dealer's counter.
+                void post(`/api/admin/buyback/requests/${id}/counter`, {
+                  lines,
+                  note: note || null,
+                });
               } else {
+                // Opening the negotiation from the review window.
                 void post(`/api/admin/buyback/requests/${id}/decision`, {
                   action: "negotiate",
                   lines,
