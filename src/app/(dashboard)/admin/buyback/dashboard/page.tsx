@@ -213,7 +213,7 @@ function DashboardSkeleton() {
 }
 
 /**
- * The two date inputs behind "Custom range…".
+ * The always-visible from→to range inputs that sit beside the Date presets.
  *
  * Native <input type="date"> rather than a picker library: the repo carries no
  * date-picker dependency, and the browser's own control is keyboard- and
@@ -453,21 +453,35 @@ export default function AdminBuybackDashboardPage() {
           sub="iTarang buyback operations — money moved, margin made, pipeline health"
         />
 
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           <FilterPill
             label="Date"
             value={preset}
             options={DATE_OPTIONS}
-            onChange={(v) => beginLoad(() => setPreset(v))}
+            onChange={(v) =>
+              beginLoad(() => {
+                setPreset(v);
+                // Picking a quick preset abandons any typed range, so the pill
+                // and the date inputs never disagree about which window is live.
+                if (v !== CUSTOM) {
+                  setCustomFrom("");
+                  setCustomTo("");
+                }
+              })
+            }
           />
-          {isCustom && (
-            <DateRangeInput
-              from={customFrom}
-              to={customTo}
-              onFrom={(v) => beginLoad(() => setCustomFrom(v))}
-              onTo={(v) => beginLoad(() => setCustomTo(v))}
-            />
-          )}
+          {/* The exact from→to range is ALWAYS visible, not buried behind the
+              "Custom range…" preset — an admin should see that a date-range
+              filter exists without having to discover it in a dropdown. Typing
+              a date moves every number on the page to that window (and flips the
+              Date pill to "Custom range…"). */}
+          <span className="text-[12px] font-semibold text-slate-400">or range</span>
+          <DateRangeInput
+            from={customFrom}
+            to={customTo}
+            onFrom={(v) => beginLoad(() => { setCustomFrom(v); setPreset(CUSTOM); })}
+            onTo={(v) => beginLoad(() => { setCustomTo(v); setPreset(CUSTOM); })}
+          />
           <FilterPill
             label="Dealer"
             value={dealerFilter}
