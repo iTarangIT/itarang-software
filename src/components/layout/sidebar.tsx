@@ -42,6 +42,7 @@ import {
   Handshake,
   FolderOpen,
   Wallet,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -938,10 +939,42 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "vendor-dashboard",
-          label: "Quotations",
-          icon: Recycle,
+          label: "Dashboard",
+          icon: LayoutDashboard,
           href: "/vendor-portal",
+          // exact: this is the prefix of every sibling below, so without it the
+          // Dashboard item would stay lit on /vendor-portal/inbox etc.
           exact: true,
+        },
+        {
+          id: "vendor-inbox",
+          label: "Quotation Inbox",
+          icon: FileText,
+          href: "/vendor-portal/inbox",
+        },
+        {
+          id: "vendor-bids",
+          label: "My Bids",
+          icon: Handshake,
+          href: "/vendor-portal/bids",
+        },
+        {
+          id: "vendor-orders",
+          label: "Orders & Documents",
+          icon: FolderOpen,
+          href: "/vendor-portal/orders",
+        },
+        {
+          id: "vendor-payments",
+          label: "Payments",
+          icon: Wallet,
+          href: "/vendor-portal/payments",
+        },
+        {
+          id: "vendor-notifications",
+          label: "Notifications",
+          icon: Bell,
+          href: "/vendor-portal/notifications",
         },
       ],
     },
@@ -1399,6 +1432,28 @@ export function Sidebar() {
     };
   }, [inferredRole]);
 
+  // Vendor inbox badge — the count of quotations awaiting this vendor's
+  // response (status SENT), mirroring the CEO approvals badge above. One fetch
+  // on mount; a queue that turns over a handful of times a week needs no poll.
+  const [vendorInboxCount, setVendorInboxCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "scrap_vendor") return;
+    let cancelled = false;
+    fetch("/api/vendor/threads", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j) => {
+        if (cancelled) return;
+        const list = (j?.data?.threads ?? []) as Array<{ status?: string }>;
+        setVendorInboxCount(list.filter((t) => t?.status === "SENT").length);
+      })
+      .catch(() => {
+        /* silent — badge stays absent on failure */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
   if (pendingNbfcCount && pendingNbfcCount > 0) {
     menuItems = menuItems.map((group: any) => ({
       ...group,
@@ -1406,6 +1461,15 @@ export function Sidebar() {
         item.id === "nbfc-approvals"
           ? { ...item, badge: pendingNbfcCount }
           : item,
+      ),
+    }));
+  }
+
+  if (vendorInboxCount && vendorInboxCount > 0) {
+    menuItems = menuItems.map((group: any) => ({
+      ...group,
+      items: group.items.map((item: any) =>
+        item.id === "vendor-inbox" ? { ...item, badge: vendorInboxCount } : item,
       ),
     }));
   }
