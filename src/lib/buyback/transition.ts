@@ -51,6 +51,9 @@ export const NOTIFICATION_FOR: Record<
   dealer_counter: { party: "ADMIN", channel: "PORTAL" },
   dealer_accept: { party: "ADMIN", channel: "PORTAL" },
   dealer_decline: { party: "ADMIN", channel: "PORTAL" },
+  // The dealer accepted iTarang's standing counter directly (mid-negotiation) —
+  // the desk hears it in-portal, same as dealer_accept.
+  dealer_accept_counter: { party: "ADMIN", channel: "PORTAL" },
 
   // Admin acted → tell the dealer, in their in-app bell (item 12).
   //
@@ -64,6 +67,9 @@ export const NOTIFICATION_FOR: Record<
   // The admin's counter is iTarang's price TO the dealer — they must hear it.
   // NOT a dealer-must-not-hear action (it carries no margin, no vendor).
   admin_counter: { party: "DEALER", channel: "PORTAL" },
+  // iTarang accepted the dealer's standing counter — good news the dealer must
+  // hear, same channel as admin_counter.
+  admin_accept_counter: { party: "DEALER", channel: "PORTAL" },
   request_info: { party: "DEALER", channel: "PORTAL" },
   send_final_offer: { party: "DEALER", channel: "PORTAL" },
   reopen: { party: "DEALER", channel: "PORTAL" },
