@@ -9,20 +9,19 @@
  * Digio agreement, no document upload — that is M18/M19, and gating sign-up on
  * it would just recreate the admin-types-it-in bottleneck this removes.
  *
- * WHAT STOPS A STRANGER GETTING YOUR DEALERS' DATA. Nothing here vets anybody,
- * so the role lands PENDING, and listRoutableVendors() only ever routes a deal
- * to a vendor whose business_entity_roles row is ACTIVE (it joins on it — this
- * is not a UI check). A registrant can log in immediately and see an empty
- * dashboard; they cannot receive a quotation, and a quotation is the only thing
- * that carries battery details or a pickup city. The gate was already in the
- * right place before this route existed, which is why this route is safe to be
- * public.
+ * VISIBILITY. A self-registered vendor lands ACTIVE (product decision — no
+ * approval step): listRoutableVendors() joins on business_entity_roles.status =
+ * 'ACTIVE', so the vendor appears in the admin's routing picker immediately.
+ * The admin still chooses which vendors a given quotation is emailed to, so the
+ * decision to expose a lot's battery details / pickup city to a firm is made at
+ * routing time, per deal — not by a blanket gate. This route is public, so
+ * anyone can create a login; what they cannot do is pull a quotation to
+ * themselves — only an admin sends one.
  *
  * The three-row entity (accounts + business_entity_roles + scrap_vendors) is the
  * same shape POST /api/admin/buyback/vendors writes — a self-registered vendor
- * is not a different kind of vendor, just an unvetted one. The differences are
- * `status: PENDING` and `onboarding_status: 'vendor_self'`, so an admin can tell
- * who walked in off the street from who they invited.
+ * is not a different kind of vendor. `onboarding_status: 'vendor_self'` still
+ * marks who walked in off the street from who we invited.
  */
 
 import { eq } from "drizzle-orm";
@@ -194,11 +193,13 @@ export const POST = withErrorHandler(async (req: Request) => {
     await tx.insert(businessEntityRoles).values({
       entity_id: entityId,
       role: "SCRAP_VENDOR",
-      // PENDING — nobody has vetted this firm. The admin route writes ACTIVE
-      // because an admin adding a vendor HAS vetted them; here there is no such
-      // claim. listRoutableVendors() joins on ACTIVE, so until an admin
-      // approves, this vendor cannot be routed a single deal.
-      status: "PENDING",
+      // ACTIVE on sign-up (product decision — no approval step). A
+      // self-registered vendor is immediately routable, so an admin sees them
+      // in the routing picker straight away. Vetting now happens implicitly
+      // when the admin CHOOSES whom to email a quotation to, per deal, rather
+      // than via a blanket PENDING gate. onboarding_status='vendor_self' still
+      // marks who walked in off the street vs. who we invited.
+      status: "ACTIVE",
     });
 
     const [row] = await tx
@@ -236,11 +237,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     {
       ...vendor,
       email,
-      // The UI says this out loud. A vendor who registers, logs in and finds an
-      // empty dashboard with no explanation concludes the portal is broken.
-      status: "PENDING",
+      status: "ACTIVE",
       message:
-        "Your login is ready. An iTarang admin will review your details before you start receiving battery lots.",
+        "Your login is ready. iTarang can now send you battery lots as they come up.",
     },
     201,
   );

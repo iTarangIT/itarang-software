@@ -15,8 +15,9 @@
  * verification and the Digio agreement are M18/M19 — gating sign-up on those
  * would recreate the bottleneck this page removes.
  *
- * The honest promise at the end matters: registering gets you a LOGIN, not
- * work. Nothing routes to you until an admin approves.
+ * The honest promise at the end matters: registering gets you a LOGIN and puts
+ * you in iTarang's routing list — not work. A lot only reaches you when an
+ * admin sends you one.
  */
 
 import { useState } from "react";
@@ -124,8 +125,8 @@ export default function VendorOnboardingPage() {
           {/* Says the quiet part out loud. A vendor who signs in to an empty
               dashboard with no explanation concludes we are broken. */}
           <p className="mt-2 text-[13.5px] text-slate-600">
-            Your login is ready. An iTarang admin will review your details before you start
-            receiving battery lots — until then your dashboard will be empty.
+            Your login is ready. iTarang can now send you battery lots as they come up — they&apos;ll
+            show on your dashboard, which stays empty until the first one arrives.
           </p>
           <Link
             href="/login"
