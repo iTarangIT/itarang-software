@@ -8,6 +8,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { NotFoundError } from "./errors";
 import type { BuybackTx } from "./tx";
 
 export interface VendorRow {
@@ -142,6 +143,222 @@ export async function threadsForDeal(
     lines: (r.lines as ThreadLineRow[]) ?? [],
     current_total: r.current_total === null ? null : Number(r.current_total),
   }));
+}
+
+/** A vendor awaiting approval, plus what they told us about themselves. */
+export interface PendingVendorRow extends VendorRow {
+  gstin: string | null;
+  pan: string | null;
+  /** 'vendor_self' — they registered themselves; 'vendor_manual' — an admin added them. */
+  onboarding_status: string | null;
+  registered_at: Date | null;
+  /** Whether a login exists for this vendor (self-registration always makes one). */
+  has_login: boolean;
+}
+
+/**
+ * Vendors who have registered but nobody has vetted (E-195).
+ *
+ * The counterpart to listRoutableVendors, and the reason self-serve sign-up is
+ * safe: a registrant lands with business_entity_roles.status = 'PENDING', which
+ * that query joins away, so they cannot be routed a single deal. But a PENDING
+ * vendor nobody can SEE is a vendor nobody can approve — self-registration
+ * without this list would be a trapdoor, not a queue.
+ *
+ * Deliberately shows gstin/pan: this list is where a human decides whether the
+ * firm is real, and those are what they check.
+ */
+export async function listPendingVendors(): Promise<PendingVendorRow[]> {
+  const rows = await db.execute(sql`
+    SELECT
+      sv.id, sv.entity_id, sv.categories, sv.regions, sv.payment_terms, sv.active,
+      a.business_entity_name AS name,
+      a.contact_email        AS email,
+      a.contact_phone        AS phone,
+      a.city, a.state, a.gstin, a.pan,
+      a.onboarding_status,
+      sv.created_at AS registered_at,
+      EXISTS (SELECT 1 FROM users u WHERE u.vendor_entity_id = sv.entity_id) AS has_login
+    FROM scrap_vendors sv
+    JOIN accounts a ON a.id = sv.entity_id
+    JOIN business_entity_roles ber
+      ON ber.entity_id = sv.entity_id
+     AND ber.role = 'SCRAP_VENDOR'
+     AND ber.status = 'PENDING'
+    ORDER BY sv.created_at DESC
+  `);
+
+  return (rows as unknown as PendingVendorRow[]).map((r) => ({
+    ...r,
+    regions: r.regions ?? [],
+    has_login: Boolean(r.has_login),
+  }));
+}
+
+/** One of a vendor's own threads, before serialization. */
+export interface VendorOwnThreadRow {
+  thread_id: string;
+  deal_id: string;
+  status: "SENT" | "COUNTERED" | "AGREED" | "LOST";
+  quotation_no: string | null;
+  sent_at: Date | null;
+  responded_at: Date | null;
+  pickup_city: string | null;
+  pickup_state: string | null;
+  lines: ThreadLineRow[];
+  /** E-196 — has this vendor already raised their PO on this deal? */
+  has_vendor_po: boolean;
+  /** E-196 — the live proforma iTarang issued against their PO, if any. */
+  proforma: { number: string; total: number | string; pdf_s3: string | null } | null;
+}
+
+/**
+ * The threads routed to ONE vendor — the read behind their dashboard (E-195).
+ *
+ * Scoped by the vendor's OWN accounts.id, in the WHERE. Same rule as
+ * loadOwnRequest: not fetched-then-filtered, so there is no window in which
+ * another vendor's thread is in memory relying on us to remember to drop it.
+ *
+ * NOTE WHAT IS NOT SELECTED. No dealer name, no dealer entity id, no address
+ * line, no dealer_price, no margin, no deal status. A vendor who can identify
+ * the dealer can go around us, and a vendor who knows what we paid knows our
+ * margin — this query is the first of the two places that has to hold that
+ * line (toVendorThread is the second, and the contract test asserts on it).
+ * The pickup city/state is the same masking pickupLocation() applies for the
+ * quotation PDF: enough to price transport, not enough to find the seller.
+ */
+export async function threadsForVendor(entityId: string): Promise<VendorOwnThreadRow[]> {
+  const rows = await db.execute(sql`
+    SELECT
+      vt.id        AS thread_id,
+      vt.deal_id,
+      vt.status,
+      vt.quotation_no,
+      vt.sent_at,
+      vt.responded_at,
+      COALESCE(pa.city,  da.city)  AS pickup_city,
+      COALESCE(pa.state, da.state) AS pickup_state,
+      -- E-196: whether this vendor has already raised their PO, and the live
+      -- proforma iTarang has issued against it. Scalar subqueries — no GROUP BY
+      -- entanglement, and no dealer-side money: a PI carries only the vendor's
+      -- own agreed total.
+      EXISTS (
+        SELECT 1 FROM purchase_orders po
+         WHERE po.deal_id = vt.deal_id AND po.leg = 'VENDOR'
+      ) AS has_vendor_po,
+      (
+        SELECT json_build_object('number', pi.number, 'total', pi.total, 'pdf_s3', pi.pdf_s3)
+          FROM proforma_invoices pi
+         WHERE pi.deal_id = vt.deal_id AND pi.status = 'ISSUED'
+         LIMIT 1
+      ) AS proforma,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'line_id',       vtl.line_id,
+            'quantity',      bl.quantity,
+            'condition',     bl.condition,
+            'voltage',       cv.voltage,
+            'ah',            cv.ah,
+            'ask_price',     vtl.ask_price,
+            'counter_price', vtl.counter_price,
+            'agreed_price',  vtl.agreed_price
+          )
+          ORDER BY cv.voltage, cv.ah
+        ) FILTER (WHERE vtl.id IS NOT NULL),
+        '[]'
+      ) AS lines
+    FROM vendor_threads vt
+    JOIN scrap_vendors sv     ON sv.id = vt.vendor_id
+    JOIN buyback_deals bd     ON bd.id = vt.deal_id
+    JOIN buyback_requests br  ON br.id = bd.request_id
+    LEFT JOIN buyback_batches bb        ON bb.request_id = br.id
+    LEFT JOIN buyback_pickup_addresses pa ON pa.id = bb.pickup_address_id
+    LEFT JOIN accounts da                 ON da.id = br.dealer_entity_id
+    LEFT JOIN vendor_thread_lines vtl ON vtl.thread_id = vt.id
+    LEFT JOIN buyback_lines bl        ON bl.id = vtl.line_id
+    LEFT JOIN catalog_variants cv     ON cv.id = bl.variant_id
+    -- The scope. Part of the query, not a check we might forget.
+    WHERE sv.entity_id = ${entityId}
+    GROUP BY vt.id, pa.city, pa.state, da.city, da.state
+    ORDER BY vt.sent_at DESC NULLS LAST, vt.created_at DESC
+  `);
+
+  return (rows as unknown as Array<Record<string, unknown>>).map((r) => ({
+    thread_id: String(r.thread_id),
+    deal_id: String(r.deal_id),
+    status: r.status as VendorOwnThreadRow["status"],
+    quotation_no: (r.quotation_no as string) ?? null,
+    sent_at: (r.sent_at as Date) ?? null,
+    responded_at: (r.responded_at as Date) ?? null,
+    pickup_city: (r.pickup_city as string) ?? null,
+    pickup_state: (r.pickup_state as string) ?? null,
+    lines: (r.lines as ThreadLineRow[]) ?? [],
+    has_vendor_po: Boolean(r.has_vendor_po),
+    proforma: (r.proforma as VendorOwnThreadRow["proforma"]) ?? null,
+  }));
+}
+
+/**
+ * Load one of a vendor's own threads, or null (E-195).
+ *
+ * Someone else's thread is indistinguishable from a non-existent one — the same
+ * reason loadOwnRequest 404s rather than 403s. A 403 would confirm the thread
+ * exists, and a vendor who can enumerate thread ids can map our deal flow.
+ */
+export async function loadOwnThread(
+  entityId: string,
+  threadId: string,
+): Promise<VendorOwnThreadRow | null> {
+  const all = await threadsForVendor(entityId);
+  return all.find((t) => t.thread_id === threadId) ?? null;
+}
+
+/**
+ * The INTERNAL context a thread's write path needs — floor total, request no,
+ * vendor name and email.
+ *
+ * SERVER-SIDE ONLY, and unscoped by design: it is the input to
+ * applyVendorResponse, which needs the floor to refuse a below-cost agreement.
+ * The caller is responsible for authorisation FIRST — the admin route proves
+ * staff, the vendor route proves ownership via loadOwnThread. Nothing in here
+ * may be serialized to a vendor: `floorTotal` is dealer_price + margin, which
+ * is our whole position.
+ *
+ * Shared by both write paths so the two cannot disagree about what a thread is.
+ */
+export async function threadContextFor(threadId: string) {
+  const rows = await db.execute(sql`
+    SELECT
+      vt.id, vt.deal_id, vt.vendor_id, vt.status, vt.quotation_no,
+      bd.request_id, bd.floor_total,
+      br.request_no,
+      a.business_entity_name AS vendor_name,
+      a.contact_email        AS vendor_email
+    FROM vendor_threads vt
+    JOIN buyback_deals bd    ON bd.id = vt.deal_id
+    JOIN buyback_requests br ON br.id = bd.request_id
+    JOIN scrap_vendors sv    ON sv.id = vt.vendor_id
+    JOIN accounts a          ON a.id = sv.entity_id
+    WHERE vt.id = ${threadId}
+    LIMIT 1
+  `);
+
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  if (!row) throw new NotFoundError("Vendor thread not found.");
+
+  return {
+    id: String(row.id),
+    dealId: String(row.deal_id),
+    vendorId: String(row.vendor_id),
+    status: String(row.status) as "SENT" | "COUNTERED" | "AGREED" | "LOST",
+    quotationNo: (row.quotation_no as string) ?? null,
+    requestId: String(row.request_id),
+    requestNo: String(row.request_no),
+    floorTotal: row.floor_total as string | null,
+    vendorName: String(row.vendor_name),
+    vendorEmail: (row.vendor_email as string) ?? null,
+  };
 }
 
 /**

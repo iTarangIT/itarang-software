@@ -14,6 +14,8 @@
  */
 
 import { formatBatteryLine, lineTotal, type BatteryCondition } from "./format";
+// No cycle: line-spec imports only zod.
+import { resolveIotBrand } from "./line-spec";
 import type { DealState } from "./state-machine";
 
 /** The full internal shape, as read from the DB by the admin queries. */
@@ -182,6 +184,70 @@ export function toDealerLine(line: AdminLineView): DealerLineView {
     photo_count: line.photo_count,
     dealer_price: line.dealer_price,
     line_total: lineTotal(line.quantity, line.dealer_price ?? line.expected_price_per_unit),
+  };
+}
+
+/**
+ * A line of the dealer's OWN DRAFT, shaped for the intake editor to reload.
+ *
+ * Why this exists rather than reusing DealerLineView: the editor needs
+ * `variant_id` to re-select the SKU in the picker, and DealerLineView has no
+ * such field — it carries `spec_label` for display. Adding an id to the
+ * read-only view to serve the editor would widen a redaction boundary for a
+ * reason unrelated to it.
+ *
+ * Why not just hand back the AdminLineView the query already produced: because
+ * it carries dealer_price, margin_value, vendor_ask and vendor_price. On a
+ * DRAFT every one of those is null — there are no locks and no offers yet — so
+ * shipping the raw row would "work". It would also mean the only thing between
+ * a dealer and our margin is that the deal happens to be young. Built
+ * field-by-field like every other serializer here, so it stays impossible
+ * rather than merely currently-empty.
+ */
+export interface DraftLineView {
+  line_id: string;
+  variant_id: string;
+  quantity: number;
+  condition: BatteryCondition;
+  /** The dealer's OWN asking price. Not dealer_price — that is what we settled on. */
+  expected_price_per_unit: number | string | null;
+  measured_voltage: number | string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
+}
+
+export function toDraftLine(line: AdminLineView): DraftLineView {
+  return {
+    line_id: line.id,
+    variant_id: line.variant_id,
+    quantity: line.quantity,
+    condition: line.condition,
+    expected_price_per_unit: line.expected_price_per_unit,
+    measured_voltage: line.measured_voltage,
+    brand: line.brand ?? null,
+    chemistry: line.chemistry ?? null,
+    form_factor: line.form_factor ?? null,
+    nominal_voltage: line.nominal_voltage ?? null,
+    nominal_ampere: line.nominal_ampere ?? null,
+    unit_weight_kg: line.unit_weight_kg ?? null,
+    warranty_cycles: line.warranty_cycles ?? null,
+    functional_qty: line.functional_qty ?? null,
+    non_functional_qty: line.non_functional_qty ?? null,
+    iot_battery: line.iot_battery ?? null,
+    // Null stays null: the Intellicar assumption is a read-time display concern
+    // (resolveIotBrand), and the editor must show the dealer what they actually
+    // typed — pre-filling the box with a guess would turn it into their answer
+    // the moment they saved.
+    iot_brand_name: line.iot_brand_name ?? null,
   };
 }
 
@@ -482,15 +548,60 @@ const DEALER_HIDDEN_ACTIONS = new Set([
   "record_vendor_counter",
   "record_vendor_agreement",
   // The vendor's PO arriving is a vendor-leg event; only the completed
-  // exchange (which the dealer is party to) is theirs to see.
+  // exchange (which the dealer is party to) is theirs to see. Both spellings:
+  // record_vendor_po (admin recorded it) and submit_vendor_po (the vendor
+  // uploaded it themselves, E-196).
   "record_vendor_po",
+  "submit_vendor_po",
+  // E-195 — the same two moves made FIRST-HAND by a vendor with a login. They
+  // hide for the identical reason as their record_* twins above: what a vendor
+  // offered is our margin. Listed explicitly rather than caught by an
+  // `e.role === "vendor"` blanket — see the filter below for why that blanket
+  // was a trap.
+  "vendor_counter",
+  "vendor_agree",
+  "vendor_declined",
+]);
+
+/**
+ * Actions a vendor performs that the dealer IS entitled to see.
+ *
+ * Tiny by design, and separate from the hide-list on purpose: this is the
+ * exception to "a vendor's actions are not the dealer's business", and an
+ * exception should be enumerable at a glance.
+ *
+ * `exchange_pos` is the case that matters. It fires inside whichever
+ * transaction completes the PO pair — so once a vendor can upload their own PO,
+ * the SAME event carries role='admin' or role='vendor' depending purely on who
+ * happened to upload second.
+ */
+const DEALER_VISIBLE_VENDOR_ACTIONS = new Set([
+  "exchange_pos",
+  "schedule_pickup",
+  "complete_pickup",
 ]);
 
 export function visibleActivityForDealer<
   T extends { action: string; role: string; after?: unknown },
 >(entries: T[]): T[] {
   return entries.filter((e) => {
-    if (e.role === "vendor" || DEALER_HIDDEN_ACTIONS.has(e.action)) return false;
+    // FILTER BY ACTION, NOT BY ROLE.
+    //
+    // This was `if (e.role === "vendor" || ...)` — a blanket that was correct
+    // only by coincidence. It was written when `vendor` appeared on exactly two
+    // actions (vendor_counter, vendor_agree), both of which must be hidden, so
+    // role and action agreed. E-195 gave vendors a login and broke that
+    // coincidence: `exchange_pos` fires inside whichever transaction completes
+    // the PO pair, so it carries role='vendor' when the vendor uploads second
+    // and role='admin' when the admin does. Under the blanket, the dealer's own
+    // PO-exchange row — an event the hide-list's own comment says they "must
+    // see" — would vanish from their audit trail if and only if the vendor
+    // happened to be second. Non-deterministic visibility of the dealer's own
+    // deal, decided by a race.
+    //
+    // What decides visibility is WHAT HAPPENED, never who typed it.
+    if (e.role === "vendor" && !DEALER_VISIBLE_VENDOR_ACTIONS.has(e.action)) return false;
+    if (DEALER_HIDDEN_ACTIONS.has(e.action)) return false;
 
     // Settlements are per-leg under one action name. The dealer's own payout
     // is theirs to see; the VENDOR receipt is the other half of the margin —
@@ -539,6 +650,30 @@ export interface VendorLineView {
   agreed_price: number | string | null;
   // NOTE what is absent: dealer_price and margin_value. A vendor who knows both
   // our ask and what we paid the dealer knows our margin exactly.
+
+  // --- E-191 dealer-declared spec. Properties of the BATTERY, so a vendor may
+  //     see all of it: none of it identifies who is selling.
+  variant_type: string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  /** Per unit, as declared. */
+  unit_weight_kg: number | string | null;
+  /** qty × unit_weight_kg — the number a scrap buyer actually prices against. */
+  line_weight_kg: number | null;
+  /** RATED life, not consumed life. The template must label it as rated. */
+  warranty_cycles: number | null;
+  iot_battery: boolean | null;
+  /**
+   * The IOT brand WITH its provenance baked in — "Intellicar (assumed)" when the
+   * dealer left it blank. One string, so a template cannot render the brand and
+   * drop the caveat.
+   */
+  iot_brand_label: string | null;
+  /** "6 working · 3 non-working · 1 untested", zero-parts omitted. */
+  condition_split_label: string | null;
 }
 
 /** The masked quotation. This — and only this — is what the PDF template sees. */
@@ -551,6 +686,23 @@ export interface VendorQuotationView {
   total_units: number;
   /** Σ qty × ask. The vendor is being asked for a number, so they get one. */
   ask_total: number | null;
+  /**
+   * Σ line_weight_kg over the lines that DECLARED a weight — the single most
+   * valuable number to a scrap buyer, who prices by the kilogram.
+   *
+   * Null when no line declares one. Never treats an undeclared weight as zero:
+   * that would understate the lot, and understating the thing the vendor prices
+   * on is how you get a quote you cannot honour.
+   */
+  total_weight_kg: number | null;
+  /**
+   * Says so when the total covers only some of the lot — "4 of 6 SKUs declared".
+   *
+   * Null when every line declared a weight. A partial total presented as a whole
+   * one is the exact failure this module keeps making: a number that is true
+   * about a subset, rendered as though it were true about everything.
+   */
+  weight_caveat: string | null;
   issued_on: Date | string;
 }
 
@@ -592,6 +744,29 @@ export interface VendorLineSource {
   ask_price: number | string | null;
   counter_price?: number | string | null;
   agreed_price?: number | string | null;
+  // --- E-191 dealer-declared spec. All optional: a caller that has not fetched
+  //     it passes nothing and the view simply omits it. Every one of these is a
+  //     property of the BATTERY, never of the dealer.
+  variant_type?: string | null;
+  brand?: string | null;
+  chemistry?: string | null;
+  form_factor?: string | null;
+  nominal_voltage?: number | string | null;
+  nominal_ampere?: number | string | null;
+  unit_weight_kg?: number | string | null;
+  warranty_cycles?: number | null;
+  functional_qty?: number | null;
+  non_functional_qty?: number | null;
+  iot_battery?: boolean | null;
+  iot_brand_name?: string | null;
+}
+
+/** Σ of a line's declared unit weight, or null when the dealer didn't declare one. */
+function lineWeightKg(line: VendorLineSource): number | null {
+  if (line.unit_weight_kg === null || line.unit_weight_kg === undefined) return null;
+  const per = Number(line.unit_weight_kg);
+  if (!Number.isFinite(per) || per <= 0) return null;
+  return Math.round(per * line.quantity * 1000) / 1000;
 }
 
 export function toVendorLine(line: VendorLineSource): VendorLineView {
@@ -616,7 +791,60 @@ export function toVendorLine(line: VendorLineSource): VendorLineView {
     ask_price: line.ask_price,
     counter_price: line.counter_price ?? null,
     agreed_price: line.agreed_price ?? null,
+    // E-191 spec — what a scrap buyer actually prices against. The quotation
+    // said "60V 120Ah · Working ×3" and nothing else, while every one of these
+    // sat unread on buyback_lines. A recycler prices by CHEMISTRY and by
+    // KILOGRAMS, and we told them neither.
+    variant_type: line.variant_type ?? null,
+    brand: line.brand ?? null,
+    chemistry: line.chemistry ?? null,
+    form_factor: line.form_factor ?? null,
+    nominal_voltage: line.nominal_voltage ?? null,
+    nominal_ampere: line.nominal_ampere ?? null,
+    unit_weight_kg: line.unit_weight_kg ?? null,
+    line_weight_kg: lineWeightKg(line),
+    warranty_cycles: line.warranty_cycles ?? null,
+    iot_battery: line.iot_battery ?? null,
+    // ONE string, not a brand plus a flag the template could render without.
+    // resolveIotBrand's assumption has to be unstrippable: a vendor pricing an
+    // "Intellicar" pack is entitled to know we guessed that, and a caller who
+    // could render the brand and drop the caveat would eventually do exactly
+    // that. Same reason condition_split_label below is a string, not three ints.
+    iot_brand_label: iotBrandLabel(line),
+    condition_split_label: conditionSplitLabel(line),
   };
+}
+
+/** "Intellicar (assumed)" vs the dealer's own answer — or null for a non-IOT pack. */
+function iotBrandLabel(line: VendorLineSource): string | null {
+  const resolved = resolveIotBrand(line.iot_battery, line.iot_brand_name);
+  if (!resolved) return null;
+  return resolved.assumed ? `${resolved.brand} (assumed)` : resolved.brand;
+}
+
+/**
+ * "6 working · 3 non-working · 1 untested", omitting the zero parts.
+ *
+ * A string rather than three numbers because the UNTESTED remainder is the part
+ * a template would forget: the submit gate treats the split as a ceiling, not an
+ * equality (5 + 3 of 10 is a truthful partial declaration), so a vendor shown
+ * only "5 working, 3 non-working" of a lot of 10 would silently misread two
+ * batteries as one or the other.
+ */
+function conditionSplitLabel(line: VendorLineSource): string | null {
+  const f = line.functional_qty;
+  const nf = line.non_functional_qty;
+  if ((f === null || f === undefined) && (nf === null || nf === undefined)) return null;
+
+  const working = f ?? 0;
+  const dead = nf ?? 0;
+  const untested = Math.max(0, line.quantity - working - dead);
+
+  const parts: string[] = [];
+  if (working > 0) parts.push(`${working} working`);
+  if (dead > 0) parts.push(`${dead} non-working`);
+  if (untested > 0) parts.push(`${untested} untested`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 export function toVendorQuotation(input: {
@@ -633,6 +861,13 @@ export function toVendorQuotation(input: {
     return t === null ? sum : (sum ?? 0) + t;
   }, null);
 
+  // Weigh only what was declared, and say so when that is not everything.
+  const declared = lines.filter((l) => l.line_weight_kg !== null);
+  const totalWeight =
+    declared.length === 0
+      ? null
+      : Math.round(declared.reduce((sum, l) => sum + (l.line_weight_kg ?? 0), 0) * 1000) / 1000;
+
   return {
     quotation_no: input.quotation_no,
     pickup_city: input.pickup_city,
@@ -640,6 +875,126 @@ export function toVendorQuotation(input: {
     lines,
     total_units: lines.reduce((n, l) => n + l.quantity, 0),
     ask_total: askTotal,
+    total_weight_kg: totalWeight,
+    weight_caveat:
+      declared.length > 0 && declared.length < lines.length
+        ? `${declared.length} of ${lines.length} SKUs declared a weight`
+        : null,
     issued_on: input.issued_on ?? new Date(),
+  };
+}
+
+/**
+ * The vendor's own status on their own thread (E-195 — the vendor dashboard).
+ *
+ * DELIBERATELY NOT the deal status. `buyback_deals.status` is a 21-state
+ * narrative of the DEALER leg — DEALER_ACCEPTED, MARGIN_SET, INVOICE_APPROVED —
+ * and handing it to a vendor would tell them we had already bought the lot and
+ * roughly when, which is a negotiating position. The vendor's thread status is
+ * the whole truth a vendor is entitled to about where they stand.
+ */
+export type VendorThreadStatus = "SENT" | "COUNTERED" | "AGREED" | "LOST";
+
+/**
+ * One routed quotation as the vendor themselves sees it, on their dashboard.
+ *
+ * A superset of VendorQuotationView by intent — same masking, plus where the
+ * haggle has got to. Everything a vendor needs to answer "what is this lot,
+ * where is it, what did they ask, what did I say, and did I win?" and nothing
+ * that answers "who is the seller?" or "what did iTarang pay for it?".
+ *
+ * Built field-by-field from a source type that has no dealer identity on it, so
+ * this is the same structural promise toVendorQuotation makes rather than a
+ * discipline someone has to remember.
+ */
+export interface VendorThreadView {
+  thread_id: string;
+  quotation_no: string;
+  status: VendorThreadStatus;
+  /** City + state only. Enough to price transport; not enough to find the dealer. */
+  pickup_city: string | null;
+  pickup_state: string | null;
+  lines: VendorLineView[];
+  total_units: number;
+  /** Σ qty × ask — what we are asking this vendor for. */
+  ask_total: number | null;
+  /** Σ qty × counter — what they have offered, once they have. */
+  counter_total: number | null;
+  /** Σ qty × agreed — the struck price, once struck. */
+  agreed_total: number | null;
+  sent_at: Date | string | null;
+  responded_at: Date | string | null;
+  /**
+   * Whether this vendor may still act. Derived, so the dashboard does not
+   * re-implement the state machine — and so a LOST vendor's buttons are gone
+   * rather than merely ghosted.
+   */
+  can_respond: boolean;
+  /**
+   * Whether the vendor may raise their PO (E-196). True once they have AGREED
+   * and have not already sent one. Derived from `has_vendor_po` for the same
+   * reason as can_respond — the button is present exactly when the action is,
+   * not ghosted after the fact.
+   */
+  can_raise_po: boolean;
+  /** Their proforma, once iTarang has issued it against their PO — step 3/4. */
+  proforma: { number: string; total: number; pdf_available: boolean } | null;
+}
+
+export interface VendorThreadSource {
+  thread_id: string;
+  quotation_no: string;
+  status: VendorThreadStatus;
+  pickup_city: string | null;
+  pickup_state: string | null;
+  lines: VendorLineSource[];
+  sent_at: Date | string | null;
+  responded_at: Date | string | null;
+  /** Whether a VENDOR-leg PO already exists on this deal. */
+  has_vendor_po?: boolean;
+  /** The live proforma raised against this vendor's PO, if any. */
+  proforma?: { number: string; total: number | string; pdf_s3: string | null } | null;
+}
+
+function sumBy(
+  lines: VendorLineView[],
+  pick: (l: VendorLineView) => number | string | null,
+): number | null {
+  return lines.reduce<number | null>((sum, l) => {
+    const t = lineTotal(l.quantity, pick(l));
+    return t === null ? sum : (sum ?? 0) + t;
+  }, null);
+}
+
+export function toVendorThread(input: VendorThreadSource): VendorThreadView {
+  const lines = input.lines.map(toVendorLine);
+
+  return {
+    thread_id: input.thread_id,
+    quotation_no: input.quotation_no,
+    status: input.status,
+    pickup_city: input.pickup_city,
+    pickup_state: input.pickup_state,
+    lines,
+    total_units: lines.reduce((n, l) => n + l.quantity, 0),
+    ask_total: sumBy(lines, (l) => l.ask_price),
+    counter_total: sumBy(lines, (l) => l.counter_price),
+    agreed_total: sumBy(lines, (l) => l.agreed_price),
+    sent_at: input.sent_at,
+    responded_at: input.responded_at,
+    // A struck or lost thread is over. The server still refuses either way —
+    // this only stops us showing a button that would 409.
+    can_respond: input.status === "SENT" || input.status === "COUNTERED",
+    // AGREED and no PO yet. The server enforces both (loadOwnThread checks
+    // AGREED; the pair check prevents a duplicate) — this only decides whether
+    // to show the upload card.
+    can_raise_po: input.status === "AGREED" && !input.has_vendor_po,
+    proforma: input.proforma
+      ? {
+          number: input.proforma.number,
+          total: Number(input.proforma.total),
+          pdf_available: input.proforma.pdf_s3 !== null,
+        }
+      : null,
   };
 }

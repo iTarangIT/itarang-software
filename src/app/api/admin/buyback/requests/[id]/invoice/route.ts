@@ -23,12 +23,12 @@
  * billed the vendor is a deal that leaks money.
  */
 
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
-import { invoiceLines, invoices } from "@/lib/db/schema";
+import { invoiceLines, invoices, proformaInvoices, purchaseOrders } from "@/lib/db/schema";
 import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError, ValidationError } from "@/lib/buyback/errors";
 import { gatewayTxnsForDeal } from "@/lib/buyback/gateway";
@@ -42,6 +42,7 @@ import {
   toLockedLines,
   vendorReceipt,
 } from "@/lib/buyback/money";
+import { loadAgreedVendorContact } from "@/lib/buyback/parties";
 import { renderVendorInvoiceHtml } from "@/lib/buyback/pdf/vendor-invoice-template";
 import { dealHeader } from "@/lib/buyback/queries";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
@@ -133,10 +134,45 @@ export const GET = withErrorHandler(
     // The online-money pane, fetched in the same GET so the admin's money view
     // is one round-trip. `txns` is a redacted projection of the attempts — the
     // raw provider snapshot and the internal settlement id never leave here.
-    const [bank, gatewayTxns] = await Promise.all([
+    const [bank, gatewayTxns, agreedVendorContact] = await Promise.all([
       dealerBank(header.dealer_entity_id),
       gatewayTxnsForDeal(header.deal_id),
+      // WHO THE PAYMENT LINK IS ADDRESSED TO. The exact function the link route
+      // uses to address it (payment-link/route.ts), so the screen cannot claim a
+      // different recipient than the one that gets emailed.
+      //
+      // Its absence is why "the system sent the QR to the wrong party" was
+      // believed and could not be checked: this pane showed dealer_bank (who we
+      // PAY) and nothing at all about who PAYS US, so the vendor leg had no
+      // named recipient anywhere on the screen. An unfalsifiable claim about
+      // money is worse than a wrong one.
+      //
+      // Admin-only route, and it already returns the dealer's full bank details
+      // — a vendor's name and email is no new exposure and crosses no redaction
+      // boundary. Null until a vendor has AGREED; there is no recipient before that.
+      loadAgreedVendorContact(header.deal_id),
     ]);
+
+    // The live proforma (E-196), and whether a vendor PO exists to raise one
+    // against. The screen needs both to decide between "raise" and "re-issue"
+    // and to disable the control when there is no PO yet.
+    const [livePi] = await db
+      .select({
+        id: proformaInvoices.id,
+        number: proformaInvoices.number,
+        total: proformaInvoices.total,
+        pdf_s3: proformaInvoices.pdf_s3,
+        issued_at: proformaInvoices.issued_at,
+      })
+      .from(proformaInvoices)
+      .where(and(eq(proformaInvoices.deal_id, header.deal_id), eq(proformaInvoices.status, "ISSUED")))
+      .limit(1);
+
+    const [vendorPo] = await db
+      .select({ number: purchaseOrders.number })
+      .from(purchaseOrders)
+      .where(and(eq(purchaseOrders.deal_id, header.deal_id), eq(purchaseOrders.leg, "VENDOR")))
+      .limit(1);
 
     return successResponse({
       request_id: request.id,
@@ -145,6 +181,8 @@ export const GET = withErrorHandler(
       match,
       history: all.filter((i) => i.status === "RETURNED"),
       vendor_invoice: all.find((i) => i.leg === "VENDOR") ?? null,
+      proforma: livePi ?? null,
+      vendor_po_number: vendorPo?.number ?? null,
       // The settlement legs live here too, so the money pane fetches once.
       settlements: await settlementsForDeal(header.deal_id),
       gateway: {
@@ -152,7 +190,12 @@ export const GET = withErrorHandler(
         links_enabled: buybackLinksConfigured(),
         dealer_amount: dealerPayout(money),
         vendor_amount: vendorReceipt(money),
+        // Who we PAY (dealer, OUT) and who PAYS US (vendor, IN). Both named, so
+        // the two legs can stop being interchangeable on screen.
         dealer_bank: bank,
+        vendor_contact: agreedVendorContact
+          ? { name: agreedVendorContact.name, email: agreedVendorContact.email }
+          : null,
         txns: gatewayTxns.map((t) => ({
           id: t.id,
           leg: t.leg,

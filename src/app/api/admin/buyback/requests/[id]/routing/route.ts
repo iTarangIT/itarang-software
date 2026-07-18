@@ -31,7 +31,7 @@ import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError, ValidationError } from "@/lib/buyback/errors";
 import { assertClearsFloor } from "@/lib/buyback/floor";
 import { renderQuotationHtml } from "@/lib/buyback/pdf/quotation-template";
-import { dealHeader } from "@/lib/buyback/queries";
+import { dealHeader, linesForRequest } from "@/lib/buyback/queries";
 import { toVendorQuotation } from "@/lib/buyback/serialize";
 import { BUYBACK_BUCKET, quotationKey } from "@/lib/buyback/storage";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";
@@ -42,7 +42,7 @@ import {
   quotationPhotoKeys,
 } from "@/lib/buyback/vendors";
 import { renderPdfFromHtml } from "@/lib/pdf/render-html";
-import { getObject, putObject } from "@/lib/storage/s3";
+import { putObject } from "@/lib/storage/s3";
 
 export const runtime = "nodejs";
 /** Puppeteer needs room; the default 10s would kill a 3-vendor render. */
@@ -119,29 +119,64 @@ export const POST = withErrorHandler(
 
     // --- Build the documents (outside the transaction) ------------------------
     const location = await pickupLocation(request.id);
-    const photoKeys = await quotationPhotoKeys(request.id, 2);
 
-    // Inline the photos once, not once per vendor — the same lot is being quoted.
-    const photosByLine: Record<string, string[]> = {};
-    for (const [lineId, keys] of Object.entries(photoKeys)) {
-      for (const key of keys) {
-        const bytes = await getObject(BUYBACK_BUCKET, key);
-        if (!bytes) continue; // a missing photo must not sink the whole routing
-        const mime = key.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
-        (photosByLine[lineId] ??= []).push(`data:${mime};base64,${bytes.toString("base64")}`);
-      }
-    }
+    // ALL of them, ATTACHED — not two per line, base64-inlined into the PDF.
+    //
+    // The photos are the reason this email exists in the shape it does: a
+    // recycler judges condition from them and should not have to log in to see
+    // one. Inlining made that impossible on both ends — every byte was
+    // duplicated into the document (base64 is ~33% overhead, and the PDF is
+    // rendered once PER VENDOR), so the count had to be capped at 2/line and
+    // rendered at 54x40px, a size at which a swollen cell and a healthy one look
+    // the same. E-198 lets the event carry the keys, so the mailer attaches the
+    // real files: full quality, all of them, fetched once at send.
+    //
+    // PER_LINE_CAP is not a byte budget, it is an attention budget: nobody opens
+    // 60 attachments. The dealer uploads at least 5 per line (the submit gate),
+    // and the display copy is the resized one — enough to judge a battery,
+    // nothing like the original's size.
+    const PER_LINE_CAP = 8;
+    const photoKeys = await quotationPhotoKeys(request.id, PER_LINE_CAP);
+    const attachmentKeys = Object.values(photoKeys).flat();
 
-    const lineSources = locks.map((l) => ({
-      line_id: l.line_id,
-      quantity: Number(l.quantity),
-      condition: l.condition,
-      voltage: l.voltage,
-      ah: l.ah,
-      // ASK only. dealer_price is deliberately NOT passed — the vendor view has
-      // no field for it, and this is the last place it could have leaked.
-      ask_price: l.vendor_ask,
-    }));
+    // The E-191 battery spec, which currentLocks() does not carry — it selects
+    // prices, not properties. Read from linesForRequest instead of widening
+    // currentLocks: money stays lock-derived (invariant 2) and the spec comes
+    // from the line, each from the query that owns it.
+    const specs = new Map((await linesForRequest(request.id)).map((l) => [l.id, l]));
+
+    const lineSources = locks.map((l) => {
+      const spec = specs.get(l.line_id);
+
+      // FIELD BY FIELD. Never `...spec`: AdminLineView carries dealer_price,
+      // margin_value, vendor_ask AND vendor_price, and spreading it here would
+      // hand the vendor our entire position in one line of convenience. The
+      // serializer would drop them — VendorLineSource has no such fields — but
+      // relying on that means the safety lives in a different file from the
+      // mistake.
+      return {
+        line_id: l.line_id,
+        quantity: Number(l.quantity),
+        condition: l.condition,
+        voltage: l.voltage,
+        ah: l.ah,
+        // ASK only. dealer_price is deliberately NOT passed — the vendor view has
+        // no field for it, and this is the last place it could have leaked.
+        ask_price: l.vendor_ask,
+        variant_type: spec?.variant_type ?? null,
+        brand: spec?.brand ?? null,
+        chemistry: spec?.chemistry ?? null,
+        form_factor: spec?.form_factor ?? null,
+        nominal_voltage: spec?.nominal_voltage ?? null,
+        nominal_ampere: spec?.nominal_ampere ?? null,
+        unit_weight_kg: spec?.unit_weight_kg ?? null,
+        warranty_cycles: spec?.warranty_cycles ?? null,
+        functional_qty: spec?.functional_qty ?? null,
+        non_functional_qty: spec?.non_functional_qty ?? null,
+        iot_battery: spec?.iot_battery ?? null,
+        iot_brand_name: spec?.iot_brand_name ?? null,
+      };
+    });
 
     const serial = request.request_no.replace(/^BB-/, "");
 
@@ -157,11 +192,14 @@ export const POST = withErrorHandler(
         lines: lineSources,
       });
 
+      // No photosByLine: the document is the itemised ask, the photos ride as
+      // real attachments (E-198). Rendering them into the PDF meant re-encoding
+      // every image into every vendor's copy.
       const pdf = await renderPdfFromHtml(
         renderQuotationHtml({
           quotation,
           vendorName: vendor.name,
-          photosByLine,
+          photoCount: attachmentKeys.length,
         }),
       );
 
@@ -228,12 +266,17 @@ export const POST = withErrorHandler(
             channel: "EMAIL" as const,
             recipientRef: p.vendor.email,
             attachmentS3Key: p.key,
+            // The battery photos, as real files. Snapshotted now, fetched at
+            // send — and skipped individually if one has vanished, because a
+            // missing photo must not cost the vendor the whole email.
+            attachmentS3Keys: attachmentKeys,
             discriminator: p.threadId,
             payload: {
               thread_id: p.threadId,
               vendor_name: p.vendor.name,
               quotation_no: p.quotationNo,
               pickup_location: [location.city, location.state].filter(Boolean).join(", "),
+              photo_count: attachmentKeys.length,
               // NOTE: no dealer identity, and no dealer_price. This payload is
               // rendered into the email body by the dispatcher.
             },

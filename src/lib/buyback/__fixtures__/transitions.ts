@@ -234,7 +234,31 @@ export const GOLDEN_TRANSITIONS: GoldenTransition[] = [
     action: "dealer_counter",
     role: "admin",
     expect: REFUSED,
-    why: "An admin counters via `negotiate`/`send_final_offer`, not the dealer's action.",
+    why: "The dealer's action is the dealer's. An admin counters via admin_counter.",
+  },
+  {
+    // item 7 — the admin's own counter, the mirror of dealer_counter. Makes the
+    // negotiation symmetric: the admin no longer has to send a final offer just
+    // to name another price.
+    state: "NEGOTIATING",
+    action: "admin_counter",
+    role: "admin",
+    expect: "NEGOTIATING",
+    why: "Self-loop: the admin counters per SKU and stays in NEGOTIATING, exactly as the dealer does.",
+  },
+  {
+    state: "NEGOTIATING",
+    action: "admin_counter",
+    role: "dealer",
+    expect: REFUSED,
+    why: "The admin's action is the admin's — a dealer counters via dealer_counter.",
+  },
+  {
+    state: "SUBMITTED",
+    action: "admin_counter",
+    role: "admin",
+    expect: REFUSED,
+    why: "There is no open negotiation to counter within yet — `negotiate` opens it first.",
   },
   {
     state: "NEGOTIATING",
@@ -540,7 +564,79 @@ export const GOLDEN_TRANSITIONS: GoldenTransition[] = [
     action: "record_vendor_counter",
     role: "dealer",
     expect: REFUSED,
-    why: "Vendor responses are admin-recorded. A dealer cannot forge one.",
+    why: "Vendor responses are admin-recorded or vendor-made. A dealer cannot forge one.",
+  },
+
+  // ---------------------------------------------------------------------------
+  // Vendor leg, first-hand (E-195 — the vendor login, BRD M24)
+  //
+  // The same two destinations as the record_* pair above. A vendor acting from
+  // their own dashboard is not a new kind of deal event; it is the same event
+  // with better evidence behind it. Both paths stay: a vendor who answers the
+  // quotation email instead of logging in is still recorded by an admin.
+  // ---------------------------------------------------------------------------
+  {
+    state: "VENDOR_ROUTED",
+    action: "vendor_counter",
+    role: "vendor",
+    expect: "VENDOR_NEGOTIATING",
+    why: "The vendor countered our ask from their own dashboard — same move as an admin recording it, first-hand.",
+  },
+  {
+    state: "VENDOR_ROUTED",
+    action: "vendor_agree",
+    role: "vendor",
+    expect: "VENDOR_AGREED",
+    why: "The vendor accepted our ask outright. First AGREED wins — the partial unique index makes that atomic however it was entered (M10).",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "vendor_counter",
+    role: "vendor",
+    expect: "VENDOR_NEGOTIATING",
+    why: "Self-loop — each further counter appends a round, exactly as on the admin-recorded path.",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "vendor_agree",
+    role: "vendor",
+    expect: "VENDOR_AGREED",
+    why: "The vendor closed the haggle themselves.",
+  },
+  {
+    state: "VENDOR_ROUTED",
+    action: "vendor_counter",
+    role: "admin",
+    expect: REFUSED,
+    why: "An admin recording a vendor's reply must use record_vendor_counter. Letting them use the first-hand action would launder hearsay into evidence in the audit log.",
+  },
+  {
+    state: "VENDOR_ROUTED",
+    action: "vendor_agree",
+    role: "dealer",
+    expect: REFUSED,
+    why: "A dealer cannot agree on a vendor's behalf — that would let the seller close their own sale at a price of their choosing.",
+  },
+  {
+    state: "MARGIN_SET",
+    action: "vendor_agree",
+    role: "vendor",
+    expect: REFUSED,
+    why: "Nothing has been quoted to this vendor yet — there is no ask to agree to until the deal is routed.",
+  },
+  {
+    state: "VENDOR_AGREED",
+    action: "vendor_counter",
+    role: "vendor",
+    expect: REFUSED,
+    why: "A vendor has already agreed. Reopening the price after agreement is exactly what M07's boundary forbids, and a losing vendor cannot reopen someone else's win.",
+  },
+  {
+    state: "SUBMITTED",
+    action: "vendor_counter",
+    role: "vendor",
+    expect: REFUSED,
+    why: "A vendor has no visibility of a deal before it is routed, let alone a say in the dealer leg.",
   },
   {
     state: "VENDOR_NEGOTIATING",
@@ -582,6 +678,29 @@ export const GOLDEN_TRANSITIONS: GoldenTransition[] = [
     role: "admin",
     expect: "PO_EXCHANGED",
     why: "Fires inside the tx that records whichever PO completes the pair (M11).",
+  },
+  {
+    // E-196 — the vendor raises their own PO. On the vendor leg the vendor is
+    // the buyer, and the buyer initiates the PO.
+    state: "VENDOR_AGREED",
+    action: "exchange_pos",
+    role: "vendor",
+    expect: "PO_EXCHANGED",
+    why: "The vendor raised their own PO; the same edge, whoever completes the pair (E-196).",
+  },
+  {
+    state: "VENDOR_AGREED",
+    action: "exchange_pos",
+    role: "dealer",
+    expect: REFUSED,
+    why: "A dealer has no part in the vendor leg — the batteries have been sold on.",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "exchange_pos",
+    role: "vendor",
+    expect: REFUSED,
+    why: "No PO before agreement, even by the vendor — there is no agreed price to invoice against.",
   },
   {
     state: "VENDOR_NEGOTIATING",

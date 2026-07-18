@@ -62,6 +62,13 @@ export const DEAL_ACTIONS = [
   "accept",
   "reject",
   "negotiate",
+  // Admin — counter WITHIN an open negotiation (item 7). The mirror of
+  // dealer_counter: before this, the dealer could counter forever but the admin
+  // could only `negotiate` once (to open it) and was then forced to
+  // send_final_offer to say another number. That asymmetry is what made "Send
+  // final offer" feel like a wrong extra button — the desk was not asking to
+  // delete the final-offer artifact, only to stop being forced into it.
+  "admin_counter",
   "request_info",
   // Admin — the rest of the dealer leg
   "send_final_offer",
@@ -70,12 +77,23 @@ export const DEAL_ACTIONS = [
   "cancel",
   // Admin — the vendor leg & fulfilment (Sprint 2A, M09–M11 + minimal M05).
   //
-  // There is no `vendor` actor role: v1 ships WITHOUT vendor login (BRD M24),
-  // so a vendor's counter or agreement reaches the system as an admin RECORDING
-  // it off an email. Hence `record_*`.
+  // `record_*` because an admin is transcribing what a vendor said in an email.
+  // These are NOT deprecated by the vendor login (E-195): a vendor who replies
+  // by email rather than logging in still has to reach the system somehow, and
+  // that is still an admin recording it. The two paths coexist, and the audit
+  // log tells them apart by actor role — `record_vendor_counter` by an admin is
+  // hearsay, `vendor_counter` by a vendor is first-hand.
   "route_to_vendors",
   "record_vendor_counter",
   "record_vendor_agreement",
+  // Vendor — the same two moves, made by the vendor themselves (E-195, M24).
+  //
+  // There is no `vendor_reject`: a vendor walking away sets their THREAD to
+  // LOST and moves no deal status, because the deal is still live with every
+  // other vendor it was routed to. Same reason record_vendor_* has no "lost"
+  // action. See VendorBoard's three buttons.
+  "vendor_counter",
+  "vendor_agree",
   "exchange_pos",
   "schedule_pickup",
   "complete_pickup",
@@ -90,9 +108,22 @@ export const DEAL_ACTIONS = [
 
 export type DealAction = (typeof DEAL_ACTIONS)[number];
 
-export type ActorRole = "dealer" | "admin";
+/**
+ * Who can act on a deal.
+ *
+ * `vendor` arrived with the vendor login (E-195). Before it, a vendor's counter
+ * or agreement reached the system only as an admin recording it off an email —
+ * which is why admin/vendor actions were tangled on one screen, and why "the
+ * vendor raises the PO" was impossible to model: there was nobody to raise it.
+ *
+ * A vendor is scoped to their OWN thread. Nothing here grants a vendor sight of
+ * a deal they were not routed to, and nothing grants them the dealer's identity
+ * — that is enforced by the route's scoping and the vendor serializer, not by
+ * this table, which only knows the (state, action, role) triple.
+ */
+export type ActorRole = "dealer" | "admin" | "vendor";
 
-export const ACTOR_ROLES: readonly ActorRole[] = ["dealer", "admin"] as const;
+export const ACTOR_ROLES: readonly ActorRole[] = ["dealer", "admin", "vendor"] as const;
 
 /**
  * The four review actions (BRD M06). Legal ONLY in SUBMITTED / UNDER_REVIEW —
@@ -178,8 +209,12 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
 
   NEGOTIATING: {
     // Counters stay in NEGOTIATING and are itemized per SKU (BRD P5); a round is
-    // appended each time. The self-loop is intentional.
+    // appended each time. The self-loop is intentional — and now SYMMETRIC: the
+    // admin can counter here too (item 7), instead of being forced to
+    // send_final_offer to name another price. send_final_offer stays: it is a
+    // deliberate "this is my last word", not the only way to say a number.
     dealer_counter: { to: "NEGOTIATING", roles: ["dealer"] },
+    admin_counter: { to: "NEGOTIATING", roles: ["admin"] },
     send_final_offer: { to: "FINAL_OFFER_SENT", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
@@ -216,6 +251,10 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
     record_vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["admin"] },
     // ...or came straight back with a yes, at our ask.
     record_vendor_agreement: { to: "VENDOR_AGREED", roles: ["admin"] },
+    // The same two moves made first-hand, from the vendor's own dashboard.
+    // Same destinations: who typed it changes the evidence, not the deal.
+    vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["vendor"] },
+    vendor_agree: { to: "VENDOR_AGREED", roles: ["vendor"] },
     reopen: { to: "NEGOTIATING", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
@@ -226,6 +265,8 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
     // status (the deal is still live with the other vendors).
     record_vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["admin"] },
     record_vendor_agreement: { to: "VENDOR_AGREED", roles: ["admin"] },
+    vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["vendor"] },
+    vendor_agree: { to: "VENDOR_AGREED", roles: ["vendor"] },
     reopen: { to: "NEGOTIATING", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
@@ -235,7 +276,16 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
   VENDOR_AGREED: {
     // Fires automatically inside the transaction that records whichever PO
     // completes the pair. POs are impossible before this state (M11 AC).
-    exchange_pos: { to: "PO_EXCHANGED", roles: ["admin"] },
+    //
+    // `vendor` joins `admin` here (E-196): with a login, the vendor raises their
+    // OWN PO instead of an admin recording it — and on the vendor leg the vendor
+    // IS the buyer, so this is the buyer initiating, exactly as intended. The
+    // action does not change: exchange_pos fires when the PAIR completes,
+    // whoever uploaded the second half. That is why the dealer's activity filter
+    // now keys on the action, not the role (serialize.ts) — the same event
+    // carries role='admin' or role='vendor' by pure race, and the dealer must
+    // see their PO exchange either way.
+    exchange_pos: { to: "PO_EXCHANGED", roles: ["admin", "vendor"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
 
@@ -341,6 +391,27 @@ export function transition(
 /** Convenience for the UI: which actions can this role take right now? */
 export function allowedActions(state: DealState, role: ActorRole): DealAction[] {
   return DEAL_ACTIONS.filter((action) => transition(state, action, role).ok);
+}
+
+/**
+ * Which action a vendor's counter/agreement becomes, given who is entering it.
+ *
+ * Lives here, with the vocabulary it maps into, because it is pure — and
+ * because its home (vendor-response.ts) imports the db, which would make this
+ * one-line decision untestable without a database.
+ *
+ * The distinction is not cosmetic. `record_vendor_*` by an admin is HEARSAY —
+ * they are transcribing an email. The bare verb by a vendor is TESTIMONY. Both
+ * reach the same state, so it would be easy to collapse them; that would launder
+ * one into the other in an INSERT-only audit log whose whole purpose is that
+ * someone can later tell the difference.
+ */
+export function vendorActionFor(
+  kind: "counter" | "agree",
+  role: "admin" | "vendor",
+): DealAction {
+  if (role === "vendor") return kind === "counter" ? "vendor_counter" : "vendor_agree";
+  return kind === "counter" ? "record_vendor_counter" : "record_vendor_agreement";
 }
 
 /**

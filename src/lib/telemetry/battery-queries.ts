@@ -35,6 +35,12 @@ import {
     type CycleKmSource,
 } from "@/lib/telemetry/cycle-distance";
 import { SESSION_GAP_MAX_S } from "@/lib/telemetry/charging-math";
+import {
+    baselineAhPerKm,
+    isOverloaded,
+    loadGates,
+    overloadIndex,
+} from "@/lib/telemetry/load-math";
 import { getBatteryThresholds } from "@/lib/telemetry/thresholds";
 import { fetchChargingCycleAggregate } from "@/lib/telemetry/queries";
 
@@ -675,7 +681,15 @@ export async function fetchElectricalTrend(
     // Weak charge is the one "under current" reading worth having, and it is only meaningful
     // INSIDE a charging cycle — a naive threshold on instantaneous current fires on every
     // parked vehicle. Reuses the authoritative charge aggregate rather than a second query.
-    const charge = await fetchChargingCycleAggregate(vehicleno, opts);
+    //
+    // The cadence is fetched alongside it because the breach cards quote it as the reason their
+    // counts are a floor. It has to be THIS battery's measured cadence over THIS window: the
+    // poller's spacing differs per vehicle and drifts over time, so a constant would be a stale
+    // number wearing a measurement's clothes.
+    const [charge, cadence] = await Promise.all([
+        fetchChargingCycleAggregate(vehicleno, opts),
+        fetchTelemetryCadence(vehicleno, opts),
+    ]);
     const weakCharge = charge.cycles.filter(
         (c) => c.avg_charging_current != null && c.avg_charging_current < t.weakChargeCurrentA,
     ).length;
@@ -702,11 +716,18 @@ export async function fetchElectricalTrend(
             nSamples,
             chargingCycles: charge.cycles.length,
             /**
-             * The median gap between stored samples, in seconds. Rendered on the breach cards
-             * so the reader can see for themselves why a count of transients is a floor: a
-             * spike shorter than this interval is invisible to us.
+             * The median gap between stored samples over this window, in seconds — measured, not
+             * assumed. Rendered on the breach cards so the reader can see for themselves why a
+             * count of transients is a floor: a spike shorter than this interval is invisible.
+             *
+             * Was hardcoded to 510, the fleet-wide p50 read off one review in July 2026. That is a
+             * real measurement of a *different* thing: cadence varies per battery and the poller's
+             * spacing has drifted (p90 ~2,010 s -> ~3,720 s; see charging-math.ts). Quoting a fixed
+             * number on a card that says "this battery is sampled about every N minutes" made a
+             * constant look like an observation. Null when the window holds too few samples to
+             * measure a gap — the card must say so rather than fall back to a number.
              */
-            medianSampleGapS: 510,
+            medianSampleGapS: cadence.medianIntervalS,
         },
     };
 }
@@ -739,6 +760,12 @@ export interface DischargeKmCyclePoint {
     ah_discharged: number;
     ah_per_km: number | null;
     km_per_ah: number | null;
+    /**
+     * This cycle's Ah/km against the pack's own best-fifth baseline. >1 means it spent more charge
+     * per kilometre than this same pack does at its lightest. Null when no baseline was computable
+     * — which is NOT the same as 1.0.
+     */
+    overload_index?: number | null;
 }
 
 /**
@@ -829,6 +856,20 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
     const cycleAhTotal =
         Math.round(cyclePoints.reduce((a, c) => a + c.ah_discharged, 0) * 10) / 10;
 
+    // The pack's own light-load reference, and each cycle's index against it. Computed here rather
+    // than in the chart so the number the card quotes and the number the scatter plots come from
+    // one place — the same reason the Ah totals above are not re-summed client-side.
+    const baseline = baselineAhPerKm(
+        cyclePoints.map((c) => ({
+            km: c.km,
+            ah: c.ah_discharged,
+            calibrated: c.km_source === "calibrated",
+        })),
+    );
+    for (const c of cyclePoints) {
+        c.overload_index = overloadIndex(c.ah_per_km, baseline?.ahPerKm ?? null);
+    }
+
     return {
         vehicleno,
         points,
@@ -837,6 +878,16 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
             cycles: cyclePoints.length,
             totalKm: cycleKmTotal,
             totalAh: cycleAhTotal,
+            /**
+             * The best fifth of this pack's own kilometres — null when the window cannot support
+             * one. Null means "not characterised", never "normal": see load-math.ts.
+             */
+            baseline,
+            /** Cycles at or above OVERLOAD_INDEX_WARN. Null when there is no baseline to judge against. */
+            overloadedCycles: baseline
+                ? cyclePoints.filter((c) => isOverloaded(c.overload_index ?? null)).length
+                : null,
+            gates: loadGates(),
             /** Aggregate ratio, not mean-of-ratios — same reasoning as the daily summary. */
             avgAhPerKm:
                 cycleKmTotal > 0

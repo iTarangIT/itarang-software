@@ -12,11 +12,15 @@
  *
  * Drafts: the prototype's four KPI buckets deliberately exclude DRAFT (see
  * handoff:446-449 — "Submitted" is `status !== DRAFT`, and none of the other
- * three buckets include it either), so there is no dedicated "Drafts" tile
- * here, unlike the page this replaces. The affordance is not gone though: a
- * draft still shows up as its own row (with a "Draft" status chip) in Recent
- * requests and on My Requests, so it stays findable — just folded into the
- * shared table instead of a standalone count.
+ * three buckets include it either), so there is still no "Drafts" KPI tile.
+ *
+ * A status chip in the table turned out not to be enough (E-194). Of the first
+ * 32 requests on db-1, 24 died in DRAFT and three of the four dealers never
+ * landed one in the review queue — a "Draft" chip reads as a stage in the
+ * process, not as "this is still sitting with you and iTarang cannot see it".
+ * Hence DraftBanner above the KPI row: it names each draft and what the submit
+ * gate is waiting for. Not a fifth KPI, because a count wouldn't have told
+ * anyone the answer was "add photos".
  */
 
 import { useEffect, useState } from "react";
@@ -27,6 +31,7 @@ import DealerBuybackSearch from "@/components/buyback/DealerBuybackSearch";
 import DealerRequestsTable, {
   type DealerRequestRow,
 } from "@/components/buyback/DealerRequestsTable";
+import DraftBanner from "@/components/buyback/DraftBanner";
 import { Card, EmptyState, KpiCard, PageHeader } from "@/components/buyback/ui";
 
 const PENDING_STATES = new Set([
@@ -102,6 +107,13 @@ export default function DealerBuybackPage() {
 
   const recent = requests.slice(0, 5);
 
+  // A draft is saved but was never sent to iTarang, and nothing on this page
+  // used to say so — the "Draft" chip in the table below is easy to read as a
+  // status rather than as "still sitting with you". On db-1 this stranded 24 of
+  // the first 32 requests: three of four dealers had never landed one in the
+  // review queue and had no way to know why.
+  const drafts = requests.filter((r) => r.status === "DRAFT");
+
   return (
     <div className="bg-bb-bg px-6 py-6">
       <div className="mx-auto max-w-[1180px]">
@@ -143,6 +155,8 @@ export default function DealerBuybackPage() {
           />
         ) : (
           <>
+            {drafts.length > 0 && <DraftBanner drafts={drafts} />}
+
             <div className="mb-[22px] grid grid-cols-4 gap-3.5">
               <KpiCard label="Submitted" value={submitted} accent="text-blue-600" />
               <KpiCard label="Pending" value={pending} accent="text-amber-500" />

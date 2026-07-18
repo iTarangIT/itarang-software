@@ -232,6 +232,15 @@ export interface DischargeKmCyclePoint {
     ah_discharged: number;
     ah_per_km: number | null;
     km_per_ah: number | null;
+    /** Ah/km against the pack's own best-fifth baseline. Null = no baseline, NOT "normal". */
+    overload_index?: number | null;
+}
+
+/** Client mirror of `Baseline` (load-math.ts) — the pack's own light-load reference. */
+export interface LoadBaseline {
+    ahPerKm: number;
+    cycles: number;
+    km: number;
 }
 
 export interface DischargeKmData {
@@ -245,6 +254,17 @@ export interface DischargeKmData {
         cyclesWithoutDistance: number;
         /** % of plotted cycles whose km was calibrated against the daily rollup. */
         calibratedPct: number | null;
+        /** Null when the window cannot support a baseline — see load-math.ts. */
+        baseline: LoadBaseline | null;
+        /** Cycles at or above the overload warn threshold. Null when there is no baseline. */
+        overloadedCycles: number | null;
+        gates: {
+            baselineMinCycles: number;
+            baselineMinKm: number;
+            baselineKmFraction: number;
+            overloadIndexWarn: number;
+            minTripKm: number;
+        };
     };
     summary: {
         days: number;
@@ -305,7 +325,12 @@ export interface ElectricalData {
         overTemperature: number;
         weakCharge: number;
     };
-    summary: { nSamples: number; chargingCycles: number; medianSampleGapS: number };
+    summary: {
+        nSamples: number;
+        chargingCycles: number;
+        /** Measured over this window for THIS battery. Null = too few samples to measure a gap. */
+        medianSampleGapS: number | null;
+    };
 }
 
 // ─── Location ────────────────────────────────────────────────────────────────

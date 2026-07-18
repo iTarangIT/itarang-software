@@ -24,12 +24,42 @@ import { db } from "@/lib/db";
 import { accounts, businessEntityRoles, scrapVendors } from "@/lib/db/schema";
 import { requireBuybackAdmin } from "@/lib/buyback/auth";
 import { ValidationError } from "@/lib/buyback/errors";
-import { listRoutableVendors } from "@/lib/buyback/vendors";
+import { listPendingVendors, listRoutableVendors } from "@/lib/buyback/vendors";
 
 export const runtime = "nodejs";
 
-export const GET = withErrorHandler(async () => {
+export const GET = withErrorHandler(async (req: Request) => {
   await requireBuybackAdmin();
+
+  // `?status=pending` — vendors who registered themselves (E-195) and are
+  // waiting to be vetted. Default stays the routable list, so every existing
+  // caller (the routing picker) is unchanged: it must never offer an unvetted
+  // vendor, and a "helpful" widening here would leak dealers' battery details
+  // to whoever signed up last.
+  const status = new URL(req.url).searchParams.get("status");
+
+  if (status === "pending") {
+    const pending = await listPendingVendors();
+    return successResponse({
+      vendors: pending.map((v) => ({
+        id: v.id,
+        entity_id: v.entity_id,
+        name: v.name,
+        email: v.email,
+        phone: v.phone,
+        city: v.city,
+        state: v.state,
+        gstin: v.gstin,
+        pan: v.pan,
+        categories: v.categories,
+        regions: v.regions,
+        onboarding_status: v.onboarding_status,
+        registered_at: v.registered_at,
+        has_login: v.has_login,
+      })),
+    });
+  }
+
   const vendors = await listRoutableVendors();
 
   return successResponse({
