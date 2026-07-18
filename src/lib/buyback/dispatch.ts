@@ -47,6 +47,7 @@ import { getObject } from "@/lib/storage/s3";
 import { getAdapter } from "@/lib/whatsapp";
 
 import { BUYBACK_ADMIN_ROLES } from "./auth";
+import { inr } from "./format";
 import { BUYBACK_BUCKET } from "./storage";
 
 /** Give up after this many tries and mark the event FAILED for a human to see. */
@@ -282,6 +283,37 @@ function renderMessage(event: DueEvent): { subject: string; body: string } {
         `<p>Thank you for quoting on this lot. On this occasion we have placed it ` +
         `elsewhere. We will be in touch with the next one.</p>` +
         `<p>— iTarang</p>`,
+    };
+  }
+
+  // E-193/R5 — the vendor's Razorpay payment link. The ONLY figure here is what
+  // the vendor owes; no dealer price, no margin, no floor ever appears (the
+  // vendor redaction holds in copy, the last place a leak could hide).
+  if (p.kind === "vendor_payment_link") {
+    const amountLabel = inr(p.amount as number | string | null | undefined);
+    const shortUrl = String(p.short_url ?? "");
+    return {
+      subject: `Payment request — iTarang buyback ${requestNo}`,
+      body:
+        `<p>Hello ${escapeHtml(String(p.vendor_name ?? "there"))},</p>` +
+        `<p>Your payment of <b>${escapeHtml(amountLabel)}</b> for buyback lot ` +
+        `<b>${escapeHtml(requestNo)}</b> is now due. Please pay securely using the ` +
+        `link below:</p>` +
+        `<p><a href="${escapeHtml(shortUrl)}">${escapeHtml(shortUrl)}</a></p>` +
+        `<p>This link is valid for 7 days.</p>` +
+        `<p>— iTarang</p>`,
+    };
+  }
+
+  // E-193 — gateway anomaly alerts (reversed payout, payment on a dead link,
+  // amount mismatch, failed attempt). ADMIN/PORTAL only, and the whole story is
+  // already written into payload.message by gateway.ts — surface it verbatim
+  // rather than letting the generic default swallow it into "request — event".
+  if (p.kind === "gateway_alert") {
+    const prefix = p.severity === "critical" ? "URGENT: " : "";
+    return {
+      subject: `${prefix}Payment alert — ${requestNo}`,
+      body: `<p>${escapeHtml(String(p.message ?? "A payment-gateway anomaly needs review."))}</p>`,
     };
   }
 

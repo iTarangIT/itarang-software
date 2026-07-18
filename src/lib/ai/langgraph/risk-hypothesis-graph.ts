@@ -735,6 +735,7 @@ export async function runRiskWorkflow(
       completion_tokens: result.totalCompletionTokens ?? 0,
     };
 
+    
     await completeRiskRun(runId, summary);
     return { run_id: runId, ...summary };
   } catch (e) {

@@ -31,8 +31,10 @@ import { db } from "@/lib/db";
 import { invoiceLines, invoices } from "@/lib/db/schema";
 import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError, ValidationError } from "@/lib/buyback/errors";
+import { gatewayTxnsForDeal } from "@/lib/buyback/gateway";
 import { matchInvoiceToLocks } from "@/lib/buyback/invoice-match";
 import {
+  dealerPayout,
   dealMoney,
   invoicesForDeal,
   liveInvoice,
@@ -45,6 +47,8 @@ import { dealHeader } from "@/lib/buyback/queries";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";
 import { renderPdfFromHtml } from "@/lib/pdf/render-html";
+import { buybackLinksConfigured } from "@/lib/razorpay";
+import { payoutsConfigured } from "@/lib/razorpayx";
 import { putObject } from "@/lib/storage/s3";
 
 export const runtime = "nodejs";
@@ -63,6 +67,41 @@ async function agreedVendor(dealId: string) {
     LIMIT 1
   `);
   return (rows as unknown as Array<Record<string, unknown>>)[0] ?? null;
+}
+
+/**
+ * The dealer's payout bank, for the admin's "Pay via RazorpayX" panel. The
+ * account number is NEVER returned whole — only the last four, prefixed with
+ * dots — so the admin can eyeball that it is the right account without the full
+ * number ever leaving the DB. `ok` says whether a payout could be attempted at
+ * all (a name+IFSC+number are the RazorpayX minimum). ADMIN-only route.
+ */
+async function dealerBank(entityId: string) {
+  const rows = await db.execute(sql`
+    SELECT bank_name, bank_account_number, ifsc_code, bank_beneficiary_name, business_entity_name
+    FROM accounts
+    WHERE id = ${entityId}
+    LIMIT 1
+  `);
+  const a = (rows as unknown as Array<Record<string, unknown>>)[0];
+  if (!a) {
+    return {
+      ok: false,
+      bank_name: null,
+      account_masked: null,
+      ifsc_code: null,
+      beneficiary: null,
+    };
+  }
+  const account = (a.bank_account_number as string) ?? null;
+  const ifsc = (a.ifsc_code as string) ?? null;
+  return {
+    ok: Boolean(account && ifsc),
+    bank_name: (a.bank_name as string) ?? null,
+    account_masked: account ? `••••${account.slice(-4)}` : null,
+    ifsc_code: ifsc,
+    beneficiary: (a.bank_beneficiary_name as string) ?? (a.business_entity_name as string) ?? null,
+  };
 }
 
 export const GET = withErrorHandler(
@@ -91,6 +130,14 @@ export const GET = withErrorHandler(
         )
       : null;
 
+    // The online-money pane, fetched in the same GET so the admin's money view
+    // is one round-trip. `txns` is a redacted projection of the attempts — the
+    // raw provider snapshot and the internal settlement id never leave here.
+    const [bank, gatewayTxns] = await Promise.all([
+      dealerBank(header.dealer_entity_id),
+      gatewayTxnsForDeal(header.deal_id),
+    ]);
+
     return successResponse({
       request_id: request.id,
       status: header.status,
@@ -100,6 +147,23 @@ export const GET = withErrorHandler(
       vendor_invoice: all.find((i) => i.leg === "VENDOR") ?? null,
       // The settlement legs live here too, so the money pane fetches once.
       settlements: await settlementsForDeal(header.deal_id),
+      gateway: {
+        payouts_enabled: payoutsConfigured(),
+        links_enabled: buybackLinksConfigured(),
+        dealer_amount: dealerPayout(money),
+        vendor_amount: vendorReceipt(money),
+        dealer_bank: bank,
+        txns: gatewayTxns.map((t) => ({
+          id: t.id,
+          leg: t.leg,
+          kind: t.kind,
+          status: t.status,
+          short_url: t.short_url,
+          utr: t.utr,
+          failure_reason: t.failure_reason,
+          created_at: t.created_at,
+        })),
+      },
     });
   },
 );

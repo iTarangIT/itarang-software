@@ -847,6 +847,9 @@ export const accounts = pgTable(
     bank_account_number: text("bank_account_number"),
     ifsc_code: varchar("ifsc_code", { length: 11 }),
     bank_proof_url: text("bank_proof_url"),
+    // E-193 — RazorpayX fund_account.bank_account.name for a payout; falls
+    // back to business_entity_name when null.
+    bank_beneficiary_name: text("bank_beneficiary_name"),
     dealer_code: varchar("dealer_code", { length: 50 }),
     contact_name: text("contact_name"),
     contact_email: text("contact_email"),
@@ -8234,6 +8237,27 @@ export const buybackSettleMethod = pgEnum("buyback_settle_method", [
 ]);
 export const buybackSettleDirection = pgEnum("buyback_settle_direction", ["OUT", "IN"]);
 
+// E-193 — PAYOUT (RazorpayX, dealer leg) vs PAYMENT_LINK (Razorpay, vendor leg).
+export const buybackGatewayKind = pgEnum("buyback_gateway_kind", ["PAYOUT", "PAYMENT_LINK"]);
+// E-193 — in-flight: INITIATED/PENDING/QUEUED/PROCESSING. Terminal success:
+// PROCESSED (payout) / PAID (link) — the ONLY states that mint a
+// settlementTransactions row. Terminal failure: FAILED/REJECTED/CANCELLED/
+// EXPIRED. REVERSED is terminal-AFTER-success (bank bounced it after
+// processed) — never auto-unwound, a human is alerted.
+export const buybackGatewayStatus = pgEnum("buyback_gateway_status", [
+  "INITIATED",
+  "PENDING",
+  "QUEUED",
+  "PROCESSING",
+  "PROCESSED",
+  "PAID",
+  "FAILED",
+  "REJECTED",
+  "CANCELLED",
+  "EXPIRED",
+  "REVERSED",
+]);
+
 // M12 — two per deal, facing opposite ways: the dealer bills iTarang (we approve
 // or return it), and iTarang bills the vendor.
 //
@@ -8367,6 +8391,59 @@ export const settlementTransactions = pgTable(
       "gin",
       t.txn_ref.op("gin_trgm_ops"),
     ),
+  }),
+);
+
+// E-193 — the ATTEMPT, not the fact. Holds an in-flight RazorpayX payout or
+// Razorpay Payment Link; only a terminal SUCCESS (PROCESSED/PAID) mints a
+// settlementTransactions row (method='API'). A FAILED/REJECTED/CANCELLED/
+// EXPIRED attempt leaves no settlement — retrying is a NEW row here, never an
+// update of this one. REVERSED is terminal-AFTER-success (bank bounced an
+// already-processed payout) and is never auto-unwound; a human is alerted.
+//
+// gatewayTxnOneInflightPerLeg is the race guard: a double-clicked "Pay via
+// RazorpayX" cannot create two in-flight attempts for the same (deal, leg).
+// The `gateway_amount_positive` CHECK constraint lives on the DB side only
+// (E-193 SQL), same as settlement_transactions' CHECKs.
+// Source of truth: drizzle/E-193_buyback_gateway_payments.sql.
+export const buybackGatewayTransactions = pgTable(
+  "buyback_gateway_transactions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    leg: buybackLeg().notNull(),
+    direction: buybackSettleDirection().notNull(),
+    kind: buybackGatewayKind().notNull(),
+    provider: text().notNull(), // 'RAZORPAYX' | 'RAZORPAY'
+    amount: numeric({ precision: 14, scale: 2 }).notNull(), // rupees, server-derived from locks
+    status: buybackGatewayStatus().default("INITIATED").notNull(),
+    provider_ref: text("provider_ref"), // 'pout_...' / 'plink_...'
+    payment_id: text("payment_id"), // 'pay_...' (link leg)
+    utr: text(),
+    short_url: text("short_url"), // link leg only
+    failure_reason: text("failure_reason"),
+    raw_payload: jsonb("raw_payload"), // last provider snapshot
+    settlement_id: uuid("settlement_id").references(() => settlementTransactions.id), // set on success
+    initiated_by: uuid("initiated_by"), // the admin who clicked; audit + webhook actor
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // Webhook correlation + the DB-level "same payout applied twice" guard.
+    providerRefUnique: uniqueIndex("gateway_txn_provider_ref_unique")
+      .on(t.provider_ref)
+      .where(sql`${t.provider_ref} is not null`),
+    // THE race guard: at most ONE in-flight gateway transaction per (deal, leg).
+    oneInflightPerLeg: uniqueIndex("gateway_txn_one_inflight_per_leg")
+      .on(t.deal_id, t.leg)
+      .where(sql`${t.status} in ('INITIATED','PENDING','QUEUED','PROCESSING')`),
+    dealIdx: index("gateway_txn_deal_idx").on(t.deal_id),
+    // The poller's scan.
+    inflightIdx: index("gateway_txn_inflight_idx")
+      .on(t.updated_at)
+      .where(sql`${t.status} in ('INITIATED','PENDING','QUEUED','PROCESSING')`),
   }),
 );
 

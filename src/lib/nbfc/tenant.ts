@@ -184,6 +184,7 @@ async function tenantBySlug(slug: string) {
   return rows[0] ?? null;
 }
 
+
 /**
  * Throws unless the current session is allowed to act on `tenantId`.
  * Use at the top of every NBFC API handler that mutates or reads tenant data.

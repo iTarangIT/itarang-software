@@ -24,6 +24,7 @@ import { getCurrentTenant, getSessionUser, requireNbfcAccess } from "@/lib/nbfc/
 import { runRiskWorkflow } from "@/lib/ai/langgraph/risk-hypothesis-graph";
 import { RunInFlightError } from "@/lib/nbfc/risk-run";
 
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
