@@ -9,7 +9,6 @@ import {
   MessageCircle,
   AlertCircle,
   ShieldCheck,
-  Send,
 } from "lucide-react";
 import { SchemeCardView } from "@/components/dealer-dashboard/calculator/SchemeCardView";
 import type { CalcResponse, ConfigMeta } from "@/components/dealer-dashboard/calculator/types";
@@ -50,6 +49,7 @@ interface OtpInfo {
   sentTo: string;
   sendCount: number;
   maxSends: number;
+  channel: "voice_call" | "whatsapp" | "dev_hardcoded";
 }
 
 const RESEND_WAIT_MS = 30 * 1000;
@@ -136,6 +136,7 @@ export default function LoanCalculatorPage() {
           sentTo: data.data.otpSentTo,
           sendCount: data.data.sendCount,
           maxSends: data.data.maxSends,
+          channel: data.data.deliveryStatus ?? "dev_hardcoded",
         });
         setOtpInput("");
         setResendAvailableAt(Date.now() + RESEND_WAIT_MS);
@@ -187,7 +188,7 @@ export default function LoanCalculatorPage() {
       return;
     }
     if (otpStage !== "verified") {
-      setError("Verify the customer's WhatsApp number first.");
+      setError("Verify the customer's mobile number first.");
       return;
     }
     setSubmitting(true);
@@ -316,16 +317,26 @@ export default function LoanCalculatorPage() {
                       {otpStage === "sending" ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
-                        <Send className="h-3.5 w-3.5" />
+                        <Phone className="h-3.5 w-3.5" />
                       )}
-                      Send OTP on WhatsApp
+                      Call customer with OTP
                     </button>
                   )}
 
                   {(otpStage === "sent" || otpStage === "verifying") && otpInfo && (
                     <div className="space-y-2">
                       <p className="text-xs text-gray-600">
-                        OTP sent to <span className="font-semibold">{otpInfo.sentTo}</span> on WhatsApp.
+                        {otpInfo.channel === "whatsapp" ? (
+                          <>
+                            OTP sent to <span className="font-semibold">{otpInfo.sentTo}</span> on
+                            WhatsApp.
+                          </>
+                        ) : (
+                          <>
+                            OTP called to <span className="font-semibold">{otpInfo.sentTo}</span> —
+                            the customer hears the code on an automated phone call.
+                          </>
+                        )}
                       </p>
                       <div className="flex gap-2">
                         <input
@@ -376,7 +387,7 @@ export default function LoanCalculatorPage() {
             <button
               type="submit"
               disabled={submitting || !meta || otpStage !== "verified"}
-              title={otpStage !== "verified" ? "Verify the customer's WhatsApp number first" : undefined}
+              title={otpStage !== "verified" ? "Verify the customer's mobile number first" : undefined}
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-gray-800 disabled:opacity-50"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
@@ -384,7 +395,7 @@ export default function LoanCalculatorPage() {
             </button>
             {otpStage !== "verified" && (
               <p className="mt-2 text-center text-[11px] text-gray-400">
-                Verify the customer&apos;s WhatsApp number to calculate.
+                Verify the customer&apos;s mobile number to calculate.
               </p>
             )}
           </form>
