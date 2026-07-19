@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NBFC Dashboard — Every Number Explained, End to End</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;
+    --bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;
+    --accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;
+    --ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;
+    --warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;
+    --bad:#d63b3b;--bad-bg:#fce4e4;--bad-line:#f2b3b3;
+    --unv:#7c5cd6;--unv-bg:#efe9fb;--unv-line:#cdbdf1;
+    --in:#0e8f8f;--in-bg:#dff5f5;--src:#2563eb;--src-bg:#dbe6ff;--calc:#b7791f;--calc-bg:#fdf3dd;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(20,32,54,.06),0 8px 24px -12px rgba(20,32,54,.18);--r:14px;
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;
+    --bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;
+    --accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;
+    --ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;
+    --warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;
+    --bad:#ff6b6b;--bad-bg:#2a1417;--bad-line:#5c2830;
+    --unv:#a996f0;--unv-bg:#1d1830;--unv-line:#3a2f57;
+    --in:#4bd6d6;--in-bg:#0e2626;--src:#5b8cff;--src-bg:#1c2942;--calc:#e8b45a;--calc-bg:#271d0d;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.6);
+  }}
+  :root[data-theme="light"]{color-scheme:light;--ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;--bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;--accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;--ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;--warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;--bad:#d63b3b;--bad-bg:#fce4e4;--bad-line:#f2b3b3;--unv:#7c5cd6;--unv-bg:#efe9fb;--unv-line:#cdbdf1;--in:#0e8f8f;--in-bg:#dff5f5;--src:#2563eb;--src-bg:#dbe6ff;--calc:#b7791f;--calc-bg:#fdf3dd;}
+  :root[data-theme="dark"]{color-scheme:dark;--ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;--bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;--accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;--ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;--warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;--bad:#ff6b6b;--bad-bg:#2a1417;--bad-line:#5c2830;--unv:#a996f0;--unv-bg:#1d1830;--unv-line:#3a2f57;--in:#4bd6d6;--in-bg:#0e2626;--src:#5b8cff;--src-bg:#1c2942;--calc:#e8b45a;--calc-bg:#271d0d;}
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 22px 90px}
+  header.top{padding:38px 0 20px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+  h1{font-size:clamp(25px,4.4vw,40px);line-height:1.08;margin:.35em 0 .3em;letter-spacing:-.02em;text-wrap:balance;font-weight:800}
+  .lede{max-width:72ch;color:var(--ink-soft);font-size:16px}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .toc a{text-decoration:none;font-family:var(--mono);font-size:12px;padding:5px 11px;border-radius:99px;border:1px solid var(--line-strong);color:var(--ink-soft);background:var(--panel)}
+  .toc a:hover{border-color:var(--accent);color:var(--ink)}
+
+  h2.sec{font-size:22px;margin:40px 0 4px;letter-spacing:-.01em;scroll-margin-top:18px;display:flex;align-items:baseline;gap:10px}
+  h2.sec .n{font-family:var(--mono);font-size:13px;color:var(--accent-ink);font-weight:700}
+  .sec-sub{color:var(--ink-soft);font-size:14.5px;margin:0 0 14px;max-width:74ch}
+
+  /* legend */
+  .legend{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 18px;margin:20px 0}
+  .legend h3{margin:0 0 10px;font-size:14px}
+  .flow-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px}
+  .verkey{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .vk{font-family:var(--mono);font-size:11.5px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;gap:7px}
+  .vk::before{content:"";width:11px;height:11px;border-radius:3px}
+  .vk.ok::before{background:var(--ok)} .vk.warn::before{background:var(--warn)} .vk.bad::before{background:var(--bad)} .vk.unv::before{background:var(--unv)}
+
+  /* flow card */
+  .fc{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin:12px 0;overflow:hidden;border-left:5px solid var(--line-strong)}
+  .fc.ok{border-left-color:var(--ok)} .fc.warn{border-left-color:var(--warn)} .fc.bad{border-left-color:var(--bad)} .fc.unv{border-left-color:var(--unv)}
+  .fc-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px 4px}
+  .fc-top .nm{font-weight:700;font-size:15px}
+  .vb{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.05em;padding:3px 9px;border-radius:99px;text-transform:uppercase;white-space:nowrap}
+  .vb.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
+  .vb.warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
+  .vb.bad{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-line)}
+  .vb.unv{background:var(--unv-bg);color:var(--unv);border:1px solid var(--unv-line)}
+
+  .flow{display:flex;align-items:stretch;flex-wrap:wrap;gap:6px;padding:8px 16px 10px}
+  .fn{border-radius:9px;padding:6px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.3;border:1px solid var(--line);background:var(--panel-2);display:flex;flex-direction:column;gap:1px;min-width:0}
+  .fn .k{font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;opacity:.85}
+  .fn .v{color:var(--ink);word-break:break-word}
+  .fn.in{background:var(--in-bg);border-color:color-mix(in srgb,var(--in) 35%,var(--line))} .fn.in .k{color:var(--in)}
+  .fn.src{background:var(--src-bg);border-color:color-mix(in srgb,var(--src) 35%,var(--line))} .fn.src .k{color:var(--src)}
+  .fn.calc{background:var(--calc-bg);border-color:color-mix(in srgb,var(--calc) 35%,var(--line))} .fn.calc .k{color:var(--calc)}
+  .fn.out{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))} .fn.out .k{color:var(--accent-ink)}
+  .ar{align-self:center;color:var(--ink-faint);font-weight:700;font-size:15px;padding:0 1px}
+  .why{padding:0 16px 12px;font-size:13.5px;color:var(--ink-soft)}
+  .why b{color:var(--ink)}
+  .why .src{display:block;margin-top:5px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+
+  /* worked example / formula box */
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 18px;margin:14px 0}
+  .box h4{margin:0 0 8px;font-size:14px;font-family:var(--mono);letter-spacing:.02em}
+  .formula{font-family:var(--mono);font-size:13px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:12px 14px;overflow-x:auto;color:var(--ink);line-height:1.7}
+  .formula b{color:var(--accent-ink)}
+  table.ex{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px;font-variant-numeric:tabular-nums}
+  table.ex th,table.ex td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--mono)}
+  table.ex th:first-child,table.ex td:first-child{text-align:left}
+  table.ex th{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint)}
+  table.ex tr.tot td{font-weight:700;border-top:2px solid var(--line-strong);border-bottom:0}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2)}
+
+  .callout{border-radius:11px;padding:12px 15px;font-size:13.5px;margin:14px 0;border:1px solid}
+  .callout.bad{background:var(--bad-bg);border-color:var(--bad-line)} .callout.warn{background:var(--warn-bg);border-color:var(--warn-line)} .callout.unv{background:var(--unv-bg);border-color:var(--unv-line)}
+  .callout b{color:var(--ink)}
+  .callout .h{font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px}
+  .callout.bad .h{color:var(--bad)} .callout.warn .h{color:var(--warn)} .callout.unv .h{color:var(--unv)}
+
+  /* screenshot decode grid */
+  .decode{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
+  .dc{border-radius:10px;border:1px solid var(--line);background:var(--panel);box-shadow:var(--shadow);padding:12px}
+  .dc .big{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
+  .dc .lbl{font-size:12px;color:var(--ink-faint);margin-top:4px}
+  .dc .expl{font-size:12px;color:var(--ink-soft);margin-top:8px;border-top:1px solid var(--line);padding-top:7px}
+  .dc.bad .big{color:var(--bad)} .dc.warn .big{color:var(--warn)} .dc.ok .big{color:var(--ok)} .dc.unv .big{color:var(--unv)}
+
+  table.master{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+  table.master th,table.master td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  table.master th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint)}
+  table.master td.v{white-space:nowrap;font-family:var(--mono);font-size:11px;font-weight:700}
+  td.v.ok{color:var(--ok)} td.v.warn{color:var(--warn)} td.v.bad{color:var(--bad)} td.v.unv{color:var(--unv)}
+  .scroll{overflow-x:auto}
+
+  .themebtn{position:fixed;right:16px;bottom:16px;font-family:var(--mono);font-size:12.5px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);padding:8px 13px;border-radius:99px;cursor:pointer;box-shadow:var(--shadow);z-index:50}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-faint);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<button class="themebtn" id="themebtn">◐ Theme</button>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">iTarang · NBFC Partner Portal · localhost:3000/nbfc</div>
+    <h1>Every Number on the Dashboard — Explained End to End</h1>
+    <p class="lede">For each value the NBFC dashboard shows — every Risk card, plus CDS, PCI, EMI and Battery metrics — this reads left to right: <b>what inputs it takes → which table the data comes from → the calculation → the field you see → is it correct?</b> Written plainly, with worked examples and arrow diagrams.</p>
+    <div class="toc">
+      <a href="#screen">① Your screen, decoded</a>
+      <a href="#trust">② The one rule: AI vs Computed</a>
+      <a href="#risk">③ Risk cards</a>
+      <a href="#cds">④ CDS score</a>
+      <a href="#pci">⑤ PCI score</a>
+      <a href="#emi">⑥ EMI Tracker</a>
+      <a href="#battery">⑦ Battery Monitoring</a>
+      <a href="#master">⑧ Master verdict table</a>
+    </div>
+  </header>
+
+  <!-- how to read -->
+  <div class="legend">
+    <h3>How to read every arrow diagram below</h3>
+    <div class="flow-legend">
+      <span class="fn in"><span class="k">Input</span><span class="v">what goes in</span></span><span class="ar">→</span>
+      <span class="fn src"><span class="k">Source table</span><span class="v">where it's read</span></span><span class="ar">→</span>
+      <span class="fn calc"><span class="k">Calculation</span><span class="v">the math</span></span><span class="ar">→</span>
+      <span class="fn out"><span class="k">Shown as</span><span class="v">the field</span></span>
+    </div>
+    <div class="verkey">
+      <span class="vk ok">CORRECT — computed right from the right data</span>
+      <span class="vk warn">CAUTION — works but drifts / mislabels / depends on the IoT tunnel</span>
+      <span class="vk bad">WRONG — gives an incorrect number</span>
+      <span class="vk unv">UNVERIFIED — number may have been stated by the AI, not computed</span>
+    </div>
+  </div>
+
+  <!-- ① screen decode -->
+  <h2 class="sec" id="screen"><span class="n">01</span> Your screen, decoded</h2>
+  <p class="sec-sub">The header line on your Risk page — “35 of 56 hypotheses produced a computed verdict” — and the four tabs mean exactly this:</p>
+  <div class="decode">
+    <div class="dc"><div class="big" style="color:var(--ink)">56</div><div class="lbl">hypotheses (cards) in the catalogue</div><div class="expl">Rows in <span class="pill">risk_hypotheses</span> — 5 human-written + 51 AI-proposed.</div></div>
+    <div class="dc ok"><div class="big">35</div><div class="lbl">actually computed from data</div><div class="expl">verdict_source = hand_coded or sandbox. These you can trust.</div></div>
+    <div class="dc unv"><div class="big">16</div><div class="lbl">pre-date tracking → UNVERIFIED</div><div class="expl">The purple banner: numbers “may have been stated by the language model.” <b>Re-run to replace them.</b></div></div>
+    <div class="dc warn"><div class="big">~21</div><div class="lbl">not computed this run</div><div class="expl">56 − 35: inconclusive (no data) or the sandbox didn't run them.</div></div>
+  </div>
+  <div class="decode">
+    <div class="dc bad"><div class="big">10</div><div class="lbl">High Alert</div><div class="expl">Most carry the <b>“AI”</b> tag → see the warning below.</div></div>
+    <div class="dc warn"><div class="big">5</div><div class="lbl">Warning</div></div>
+    <div class="dc"><div class="big" style="color:var(--unv)">5</div><div class="lbl">Inconclusive</div><div class="expl">Tested but no data / errored — honestly not counted as OK.</div></div>
+    <div class="dc ok"><div class="big">36</div><div class="lbl">OK</div><div class="expl">Tested, found nothing.</div></div>
+  </div>
+  <div class="callout unv">
+    <span class="h">⚠ Read this before you trust any red card on your screen</span>
+    The High Alerts tagged <b>“AI”</b> — <b>Ignition Status Risk (7 / 7)</b>, <b>High Demand Vehicles (5 / 7)</b>, <b>Low Demand Vehicles (5 / 7)</b>, <b>High Utilization Low DPD (4 / 5)</b>, <b>High Utilization Borrowers (3 / 7)</b> — were written by the language model, and several are among the <b>16 unverified (E-185)</b> cards. Their counts (notice how many are “X of 7”, and 7 is just your active-loan count) may have been <b>asserted by the model, not calculated</b>. The code even names “Ignition Status Risk — 7 of 7 affected” as the exact case it guards against. <b>Treat these as leads to re-run, not facts.</b> The one red card <b>without</b> an “AI” tag — <b>“7-day usage cliff, 1 of 5 assessed”</b> — is real, computed arithmetic.
+  </div>
+
+  <!-- ② trust rule -->
+  <h2 class="sec" id="trust"><span class="n">02</span> The one rule that decides if a card is trustworthy</h2>
+  <p class="sec-sub">Every risk card has a hidden <span class="pill">verdict_source</span> field. It is the single most important thing to check.</p>
+  <div class="scroll"><table class="master">
+    <thead><tr><th>Tag / verdict_source</th><th>Who produced the number</th><th>Trust</th></tr></thead>
+    <tbody>
+      <tr><td class="v ok">hand_coded</td><td>A hand-written TypeScript evaluator did the arithmetic on real data. These are the 5 non-AI cards (7-day usage cliff, etc.).</td><td class="v ok">TRUST</td></tr>
+      <tr><td class="v warn">sandbox</td><td>AI proposed the test, but real Python ran on real data. Computed — though capped to “Warning” until a human promotes it.</td><td class="v warn">MOSTLY</td></tr>
+      <tr><td class="v unv">legacy_llm</td><td>Pre-E-185. The AI may have <b>stated</b> the count itself. This is the 16-card banner.</td><td class="v unv">DON'T</td></tr>
+      <tr><td class="v unv">none</td><td>No verdict was computed (sandbox down / no code emitted).</td><td class="v unv">DON'T</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sec-sub" style="margin-top:12px">Check it in the database directly:</p>
+  <div class="formula">SELECT h.slug, r.severity, r.verdict_source, r.affected_count, r.total_count<br>FROM risk_card_runs r JOIN risk_hypotheses h ON h.id = r.hypothesis_id<br>WHERE r.tenant_id = '&lt;your-tenant-uuid&gt;'<br>ORDER BY r.run_at DESC;<br><span style="color:var(--unv)">-- any verdict_source = 'legacy_llm' or 'none' → the number is NOT verified</span></div>
+
+  <!-- ③ risk cards -->
+  <h2 class="sec" id="risk"><span class="n">03</span> Risk cards — the 5 real ones + the AI ones</h2>
+  <p class="sec-sub">Each computed card counts <b>affected units ÷ assessable units</b> and colours off that fraction. Below: inputs, source, the rule that makes a unit “affected”, and whether it’s trustworthy.</p>
+  <div id="riskCards"></div>
+
+  <!-- ④ CDS -->
+  <h2 class="sec" id="cds"><span class="n">04</span> CDS — Credit Default Score (0–100, higher = riskier)</h2>
+  <p class="sec-sub">Shown on Lead Intelligence and Battery Monitoring. It answers: “how badly is this borrower paying, weighted toward recent EMIs?”</p>
+  <div id="cdsFlow"></div>
+  <div class="box">
+    <h4>The formula (BRD §6.1.5)</h4>
+    <div class="formula">
+CDS = ( <b>Σ(EMI_weight × recency)</b> + <b>streak_penalty</b> + <b>telemetry_risk</b> ) ÷ ( Σrecency + 3.0 + 0.5 ) × 100
+    </div>
+    <p style="font-size:13px;color:var(--ink-soft);margin:10px 0 4px"><b>Inputs</b> — the last <b>6 elapsed EMIs</b> (due on/before today), newest first, from <span class="pill">emi_schedules</span>:</p>
+    <ul style="font-size:13px;color:var(--ink-soft);margin:4px 0 0">
+      <li><b>EMI_weight</b> (how bad each EMI is): paid = 0 · paid-late ≤7d = 0.5 · paid-late &gt;7d = 0.7 · overdue ≤7d = 0.6 · overdue 8–30d = 0.85 · overdue &gt;30d / missed = 1.0 · not-yet-due = 0</li>
+      <li><b>recency</b>: newest EMI ×1.0, then 0.88, 0.76, 0.64, 0.52, down to 0.40 (older EMIs count less)</li>
+      <li><b>streak_penalty</b>: +0.5 for each consecutive most-recent missed/overdue EMI (resets to 0 the moment a recent EMI was paid)</li>
+      <li><b>telemetry_risk</b>: 0 if battery reported ≤12h ago; ramps to 0.5 as it goes stale toward ~7 days. <span style="color:var(--warn)">Read from the live IoT battery — 0 when the tunnel is down.</span></li>
+    </ul>
+  </div>
+  <div class="box">
+    <h4>Worked example — a borrower with one recent missed EMI</h4>
+    <div class="scroll"><table class="ex">
+      <thead><tr><th>EMI (newest→oldest)</th><th>weight</th><th>recency</th><th>contribution</th></tr></thead>
+      <tbody>
+        <tr><td>paid on time</td><td>0.00</td><td>1.00</td><td>0.000</td></tr>
+        <tr><td>overdue 20 days</td><td>0.85</td><td>0.88</td><td>0.748</td></tr>
+        <tr><td>missed</td><td>1.00</td><td>0.76</td><td>0.760</td></tr>
+        <tr><td>paid late 4 days</td><td>0.50</td><td>0.64</td><td>0.320</td></tr>
+        <tr><td>paid on time</td><td>0.00</td><td>0.52</td><td>0.000</td></tr>
+        <tr><td>paid on time</td><td>0.00</td><td>0.40</td><td>0.000</td></tr>
+        <tr class="tot"><td>Σ</td><td></td><td>4.20</td><td>1.828</td></tr>
+      </tbody>
+    </table></div>
+    <div class="formula" style="margin-top:12px">
+streak = <b>0</b> (newest EMI was paid → streak breaks)  ·  streak_penalty = 0<br>
+telemetry_risk = <b>0</b> (tunnel down, no battery contact)<br>
+CDS = (1.828 + 0 + 0) ÷ (4.20 + 3.0 + 0.5) × 100 = 1.828 ÷ 7.70 × 100 = <b>≈ 24</b> / 100
+    </div>
+    <p style="font-size:13px;color:var(--ink-soft);margin:10px 0 0">Even with a missed EMI, the score is a modest 24 — <b>because the most recent EMI was paid</b> (streak = 0) and recency down-weights the older miss. That is by design (recency-weighted), but it explains why CDS can look low despite past misses.</p>
+  </div>
+  <div class="callout warn">
+    <span class="h">Correct math, two things to know</span>
+    <b>1. The telemetry piece is always 0 without the IoT tunnel</b> — yet <span class="pill">+0.5</span> stays in the denominator, so every CDS is slightly deflated and <b>Confidence can never reach HIGH</b> (it pins at MEDIUM). <b>2. The nightly snapshot job</b> (<span class="pill">borrower_risk_scores</span>) reads a <b>dead</b> telemetry table (<span class="pill">telemetry_ingestion_log</span>, empty here) and <b>skips loans whose id isn’t a UUID</b> (e.g. <span class="pill">BAJAJ-LIVE-…</span>) — so the snapshot table is sparse. The <b>displayed</b> score dodges both by recomputing live from <span class="pill">emi_schedules</span>, so what you see on screen is correct.
+  </div>
+
+  <!-- ⑤ PCI -->
+  <h2 class="sec" id="pci"><span class="n">05</span> PCI — Payment Consistency Index (0.0–1.0, higher = better payer)</h2>
+  <p class="sec-sub">The mirror of CDS — how <em>consistently</em> the borrower pays. Below 0.40 it fires a <span class="pill">pci_low</span> risk alert.</p>
+  <div id="pciFlow"></div>
+  <div class="box">
+    <h4>The formula (BRD §6.1.5)</h4>
+    <div class="formula">PCI = <b>Σ(EMI_score × weight)</b> ÷ <b>Σweight</b>   &nbsp;(weight = n for newest … 1 for oldest; Σweight = n(n+1)/2)</div>
+    <p style="font-size:13px;color:var(--ink-soft);margin:10px 0 4px"><b>EMI_score:</b> paid on time = 1.0 · paid late (&lt;7d) = 0.5 · missed/overdue = 0.0. Same 6-elapsed-EMI window from <span class="pill">emi_schedules</span>.</p>
+    <h4 style="margin-top:14px">Worked example — same borrower</h4>
+    <div class="scroll"><table class="ex">
+      <thead><tr><th>EMI (newest→oldest)</th><th>score</th><th>weight</th><th>score×weight</th></tr></thead>
+      <tbody>
+        <tr><td>paid on time</td><td>1.0</td><td>6</td><td>6.0</td></tr>
+        <tr><td>overdue 20 days</td><td>0.0</td><td>5</td><td>0.0</td></tr>
+        <tr><td>missed</td><td>0.0</td><td>4</td><td>0.0</td></tr>
+        <tr><td>paid late 4 days</td><td>0.5</td><td>3</td><td>1.5</td></tr>
+        <tr><td>paid on time</td><td>1.0</td><td>2</td><td>2.0</td></tr>
+        <tr><td>paid on time</td><td>1.0</td><td>1</td><td>1.0</td></tr>
+        <tr class="tot"><td>Σ</td><td></td><td>21</td><td>10.5</td></tr>
+      </tbody>
+    </table></div>
+    <div class="formula" style="margin-top:12px">PCI = 10.5 ÷ 21 = <b>0.500</b>  →  band = “monitoring” (0.40–0.75). Above 0.40, so <b>no alert</b>.</div>
+  </div>
+  <div class="callout ok">
+    <span class="h">Correct — and one important bug already fixed</span>
+    The <b>due_date ≤ today</b> filter is load-bearing: without it, future “scheduled” EMIs (score 0) sort first and <b>every borrower would show PCI 0.000</b>. That filter is present in the live path and the nightly job, so PCI is sound. Division is guarded (empty history shows “—”, never a fake 0).
+  </div>
+
+  <!-- ⑥ EMI -->
+  <h2 class="sec" id="emi"><span class="n">06</span> EMI Tracker — the five headline numbers</h2>
+  <p class="sec-sub">Money is stored two ways: EMI amounts in <b>rupees</b> (<span class="pill">emi_schedules.amount</span>), collections in <b>paise</b> (<span class="pill">emi_payment_attempts.amount_paise</span>, ÷100). The conversions are all correct — the one real error is “Collection rate”.</p>
+  <div id="emiCards"></div>
+
+  <!-- ⑦ Battery -->
+  <h2 class="sec" id="battery"><span class="n">07</span> Battery Monitoring — telemetry tiles & columns</h2>
+  <p class="sec-sub">All live battery data (SoC, SoH, GPS, freshness, alerts) is read from a <b>separate IoT server over an SSH tunnel</b>, not the app database. When that tunnel is down, these go blank / “never” / 0 — so read them knowing the tunnel state.</p>
+  <div id="batteryCards"></div>
+
+  <!-- ⑧ master -->
+  <h2 class="sec" id="master"><span class="n">08</span> Master verdict table — everything at a glance</h2>
+  <div class="scroll"><table class="master" id="masterTable"></table></div>
+
+  <footer>
+    Static source analysis, 2026-07-18 · files: hand-coded-cards.ts · severity.ts · risk-thresholds.ts · computeCds.ts · computePci.ts · liveScores.ts · emi-tracker/page.tsx · BatteryMonitoringView.tsx. Verdicts describe the code, not live data — an unseeded catalogue or a down IoT tunnel changes what you actually see.
+  </footer>
+</div>
+
+<script>
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// node: [type,label,value]  type: in|src|calc|out
+function flowCard(m){
+  const nodes = m.flow.map((n,i)=>{
+    const box=`<span class="fn ${n[0]}"><span class="k">${esc(n[1])}</span><span class="v">${esc(n[2])}</span></span>`;
+    return box + (i<m.flow.length-1?'<span class="ar">→</span>':'');
+  }).join('');
+  return `<div class="fc ${m.v}">
+    <div class="fc-top"><span class="nm">${esc(m.nm)}</span><span class="vb ${m.v}">${({ok:'CORRECT',warn:'CAUTION',bad:'WRONG',unv:'UNVERIFIED'})[m.v]}</span></div>
+    <div class="flow">${nodes}</div>
+    <div class="why"><b>${({ok:'Correct — ',warn:'Caution — ',bad:'Wrong — ',unv:'Unverified — '})[m.v]}</b>${esc(m.why)}${m.src?`<span class="src">↳ ${esc(m.src)}</span>`:''}</div>
+  </div>`;
+}
+const F=(type,label,value)=>[type,label,value];
+
+/* ---- RISK CARDS ---- */
+const RISK=[
+{nm:'7-day usage cliff  (real, non-AI)',v:'ok',
+ flow:[F('in','Input','14 days of km per vehicle'),F('src','Source','IoT VPS · distance_rollup'),F('calc','Calc','drop = (prior7d − recent7d)/prior7d ≥ 40%'),F('out','Shown','X of Y assessed')],
+ why:'Hand-written evaluator, governed 40% threshold, denominator = vehicles with a real baseline. Your screen shows “1 of 5 assessed” — trustworthy computed arithmetic.',src:'hand-coded-cards.ts:104'},
+{nm:'Past-due + telemetry silent  (real)',v:'warn',
+ flow:[F('in','Input','DPD + last GPS time'),F('src','Source','CRM nbfc_loans + IoT vehicle_state'),F('calc','Calc','DPD ≥ 30 AND GPS silent > 24h'),F('out','Shown','X of overdue-pool')],
+ why:'Correct logic, but the “silent” half needs the IoT tunnel. Edge: if telemetry returns empty (not error), every overdue loan reads “silent” → false High.',src:'hand-coded-cards.ts:178'},
+{nm:'Vehicle outside operating radius  (real)',v:'warn',
+ flow:[F('in','Input','30-day GPS history'),F('src','Source','IoT VPS · telemetry_gps + vehicle_state'),F('calc','Calc','haversine(now, home cell) > 100 km'),F('out','Shown','X of assessable')],
+ why:'Correct distance-from-home math (governed 100 km). Needs the tunnel; without it → Inconclusive. Tiny cutoff (0.5%) means one diverted vehicle = High on a small fleet.',src:'hand-coded-cards.ts:242'},
+{nm:'Accelerated battery degradation  (real)',v:'warn',
+ flow:[F('in','Input','SoH readings 30d apart'),F('src','Source','IoT VPS · telemetry_can'),F('calc','Calc','SoH drop ≥ 5 pp / 30d'),F('out','Shown','X of measured')],
+ why:'Correct, but 5pp is hard-coded (not in the admin screen), and telemetry_can is often sparse — so this card is frequently Inconclusive, honestly not OK.',src:'hand-coded-cards.ts:319'},
+{nm:'Active loan, low utilization  (real)',v:'warn',
+ flow:[F('in','Input','14 days km + EMI active'),F('src','Source','CRM nbfc_loans + IoT distance_rollup'),F('calc','Calc','avg < 20 km/day over reported days'),F('out','Shown','X of observable')],
+ why:'Correct, averages only days actually reported (fix for a past false-High during an ingestion outage). 20 km/day is hard-coded; needs the tunnel.',src:'hand-coded-cards.ts:378'},
+{nm:'Ignition Status Risk · High/Low Demand · High Utilization  (“AI” cards)',v:'unv',
+ flow:[F('in','Input','varies (AI-chosen)'),F('src','Source','AI-written Python / legacy'),F('calc','Calc','model-generated or model-stated'),F('out','Shown','7/7 · 5/7 · 4/5 High Alert')],
+ why:'These are the red “AI” cards on your screen. Several are among the 16 unverified (E-185) — the count may have been asserted by the model, not computed. “X of 7” tracks your active-loan count. Re-run analysis to replace them before acting.',src:'risk-hypothesis-graph.ts · E-185 banner'},
+];
+document.getElementById('riskCards').innerHTML = RISK.map(flowCard).join('');
+
+/* ---- CDS ---- */
+document.getElementById('cdsFlow').innerHTML = [
+{nm:'CDS score (the number on each row)',v:'ok',
+ flow:[F('in','Input','last 6 elapsed EMIs + battery freshness'),F('src','Source','emi_schedules (live) + IoT vehicle_state'),F('calc','Calc','weighted EMI risk ÷ max × 100'),F('out','Shown','CDS badge 0–100')],
+ why:'The displayed score recomputes live from emi_schedules using the exact BRD formula, div-by-zero guarded. What you see on screen is correct.',src:'liveScores.ts:118 → computeCds.ts:157'},
+{nm:'CDS Confidence (HIGH / MEDIUM / LOW)',v:'warn',
+ flow:[F('in','Input','# of EMIs + telemetry freshness'),F('src','Source','emi_schedules + IoT vehicle_state.last_gps_at'),F('calc','Calc','HIGH needs ≥6 EMIs AND telemetry ≤12h'),F('out','Shown','Conf. column')],
+ why:'HIGH is impossible without the IoT tunnel — it pins at MEDIUM even for a clean 6-EMI history. LOW if restructured or <3 EMIs.',src:'computeCds.ts:252'},
+].map(flowCard).join('');
+
+/* ---- PCI ---- */
+document.getElementById('pciFlow').innerHTML = [
+{nm:'PCI score',v:'ok',
+ flow:[F('in','Input','last 6 elapsed EMIs'),F('src','Source','emi_schedules (due_date ≤ today)'),F('calc','Calc','Σ(score×weight) ÷ Σweight'),F('out','Shown','PCI badge 0.000–1.000')],
+ why:'Clean recency-weighted average, guarded. The due_date ≤ today filter prevents the “everyone is 0.000” bug. Below 0.40 fires a pci_low alert.',src:'computePci.ts:108'},
+].map(flowCard).join('');
+
+/* ---- EMI ---- */
+const EMI=[
+{nm:'Active loans',v:'warn',
+ flow:[F('in','Input','tenant loans'),F('src','Source','nbfc_loans (is_active)'),F('calc','Calc','rows.length — LIMIT 500'),F('out','Shown','stat card')],
+ why:'It counts the fetched list length, capped at 500. A tenant with >500 active loans shows exactly 500.',src:'emi-tracker/page.tsx:258'},
+{nm:'Collected this month',v:'ok',
+ flow:[F('in','Input','successful payment attempts'),F('src','Source','emi_payment_attempts.amount_paise'),F('calc','Calc','SUM(paise) ÷ 100 this month'),F('out','Shown','₹ stat card')],
+ why:'paise→rupee conversion correct, div-safe. Includes manual cash. Only caveat: “simulated” test payments count in simulate mode.',src:'emi-tracker/page.tsx:247'},
+{nm:'Collection rate',v:'bad',
+ flow:[F('in','Input','all EMIs ever'),F('src','Source','emi_schedules (every status)'),F('calc','Calc','paid ÷ ALL installments (incl. future)'),F('out','Shown','% stat card')],
+ why:'The denominator includes future, not-yet-due EMIs — so this is lifetime repayment progress, not collection efficiency. A healthy new loan drags it toward 0%. Efficiency should be collected-this-period ÷ due-this-period.',src:'emi-tracker/page.tsx:241'},
+{nm:'Overdue / missed  &  EMIs due today',v:'warn',
+ flow:[F('in','Input','installment rows'),F('src','Source','emi_schedules'),F('calc','Calc','COUNT installments (not loans)'),F('out','Shown','stat cards')],
+ why:'These count individual installments, not borrowers — one loan with 3 overdue EMIs adds 3. Reads like a loan count but isn’t.',src:'emi-tracker/page.tsx:240'},
+{nm:'DPD (days past due)',v:'warn',
+ flow:[F('in','Input','overdue installment ages'),F('src','Source','nbfc_loans.current_dpd'),F('calc','Calc','MIN(age of overdue EMIs)'),F('out','Shown','DPD column')],
+ why:'Uses the age of the MOST-RECENT missed EMI, not the OLDEST unpaid one (the industry-standard DPD). A borrower delinquent since January can read ~30 days. Deliberate, but confirm with product.',src:'runEmiAging.ts:78'},
+];
+document.getElementById('emiCards').innerHTML = EMI.map(flowCard).join('');
+
+/* ---- BATTERY ---- */
+const BAT=[
+{nm:'Critical / Warning / Info tiles',v:'warn',
+ flow:[F('in','Input','CDS + open alerts'),F('src','Source','emi_schedules (CDS) + IoT alerts'),F('calc','Calc','Critical = alerts>0 OR CDS ≥ 70'),F('out','Shown','KPI tiles')],
+ why:'Labelled “Live from telemetry” but mostly driven by CDS (from EMI history). Without the tunnel, the alerts part is 0, so it collapses to pure CDS. Counts themselves are consistent.',src:'BatteryMonitoringView.tsx:139'},
+{nm:'Geo Variation tile',v:'bad',
+ flow:[F('in','Input','vehicle GPS coords'),F('src','Source','IoT vehicle_state.lat/lon'),F('calc','Calc','count(has any GPS fix)'),F('out','Shown','red 📍 tile')],
+ why:'Counts vehicles that merely HAVE a GPS fix — not ones that moved. A stationary, healthy battery increments this red “danger” tile. The real geo-shift engine exists but isn’t wired here.',src:'BatteryMonitoringView.tsx:456'},
+{nm:'SoH / Freshness / Alerts / Conf columns',v:'warn',
+ flow:[F('in','Input','live battery telemetry'),F('src','Source','IoT VPS vehicle_state / alerts'),F('calc','Calc','passthrough / freshness buckets'),F('out','Shown','table columns')],
+ why:'Correct when the tunnel is up. Without it: SoH “—”, Freshness “never”, Alerts 0, Conf stuck at MEDIUM — for the whole fleet.',src:'iot-queries.ts / freshness.ts'},
+{nm:'EMI / DPD columns vs CDS in the same row',v:'warn',
+ flow:[F('in','Input','overdue state (two sources)'),F('src','Source','nbfc_loans.current_dpd  vs  emi_schedules'),F('calc','Calc','denormalized col vs live recompute'),F('out','Shown','EMI + CDS columns')],
+ why:'The EMI/DPD columns read a stored current_dpd while CDS reads live emi_schedules — one row can show “On time” while its CDS reflects overdue EMIs. No sync job keeps them equal.',src:'BatteriesTable.tsx:179'},
+];
+document.getElementById('batteryCards').innerHTML = BAT.map(flowCard).join('');
+
+/* ---- MASTER TABLE ---- */
+const ALL=[
+ ['Risk','7-day usage cliff','ok','distance_rollup (IoT)','wk-over-wk km drop ≥40% of assessed'],
+ ['Risk','Past-due + telemetry silent','warn','nbfc_loans + vehicle_state','DPD≥30 & GPS silent>24h; false-High if telemetry empty'],
+ ['Risk','Geo-shift','warn','telemetry_gps + vehicle_state','>100km from home; tunnel-dependent'],
+ ['Risk','Battery SoH decay','warn','telemetry_can','≥5pp/30d; hard-coded; often Inconclusive'],
+ ['Risk','Low utilization','warn','nbfc_loans + distance_rollup','<20 km/day; hard-coded; tunnel-dependent'],
+ ['Risk','“AI” cards (Ignition, Demand, Utilization)','unv','AI Python / legacy','16 unverified — may be model-stated, not computed'],
+ ['CDS','CDS score','ok','emi_schedules (live) + IoT','recency-weighted EMI risk ÷ max ×100'],
+ ['CDS','CDS confidence','warn','emi_schedules + vehicle_state','never HIGH without IoT tunnel'],
+ ['CDS','Nightly snapshot (borrower_risk_scores)','warn','telemetry_ingestion_log (dead) ','reads dead table, skips non-UUID loans → sparse'],
+ ['PCI','PCI score','ok','emi_schedules (due≤today)','Σ(score×weight)÷Σweight; <0.40 alerts'],
+ ['EMI','Collected this month','ok','emi_payment_attempts (paise)','SUM ÷100; correct units'],
+ ['EMI','Collection rate','bad','emi_schedules (all statuses)','denominator includes future EMIs — not efficiency'],
+ ['EMI','Active loans','warn','nbfc_loans','capped at LIMIT 500'],
+ ['EMI','Overdue / due-today counts','warn','emi_schedules','counts installments, not loans'],
+ ['EMI','DPD','warn','nbfc_loans.current_dpd','most-recent miss, not oldest — understates'],
+ ['Battery','Critical/Warning/Info tiles','warn','emi_schedules + IoT alerts','mostly CDS-driven despite “telemetry” label'],
+ ['Battery','Geo Variation tile','bad','vehicle_state.lat/lon','counts “has GPS fix”, not movement'],
+ ['Battery','SoH/Freshness/Alerts/Conf','warn','IoT VPS','blank/0/never without the tunnel'],
+ ['Battery','EMI/DPD vs CDS in a row','warn','current_dpd vs emi_schedules','two overdue sources can disagree'],
+];
+document.getElementById('masterTable').innerHTML =
+ '<thead><tr><th>Area</th><th>Field</th><th>Verdict</th><th>Reads from</th><th>Note</th></tr></thead><tbody>'+
+ ALL.map(r=>`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td class="v ${r[2]}">${({ok:'CORRECT',warn:'CAUTION',bad:'WRONG',unv:'UNVERIFIED'})[r[2]]}</td><td style="font-family:var(--mono);font-size:11px">${esc(r[3])}</td><td>${esc(r[4])}</td></tr>`).join('')+
+ '</tbody>';
+
+document.getElementById('themebtn').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);
+});
+</script>
+</body>
+</html>

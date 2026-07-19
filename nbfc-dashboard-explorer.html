@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NBFC Dashboard Explorer — click any value to see how it's calculated</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;
+    --bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;
+    --accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;
+    --ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;
+    --warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;
+    --bad:#d63b3b;--bad-bg:#fce4e4;--bad-line:#f2b3b3;
+    --read:#0e8f8f;--read-bg:#dff5f5;--store:#7c5cd6;--store-bg:#efe9fb;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(20,32,54,.06),0 10px 30px -14px rgba(20,32,54,.25);--r:13px;
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;
+    --bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;
+    --accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;
+    --ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;
+    --warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;
+    --bad:#ff6b6b;--bad-bg:#2a1417;--bad-line:#5c2830;
+    --read:#4bd6d6;--read-bg:#0e2626;--store:#a996f0;--store-bg:#1d1830;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 34px -14px rgba(0,0,0,.7);
+  }}
+  :root[data-theme="light"]{color-scheme:light;--ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;--bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;--accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;--ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;--warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;--bad:#d63b3b;--bad-bg:#fce4e4;--bad-line:#f2b3b3;--read:#0e8f8f;--read-bg:#dff5f5;--store:#7c5cd6;--store-bg:#efe9fb;}
+  :root[data-theme="dark"]{color-scheme:dark;--ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;--bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;--accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;--ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;--warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;--bad:#ff6b6b;--bad-bg:#2a1417;--bad-line:#5c2830;--read:#4bd6d6;--read-bg:#0e2626;--store:#a996f0;--store-bg:#1d1830;}
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .top{padding:20px 24px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(10px);z-index:30}
+  .top h1{margin:0;font-size:19px;letter-spacing:-.01em;font-weight:800}
+  .top p{margin:3px 0 0;font-size:13px;color:var(--ink-soft)}
+  .top .search{margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .top input{flex:1;min-width:180px;font-family:var(--sans);font-size:13.5px;padding:8px 12px;border-radius:9px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink)}
+  .top input:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+  .legend{display:flex;gap:10px;font-family:var(--mono);font-size:11px;flex-wrap:wrap}
+  .lg{display:flex;align-items:center;gap:5px;color:var(--ink-faint)} .lg::before{content:"";width:9px;height:9px;border-radius:99px}
+  .lg.ok::before{background:var(--ok)} .lg.warn::before{background:var(--warn)} .lg.bad::before{background:var(--bad)}
+
+  .app{display:grid;grid-template-columns:230px 1fr;gap:0;max-width:1200px;margin:0 auto;min-height:calc(100vh - 92px)}
+  @media(max-width:780px){.app{grid-template-columns:1fr}}
+  nav.side{border-right:1px solid var(--line);padding:14px 10px}
+  @media(max-width:780px){nav.side{border-right:0;border-bottom:1px solid var(--line);display:flex;gap:6px;overflow-x:auto;padding:10px}}
+  nav.side button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;text-align:left;font-family:var(--sans);font-size:13.5px;color:var(--ink-soft);background:none;border:0;border-radius:9px;padding:9px 11px;cursor:pointer;white-space:nowrap}
+  nav.side button:hover{background:var(--panel)}
+  nav.side button.active{background:var(--panel);color:var(--ink);font-weight:700;box-shadow:var(--shadow)}
+  nav.side button .badge{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);display:flex;gap:4px}
+  nav.side button .dots{display:inline-flex;gap:2px}
+  .dot{width:7px;height:7px;border-radius:99px;display:inline-block}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.bad{background:var(--bad)}
+
+  main{padding:18px 22px}
+  .sec-h{font-size:20px;font-weight:800;letter-spacing:-.01em;margin:0 0 3px}
+  .sec-d{font-size:13.5px;color:var(--ink-soft);margin:0 0 14px;max-width:70ch}
+  .points{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+  .pt{text-align:left;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--line-strong);border-radius:11px;box-shadow:var(--shadow);padding:12px 13px;cursor:pointer;transition:.12s;font-family:var(--sans)}
+  .pt:hover{transform:translateY(-2px);border-color:var(--accent)}
+  .pt.ok{border-left-color:var(--ok)} .pt.warn{border-left-color:var(--warn)} .pt.bad{border-left-color:var(--bad)}
+  .pt .pn{font-weight:700;font-size:14px;color:var(--ink);display:block}
+  .pt .pw{font-size:12px;color:var(--ink-faint);margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pt .pv{margin-top:8px;font-family:var(--mono);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:6px;display:inline-block}
+  .pt.ok .pv{background:var(--ok-bg);color:var(--ok)} .pt.warn .pv{background:var(--warn-bg);color:var(--warn)} .pt.bad .pv{background:var(--bad-bg);color:var(--bad)}
+  .pt .tapicon{float:right;color:var(--ink-faint);font-size:12px}
+
+  /* detail drawer */
+  .overlay{position:fixed;inset:0;background:rgba(10,15,25,.5);opacity:0;pointer-events:none;transition:.2s;z-index:40}
+  .overlay.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:520px;max-width:92vw;background:var(--panel);border-left:1px solid var(--line);box-shadow:-20px 0 50px -20px rgba(0,0,0,.4);transform:translateX(100%);transition:transform .22s ease;z-index:41;overflow-y:auto}
+  .drawer.open{transform:translateX(0)}
+  .dh{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line);padding:16px 20px;display:flex;align-items:flex-start;gap:12px;z-index:2}
+  .dh .dtt{flex:1}
+  .dh h2{margin:0;font-size:18px;letter-spacing:-.01em}
+  .dh .where{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-top:3px}
+  .dh .vb{font-family:var(--mono);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:4px 10px;border-radius:99px;white-space:nowrap}
+  .dh .vb.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
+  .dh .vb.warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
+  .dh .vb.bad{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-line)}
+  .dh .x{background:none;border:1px solid var(--line-strong);border-radius:8px;width:32px;height:32px;cursor:pointer;color:var(--ink-soft);font-size:17px;line-height:1;flex:none}
+
+  .dbody{padding:16px 20px 40px}
+  .field{margin-bottom:16px}
+  .field .fl{font-family:var(--mono);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .field .fl .i{width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff}
+  .field .fc{font-size:14px;color:var(--ink)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .tcol{font-family:var(--mono);font-size:11.5px;border-radius:8px;padding:6px 9px;line-height:1.35;border:1px solid var(--line)}
+  .tcol.read{background:var(--read-bg);border-color:color-mix(in srgb,var(--read) 30%,var(--line))}
+  .tcol.store{background:var(--store-bg);border-color:color-mix(in srgb,var(--store) 30%,var(--line))}
+  .tcol .tb{font-weight:700;color:var(--ink)} .tcol .tc{color:var(--ink-soft)}
+  .tcol.read .tb{color:var(--read)} .tcol.store .tb{color:var(--store)}
+  .calc{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:11px 13px;line-height:1.7;overflow-x:auto;white-space:pre-wrap;color:var(--ink)}
+  .verdbox{border-radius:10px;padding:11px 13px;font-size:13.5px;border:1px solid}
+  .verdbox.ok{background:var(--ok-bg);border-color:var(--ok-line)} .verdbox.warn{background:var(--warn-bg);border-color:var(--warn-line)} .verdbox.bad{background:var(--bad-bg);border-color:var(--bad-line)}
+  .srcline{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-top:2px}
+  .flowmini{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:2px}
+  .flowmini .b{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:3px 7px}
+  .flowmini .a{color:var(--ink-faint);font-weight:700}
+  .themebtn{position:fixed;left:16px;bottom:16px;font-family:var(--mono);font-size:12px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);padding:7px 12px;border-radius:99px;cursor:pointer;box-shadow:var(--shadow);z-index:35}
+  .hint{font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin-top:10px}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>NBFC Dashboard Explorer</h1>
+  <p>Pick a section, then <b>click any value</b> to see what it is, which tables &amp; columns it reads, how it's calculated, where it's stored, and whether it's correct.</p>
+  <div class="search">
+    <input id="q" type="search" placeholder="Search any value… e.g. CDS, collection rate, AUM, geo" aria-label="Search values" />
+    <div class="legend"><span class="lg ok">correct</span><span class="lg warn">caution</span><span class="lg bad">wrong</span></div>
+  </div>
+</div>
+
+<div class="app">
+  <nav class="side" id="side"></nav>
+  <main id="main"></main>
+</div>
+
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Value details"></aside>
+<button class="themebtn" id="themebtn">◐ Theme</button>
+
+<script>
+/* ============ DATA ============
+   v: ok|warn|bad
+   reads: [ [table, "col1, col2"], ... ]     store: [ [table, "cols"] ] or "text"
+*/
+const CDS = {name:'CDS — Credit Default Score', v:'ok', tag:'0–100, higher = riskier',
+  what:'A per-borrower score of how badly they are repaying, weighted toward the most recent EMIs. Shown on Lead Intelligence and Battery Monitoring.',
+  inputs:'The last 6 elapsed EMIs (due on/before today) + battery telemetry freshness + any restructuring flag.',
+  reads:[['emi_schedules','status, days_overdue, due_date, paid_at'],['nbfc_loans','vehicleno (to find the battery)'],['IoT vehicle_state','last_gps_at (telemetry freshness)'],['nbfc_loan_restructures','any row → confidence LOW']],
+  calc:'CDS = ( Σ(EMI_weight × recency) + streak×0.5 + telemetry_risk )\n        ÷ ( Σrecency + 3.0 + 0.5 ) × 100\n\nEMI_weight: paid 0 · late≤7d 0.5 · late>7d 0.7 · overdue≤7d 0.6 · overdue 8–30d 0.85 · overdue>30d/missed 1.0\nrecency: newest 1.0 → 0.88 → 0.76 → 0.64 → 0.52 → 0.40\nstreak: +0.5 per consecutive most-recent missed/overdue EMI',
+  store:'Displayed value is computed LIVE on each page load (never stored). A nightly job also writes a snapshot to borrower_risk_scores (cds_score, confidence, computed_at).',
+  why:'The live math is correct and div-by-zero guarded. Two caveats: (1) the telemetry term is 0 whenever the IoT tunnel is down, and +0.5 stays in the denominator, so CDS is slightly deflated and Confidence can never reach HIGH; (2) the nightly snapshot job reads a dead table (telemetry_ingestion_log) and skips loans whose id isn’t a UUID — so borrower_risk_scores is sparse, but the on-screen number dodges that by recomputing live.',
+  file:'liveScores.ts:118 → computeCds.ts:157'};
+
+const PCI = {name:'PCI — Payment Consistency Index', v:'ok', tag:'0.0–1.0, higher = better payer',
+  what:'The mirror of CDS: how consistently the borrower pays. Below 0.40 it fires a low-PCI risk alert.',
+  inputs:'The same last 6 elapsed EMIs.',
+  reads:[['emi_schedules','status, paid_at, due_date, days_overdue']],
+  calc:'PCI = Σ(EMI_score × weight) ÷ Σweight\n\nEMI_score: paid on time 1.0 · paid late (<7d) 0.5 · missed/overdue 0.0\nweight: newest = n, next = n−1, … oldest = 1   (Σweight = n(n+1)/2)',
+  store:'Live-computed for display. Nightly job writes pci_score onto the latest borrower_risk_scores row; if PCI < 0.40 it INSERTS a row into nbfc_risk_alerts (type = pci_low).',
+  why:'Correct, div-guarded. The load-bearing filter due_date ≤ today prevents the known “everyone scores 0.000” bug (future scheduled EMIs would otherwise sort first). Empty history shows “—”, never a fake 0.',
+  file:'computePci.ts:108'};
+
+const SECTIONS=[
+{id:'acquire',name:'Acquire',desc:'The lead-pipeline workspace — status KPI cards and per-lead financing details.',points:[
+  {name:'6 status KPI cards',v:'warn',what:'Counts of your lead assignments by stage (Pending, In progress, Offer submitted, Selected, Not selected, Declined).',
+   inputs:'Your NBFC’s lead assignments.',reads:[['nbfc_lead_assignments','status, tenant_id'],['leads','(inner join)'],['product_selections','final_price (finance)']],
+   calc:'enriched.filter(row.status === card) .length — over a client-side fetch capped at LIMIT 1000.',store:'Not stored — counted on page load each time.',
+   why:'Capped at 1000 assignments, so counts are wrong past 1000 leads. “Withdrawn” rows show in the table but have no card, so cards don’t sum to the total. The finance product_selections join isn’t deduped → a lead with two finance rows double-counts.',file:'acquire/page.tsx:152-263'},
+  {name:'Asset price (column)',v:'warn',what:'The financed asset’s price shown per lead.',inputs:'The lead’s finance product selection.',
+   reads:[['product_selections','final_price (payment_mode = finance)']],calc:'LEFT JOIN on lead_id — no LIMIT 1, so multiple finance rows fan out.',store:'product_selections.final_price',
+   why:'It’s the product price, not a loan amount (label is honest). The un-deduped join can duplicate a lead. The lead-detail page uses LIMIT 1 and is fine.',file:'acquire/page.tsx:163-194'},
+  {name:'Work-queue chip “· N”',v:'warn',what:'The count next to a “needs FI / VKYC / E-NACH / agreement” filter chip.',inputs:'Your pending verification tracks.',
+   reads:[['nbfc_fi_track / vkyc / enach / agreement','tenant-scoped'],['leads','(inner join)']],calc:'size of (track lead-ids ∩ the ≤1000 fetched set).',store:'Not stored.',
+   why:'The bell/sidebar badge uses a true COUNT(*), but this chip is bounded by the LIMIT-1000 fetch — so the two can disagree once a tenant passes 1000 leads.',file:'acquire/page.tsx:209-215'},
+  {name:'Indicated loan product (ranges)',v:'ok',what:'The offered loan amount range, tenure, ROI, down-payment % and TAT on the lead detail page.',
+   inputs:'The NBFC loan product tied to the assignment.',reads:[['nbfc_loan_products','loan_amount_min/max, min/max_roi_pct, down_payment_pct, disbursement_tat_hours']],calc:'Displayed verbatim — no computation.',store:'nbfc_loan_products',
+   why:'Pure display of configured product ranges. Correct.',file:'[leadId]/page.tsx:611-645'},
+  {name:'Disbursal-ready gate',v:'ok',what:'Whether the lead is ready to disburse.',inputs:'This NBFC’s FI/VKYC/E-NACH track states + the frozen per-lead config.',
+   reads:[['nbfc_lead_assignments','service_config_snapshot, nbfc_id'],['FI / VKYC / E-NACH tracks','state']],calc:'disbursalReady = won AND enachGate.satisfied AND verificationComplete.',store:'Not stored (derived).',
+   why:'Reads this NBFC’s own track rows and the per-lead config snapshot (matches the in-flight-config rule). Correct.',file:'[leadId]/page.tsx:161-427'},
+]},
+{id:'portfolio',name:'Portfolio Overview',desc:'The command centre — one endpoint (computeCommandCentre) feeds every KPI, all tenant-scoped.',points:[
+  {name:'Active Loans (KPI)',v:'ok',what:'Loans disbursed and not yet closed.',inputs:'Your loan book.',reads:[['loan_sanctions','status, closed_at, nbfc_id']],
+   calc:'COUNT(*) WHERE status = disbursed AND closed_at IS NULL.',store:'Not stored — counted live.',why:'Clean lifecycle filter, tenant-scoped. Correct.',file:'portfolio-summary.ts:40-55'},
+  {name:'At-Risk Accounts (KPI)',v:'warn',what:'Share of the active book that is 30+ days overdue or has a critical/warning telemetry alert.',
+   inputs:'Overdue EMIs + open telemetry alerts.',reads:[['emi_schedules','status, days_overdue'],['telemetry_alerts','severity, resolved_at'],['nbfc_loans','vehicleno (join)']],
+   calc:'|{loans 30+ DPD} ∪ {loans with critical/warning telemetry alert}| ÷ active loans × 100.',store:'Not stored.',
+   why:'It deliberately EXCLUDES CDS/PCI risk alerts on a stale “uuid can’t join varchar” assumption that migration E-117 already fixed — so a borrower flagged only by a bad CDS/PCI is not counted. Under-reports.',file:'command-centre.ts:223-257'},
+  {name:'Delinquency Rate (KPI)',v:'warn',what:'% of active loans with an EMI overdue > 30 days.',inputs:'Overdue EMIs.',reads:[['emi_schedules','status, days_overdue, due_date, paid_at']],
+   calc:'overdue-loan count ÷ active-loan count × 100.',store:'Not stored.',why:'The number shown uses the mutable status column, but its own “MoM delta” recomputes from due_date/paid_at — the two methods disagree, so value − delta ≠ last month’s value.',file:'command-centre.ts:351-407'},
+  {name:'Recovery in Motion (KPI)',v:'warn',what:'₹ value + battery count in the recovery pipeline.',inputs:'Recovery pipeline rows.',reads:[['nbfc_recovery_pipeline','estimated_recovery_value, stage']],
+   calc:'SUM(estimated_recovery_value) WHERE stage <> "resold".',store:'nbfc_recovery_pipeline.',why:'“stage <> resold” also sums other terminal stages (scrap, cancelled…) into “in motion”. Over-counts. Units are rupees (fine).',file:'command-centre.ts:301-317'},
+  {name:'“Needs attention” alert feed',v:'warn',what:'The list of active alerts, grouped by severity.',inputs:'Open risk + telemetry alerts.',reads:[['nbfc_risk_alerts','resolved_at'],['telemetry_alerts','resolved_at']],
+   calc:'each source LIMIT 60, merged, sliced to 60.',store:'Not stored.',why:'>60 risk alerts push telemetry alerts out of the top-60, so “N active alerts” is a capped number that disagrees with the nav tile total.',file:'command-centre.ts:472-570'},
+  {name:'Regional risk (per city %)',v:'ok',what:'At-risk share per city, as a bar.',inputs:'Active loans grouped by city + the at-risk set.',reads:[['loan_sanctions','(active)'],['leads','city']],
+   calc:'at-risk loans in city ÷ loans in city × 100, div-guarded.',store:'Not stored.',why:'Correct for what it measures — but inherits the At-Risk KPI’s CDS/PCI undercount.',file:'command-centre.ts:576-611'},
+  {name:'Data-freshness badge',v:'warn',what:'“Last updated …” vs “Data may be outdated — IoT sync issue”.',inputs:'Latest CDS compute time + latest IoT telemetry time.',
+   reads:[['borrower_risk_scores','computed_at'],['IoT vehicle_state','last telemetry']],calc:'stale if either is missing or > 24h old.',store:'Not stored.',
+   why:'Logic is sound, but borrower_risk_scores is often unseeded and the IoT VPS needs a tunnel — either being empty pins the badge amber permanently. Latent false alarm.',file:'portfolio-freshness.ts'},
+]},
+{id:'leads',name:'Lead Intelligence',desc:'The loan-book table with CDS scores. Loads the whole book into memory and filters in JS.',points:[
+  CDS,
+  {name:'EMI Status (column)',v:'warn',what:'“Next due …” or “N days overdue” per loan.',inputs:'The loan’s EMI schedule.',reads:[['emi_schedules','status, due_date'],['loan_sanctions','nbfc_id (scoping)']],
+   calc:'MIN age of overdue EMIs; next due = MIN future scheduled due_date.',store:'Not stored.',why:'This query scopes by loan_sanctions.nbfc_id while the rest of the page scopes by nbfc_loans.tenant_id — a NULL/mismatched nbfc_id blanks EMI Status on an otherwise-scored row.',file:'leads/page.tsx:281-289'},
+  {name:'Status pill (Active/Overdue…)',v:'warn',what:'The loan’s stage pill, flipped to “Overdue” when past due.',inputs:'Loan status + stored DPD.',reads:[['loan_sanctions','status'],['nbfc_loans','current_dpd']],
+   calc:'overdue if current_dpd > 0 and base status is active/disbursed.',store:'Not stored.',why:'Uses the denormalized current_dpd, while the EMI Status column beside it uses live emi_schedules — the two can contradict in one row.',file:'leads/page.tsx:325-346'},
+  {name:'Outstanding (drawer)',v:'warn',what:'The remaining balance on the loan.',inputs:'A stored balance column.',reads:[['nbfc_loans','outstanding_amount']],calc:'Read verbatim.',store:'nbfc_loans.outstanding_amount',
+   why:'Import-maintained and never reconciled against emi_schedules — can lag actual balances (same drift class as the stale active-loans counter).',file:'leads/page.tsx:351'},
+  {name:'Loan Amount (column)',v:'ok',what:'The sanctioned loan amount.',inputs:'The sanction record.',reads:[['loan_sanctions','loan_amount']],calc:'Number(loan_amount), formatted ₹.',store:'loan_sanctions.loan_amount',
+   why:'Correctly the sanctioned amount (not disbursed/outstanding), labelled as such. Rupee units.',file:'leads/page.tsx:343'},
+  {name:'Stage cards (6 counts)',v:'warn',what:'Sanctioned / Dealer Approved / Disbursed / Active / Overdue / Closed counts.',inputs:'The loaded book.',reads:[['loan_sanctions','status'],['nbfc_loans','current_dpd']],
+   calc:'count per stage over the enriched set; Active includes disbursed+overdue.',store:'Not stored.',why:'Buckets overlap (an overdue loan counts in both Overdue and Active), so they sum to more than the table total; Disbursed drops delinquent loans.',file:'leads/page.tsx:425-489'},
+]},
+{id:'emi',name:'EMI Tracker',desc:'Repayment tracking. EMI amounts are rupees; collections are paise (÷100). The one real math error is Collection rate.',points:[
+  {name:'Collection rate',v:'bad',what:'Shown as a portfolio “collection %”.',inputs:'Paid EMIs vs all EMIs.',reads:[['emi_schedules','status (all rows, incl. future scheduled)']],
+   calc:'paid_count ÷ ALL installments × 100  ← denominator includes not-yet-due EMIs.',store:'Not stored.',why:'This is lifetime repayment progress, not collection efficiency. A healthy new loan with 24 future EMIs drags it toward 0%. Efficiency should be collected-this-period ÷ due-this-period.',file:'emi-tracker/page.tsx:241-262'},
+  {name:'Collected this month',v:'ok',what:'₹ collected this calendar month.',inputs:'Successful/simulated payment attempts.',reads:[['emi_payment_attempts','amount_paise, status, collected_at']],
+   calc:'SUM(amount_paise) ÷ 100 for this month.',store:'Not stored (aggregated on read).',why:'paise→rupee conversion correct, div-safe. Only caveat: “simulated” test payments count in simulate mode.',file:'emi-tracker/page.tsx:247-261'},
+  {name:'Active loans (card)',v:'warn',what:'Count of active loans.',inputs:'The fetched loan list.',reads:[['nbfc_loans','is_active']],calc:'rows.length — over a LIMIT 500 query.',store:'Not stored.',
+   why:'It’s the list length, capped at 500 — a tenant with >500 active loans always shows exactly 500.',file:'emi-tracker/page.tsx:95,258'},
+  {name:'Overdue / missed  &  Due today',v:'warn',what:'Counts of overdue/missed and due-today EMIs.',inputs:'EMI rows.',reads:[['emi_schedules','status, due_date']],
+   calc:'COUNT of installments matching the status.',store:'Not stored.',why:'These count individual installments, not borrowers — one loan with 3 overdue EMIs adds 3. Reads like a loan count but isn’t.',file:'emi-tracker/page.tsx:239-240'},
+  {name:'DPD (column)',v:'warn',what:'Days past due per loan.',inputs:'Overdue installment ages.',reads:[['nbfc_loans','current_dpd']],calc:'current_dpd = MIN(today − due_date) over overdue EMIs.',store:'nbfc_loans.current_dpd (written by the aging job)',
+   why:'Uses the age of the MOST-RECENT missed EMI, not the OLDEST unpaid one (industry-standard DPD). A borrower delinquent since January can read ~30 days. Deliberate, but confirm with product.',file:'runEmiAging.ts:78'},
+  {name:'Progress (paid / total)',v:'ok',what:'Installments paid out of total.',inputs:'EMI rows.',reads:[['emi_schedules','status']],calc:'COUNT(paid/paid_late) / COUNT(*).',store:'Not stored.',why:'Straight counts; consistent with the collection numerator. Correct.',file:'emi-tracker/page.tsx:68-69'},
+]},
+{id:'battery',name:'Battery Monitoring',desc:'All live battery data (SoC/SoH/GPS/alerts) comes from a SEPARATE IoT server over an SSH tunnel — not the app DB. Tunnel down = blank/never/0.',points:[
+  {name:'Geo Variation (tile)',v:'bad',what:'A red “danger” tile counting geo-shifted vehicles.',inputs:'Vehicle GPS coordinates.',reads:[['IoT vehicle_state','lat, lon']],
+   calc:'count(lat != null AND lon != null) — i.e. “has any GPS fix”.',store:'Not stored.',why:'It counts vehicles that merely HAVE a GPS fix — not ones that moved. A stationary, healthy battery increments this red tile. The real geo-shift (haversine) engine exists but isn’t wired here.',file:'BatteryMonitoringView.tsx:456'},
+  {name:'Critical / Warning / Info tiles',v:'warn',what:'The KPI tiles labelled “Live from telemetry”.',inputs:'CDS score + open telemetry alerts.',reads:[['emi_schedules','(CDS inputs)'],['IoT alerts','open count']],
+   calc:'Critical = open_alerts > 0 OR CDS ≥ 70.',store:'Not stored.',why:'Labelled “telemetry” but mostly driven by CDS (from EMI history). Without the tunnel the alerts term is 0, so it collapses to pure CDS. Counts themselves are consistent.',file:'BatteryMonitoringView.tsx:139'},
+  {name:'CDS (column)',v:'ok',what:'The same Credit Default Score, per battery row.',inputs:CDS.inputs,reads:CDS.reads,calc:CDS.calc,store:CDS.store,why:CDS.why,file:CDS.file},
+  {name:'PCI (column)',v:'ok',what:PCI.what,inputs:PCI.inputs,reads:PCI.reads,calc:PCI.calc,store:PCI.store,why:PCI.why,file:PCI.file},
+  {name:'SoH (column)',v:'warn',what:'Battery state of health %.',inputs:'Live battery telemetry.',reads:[['IoT vehicle_state','soh_pct']],calc:'round(soh_pct); “—” if null.',store:'Not stored (read live from IoT).',
+   why:'Direct passthrough of an IoT-server field — “—” for the whole fleet whenever the tunnel is down.',file:'iot-queries.ts:178'},
+  {name:'Freshness (pill)',v:'warn',what:'fresh / idle / stale / offline / never.',inputs:'Last GPS contact time.',reads:[['IoT vehicle_state','last_gps_at']],calc:'<15m fresh · 15m–6h idle · 6–24h stale · >24h offline · null = never.',store:'Not stored.',
+   why:'Correct pure-compute, but keys on GPS only and reads “never” for the whole fleet without the tunnel. (The footer uses a 5-min “fresh” while this uses 15-min — two definitions on one page.)',file:'freshness.ts:46'},
+  {name:'Confidence (column)',v:'warn',what:'HIGH / MEDIUM / LOW confidence in the CDS.',inputs:'# of EMIs + telemetry freshness.',reads:[['emi_schedules','(count)'],['IoT vehicle_state','last_gps_at']],
+   calc:'HIGH needs ≥6 EMIs AND telemetry ≤12h; LOW if restructured or <3 EMIs.',store:'Not stored.',why:'HIGH is impossible without the IoT tunnel — it pins at MEDIUM even for a clean 6-EMI history.',file:'computeCds.ts:252'},
+  {name:'EMI / DPD (columns)',v:'warn',what:'On-time / overdue and DPD per row.',inputs:'A stored DPD value.',reads:[['nbfc_loans','current_dpd']],calc:'read verbatim (while CDS in the same row uses emi_schedules).',store:'nbfc_loans.current_dpd',
+   why:'Two overdue sources in one row — the EMI/DPD columns read stored current_dpd while CDS reads live emi_schedules, so a row can show “On time” while its CDS reflects overdue EMIs.',file:'BatteriesTable.tsx:179'},
+]},
+{id:'risk',name:'Risk Alerts',desc:'Hypothesis cards. Each = affected ÷ assessable, coloured off that fraction. 5 are hand-written; the rest are AI-generated. CDS/PCI are NOT on this page.',points:[
+  {name:'Tab counts (High/Warn/Inc/OK)',v:'warn',what:'The four tab numbers at the top.',inputs:'The latest run of every non-retired hypothesis.',reads:[['risk_hypotheses','retired_at'],['risk_card_runs','severity, verdict_source']],
+   calc:'count cards per severity (error folds into Inconclusive).',store:'risk_card_runs (one row per run).',why:'If the catalogue was never seeded, all four read 0 and look “healthy”. On a 7-loan book, one affected vehicle = 14% → auto-High, so the fraction cutoffs are meaningless at your scale.',file:'risk/page.tsx:42-56'},
+  {name:'7-day usage cliff (hand-coded)',v:'ok',what:'Borrowers whose 7-day km dropped ≥40% vs the prior week.',inputs:'14 days of km per vehicle.',reads:[['IoT distance_rollup','km per day'],['nbfc_risk_rules','usage_drop_pct = 40']],
+   calc:'drop = (prior7d − recent7d)/prior7d ≥ 40%, over vehicles with a ≥50 km baseline.',store:'risk_card_runs (affected_count, total_count).',why:'Deterministic, governed threshold, proper denominator. The trustworthy model card — your screen shows “1 of 5 assessed”.',file:'hand-coded-cards.ts:104'},
+  {name:'Past-due + telemetry silent (hand-coded)',v:'warn',what:'Loans 30+ DPD whose battery is GPS-silent >24h.',inputs:'DPD + last GPS time.',reads:[['nbfc_loans','current_dpd'],['IoT vehicle_state','sec_since_gps'],['nbfc_risk_rules','emi_overdue_days=30, offline_alert_hours=24']],
+   calc:'DPD ≥ 30 AND GPS silent > 24h, ÷ the overdue pool.',store:'risk_card_runs.',why:'Correct logic, but the “silent” half needs the IoT tunnel; if telemetry returns empty (not error), every overdue loan reads “silent” → false High.',file:'hand-coded-cards.ts:178'},
+  {name:'Geo-shift / SoH-decay / Low-utilization (hand-coded)',v:'warn',what:'Three more human cards: >100km from home, ≥5pp SoH drop/30d, <20 km/day.',inputs:'IoT telemetry (GPS, battery CAN, distance).',reads:[['IoT telemetry_gps / telemetry_can / distance_rollup','positions, SoH, km'],['nbfc_risk_rules','geo_shift_km=100']],
+   calc:'each = affected ÷ assessable vs a threshold (geo 100km governed; SoH 5pp & util 20km/day hard-coded).',store:'risk_card_runs.',why:'Correct math, but all three need the IoT tunnel; without it they go Inconclusive. SoH-decay is often Inconclusive even with the tunnel (sparse battery data).',file:'hand-coded-cards.ts:242-488'},
+  {name:'AI cards (Ignition, Demand, Utilization…)',v:'bad',what:'The red cards tagged “AI” — Ignition Status Risk 7/7, High/Low Demand Vehicles, High Utilization…',inputs:'AI-chosen; often IoT telemetry or DPD.',reads:[['risk_hypotheses','test_definition (AI-written)'],['risk_card_runs','severity, verdict_source, evidence_json']],
+   calc:'AI-generated Python (or, for older rows, no saved code) run on your data; same 5%/1% cutoffs then capped.',store:'risk_card_runs.',why:'8 of your 10 Highs are UNPROMOTED AI cards from an old run that predate the E-188 cap — the current rules say they should be Warnings; re-running demotes them. Several tests are weak (flag 7/7, or “below average”). Only the DPD>30 one is a solid signal. Treat AI cards as leads to re-run, not facts.',file:'risk-hypothesis-graph.ts · see the 15-card audit doc'},
+]},
+{id:'recovery',name:'Recovery & Auction',desc:'Recovery pipeline, live auction lots and settlements. Money is in rupees throughout; the issues are LIMIT caps applied before totals.',points:[
+  {name:'“N assets in motion”',v:'warn',what:'Header count of the recovery pipeline.',inputs:'Pipeline rows.',reads:[['nbfc_recovery_pipeline','stage, tenant_id']],calc:'enrichedRows.length — LIMIT 500, includes terminal stages.',store:'nbfc_recovery_pipeline.',
+   why:'“In motion” also counts resold/scrap rows, and the LIMIT 500 caps every metric in this section for large tenants.',file:'recovery/page.tsx:145-157'},
+  {name:'Value locked',v:'ok',what:'₹ tied up in in-progress recovery stages.',inputs:'Estimated recovery values.',reads:[['nbfc_recovery_pipeline','estimated_recovery_value, stage']],calc:'SUM for in-progress stages, null→0.',store:'nbfc_recovery_pipeline.',why:'Correct sum over in-progress stages (subject to the LIMIT-500 cap). Rupee units.',file:'recovery/page.tsx:279-281'},
+  {name:'Settlement metrics (total/rate/premium)',v:'warn',what:'Totals for completed auctions.',inputs:'Settlement rows.',reads:[['auction_settlements','final_price, status'],['auction_lots','base_price'],['nbfc_tenants','winner (inner join)']],
+   calc:'SUM/rate/premium over the display slice (LIMIT 50).',store:'auction_settlements.',why:'Aggregated over a LIMIT-50 slice — wrong for sellers with >50 settlements. The inner join drops settlements whose winner tenant row is missing (e.g. external buyers).',file:'recovery/page.tsx:386-429'},
+  {name:'Live lot “Current bid”',v:'ok',what:'The current top bid on an auction lot (Recovery page).',inputs:'Bids on the lot.',reads:[['auction_lots','base_price'],['auction_bids','amount']],calc:'current_bid = MAX(amount) ?? base_price.',store:'auction_lots / auction_bids.',
+   why:'Correct — a no-bid lot falls back to base_price. (Note: the standalone Auction page shows ₹0 for the same lot — that page is the wrong one.)',file:'recovery/page.tsx:304-383'},
+  {name:'Immobilisation “Loan” column',v:'bad',what:'The loan id shown per immobilisation request.',inputs:'The approval request’s entity id.',reads:[['dual_approval_requests','entity_id, action_type']],calc:'shows entity_id as a loan id.',store:'dual_approval_requests.',
+   why:'Single immobilisation writes entity_id = loan id, but BULK immobilisation writes entity_id = batch.id — so bulk rows show a batch UUID under a “Loan” header.',file:'recovery/page.tsx:211-238'},
+]},
+{id:'audit',name:'Audit Log',desc:'The immutable action trail. The page itself computes nothing; the count comes from the /audit-log route.',points:[
+  {name:'“X–Y of TOTAL” + pages',v:'warn',what:'The result count and pagination footer.',inputs:'Three merged log sources.',reads:[['nbfc_audit_log','(≤500)'],['nbfc_borrower_actions','(≤500)'],['nbfc_immobilisation_actions','(≤500)']],
+   calc:'total = length of the merged in-memory array (each source capped at 500), sliced in JS.',store:'The 3 source tables (append-only).',why:'total is not a real COUNT(*) — it’s capped at 500 per source (≤1500). Past that, the footer under-reports and old events fall off the last page — a real gap for a compliance log.',file:'audit-log/route.ts:221-399'},
+  {name:'Status filter',v:'warn',what:'Filtering the log by status.',inputs:'The status field of each row.',reads:[['nbfc_audit_log','after_state.status']],calc:'applies the filter only when after.status is a string.',store:'—',
+   why:'Rows with no status in after_state aren’t excluded when a status filter is active, so they leak into the filtered view and inflate its total.',file:'audit-log/route.ts:304'},
+]},
+{id:'settings',name:'Settings',desc:'Tenant card, wallet, and risk-rule thresholds. Also the source of the sidebar’s “N active / AUM”.',points:[
+  {name:'AUM (₹) — sidebar & settings',v:'warn',what:'Assets under management shown in the sidebar and on the tenant card.',inputs:'A stored tenant column.',reads:[['nbfc_tenants','aum_inr']],calc:'read verbatim, formatted ₹.',store:'nbfc_tenants.aum_inr',
+   why:'Reads a denormalized column that NOTHING maintains — it’s seeded once and drifts forever. The exact bug already fixed for active-loans, left unfixed here. Live equivalent: SUM(nbfc_loans.outstanding_amount).',file:'tenant.ts:113 / settings/page.tsx:154'},
+  {name:'Active loans — sidebar & settings',v:'ok',what:'Count of active loans in the tenant block.',inputs:'Your loan rows.',reads:[['nbfc_loans','is_active, tenant_id']],calc:'live COUNT(*) — deliberately ignores the stale nbfc_tenants.active_loans column.',store:'Recomputed live; a stale copy also sits in nbfc_tenants.active_loans (unused).',
+   why:'Correct live count (documented to fix a 14-vs-7 drift). Note the inconsistency: this is live but the AUM beside it is stale.',file:'tenant.ts:91-97'},
+  {name:'Wallet balance',v:'ok',what:'The prepaid wallet balance.',inputs:'The wallet row.',reads:[['nbfc_wallets','balance']],calc:'stored running balance, ₹ formatted; auto-creates a ₹0 wallet if none.',store:'nbfc_wallets.balance',why:'Tenant-scoped, rupee units, null-safe. Correct.',file:'charging.ts:27'},
+  {name:'Wallet ledger (amount / balance)',v:'ok',what:'The transaction history rows.',inputs:'Ledger entries.',reads:[['nbfc_wallet_ledger','amount, balance_after']],calc:'read from the append-only ledger; amount<0 = debit; 50 most-recent.',store:'nbfc_wallet_ledger',why:'Read straight from the ledger, tenant-scoped, rupee units. Correct.',file:'wallet/route.ts:39'},
+  {name:'Risk-rule thresholds (Value)',v:'warn',what:'The editable rule values (usage drop %, DPD days, etc.).',inputs:'The rule rows.',reads:[['nbfc_risk_rules','current_value, unit — no tenant_id']],calc:'SELECT all rows, no WHERE.',store:'nbfc_risk_rules',
+   why:'The table has no tenant_id, so this per-tenant Settings page renders GLOBAL thresholds — any admin edit moves the number for every NBFC at once.',file:'settings/page.tsx:134'},
+]},
+];
+
+/* ============ RENDER ============ */
+const side=document.getElementById('side'), main=document.getElementById('main');
+const overlay=document.getElementById('overlay'), drawer=document.getElementById('drawer');
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const VLABEL={ok:'CORRECT',warn:'CAUTION',bad:'WRONG'};
+let activeSec=SECTIONS[0].id, filter='';
+
+function counts(pts){return pts.reduce((m,p)=>{m[p.v]=(m[p.v]||0)+1;return m;},{});}
+
+function renderSide(){
+  side.innerHTML=SECTIONS.map(s=>{
+    const c=counts(s.points);
+    const dots=['bad','warn','ok'].filter(k=>c[k]).map(k=>`<span class="dot ${k}" title="${c[k]} ${k}"></span>`).join('');
+    return `<button data-sec="${s.id}" class="${s.id===activeSec?'active':''}">
+      <span>${esc(s.name)}</span>
+      <span class="badge"><span class="dots">${dots}</span>${s.points.length}</span>
+    </button>`;
+  }).join('');
+  side.querySelectorAll('button').forEach(b=>b.onclick=()=>{activeSec=b.dataset.sec;filter='';document.getElementById('q').value='';renderSide();renderMain();});
+}
+
+function matchedPoints(){
+  if(filter){
+    const f=filter.toLowerCase();
+    const hits=[];
+    SECTIONS.forEach(s=>s.points.forEach(p=>{
+      if((p.name+' '+p.what+' '+s.name).toLowerCase().includes(f)) hits.push({sec:s,p});
+    }));
+    return hits;
+  }
+  const s=SECTIONS.find(x=>x.id===activeSec);
+  return s.points.map(p=>({sec:s,p}));
+}
+
+function renderMain(){
+  const items=matchedPoints();
+  const head = filter
+    ? `<div class="sec-h">Search: “${esc(filter)}”</div><div class="sec-d">${items.length} value${items.length===1?'':'s'} match. Click any to open its calculation.</div>`
+    : (()=>{const s=SECTIONS.find(x=>x.id===activeSec);return `<div class="sec-h">${esc(s.name)}</div><div class="sec-d">${esc(s.desc)}</div>`;})();
+  const cards = items.map(({sec,p},i)=>`
+    <button class="pt ${p.v}" data-sec="${sec.id}" data-i="${sec.points.indexOf(p)}">
+      <span class="pn">${esc(p.name)}<span class="tapicon">↗</span></span>
+      <span class="pw">${esc(p.what)}</span>
+      <span class="pv">${VLABEL[p.v]}${filter?' · '+esc(sec.name):''}</span>
+    </button>`).join('');
+  main.innerHTML = head + `<div class="points">${cards}</div>` + `<div class="hint">Tip: click a card to see tables, columns, formula &amp; where it’s stored.</div>`;
+  main.querySelectorAll('.pt').forEach(b=>b.onclick=()=>openDrawer(b.dataset.sec,+b.dataset.i));
+}
+
+function tcolChips(list,cls){
+  if(!list) return '';
+  if(typeof list==='string') return `<div class="tcol ${cls}"><span class="tb">${esc(list)}</span></div>`;
+  return `<div class="chips">`+list.map(([t,c])=>`<div class="tcol ${cls}"><span class="tb">${esc(t)}</span>${c?` · <span class="tc">${esc(c)}</span>`:''}</div>`).join('')+`</div>`;
+}
+
+function openDrawer(secId,i){
+  const s=SECTIONS.find(x=>x.id===secId); const p=s.points[i];
+  drawer.innerHTML=`
+    <div class="dh">
+      <div class="dtt">
+        <h2>${esc(p.name)}</h2>
+        <div class="where">${esc(s.name)}</div>
+      </div>
+      <span class="vb ${p.v}">${VLABEL[p.v]}</span>
+      <button class="x" aria-label="Close" id="closeD">✕</button>
+    </div>
+    <div class="dbody">
+      <div class="flowmini"><span class="b">inputs</span><span class="a">→</span><span class="b">tables</span><span class="a">→</span><span class="b">calc</span><span class="a">→</span><span class="b">shown</span></div>
+      <div class="field"><div class="fl"><span class="i" style="background:var(--ink-faint)">?</span>What it is</div><div class="fc">${esc(p.what)}</div></div>
+      <div class="field"><div class="fl"><span class="i" style="background:var(--read)">↓</span>Inputs</div><div class="fc">${esc(p.inputs)}</div></div>
+      <div class="field"><div class="fl"><span class="i" style="background:var(--read)">▤</span>Reads from — table · columns</div><div class="fc">${tcolChips(p.reads,'read')}</div></div>
+      <div class="field"><div class="fl"><span class="i" style="background:var(--warn)">∑</span>How it's calculated</div><div class="fc"><div class="calc">${esc(p.calc)}</div></div></div>
+      <div class="field"><div class="fl"><span class="i" style="background:var(--store)">▣</span>Where it's stored</div><div class="fc">${tcolChips(p.store,'store')}</div></div>
+      <div class="field"><div class="fl"><span class="i" style="background:var(--${p.v})">${p.v==='ok'?'✓':p.v==='warn'?'!':'✕'}</span>Correct?</div>
+        <div class="fc"><div class="verdbox ${p.v}"><b>${VLABEL[p.v]}.</b> ${esc(p.why)}</div><div class="srcline">↳ ${esc(p.file)}</div></div></div>
+    </div>`;
+  drawer.classList.add('open'); overlay.classList.add('open');
+  document.getElementById('closeD').onclick=closeDrawer;
+  drawer.scrollTop=0;
+}
+function closeDrawer(){drawer.classList.remove('open');overlay.classList.remove('open');}
+overlay.onclick=closeDrawer;
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+
+document.getElementById('q').addEventListener('input',e=>{filter=e.target.value.trim();renderMain();});
+document.getElementById('themebtn').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);
+});
+
+renderSide(); renderMain();
+</script>
+</body>
+</html>
