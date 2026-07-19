@@ -309,6 +309,7 @@ const ADMIN_DOC_TYPES: { value: string; label: string }[] = [
   { value: "udyam", label: "Udyam Registration" },
   { value: "itr", label: "ITR" },
   { value: "owner_photo", label: "Owner Photo" },
+  { value: "owner_aadhaar", label: "Owner Aadhaar" },
   { value: "partner_photo", label: "Partner Photo" },
   { value: "partnership_deed", label: "Partnership Deed" },
   { value: "mou", label: "MOU" },
@@ -875,6 +876,7 @@ export default function DealerReviewPage() {
   const [docUploadMode, setDocUploadMode] = useState<"add" | "replace">("add");
   const [docUploadFile, setDocUploadFile] = useState<File | null>(null);
   const [docUploading, setDocUploading] = useState(false);
+  const [cancellingCorrection, setCancellingCorrection] = useState(false);
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
@@ -1220,6 +1222,32 @@ export default function DealerReviewPage() {
       if (tj.success) setTracking(tj.data);
     } catch (error) {
       console.error("Failed to refresh", error);
+    }
+  };
+
+  const handleCancelCorrection = async () => {
+    if (cancellingCorrection) return;
+    if (!window.confirm(
+      "Cancel this correction request? The dealer's link will stop working and the application returns to review.",
+    )) return;
+    setCancellingCorrection(true);
+    try {
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/cancel-correction`,
+        { method: "POST" },
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        toast.error(json?.message || `Cancel failed (HTTP ${res.status})`);
+        return;
+      }
+      toast.success(json.message || "Correction request cancelled");
+      await reloadDealer();
+    } catch (err) {
+      console.error("Cancel correction failed", err);
+      toast.error("Cancel failed");
+    } finally {
+      setCancellingCorrection(false);
     }
   };
 
@@ -1576,6 +1604,14 @@ export default function DealerReviewPage() {
                 <p className="font-semibold">Correction Requested</p>
                 <p className="mt-1">Admin has requested corrections for this application. Update the required details and save the form for re-validation.</p>
                 {data?.correctionRemarks && <p className="mt-2 text-xs"><strong>Remarks:</strong> {data.correctionRemarks}</p>}
+                <button
+                  type="button"
+                  onClick={handleCancelCorrection}
+                  disabled={cancellingCorrection}
+                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-orange-300 bg-white px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {cancellingCorrection ? "Cancelling…" : "Cancel correction request"}
+                </button>
               </div>
             </div>
           </div>

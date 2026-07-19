@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NBFC Risk Cards — Data Sources & Severity Logic</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;
+    --bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;
+    --accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;
+    --high:#d63b3b;--high-bg:#fce4e4;--high-line:#f2b3b3;
+    --warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;
+    --ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;
+    --inc:#5b6675;--inc-bg:#e9edf3;--inc-line:#c6cfdd;
+    --crm:#2563eb;--crm-bg:#dbe6ff;--iot:#7c5cd6;--iot-bg:#efe9fb;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(20,32,54,.06),0 8px 24px -12px rgba(20,32,54,.18);--r:14px;
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;
+    --bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;
+    --accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;
+    --high:#ff6b6b;--high-bg:#2a1417;--high-line:#5c2830;
+    --warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;
+    --ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;
+    --inc:#9aa7b8;--inc-bg:#1a222d;--inc-line:#33404f;
+    --crm:#5b8cff;--crm-bg:#1c2942;--iot:#a996f0;--iot-bg:#1d1830;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.6);
+  }}
+  :root[data-theme="light"]{color-scheme:light;--ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;--bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;--accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;--high:#d63b3b;--high-bg:#fce4e4;--high-line:#f2b3b3;--warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;--ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;--inc:#5b6675;--inc-bg:#e9edf3;--inc-line:#c6cfdd;--crm:#2563eb;--crm-bg:#dbe6ff;--iot:#7c5cd6;--iot-bg:#efe9fb;}
+  :root[data-theme="dark"]{color-scheme:dark;--ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;--bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;--accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;--high:#ff6b6b;--high-bg:#2a1417;--high-line:#5c2830;--warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;--ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;--inc:#9aa7b8;--inc-bg:#1a222d;--inc-line:#33404f;--crm:#5b8cff;--crm-bg:#1c2942;--iot:#a996f0;--iot-bg:#1d1830;}
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px 90px}
+  header.top{padding:38px 0 20px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+  h1{font-size:clamp(25px,4.4vw,40px);line-height:1.08;margin:.35em 0 .3em;letter-spacing:-.02em;text-wrap:balance;font-weight:800}
+  .lede{max-width:72ch;color:var(--ink-soft);font-size:16px}
+  .meta{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  .meta b{color:var(--ink-soft);font-weight:600}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 20px;margin:22px 0}
+  .panel h3{margin:0 0 10px;font-size:15px;letter-spacing:.01em}
+  .model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:6px}
+  .sev-chip{border-radius:10px;padding:10px 12px;border:1px solid var(--line);font-size:12.5px}
+  .sev-chip .t{font-weight:700;font-family:var(--mono);text-transform:uppercase;font-size:11px;letter-spacing:.06em;display:flex;align-items:center;gap:7px}
+  .sev-chip .t::before{content:"";width:10px;height:10px;border-radius:99px;display:inline-block}
+  .sev-chip.high{background:var(--high-bg);border-color:var(--high-line)} .sev-chip.high .t{color:var(--high)} .sev-chip.high .t::before{background:var(--high)}
+  .sev-chip.warn{background:var(--warn-bg);border-color:var(--warn-line)} .sev-chip.warn .t{color:var(--warn)} .sev-chip.warn .t::before{background:var(--warn)}
+  .sev-chip.ok{background:var(--ok-bg);border-color:var(--ok-line)} .sev-chip.ok .t{color:var(--ok)} .sev-chip.ok .t::before{background:var(--ok)}
+  .sev-chip.inc{background:var(--inc-bg);border-color:var(--inc-line)} .sev-chip.inc .t{color:var(--inc)} .sev-chip.inc .t::before{background:var(--inc)}
+  .sev-chip .d{color:var(--ink-soft);margin-top:5px}
+
+  table.rules{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  table.rules th,table.rules td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+  table.rules th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint)}
+  table.rules td.k{font-family:var(--mono);color:var(--accent-ink)}
+  table.rules td.v{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  .callout{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:10px;padding:11px 14px;font-size:13.5px;color:var(--ink-soft);margin-top:12px}
+  .callout b{color:var(--ink)}
+
+  /* card */
+  section.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin:16px 0;overflow:hidden;border-top:4px solid var(--accent);scroll-margin-top:20px}
+  .card-h{padding:16px 20px 6px}
+  .card-h .num{font-family:var(--mono);font-size:12px;color:var(--accent-ink);font-weight:700}
+  .card-h h2{margin:2px 0 3px;font-size:19px;letter-spacing:-.01em}
+  .card-h .slug{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  .card-h .tags{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+  .tg{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:6px;border:1px solid var(--line);color:var(--ink-faint);background:var(--panel-2)}
+  .tg.iot{background:var(--iot-bg);color:var(--iot);border-color:color-mix(in srgb,var(--iot) 35%,var(--line))}
+  .tg.crm{background:var(--crm-bg);color:var(--crm);border-color:color-mix(in srgb,var(--crm) 35%,var(--line))}
+  .tg.gov{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+  .tg.hard{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+
+  .steps{padding:12px 20px 6px;display:grid;gap:10px}
+  .step{display:grid;grid-template-columns:132px 1fr;gap:14px;align-items:start}
+  @media(max-width:640px){.step{grid-template-columns:1fr;gap:3px}}
+  .step .lab{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);font-weight:700;padding-top:2px}
+  .step .body{font-size:14px;color:var(--ink)}
+  .step .body .mono,.src{font-family:var(--mono);font-size:12.5px}
+  .srcs{display:flex;flex-wrap:wrap;gap:7px}
+  .srcbox{border-radius:9px;padding:7px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.35;border:1px solid var(--line);background:var(--panel-2);max-width:100%}
+  .srcbox .sys{font-size:9px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;display:block;margin-bottom:1px}
+  .srcbox.iot{background:var(--iot-bg);border-color:color-mix(in srgb,var(--iot) 35%,var(--line))} .srcbox.iot .sys{color:var(--iot)}
+  .srcbox.crm{background:var(--crm-bg);border-color:color-mix(in srgb,var(--crm) 35%,var(--line))} .srcbox.crm .sys{color:var(--crm)}
+  .srcbox .tb{color:var(--ink);font-weight:600} .srcbox .cl{color:var(--ink-soft)}
+
+  /* severity ladder */
+  .ladder{margin:6px 20px 18px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .ladder .lr{display:grid;grid-template-columns:120px 1fr;gap:0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .ladder .lr:last-child{border-bottom:0}
+  .ladder .lv{padding:9px 12px;font-family:var(--mono);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:8px}
+  .ladder .lv::before{content:"";width:11px;height:11px;border-radius:3px;display:inline-block}
+  .ladder .cond{padding:9px 12px;color:var(--ink-soft);border-left:1px solid var(--line);font-variant-numeric:tabular-nums}
+  .ladder .cond b{color:var(--ink);font-family:var(--mono)}
+  .lr.high .lv{background:var(--high-bg);color:var(--high)} .lr.high .lv::before{background:var(--high)}
+  .lr.warn .lv{background:var(--warn-bg);color:var(--warn)} .lr.warn .lv::before{background:var(--warn)}
+  .lr.ok .lv{background:var(--ok-bg);color:var(--ok)} .lr.ok .lv::before{background:var(--ok)}
+  .lr.inc .lv{background:var(--inc-bg);color:var(--inc)} .lr.inc .lv::before{background:var(--inc)}
+
+  .note{margin:0 20px 8px;font-size:13px;color:var(--ink-soft);border-left:3px solid var(--line-strong);padding:2px 0 2px 12px}
+  .note b{color:var(--ink)}
+  .note.tunnel{border-left-color:var(--iot)} .note.tunnel b{color:var(--iot)}
+  .note.small{border-left-color:var(--warn)}
+  .spacer{height:10px}
+  code{font-family:var(--mono);font-size:.9em;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .themebtn{position:fixed;right:16px;bottom:16px;font-family:var(--mono);font-size:12.5px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);padding:8px 13px;border-radius:99px;cursor:pointer;box-shadow:var(--shadow);z-index:50}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-faint);font-family:var(--mono)}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .toc a{text-decoration:none;font-family:var(--mono);font-size:12px;padding:5px 11px;border-radius:99px;border:1px solid var(--line-strong);color:var(--ink-soft);background:var(--panel)}
+  .toc a:hover{border-color:var(--accent);color:var(--ink)}
+</style>
+</head>
+<body>
+<button class="themebtn" id="themebtn">◐ Theme</button>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">iTarang · NBFC Portal · Risk Alerts</div>
+    <h1>Risk Cards — Data Sources & Severity Logic</h1>
+    <p class="lede">For every card on the Risk Alerts page: exactly <b>which tables it reads</b>, what it measures, and <b>the thresholds that decide High vs Warning vs OK vs Inconclusive</b>. Each card computes an <em>affected fraction</em> (affected units ÷ assessable population), then colours itself off that fraction against two cutoffs — the cutoffs differ per card and are listed in each ladder below.</p>
+    <div class="meta">
+      <span><b>Source</b> src/lib/risk/hand-coded-cards.ts · severity.ts · risk-thresholds.ts</span>
+      <span><b>Generated</b> 2026-07-18</span>
+    </div>
+    <div class="toc" id="toc"></div>
+  </header>
+
+  <!-- shared model -->
+  <div class="panel">
+    <h3>How every card decides its severity</h3>
+    <p style="font-size:14px;color:var(--ink-soft);margin:0 0 4px">
+      A card first counts <b>affected</b> units (vehicles/loans that trip its trigger) out of its <b>assessable population</b> (units it could actually measure — the rest are excluded, never counted as healthy). The ratio drives the colour via <code>pickSeverity(fraction, high, warn)</code>:
+    </p>
+    <div class="model-grid">
+      <div class="sev-chip high"><div class="t">High Alert</div><div class="d">fraction ≥ the card's <b>high</b> cutoff</div></div>
+      <div class="sev-chip warn"><div class="t">Warning</div><div class="d">fraction ≥ the card's <b>warn</b> cutoff (but below high)</div></div>
+      <div class="sev-chip ok"><div class="t">OK</div><div class="d">tested, fraction below warn — genuinely clean</div></div>
+      <div class="sev-chip inc"><div class="t">Inconclusive</div><div class="d">assessable population = 0 (no data to test), or the query errored</div></div>
+    </div>
+    <div class="callout">
+      <b>Two structural rules that override the ladder.</b>
+      (1) <b>Small books:</b> the cutoffs are fractions tuned for large fleets (as low as 0.5%). On a 7-loan tenant, one affected vehicle = ~14% — which clears every card's High cutoff. So on small fleets, <b>a single flagged vehicle usually = High</b>, regardless of the numbers below.
+      (2) <b>Agent (LLM) cards</b> are <b>capped from High → Warning</b> until a human promotes the hypothesis (E-188). Only the five human-written cards here, once seeded, can raise a true High.
+    </div>
+  </div>
+
+  <!-- governed thresholds -->
+  <div class="panel">
+    <h3>Governed thresholds — the admin “Risk Rules” screen (<code>nbfc_risk_rules</code>)</h3>
+    <p style="font-size:13.5px;color:var(--ink-soft);margin:0 0 6px">These set what counts as “affected”. Read live per run and snapshotted into each card’s <code>evidence_json.thresholds</code>. If the DB is unreachable, the BRD default is used.</p>
+    <table class="rules">
+      <thead><tr><th>rule_key</th><th>Default</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td class="k">usage_drop_pct</td><td class="v">40 %</td><td>7-day usage cliff</td></tr>
+        <tr><td class="k">emi_overdue_days</td><td class="v">30 days</td><td>Past-due + telemetry silent</td></tr>
+        <tr><td class="k">offline_alert_hours</td><td class="v">24 h</td><td>Past-due + telemetry silent</td></tr>
+        <tr><td class="k">geo_shift_km</td><td class="v">100 km</td><td>Vehicle outside operating radius</td></tr>
+        <tr><td class="k">cds_low_medium / medium_high / high_very_high</td><td class="v">40 / 70 / 85</td><td>Portfolio & Battery CDS bands — <b>not</b> these cards</td></tr>
+        <tr><td class="k">pci_concern</td><td class="v">0.4</td><td>PCI banding — <b>not</b> these cards</td></tr>
+      </tbody>
+    </table>
+    <div class="callout"><b>Not governed:</b> the SOH-decay (5 pp) and low-utilisation (20 km/day) thresholds have no rule key, so they are hard-coded constants — editing the admin screen does nothing to those two cards.</div>
+  </div>
+
+  <div id="cards"></div>
+
+  <footer>
+    Card severity is computed live on page load from these evaluators, or read from the latest <code>risk_card_runs</code> row per (tenant, hypothesis) when a run has executed. All five human cards must be seeded in <code>risk_hypotheses</code> (source='human') or the page renders an empty, falsely-healthy 0/0/0/0.
+  </footer>
+</div>
+
+<script>
+const SRC=(sys,table,cols)=>({sys,table,cols});
+const CARDS=[
+{
+  id:'usage-drop', num:1, slug:'usage-drop-7d', title:'7-day usage cliff',
+  tags:[['iot','IoT VPS only'],['gov','governed: usage_drop_pct']],
+  sources:[ SRC('IoT VPS','distance_rollup','bucket_size=\'day\', last 14 days · getDailyKm()') ],
+  measure:'Per vehicle, sum km for the last 7 days (recent) vs the 7 days before that (prior). drop_pct = (prior − recent) / prior.',
+  pop:'Vehicles whose PRIOR week had ≥ 50 km (a real baseline to drop from). Vehicles with < 50 km prior, or no telemetry, are excluded — not counted as “no drop”.',
+  trigger:'A vehicle is AFFECTED if its week-over-week km drop ≥ 40% (governed usage_drop_pct).',
+  ladder:{ high:'affected ÷ assessed ≥ <b>5%</b>', warn:'affected ÷ assessed ≥ <b>1%</b>', ok:'affected ÷ assessed &lt; 1%', inc:'no vehicle has ≥ 50 km of prior-week mileage' },
+  tunnel:'Reads only distance_rollup on the IoT VPS. Without the bastion tunnel there is no data → assessable population 0 → <b>Inconclusive</b> (or Error if the query throws).',
+  small:'On a small fleet, one big-dropper vehicle out of a handful of assessed easily clears 5% → High.'
+},
+{
+  id:'dpd-silent', num:2, slug:'dpd-7-no-telemetry', title:'Past-due + telemetry silent',
+  tags:[['crm','CRM: nbfc_loans'],['iot','IoT VPS: vehicle_state'],['gov','governed: emi_overdue_days + offline_alert_hours']],
+  sources:[ SRC('CRM (app DB)','nbfc_loans','current_dpd, vehicleno — the tenant loan slice'), SRC('IoT VPS','vehicle_state','sec_since_gps · getVehicleStates()') ],
+  measure:'Take the overdue pool (loans DPD ≥ 30). For each, look up its last GPS contact. A loan is “silent” if there is no state row, or sec_since_gps is null, or sec_since_gps > 24h.',
+  pop:'The OVERDUE POOL — loans with current_dpd ≥ 30 (governed emi_overdue_days). The denominator is the overdue loans, not the whole book.',
+  trigger:'A loan is AFFECTED if it is 30+ DPD AND has not reported GPS for 24h+ (governed offline_alert_hours).',
+  ladder:{ high:'silent ÷ overdue pool ≥ <b>3%</b>', warn:'silent ÷ overdue pool ≥ <b>1%</b>', ok:'silent ÷ overdue pool &lt; 1% (incl. “0 borrowers are 30+ DPD” → clean OK)', inc:'query error only — an empty overdue pool renders OK, not inconclusive' },
+  tunnel:'The DPD pool comes from the CRM (works offline), but the “silent” test needs vehicle_state on the IoT VPS. If getVehicleStates throws → the card errors (Inconclusive tab). Watch the edge: if it returns EMPTY without throwing, every overdue loan reads “silent” → fraction 1.0 → false High.',
+  small:'With a small overdue pool, one silent loan clears 3% → High.'
+},
+{
+  id:'geo-shift', num:3, slug:'geo-shift', title:'Vehicle outside operating radius',
+  tags:[['iot','IoT VPS only'],['gov','governed: geo_shift_km']],
+  sources:[ SRC('IoT VPS','telemetry_gps','30-day GPS fixes → modal ~11 km home cell'), SRC('IoT VPS','vehicle_state','current lat/lon · getGeoShiftDistances() haversine') ],
+  measure:'Build each vehicle’s “home base” = most-visited ~11 km GPS cell over 30 days. distance_km = haversine(current position, home). NOT a bounding box.',
+  pop:'Vehicles with ≥ 50 GPS fixes in their modal cell (an established home). Too-few-fixes vehicles are excluded — measuring distance-from-home for them would be distance from noise.',
+  trigger:'A vehicle is AFFECTED if it is > 100 km from its home cell (governed geo_shift_km).',
+  ladder:{ high:'outside ÷ assessable ≥ <b>0.5%</b>', warn:'outside ÷ assessable ≥ <b>0.1%</b>', ok:'outside ÷ assessable &lt; 0.1%', inc:'no vehicle has ≥ 50 home-cell GPS fixes' },
+  tunnel:'Reads telemetry_gps + vehicle_state on the IoT VPS. Without the tunnel → Inconclusive/Error.',
+  small:'The 0.5% High cutoff means on any realistic small fleet a single diverted vehicle = High.'
+},
+{
+  id:'soh-decay', num:4, slug:'battery-soh-decay', title:'Accelerated battery degradation',
+  tags:[['iot','IoT VPS only'],['hard','hard-coded 5 pp (not governed)']],
+  sources:[ SRC('IoT VPS','telemetry_can','payload→soh→value · oldest vs newest in 30d · getSohDelta30d()') ],
+  measure:'delta = SOH(newest reading in 30d) − SOH(oldest reading in 30d), in percentage points (signed, negative = decline).',
+  pop:'Vehicles with an SOH reading at BOTH ends of the 30-day window. No reading, or only one end → excluded (unmeasurable).',
+  trigger:'A vehicle is AFFECTED if SOH dropped by ≥ 5 pp over 30 days (hard-coded SOH_DECAY_PP_30D — no admin rule exists).',
+  ladder:{ high:'decayed ÷ measured ≥ <b>2%</b>', warn:'decayed ÷ measured ≥ <b>0.5%</b>', ok:'decayed ÷ measured &lt; 0.5%', inc:'no vehicle has SOH readings at both ends of the window' },
+  tunnel:'Reads only telemetry_can (battery bus) on the IoT VPS. This table is often sparse even WITH the tunnel, so this card is frequently <b>Inconclusive</b> — a coverage gap, honestly surfaced, not a false OK.',
+  small:'One battery losing ≥ 5 pp out of a few measured clears 2% → High.'
+},
+{
+  id:'low-util', num:5, slug:'low-utilization-active-loan', title:'Active loan, low utilization',
+  tags:[['crm','CRM: nbfc_loans (emi_amount)'],['iot','IoT VPS: distance_rollup'],['hard','hard-coded 20 km/day (not governed)']],
+  sources:[ SRC('CRM (app DB)','nbfc_loans','emi_amount > 0 selects the active-EMI population'), SRC('IoT VPS','distance_rollup','last 14 days · getDailyKm()') ],
+  measure:'Per active-EMI vehicle, avg_km_per_day = total km ÷ the days it ACTUALLY reported (never ÷ a fixed 14 — a missing day is a pipeline gap, not a zero-km day).',
+  pop:'Active-EMI vehicles that reported on ≥ 7 of the last 14 days. No telemetry, or < 7 reporting days → excluded (surfaced as coverage notes).',
+  trigger:'A vehicle is AFFECTED if it averaged < 20 km/day across the days it reported (hard-coded LOW_UTILISATION_KM_PER_DAY).',
+  ladder:{ high:'idle ÷ observable ≥ <b>10%</b>', warn:'idle ÷ observable ≥ <b>4%</b>', ok:'idle ÷ observable &lt; 4%', inc:'no active-EMI vehicle reported on ≥ 7 of 14 days' },
+  tunnel:'Active-EMI population comes from the CRM, but the km data is distance_rollup on the IoT VPS. Without the tunnel → Inconclusive. (This exclusion-of-missing-days logic is the fix for a past FALSE High that fired during a 10-day ingestion outage.)',
+  small:'Highest cutoffs of the five (10% / 4%) — but on a small fleet a couple of idle vehicles still clear 10%.'
+},
+{
+  id:'llm', num:6, slug:'llm-v1 / sandbox', title:'Agent-generated cards (LLM hypotheses)',
+  tags:[['crm','varies'],['iot','varies'],['hard','severity capped until promoted']],
+  sources:[ SRC('varies','agent-authored Python','executed deterministically on real CRM + IoT data · verdict_source = sandbox') ],
+  measure:'The LangGraph risk agent proposes a hypothesis and writes Python that computes affected_count / total_count / severity on real data. The numbers are computed by that sandbox run, not stated by the LLM.',
+  pop:'Defined by the generated test itself (varies per hypothesis).',
+  trigger:'Defined by the generated test. Whatever severity the sandbox returns is then passed through the promotion cap.',
+  ladder:{ high:'ONLY if a human has promoted the hypothesis (promoted_at set)', warn:'an unpromoted card’s High is forced down to Warning (E-188 capUnpromotedSeverity)', ok:'sandbox found nothing', inc:'sandbox down / emitted no code (verdict_source = none), or crashed (error)' },
+  tunnel:'Depends on which tables the generated Python reads. A card that queries IoT tables inherits the same tunnel dependency.',
+  small:'Same fraction thresholds apply if the generated test uses pickSeverity; but the promotion cap means these can never surface as a true High until vetted.'
+},
+];
+
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const mono=s=>s; // ladder conditions contain intentional <b> markup
+
+/* TOC */
+document.getElementById('toc').innerHTML = CARDS.map(c=>`<a href="#${c.id}">${c.num}. ${esc(c.title)}</a>`).join('');
+
+/* cards */
+document.getElementById('cards').innerHTML = CARDS.map(c=>{
+  const tags = c.tags.map(([k,t])=>`<span class="tg ${k}">${esc(t)}</span>`).join('');
+  const srcs = c.sources.map(s=>{
+    const cls = s.sys.startsWith('IoT')?'iot':s.sys.startsWith('CRM')?'crm':'';
+    return `<div class="srcbox ${cls}"><span class="sys">${esc(s.sys)}</span><span class="tb">${esc(s.table)}</span><br><span class="cl">${esc(s.cols)}</span></div>`;
+  }).join('');
+  return `<section class="card" id="${c.id}">
+    <div class="card-h">
+      <div class="num">CARD ${String(c.num).padStart(2,'0')}</div>
+      <h2>${esc(c.title)}</h2>
+      <div class="slug">slug: ${esc(c.slug)}</div>
+      <div class="tags">${tags}</div>
+    </div>
+    <div class="steps">
+      <div class="step"><div class="lab">Reads from</div><div class="body"><div class="srcs">${srcs}</div></div></div>
+      <div class="step"><div class="lab">Measures</div><div class="body">${esc(c.measure)}</div></div>
+      <div class="step"><div class="lab">Assessable population<br>(the denominator)</div><div class="body">${esc(c.pop)}</div></div>
+      <div class="step"><div class="lab">“Affected” trigger</div><div class="body">${esc(c.trigger)}</div></div>
+    </div>
+    <div class="ladder">
+      <div class="lr high"><div class="lv">High</div><div class="cond">${c.ladder.high}</div></div>
+      <div class="lr warn"><div class="lv">Warning</div><div class="cond">${c.ladder.warn}</div></div>
+      <div class="lr ok"><div class="lv">OK</div><div class="cond">${c.ladder.ok}</div></div>
+      <div class="lr inc"><div class="lv">Inconclusive</div><div class="cond">${c.ladder.inc}</div></div>
+    </div>
+    <div class="note tunnel"><b>Without the IoT tunnel — </b>${esc(c.tunnel)}</div>
+    <div class="note small"><b>Small-book effect — </b>${esc(c.small)}</div>
+    <div class="spacer"></div>
+  </section>`;
+}).join('');
+
+/* fix escaped ladder markup (we intentionally allow <b> inside conditions) */
+document.querySelectorAll('.ladder .cond').forEach(el=>{ el.innerHTML = el.innerHTML.replace(/&lt;b&gt;/g,'<b>').replace(/&lt;\/b&gt;/g,'</b>'); });
+
+document.getElementById('themebtn').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);
+});
+</script>
+</body>
+</html>

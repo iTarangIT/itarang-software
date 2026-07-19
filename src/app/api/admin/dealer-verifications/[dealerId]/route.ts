@@ -608,8 +608,23 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       (v) => v !== undefined,
     );
     const touchesGstAddresses = gstAddresses !== undefined;
+    // The dealer agreement signer (Section 3 "Primary Signer") is the primary
+    // contact. Its values live in provider_raw_response.agreement.dealerSigner*,
+    // and both Section 3's display and initiate-agreement PRIORITISE those stored
+    // values over owner_name/owner_email. So when an admin edits the primary
+    // contact in Section 1, we must mirror it into the agreement blob — otherwise
+    // Section 3 (and the generated Digio agreement) keep the pre-edit signer.
+    const touchesDealerSigner =
+      ownerName !== undefined ||
+      ownerEmail !== undefined ||
+      ownerPhone !== undefined;
 
-    if (touchesOwnershipSnapshot || touchesSalesManagerSnapshot || touchesGstAddresses) {
+    if (
+      touchesOwnershipSnapshot ||
+      touchesSalesManagerSnapshot ||
+      touchesGstAddresses ||
+      touchesDealerSigner
+    ) {
       const [existingRow] = await db
         .select({ providerRawResponse: dealerOnboardingApplications.provider_raw_response })
         .from(dealerOnboardingApplications)
@@ -640,6 +655,12 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       for (const [key, value] of Object.entries(salesManagerSnapshotKeys)) {
         if (value !== undefined) existingSalesManager[key] = value;
       }
+
+      // Keep the dealer signer in lock-step with the edited primary contact so
+      // Section 3 and the Digio agreement always reflect the latest name/email.
+      if (ownerName  !== undefined) existingAgreement.dealerSignerName  = ownerName;
+      if (ownerEmail !== undefined) existingAgreement.dealerSignerEmail = ownerEmail;
+      if (ownerPhone !== undefined) existingAgreement.dealerSignerPhone = ownerPhone;
 
       existingSnapshot.ownership = existingOwnership;
       existingAgreement.salesManager = existingSalesManager;
