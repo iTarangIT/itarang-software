@@ -18,6 +18,7 @@ import {
 import type { Severity, VerdictSource } from "@/lib/risk/severity";
 import type { RiskThresholds } from "@/lib/nbfc/risk-thresholds";
 
+
 export type { Severity, VerdictSource } from "@/lib/risk/severity";
 
 export interface TenantLoanSlice {

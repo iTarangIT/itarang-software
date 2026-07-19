@@ -62,6 +62,26 @@ const fieldsSchema = z
 export const POST = withErrorHandler(async (req: Request) => {
   const actor = await requireDealer();
 
+  // Refuse an oversized body BEFORE parsing it.
+  //
+  // `req.formData()` below buffers the ENTIRE request into heap. The file.size
+  // check further down runs after that — so it has never protected this process,
+  // only the S3 bill. A single large POST could OOM the node before any check
+  // ran, and sandbox and production are co-resident on one 8GB VPS.
+  //
+  // Content-Length is a HINT, not a guarantee: a chunked upload omits it, and a
+  // liar can understate it. So this is a cheap early gate, not the guard — the
+  // real one is still file.size below, and the residual exposure is a chunked
+  // or under-declared body. Closing that properly needs streaming multipart
+  // parsing, which Request.formData() does not do; that is a bigger change than
+  // this bug is worth today, but it is why this comment does not claim victory.
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
+    throw new ValidationError(
+      `The file is too large (${Math.round(declared / 1024 / 1024)} MB). Maximum is ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB.`,
+    );
+  }
+
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {
@@ -96,9 +116,15 @@ export const POST = withErrorHandler(async (req: Request) => {
     key = uploadKeyFor(line.request_id, line.line_id, kind, file.type);
   }
 
-  // Stream straight through to S3 rather than buffering the whole file into
-  // memory first — see putObjectStream's doc comment. 25MB cap is already
-  // enforced above, before any bytes are streamed.
+  // Hand the body to S3 as a stream rather than a second in-memory copy — see
+  // putObjectStream's doc comment.
+  //
+  // This used to claim the file was never buffered into memory and that the cap
+  // was "enforced above, before any bytes are streamed". Both were false:
+  // req.formData() has already buffered the whole request by the time execution
+  // reaches this line, and the size check ran after it. The Content-Length gate
+  // at the top of this handler is what now refuses an oversized body early; this
+  // call only avoids making it worse.
   await putObjectStream(
     BUYBACK_BUCKET,
     key,

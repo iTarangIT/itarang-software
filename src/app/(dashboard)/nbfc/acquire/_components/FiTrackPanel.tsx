@@ -324,6 +324,15 @@ export default function FiTrackPanel({ leadId }: { leadId: string }) {
           <p className="rounded-lg bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-700 ring-1 ring-rose-100">{error}</p>
         )}
 
+        {/* First load — skeleton so the panel appears instantly. */}
+        {!data && !error && (
+          <div className="space-y-2.5 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3">
+            <div className="h-3 w-28 animate-pulse rounded bg-slate-200" />
+            <div className="h-9 w-full animate-pulse rounded-lg bg-slate-200" />
+            <div className="h-9 w-full animate-pulse rounded-lg bg-slate-200" />
+          </div>
+        )}
+
         {canAct && !enabled && (
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500 ring-1 ring-slate-100">
             Not opted in for this lead. Enable Field Investigation in{" "}

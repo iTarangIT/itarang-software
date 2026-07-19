@@ -87,10 +87,34 @@ function NodeIcon({ state, index }: { state: NodeState; index: number }) {
 export default function LeadStageStepper({
   stages,
   nextAction,
+  leadId,
 }: {
   stages: StepperStage[];
   nextAction: NextAction;
+  /** Used to persist client-side step acknowledgements (e.g. "Next: Offer"). */
+  leadId?: string;
 }) {
+  // Steps the reviewer has acknowledged as complete client-side (e.g. clicking
+  // "Next: Offer" signs off Verification). Persisted per-lead so the completed
+  // checkmark survives a reload; never downgrades a server "failed" state.
+  const ackKey = leadId ? `nbfc:acquire:ack-done:${leadId}` : null;
+  const [ackDone, setAckDone] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!ackKey) return;
+    try {
+      const raw = window.localStorage.getItem(ackKey);
+      if (raw) setAckDone(new Set(JSON.parse(raw) as string[]));
+    } catch {
+      /* ignore corrupt / unavailable storage */
+    }
+  }, [ackKey]);
+
+  // A stage's displayed state — an acknowledged step shows as done unless the
+  // server marks it failed (a real failure must never be hidden).
+  const dispState = (s: StepperStage): NodeState =>
+    ackDone.has(s.key) && s.state !== "failed" ? "done" : s.state;
+
   // Default the accordion to the first step needing attention (active/failed),
   // else the most recently completed step, else the first node.
   const initialKey = (() => {
@@ -105,10 +129,27 @@ export default function LeadStageStepper({
   const openStage = stages.find((s) => s.key === openKey) ?? null;
 
   // Let a step's content (e.g. the dossier "Next: Offer" button) drive which
-  // step is open, then scroll its panel into view.
+  // step is open, then scroll its panel into view. A `markDone` in the event
+  // acknowledges that step as complete (persisted per-lead).
   useEffect(() => {
     function onOpenStep(e: Event) {
-      const key = (e as CustomEvent<{ key?: string }>).detail?.key;
+      const detail = (e as CustomEvent<{ key?: string; markDone?: string }>)
+        .detail;
+      const key = detail?.key;
+      if (detail?.markDone && stages.some((s) => s.key === detail.markDone)) {
+        setAckDone((prev) => {
+          if (prev.has(detail.markDone!)) return prev;
+          const next = new Set(prev).add(detail.markDone!);
+          if (ackKey) {
+            try {
+              window.localStorage.setItem(ackKey, JSON.stringify([...next]));
+            } catch {
+              /* ignore */
+            }
+          }
+          return next;
+        });
+      }
       if (!key || !stages.some((s) => s.key === key)) return;
       setOpenKey(key);
       requestAnimationFrame(() => {
@@ -120,7 +161,7 @@ export default function LeadStageStepper({
     window.addEventListener(OPEN_STEP_EVENT, onOpenStep as EventListener);
     return () =>
       window.removeEventListener(OPEN_STEP_EVENT, onOpenStep as EventListener);
-  }, [stages]);
+  }, [stages, ackKey]);
 
   return (
     <section className="border border-slate-200 rounded-xl bg-white p-5">
@@ -130,8 +171,11 @@ export default function LeadStageStepper({
 
       <ol className="flex items-start">
         {stages.map((s, i) => {
-          const connectorDone = stages[i - 1]?.state === "done";
+          const state = dispState(s);
+          const prev = stages[i - 1];
+          const connectorDone = prev ? dispState(prev) === "done" : false;
           const isOpen = s.key === openKey;
+          const sub = ackDone.has(s.key) && s.state !== "failed" ? "complete" : s.sub;
           return (
             <li
               key={s.key}
@@ -155,23 +199,23 @@ export default function LeadStageStepper({
               >
                 <span
                   className={`relative z-10 flex h-8 w-8 items-center justify-center rounded-full border transition ${
-                    NODE_TONE[s.state]
+                    NODE_TONE[state]
                   } ${
                     isOpen
                       ? "ring-2 ring-offset-2 ring-[color:var(--color-brand-sky)]"
                       : "group-hover:brightness-95"
                   }`}
                 >
-                  <NodeIcon state={s.state} index={i} />
+                  <NodeIcon state={state} index={i} />
                 </span>
                 <span
-                  className={`mt-2 text-[11px] leading-tight ${LABEL_TONE[s.state]}`}
+                  className={`mt-2 text-[11px] leading-tight ${LABEL_TONE[state]}`}
                 >
                   {s.label}
                 </span>
-                {s.sub && (
+                {sub && (
                   <span className="mt-0.5 text-[10px] text-slate-400 leading-tight">
-                    {s.sub}
+                    {sub}
                   </span>
                 )}
                 <ChevronDown
@@ -193,7 +237,7 @@ export default function LeadStageStepper({
         >
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="flex items-center gap-2">
-              {openStage.state === "done" && (
+              {dispState(openStage) === "done" && (
                 <Lock className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
               )}
               <h3 className="text-sm font-semibold text-slate-800">
@@ -202,18 +246,22 @@ export default function LeadStageStepper({
             </div>
             <span
               className={`px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
-                STATE_BADGE[openStage.state].cls
+                STATE_BADGE[dispState(openStage)].cls
               }`}
             >
-              {STATE_BADGE[openStage.state].label}
+              {STATE_BADGE[dispState(openStage)].label}
             </span>
           </div>
 
-          {openStage.state === "done" && (
+          {openStage.state === "done" ? (
             <p className="text-[11px] text-slate-500 mb-3">
               This step is complete and locked — the values below are read-only.
             </p>
-          )}
+          ) : dispState(openStage) === "done" ? (
+            <p className="text-[11px] text-slate-500 mb-3">
+              Marked complete — you can revisit it any time.
+            </p>
+          ) : null}
 
           <div>
             {openStage.content ?? (

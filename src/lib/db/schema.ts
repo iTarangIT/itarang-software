@@ -41,6 +41,13 @@ export const users = pgTable("users", {
   name: text().notNull(),
   role: varchar({ length: 50 }).notNull(),
   dealer_id: varchar("dealer_id", { length: 255 }),
+  /**
+   * E-195 — accounts.id of the scrap vendor this login acts for; NULL for
+   * everyone else. Deliberately not dealer_id above: that column is joined
+   * against `dealers` by dealer_code app-wide and a scrap vendor has no
+   * dealers row, so those joins would return nothing rather than fail.
+   */
+  vendor_entity_id: varchar("vendor_entity_id", { length: 255 }),
   phone: text(),
   avatar_url: text("avatar_url"),
   is_active: boolean("is_active").default(true).notNull(),
@@ -7565,6 +7572,10 @@ export const buybackPickupAddresses = pgTable(
     contact_phone: varchar("contact_phone", { length: 20 }),
     is_default: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
+    // E-194 — DEALER | VENDOR | CUSTOMER. TEXT + CHECK (in SQL), not an enum:
+    // same reasoning as buyback_lines.chemistry, the set may grow. entity_id
+    // says which account this hangs off; this says what role it plays.
+    owner_kind: text("owner_kind").default("DEALER").notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
@@ -7597,12 +7608,21 @@ export const buybackRequests = pgTable(
       t.dealer_entity_id,
       t.created_at,
     ),
-    // E-192 — the review queue's own sort (queue/route.ts `ORDER BY
-    // submitted_at NULLS LAST, created_at`), matched exactly (ASC is
-    // Postgres' default for NULLS LAST on an ascending column).
+    // E-192 — was the review queue's own sort. The queue moved to newest-first
+    // in E-194 (below), but this stays: /reports and any FIFO reader still
+    // want ascending, and dropping it would be a destructive change to a
+    // shared DB for no gain.
     submittedCreatedIdx: index("buyback_requests_submitted_created_idx").on(
       t.submitted_at.nullsLast(),
       t.created_at,
+    ),
+    // E-194 — the review queue's sort now (queue/route.ts `ORDER BY
+    // submitted_at DESC NULLS LAST, created_at DESC`). Not a duplicate of the
+    // ASC index above: reverse-scanning that one gives DESC NULLS FIRST, which
+    // would float every unsubmitted request to the top of the queue.
+    submittedCreatedDescIdx: index("buyback_requests_submitted_created_desc_idx").on(
+      t.submitted_at.desc().nullsLast(),
+      t.created_at.desc(),
     ),
     // E-192 — GIN trigram, leading-wildcard admin/dealer search (M23).
     requestNoTrgmIdx: index("buyback_requests_request_no_trgm_idx").using(
@@ -7753,6 +7773,29 @@ export const provenanceRecords = pgTable(
     id_proof_type: text("id_proof_type"),
     id_proof_s3: text("id_proof_s3"),
     payment_proof_ref: text("payment_proof_ref"),
+    // --- E-197: who the previous owner is, and how to pay them ---------------
+    /** Full. A tax identity (TDS/reporting), and not a credential. */
+    prev_owner_pan: text("prev_owner_pan"),
+    /**
+     * LAST FOUR ONLY — a DB CHECK (`^[0-9]{4}$`) makes a full Aadhaar
+     * unstorable. Under DPDP/UIDAI we have no need to hold the number; the
+     * Decentro ref below is the actual evidence.
+     */
+    prev_owner_aadhaar_last4: varchar("prev_owner_aadhaar_last4", { length: 4 }),
+    prev_owner_aadhaar_ref: text("prev_owner_aadhaar_ref"),
+    prev_owner_aadhaar_verified_at: timestamp("prev_owner_aadhaar_verified_at", {
+      withTimezone: true,
+    }),
+    /**
+     * Full — you cannot pay a masked account. Held ONLY because
+     * settlement_transactions.payee_provenance_id makes paying this person
+     * expressible. Do not collect a bank account for someone we cannot pay.
+     */
+    payee_account_number: text("payee_account_number"),
+    payee_ifsc: varchar("payee_ifsc", { length: 11 }),
+    payee_bank_name: text("payee_bank_name"),
+    /** Not always prev_owner_name — a driver may bank as their firm. */
+    payee_beneficiary_name: text("payee_beneficiary_name"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
@@ -7995,6 +8038,12 @@ export const buybackNotificationEvents = pgTable(
     // where the message actually went — not where it would go if sent today.
     recipient_ref: text("recipient_ref"),
     attachment_s3_key: text("attachment_s3_key"),
+    /**
+     * E-198 — extra files beyond the primary one (the battery photos on a
+     * vendor quotation). A missing key here is skipped at send; a missing
+     * attachment_s3_key above throws, because the quotation IS the email.
+     */
+    attachment_s3_keys: text("attachment_s3_keys").array(),
   },
   (t) => ({
     idemUnique: uniqueIndex("buyback_notification_events_idem_unique").on(t.idempotency_key),
@@ -8329,6 +8378,66 @@ export const invoiceLines = pgTable(
   }),
 );
 
+// --- E-196: the Proforma Invoice ------------------------------------------
+// A SEPARATE table from `invoices`, which is the TAX slot. A proforma answers
+// the vendor's PO before payment; a tax invoice follows payment and needs the
+// GST treatment nobody has ruled on. Distinct series, distinct lifecycle, no
+// tax columns. See drizzle/E-196.
+export const buybackProformaStatus = pgEnum("buyback_proforma_status", [
+  "ISSUED",
+  "SUPERSEDED",
+  "CANCELLED",
+]);
+
+export const proformaInvoices = pgTable(
+  "proforma_invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    deal_id: uuid("deal_id")
+      .notNull()
+      .references(() => buybackDeals.id, { onDelete: "cascade" }),
+    /** The vendor PO this answers. NOT NULL — no PO, no PI. */
+    po_id: uuid("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id),
+    number: text().notNull(), // 'PI-1001-V'
+    pdf_s3: text("pdf_s3"),
+    status: buybackProformaStatus().default("ISSUED").notNull(),
+    /** Server-derived from deal_line_locks.vendor_price (vendorReceipt), never the client. */
+    total: numeric({ precision: 14, scale: 2 }).notNull(),
+    issued_at: timestamp("issued_at", { withTimezone: true }).defaultNow().notNull(),
+    valid_until: timestamp("valid_until", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    numberUnique: uniqueIndex("proforma_invoices_number_unique").on(t.number),
+    poIdx: index("proforma_invoices_po_idx").on(t.po_id),
+    // One-live-per-deal is a PARTIAL unique index (WHERE status = 'ISSUED') and
+    // lives in the SQL migration — drizzle cannot express the predicate.
+  }),
+);
+
+export const proformaInvoiceLines = pgTable(
+  "proforma_invoice_lines",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    proforma_id: uuid("proforma_id")
+      .notNull()
+      .references(() => proformaInvoices.id, { onDelete: "cascade" }),
+    line_id: uuid("line_id")
+      .notNull()
+      .references(() => buybackLines.id),
+    quantity: integer().notNull(),
+    price_per_unit: numeric("price_per_unit", { precision: 12, scale: 2 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    lineUnique: uniqueIndex("proforma_invoice_lines_unique").on(t.proforma_id, t.line_id),
+  }),
+);
+
 // M13/U10 — TXN-{n}-D (OUT, dealer payout) + TXN-{n}-V (IN, vendor receipt).
 // Both closed ⇒ SETTLED. The difference between them IS the realised margin,
 // which is what M14's reconciliation invariant checks against the locks.
@@ -8368,6 +8477,20 @@ export const settlementTransactions = pgTable(
     // FK. Both directions exist in the SQL (E-188); expressing only one of them
     // here keeps the TS module free of a cycle.
     statement_row_id: uuid("statement_row_id"),
+    /**
+     * E-197 — who received this OUT payment, when it was not the dealer.
+     *
+     * NULL means the dealer (every existing row, and still the default). Set
+     * means the battery's previous owner was paid directly, because the dealer
+     * brokered a battery they never owned.
+     *
+     * NOT a new leg: same leg, same amount (the locked dealer_price), different
+     * beneficiary — which is why M14 still holds. A driver-AND-dealer SPLIT is a
+     * different thing entirely and is deliberately not modelled. A DB CHECK
+     * confines this to the DEALER leg: the vendor leg is money IN, so there is
+     * no beneficiary to redirect.
+     */
+    payee_provenance_id: uuid("payee_provenance_id"),
   },
   (t) => ({
     legSubUnique: uniqueIndex("settlement_transactions_leg_sub_unique").on(t.leg_sub_id),

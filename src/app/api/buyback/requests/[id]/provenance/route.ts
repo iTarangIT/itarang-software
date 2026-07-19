@@ -38,6 +38,21 @@ const ownerFields = z.object({
   id_proof_type: z.enum(["PAN", "DL", "AADHAAR", "OTHER"]).nullish(),
   id_proof_s3: z.string().max(512).nullish(),
   payment_proof_ref: z.string().max(512).nullish(),
+  // --- E-197: who the owner is, and how to pay them directly ---------------
+  // PAN in full — a tax identity, not a credential.
+  prev_owner_pan: z.string().trim().max(10).nullish(),
+  // LAST FOUR ONLY. The full number never reaches this route: the intake sends
+  // four digits, and the DB CHECK (^[0-9]{4}$) makes anything longer unstorable.
+  prev_owner_aadhaar_last4: z
+    .string()
+    .regex(/^[0-9]{4}$/, "Enter the last 4 digits of the Aadhaar.")
+    .nullish(),
+  // Bank details in full — you cannot pay a masked account. Collected only
+  // because settlement_transactions.payee_provenance_id can now pay this person.
+  payee_account_number: z.string().trim().max(34).nullish(),
+  payee_ifsc: z.string().trim().max(11).nullish(),
+  payee_bank_name: z.string().trim().max(120).nullish(),
+  payee_beneficiary_name: z.string().trim().max(200).nullish(),
 });
 
 const bodySchema = z.discriminatedUnion("source_type", [
@@ -132,6 +147,15 @@ export const POST = withErrorHandler(
               id_proof_type: body.id_proof_type ?? null,
               id_proof_s3: body.id_proof_s3 ?? null,
               payment_proof_ref: body.payment_proof_ref ?? null,
+              // E-197. Aadhaar last-4 goes in as given; the assumption-free
+              // Decentro reference is a follow-up (see the intake note), so
+              // prev_owner_aadhaar_ref/verified_at stay null here.
+              prev_owner_pan: body.prev_owner_pan?.toUpperCase() || null,
+              prev_owner_aadhaar_last4: body.prev_owner_aadhaar_last4 || null,
+              payee_account_number: body.payee_account_number || null,
+              payee_ifsc: body.payee_ifsc?.toUpperCase() || null,
+              payee_bank_name: body.payee_bank_name || null,
+              payee_beneficiary_name: body.payee_beneficiary_name || null,
             }
           : {};
 

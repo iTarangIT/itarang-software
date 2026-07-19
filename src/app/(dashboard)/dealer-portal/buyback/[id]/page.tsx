@@ -344,6 +344,15 @@ function DealerRequestDetail() {
   const offer = detail.final_offer;
   const canRespond = detail.status === "FINAL_OFFER_SENT" && offer?.status === "SENT";
   const canCounter = detail.status === "NEGOTIATING";
+  // The dealer can ACCEPT only iTarang's standing counter — i.e. when the latest
+  // negotiation round is iTarang's (an admin round). If the dealer's own counter
+  // is the latest, the ball is with iTarang and there is nothing to accept yet.
+  const lastNegRound = detail.negotiation.length
+    ? [...detail.negotiation].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0]
+    : null;
+  const iTarangOfferStanding = canCounter && lastNegRound?.offered_by === "admin";
 
   const totalUnits = detail.lines.reduce((s, l) => s + l.quantity, 0);
   const dateLabel = new Date(detail.submitted_at ?? detail.created_at).toLocaleDateString("en-IN", {
@@ -588,22 +597,38 @@ function DealerRequestDetail() {
           {canCounter && (
             <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
               {!showCounter ? (
-                <button
-                  onClick={() => {
-                    setCounter(
-                      Object.fromEntries(
-                        detail.lines.map((l) => [
-                          l.id,
-                          String(Math.round(Number(l.expected_price_per_unit ?? 0))),
-                        ]),
-                      ),
-                    );
-                    setShowCounter(true);
-                  }}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50"
-                >
-                  Send a counter offer
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {iTarangOfferStanding && (
+                    <button
+                      disabled={busy}
+                      onClick={() => void act(`/api/buyback/requests/${id}/accept-counter`)}
+                      className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                    >
+                      Accept iTarang&apos;s offer
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setCounter(
+                        Object.fromEntries(
+                          detail.lines.map((l) => [
+                            l.id,
+                            String(Math.round(Number(l.expected_price_per_unit ?? 0))),
+                          ]),
+                        ),
+                      );
+                      setShowCounter(true);
+                    }}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50"
+                  >
+                    Send a counter offer
+                  </button>
+                  {!iTarangOfferStanding && (
+                    <span className="text-xs text-slate-400">
+                      iTarang is reviewing your last counter.
+                    </span>
+                  )}
+                </div>
               ) : (
                 <>
                   <h3 className="mb-2 text-sm font-bold text-slate-900">

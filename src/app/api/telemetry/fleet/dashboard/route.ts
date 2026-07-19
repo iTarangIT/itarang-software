@@ -27,8 +27,11 @@ export async function GET(req: NextRequest) {
             const emptyData = user.role === 'ceo'
                 ? {
                     role: 'ceo' as const,
-                    kpis: { fleetSize: 0, utilization: 0, avgSOH: 0, warrantyAtRisk: 0, activeAlerts: 0 },
-                    warrantyRisk: { trend: [], atRiskDevices: 0 },
+                    // avgSOH / warrantyAtRisk are null, not 0: the VPS is unreachable, so
+                    // nothing was measured. A 0 here would render as "no batteries at
+                    // risk" on the very request that failed to ask.
+                    kpis: { fleetSize: 0, utilization: 0, avgSOH: null, warrantyAtRisk: null, activeAlerts: 0 },
+                    sohFeed: { assessed: 0, unassessable: 0, constantFeed: false, constantValue: null },
                     dealerPerformance: [],
                     serviceMetrics: { fleetUptime: 0, avgDailyDistance: 0, offlineDevices: 0 },
                 }

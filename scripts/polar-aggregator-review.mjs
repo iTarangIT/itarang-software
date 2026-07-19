@@ -39,8 +39,21 @@ const sql = postgres(loadEnv(), {
   idle_timeout: 120,
 });
 
-/** Reference battery — the one the calculations doc is pinned to. */
-const REF = "TK-51105-04HY-122432";
+/**
+ * Reference battery — the one docs/intellicar-calculations.md is pinned to, and the same default
+ * as diagnose-charging-cycles.ts, charging-math.test.ts and the export fixture.
+ *
+ * This used to read TK-51105-04HY-122432 while claiming, in this very comment, to be the doc's
+ * battery. It was not: every stat this workbook labelled "reference battery" — cadence, current
+ * distribution, BMS cycles — was therefore being read against the doc's 62/62 cycles and 106.0 Ah
+ * mean as though the two described the same pack. They did not.
+ *
+ * Override with --vehicleno=... . If the chosen battery has no CAN rows the run stops rather than
+ * emitting a workbook full of blank "reference" sheets that look like a dead fleet.
+ */
+const REF =
+    process.argv.find((a) => a.startsWith("--vehicleno="))?.slice("--vehicleno=".length) ||
+    "TK-51105-02DZ-213416";
 
 /**
  * Every check records its own status, so a dropped tunnel degrades one row, not the run.
@@ -49,7 +62,27 @@ const REF = "TK-51105-04HY-122432";
  * nobody mistakes it for a fresh reading.
  */
 const CACHE = path.join(ROOT, "reports", ".polar-review-cache.json");
-const cache = fs.existsSync(CACHE) ? JSON.parse(fs.readFileSync(CACHE, "utf8")) : {};
+
+/**
+ * The cache is keyed by check id, but a third of the checks are scoped to REF — so a cache written
+ * for one reference battery is meaningless for another. It carries the battery it was collected
+ * against, and a mismatch discards it rather than relabelling one pack's cadence and current
+ * distribution as another's. Losing a cache costs one re-run; keeping the wrong one costs a
+ * workbook that is confidently wrong.
+ */
+const rawCache = fs.existsSync(CACHE) ? JSON.parse(fs.readFileSync(CACHE, "utf8")) : {};
+const cachedRef = rawCache.__ref;
+const cacheUsable = Object.keys(rawCache).length === 0 || cachedRef === REF;
+const cache = cacheUsable ? rawCache : {};
+if (!cacheUsable) {
+  // An UNLABELLED cache is discarded too, not trusted. Caches written before __ref existed were
+  // collected against the old, wrong reference battery — "no label" means "cannot verify whose
+  // readings these are", and that is not a licence to use them.
+  console.log(
+    `Cache was collected against ${cachedRef ?? "an unrecorded battery"}, not ${REF} — discarding it.\n`,
+  );
+}
+delete cache.__ref;
 const results = {};
 
 /**
@@ -60,7 +93,25 @@ const results = {};
 let online = true;
 try {
   await sql`SELECT 1`;
-  console.log("IoT DB reachable — collecting live.\n");
+  console.log("IoT DB reachable — collecting live.");
+  // The reference battery is load-bearing: ~a third of the checks below are scoped to it, and the
+  // workbook compares their results against the numbers docs/intellicar-calculations.md pins to
+  // this same pack. A REF with no rows does not fail — it quietly yields empty "reference" sheets
+  // that read as a dead battery. Better to stop and say which battery, and offer the real ones.
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM telemetry_can WHERE vehicleno = ${REF}`;
+  if (n === 0) {
+    console.error(`\nReference battery ${REF} has no telemetry_can rows on this DB.`);
+    const near = await sql`
+      SELECT vehicleno, count(*)::int AS rows, max(time)::text AS last_seen
+      FROM telemetry_can GROUP BY 1 ORDER BY 2 DESC LIMIT 5`;
+    if (near.length) {
+      console.error("Batteries with the most CAN data here:");
+      for (const v of near) console.error(`  ${v.vehicleno}  ${v.rows} rows, last ${v.last_seen}`);
+    }
+    console.error("\nRe-run with --vehicleno=<one of the above> if the pinned battery has retired.");
+    process.exit(2);
+  }
+  console.log(`Reference battery ${REF}: ${n} CAN rows.\n`);
 } catch (err) {
   online = false;
   if (!Object.keys(cache).length) {
@@ -103,7 +154,8 @@ async function check(id, fn) {
 
 function saveCache() {
   fs.mkdirSync(path.dirname(CACHE), { recursive: true });
-  fs.writeFileSync(CACHE, JSON.stringify(cache, null, 2));
+  // __ref rides along so the next run can tell whose readings these are.
+  fs.writeFileSync(CACHE, JSON.stringify({ ...cache, __ref: REF }, null, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -435,15 +487,15 @@ const failed = (id) => !results[id]?.ok;
      "trips = 0 rows, yet the reference battery demonstrably drove ~4,629 km (distance_rollup).",
      "'No trips found' on the Trip Analytics tab is a pipeline gap, not a query bug. Any trip-level metric is unbuildable until the trip aggregator runs."],
 
-    ["Avg Daily Distance silently reads 0 km whenever a State/City filter is applied.",
-     "FAIL",
-     "src/lib/telemetry/queries.ts:99 reads daily_distance_per_vehicle (0 rows) on the filtered path; :105 reads distance_rollup (populated) on the unfiltered path. No fallback between them.",
-     "A filtered fleet view reports 0 km for every state and city and looks like a genuinely idle fleet. Fix: point :99 at distance_rollup (it does have vehicleno), as iot-queries.ts:228 already does."],
+    ["Avg Daily Distance under a State/City filter — FIXED, was reading 0 km for every state.",
+     "PASS",
+     "queries.ts:101-114 now reads distance_rollup on BOTH the filtered and unfiltered paths, scoped by vehicleno = ANY(...), with bucket_size='day' pinned on each. Shipped in 1b06b3b4.",
+     "Kept on this sheet as a closed finding, not deleted: it was reported as a live P0 and a reader who saw it once is owed the resolution. Re-check by filtering the Fleet tab to any state and confirming a non-zero average."],
 
-    ["Unfiltered Avg Daily Distance omits bucket_size='day'.",
-     "WARN",
-     `queries.ts:105 averages distance_rollup without filtering bucket_size. Buckets present: ${r("V5c_rollup_fill").map((b) => b.bucket_size).join(", ") || "n/a"}.`,
-     "The average is diluted by non-daily bucket rows. Every other reader filters bucket_size='day' (iot-queries.ts:237, battery-queries.ts:259)."],
+    ["Avg Daily Distance and bucket_size — FIXED, and the original claim was overstated.",
+     "PASS",
+     `Both paths in queries.ts now pin bucket_size='day'. The earlier WARN said the average was "diluted by non-daily bucket rows" — but distance_rollup contains only ONE bucket size. Buckets actually present: ${r("V5c_rollup_fill").map((b) => `${b.bucket_size} (${b.rows} rows)`).join(", ") || "n/a"}.`,
+     "Nothing was ever being diluted: there are no non-daily rows to dilute it with. The filter is still correct to pin — it costs nothing and it stops a future weekly/monthly bucket from silently changing a KPI — but this was a latent risk, not a live wrong number. Recorded so the fix is not credited with an improvement it did not make."],
 
     ["telemetry_can stores the same CAN frame over and over.",
      "WARN",
@@ -570,9 +622,90 @@ const failed = (id) => !results[id]?.ok;
   ].forEach((line) => ws.addRow({ st: line }));
 }
 
+// ---- Sheet: Polar API endpoints (reconstructed / inferred)
+{
+  const ws = sheet("2. Polar API Endpoints");
+  header(ws, [
+    { header: "Inferred endpoint (Polar/Intellicar)", key: "e", width: 34 },
+    { header: "Method", key: "m", width: 9 },
+    { header: "Populates table", key: "t", width: 22 },
+    { header: "Cadence (measured / designed)", key: "c", width: 34 },
+    { header: "Returns — key fields (evidence)", key: "r", width: 52 },
+    { header: "Basis / evidence in the DB", key: "b", width: 52 },
+    { header: "Confidence", key: "f", width: 12 },
+  ]);
+
+  const cnt = Object.fromEntries(counts.map((c) => [c.table, c]));
+  const fresh = Object.fromEntries(r("V7_freshness").map((x) => [x.tbl, x.mins_stale]));
+  const ord = r0("V2_ordering");
+  const bf = r0("V5_battery_fill");
+  const staleOf = (t) => {
+    const v = fresh[t] ?? cnt[t]?.mins_stale;
+    return v == null ? "" : ` (last row ${v} min ago)`;
+  };
+
+  const EP = [
+    ["Vehicle list / registry", "GET", "vehicles",
+     "On change (info_updated)",
+     "vehicleno, info JSONB (Intellicar model, assigned groups)",
+     `vehicles has ${cnt.vehicles?.rows ?? "?"} rows, one per vehicle; info JSONB carries the Intellicar model — a registry pull, not a stream.`],
+
+    ["Live status / last state", "GET", "vehicle_state",
+     `~1–5 min (UPSERT)${staleOf("vehicle_state")}`,
+     "soc_pct, soh_pct, lat/lon, online, range_km, charging",
+     "One UPSERTed row per vehicle — the only place a live charging flag exists. A 'latest snapshot' endpoint, not a history feed."],
+
+    ["CAN / BMS raw frame", "GET", "telemetry_can",
+     `p50 ${ord.p50_s ?? "?"}s / p90 ${ord.p90_s ?? "?"}s between stored frames${staleOf("telemetry_can")}`,
+     "Full BMS payload JSONB — ~100 signals: soc, soh, current, battery_voltage, rated_capacity, charge_cycle, 24 cell voltages, 12 cell temps, ~30 alarm/protection flags",
+     "telemetry_can.payload is the richest object in the pipeline and the source for ALL battery analytics — see the CAN Payload Signals sheet for the live dictionary."],
+
+    ["Battery series", "GET", "telemetry_battery",
+     `~15–30 s series${staleOf("telemetry_battery")}`,
+     `soc_pct, soh_pct (only these are filled: soc ${bf.pct_soc ?? "?"}%, soh ${bf.pct_soh ?? "?"}%; pack_voltage/temp/charging 100% NULL)`,
+     `${cnt.telemetry_battery?.rows ?? "?"} rows but hollow — a narrow columnar mirror of SOC/SOH; the fill audit (Data Validation) shows the rest is NULL.`],
+
+    ["GPS / location series", "GET", "telemetry_gps",
+     `~30–60 s series${staleOf("telemetry_gps")}`,
+     "lat, lon, speed_kph, heading, ignition, gps_fix, ext_voltage",
+     `${cnt.telemetry_gps?.rows ?? "?"} rows; feeds the heat map. Position/ignition columns imply a location endpoint distinct from the CAN frame.`],
+
+    ["Alerts / events", "GET", "alerts",
+     `Event-driven${staleOf("alerts")}`,
+     "alert_type, severity, time, resolved_at (NULL = open)",
+     "Only 'offline' alerts are present (V9_alerts) even though ~30 BMS fault flags arrive on the CAN frame — an event endpoint the poller under-uses."],
+
+    ["Distance / daily summary", "GET", "distance_rollup",
+     "Daily bucket",
+     "distance_km per (vehicle, day); energy_kwh + moving_seconds 100% NULL",
+     "The ONLY distance source (no odometer anywhere). Pre-bucketed by day → a summary/report endpoint, not raw telemetry."],
+
+    ["Fuel series", "GET", "telemetry_fuel",
+     "n/a (EV fleet)",
+     "— not applicable —",
+     `telemetry_fuel exists (${cnt.telemetry_fuel?.rows ?? 0} rows) but an EV fleet produces no fuel telemetry — listed for completeness of the Polar API surface.`],
+  ];
+
+  EP.forEach((x) => ws.addRow({ e: x[0], m: x[1], t: x[2], c: x[3], r: x[4], b: x[5], f: "INFERRED" }));
+  ws.eachRow((row, i) => { if (i > 1) row.alignment = { vertical: "top", wrapText: true }; });
+  tint(ws, "f", { INFERRED: AMBER });
+
+  ws.addRow({});
+  const note = ws.addRow({ e: "HOW TO READ THIS SHEET" });
+  note.font = { bold: true };
+  [
+    "Intellicar (Polar) is a THIRD-PARTY platform. Nothing in the CRM repo calls it — the poller",
+    "that does runs on AWS, outside this repo. These endpoints are RECONSTRUCTED from the shape of",
+    "the data that landed in each table (columns, JSONB payload, cadence, refresh pattern), not read",
+    "from the poller's source. Endpoint names/paths are indicative, not verified — confirm against the",
+    "poller / Intellicar API docs before building against a specific path. What IS verified is the",
+    "right-hand side: which table each stream lands in, and what it actually contains.",
+  ].forEach((line) => ws.addRow({ e: line }));
+}
+
 // ---- Sheet: Polar API tables
 {
-  const ws = sheet("2. Polar API Tables");
+  const ws = sheet("3. Polar API Tables");
   header(ws, [
     { header: "Table", key: "t", width: 30 },
     { header: "Written by", key: "w", width: 14 },
@@ -612,9 +745,98 @@ const failed = (id) => !results[id]?.ok;
   tint(ws, "st", STATUS_TINT);
 }
 
+// ---- Sheet: Telemetry types compared
+{
+  const ws = sheet("4. Telemetry Types Compared");
+  header(ws, [
+    { header: "Telemetry type (as requested)", key: "t", width: 22 },
+    { header: "Backing table", key: "b", width: 20 },
+    { header: "What it represents", key: "r", width: 40 },
+    { header: "Shape", key: "sh", width: 26 },
+    { header: "Granularity / cadence", key: "g", width: 26 },
+    { header: "Key fields", key: "k", width: 46 },
+    { header: "Rows", key: "n", width: 12 },
+    { header: "Vehicles", key: "v", width: 10 },
+    { header: "Fill / quality", key: "q", width: 46 },
+    { header: "Dup-ts", key: "d", width: 10 },
+    { header: "Consumed by", key: "u", width: 34 },
+    { header: "Status", key: "s", width: 10 },
+  ]);
+
+  const cnt = Object.fromEntries(counts.map((c) => [c.table, c]));
+  const bf = r0("V5_battery_fill");
+  const sf = r0("V5b_state_fill");
+  const dup = Object.fromEntries(r("V1_duplicates").map((x) => [x.tbl, x.pct_duplicate]));
+  const rowsOf = (t) => Number(cnt[t]?.rows ?? 0);
+  const stat = (t) => (rowsOf(t) === 0 ? "EMPTY" : Number(cnt[t]?.mins_stale ?? 0) > 120 ? "WARN" : "OK");
+
+  const TT = [
+    ["Vehicle telemetry", "vehicle_state (+ vehicles)",
+     "Live per-vehicle snapshot + the master registry. NOT a time series — the current state of each vehicle.",
+     "UPSERT snapshot — 1 row / vehicle",
+     "Overwritten ~1–5 min",
+     "vehicleno, soc_pct, soh_pct, lat/lon, online, range_km, charging",
+     rowsOf("vehicle_state"), cnt.vehicle_state?.vehicles ?? "-",
+     `soc ${sf.pct_soc ?? "?"}%, charging ${sf.pct_charging ?? "?"}%, range_km ${sf.pct_range_km ?? "?"}%; ${sf.online_now ?? "?"} online now`,
+     "n/a",
+     "Every Fleet KPI, Fleet Devices table, heat map (live)", stat("vehicle_state")],
+
+    ["Battery telemetry", "telemetry_battery",
+     "Narrow columnar battery series (soc/soh). Looks like the battery source but is mostly hollow.",
+     "Append-only series",
+     "~15–30 s",
+     "vehicleno, time, soc_pct, soh_pct — pack_voltage/current/temp/charging exist but NULL",
+     rowsOf("telemetry_battery"), cnt.telemetry_battery?.vehicles ?? "-",
+     `soc ${bf.pct_soc ?? "?"}%, soh ${bf.pct_soh ?? "?"}%, pack_current ${bf.pct_pack_current ?? "?"}%, pack_voltage ${bf.pct_pack_voltage ?? "?"}%, charging ${bf.pct_charging_flag ?? "?"}%`,
+     `${dup.telemetry_battery ?? "?"}%`,
+     "SOH Degradation chart only", stat("telemetry_battery")],
+
+    ["CAN telemetry", "telemetry_can",
+     "Full BMS/CAN frame as JSONB (~100 signals). THE source for every battery-analytics number.",
+     "Append-only series (JSONB)",
+     "p50 ~8–9 min stored (device ~30 s)",
+     "vehicleno, time, payload{soc, current, battery_voltage, rated_capacity, charge_cycle, soh, cell_voltage_01..24, cell_temperature_01..12, *_alarm}",
+     rowsOf("telemetry_can"), cnt.telemetry_can?.vehicles ?? "-",
+     "Rich & trustworthy; SOC matches battery/state exactly. Current is UNSIGNED (can't sign charge vs discharge).",
+     `${dup.telemetry_can ?? "?"}%`,
+     "All charge/discharge analytics, AH trend, capacity, timeline", stat("telemetry_can")],
+
+    ["GPS telemetry", "telemetry_gps",
+     "Position / motion series.",
+     "Append-only series",
+     "~30–60 s",
+     "vehicleno, time, lat, lon, speed_kph, heading, ignition, gps_fix, ext_voltage",
+     rowsOf("telemetry_gps"), cnt.telemetry_gps?.vehicles ?? "-",
+     "Feeds the heat map; reconciles distance_rollup to within ~2%.",
+     `${dup.telemetry_gps ?? "?"}%`,
+     "Heat map, distance recon, (trips — if aggregator ran)", stat("telemetry_gps")],
+
+    ["Fuel telemetry", "telemetry_fuel",
+     "Fuel-level series — not applicable to an EV fleet.",
+     "Append-only series",
+     "n/a",
+     "(schema present; no data expected for EVs)",
+     rowsOf("telemetry_fuel"), cnt.telemetry_fuel?.vehicles ?? "-",
+     "Empty by design — the fleet is electric.",
+     "-",
+     "nothing", stat("telemetry_fuel")],
+  ];
+
+  TT.forEach((x) => ws.addRow({
+    t: x[0], b: x[1], r: x[2], sh: x[3], g: x[4], k: x[5],
+    n: x[6], v: x[7], q: x[8], d: x[9], u: x[10], s: x[11],
+  }));
+  ws.eachRow((row, i) => { if (i > 1) row.alignment = { vertical: "top", wrapText: true }; });
+  tint(ws, "s", STATUS_TINT);
+
+  ws.addRow({});
+  ws.addRow({ t: "The five 'telemetry types' are the poller's write targets. Two are snapshots vs series, and CAN is the only one every analytic actually reads — Battery telemetry looks equivalent but is hollow (see Fill / quality)." });
+  ws.getRow(ws.rowCount).alignment = { wrapText: true, vertical: "top" };
+}
+
 // ---- Sheet: Raw telemetry field spec
 {
-  const ws = sheet("3. Raw Telemetry Fields");
+  const ws = sheet("5. Raw Telemetry Fields");
   header(ws, [
     { header: "Requested field", key: "q", width: 22 },
     { header: "Available?", key: "a", width: 12 },
@@ -649,7 +871,7 @@ const failed = (id) => !results[id]?.ok;
 
 // ---- Sheet: CAN payload dictionary
 {
-  const ws = sheet("4. CAN Payload Signals");
+  const ws = sheet("6. CAN Payload Signals");
   header(ws, [
     { header: "Signal (payload key)", key: "k", width: 34 },
     { header: "Latest value", key: "v", width: 24 },
@@ -677,7 +899,7 @@ const failed = (id) => !results[id]?.ok;
 
 // ---- Sheet: Aggregator pipeline
 {
-  const ws = sheet("5. Aggregator Pipeline");
+  const ws = sheet("7. Aggregator Pipeline");
   header(ws, [
     { header: "Output table", key: "o", width: 32 },
     { header: "Exists?", key: "x", width: 10 },
@@ -722,7 +944,7 @@ const failed = (id) => !results[id]?.ok;
 
 // ---- Sheet: Validation
 {
-  const ws = sheet("6. Data Validation");
+  const ws = sheet("8. Data Validation");
   header(ws, [
     { header: "#", key: "n", width: 5 },
     { header: "Check", key: "c", width: 46 },
@@ -810,7 +1032,7 @@ const failed = (id) => !results[id]?.ok;
 
 // ---- Sheet: Distance reconciliation detail
 {
-  const ws = sheet("7. Distance Recon");
+  const ws = sheet("9. Distance Recon");
   header(ws, [
     { header: "Day", key: "d", width: 14 },
     { header: "distance_rollup km (poller)", key: "r", width: 24 },
@@ -828,7 +1050,7 @@ const failed = (id) => !results[id]?.ok;
 
 // ---- Sheet: Dashboard mapping
 {
-  const ws = sheet("8. Dashboard Mapping");
+  const ws = sheet("10. Dashboard Mapping");
   header(ws, [
     { header: "Tab", key: "t", width: 18 },
     { header: "Metric (as the user sees it)", key: "m", width: 30 },
@@ -844,7 +1066,7 @@ const failed = (id) => !results[id]?.ok;
     ["Fleet Overview", "Avg SOH %", "/api/telemetry/fleet/dashboard", "queries.ts:71", "vehicle_state", "RAW", "WARN"],
     ["Fleet Overview", "Warranty At-Risk", "/api/telemetry/fleet/dashboard", "queries.ts:72 (soh<80)", "vehicle_state", "RAW", "WARN"],
     ["Fleet Overview", "Active Alerts", "/api/telemetry/fleet/dashboard", "queries.ts:77", "alerts", "RAW", "OK"],
-    ["Fleet Overview", "Avg Daily Distance", "/api/telemetry/fleet/dashboard", "queries.ts:96-107 (branches on filter)", "distance_rollup (unfiltered) / daily_distance_per_vehicle (filtered)", "PRE-AGG", "FAIL"],
+    ["Fleet Overview", "Avg Daily Distance", "/api/telemetry/fleet/dashboard", "queries.ts:101-114 (branches on filter)", "distance_rollup, bucket_size='day' (both paths)", "PRE-AGG", "OK"],
     ["Fleet Overview", "Offline Devices", "/api/telemetry/fleet/dashboard", "queries.ts:131", "vehicle_state", "RAW", "OK"],
     ["Fleet Overview", "Fleet Devices table", "/api/telemetry/fleet/map", "queries.ts:215 fetchFleetMapData", "vehicle_state + vehicles", "RAW", "OK"],
     ["Fleet Overview", "State / City filter", "/api/telemetry/fleet/locations", "queries.ts:180 fetchFleetLocations", "device_battery_map (CRM DB, not IoT)", "n/a", "OK"],
@@ -882,7 +1104,7 @@ const failed = (id) => !results[id]?.ok;
 
 // ---- Sheets: table structures + 5 sample records
 {
-  const ws = sheet("9. Table Structures");
+  const ws = sheet("11. Table Structures");
   header(ws, [
     { header: "Table", key: "t", width: 30 },
     { header: "#", key: "n", width: 5 },
@@ -936,7 +1158,7 @@ for (const t of Object.keys(TABLE_TIME)) {
 
 // ---- Sheet: Actions
 {
-  const ws = sheet("10. Actions");
+  const ws = sheet("12. Actions");
   header(ws, [
     { header: "#", key: "n", width: 5 },
     { header: "Action", key: "a", width: 66 },
@@ -946,8 +1168,7 @@ for (const t of Object.keys(TABLE_TIME)) {
   ]);
   [
     ["Decide the aggregator's fate: revive it, or formally kill it.", "It has never run. Today the CRM does all aggregation at query time and does it well. Either restore the Python jobs, or delete the five empty tables + five never-created ones so nobody builds on a ghost.", "Apoorv + IoT team", "P0"],
-    ["Fix Avg Daily Distance under a State/City filter.", "queries.ts:99 reads the empty daily_distance_per_vehicle and silently reports 0 km for every state/city. Point it at distance_rollup (which has vehicleno), exactly as iot-queries.ts:228 already does.", "CRM", "P0"],
-    ["Add bucket_size='day' to the unfiltered Avg Daily Distance query.", "queries.ts:105 averages across all bucket sizes, diluting the figure.", "CRM", "P1"],
+    ["DONE — Avg Daily Distance under a State/City filter.", "Was reading the empty daily_distance_per_vehicle and reporting 0 km for every state/city. queries.ts:101-114 now reads distance_rollup on both paths, scoped by vehicleno, with bucket_size='day' pinned on each. Shipped in 1b06b3b4.", "CRM", "DONE"],
     ["Populate the trips table (or remove the Trip Analytics tab).", "0 rows fleet-wide. The tab shows 'No trips found' for a fleet that is demonstrably driving thousands of km.", "IoT team", "P1"],
     ["Ask Intellicar for a signed current, or a reliable charging flag, in the CAN feed.", "Current is an unsigned magnitude, so charge vs discharge has to be inferred from rising SOC. A sign bit would remove a whole class of ambiguity from cycle detection.", "Apoorv -> Intellicar", "P1"],
     ["Ask the poller team to stop re-inserting unchanged frames.", "79% of telemetry_can rows are byte-identical duplicates of a frame already stored (worst case: one frame stored 2,668 times). ~5x storage and scan cost, and a trap for any query that forgets DISTINCT ON.", "IoT team", "P1"],
@@ -961,12 +1182,12 @@ for (const t of Object.keys(TABLE_TIME)) {
     ["Add error states to the Trip/Health/Alerts/Device tabs.", "Only Fleet Overview renders an error branch. On the other tabs a 500 and an empty table look identical to the user.", "CRM", "P2"],
   ].forEach((x, i) => ws.addRow({ n: i + 1, a: x[0], w: x[1], o: x[2], p: x[3] }));
   ws.eachRow((row, i) => { if (i > 1) row.alignment = { vertical: "top", wrapText: true }; });
-  tint(ws, "p", { P0: RED, P1: AMBER, P2: GREY });
+  tint(ws, "p", { P0: RED, P1: AMBER, P2: GREY, DONE: GREEN });
 }
 
 // ---- Sheet: run log (so a reader can see what did / didn't verify)
 {
-  const ws = sheet("11. Run Log");
+  const ws = sheet("13. Run Log");
   header(ws, [
     { header: "Check", key: "c", width: 30 },
     { header: "Status", key: "s", width: 10 },

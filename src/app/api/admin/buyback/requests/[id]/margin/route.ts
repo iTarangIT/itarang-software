@@ -24,6 +24,7 @@ import { db } from "@/lib/db";
 import { buybackDeals, dealLineLocks } from "@/lib/db/schema";
 import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
+import { resolveDealerPrice } from "@/lib/buyback/floor";
 import { linesForRequest } from "@/lib/buyback/queries";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";
 import { eq } from "drizzle-orm";
@@ -69,13 +70,28 @@ export const POST = withErrorHandler(
           throw new ValidationError("A margin line does not belong to this request.");
         }
 
-        // The dealer's accepted price — read from the DB, never from the client.
-        const dealerPrice = Number(line.dealer_price);
-        if (!Number.isFinite(dealerPrice)) {
+        // The dealer's accepted price — read from the DB, never from the client,
+        // and validated by resolveDealerPrice rather than inline.
+        //
+        // This was `if (!Number.isFinite(Number(line.dealer_price)))`, which
+        // reads as a null-guard and is not one: Number(null) is 0 and
+        // isFinite(0) is true, so an UNPRICED line passed straight through and
+        // got locked at ₹0 in deal_line_locks — INSERT-only, fill-once, so the
+        // dealer's price for that deal was permanently zero and the floor
+        // collapsed to margin alone. Reachable today via the review-bar `accept`
+        // (SUBMITTED/UNDER_REVIEW → DEALER_ACCEPTED), which prices nothing.
+        // db-1 has no ₹0 locks only because every acceptance so far went via
+        // dealer_accept, whose final-offer route refuses to send unless every
+        // line is priced. Luck, not design.
+        const resolved = resolveDealerPrice(line.dealer_price);
+        if (!resolved.ok) {
           throw new ValidationError(
-            `No accepted price for ${line.variant_type}. The dealer must accept a final offer before margin can be locked.`,
+            resolved.reason === "missing"
+              ? `No accepted price for ${line.variant_type}. The dealer must accept a final offer before margin can be locked.`
+              : `The accepted price for ${line.variant_type} is not a usable figure (${resolved.raw}). Margin cannot be locked against it.`,
           );
         }
+        const dealerPrice = resolved.price;
 
         // Resolve to whole rupees per unit, once, here.
         const marginValue =

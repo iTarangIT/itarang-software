@@ -17,6 +17,8 @@ interface KPI {
     value: string | number;
     icon: React.ElementType;
     color: string;
+    /** Shown under the value when the KPI could not be measured. */
+    note?: string;
 }
 
 interface FleetEnvelope<T> {
@@ -108,11 +110,22 @@ export function FleetOverview() {
     }
 
     const kpis = data?.kpis || {};
+    // avgSOH / warrantyAtRisk are null when the BMS SOH feed is not measuring anything
+    // (every pack reporting the identical value). They render as "—" with the reason,
+    // never as "100%" / "0" — those read as a healthy fleet when they mean a dead signal.
+    const sohFeed = data?.sohFeed;
+    const sohNote = sohFeed?.constantFeed
+        ? `BMS SOH is stuck at ${sohFeed.constantValue}% on all ${sohFeed.assessed} reporting packs — not a measurement`
+        : 'Not measured';
     const kpiCards: KPI[] = [
         { label: 'Fleet Size', value: kpis.fleetSize || 0, icon: Battery, color: 'text-blue-600' },
         { label: 'Utilization %', value: `${kpis.utilization || 0}%`, icon: Activity, color: 'text-green-600' },
-        { label: 'Avg SOH %', value: `${kpis.avgSOH || 0}%`, icon: Battery, color: 'text-purple-600' },
-        { label: 'Warranty At-Risk', value: kpis.warrantyAtRisk || 0, icon: AlertTriangle, color: 'text-amber-600' },
+        kpis.avgSOH == null
+            ? { label: 'Avg SOH %', value: '—', icon: Battery, color: 'text-gray-400', note: sohNote }
+            : { label: 'Avg SOH %', value: `${kpis.avgSOH}%`, icon: Battery, color: 'text-purple-600' },
+        kpis.warrantyAtRisk == null
+            ? { label: 'Warranty At-Risk', value: '—', icon: AlertTriangle, color: 'text-gray-400', note: sohNote }
+            : { label: 'Warranty At-Risk', value: kpis.warrantyAtRisk, icon: AlertTriangle, color: 'text-amber-600' },
         { label: 'Active Alerts', value: kpis.activeAlerts || 0, icon: AlertTriangle, color: 'text-red-600' },
     ];
 
@@ -177,7 +190,10 @@ export function FleetOverview() {
                             <kpi.icon className={cn('w-4 h-4', kpi.color)} />
                             <span className="text-xs font-medium text-gray-500">{kpi.label}</span>
                         </div>
-                        <p className="text-2xl font-bold text-gray-900">{kpi.value}</p>
+                        <p className={cn('text-2xl font-bold', kpi.note ? 'text-gray-300' : 'text-gray-900')}>{kpi.value}</p>
+                        {kpi.note ? (
+                            <p className="mt-1 text-[10px] leading-snug text-gray-400">{kpi.note}</p>
+                        ) : null}
                     </div>
                 ))}
             </div>

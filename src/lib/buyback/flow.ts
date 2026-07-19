@@ -76,3 +76,42 @@ export function stepIndexFor(status: string): number | "terminal" {
   const idx = FLOW.indexOf(status as (typeof FLOW)[number]);
   return idx >= 0 ? idx : 0;
 }
+
+/**
+ * The dashboard funnel's five pipeline stages, in order. Buckets the
+ * buyback_deals.status values that appear on the pipeline; the status lists are
+ * copied VERBATIM from the admin dashboard's original local FUNNEL_BUCKETS
+ * (page.tsx) so the funnel folds identically to what shipped for M22 — no new
+ * groupings invented here.
+ *
+ * Consumed by the dashboard API (SQL statuses folded into these buckets), the
+ * dashboard funnel UI, and the Review Queue's `?stage=` deep-link filter, so the
+ * five keys are a shared contract across all three surfaces.
+ *
+ * Four of the 21 buyback_deal_status values are deliberately UNbucketed — DRAFT,
+ * DEALER_REOPENED, REJECTED, CANCELLED — exactly as the original map left them;
+ * `stageForStatus` returns null for those and the funnel simply omits them.
+ */
+export const STAGE_BUCKETS = [
+  { key: "submitted", label: "Submitted", statuses: ["SUBMITTED", "UNDER_REVIEW", "INFO_REQUESTED"] },
+  { key: "reviewed", label: "Reviewed", statuses: ["NEGOTIATING", "FINAL_OFFER_SENT", "DEALER_ACCEPTED"] },
+  {
+    key: "locked",
+    label: "Locked",
+    statuses: ["MARGIN_SET", "VENDOR_ROUTED", "VENDOR_NEGOTIATING", "VENDOR_AGREED", "PO_EXCHANGED"],
+  },
+  {
+    key: "picked",
+    label: "Picked",
+    statuses: ["PICKUP_SCHEDULED", "PICKED_UP", "INVOICE_RAISED", "INVOICE_APPROVED"],
+  },
+  { key: "settled", label: "Settled", statuses: ["SETTLED", "CLOSED"] },
+] as const;
+
+/** The stage bucket key a status folds into, or null when it belongs to none. */
+export function stageForStatus(status: string): string | null {
+  for (const b of STAGE_BUCKETS) {
+    if ((b.statuses as readonly string[]).includes(status)) return b.key;
+  }
+  return null;
+}

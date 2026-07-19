@@ -11,6 +11,7 @@
  * emitted no code, the card is `inconclusive` — never `ok`. A card that says OK
  * must mean "we tested this and found nothing", not "we could not test this".
  */
+
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { db } from "@/lib/db";
@@ -734,6 +735,7 @@ export async function runRiskWorkflow(
       completion_tokens: result.totalCompletionTokens ?? 0,
     };
 
+    
     await completeRiskRun(runId, summary);
     return { run_id: runId, ...summary };
   } catch (e) {
