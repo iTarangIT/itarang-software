@@ -37,7 +37,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       return NextResponse.json({ ok: true, track: null, reason: "No assignment for this tenant." });
     }
 
-    const track = await getCurrentFiTrack(leadId, assignment.nbfc_id);
+    // Fetch the independent pieces concurrently — track, opt-in/config, prior
+    // attempts and the agent directory don't depend on one another.
+    const [track, cfg, historyRows, agents] = await Promise.all([
+      getCurrentFiTrack(leadId, assignment.nbfc_id),
+      db
+        .select({ fi: nbfcServiceConfig.fi_enabled, fiConfig: nbfcServiceConfig.fi_config })
+        .from(nbfcServiceConfig)
+        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+        .limit(1),
+      getFiHistory(leadId, assignment.nbfc_id),
+      listFiAgents(actor.tenant_id, { activeOnly: true }),
+    ]);
+
     const overdue =
       !!track &&
       !!track.sla_due_at &&
@@ -47,21 +59,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     // Opt-in + FI config: per-lead snapshot first, live config fallback (§3.4).
     const snap = assignment.snapshot as { fi_enabled?: boolean };
     let enabled = snap.fi_enabled ?? false;
-    const cfg = await db
-      .select({ fi: nbfcServiceConfig.fi_enabled, fiConfig: nbfcServiceConfig.fi_config })
-      .from(nbfcServiceConfig)
-      .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-      .limit(1);
     if (snap.fi_enabled === undefined) enabled = cfg[0]?.fi ?? false;
     const fiConfig = (cfg[0]?.fiConfig as Record<string, unknown> | undefined) ?? null;
 
-    // Decision context for a submitted/decided attempt.
+    // Decision context for a submitted/decided attempt — photos + agent in
+    // parallel; both only exist when there's a current attempt.
     let photos: Awaited<ReturnType<typeof getFiPhotos>> = [];
     let agent = null;
     let autoFlags: ReturnType<typeof computeFiAutoFlags> = [];
     if (track) {
-      photos = await getFiPhotos(track.id);
-      agent = track.assigned_agent_id ? await getFiAgent(track.assigned_agent_id, actor.tenant_id) : null;
+      [photos, agent] = await Promise.all([
+        getFiPhotos(track.id),
+        track.assigned_agent_id
+          ? getFiAgent(track.assigned_agent_id, actor.tenant_id)
+          : Promise.resolve(null),
+      ]);
       autoFlags = computeFiAutoFlags(
         { ...track, sla_breached: track.sla_breached || overdue },
         photos,
@@ -70,7 +82,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     }
 
     // Lightweight history (prior attempts).
-    const history = (await getFiHistory(leadId, assignment.nbfc_id))
+    const history = historyRows
       .filter((h) => !h.is_current)
       .map((h) => ({
         id: h.id,
@@ -81,8 +93,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         assigned_to: h.assigned_to,
         decided_at: h.decided_at,
       }));
-
-    const agents = await listFiAgents(actor.tenant_id, { activeOnly: true });
 
     return NextResponse.json({
       ok: true,

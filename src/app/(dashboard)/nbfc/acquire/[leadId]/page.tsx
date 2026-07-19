@@ -22,6 +22,7 @@ import AgreementTrackPanel from "../_components/AgreementTrackPanel";
 import VkycTrackPanel from "../_components/VkycTrackPanel";
 import FiTrackPanel from "../_components/FiTrackPanel";
 import OfferPanel from "../_components/OfferPanel";
+import GoToStepButton from "../_components/GoToStepButton";
 import SanctionPanel from "../_components/SanctionPanel";
 import LeadStageStepper, {
   type NextAction,
@@ -152,9 +153,6 @@ export default async function AcquireLeadDetailPage({
         .limit(1)
     : [];
 
-  const batteryPhotos = (ps?.battery_photo_urls as string[] | null) ?? [];
-  const chargerPhotos = (ps?.charger_photo_urls as string[] | null) ?? [];
-
   // ── Lifecycle derivation (Addendum V0.2 §6/§9/§10) ───────────────────────
   // Stage-1 tracks run across EVERY picked NBFC, so read THIS NBFC's own rows
   // (assignment.nbfc_id). E-NACH is winner-only, so its gate is winner-centric.
@@ -207,19 +205,25 @@ export default async function AcquireLeadDetailPage({
   const sold = lead.kyc_status === "sold";
 
   function nodeOffer(): StepperStage["state"] {
+    // FI / Video KYC now live inside the Offer step and only unlock once won, so
+    // the Offer step itself is reachable straight after the dossier review.
     if (offerSubmitted) return "done";
-    if (verificationComplete && !closed) return "active";
-    return "locked";
+    if (closed) return "locked";
+    return "active";
   }
-  function nodeWinner(): StepperStage["state"] {
-    if (won) return "done";
-    if (lost) return "failed";
-    if (status === "offer_submitted") return "active";
-    return "locked";
+  function nodeFivkyc(): StepperStage["state"] {
+    // FI / Video KYC only run for the winning lead.
+    if (!won) return "locked";
+    if (verificationFailed) return "failed";
+    if (!verificationRequired) return "done";
+    return verificationComplete ? "done" : "active";
   }
   function nodeEnach(): StepperStage["state"] {
     if (!won) return "locked";
-    return enachGate.satisfied ? "done" : "active";
+    if (enachGate.satisfied) return "done";
+    // Gate E-NACH behind FI & V-KYC completion.
+    if (!verificationComplete) return "locked";
+    return "active";
   }
 
   // ── Per-step accordion content (Addendum V0.2 §6/§9/§10/§11) ─────────────
@@ -231,50 +235,215 @@ export default async function AcquireLeadDetailPage({
   // customer dossier (details + verified documents from Steps 1–3) with a
   // Download (ZIP) + Next → Offer action bar. When FI / Video KYC are opted in
   // for this lead, their live track panels render below the dossier (§7.4).
+  // Section G (NBFCs the customer picked) and the Indicated Loan Product lead
+  // the Verification step — they frame the offer before the customer dossier.
+  const sectionGCard = (
+    <section className="border border-slate-200 rounded-xl bg-white p-5">
+      <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
+        Section G — NBFCs the customer picked
+      </h2>
+      {pickedNbfcRows.length === 0 ? (
+        <p className="text-sm text-slate-500">No picks recorded.</p>
+      ) : (
+        <ul className="space-y-2">
+          {pickedNbfcRows.map((n) => {
+            const isUs = myNbfcId !== null && n.id === myNbfcId;
+            return (
+              <li
+                key={n.id}
+                className={`px-3 py-2.5 rounded-lg border text-sm flex items-center justify-between ${
+                  isUs
+                    ? "border-[color:var(--color-brand-sky)] bg-[color:var(--color-brand-sky)]/5"
+                    : "border-slate-200"
+                }`}
+              >
+                <div>
+                  <div className="font-semibold text-slate-800">
+                    {n.short_name}
+                  </div>
+                  <div className="text-xs text-slate-500">{n.legal_name}</div>
+                </div>
+                {isUs && (
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[color:var(--color-brand-sky)]">
+                    This NBFC
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+
+  const loanProductCard = loanProduct ? (
+    <section className="border border-slate-200 rounded-xl bg-white p-5">
+      <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
+        Indicated Loan Product
+      </h2>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+        <Field k="Product" v={loanProduct.product_name} />
+        <Field k="Status" v={loanProduct.status} />
+        <Field
+          k="Loan amount"
+          v={`${fmtInr(loanProduct.loan_amount_min)} – ${fmtInr(loanProduct.loan_amount_max)}`}
+        />
+        <Field
+          k="Tenure (months)"
+          v={`${loanProduct.tenure_months_min} – ${loanProduct.tenure_months_max}`}
+        />
+        <Field
+          k="ROI (%)"
+          v={`${loanProduct.min_roi_pct} – ${loanProduct.max_roi_pct}`}
+        />
+        <Field k="Down payment (%)" v={`${loanProduct.down_payment_pct}`} />
+        <Field
+          k="Disbursement TAT"
+          v={
+            loanProduct.disbursement_tat_hours != null
+              ? `${loanProduct.disbursement_tat_hours}h`
+              : null
+          }
+        />
+        <Field k="Credit bureau" v={loanProduct.credit_bureau} />
+      </dl>
+    </section>
+  ) : null;
+
   const verifyContent = (
     <div className="space-y-4">
       {dossier ? (
-        <CustomerDossierPanel dossier={dossier} leadId={leadId} />
-      ) : null}
-      {verificationRequired ? (
-        <div className="space-y-3 border-t border-slate-200 pt-5">
-          <div className="flex items-center gap-2.5">
-            <span
-              className="grid h-7 w-7 place-items-center rounded-lg text-white shadow-sm"
-              style={{ backgroundImage: "linear-gradient(135deg, var(--color-brand-teal), var(--color-brand-navy))" }}
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
-                <path d="m9 12 2 2 4-4" />
-              </svg>
-            </span>
-            <div>
-              <p className="text-sm font-semibold tracking-tight text-slate-900">Verification tracks</p>
-              <p className="text-[11px] text-slate-400">Stage-1 checks run in parallel before the offer</p>
-            </div>
-          </div>
-          <FiTrackPanel leadId={leadId} />
-          <VkycTrackPanel leadId={leadId} />
-        </div>
+        <CustomerDossierPanel
+          dossier={dossier}
+          leadId={leadId}
+          afterHero={
+            <>
+              {sectionGCard}
+              {loanProductCard}
+            </>
+          }
+        />
       ) : null}
     </div>
   );
 
-  const offerContent = <OfferPanel leadId={leadId} />;
+  // FI + Passive Video KYC — their own step ("FI & V-KYC", step 3). They only
+  // become interactive once this NBFC wins the offer; until then they are
+  // locked behind a notice.
+  const fivkycContent = (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2.5">
+        <span
+          className="grid h-7 w-7 place-items-center rounded-lg text-white shadow-sm"
+          style={{ backgroundImage: "linear-gradient(135deg, var(--color-brand-teal), var(--color-brand-navy))" }}
+        >
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+            <path d="m9 12 2 2 4-4" />
+          </svg>
+        </span>
+        <div>
+          <p className="text-sm font-semibold tracking-tight text-slate-900">Field Investigation &amp; Passive Video KYC</p>
+          <p className="text-[11px] text-slate-400">
+            {won
+              ? "Stage-1 verification tracks — run these for the winning lead"
+              : "Unlock once this NBFC wins the offer"}
+          </p>
+        </div>
+      </div>
+      {won ? (
+        <>
+          <FiTrackPanel leadId={leadId} />
+          <VkycTrackPanel leadId={leadId} />
+        </>
+      ) : (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center">
+          <svg
+            className="mx-auto mb-2 h-5 w-5 text-slate-400"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <p className="text-sm font-semibold text-slate-600">
+            Field Investigation &amp; Passive Video KYC are locked
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {lost
+              ? "This NBFC was not selected — verification tracks do not apply."
+              : "They unlock once the customer selects this NBFC as the winning lender."}
+          </p>
+        </div>
+      )}
+    </div>
+  );
 
-  const winnerContent = (
-    <p className="text-sm text-slate-600">
+  // Winner outcome — folded into the Offer step (§9.1). Once won, a Next button
+  // advances to the FI & V-KYC step.
+  const winnerBanner = (
+    <div
+      className={`rounded-lg border px-3 py-2.5 text-xs font-medium leading-relaxed ${
+        won
+          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+          : lost
+            ? "border-slate-200 bg-slate-50 text-slate-600"
+            : "border-sky-200 bg-sky-50 text-sky-800"
+      }`}
+    >
       {won
-        ? "Selected as the winning lender by the customer."
+        ? "Selected as the winning lender by the customer — proceed to Field Investigation & Passive Video KYC."
         : lost
           ? "Not selected — a competing offer won. No further action."
           : status === "offer_submitted"
             ? "Offer submitted — awaiting the customer's decision between competing offers."
             : "Submit your financing offer first; the customer then picks the winner across competing NBFCs."}
-    </p>
+    </div>
   );
 
-  const enachContent = won ? (
+  const offerContent = (
+    <div className="space-y-4">
+      <OfferPanel leadId={leadId} />
+      {offerSubmitted ? winnerBanner : null}
+      {won ? (
+        <GoToStepButton stepKey="fivkyc" label="Next: FI & V-KYC" />
+      ) : null}
+    </div>
+  );
+
+  const enachContent = !won ? (
+    <p className="text-sm text-slate-500">
+      {lost
+        ? "This NBFC was not selected — Stage 2 does not apply."
+        : "E-NACH mandate registration and the agreement unlock once the customer selects this NBFC as the winning lender (§9.1)."}
+    </p>
+  ) : !verificationComplete ? (
+    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center">
+      <svg
+        className="mx-auto mb-2 h-5 w-5 text-slate-400"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="11" width="18" height="11" rx="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </svg>
+      <p className="text-sm font-semibold text-slate-600">
+        E-NACH &amp; Agreement are locked
+      </p>
+      <p className="mt-1 text-xs text-slate-500">
+        Complete Field Investigation &amp; Passive Video KYC (step 3) before
+        registering the E-NACH mandate.
+      </p>
+    </div>
+  ) : (
     <div className="space-y-3">
       <EnachTrackPanel leadId={leadId} />
       <AgreementTrackPanel leadId={leadId} />
@@ -286,12 +455,6 @@ export default async function AcquireLeadDetailPage({
         disbursal and warranty.
       </p>
     </div>
-  ) : (
-    <p className="text-sm text-slate-500">
-      {lost
-        ? "This NBFC was not selected — Stage 2 does not apply."
-        : "E-NACH mandate registration and the agreement unlock once the customer selects this NBFC as the winning lender (§9.1)."}
-    </p>
   );
 
   const disburseContent = won ? (
@@ -306,36 +469,42 @@ export default async function AcquireLeadDetailPage({
   const stages: StepperStage[] = [
     {
       key: "verify",
+      // Verification here is the dossier review — FI / Video KYC moved to the
+      // Offer step. Done once the offer is submitted (or the lead has moved on);
+      // clicking "Next: Offer" also marks it done client-side.
       label: "Verification",
-      sub: verificationFailed
-        ? "track failed"
-        : !verificationRequired
-          ? "not required"
-          : verificationComplete
-            ? "complete"
-            : "in progress",
-      state: verificationFailed
-        ? "failed"
-        : !verificationRequired
-          ? "done"
-          : verificationComplete
-            ? "done"
-            : "active",
+      sub: offerSubmitted || sanctioned ? "reviewed" : "review dossier",
+      state: offerSubmitted || sanctioned ? "done" : "active",
       content: verifyContent,
     },
     {
       key: "offer",
+      // The winner outcome is folded into the Offer step (§9.1).
       label: "Offer",
-      sub: offerSubmitted ? "submitted" : "pending",
+      sub: won
+        ? "selected"
+        : lost
+          ? "not selected"
+          : offerSubmitted
+            ? "submitted · awaiting decision"
+            : "pending",
       state: nodeOffer(),
       content: offerContent,
     },
     {
-      key: "winner",
-      label: "Winner",
-      sub: won ? "selected" : lost ? "not selected" : "customer decides",
-      state: nodeWinner(),
-      content: winnerContent,
+      key: "fivkyc",
+      label: "FI & V-KYC",
+      sub: !won
+        ? "winner only"
+        : verificationFailed
+          ? "action needed"
+          : !verificationRequired
+            ? "not required"
+            : verificationComplete
+              ? "complete"
+              : "in progress",
+      state: nodeFivkyc(),
+      content: fivkycContent,
     },
     {
       key: "enach",
@@ -346,7 +515,9 @@ export default async function AcquireLeadDetailPage({
           ? enachGate.status === "skipped"
             ? "waived"
             : "registered"
-          : "pending",
+          : !verificationComplete
+            ? "awaiting FI & V-KYC"
+            : "pending",
       state: nodeEnach(),
       content: enachContent,
     },
@@ -388,16 +559,34 @@ export default async function AcquireLeadDetailPage({
         tone: "success",
         text: "Loan sanctioned — the dealer can now complete Step 5 (OTP + dispatch).",
       };
-    if (verificationFailed)
-      return {
-        tone: "danger",
-        text: "A verification track failed. Review Field Investigation / Video KYC below — re-initiate or record the outcome.",
-      };
-    if (!verificationComplete)
+    // Winning lead — Field Investigation / Video KYC unlock here, then Stage 2.
+    if (won) {
+      if (verificationFailed)
+        return {
+          tone: "danger",
+          text: "A verification track failed. Review Field Investigation / Video KYC in the FI & V-KYC step — re-initiate or record the outcome.",
+        };
+      if (!verificationComplete)
+        return {
+          tone: "info",
+          text: "FI Coordinator & Operations: this NBFC won — complete Field Investigation and Passive Video KYC (now unlocked in the FI & V-KYC step).",
+        };
+      if (enachGate.required && !enachGate.satisfied)
+        return {
+          tone: "info",
+          text: "Operations: register the E-NACH mandate for the winning lead (Stage 2, winner-only).",
+        };
+      if (disbursalReady)
+        return {
+          tone: "success",
+          text: "All applicable verification tracks satisfied — ready to sanction & disburse.",
+        };
       return {
         tone: "info",
-        text: "FI Coordinator & Operations: complete Field Investigation and Passive Video KYC — Stage-1 tracks run in parallel.",
+        text: "Winning lead — complete the Stage-2 mandate and disbursal steps below.",
       };
+    }
+    // Pre-win — submit the offer, then await the customer's decision.
     if (!offerSubmitted)
       return {
         tone: "info",
@@ -407,21 +596,6 @@ export default async function AcquireLeadDetailPage({
       return {
         tone: "info",
         text: "Offer submitted — awaiting the customer's decision between competing offers.",
-      };
-    if (won && enachGate.required && !enachGate.satisfied)
-      return {
-        tone: "info",
-        text: "Operations: register the E-NACH mandate for the winning lead (Stage 2, winner-only).",
-      };
-    if (won && disbursalReady)
-      return {
-        tone: "success",
-        text: "All applicable verification tracks satisfied — ready to sanction & disburse.",
-      };
-    if (won)
-      return {
-        tone: "info",
-        text: "Winning lead — complete the Stage-2 mandate and disbursal steps below.",
       };
     return { tone: "muted", text: "Awaiting the next step." };
   }
@@ -478,199 +652,32 @@ export default async function AcquireLeadDetailPage({
         </div>
       </header>
 
-      <LeadStageStepper stages={stages} nextAction={nextAction} />
+      <LeadStageStepper stages={stages} nextAction={nextAction} leadId={leadId} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 space-y-5">
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Customer
-            </h2>
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-              <Field k="Full name" v={lead.full_name} />
-              <Field k="Phone" v={lead.phone} />
-              <Field
-                k="Date of birth"
-                v={lead.dob ? fmtDate(lead.dob) : null}
-              />
-              <Field k="Father / husband" v={lead.father_or_husband_name} />
-              <Field k="City" v={lead.city} />
-              <Field k="State" v={lead.state} />
-              <Field k="Current address" v={lead.current_address} span={2} />
-              <Field
-                k="Resident status"
-                v={
-                  lead.resident_status
-                    ? lead.resident_status.charAt(0).toUpperCase() +
-                      lead.resident_status.slice(1)
-                    : null
-                }
-              />
-              <Field
-                k="Has health insurance"
-                v={
-                  lead.has_health_insurance == null
-                    ? null
-                    : lead.has_health_insurance
-                      ? "Yes"
-                      : "No"
-                }
-              />
-              <Field
-                k="Has life insurance"
-                v={
-                  lead.has_life_insurance == null
-                    ? null
-                    : lead.has_life_insurance
-                      ? "Yes"
-                      : "No"
-                }
-              />
-            </dl>
-          </section>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <section className="border border-slate-200 rounded-xl bg-white p-5">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
+            Dealer
+          </h2>
+          <div className="text-sm font-medium text-slate-800">
+            {dealerRow?.company_name ?? "—"}
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            {dealerRow?.dealer_id ?? lead.dealer_id ?? "—"}
+          </div>
+        </section>
 
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Product Selection
-            </h2>
-            {ps ? (
-              <>
-                <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-                  <Field k="Battery serial" v={ps.battery_serial} />
-                  <Field k="Charger serial" v={ps.charger_serial} />
-                  <Field k="Category" v={ps.category} />
-                  <Field k="Model number" v={ps.model_number} />
-                  <Field k="Final price" v={fmtInr(ps.final_price)} />
-                  <Field
-                    k="Customer disclosure"
-                    v={
-                      ps.customer_disclosure_ack
-                        ? "Acknowledged"
-                        : "Not acknowledged"
-                    }
-                  />
-                </dl>
-
-                {(batteryPhotos.length > 0 || chargerPhotos.length > 0) && (
-                  <div className="mt-5 space-y-3">
-                    {batteryPhotos.length > 0 && (
-                      <PhotoStrip title="Battery photos" urls={batteryPhotos} />
-                    )}
-                    {chargerPhotos.length > 0 && (
-                      <PhotoStrip title="Charger photos" urls={chargerPhotos} />
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="text-sm text-slate-500">
-                No product selection recorded.
-              </p>
-            )}
-          </section>
-
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Section G — NBFCs the customer picked
-            </h2>
-            {pickedNbfcRows.length === 0 ? (
-              <p className="text-sm text-slate-500">No picks recorded.</p>
-            ) : (
-              <ul className="space-y-2">
-                {pickedNbfcRows.map((n) => {
-                  const isUs = myNbfcId !== null && n.id === myNbfcId;
-                  return (
-                    <li
-                      key={n.id}
-                      className={`px-3 py-2.5 rounded-lg border text-sm flex items-center justify-between ${
-                        isUs
-                          ? "border-[color:var(--color-brand-sky)] bg-[color:var(--color-brand-sky)]/5"
-                          : "border-slate-200"
-                      }`}
-                    >
-                      <div>
-                        <div className="font-semibold text-slate-800">
-                          {n.short_name}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {n.legal_name}
-                        </div>
-                      </div>
-                      {isUs && (
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-[color:var(--color-brand-sky)]">
-                          This NBFC
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
-
-          {loanProduct && (
-            <section className="border border-slate-200 rounded-xl bg-white p-5">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-                Indicated Loan Product
-              </h2>
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-                <Field k="Product" v={loanProduct.product_name} />
-                <Field k="Status" v={loanProduct.status} />
-                <Field
-                  k="Loan amount"
-                  v={`${fmtInr(loanProduct.loan_amount_min)} – ${fmtInr(loanProduct.loan_amount_max)}`}
-                />
-                <Field
-                  k="Tenure (months)"
-                  v={`${loanProduct.tenure_months_min} – ${loanProduct.tenure_months_max}`}
-                />
-                <Field
-                  k="ROI (%)"
-                  v={`${loanProduct.min_roi_pct} – ${loanProduct.max_roi_pct}`}
-                />
-                <Field
-                  k="Down payment (%)"
-                  v={`${loanProduct.down_payment_pct}`}
-                />
-                <Field
-                  k="Disbursement TAT"
-                  v={
-                    loanProduct.disbursement_tat_hours != null
-                      ? `${loanProduct.disbursement_tat_hours}h`
-                      : null
-                  }
-                />
-                <Field k="Credit bureau" v={loanProduct.credit_bureau} />
-              </dl>
-            </section>
-          )}
-        </div>
-
-        <div className="space-y-5">
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Dealer
-            </h2>
-            <div className="text-sm font-medium text-slate-800">
-              {dealerRow?.company_name ?? "—"}
-            </div>
-            <div className="text-xs text-slate-500 mt-1">
-              {dealerRow?.dealer_id ?? lead.dealer_id ?? "—"}
-            </div>
-          </section>
-
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">
-              Origination steps
-            </h2>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Use the progress rail above — click any step to open its panel.
-              Stage-1 (FI + Video KYC) runs in parallel and competitively;
-              E-NACH and disbursal are winner-only (§9.1). A completed step is
-              locked and read-only.
-            </p>
-          </section>
-        </div>
+        <section className="border border-slate-200 rounded-xl bg-white p-5">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">
+            Origination steps
+          </h2>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Use the progress rail above — click any step to open its panel.
+            Stage-1 (FI + Video KYC) runs in parallel and competitively; E-NACH
+            and disbursal are winner-only (§9.1). A completed step is locked and
+            read-only.
+          </p>
+        </section>
       </div>
     </div>
   );
@@ -693,30 +700,6 @@ function Field({
       <dd className="text-sm text-slate-700 mt-0.5">
         {v == null || v === "" ? <span className="text-slate-300">—</span> : v}
       </dd>
-    </div>
-  );
-}
-
-function PhotoStrip({ title, urls }: { title: string; urls: string[] }) {
-  return (
-    <div>
-      <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-2">
-        {title}
-      </p>
-      <div className="flex gap-2 flex-wrap">
-        {urls.map((u, idx) => (
-          <a
-            key={idx}
-            href={u}
-            target="_blank"
-            rel="noreferrer"
-            className="block w-24 h-24 rounded-md overflow-hidden border border-slate-200 hover:border-[color:var(--color-brand-sky)] transition"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={u} alt="" className="w-full h-full object-cover" />
-          </a>
-        ))}
-      </div>
     </div>
   );
 }

@@ -105,6 +105,16 @@ def _worker_env() -> dict[str, str]:
         "PYTHONHASHSEED": "0",
         "HOME": os.environ.get("HOME") or "/tmp",
         "LANG": os.environ.get("LANG") or "C.UTF-8",
+        # Pin every BLAS backend to a single thread. Two reasons, both load-bearing:
+        #   1. worker.py sets RLIMIT_NPROC=0, so a thread pool spun up lazily on
+        #      the first large matmul would fail *mid-hypothesis* — an error that
+        #      would look like a bad hypothesis rather than a sandbox defect.
+        #   2. This service exists to return deterministic verdicts. Multi-threaded
+        #      BLAS reductions are order-dependent and not bit-reproducible.
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
     }
     for passthrough in ("SystemRoot", "COMSPEC", "TMPDIR"):  # Windows dev boxes + tmp
         if passthrough in os.environ:

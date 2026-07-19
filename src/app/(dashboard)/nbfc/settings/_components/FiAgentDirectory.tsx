@@ -21,16 +21,28 @@ interface Agent {
   active: boolean;
 }
 
-const BLANK = { name: "", phone: "", email: "", city: "", preferred_channel: "email" as const, reference_photo_url: "" };
+interface Draft {
+  name: string;
+  phone: string;
+  email: string;
+  city: string;
+  preferred_channel: "email" | "sms" | "whatsapp";
+  reference_photo_url: string;
+}
+
+const BLANK: Draft = { name: "", phone: "", email: "", city: "", preferred_channel: "email", reference_photo_url: "" };
 
 export default function FiAgentDirectory({ canEdit }: { canEdit: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<typeof BLANK>({ ...BLANK });
+  const [draft, setDraft] = useState<Draft>({ ...BLANK });
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Draft>({ ...BLANK });
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +114,48 @@ export default function FiAgentDirectory({ canEdit }: { canEdit: boolean }) {
     }
   }
 
+  function startEdit(a: Agent) {
+    setError(null);
+    setEditingId(a.id);
+    setEditDraft({
+      name: a.name,
+      phone: a.phone,
+      email: a.email ?? "",
+      city: a.city ?? "",
+      preferred_channel: a.preferred_channel,
+      reference_photo_url: a.reference_photo_url ?? "",
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft({ ...BLANK });
+  }
+
+  async function saveEdit(id: string) {
+    if (!editDraft.name.trim() || !editDraft.phone.trim()) {
+      setError("Name and phone are required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/nbfc/fi/agents/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(editDraft),
+      });
+      const j = await res.json();
+      if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
+      cancelEdit();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="mt-2">
       <button onClick={() => setOpen((s) => !s)} className="text-[11px] font-semibold text-[color:var(--color-brand-sky)] underline">
@@ -116,26 +170,58 @@ export default function FiAgentDirectory({ canEdit }: { canEdit: boolean }) {
           ) : (
             <ul className="space-y-1.5">
               {agents.map((a) => (
-                <li key={a.id} className="flex items-center gap-2 text-xs">
-                  <div className="w-8 h-8 rounded bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
-                    {a.reference_photo_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={a.reference_photo_url} alt={a.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-slate-300">👤</span>
+                <li key={a.id} className="text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
+                      {a.reference_photo_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={a.reference_photo_url} alt={a.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-slate-300">👤</span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium ${a.active ? "text-slate-800" : "text-slate-400 line-through"}`}>{a.name}</p>
+                      <p className="text-[10px] text-slate-500 truncate">
+                        {a.phone}
+                        {a.city ? ` · ${a.city}` : ""}
+                        {a.email ? ` · ${a.email}` : ""} · {a.preferred_channel}
+                      </p>
+                    </div>
+                    {canEdit && editingId !== a.id && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => startEdit(a)} disabled={busy} className="text-[10px] font-semibold text-[color:var(--color-brand-sky)] underline">
+                          Edit
+                        </button>
+                        <button onClick={() => toggleActive(a)} disabled={busy} className="text-[10px] font-semibold text-slate-500 underline">
+                          {a.active ? "Deactivate" : "Reactivate"}
+                        </button>
+                      </div>
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`font-medium ${a.active ? "text-slate-800" : "text-slate-400 line-through"}`}>{a.name}</p>
-                    <p className="text-[10px] text-slate-500">
-                      {a.phone}
-                      {a.city ? ` · ${a.city}` : ""} · {a.preferred_channel}
-                    </p>
-                  </div>
-                  {canEdit && (
-                    <button onClick={() => toggleActive(a)} disabled={busy} className="text-[10px] font-semibold text-slate-500 underline">
-                      {a.active ? "Deactivate" : "Reactivate"}
-                    </button>
+
+                  {canEdit && editingId === a.id && (
+                    <div className="mt-2 ml-10 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Name *" className="text-xs border border-slate-300 rounded px-2 py-1" />
+                        <input value={editDraft.phone} onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value })} placeholder="Phone *" className="text-xs border border-slate-300 rounded px-2 py-1" />
+                        <input value={editDraft.email} onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })} placeholder="Email" className="text-xs border border-slate-300 rounded px-2 py-1" />
+                        <input value={editDraft.city} onChange={(e) => setEditDraft({ ...editDraft, city: e.target.value })} placeholder="City" className="text-xs border border-slate-300 rounded px-2 py-1" />
+                        <select value={editDraft.preferred_channel} onChange={(e) => setEditDraft({ ...editDraft, preferred_channel: e.target.value as typeof editDraft.preferred_channel })} className="text-xs border border-slate-300 rounded px-2 py-1">
+                          <option value="email">Email</option>
+                          <option value="sms">SMS</option>
+                          <option value="whatsapp">WhatsApp</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => saveEdit(a.id)} disabled={busy} className="px-3 py-1 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50">
+                          Save
+                        </button>
+                        <button onClick={cancelEdit} disabled={busy} className="text-[11px] font-semibold text-slate-500 underline">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </li>
               ))}
