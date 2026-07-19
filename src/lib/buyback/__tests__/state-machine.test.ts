@@ -6,9 +6,12 @@
  *   1. The GOLDEN TABLE (__fixtures__/transitions.ts) pins the transitions the
  *      business signed off on, each with a stated reason.
  *   2. The EXHAUSTIVE CLOSURE walks the entire (state × action × role)
- *      cross-product — 21 × 14 × 2 = 588 cells — and asserts that every cell NOT
- *      declared in TRANSITIONS is refused. This is the real guard: it fails the
- *      moment somebody widens a transition, so no edge can be opened silently.
+ *      cross-product and asserts that every cell NOT declared in TRANSITIONS is
+ *      refused. This is the real guard: it fails the moment somebody widens a
+ *      transition, so no edge can be opened silently. The count is derived from
+ *      the enums, never written down — it said "21 × 14 × 2 = 588" here for a
+ *      long time while the machine actually had 26 actions, which is what a
+ *      hardcoded number in a comment is always eventually for.
  *
  * Run: npm test
  */

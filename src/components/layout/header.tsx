@@ -1,11 +1,15 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from 'lucide-react';
+import { Search, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
+import BuybackBell from '@/components/buyback/BuybackBell';
+// Dependency-free by design (middleware runs it on Edge), so a client component
+// can share the one list rather than keep a second copy that drifts.
+import { BUYBACK_ADMIN_ROLES } from '@/lib/buyback/roles';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useUIStore } from '@/store/uiStore';
 import { toast } from 'sonner';
@@ -105,10 +109,15 @@ export function Header() {
 
             {/* Right Actions */}
             <div className="flex items-center gap-4">
-                <button className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors">
-                    <Bell className="w-5 h-5" />
-                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-                </button>
+                {/* Was a <button> with no onClick and a hardcoded red dot —
+                    permanently lit, so it reported nothing, while 997
+                    notifications sat unread. Scoped to the buyback feed by
+                    product decision; its PATCH carries the same filter as its
+                    GET, so "mark all read" cannot reach the non-buyback
+                    notifications this bell does not show. */}
+                <BuybackBell
+                    isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
+                />
 
                 {/* Profile Dropdown */}
                 <div className="relative" ref={dropdownRef}>

@@ -121,6 +121,9 @@ export async function middleware(request: NextRequest) {
     dealer: "/dealer-portal",
     admin: "/admin",
     nbfc_partner: "/nbfc",
+    // E-195 — the scrap vendor's own portal. Adding it here also protects the
+    // path: isProtectedRoute is derived from these values.
+    scrap_vendor: "/vendor-portal",
   };
 
   const isPublicRoute = path === "/login" || path === "/logout";

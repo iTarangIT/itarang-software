@@ -261,25 +261,6 @@ export default function ConsentOtpCard({
             </span>
           </div>
 
-          {devOtp && (
-            <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
-              <div className="text-xs">
-                <span className="font-bold">Dev / test mode:</span> call provider not configured. Use
-                OTP{" "}
-                <span className="font-mono font-black tracking-widest text-base">{devOtp}</span>.
-              </div>
-              <button
-                onClick={() => {
-                  setDigits(devOtp.split(""));
-                  inputsRef.current[5]?.focus();
-                }}
-                className="flex-shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold"
-              >
-                Autofill
-              </button>
-            </div>
-          )}
-
           <div className="flex justify-center gap-2 sm:gap-3">
             {digits.map((d, i) => (
               <input

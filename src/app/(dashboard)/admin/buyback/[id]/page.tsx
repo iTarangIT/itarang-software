@@ -524,9 +524,19 @@ function AdminBuybackDetail() {
               onClick={() => setModal("reject")}
             />
             <ActionButton
-              label="Negotiate"
+              // "Negotiate" opens the haggle from the review window; "Counter"
+              // is the admin's per-SKU reply once it is open (item 7). The
+              // button used to key off `negotiate`, which is a review action and
+              // ghosts in NEGOTIATING — so the admin had no way to counter and
+              // was pushed into Send Final Offer. In NEGOTIATING it now keys off
+              // admin_counter, which is legal there.
+              label={d.status === "NEGOTIATING" ? "Counter" : "Negotiate"}
               tone="amber"
-              state={actionOf("negotiate")}
+              state={
+                d.status === "NEGOTIATING"
+                  ? { action: "admin_counter", enabled: can("admin_counter"), blocked_reason: null }
+                  : actionOf("negotiate")
+              }
               busy={busy}
               onClick={() => {
                 seedPrices();
@@ -660,15 +670,58 @@ function AdminBuybackDetail() {
       )}
 
       {/* ============================ NEGOTIATION LOG ============================ */}
-      {tab === "neg" && (
-        <div className="mt-4">
-          <NegotiationThread rounds={negRounds} viewer="admin" offerVersion={d.offer_version} />
-          <p className="mt-2.5 text-xs text-slate-400">
-            Counters and final offers are composed from the Actions bar — every offer prices
-            each battery line.
-          </p>
-        </div>
-      )}
+      {tab === "neg" &&
+        (() => {
+          // Whose price is standing? In NEGOTIATING the latest round is the open
+          // offer; the admin can accept it only when it is the DEALER's (their
+          // counter awaits our yes). If our own counter is latest, we wait.
+          const lastRound = d.negotiation.length
+            ? [...d.negotiation].sort(
+                (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+              )[0]
+            : null;
+          const dealerCounterStanding = lastRound?.offered_by_role === "dealer";
+          return (
+            <div className="mt-4">
+              <NegotiationThread rounds={negRounds} viewer="admin" offerVersion={d.offer_version} />
+              {d.status === "NEGOTIATING" ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {dealerCounterStanding && can("admin_accept_counter") && (
+                    <button
+                      disabled={busy}
+                      onClick={() => void post(`/api/admin/buyback/requests/${id}/accept-counter`)}
+                      className="rounded-lg bg-green-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                    >
+                      Accept dealer&apos;s offer
+                    </button>
+                  )}
+                  {can("admin_counter") && (
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        seedPrices();
+                        setModal("negotiate");
+                      }}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Counter
+                    </button>
+                  )}
+                  {!dealerCounterStanding && (
+                    <span className="text-xs text-slate-400">
+                      Waiting for the dealer to respond to your last offer.
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-2.5 text-xs text-slate-400">
+                  Counters and final offers are composed from the Actions bar — every offer prices
+                  each battery line.
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
       {/* ============================ MARGIN & ROUTING ============================ */}
       {tab === "margin" && (
@@ -934,7 +987,18 @@ function AdminBuybackDetail() {
                   lines,
                   note: note || null,
                 });
+              } else if (d.status === "NEGOTIATING") {
+                // The deal is already in negotiation, so this is a COUNTER, not
+                // an opening. `negotiate` is a review action (legal only in
+                // SUBMITTED/UNDER_REVIEW) — posting it here used to 409, which is
+                // why "Send counter" appeared broken once negotiation opened.
+                // admin_counter (item 7) is the mirror of the dealer's counter.
+                void post(`/api/admin/buyback/requests/${id}/counter`, {
+                  lines,
+                  note: note || null,
+                });
               } else {
+                // Opening the negotiation from the review window.
                 void post(`/api/admin/buyback/requests/${id}/decision`, {
                   action: "negotiate",
                   lines,

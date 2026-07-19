@@ -42,6 +42,7 @@ import {
   Handshake,
   FolderOpen,
   Wallet,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -923,6 +924,62 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  /**
+   * peakAmp Battery Buyback — the scrap vendor's side (E-195).
+   *
+   * Small on purpose. A vendor's whole relationship with iTarang is: here are
+   * the lots we've quoted you, answer them. They are not staff and not a
+   * dealer — nothing else in this application is any of their business, and
+   * anything added here is a new surface that has to be checked for dealer
+   * identity before it ships (see toVendorThread in lib/buyback/serialize.ts).
+   */
+  scrap_vendor: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "vendor-dashboard",
+          label: "Dashboard",
+          icon: LayoutDashboard,
+          href: "/vendor-portal",
+          // exact: this is the prefix of every sibling below, so without it the
+          // Dashboard item would stay lit on /vendor-portal/inbox etc.
+          exact: true,
+        },
+        {
+          id: "vendor-inbox",
+          label: "Quotation Inbox",
+          icon: FileText,
+          href: "/vendor-portal/inbox",
+        },
+        {
+          id: "vendor-bids",
+          label: "My Bids",
+          icon: Handshake,
+          href: "/vendor-portal/bids",
+        },
+        {
+          id: "vendor-orders",
+          label: "Orders & Documents",
+          icon: FolderOpen,
+          href: "/vendor-portal/orders",
+        },
+        {
+          id: "vendor-payments",
+          label: "Payments",
+          icon: Wallet,
+          href: "/vendor-portal/payments",
+        },
+        {
+          id: "vendor-notifications",
+          label: "Notifications",
+          icon: Bell,
+          href: "/vendor-portal/notifications",
+        },
+      ],
+    },
+  ],
+
   dealer: [
     {
       section: "OVERVIEW",
@@ -1294,6 +1351,7 @@ export function Sidebar() {
   const inferredRole = (() => {
     if (user?.role) return user.role.toLowerCase();
     if (pathname.startsWith("/dealer-portal")) return "dealer";
+    if (pathname.startsWith("/vendor-portal")) return "scrap_vendor";
     if (pathname.startsWith("/admin")) return "admin";
     if (pathname.startsWith("/ceo")) return "ceo";
     if (pathname.startsWith("/sales-head")) return "sales_head";
@@ -1344,10 +1402,15 @@ export function Sidebar() {
         }))
       : rawMenuItems;
 
-  // Universal nav items (e.g. Submit Expense) appended to every role except
-  // the "user" fallback (unauthenticated path-inferred view).
-  let menuItems =
-    inferredRole === "user" ? filteredMenuItems : [...filteredMenuItems, ...COMMON_ITEMS];
+  // Universal nav items (e.g. Submit Expense) appended to every role except:
+  //  · "user" — the unauthenticated path-inferred fallback view;
+  //  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
+  //    files a business expense for a CEO to approve; offering that to the firm
+  //    we are selling scrap to is not a universal action, it is a wrong one.
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor"]);
+  let menuItems = NO_COMMON_ITEMS.has(inferredRole)
+    ? filteredMenuItems
+    : [...filteredMenuItems, ...COMMON_ITEMS];
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue
@@ -1369,6 +1432,28 @@ export function Sidebar() {
     };
   }, [inferredRole]);
 
+  // Vendor inbox badge — the count of quotations awaiting this vendor's
+  // response (status SENT), mirroring the CEO approvals badge above. One fetch
+  // on mount; a queue that turns over a handful of times a week needs no poll.
+  const [vendorInboxCount, setVendorInboxCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "scrap_vendor") return;
+    let cancelled = false;
+    fetch("/api/vendor/threads", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j) => {
+        if (cancelled) return;
+        const list = (j?.data?.threads ?? []) as Array<{ status?: string }>;
+        setVendorInboxCount(list.filter((t) => t?.status === "SENT").length);
+      })
+      .catch(() => {
+        /* silent — badge stays absent on failure */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
   if (pendingNbfcCount && pendingNbfcCount > 0) {
     menuItems = menuItems.map((group: any) => ({
       ...group,
@@ -1376,6 +1461,15 @@ export function Sidebar() {
         item.id === "nbfc-approvals"
           ? { ...item, badge: pendingNbfcCount }
           : item,
+      ),
+    }));
+  }
+
+  if (vendorInboxCount && vendorInboxCount > 0) {
+    menuItems = menuItems.map((group: any) => ({
+      ...group,
+      items: group.items.map((item: any) =>
+        item.id === "vendor-inbox" ? { ...item, badge: vendorInboxCount } : item,
       ),
     }));
   }

@@ -398,11 +398,22 @@ export function RedFlagCards({ data }: { data: ElectricalData | undefined }) {
                 <div className="text-xs text-amber-900 space-y-1.5">
                     <p>
                         <strong>Voltage and current counts are a floor, not a total.</strong> A real
-                        electrical transient lasts seconds; this battery is sampled about every{' '}
-                        {Math.round((data.summary.medianSampleGapS ?? 510) / 60)} minutes, so we see roughly
-                        1% of them. A reading of 0 means <em>we did not catch one</em> — not that none
-                        occurred. Detecting transients properly is a job for the BMS-side poller, which sees
-                        every frame.
+                        electrical transient lasts seconds;{' '}
+                        {data.summary.medianSampleGapS != null ? (
+                            <>
+                                this battery is sampled about every{' '}
+                                <strong>{Math.round(data.summary.medianSampleGapS / 60)} minutes</strong> over
+                                this period
+                            </>
+                        ) : (
+                            <>
+                                this battery has too few samples in this period to measure its cadence, and it
+                                is sampled far slower than the device streams
+                            </>
+                        )}
+                        , so we see roughly 1% of them. A reading of 0 means <em>we did not catch one</em> —
+                        not that none occurred. Detecting transients properly is a job for the BMS-side
+                        poller, which sees every frame.
                     </p>
                     <p>
                         <strong>Over Temperature</strong> and <strong>Weak Charge</strong> are exceptions and

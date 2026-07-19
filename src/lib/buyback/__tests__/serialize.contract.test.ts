@@ -23,6 +23,7 @@ import {
   toDealerPo,
   toVendorLine,
   toVendorQuotation,
+  toVendorThread,
   visibleActivityForDealer,
   type AdminDealView,
   type DealerNegRoundSource,
@@ -687,5 +688,330 @@ describe("vendor payload excludes dealer identity — ABSENT, not null", () => {
     expect("dealer_price" in line).toBe(false);
     expect("margin_value" in line).toBe(false);
     expect("dealer_name" in line).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Item 14 — the battery spec reaches the vendor, and the dealer still does not.
+// Widening a masked type is the riskiest edit in this module: every field added
+// here is a field that now leaves the building.
+// ===========================================================================
+// ===========================================================================
+// E-195 fallout: the dealer's activity filter used to key off ROLE, which was
+// only ever correct by coincidence. Giving vendors a login broke the
+// coincidence — these pin the fix.
+// ===========================================================================
+describe("dealer activity is filtered by ACTION, never by who typed it", () => {
+  it("shows the PO exchange whichever counterparty uploaded second", () => {
+    // THE BUG THE OLD FILTER HAD. exchange_pos fires inside whichever
+    // transaction completes the PO pair, so it carries role='admin' or
+    // role='vendor' purely by race. A blanket `role === "vendor" -> hide` made
+    // the dealer's sight of their OWN PO exchange depend on that race.
+    const viaAdmin = visibleActivityForDealer([{ action: "exchange_pos", role: "admin" }]);
+    const viaVendor = visibleActivityForDealer([{ action: "exchange_pos", role: "vendor" }]);
+    expect(viaAdmin).toHaveLength(1);
+    expect(viaVendor).toHaveLength(1);
+  });
+
+  it("hides a vendor's first-hand counter and agreement", () => {
+    // What a vendor offered IS the margin. These hide for the same reason as
+    // their record_* twins — not because a vendor typed them.
+    const out = visibleActivityForDealer([
+      { action: "vendor_counter", role: "vendor" },
+      { action: "vendor_agree", role: "vendor" },
+      { action: "vendor_declined", role: "vendor" },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("hides them even if an admin somehow performed them", () => {
+    // Belt and braces: the hide-list is keyed on the action, so a
+    // mis-attributed row still cannot leak the vendor leg.
+    const out = visibleActivityForDealer([
+      { action: "vendor_counter", role: "admin" },
+      { action: "record_vendor_agreement", role: "admin" },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("still hides an unknown vendor action — new vendor actions fail SAFE", () => {
+    // The allow-list is the point: a vendor-leg action added later is hidden by
+    // omission rather than by somebody remembering to hide it.
+    const out = visibleActivityForDealer([
+      { action: "some_future_vendor_thing", role: "vendor" },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("still shows the dealer their own fulfilment events", () => {
+    const out = visibleActivityForDealer([
+      { action: "schedule_pickup", role: "vendor" },
+      { action: "complete_pickup", role: "admin" },
+    ]);
+    expect(out).toHaveLength(2);
+  });
+});
+
+describe("vendor line carries the battery spec (E-191) but never the dealer", () => {
+  const SPEC = {
+    line_id: "line-1",
+    quantity: 10,
+    condition: "WORKING" as const,
+    voltage: 60,
+    ah: 120,
+    ask_price: 6500,
+    variant_type: "LI_ION",
+    brand: "Exide",
+    chemistry: "LFP",
+    form_factor: "PRISMATIC",
+    nominal_voltage: 60,
+    nominal_ampere: 120,
+    unit_weight_kg: 12.5,
+    warranty_cycles: 2000,
+    functional_qty: 6,
+    non_functional_qty: 3,
+    iot_battery: true,
+    iot_brand_name: null,
+  };
+
+  it("gives a scrap buyer what they actually price on: chemistry and kilograms", () => {
+    const l = toVendorLine(SPEC);
+    expect(l.chemistry).toBe("LFP");
+    expect(l.unit_weight_kg).toBe(12.5);
+    // 10 × 12.5 — the number the quotation never had.
+    expect(l.line_weight_kg).toBe(125);
+  });
+
+  it("marks an assumed IOT brand as assumed, in the same string as the brand", () => {
+    // Unstrippable on purpose: a template cannot render the brand and drop the
+    // caveat, because there is no bare brand to render.
+    expect(toVendorLine(SPEC).iot_brand_label).toBe("Intellicar (assumed)");
+  });
+
+  it("does not mark the dealer's own answer as assumed", () => {
+    expect(toVendorLine({ ...SPEC, iot_brand_name: "BoltIoT" }).iot_brand_label).toBe("BoltIoT");
+  });
+
+  it("says nothing about IOT brand for a non-IOT pack", () => {
+    expect(toVendorLine({ ...SPEC, iot_battery: false }).iot_brand_label).toBeNull();
+  });
+
+  it("counts the untested remainder rather than hiding it", () => {
+    // 6 + 3 of 10. The gate allows a partial declaration, so the vendor must be
+    // told about the 1 nobody tested — not left to infer it is working.
+    expect(toVendorLine(SPEC).condition_split_label).toBe("6 working · 3 non-working · 1 untested");
+  });
+
+  it("omits the zero parts of the split", () => {
+    expect(
+      toVendorLine({ ...SPEC, functional_qty: 10, non_functional_qty: 0 }).condition_split_label,
+    ).toBe("10 working");
+  });
+
+  it("says nothing when the dealer declared no split at all", () => {
+    expect(
+      toVendorLine({ ...SPEC, functional_qty: null, non_functional_qty: null })
+        .condition_split_label,
+    ).toBeNull();
+  });
+
+  it("a NEW dealer column still cannot ride in via the spec path", () => {
+    // The contamination test, re-run now that the source type is much wider.
+    const q = toVendorQuotation({
+      quotation_no: "QTN-1",
+      pickup_city: "Nashik",
+      pickup_state: "Maharashtra",
+      lines: [
+        {
+          ...SPEC,
+          dealer_name: "Shakti Battery House",
+          dealer_price: 5200,
+          margin_value: 1300,
+        } as never,
+      ],
+    });
+    const leaked = allValues(q);
+    expect(leaked).not.toContain("Shakti Battery House");
+    expect(leaked).not.toContain(5200);
+    expect(leaked).not.toContain(1300);
+  });
+
+  it.each(VENDOR_FORBIDDEN_KEYS)("%s still absent with every spec field populated", (key) => {
+    const q = toVendorQuotation({
+      quotation_no: "QTN-1",
+      pickup_city: "Nashik",
+      pickup_state: "Maharashtra",
+      lines: [SPEC],
+    });
+    expect(allKeys(q).has(key)).toBe(false);
+  });
+});
+
+describe("lot weight never overstates what was declared", () => {
+  const line = (id: string, qty: number, w: number | null) => ({
+    line_id: id,
+    quantity: qty,
+    condition: "WORKING" as const,
+    voltage: 60,
+    ah: 120,
+    ask_price: 100,
+    unit_weight_kg: w,
+  });
+
+  it("sums the declared weights", () => {
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, 12.5), line("b", 2, 5)],
+    });
+    expect(q.total_weight_kg).toBe(135);
+    expect(q.weight_caveat).toBeNull();
+  });
+
+  it("carries a caveat when only some lines declared — never a silent partial total", () => {
+    // The failure this module keeps repeating: a number true of a subset,
+    // rendered as though true of the whole. 125kg over a 2-SKU lot reads as the
+    // lot's weight; it is one SKU's.
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, 12.5), line("b", 2, null)],
+    });
+    expect(q.total_weight_kg).toBe(125);
+    expect(q.weight_caveat).toBe("1 of 2 SKUs declared a weight");
+  });
+
+  it("is null — not zero — when nobody declared a weight", () => {
+    // Zero would read as "these batteries weigh nothing".
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, null)],
+    });
+    expect(q.total_weight_kg).toBeNull();
+  });
+
+  it("treats a nonsensical declared weight as undeclared", () => {
+    const q = toVendorQuotation({
+      quotation_no: "Q",
+      pickup_city: null,
+      pickup_state: null,
+      lines: [line("a", 10, 0)],
+    });
+    expect(q.total_weight_kg).toBeNull();
+  });
+});
+
+// ===========================================================================
+// E-195 — the vendor dashboard. Same clause as the quotation, new surface:
+// a vendor with a login can now READ, not just receive a PDF. Everything the
+// quotation must not say, the dashboard must not say either.
+// ===========================================================================
+describe("vendor thread payload (E-195) excludes dealer identity and our economics", () => {
+  const thread = toVendorThread({
+    thread_id: "thr-1",
+    quotation_no: "QTN-1024-1",
+    status: "COUNTERED",
+    pickup_city: "Nashik",
+    pickup_state: "Maharashtra",
+    sent_at: "2026-07-13T00:00:00Z",
+    responded_at: "2026-07-14T00:00:00Z",
+    lines: [
+      {
+        line_id: "line-1",
+        quantity: 3,
+        condition: "WORKING",
+        voltage: 60,
+        ah: 120,
+        ask_price: 6500,
+        counter_price: 6000,
+        agreed_price: null,
+      },
+      {
+        line_id: "line-2",
+        quantity: 2,
+        condition: "DEAD",
+        voltage: 58,
+        ah: 110,
+        ask_price: 3900,
+        counter_price: 3500,
+        agreed_price: null,
+      },
+    ],
+  });
+
+  const keys = allKeys(thread);
+
+  it.each(VENDOR_FORBIDDEN_KEYS)("the key %s does not appear at any depth", (key) => {
+    expect(keys.has(key)).toBe(false);
+  });
+
+  it("never carries the deal status — that is the dealer leg's narrative", () => {
+    // DEALER_ACCEPTED/MARGIN_SET would tell a vendor we had already bought the
+    // lot and roughly when. Their own thread status is all they are entitled to.
+    expect(keys.has("status")).toBe(true);
+    expect(thread.status).toBe("COUNTERED");
+    expect(keys.has("deal_status")).toBe(false);
+    expect(keys.has("offer_version")).toBe(false);
+    expect(keys.has("deal_id")).toBe(false);
+    expect(keys.has("request_id")).toBe(false);
+  });
+
+  it("gives the vendor their own numbers, both directions", () => {
+    expect(thread.ask_total).toBe(3 * 6500 + 2 * 3900);
+    expect(thread.counter_total).toBe(3 * 6000 + 2 * 3500);
+    expect(thread.agreed_total).toBeNull();
+    expect(thread.total_units).toBe(5);
+  });
+
+  it("closes the door on a struck or lost thread", () => {
+    const base = {
+      thread_id: "thr-1",
+      quotation_no: "QTN-1024-1",
+      pickup_city: null,
+      pickup_state: null,
+      sent_at: null,
+      responded_at: null,
+      lines: [],
+    };
+    expect(toVendorThread({ ...base, status: "SENT" }).can_respond).toBe(true);
+    expect(toVendorThread({ ...base, status: "COUNTERED" }).can_respond).toBe(true);
+    expect(toVendorThread({ ...base, status: "AGREED" }).can_respond).toBe(false);
+    expect(toVendorThread({ ...base, status: "LOST" }).can_respond).toBe(false);
+  });
+
+  it("a NEW dealer column cannot ride along into a thread", () => {
+    const contaminated = toVendorThread({
+      thread_id: "thr-2",
+      quotation_no: "QTN-1024-2",
+      status: "SENT",
+      pickup_city: "Nashik",
+      pickup_state: "Maharashtra",
+      sent_at: null,
+      responded_at: null,
+      lines: [
+        {
+          line_id: "line-1",
+          quantity: 3,
+          condition: "WORKING",
+          voltage: 60,
+          ah: 120,
+          ask_price: 6500,
+          dealer_name: "Shakti Battery House",
+          dealer_price: 5200,
+          margin_value: 1300,
+        } as never,
+      ],
+    });
+
+    const leaked = allValues(contaminated);
+    expect(leaked).not.toContain("Shakti Battery House");
+    expect(leaked).not.toContain(5200);
+    expect(leaked).not.toContain(1300);
+    expect(allKeys(contaminated).has("dealer_name")).toBe(false);
+    expect(allKeys(contaminated).has("dealer_price")).toBe(false);
   });
 });

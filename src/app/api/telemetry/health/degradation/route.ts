@@ -6,7 +6,10 @@ export async function GET(req: NextRequest) {
     try {
         await requireRole(['ceo']);
         const { searchParams } = new URL(req.url);
-        const days = parseInt(searchParams.get('days') || '30');
+        // Guard the parse: a non-numeric ?days= yielded NaN, which reached the query as
+        // `interval '1 day' * NaN` and returned an empty trend — a silent "no data".
+        const parsed = Number.parseInt(searchParams.get('days') || '30', 10);
+        const days = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 30;
         const data = await fetchSOHTrend(days);
         return NextResponse.json({ success: true, data });
     } catch (error) {

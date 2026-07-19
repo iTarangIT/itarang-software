@@ -152,6 +152,7 @@ export async function getRunFreshness(tenantId: string): Promise<RunFreshness> {
   };
 }
 
+
 function isUniqueViolation(e: unknown): boolean {
   // Drizzle wraps the driver error: the pg error carrying code '23505' is on
   // `.cause`, not the top-level object (the thrown error's message is just
@@ -191,3 +192,4 @@ export async function listActiveTenants(): Promise<TenantContext[]> {
 
   return rows.map((r) => ({ ...r, via: "cron" as const }));
 }
+

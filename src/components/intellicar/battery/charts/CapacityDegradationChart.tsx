@@ -14,6 +14,7 @@ import {
     ReferenceArea,
 } from 'recharts';
 import { capacityAxis } from '../capacity-axis';
+import { capacityBands } from '@/lib/telemetry/thresholds-math';
 import { VIZ } from './chart-kit';
 import {
     CAPACITY_COLOR,
@@ -249,13 +250,12 @@ export function CapacityDegradationChart({
     // packs in this fleet that gives 94.5 / 84 Ah — the 95/85 that was asked for — but it
     // generalises to a pack of any rating. A battery that reports no nameplate gets NO bands
     // rather than being judged against a number invented for it.
-    const bands =
-        rated != null && rated > 0 && thresholds
-            ? {
-                  warning: Math.round(rated * thresholds.capacityWarningFrac * 10) / 10,
-                  critical: Math.round(rated * thresholds.capacityCriticalFrac * 10) / 10,
-              }
-            : null;
+    //
+    // capacityBands() is that rule, and it is the tested one (thresholds-math.ts is pure, so it
+    // imports cleanly here). This used to recompute `rated x frac` inline: the same arithmetic in
+    // two places, one of them covered. The thresholds a reader is judged against must not be able
+    // to disagree with the thresholds the tests pin.
+    const bands = thresholds ? capacityBands(rated, thresholds) : null;
 
     // ── The axis domain ──────────────────────────────────────────────────────────
     //

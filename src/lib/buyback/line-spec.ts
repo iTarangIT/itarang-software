@@ -24,6 +24,45 @@ export type FormFactor = (typeof FORM_FACTORS)[number];
 /** Matches MAX_QTY_PER_LINE in the line routes — the split cannot exceed it. */
 const MAX_SPLIT_QTY = 500;
 
+/**
+ * What an IOT battery's brand is ASSUMED to be when the dealer leaves it blank.
+ *
+ * The submit gate used to require it, which was wrong: a dealer reselling a
+ * second-hand pack frequently cannot know who made the module, so the field
+ * bought guesses rather than facts. Intellicar is the fleet default across
+ * iTarang's own deployments, so it is the honest assumption.
+ *
+ * IT IS NEVER WRITTEN TO THE COLUMN. E-194 first shipped this as a write-time
+ * default, on the reasoning that a stored value let a reader tell "we assumed
+ * Intellicar" from "nobody has answered yet". That is exactly backwards: `null`
+ * IS that distinction, and filling it in is what destroys it — a dealer who
+ * knows the module is an Intellicar and types it becomes byte-identical to one
+ * who never looked. Storing the guess also silently overwrote real brands,
+ * because a PATCH body that omits the key means "leave alone", not "blank".
+ *
+ * So the column keeps the dealer's answer or stays null, and the ASSUMPTION is
+ * applied by whoever reads it, via resolveIotBrand(). Same rule as the
+ * commit that stopped reporting unmeasured battery health as measured: never
+ * launder an inference into the record as an observation.
+ */
+export const DEFAULT_IOT_BRAND = "Intellicar";
+
+/**
+ * The IOT brand to SHOW for a line, and whether it is the dealer's answer.
+ *
+ * `assumed: true` is the caller's cue to say so — "Intellicar (assumed)" — so
+ * the guess never reaches a human, a vendor quotation or a report dressed as a
+ * fact. Returns null for a non-IOT battery: there is no module to have a brand.
+ */
+export function resolveIotBrand(
+  iot_battery: boolean | null | undefined,
+  iot_brand_name: string | null | undefined,
+): { brand: string; assumed: boolean } | null {
+  if (iot_battery !== true) return null;
+  const named = iot_brand_name?.trim();
+  return named ? { brand: named, assumed: false } : { brand: DEFAULT_IOT_BRAND, assumed: true };
+}
+
 export const lineSpecSchema = z.object({
   brand: z.string().trim().min(1).max(120).nullish(),
   chemistry: z.enum(CHEMISTRIES).nullish(),
@@ -82,7 +121,16 @@ export function specColumnsFromBody(body: LineSpecBody): LineSpecColumns {
   if (body.non_functional_qty !== undefined)
     out.non_functional_qty = body.non_functional_qty ?? null;
   if (body.iot_battery !== undefined) out.iot_battery = body.iot_battery ?? null;
-  if (body.iot_brand_name !== undefined) out.iot_brand_name = body.iot_brand_name ?? null;
+  // A brand the dealer cleared, or submitted as whitespace, is stored as null —
+  // "not answered" — not as an empty string, and never as DEFAULT_IOT_BRAND.
+  // The assumption is applied on read by resolveIotBrand(); writing it here
+  // destroyed the null that distinguishes a guess from an answer, and (because
+  // an absent key means "leave alone") overwrote brands the dealer had actually
+  // given us.
+  if (body.iot_brand_name !== undefined) {
+    const named = body.iot_brand_name?.trim();
+    out.iot_brand_name = named ? named : null;
+  }
 
   return out;
 }

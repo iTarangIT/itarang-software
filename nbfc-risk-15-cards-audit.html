@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Your 15 Risk Cards — Where They Come From & Are They Correct</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;
+    --bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;
+    --accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;
+    --ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;
+    --warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;
+    --bad:#d63b3b;--bad-bg:#fce4e4;--bad-line:#f2b3b3;
+    --unv:#7c5cd6;--unv-bg:#efe9fb;--unv-line:#cdbdf1;
+    --iot:#7c5cd6;--iot-bg:#efe9fb;--crm:#0e8f8f;--crm-bg:#dff5f5;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(20,32,54,.06),0 8px 24px -12px rgba(20,32,54,.18);--r:14px;
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;
+    --bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;
+    --accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;
+    --ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;
+    --warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;
+    --bad:#ff6b6b;--bad-bg:#2a1417;--bad-line:#5c2830;
+    --unv:#a996f0;--unv-bg:#1d1830;--unv-line:#3a2f57;
+    --iot:#a996f0;--iot-bg:#1d1830;--crm:#4bd6d6;--crm-bg:#0e2626;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.6);
+  }}
+  :root[data-theme="light"]{color-scheme:light;--ink:#0f1720;--ink-soft:#3d4a5c;--ink-faint:#647389;--bg:#eef1f6;--panel:#fff;--panel-2:#f6f8fc;--line:#dde3ec;--line-strong:#c6cfdd;--accent:#2563eb;--accent-soft:#dbe6ff;--accent-ink:#1b4bd6;--ok:#0f9d6b;--ok-bg:#e2f6ee;--ok-line:#9fe0c4;--warn:#b7791f;--warn-bg:#fdf3dd;--warn-line:#f0d190;--bad:#d63b3b;--bad-bg:#fce4e4;--bad-line:#f2b3b3;--unv:#7c5cd6;--unv-bg:#efe9fb;--unv-line:#cdbdf1;--iot:#7c5cd6;--iot-bg:#efe9fb;--crm:#0e8f8f;--crm-bg:#dff5f5;}
+  :root[data-theme="dark"]{color-scheme:dark;--ink:#e7edf6;--ink-soft:#aab6c8;--ink-faint:#76839a;--bg:#0b0f16;--panel:#131a24;--panel-2:#0f151d;--line:#232d3b;--line-strong:#33404f;--accent:#5b8cff;--accent-soft:#1c2942;--accent-ink:#8fb0ff;--ok:#3fd39a;--ok-bg:#10241d;--ok-line:#1f5140;--warn:#e8b45a;--warn-bg:#271d0d;--warn-line:#5a441c;--bad:#ff6b6b;--bad-bg:#2a1417;--bad-line:#5c2830;--unv:#a996f0;--unv-bg:#1d1830;--unv-line:#3a2f57;--iot:#a996f0;--iot-bg:#1d1830;--crm:#4bd6d6;--crm-bg:#0e2626;}
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 22px 90px}
+  header.top{padding:36px 0 18px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+  h1{font-size:clamp(24px,4.2vw,38px);line-height:1.09;margin:.35em 0 .3em;letter-spacing:-.02em;text-wrap:balance;font-weight:800}
+  .lede{max-width:74ch;color:var(--ink-soft);font-size:15.5px}
+  .meta{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px 16px;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  .meta b{color:var(--ink-soft)}
+
+  h2.sec{font-size:21px;margin:38px 0 4px;letter-spacing:-.01em;scroll-margin-top:16px}
+  .sub{color:var(--ink-soft);font-size:14px;margin:0 0 12px;max-width:76ch}
+
+  .callout{border-radius:12px;padding:13px 16px;font-size:14px;margin:12px 0;border:1px solid}
+  .callout.bad{background:var(--bad-bg);border-color:var(--bad-line)} .callout.warn{background:var(--warn-bg);border-color:var(--warn-line)} .callout.unv{background:var(--unv-bg);border-color:var(--unv-line)} .callout.ok{background:var(--ok-bg);border-color:var(--ok-line)}
+  .callout b{color:var(--ink)} .callout code{font-family:var(--mono);font-size:.86em;background:rgba(125,125,125,.16);border-radius:4px;padding:1px 5px}
+  .callout .h{font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px}
+  .callout.bad .h{color:var(--bad)} .callout.warn .h{color:var(--warn)} .callout.unv .h{color:var(--unv)} .callout.ok .h{color:var(--ok)}
+
+  .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin:16px 0}
+  .bt{border-radius:11px;border:1px solid var(--line);background:var(--panel);box-shadow:var(--shadow);padding:13px 14px;position:relative;overflow:hidden}
+  .bt .n{font-size:27px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
+  .bt .l{font-size:11.5px;color:var(--ink-faint);margin-top:5px}
+  .bt.bad .n{color:var(--bad)} .bt.warn .n{color:var(--warn)} .bt.ok .n{color:var(--ok)} .bt.unv .n{color:var(--unv)}
+
+  /* card */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin:12px 0;overflow:hidden;border-left:5px solid var(--line-strong)}
+  .card.sev-high{border-left-color:var(--bad)} .card.sev-warn{border-left-color:var(--warn)}
+  .ch{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 16px 6px}
+  .ch .cn{font-family:var(--mono);font-size:12px;color:var(--ink-faint);font-weight:700}
+  .ch .ct{font-weight:700;font-size:15.5px}
+  .ch .shown{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bad)}
+  .card.sev-warn .ch .shown{color:var(--warn)}
+  .chips{display:flex;gap:5px;flex-wrap:wrap;margin-left:auto}
+  .chip{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:6px;border:1px solid var(--line);color:var(--ink-faint);background:var(--panel-2);white-space:nowrap}
+  .chip.ai{background:var(--unv-bg);color:var(--unv);border-color:var(--unv-line)}
+  .chip.hand{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+  .chip.iot{background:var(--iot-bg);color:var(--iot);border-color:var(--iot-line,var(--line))}
+  .chip.crm{background:var(--crm-bg);color:var(--crm)}
+  .chip.capped{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+
+  .cbody{padding:2px 16px 14px;display:grid;gap:9px}
+  .row{display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:start;font-size:13.5px}
+  @media(max-width:600px){.row{grid-template-columns:1fr;gap:2px}}
+  .row .k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);font-weight:700;padding-top:2px}
+  .row .val{color:var(--ink)}
+  .code{font-family:var(--mono);font-size:11.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;overflow-x:auto;white-space:pre;color:var(--ink);line-height:1.55}
+  .verds{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+  .verd{border-radius:9px;border:1px solid var(--line);padding:7px 11px;font-size:12.5px;flex:1 1 240px;min-width:0}
+  .verd .vh{font-family:var(--mono);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px;margin-bottom:3px}
+  .verd .vh::before{content:"";width:9px;height:9px;border-radius:2px}
+  .verd.ok{background:var(--ok-bg);border-color:var(--ok-line)} .verd.ok .vh{color:var(--ok)} .verd.ok .vh::before{background:var(--ok)}
+  .verd.warn{background:var(--warn-bg);border-color:var(--warn-line)} .verd.warn .vh{color:var(--warn)} .verd.warn .vh::before{background:var(--warn)}
+  .verd.bad{background:var(--bad-bg);border-color:var(--bad-line)} .verd.bad .vh{color:var(--bad)} .verd.bad .vh::before{background:var(--bad)}
+  .verd .vt{color:var(--ink-soft)}
+
+  table.m{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+  table.m th,table.m td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  table.m th{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint)}
+  table.m td.v{font-family:var(--mono);font-size:10.5px;font-weight:700;white-space:nowrap}
+  td.v.ok{color:var(--ok)} td.v.warn{color:var(--warn)} td.v.bad{color:var(--bad)}
+  .scroll{overflow-x:auto}
+  .themebtn{position:fixed;right:16px;bottom:16px;font-family:var(--mono);font-size:12.5px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);padding:8px 13px;border-radius:99px;cursor:pointer;box-shadow:var(--shadow);z-index:50}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-faint);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<button class="themebtn" id="themebtn">◐ Theme</button>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">iTarang Finance · Risk Alerts · pulled live from database-2</div>
+    <h1>Your 15 Risk Cards — Are They Correct, and How Are They Calculated?</h1>
+    <p class="lede">Every one of your <b>10 High Alert</b> and <b>5 Warning</b> cards, read straight from <code style="font-family:var(--mono)">risk_card_runs</code> for tenant <b>iTarang Finance (7 active loans)</b>. For each: what it checks, where the data comes from, the exact calculation, and whether the <b>count</b> and the <b>severity</b> are correct.</p>
+    <div class="meta">
+      <span><b>Catalogue</b> 5 human + 51 live AI = 56 hypotheses</span>
+      <span><b>Tabs</b> 10 High · 5 Warning · 5 Inconclusive · 36 OK</span>
+      <span><b>Last run</b> 7/18/2026 (some cards stale from 7/13)</span>
+    </div>
+  </header>
+
+  <h2 class="sec">The 3 findings that explain all 15</h2>
+  <div class="board">
+    <div class="bt bad"><div class="n">8/10</div><div class="l">Highs are stale AI cards that <b>should be Warnings</b></div></div>
+    <div class="bt ok"><div class="n">2/10</div><div class="l">Highs are legitimately High (promoted / hand-coded)</div></div>
+    <div class="bt warn"><div class="n">5/5</div><div class="l">Warnings are AI cards <b>auto-capped</b> from High</div></div>
+    <div class="bt unv"><div class="n">14%</div><div class="l">1 affected loan ÷ 7 → already past the 5% “High” line</div></div>
+  </div>
+
+  <div class="callout bad">
+    <span class="h">① On 7 loans, one matched vehicle = an automatic High</span>
+    Every AI card scores with the same cutoffs: <code>affected ÷ total ≥ 5% → High</code>, <code>≥ 1% → Warning</code>. With <b>7 loans, a single affected loan is 14%</b> — already over the High line. So a card reading “<b>1 / 7 affected</b>” is red not because it’s severe, but because the fleet is tiny. <b>These fractions are meaningless at 7 loans.</b>
+  </div>
+  <div class="callout warn">
+    <span class="h">② Why 8 Highs but 5 Warnings — it’s timing, not risk</span>
+    Rule E-188 caps an <b>unpromoted AI card’s High down to Warning</b> until a human vets it. Your <b>5 Warnings</b> were re-run on <b>7/18</b> (after the cap) → each computed <b>High and was capped</b> (<code>severity_capped: true</code>). Your <b>8 unpromoted Highs</b> are from an <b>older 7/13 run</b> that predates the cap, so they were never capped. <b>Clicking “Re-run analysis” would demote all 8 to Warning.</b> Only 2 Highs survive a re-run: <code>7-day usage cliff</code> (hand-coded) and <code>High Daily KM Usage</code> (promoted).
+  </div>
+  <div class="callout unv">
+    <span class="h">③ Most AI tests are weak, duplicated, or telemetry-dependent</span>
+    Several read IoT telemetry (ignition, speed, daily km) that needs the SSH tunnel — <b>currently down</b>. Two Warnings flag <b>7 of 7</b> vehicles (everyone → not discriminating). One (“Low Weekly Usage”) flags everything <b>below the average</b>, which by definition is ~half the fleet every time. And the only solid signal — <b>DPD &gt; 30</b> — is computed by <b>two different cards</b> (“High DPD Borrowers” and “High Repayment Issues”), both finding the same <b>1 borrower</b>.
+  </div>
+
+  <h2 class="sec">🔴 The 10 High Alert cards</h2>
+  <p class="sub">Ordered as on your screen. “Reads from” shows the true data source; the two verdict boxes grade the <b>count</b> (is the number computed right from the right data?) and the <b>severity</b> (should it really be red?).</p>
+  <div id="highCards"></div>
+
+  <h2 class="sec">🟠 The 5 Warning cards</h2>
+  <p class="sub">All five are AI cards that computed <b>High</b> and were correctly auto-capped to Warning (<code>severity_capped: true</code>). Their Python is saved, so the exact logic is shown.</p>
+  <div id="warnCards"></div>
+
+  <h2 class="sec">Everything at a glance</h2>
+  <div class="scroll"><table class="m" id="master"></table></div>
+
+  <h2 class="sec">What to actually do</h2>
+  <div class="callout ok">
+    <span class="h">Recommended</span>
+    <b>1.</b> Click <b>Re-run analysis</b> — it recomputes on current data and caps the 8 stale Highs to Warning, so the board stops over-alarming. &nbsp;<b>2.</b> The one signal worth acting on is <b>DPD &gt; 30 → 1 borrower</b> (shown by “High DPD Borrowers” and “High Repayment Issues”); verify it in EMI Tracker. &nbsp;<b>3.</b> Treat every card with an “AI” tag as a <b>lead to investigate, not a fact</b> — promote only the ones a human has validated. &nbsp;<b>4.</b> On a 7-loan book the percentage thresholds don’t work; judge these by the raw affected list, not the colour.
+  </div>
+
+  <footer>
+    Pulled read-only from risk_card_runs (latest run per non-retired hypothesis), tenant 02bda647…cdb6, 2026-07-18. Logic from test_definition (AI) / hand-coded-cards.ts (human). Verdicts are the analyst’s reading of that logic against a 7-loan book.
+  </footer>
+</div>
+
+<script>
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// REAL data pulled from the DB, with analyst verdicts added.
+const HIGH=[
+{n:1,title:'Ignition Status Risk',slug:'ignition-status-risk',shown:'7 / 7',kind:'AI',src:'IoT telemetry',srcClass:'iot',
+ checks:'Vehicles whose ignition is frequently OFF, correlated with loan DPD.',
+ how:'AI-proposed test. Reads ignition status from IoT vehicle_states over 14 days. Flagged all 7 loans → 7/7 = 100% → “High”. NOTE: the 7/13 run did NOT save its code (test_method=js, python_code=null) — only the plan survives, so the exact math is not reproducible.',
+ countV:'bad',countWhy:'7 of 7 = every loan flagged → not discriminating; and the code isn’t saved, so the number can’t be verified. Depends on IoT ignition data (tunnel down).',
+ sevV:'bad',sevWhy:'Unpromoted AI card from the old 7/13 run. E-188 says it should be Warning; it’s only High because it predates the cap. Re-run → Warning.'},
+{n:2,title:'High Demand Vehicles',slug:'high-demand-vehicles',shown:'5 / 7',kind:'AI',src:'IoT telemetry',srcClass:'iot',
+ checks:'Vehicles with high average daily mileage, checked against loan performance.',
+ how:'AI test on IoT daily_km. Flagged 5 of 7 as “high mileage”. Code not saved (7/13 run).',
+ countV:'warn',countWhy:'Plausible arithmetic but unverifiable (no saved code) and telemetry-dependent. Also “high demand/usage” is arguably a GOOD sign for repayment, not a risk.',
+ sevV:'bad',sevWhy:'Unpromoted AI, stale. Should be Warning per E-188. Re-run → Warning.'},
+{n:3,title:'Low Demand Vehicles',slug:'low-demand-vehicles',shown:'5 / 7',kind:'AI',src:'IoT telemetry',srcClass:'iot',
+ checks:'Vehicles with low daily mileage, checked against DPD and outstanding.',
+ how:'AI test on IoT daily_km. Flagged 5 of 7 as low mileage. Code not saved.',
+ countV:'warn',countWhy:'Unverifiable (no code), telemetry-dependent. Note it directly contradicts “High Demand Vehicles” — 5 low + 5 high out of 7 can’t both be true, so at least one is mis-defined.',
+ sevV:'bad',sevWhy:'Unpromoted AI, stale → should be Warning.'},
+{n:4,title:'High Utilization Low DPD',slug:'high-utilization-low-dpd',shown:'4 / 5',kind:'AI',src:'IoT + CRM',srcClass:'iot',
+ checks:'Among high-utilization vehicles, how many have LOW DPD.',
+ how:'AI test correlating utilization (IoT) with DPD (CRM). Found 4 of 5 high-util loans are low-DPD.',
+ countV:'warn',countWhy:'The count may be fine, but the test measures “paying fine” — low DPD is GOOD.',
+ sevV:'bad',sevWhy:'Flagging borrowers who pay on time as a red “High Alert” is backwards as a risk signal. Also unpromoted/stale → should be Warning at most.'},
+{n:5,title:'High Utilization Borrowers',slug:'high-utilization-borrowers',shown:'3 / 7',kind:'AI',src:'IoT telemetry',srcClass:'iot',
+ checks:'Borrowers whose vehicles run above a mileage threshold, vs DPD.',
+ how:'AI test on IoT daily_km. Flagged 3 of 7. Code not saved.',
+ countV:'warn',countWhy:'Unverifiable, telemetry-dependent, overlaps “High Demand Vehicles”.',
+ sevV:'bad',sevWhy:'Unpromoted AI, stale → should be Warning.'},
+{n:6,title:'High Daily KM Borrowers',slug:'high-daily-km-borrowers',shown:'1 / 7',kind:'AI',src:'IoT telemetry',srcClass:'iot',
+ checks:'Borrowers with high daily km vs loan default risk.',
+ how:'AI test on IoT daily_km. Flagged 1 of 7. Code not saved.',
+ countV:'warn',countWhy:'1/7 is only “High” because 1÷7 = 14% > 5%. Small-fleet artefact. Duplicates “High Daily KM Usage”.',
+ sevV:'bad',sevWhy:'Unpromoted AI, stale → should be Warning.'},
+{n:7,title:'High Daily KM Usage',slug:'high-daily-km-usage',shown:'1 / 7',kind:'AI · PROMOTED',src:'IoT telemetry',srcClass:'iot',
+ checks:'Borrowers whose vehicles average > 50 km/day, vs current DPD.',
+ how:'AI test on IoT daily_km with an explicit 50 km/day threshold. Flagged 1 of 7. A human has PROMOTED this hypothesis, so its High is allowed to stand.',
+ countV:'warn',countWhy:'Clear threshold (>50 km/day) and computed, but depends on live daily_km telemetry (tunnel down). 1/7 → High is again the 14% small-fleet effect.',
+ sevV:'warn',sevWhy:'Legitimately allowed to be High (promoted), but note high usage is usually a POSITIVE repayment signal — worth re-checking the hypothesis direction.'},
+{n:8,title:'High DPD Borrowers',slug:'high-dpd-borrowers',shown:'1 / 7',kind:'AI',src:'CRM (loans)',srcClass:'crm',
+ checks:'Loans with current DPD > 30 days.',
+ how:'AI test: count(loans where current_dpd > 30) ÷ total. Found 1 of 7. Reads nbfc_loans.current_dpd — no telemetry needed.',
+ countV:'ok',countWhy:'This is a real, correct CRM calculation — 1 borrower genuinely 30+ days past due. The most useful of the AI Highs.',
+ sevV:'warn',sevWhy:'The signal is real, but it’s an unpromoted AI card, so a re-run caps it to Warning. The underlying fact (1 borrower 30+ DPD) still deserves attention.'},
+{n:9,title:'7-day usage cliff',slug:'usage-drop-7d',shown:'1 / 5',kind:'Hand-coded · PROMOTED',src:'IoT telemetry',srcClass:'iot',
+ checks:'Borrowers whose 7-day km dropped ≥ 40% vs the prior 7 days (a sudden-stop signal).',
+ how:'The ONLY non-AI High. Hand-written evaluator: for vehicles with a real prior-week baseline (≥50 km), drop = (prior−recent)/prior ≥ 40% (governed threshold). Found 1 of 5 assessed.',
+ countV:'ok',countWhy:'Deterministic, governed threshold, denominator = only assessable vehicles. Trustworthy computed arithmetic — this is the model card.',
+ sevV:'ok',sevWhy:'Legitimate High: human-written and promoted, so not capped. (On 5 assessed, 1 = 20%, still a real drop worth a look.)'},
+{n:10,title:'Low Utilization Borrowers',slug:'low-utilization-borrowers',shown:'1 / 7',kind:'AI',src:'IoT telemetry',srcClass:'iot',
+ checks:'Borrowers with low daily km vs repayment status.',
+ how:'AI test on IoT daily_km. Flagged 1 of 7. Code not saved. Overlaps the hand-coded “low-utilization-active-loan” card.',
+ countV:'warn',countWhy:'Unverifiable, telemetry-dependent, duplicates an existing hand-coded card.',
+ sevV:'bad',sevWhy:'Unpromoted AI, stale → should be Warning.'},
+];
+
+const WARN=[
+{n:11,title:'Low Speed Vehicles Risk',slug:'low-speed-vehicles-risk',shown:'7 / 7',kind:'AI · CAPPED',src:'IoT telemetry',srcClass:'iot',
+ checks:'Vehicles operating below 20 km/h.',
+ code:"low_speed = vehicle_states[speed_kph < 20]\naffected = loans where vehicleno in low_speed\nseverity: ≥5% → high, ≥1% → warn",
+ countV:'bad',countWhy:'Flags ALL 7 vehicles (7/7). E-rickshaws routinely run under 20 km/h, so this catches everyone — a non-discriminating test, not a risk signal.',
+ sevV:'warn',sevWhy:'Computed “High” (100%) then correctly auto-capped to Warning by E-188. The cap is working; the test is the problem.'},
+{n:12,title:'High Idle Vehicles Risk',slug:'high-idle-vehicles-risk',shown:'7 / 7',kind:'AI · CAPPED',src:'IoT telemetry',srcClass:'iot',
+ checks:'Vehicles whose ignition is OFF.',
+ code:"high_idle = vehicle_states[ignition == 0]\naffected = loans where vehicleno in high_idle\nseverity: ≥5% → high, ≥1% → warn",
+ countV:'bad',countWhy:'7/7 — every vehicle read ignition-off at the single snapshot moment (parked, or telemetry stale/empty). A point-in-time snapshot, not “high idle over time”. Non-discriminating.',
+ sevV:'warn',sevWhy:'Computed High (100%) → correctly capped to Warning.'},
+{n:13,title:'Low Weekly Usage Borrowers Risk',slug:'low-weekly-usage-borrowers-risk-14d',shown:'5 / 7',kind:'AI · CAPPED',src:'IoT telemetry',srcClass:'iot',
+ checks:'Borrowers whose weekly km is below the fleet average.',
+ code:"low_usage = daily_km[km < daily_km['km'].mean()]\naffected = loans where vehicleno in low_usage\nseverity: ≥5% → high, ≥1% → warn",
+ countV:'bad',countWhy:'“Below the average” always flags roughly half the fleet — here 5 of 7 — no matter how healthy everyone is. A statistically vacuous test: there is no fixed risk threshold, just the mean.',
+ sevV:'warn',sevWhy:'Computed High → capped to Warning. But it would fire on any fleet, forever.'},
+{n:14,title:'High Idle Time Vehicles Risk',slug:'high-idle-time-vehicles-risk-usage',shown:'2 / 7',kind:'AI · CAPPED',src:'IoT telemetry',srcClass:'iot',
+ checks:'Vehicles with no GPS contact for more than 24 hours.',
+ code:"high_idle = vehicle_states[sec_since_gps > 86400]  # 24h\naffected = loans where vehicleno in high_idle\nseverity: ≥5% → high, ≥1% → warn",
+ countV:'warn',countWhy:'A meaningful signal (2 vehicles telemetry-silent >24h) — but it duplicates the hand-coded “Past-due + telemetry silent” card, and reads live IoT data (tunnel down = unreliable now).',
+ sevV:'warn',sevWhy:'Computed High → capped to Warning. Reasonable as a Warning; just redundant with an existing card.'},
+{n:15,title:'High Repayment Issues (Last 30 Days)',slug:'high-repayment-issues-vehicles-30d',shown:'1 / 7',kind:'AI · CAPPED',src:'CRM (loans)',srcClass:'crm',
+ checks:'Vehicles tied to borrowers with current DPD > 30.',
+ code:"repayment_issues = loans[current_dpd > 30]\naffected = unique vehicles of those loans\nseverity: ≥5% → high, ≥1% → warn",
+ countV:'ok',countWhy:'Correct CRM calculation — 1 borrower is 30+ DPD. This is the same true signal as “High DPD Borrowers” (#8): the one card here worth acting on.',
+ sevV:'warn',sevWhy:'Computed High → capped to Warning. Real signal; just note it’s a duplicate of #8.'},
+];
+
+function render(list){
+  return list.map(c=>{
+    const sevCls = c.n<=10 && (c.kind||'').indexOf('CAPPED')<0 ? 'sev-high':'sev-warn';
+    const kindChip = (c.kind||'').split('·').map(k=>{
+      const t=k.trim(); if(!t)return'';
+      let cl='chip'; if(/hand/i.test(t))cl+=' hand'; else if(/^AI/i.test(t))cl+=' ai'; else if(/capped/i.test(t))cl+=' capped'; else if(/promoted/i.test(t))cl+=' hand';
+      return `<span class="${cl}">${esc(t)}</span>`;
+    }).join('');
+    const srcChip=`<span class="chip ${c.srcClass}">${esc(c.src)}</span>`;
+    const codeBlock = c.code?`<div class="row"><div class="k">The code</div><div class="val"><div class="code">${esc(c.code)}</div></div></div>`:'';
+    const howLabel = c.code?'In words':'How it’s calculated';
+    return `<div class="card ${sevCls}">
+      <div class="ch">
+        <span class="cn">#${c.n}</span>
+        <span class="ct">${esc(c.title)}</span>
+        <span class="shown">${esc(c.shown)} affected</span>
+        <span class="chips">${kindChip}${srcChip}</span>
+      </div>
+      <div class="cbody">
+        <div class="row"><div class="k">What it checks</div><div class="val">${esc(c.checks)}</div></div>
+        <div class="row"><div class="k">Reads from</div><div class="val">${esc(c.src)} — <span style="font-family:var(--mono);font-size:11.5px;color:var(--ink-faint)">${esc(c.slug)}</span></div></div>
+        ${codeBlock}
+        <div class="row"><div class="k">${howLabel}</div><div class="val">${esc(c.how||c.checks)}</div></div>
+        <div class="verds">
+          <div class="verd ${c.countV}"><div class="vh">Count — ${({ok:'correct',warn:'caution',bad:'wrong / weak'})[c.countV]}</div><div class="vt">${esc(c.countWhy)}</div></div>
+          <div class="verd ${c.sevV}"><div class="vh">Severity — ${({ok:'correct',warn:'should be warning',bad:'wrong / stale'})[c.sevV]}</div><div class="vt">${esc(c.sevWhy)}</div></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+document.getElementById('highCards').innerHTML=render(HIGH);
+document.getElementById('warnCards').innerHTML=render(WARN);
+
+// master table
+const all=[...HIGH,...WARN];
+document.getElementById('master').innerHTML =
+ '<thead><tr><th>#</th><th>Card</th><th>Shows</th><th>Source</th><th>Count</th><th>Severity</th><th>Verdict in one line</th></tr></thead><tbody>'+
+ all.map(c=>{
+   const one = c.n===9?'Real, computed, legit High':
+     c.n===7?'Promoted; legit but check direction':
+     c.n===8?'Real DPD>30 signal; should be Warning':
+     c.n===15?'Real DPD>30 (duplicate of #8)':
+     c.n===13?'Vacuous (below-average always fires)':
+     (c.n===11||c.n===12)?'Non-discriminating (flags all 7)':
+     c.n===4?'Backwards — low DPD is good':
+     c.n===14?'Real but duplicates a hand-coded card':
+     'Stale AI High → should be Warning';
+   return `<tr><td>${c.n}</td><td>${esc(c.title)}</td><td class="v ${c.n<=10&&!/CAPPED/.test(c.kind)?'bad':'warn'}">${esc(c.shown)}</td><td style="font-family:var(--mono);font-size:10.5px">${esc(c.src)}</td><td class="v ${c.countV}">${({ok:'OK',warn:'CAUTION',bad:'WEAK'})[c.countV]}</td><td class="v ${c.sevV}">${({ok:'OK',warn:'→WARN',bad:'STALE'})[c.sevV]}</td><td>${esc(one)}</td></tr>`;
+ }).join('')+'</tbody>';
+
+document.getElementById('themebtn').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);
+});
+</script>
+</body>
+</html>

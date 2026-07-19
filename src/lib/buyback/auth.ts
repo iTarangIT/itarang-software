@@ -8,8 +8,12 @@
  *    miss is a 404, never a 403. A 403 would confirm the request exists, which
  *    lets one dealer enumerate another's request IDs (BRD M01 AC).
  *
- *  · Roles are resolved to the state machine's two actors. The CRM has eleven
- *    roles; the deal state machine only cares "dealer or admin".
+ *  · The same rule for a scrap vendor: scoped to the threads routed to THEM,
+ *    404 on a miss. A vendor must not be able to discover that a deal exists,
+ *    let alone which dealer it came from.
+ *
+ *  · Roles are resolved to the state machine's three actors. The CRM has a dozen
+ *    roles; the deal state machine only cares "dealer, admin or vendor".
  */
 
 import { and, eq } from "drizzle-orm";
@@ -72,6 +76,32 @@ export async function requireDealer(): Promise<BuybackActor> {
 export async function requireBuybackAdmin(): Promise<BuybackActor> {
   const user = await requireRole([...BUYBACK_ADMIN_ROLES]);
   return { id: user.id, role: "admin", entityId: null };
+}
+
+/**
+ * The caller must be a scrap vendor, and must belong to a vendor account (E-195).
+ *
+ * `vendor_entity_id`, never `dealer_id` — a vendor login has no dealer_id at
+ * all, and reading one would silently scope them to nothing (or, worse, to a
+ * dealer). The value is an accounts.id, the same id scrap_vendors.entity_id
+ * points at, which is what lets a route resolve "which vendor is this?" with a
+ * single join.
+ *
+ * Being ACTIVE is deliberately NOT checked here. A PENDING vendor can log in
+ * and look at their (empty) dashboard the moment they sign up — that is the
+ * point of self-serve. What they cannot do is receive work, and that is
+ * enforced where it belongs: listRoutableVendors() only ever routes a deal to
+ * a vendor whose business_entity_roles row is ACTIVE, so a stranger who signs
+ * up has nothing to see until an admin activates them.
+ */
+export async function requireVendor(): Promise<BuybackActor> {
+  const user = await requireRole(["scrap_vendor"]);
+
+  if (!user.vendor_entity_id) {
+    throw new ForbiddenError("Your login is not linked to a vendor account.");
+  }
+
+  return { id: user.id, role: "vendor", entityId: user.vendor_entity_id };
 }
 
 /**

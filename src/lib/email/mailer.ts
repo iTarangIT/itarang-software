@@ -57,15 +57,26 @@ function toBase64(content: Buffer | string): string {
   return Buffer.isBuffer(content) ? content.toString("base64") : Buffer.from(content, "utf8").toString("base64");
 }
 
+// AgentMail validates every recipient as an email, coercing a bare string into
+// a single-element array. So a comma-joined string of N recipients (the shape
+// most of our senders build via `recipients.join(",")`) is validated as ONE
+// address and rejected with HTTP 400 "Invalid email address". Split any
+// comma-joined string into a proper array so each address is validated on its
+// own. nodemailer (the SMTP path) accepts arrays too, so this is safe there.
+function toAddressList(value: string | string[]): string[] {
+  const parts = Array.isArray(value) ? value : String(value).split(",");
+  return parts.map((v) => v.trim()).filter(Boolean);
+}
+
 async function agentMailSend(cfg: AgentMailConfig, opts: SendMailOptions): Promise<{ messageId: string }> {
   // AgentMail sends *from* the inbox itself, so `from` is not part of the body
   // (the sender is care-itarang@agentmail.to). Everything else maps 1:1.
   const body: Record<string, unknown> = {
-    to: opts.to,
+    to: toAddressList(opts.to),
     subject: opts.subject,
   };
-  if (opts.cc) body.cc = opts.cc;
-  if (opts.bcc) body.bcc = opts.bcc;
+  if (opts.cc) body.cc = toAddressList(opts.cc);
+  if (opts.bcc) body.bcc = toAddressList(opts.bcc);
   if (opts.replyTo) body.reply_to = opts.replyTo;
   if (opts.text) body.text = opts.text;
   if (opts.html) body.html = opts.html;

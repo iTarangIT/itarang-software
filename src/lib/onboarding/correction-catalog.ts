@@ -42,6 +42,7 @@ export type CorrectionDocumentKey =
   | "passport_photo"
   | "udyam_certificate"
   | "owner_photo"
+  | "owner_aadhaar"
   | "partnership_deed"
   | "mou_document"
   | "aoa_document";
@@ -105,6 +106,7 @@ export const CORRECTION_DOCUMENTS: CorrectionDocument[] = [
   { key: "passport_photo",          label: "Passport Photo",           group: "compliance" },
   { key: "udyam_certificate",       label: "Udyam Registration",       group: "compliance" },
   { key: "owner_photo",             label: "Owner Photo",              group: "ownership" },
+  { key: "owner_aadhaar",           label: "Owner Aadhaar Card",       group: "ownership" },
   { key: "partnership_deed",        label: "Partnership Deed",         group: "ownership" },
   { key: "mou_document",            label: "MOU Document",             group: "ownership" },
   { key: "aoa_document",            label: "AOA Document",             group: "ownership" },

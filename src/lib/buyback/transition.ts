@@ -51,15 +51,29 @@ export const NOTIFICATION_FOR: Record<
   dealer_counter: { party: "ADMIN", channel: "PORTAL" },
   dealer_accept: { party: "ADMIN", channel: "PORTAL" },
   dealer_decline: { party: "ADMIN", channel: "PORTAL" },
+  // The dealer accepted iTarang's standing counter directly (mid-negotiation) —
+  // the desk hears it in-portal, same as dealer_accept.
+  dealer_accept_counter: { party: "ADMIN", channel: "PORTAL" },
 
-  // Admin acted → tell the dealer, on WhatsApp.
-  accept: { party: "DEALER", channel: "WHATSAPP" },
-  reject: { party: "DEALER", channel: "WHATSAPP" },
-  negotiate: { party: "DEALER", channel: "WHATSAPP" },
-  request_info: { party: "DEALER", channel: "WHATSAPP" },
-  send_final_offer: { party: "DEALER", channel: "WHATSAPP" },
-  reopen: { party: "DEALER", channel: "WHATSAPP" },
-  cancel: { party: "DEALER", channel: "WHATSAPP" },
+  // Admin acted → tell the dealer, in their in-app bell (item 12).
+  //
+  // These were WHATSAPP. WhatsApp is out of scope and unwired, so a dealer's
+  // accept/reject/negotiate notifications went to a channel that never fired and
+  // never reached a bell — the dealer was told nothing. PORTAL routes them to
+  // the dealer's own bell instead, which is the delivery that actually exists.
+  accept: { party: "DEALER", channel: "PORTAL" },
+  reject: { party: "DEALER", channel: "PORTAL" },
+  negotiate: { party: "DEALER", channel: "PORTAL" },
+  // The admin's counter is iTarang's price TO the dealer — they must hear it.
+  // NOT a dealer-must-not-hear action (it carries no margin, no vendor).
+  admin_counter: { party: "DEALER", channel: "PORTAL" },
+  // iTarang accepted the dealer's standing counter — good news the dealer must
+  // hear, same channel as admin_counter.
+  admin_accept_counter: { party: "DEALER", channel: "PORTAL" },
+  request_info: { party: "DEALER", channel: "PORTAL" },
+  send_final_offer: { party: "DEALER", channel: "PORTAL" },
+  reopen: { party: "DEALER", channel: "PORTAL" },
+  cancel: { party: "DEALER", channel: "PORTAL" },
 
   // Internal bookkeeping — the dealer does not need to hear that an admin
   // opened their request, or what margin was set (they must never hear that).
@@ -75,20 +89,36 @@ export const NOTIFICATION_FOR: Record<
   record_vendor_counter: { party: "ADMIN", channel: "PORTAL" },
   record_vendor_agreement: { party: "ADMIN", channel: "PORTAL" },
 
-  // Fulfilment — the dealer is the one who has to be somewhere at a time, so
-  // these reach them on WhatsApp. The vendor's own PO copy is handled by the
-  // fan-out on exchange_pos.
-  exchange_pos: { party: "DEALER", channel: "WHATSAPP" },
-  schedule_pickup: { party: "DEALER", channel: "WHATSAPP" },
-  complete_pickup: { party: "DEALER", channel: "WHATSAPP" },
+  // --- Vendor leg, first-hand (E-195 — the vendor login) ---
+  // A counterparty moved, so the desk hears about it in-portal — the same shape
+  // as dealer_counter/dealer_accept above, for the same reason.
+  //
+  // NOT the dealer, on either. A dealer must never learn what a vendor offered:
+  // the gap between the two prices is iTarang's margin, and telling the seller
+  // what the buyer paid is the one disclosure this whole module is built to
+  // prevent. Same rule that makes record_settlement fan out rather than
+  // broadcast.
+  //
+  // vendor_agree's route overrides with a fanOut, exactly as
+  // record_vendor_agreement does, so every losing vendor still gets the
+  // courteous close rather than silence.
+  vendor_counter: { party: "ADMIN", channel: "PORTAL" },
+  vendor_agree: { party: "ADMIN", channel: "PORTAL" },
+
+  // Fulfilment — the dealer has to be somewhere at a time, so they hear about
+  // it (in-app; was WhatsApp). The vendor's own PO copy is the fan-out on
+  // exchange_pos.
+  exchange_pos: { party: "DEALER", channel: "PORTAL" },
+  schedule_pickup: { party: "DEALER", channel: "PORTAL" },
+  complete_pickup: { party: "DEALER", channel: "PORTAL" },
 
   // --- Money leg (Sprint 2B) ---
   // The dealer raised it, so the admins are the ones who need to know.
   raise_invoice: { party: "ADMIN", channel: "PORTAL" },
-  // These two are the dealer's money. They hear about both — especially the
-  // rejection, which carries the reason and needs them to act.
-  approve_invoice: { party: "DEALER", channel: "WHATSAPP" },
-  return_invoice: { party: "DEALER", channel: "WHATSAPP" },
+  // These two are the dealer's money. They hear about both (in-app; was
+  // WhatsApp) — especially the rejection, which carries the reason to act on.
+  approve_invoice: { party: "DEALER", channel: "PORTAL" },
+  return_invoice: { party: "DEALER", channel: "PORTAL" },
   // Default recipient; the routes override with a fanOut so the party who was
   // actually paid is the one told (a dealer must not be notified that a VENDOR
   // paid us, and must never learn the vendor's figure).
@@ -111,6 +141,16 @@ export interface NotificationTarget {
   channel: "WHATSAPP" | "EMAIL" | "PORTAL";
   recipientRef?: string | null;
   attachmentS3Key?: string | null;
+  /**
+   * E-198 — extra files beyond the primary one (the battery photos on a vendor
+   * quotation). Snapshotted here for the same reason as the recipient: a photo
+   * can be deleted or replaced between the transition and the send, and the
+   * audit trail must record what actually went out.
+   *
+   * Different failure policy from attachmentS3Key: a missing one of these is
+   * skipped, not retried. See dispatch.ts's deliver().
+   */
+  attachmentS3Keys?: string[] | null;
   /** Makes this event's idempotency key unique among the transition's fan-out. */
   discriminator: string | number;
   payload?: Record<string, unknown>;
@@ -288,6 +328,7 @@ export async function applyTransition({
       channel: target.channel,
       recipient_ref: resolveRef(target),
       attachment_s3_key: target.attachmentS3Key ?? null,
+      attachment_s3_keys: target.attachmentS3Keys?.length ? target.attachmentS3Keys : null,
       idempotency_key: eventKey(
         dealId,
         action,
