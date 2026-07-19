@@ -137,11 +137,12 @@ export default function Step5Page() {
   const [otpDigits, setOtpDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
   const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  // OTP confirmed against the server but not yet consumed — gates the
+  // "Validate & Confirm Dispatch" button so dispatch is a deliberate 2nd step.
+  const [otpVerified, setOtpVerified] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState<null | { warrantyId: string }>(null);
-  // Dev / no-provider mode: API echoes back the OTP so the tester can read
-  // it without an SMS provider. Null in production once MSG91 is live.
-  const [devOtp, setDevOtp] = useState<string | null>(null);
 
   const [actioning, setActioning] = useState<null | "close" | "switch">(null);
 
@@ -206,8 +207,7 @@ export default function Step5Page() {
         setOtpSentTo(json.data.otpSentTo);
         setSecondsLeft(json.data.expiresInSeconds || 600);
         setOtpDigits(["", "", "", "", "", ""]);
-        // Dev / hardcoded path: surface OTP so the tester can use it.
-        setDevOtp(json.data._devOtp ?? null);
+        setOtpVerified(false);
         await load();
         inputsRef.current[0]?.focus();
       } else {
@@ -222,6 +222,8 @@ export default function Step5Page() {
 
   const handleOtpChange = (i: number, v: string) => {
     const digit = v.replace(/\D/g, "").slice(-1);
+    // Editing the code invalidates a prior verification.
+    setOtpVerified(false);
     setOtpDigits((prev) => {
       const next = [...prev];
       next[i] = digit;
@@ -240,8 +242,38 @@ export default function Step5Page() {
     const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
     if (pasted.length === 6) {
       e.preventDefault();
+      setOtpVerified(false);
       setOtpDigits(pasted.split(""));
       inputsRef.current[5]?.focus();
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    const otp = otpDigits.join("");
+    if (otp.length !== 6) {
+      setError("Enter all 6 digits");
+      return;
+    }
+    setVerifying(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/lead/${leadId}/step-5/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ otp }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setOtpVerified(true);
+      } else {
+        setOtpVerified(false);
+        setError(json.error?.message || "OTP verification failed");
+      }
+    } catch {
+      setOtpVerified(false);
+      setError("OTP verification failed");
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -750,15 +782,16 @@ export default function Step5Page() {
         <section className="bg-white border-2 border-[#0047AB]/20 rounded-2xl p-6 shadow-sm">
           <SectionTitle icon={<Phone className="w-4 h-4" />} title="Customer OTP Confirmation" />
           <p className="text-xs text-gray-500 mb-5">
-            The 6-digit OTP serves as the customer&apos;s digital acceptance of the loan terms and
-            authorises dispatch. It cannot be undone once submitted.
+            The 6-digit OTP is read out to the customer on an automated phone call and serves as
+            their digital acceptance of the loan terms, authorising dispatch. It cannot be undone
+            once submitted.
           </p>
 
           {!showOtpUi && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-2 text-sm text-gray-700">
                 <Phone className="w-4 h-4 text-gray-400" />
-                Will be sent to{" "}
+                Customer will be called on{" "}
                 <span className="font-bold font-mono">{data.phone ?? "—"}</span>
               </div>
               <button
@@ -769,9 +802,9 @@ export default function Step5Page() {
                 {sending ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <ArrowRight className="w-4 h-4" />
+                  <Phone className="w-4 h-4" />
                 )}
-                {sending ? "Sending…" : "Send OTP to Customer"}
+                {sending ? "Calling…" : "Call Customer with OTP"}
               </button>
             </div>
           )}
@@ -779,7 +812,7 @@ export default function Step5Page() {
           {showOtpUi && (
             <div className="space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-xs">
-                <span className="text-gray-500">OTP sent to:</span>
+                <span className="text-gray-500">OTP called to:</span>
                 <span className="font-bold font-mono text-gray-900">
                   {otpSentTo ?? data.phone}
                 </span>
@@ -790,28 +823,6 @@ export default function Step5Page() {
                     : "OTP expired"}
                 </span>
               </div>
-
-              {devOtp && (
-                <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
-                  <div className="text-xs">
-                    <span className="font-bold">Dev / test mode:</span> SMS provider not
-                    configured. Use OTP{" "}
-                    <span className="font-mono font-black tracking-widest text-base">
-                      {devOtp}
-                    </span>{" "}
-                    — would normally arrive on the customer&apos;s phone.
-                  </div>
-                  <button
-                    onClick={() => {
-                      setOtpDigits(devOtp.split(""));
-                      inputsRef.current[5]?.focus();
-                    }}
-                    className="flex-shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold"
-                  >
-                    Autofill
-                  </button>
-                </div>
-              )}
 
               <div className="flex justify-center gap-2 sm:gap-3">
                 {otpDigits.map((d, i) => (
@@ -832,29 +843,52 @@ export default function Step5Page() {
                 ))}
               </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 text-xs">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={handleSendOtp}
-                    disabled={sending || resendCoolingDown || resendMaxedOut}
-                    className="text-[#0047AB] font-bold hover:underline disabled:opacity-50 disabled:no-underline disabled:text-gray-400"
-                  >
-                    {resendMaxedOut
-                      ? "Max sends reached — try again later"
-                      : resendCoolingDown
-                        ? `Resend available in ${secondsLeft - 570}s`
-                        : "Resend OTP"}
-                  </button>
-                  <span className="text-gray-400">
-                    {sendCount}/{maxSends} sends used
+              <div className="flex items-center gap-3 text-xs">
+                <button
+                  onClick={handleSendOtp}
+                  disabled={sending || resendCoolingDown || resendMaxedOut}
+                  className="text-[#0047AB] font-bold hover:underline disabled:opacity-50 disabled:no-underline disabled:text-gray-400"
+                >
+                  {resendMaxedOut
+                    ? "Max sends reached — try again later"
+                    : resendCoolingDown
+                      ? `Resend available in ${secondsLeft - 570}s`
+                      : "Resend OTP"}
+                </button>
+                <span className="text-gray-400">
+                  {sendCount}/{maxSends} sends used
+                </span>
+              </div>
+
+              {/* Two-step: verify the OTP first, then the dispatch button unlocks. */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                {otpVerified ? (
+                  <span className="inline-flex items-center gap-1.5 text-sm font-bold text-emerald-700">
+                    <CheckCircle2 className="w-4 h-4" /> OTP verified
                   </span>
-                </div>
+                ) : (
+                  <button
+                    onClick={handleVerifyOtp}
+                    disabled={
+                      verifying || otpDigits.join("").length !== 6 || secondsLeft <= 0
+                    }
+                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#0047AB] hover:bg-[#003580] text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-50"
+                  >
+                    {verifying ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="w-4 h-4" />
+                    )}
+                    {verifying ? "Verifying…" : "Verify OTP"}
+                  </button>
+                )}
                 <button
                   onClick={handleConfirm}
-                  disabled={
-                    confirming || otpDigits.join("").length !== 6 || secondsLeft <= 0
+                  disabled={!otpVerified || confirming || secondsLeft <= 0}
+                  title={
+                    !otpVerified ? "Verify the customer's OTP first" : undefined
                   }
-                  className="ml-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-50"
+                  className="sm:ml-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-50"
                 >
                   {confirming ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
