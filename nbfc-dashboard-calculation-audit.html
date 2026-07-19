@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NBFC Dashboard — Calculation Provenance Map</title>
+<style>
+  /* ============ TOKENS ============ */
+  :root{
+    color-scheme: light dark;
+    --ink:#0f1720; --ink-soft:#3d4a5c; --ink-faint:#647389;
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f6f8fc; --line:#dde3ec; --line-strong:#c6cfdd;
+    --accent:#2563eb; --accent-soft:#dbe6ff; --accent-ink:#1b4bd6;
+    --ok:#0f9d6b; --ok-bg:#e2f6ee; --ok-line:#9fe0c4;
+    --warn:#b7791f; --warn-bg:#fdf3dd; --warn-line:#f0d190;
+    --bad:#d63b3b; --bad-bg:#fce4e4; --bad-line:#f2b3b3;
+    --violet:#7c5cd6; --violet-bg:#efe9fb;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(20,32,54,.06),0 8px 24px -12px rgba(20,32,54,.18);
+    --radius:14px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --ink:#e7edf6; --ink-soft:#aab6c8; --ink-faint:#76839a;
+      --bg:#0b0f16; --panel:#131a24; --panel-2:#0f151d; --line:#232d3b; --line-strong:#33404f;
+      --accent:#5b8cff; --accent-soft:#1c2942; --accent-ink:#8fb0ff;
+      --ok:#3fd39a; --ok-bg:#10241d; --ok-line:#1f5140;
+      --warn:#e8b45a; --warn-bg:#271d0d; --warn-line:#5a441c;
+      --bad:#ff6b6b; --bad-bg:#2a1417; --bad-line:#5c2830;
+      --violet:#a996f0; --violet-bg:#1d1830;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"]{
+    color-scheme:light;
+    --ink:#0f1720; --ink-soft:#3d4a5c; --ink-faint:#647389;
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f6f8fc; --line:#dde3ec; --line-strong:#c6cfdd;
+    --accent:#2563eb; --accent-soft:#dbe6ff; --accent-ink:#1b4bd6;
+    --ok:#0f9d6b; --ok-bg:#e2f6ee; --ok-line:#9fe0c4;
+    --warn:#b7791f; --warn-bg:#fdf3dd; --warn-line:#f0d190;
+    --bad:#d63b3b; --bad-bg:#fce4e4; --bad-line:#f2b3b3;
+    --violet:#7c5cd6; --violet-bg:#efe9fb;
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --ink:#e7edf6; --ink-soft:#aab6c8; --ink-faint:#76839a;
+    --bg:#0b0f16; --panel:#131a24; --panel-2:#0f151d; --line:#232d3b; --line-strong:#33404f;
+    --accent:#5b8cff; --accent-soft:#1c2942; --accent-ink:#8fb0ff;
+    --ok:#3fd39a; --ok-bg:#10241d; --ok-line:#1f5140;
+    --warn:#e8b45a; --warn-bg:#271d0d; --warn-line:#5a441c;
+    --bad:#ff6b6b; --bad-bg:#2a1417; --bad-line:#5c2830;
+    --violet:#a996f0; --violet-bg:#1d1830;
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+  a{color:inherit}
+
+  /* ============ SHELL ============ */
+  .wrap{max-width:1240px;margin:0 auto;padding:0 22px 90px}
+  header.top{padding:38px 0 22px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+  h1{font-size:clamp(26px,4.5vw,42px);line-height:1.08;margin:.35em 0 .3em;letter-spacing:-.02em;text-wrap:balance;font-weight:800}
+  .lede{max-width:70ch;color:var(--ink-soft);font-size:16px}
+  .meta{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  .meta b{color:var(--ink-soft);font-weight:600}
+
+  /* ============ SCOREBOARD ============ */
+  .scoreboard{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 8px}
+  @media(max-width:720px){.scoreboard{grid-template-columns:repeat(2,1fr)}}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .tile .n{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1}
+  .tile .k{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);margin-top:6px;font-weight:600}
+  .tile.ok .n{color:var(--ok)} .tile.warn .n{color:var(--warn)} .tile.bad .n{color:var(--bad)}
+  .tile .stripe{position:absolute;left:0;top:0;bottom:0;width:4px}
+  .tile.total .stripe{background:var(--accent)} .tile.ok .stripe{background:var(--ok)} .tile.warn .stripe{background:var(--warn)} .tile.bad .stripe{background:var(--bad)}
+
+  .distbar{display:flex;height:12px;border-radius:99px;overflow:hidden;margin:16px 0 4px;border:1px solid var(--line)}
+  .distbar span{display:block}
+  .distbar .s-ok{background:var(--ok)} .distbar .s-warn{background:var(--warn)} .distbar .s-bad{background:var(--bad)}
+  .distlabel{font-size:12px;color:var(--ink-faint);font-family:var(--mono)}
+
+  /* ============ LEGEND / CONTROLS ============ */
+  .controls{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);margin:26px -22px 0;padding:12px 22px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between}
+  .filters{display:flex;flex-wrap:wrap;gap:8px}
+  .fbtn{font-family:var(--mono);font-size:12.5px;font-weight:600;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);padding:6px 12px;border-radius:99px;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:7px}
+  .fbtn:hover{border-color:var(--accent)}
+  .fbtn .dot{width:9px;height:9px;border-radius:99px}
+  .fbtn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+  .fbtn[aria-pressed="true"] .dot{outline:2px solid rgba(255,255,255,.55)}
+  .fbtn.ok .dot{background:var(--ok)} .fbtn.warn .dot{background:var(--warn)} .fbtn.bad .dot{background:var(--bad)} .fbtn.all .dot{background:var(--accent)}
+  .themebtn{font-family:var(--mono);font-size:12.5px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);padding:6px 12px;border-radius:99px;cursor:pointer}
+
+  /* ============ LAYOUT ============ */
+  .layout{display:grid;grid-template-columns:210px 1fr;gap:34px;margin-top:26px}
+  @media(max-width:900px){.layout{grid-template-columns:1fr}}
+  nav.side{position:sticky;top:64px;align-self:start;max-height:calc(100vh - 84px);overflow-y:auto;font-size:13.5px}
+  @media(max-width:900px){nav.side{display:none}}
+  nav.side h4{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--ink-faint);margin:0 0 8px}
+  nav.side a{display:flex;justify-content:space-between;gap:8px;text-decoration:none;color:var(--ink-soft);padding:7px 10px;border-radius:9px;border-left:2px solid transparent}
+  nav.side a:hover{background:var(--panel);color:var(--ink)}
+  nav.side a.active{background:var(--panel);border-left-color:var(--accent);color:var(--ink);font-weight:600}
+  nav.side a .cnt{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+
+  /* ============ SECTION ============ */
+  section.grp{margin-bottom:40px;scroll-margin-top:70px}
+  .grp-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding-bottom:10px;margin-bottom:16px;border-bottom:2px solid var(--line-strong)}
+  .grp-head .idx{font-family:var(--mono);font-size:13px;color:var(--accent-ink);font-weight:700}
+  .grp-head h2{font-size:21px;margin:0;letter-spacing:-.01em;font-weight:750}
+  .grp-head .route{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  .grp-note{background:var(--panel-2);border:1px dashed var(--line-strong);border-radius:10px;padding:10px 14px;font-size:13.5px;color:var(--ink-soft);margin-bottom:16px}
+  .grp-note b{color:var(--ink)}
+
+  /* ============ CARD ============ */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:12px;overflow:hidden;border-left:5px solid var(--line-strong)}
+  .card.v-ok{border-left-color:var(--ok)} .card.v-warn{border-left-color:var(--warn)} .card.v-bad{border-left-color:var(--bad)}
+  .card-top{display:flex;align-items:center;gap:12px;padding:12px 16px;flex-wrap:wrap}
+  .card-top .lbl{font-weight:700;font-size:15px}
+  .badge{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.05em;padding:3px 9px;border-radius:99px;text-transform:uppercase;white-space:nowrap}
+  .badge.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
+  .badge.warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
+  .badge.bad{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-line)}
+  .tags{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+  .tag{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+
+  /* ============ FLOW / ARROW DIAGRAM ============ */
+  .flow-scroll{overflow-x:auto;padding:2px 16px 14px}
+  .flow{display:flex;align-items:stretch;gap:0;min-width:min-content}
+  .node{flex:0 0 auto;max-width:340px;border-radius:10px;padding:8px 11px;font-family:var(--mono);font-size:11.5px;line-height:1.35;border:1px solid var(--line);background:var(--panel-2);display:flex;flex-direction:column;gap:2px;justify-content:center}
+  .node .nt{font-size:9px;letter-spacing:.1em;text-transform:uppercase;opacity:.7;font-weight:700}
+  .node .nv{color:var(--ink);white-space:pre-wrap;word-break:break-word}
+  .node.ui{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+  .node.ui .nt{color:var(--accent-ink)}
+  .node.route{background:var(--panel-2)}
+  .node.route .nt{color:var(--ink-faint)}
+  .node.db{background:var(--violet-bg);border-color:color-mix(in srgb,var(--violet) 35%,var(--line))}
+  .node.db .nt{color:var(--violet)}
+  .node.calc{background:var(--panel);border-style:dashed}
+  .node.calc .nt{color:var(--ink-faint)}
+  .arrow{flex:0 0 auto;align-self:center;width:34px;text-align:center;color:var(--ink-faint);position:relative}
+  .arrow svg{display:block;margin:0 auto}
+  .arrow.bad{color:var(--bad)} .arrow.warn{color:var(--warn)} .arrow.ok{color:var(--ok)}
+
+  .reason{padding:0 16px 14px;font-size:13.5px;color:var(--ink-soft)}
+  .reason .rk{font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-right:7px}
+  .reason.ok .rk{color:var(--ok)} .reason.warn .rk{color:var(--warn)} .reason.bad .rk{color:var(--bad)}
+  .reason code{font-family:var(--mono);font-size:12px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .src{display:block;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+
+  .empty{display:none;text-align:center;padding:50px;color:var(--ink-faint);font-family:var(--mono)}
+  footer{margin-top:50px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-faint);font-family:var(--mono)}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">iTarang · NBFC Partner Portal</div>
+    <h1>Dashboard Calculation Provenance Map</h1>
+    <p class="lede">Every number rendered across all nine NBFC portal sections, traced from the on-screen label → API/query → database table.column → the exact formula — and graded <b style="color:var(--ok)">correct</b>, <b style="color:var(--warn)">suspect</b>, or <b style="color:var(--bad)">wrong</b>. Follow the arrows left-to-right to read each data point's lineage.</p>
+    <div class="meta">
+      <span><b>Generated</b> 2026-07-18</span>
+      <span><b>Branch</b> Rushikesh-claude</span>
+      <span><b>Scope</b> Acquire · Portfolio · Leads · EMI Tracker · Batteries · Risk · Recovery/Auction · Audit · Settings · Shell</span>
+    </div>
+
+    <div class="scoreboard" id="scoreboard"></div>
+    <div class="distbar" id="distbar"></div>
+    <div class="distlabel" id="distlabel"></div>
+  </header>
+
+  <div class="controls">
+    <div class="filters" id="filters">
+      <button class="fbtn all" data-f="all" aria-pressed="true"><span class="dot"></span>All <span id="c-all"></span></button>
+      <button class="fbtn ok" data-f="ok" aria-pressed="false"><span class="dot"></span>Correct <span id="c-ok"></span></button>
+      <button class="fbtn warn" data-f="warn" aria-pressed="false"><span class="dot"></span>Suspect <span id="c-warn"></span></button>
+      <button class="fbtn bad" data-f="bad" aria-pressed="false"><span class="dot"></span>Wrong <span id="c-bad"></span></button>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <span class="distlabel" style="opacity:.8">Nodes:&nbsp; <b style="color:var(--accent-ink)">UI</b> → <b style="color:var(--ink-faint)">route</b> → <b style="color:var(--violet)">db</b> → <b style="color:var(--ink-faint)">formula</b></span>
+      <button class="themebtn" id="themebtn">◐ Theme</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <nav class="side"><h4>Sections</h4><div id="sidenav"></div></nav>
+    <main id="main">
+      <div class="empty" id="empty">No data points match this filter.</div>
+    </main>
+  </div>
+
+  <footer>
+    Static analysis of the working tree — verdicts describe the code path, not live data. “Suspect” = works today but drifts / mis-labels / caps / depends on an unseeded table or the IoT VPS tunnel. “Wrong” = produces an incorrect number under normal conditions. Cross-check any fix against <code style="font-family:inherit">src/lib/db/schema.ts</code> (the migration is the source of truth).
+  </footer>
+</div>
+
+<script>
+/* ---- node helpers ---- */
+const N = (type, title, val) => ({type, title, val});
+const ui   = (t,v)=>N('ui',t,v);
+const route= (t,v)=>N('route',t,v);
+const db   = (t,v)=>N('db',t,v);
+const calc = (v)=>N('calc','formula',v);
+
+/* ---- DATA ---- verdict: ok | warn | bad ---- */
+const DATA = [
+{
+  id:'shell', title:'Sidebar / Portal Shell', route:'components/nbfc-portal/NbfcPortalSidebar.tsx',
+  note:'The tenant block under the logo and the Acquire nav badge. Same values reused on Settings.',
+  items:[
+    {lbl:'“N active” (active loans)', v:'ok', tags:['live count'],
+     flow:[ui('sidebar','{activeLoans} active'),route('layout.tsx:28 → tenant.ts:91','countActiveLoans()'),db('nbfc_loans','WHERE tenant_id AND is_active=true'),calc('live COUNT(*) — ignores stale nbfc_tenants.active_loans')],
+     reason:'Deliberately recomputes live instead of trusting the denormalized counter (documented to drift 14 vs real 7). Tenant-scoped.', src:'tenant.ts:82-97'},
+    {lbl:'“AUM ₹X”', v:'warn', tags:['stale column'],
+     flow:[ui('sidebar','AUM ₹{aumInr}'),route('layout.tsx:29','tenant.aum_inr'),db('nbfc_tenants.aum_inr','read verbatim'),calc('stored value — nothing recomputes it')],
+     reason:'Same denormalized-drift bug class they fixed for active_loans, but left unfixed here. Nothing maintains aum_inr; it is seeded once and drifts forever. Live equivalent: SUM(nbfc_loans.outstanding_amount).', src:'tenant.ts:113 / NbfcPortalSidebar.tsx:138'},
+    {lbl:'Acquire pending badge', v:'ok', tags:['tenant-scoped'],
+     flow:[ui('nav pill','{acquire_pending}'),route('useNbfcWorkQueue → /notifications/summary','getNbfcWorkQueueCounts'),db('nbfc_lead_assignments ⋈ leads','status=pending'),calc('COUNT(*) INNER JOIN leads')],
+     reason:'Same condition-builder feeds the badge and the ?need= list, so the badge never over-counts vs the Acquire page. INNER JOIN drops orphaned assignments.', src:'work-queue.ts:58,142'},
+  ]
+},
+{
+  id:'audit', title:'Audit Log', route:'app/(dashboard)/nbfc/audit/page.tsx',
+  note:'The page component computes nothing itself — it passes tenant.display_name; all counts come from the /audit-log route.',
+  items:[
+    {lbl:'“X–Y of TOTAL” + pagination', v:'warn', tags:['LIMIT cap','not COUNT(*)'],
+     flow:[ui('footer','{start}–{end} of {total}'),route('/api/nbfc/audit-log:399','total = items.length'),db('3 sources merged in-JS','each .limit(500)'),calc('total ≠ COUNT(*); capped ≤1500, paginated via slice()')],
+     reason:'total is the length of a merged in-memory array of nbfc_audit_log + nbfc_borrower_actions + nbfc_immobilisation_actions, each capped at 500. Past 500 rows/source the footer under-reports and older events silently fall off the last page — a real gap for a compliance log. Tenant-scoping is correct (no leak).', src:'audit-log/route.ts:221,256,285,399'},
+    {lbl:'Status filter correctness', v:'warn', tags:['filter leak'],
+     flow:[ui('status filter'),route('audit-log/route.ts:304','if typeof after.status==="string"'),db('nbfc_audit_log.after_state'),calc('rows lacking a status are NOT excluded')],
+     reason:'When a status filter is active, audit rows whose after_state has no status field still pass through, inflating total for that filtered view.', src:'audit-log/route.ts:304'},
+  ]
+},
+{
+  id:'settings', title:'Settings', route:'app/(dashboard)/nbfc/settings/page.tsx',
+  note:'Tenant card, wallet, and the risk-rule thresholds table.',
+  items:[
+    {lbl:'Tenant “AUM” field', v:'warn', tags:['stale column'],
+     flow:[ui('tenant card','₹{aum_inr}'),route('settings/page.tsx:154'),db('nbfc_tenants.aum_inr'),calc('stored value, unmaintained')],
+     reason:'Same stale column as the sidebar AUM — and notably inconsistent with the “Active loans” field right beside it, which IS live-recomputed. One card, two truth models.', src:'settings/page.tsx:154 vs :158'},
+    {lbl:'Tenant “Active loans” field', v:'ok', tags:['live count'],
+     flow:[ui('tenant card','{active_loans}'),route('getCurrentTenant → countActiveLoans'),db('nbfc_loans','is_active=true'),calc('live COUNT(*)')],
+     reason:'Correct live count; flagged only for the inconsistency with the stale AUM beside it.', src:'settings/page.tsx:158'},
+    {lbl:'Wallet “Balance”', v:'ok', tags:['₹ rupees','null-safe'],
+     flow:[ui('WalletSection:238','inr(wallet.balance)'),route('/api/nbfc/settings/wallet','getOrCreateWallet'),db('nbfc_wallets.balance','numeric(14,2)'),calc('stored running balance; zero-wallet created if none')],
+     reason:'Tenant-scoped via resolveActor, rupee units, null-safe (auto-creates a ₹0 wallet).', src:'charging.ts:27'},
+    {lbl:'Wallet ledger (amount / balance)', v:'ok', tags:['append-only'],
+     flow:[ui('WalletSection:358','±inr, red/green'),route('wallet/route.ts:39','LIMIT 50 desc'),db('nbfc_wallet_ledger','amount, balance_after'),calc('sign: amount<0 = debit')],
+     reason:'Read straight from the append-only ledger, tenant-scoped, rupee units, 50 most-recent rows.', src:'schema.ts:4122-4135'},
+    {lbl:'Auto-NACH threshold / recharge', v:'ok', tags:['config'],
+     flow:[ui('inputs'),route('PUT wallet/route.ts:80'),db('nbfc_wallets.auto_nach_*'),calc('config values, not computed')],
+     reason:'Round-tripped as rupee strings, consistent GET↔PUT.', src:'schema.ts:4074-4075'},
+    {lbl:'Risk-rule thresholds “Value”', v:'ok', tags:['GLOBAL not per-tenant'],
+     flow:[ui('threshold table'),route('settings/page.tsx:134','db.select() — no WHERE'),db('nbfc_risk_rules','has NO tenant_id column'),calc('renders GLOBAL thresholds')],
+     reason:'Query is correct-by-schema (nothing to scope by), but the table has no tenant_id — so a per-tenant Settings page renders thresholds shared across every NBFC, and any admin edit moves the number for all tenants at once.', src:'schema.ts:4650-4661'},
+  ]
+},
+{
+  id:'portfolio', title:'Portfolio Overview (Command Centre)', route:'app/(dashboard)/nbfc/portfolio/page.tsx',
+  note:'All live numbers come from one endpoint — /api/nbfc/portfolio/command-centre → computeCommandCentre(). Every query is tenant-scoped. Headline finding: a stale doc-block premise excludes CDS/PCI risk alerts from At-Risk, on a uuid/varchar join assumption that migration E-117 already fixed.',
+  items:[
+    {lbl:'KPI · Active Loans', v:'ok', tags:['lifecycle filter'],
+     flow:[ui('KPI card','kpis.active_loans'),route('command-centre.ts:291'),db('loan_sanctions','status=disbursed AND closed_at IS NULL'),calc('COUNT(*)')],
+     reason:'Clean tenant scope + lifecycle filter.', src:'portfolio-summary.ts:40-55'},
+    {lbl:'KPI · Active Loans delta “+N QoQ”', v:'warn', tags:['definition drift'],
+     flow:[ui('delta chip'),route('command-centre.ts:324'),db('loan_sanctions','baseline: disbursed_at<now-90d'),calc('current(status) − baseline(disbursed_at) → mismatched defs')],
+     reason:'Current value filters by status; baseline requires disbursed_at<asOf. A disbursed loan with disbursed_at=NULL counts in current but never in baseline, inflating the QoQ gain.', src:'command-centre.ts:324-349'},
+    {lbl:'KPI · At-Risk Accounts', v:'warn', tags:['under-reports','stale premise'],
+     flow:[ui('KPI card + %'),route('command-centre.ts:223','computeAtRiskIds'),db('emi_schedules ∪ telemetry_alerts','risk_alerts EXCLUDED'),calc('30+ DPD ∪ critical/warning telemetry — CDS/PCI omitted')],
+     reason:'Deliberately excludes nbfc_risk_alerts on the comment’s claim that a uuid loan_sanction_id can’t map to varchar — but E-117 already widened that column and the alert-feed query joins it fine. A borrower flagged only by elevated CDS / low PCI is not counted at-risk. Highest-value fix.', src:'command-centre.ts:219-257, schema.ts:6089'},
+    {lbl:'KPI · Delinquency Rate', v:'warn', tags:['self-inconsistent'],
+     flow:[ui('KPI + delta'),route('portfolio-summary.ts:89 / command-centre.ts:360'),db('emi_schedules','status,days_overdue'),calc('value uses status method; its delta uses ledger method')],
+     reason:'The shown % uses mutable status/days_overdue; its own MoM delta reconstructs from due_date/paid_at. The two methods disagree, so “value − delta ≠ last month’s value.” Also relies on a cron keeping status current.', src:'command-centre.ts:351-407'},
+    {lbl:'KPI · Recovery in Motion (₹ + count)', v:'warn', tags:['over-count'],
+     flow:[ui('KPI card'),route('command-centre.ts:301'),db('nbfc_recovery_pipeline','stage <> "resold"'),calc('SUM(estimated_recovery_value)')],
+     reason:'Blanket stage<>"resold" sums any other terminal stage (scrap/cancelled/written_off) into “in motion.” stage is a free varchar(32) with no constraint. Units fine (rupees), null-safe.', src:'command-centre.ts:301-317'},
+    {lbl:'Nav tile · Risk Alerts “N open”', v:'warn', tags:['double-count'],
+     flow:[ui('nav tile'),route('command-centre.ts:728'),db('nbfc_risk_alerts + telemetry_alerts'),calc('COUNT(a) + COUNT(b) as disjoint sets')],
+     reason:'The two open-alert sources are summed as if disjoint; one battery surfacing both a risk_alert and a telemetry_alert is counted twice. Also broader than the capped feed, so tile ≠ feed length.', src:'command-centre.ts:728-750'},
+    {lbl:'Nav tile · Lead Intelligence “N active loans”', v:'ok', tags:['label mismatch'],
+     flow:[ui('nav tile'),route('command-centre.ts:763'),db('loan_sanctions','disbursed/open'),calc('activeIds.length')],
+     reason:'Count is correct; the label “active loans” under a tile titled “Lead Intelligence” is a semantic mismatch, not a math error.', src:'command-centre.ts:763'},
+    {lbl:'Nav tile · Recovery “N in pipeline”', v:'warn', tags:['over-count'],
+     flow:[ui('nav tile'),route('command-centre.ts:751'),db('nbfc_recovery_pipeline','stage <> "resold"'),calc('COUNT(*)')],
+     reason:'Same blanket stage<>"resold" over-count as the Recovery-in-Motion KPI (it equals that count, so at least internally consistent).', src:'command-centre.ts:751-759'},
+    {lbl:'“Needs attention now” feed — N active alerts', v:'warn', tags:['LIMIT cap'],
+     flow:[ui('feed header'),route('command-centre.ts:472','LIMIT 60 each, merge, slice 60'),db('nbfc_risk_alerts ⋈ / telemetry_alerts ⋈'),calc('count = capped merged length')],
+     reason:'Each source is limited to 60 then the merge is sliced to 60 — >60 risk alerts can push telemetry alerts entirely out, so “N active alerts” is a capped number that silently disagrees with the nav tile total.', src:'command-centre.ts:472-570'},
+    {lbl:'This week · EMIs settled', v:'warn', tags:['undercount'],
+     flow:[ui('weekly panel'),route('command-centre.ts:617'),db('emi_schedules','paid_at≥now-7d AND loan∈activeIds'),calc('COUNT(*) restricted to still-active loans')],
+     reason:'An EMI paid in the last 7 days on a loan that has since closed is excluded, understating weekly settlements.', src:'command-centre.ts:617-674'},
+    {lbl:'This week · New risk alerts', v:'warn', tags:['undercount'],
+     flow:[ui('weekly panel'),route('command-centre.ts'),db('nbfc_risk_alerts','created_at≥now-7d'),calc('COUNT — telemetry_alerts NOT included')],
+     reason:'Counts only nbfc_risk_alerts, so it undercounts total new alerts vs the feed/nav which also include telemetry alerts.', src:'command-centre.ts:617-674'},
+    {lbl:'This week · Recovery added', v:'ok', tags:[],
+     flow:[ui('weekly panel'),route('command-centre.ts'),db('nbfc_recovery_pipeline','created_at≥now-7d'),calc('COUNT(*)')],
+     reason:'Straight tenant-scoped 7-day count.', src:'command-centre.ts:617-674'},
+    {lbl:'This week · Immobilisations', v:'ok', tags:[],
+     flow:[ui('weekly panel'),route('command-centre.ts'),db('nbfc_immobilisation_actions','executed_at≥now-7d'),calc('COUNT(*) — un-executed correctly excluded')],
+     reason:'Nullable executed_at means only executed rows count. Correct.', src:'command-centre.ts:617-674'},
+    {lbl:'Regional risk — per-city at-risk %', v:'ok', tags:['inherits At-Risk gap'],
+     flow:[ui('regional panel'),route('command-centre.ts:576'),db('loan_sanctions ⋈ leads.city + atRiskIds'),calc('atRisk/loans×100, div-guarded')],
+     reason:'Correct for what it measures and consistent with the At-Risk KPI (same atRiskIds set) — but inherits the same CDS/PCI undercount, so regional shares are understated the same way.', src:'command-centre.ts:576-611'},
+    {lbl:'Recently completed actions — 6 counts', v:'warn', tags:['wrong date','drops types'],
+     flow:[ui('actions panel'),route('command-centre.ts:689'),db('nbfc_borrower_actions','created_at≥now-7d'),calc('GROUP BY action_type; 6 keys back-filled')],
+     reason:'Window filters on created_at (when requested), not when approved/executed — so “completed in last 7 days” misses an action created 8 days ago and executed yesterday. Any action_type outside the 6 hard-coded keys is silently dropped.', src:'command-centre.ts:689-718'},
+    {lbl:'Data-freshness badge', v:'warn', tags:['VPS-dependent','false amber'],
+     flow:[ui('badge','Last updated / IoT sync issue'),route('/portfolio/freshness'),db('borrower_risk_scores.computed_at + IoT VPS vehicle_state'),calc('stale if either >24h or missing')],
+     reason:'Logic is sound but borrower_risk_scores is frequently unseeded on database-2 and the IoT VPS needs a bastion tunnel — either being empty forces is_stale=true permanently, so the badge sits amber even when the KPIs are fine. Latent false alarm.', src:'portfolio-freshness.ts'},
+  ]
+},
+{
+  id:'leads', title:'Lead Intelligence', route:'app/(dashboard)/nbfc/leads/page.tsx',
+  note:'No API route — the page loads the whole tenant book into memory and filters/sorts/pages in JS. Two DPD sources (denormalized current_dpd vs live emi_schedules) power different columns and can contradict each other in one row.',
+  items:[
+    {lbl:'Stage cards (Sanctioned…Closed) — 6 counts', v:'warn', tags:['overlapping','undercount'],
+     flow:[ui('stat cards'),route('page.tsx:425','stageCounts over enriched'),db('loan_sanctions.status','effective_status rewrite'),calc('Active = active∪disbursed∪overdue; effective rewrites disbursed→overdue if DPD>0')],
+     reason:'Buckets are not mutually exclusive — an overdue loan counts in both Overdue and Active, so cards sum to more than the table total. And because disbursed→overdue is rewritten when DPD>0, the Disbursed card drops delinquent-disbursed loans, understating the disbursed book.', src:'page.tsx:55-66,325-334'},
+    {lbl:'CDS band labels (Low/Mid/High)', v:'ok', tags:['global thresholds'],
+     flow:[ui('filter bar'),route('page.tsx:91','loadCdsBands'),db('nbfc_risk_rules','cds_*_threshold'),calc('defaults 40/70; higher=riskier')],
+     reason:'Correct; thresholds are global (no tenant_id), so one admin edit changes every tenant’s bands.', src:'page.tsx:91-119'},
+    {lbl:'Geography / Product / Dealer options', v:'ok', tags:[],
+     flow:[ui('dropdowns'),route('page.tsx:365','distinct over enriched'),db('leads / product_selections / dealers'),calc('empties filtered')],
+     reason:'Derived from the loaded set.', src:'page.tsx:365-377'},
+    {lbl:'Customer name', v:'ok', tags:[],
+     flow:[ui('Customer col'),route('page.tsx:215'),db('coalesce(leads.full_name, owner_name)'),calc('sub-line = reference_id ?? loan_application_id')],
+     reason:'Coalesce handles the one-of-two-populated case.', src:'page.tsx:215'},
+    {lbl:'Status pill + “Flagged for Recovery”', v:'warn', tags:['dual DPD source'],
+     flow:[ui('Status col'),route('page.tsx:325'),db('nbfc_loans.current_dpd (denormalized)'),calc('overdue if current_dpd>0')],
+     reason:'The pill’s overdue decision reads denormalized current_dpd, while the EMI Status column reads live emi_schedules — the two pipelines can disagree in the same row/drawer.', src:'page.tsx:325-346'},
+    {lbl:'Dealer', v:'ok', tags:['join valid'],
+     flow:[ui('Dealer col'),route('page.tsx:227'),db('dealers ⋈ leads.dealer_id'),calc('dealer code match; NULL pre-activation')],
+     reason:'Despite a misleading schema comment, leads.dealer_id holds the dealer code and the join matches; blank only for not-yet-activated dealers.', src:'page.tsx:217-227'},
+    {lbl:'Battery Serial', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:203'),db('nbfc_loans.vehicleno'),calc('passthrough')], reason:'Direct field.', src:'schema.ts:4219'},
+    {lbl:'Loan Amount', v:'ok', tags:['sanctioned'],
+     flow:[ui('col'),route('page.tsx:343'),db('loan_sanctions.loan_amount'),calc('₹ toLocaleString')],
+     reason:'Correctly the sanctioned amount (not disbursed/outstanding), labeled as such.', src:'schema.ts:3362'},
+    {lbl:'Loan File No.', v:'ok', tags:[], flow:[ui('col'),route('page.tsx'),db('loan_sanctions.loan_file_number'),calc('passthrough')], reason:'Direct field.', src:'schema.ts:3371'},
+    {lbl:'Product', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:221'),db('coalesce(product_selections.model_number, leads.asset_model)'),calc('coalesce')], reason:'Correct fallback.', src:'page.tsx:221'},
+    {lbl:'CDS Score', v:'warn', tags:['telemetry-blind','conf capped'],
+     flow:[ui('ScoreBadge'),route('liveScores.ts:118 → computeCds.ts:157'),db('emi_schedules (last 6 elapsed) + IoT vehicle_state'),calc('Σ(weight×recency)+streak+telemetryRisk / Σrecency+3.5 ×100')],
+     reason:'Math is sound and div-guarded, but the telemetry term reads live IoT vehicle_state over the bastion tunnel — null in normal prod → telemetryRisk=0 and confidence capped at MEDIUM. The score advertises a telemetry input it isn’t receiving; effectively EMI-only. borrower_risk_scores snapshot is not read here (always live recompute).', src:'liveScores.ts:55-101, computeCds.ts:193-259'},
+    {lbl:'EMI Status column (Next due / Nd overdue)', v:'warn', tags:['scoping mismatch'],
+     flow:[ui('EMI Status col'),route('page.tsx:281','raw SQL'),db('emi_schedules ⋈ loan_sanctions.nbfc_id'),calc('MIN overdue age; scopes by nbfc_id')],
+     reason:'This query scopes by loan_sanctions.nbfc_id while the rest of the page scopes by nbfc_loans.tenant_id. nbfc_id is nullable — a NULL/mismatched value blanks EMI Status on an otherwise-scored row and mis-buckets the EMI filter.', src:'page.tsx:236 vs :281-289'},
+    {lbl:'Outstanding (drawer)', v:'warn', tags:['stale column'],
+     flow:[ui('drawer'),route('page.tsx:351'),db('nbfc_loans.outstanding_amount'),calc('import-maintained, no live recompute')],
+     reason:'Denormalized, never reconciled against emi_schedules — same drift class as active_loans.', src:'schema.ts:4223'},
+    {lbl:'Current DPD (drawer)', v:'ok', tags:['diverges from EMI status'],
+     flow:[ui('drawer'),route('page.tsx:350'),db('nbfc_loans.current_dpd'),calc('passthrough')],
+     reason:'Correct read, but sits next to the live EMI-derived overdue_days in the same drawer and can contradict it (“Current DPD: 0” beside “EMI Status: 5 days overdue”).', src:'LeadsTable.tsx:222-235'},
+    {lbl:'Sanctioned date', v:'ok', tags:[], flow:[ui('drawer/CSV'),route('page.tsx:355'),db('loan_sanctions.sanctioned_at'),calc('also used as created_at for sort/filter')], reason:'Correct; note it drives date-range filtering (sanction time, not lead-creation time).', src:'schema.ts:3379'},
+    {lbl:'City / State', v:'ok', tags:[], flow:[ui('drawer/CSV'),route('page.tsx'),db('leads.city, leads.state'),calc('passthrough')], reason:'Direct fields.', src:'schema.ts:331-332'},
+    {lbl:'Pagination “X–Y of total”', v:'ok', tags:['perf'],
+     flow:[ui('footer'),route('page.tsx:666','total = filtered.length'),db('no LIMIT — full book in memory'),calc('slice in JS')],
+     reason:'Number is correct; the O(book size)/request in-memory approach is a scalability concern, not a calc error.', src:'page.tsx:200-236'},
+    {lbl:'CSV export', v:'ok', tags:[], flow:[ui('button'),route('LeadsCsvButton.tsx'),db('filtered set'),calc('mirrors columns')], reason:'Exports the full filtered+sorted set as intended.', src:'LeadsCsvButton.tsx:14-49'},
+    {lbl:'loan_files left-join (structural)', v:'warn', tags:['fan-out','double-count'],
+     flow:[ui('all rows'),route('page.tsx:232','leftJoin loan_files'),db('loan_files.loan_application_id','nullable, NOT unique'),calc('no DISTINCT → rows can multiply')],
+     reason:'If two loan_files share one loan_application_id the join fans out, duplicating the loan across stat cards, table, pagination total and CSV. Used only for a loan_status fallback — a MAX/subquery would be safer.', src:'page.tsx:232-235'},
+  ]
+},
+{
+  id:'emi', title:'EMI Tracker', route:'app/(dashboard)/nbfc/emi-tracker/page.tsx',
+  note:'Three SQL blocks (list, metrics, collected). Tenant-scoping and paise→rupee handling are correct throughout. The one true math error is the “Collection rate” denominator.',
+  items:[
+    {lbl:'Active loans (card)', v:'warn', tags:['LIMIT 500'],
+     flow:[ui('stat card'),route('page.tsx:258','rows.length'),db('nbfc_loans','is_active, LIMIT 500'),calc('length of a capped list, not COUNT(*)')],
+     reason:'rows.length over a LIMIT-500 list — a tenant with >500 active loans shows exactly 500. Also counts is_active loans whose loan_sanctions.status=closed.', src:'page.tsx:95,258'},
+    {lbl:'EMIs due today', v:'warn', tags:['installments','dead branch','TZ'],
+     flow:[ui('stat card'),route('page.tsx:239'),db('emi_schedules','status IN(scheduled,overdue) AND due_date=CURRENT_DATE'),calc('overdue never = today → dead branch; counts installments')],
+     reason:'The overdue half is unreachable (aging only flips to overdue when due_date<today). Counts installments not loans, and CURRENT_DATE uses server TZ (not IST) — a day-boundary edge.', src:'page.tsx:239, runEmiAging.ts:47-53'},
+    {lbl:'Overdue / missed', v:'warn', tags:['installments not loans'],
+     flow:[ui('stat card, danger'),route('page.tsx:240'),db('emi_schedules','status IN(overdue,missed)'),calc('COUNT installments')],
+     reason:'Label reads like a loan/borrower count but it counts installments — one loan with 3 overdue EMIs contributes 3. Inconsistent with the per-loan Status badge. Not excluded when the loan is closed-but-active.', src:'page.tsx:240'},
+    {lbl:'Collected this month', v:'ok', tags:['paise→₹ ✓'],
+     flow:[ui('stat card'),route('page.tsx:247','SUM(amount_paise)/100'),db('emi_payment_attempts','status IN(succeeded,simulated), this month'),calc('COALESCE(sum,0)/100 → rupees')],
+     reason:'paise→rupee conversion correct, div-safe, includes manual cash. Caveat: “simulated” attempts count as real money — fine in simulate mode, but stale test rows would inflate a live-mode DB.', src:'page.tsx:247-261'},
+    {lbl:'Collection rate', v:'bad', tags:['wrong denominator'],
+     flow:[ui('stat card'),route('page.tsx:241','paid_total / all_total'),db('emi_schedules','all_total = ALL rows incl. future scheduled'),calc('paid/(every installment ever) — not collected/due')],
+     reason:'The denominator includes not-yet-due future installments, so this is lifetime repayment progress, not collection efficiency. A healthy new loan with 24 future EMIs drags the rate toward 0%; it only climbs as the book ages. Systematically understates. (Efficiency = collected-this-period ÷ due-this-period.)', src:'page.tsx:241-242,262'},
+    {lbl:'Borrower / Loan', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:154'),db('coalesce(leads.full_name)'),calc('LEFT JOIN tolerant')], reason:'Falls back to “—”.', src:'page.tsx:154'},
+    {lbl:'Finance (financier)', v:'ok', tags:['manual only'], flow:[ui('col'),route('page.tsx:166'),db('nbfc_emi_tracker_overrides.financier'),calc('override-only free text')], reason:'Always “—” unless typed; not derived from enach_mandates.provider (a missed opportunity, not a bug).', src:'page.tsx:138,166'},
+    {lbl:'Battery serial', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:39'),db('nbfc_loans.vehicleno'),calc('passthrough')], reason:'Direct field.', src:'page.tsx:39'},
+    {lbl:'EMI amount', v:'ok', tags:['₹ ✓'], flow:[ui('col'),route('page.tsx:114'),db('loan_sanctions.emi','numeric rupees'),calc('inr(), rounds display only')], reason:'Rupees in, rupees out — no paise mixup.', src:'page.tsx:114'},
+    {lbl:'Next due', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:79'),db('emi_schedules','MIN(due_date) unpaid & ≥today'),calc('never a past date; null-safe')], reason:'Reduces to the soonest unpaid scheduled installment with a balance.', src:'page.tsx:79-83,144'},
+    {lbl:'Last paid', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:84'),db('emi_schedules','MAX(paid_at)'),calc('passthrough')], reason:'Correct.', src:'page.tsx:84'},
+    {lbl:'Progress (paid / total)', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:68'),db('emi_schedules','COUNT + COUNT FILTER(paid,paid_late)'),calc('settled / all installments')], reason:'Consistent with the collection-rate numerator.', src:'page.tsx:68-69'},
+    {lbl:'Status pill', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:121'),db('loan_status + overdueCount'),calc('closed → overdue if>0 → active')], reason:'Sound; “overdue” set matches the DPD source. Cosmetic edge: a fully-repaid loan never set to closed shows “active”.', src:'page.tsx:121-122'},
+    {lbl:'DPD', v:'warn', tags:['most-recent not oldest'],
+     flow:[ui('col'),route('page.tsx:41'),db('nbfc_loans.current_dpd'),calc('LEAST(720, MIN(today−due_date)) over overdue')],
+     reason:'MIN(age) = age of the most-recent missed EMI, not the oldest unpaid one (industry-standard DPD). A borrower delinquent since January (true ~180) whose latest miss was last month reads ~30. Deliberate (avoids old misses inflating DPD) but diverges from what a lender expects. Confirm with product.', src:'runEmiAging.ts:70-89'},
+    {lbl:'Mandate', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:87','LATERAL latest'),db('enach_mandates','by lead_id+tenant_id'),calc('registered preferred')], reason:'Fine for a display flag; ignores nbfc_id (any NBFC’s registered mandate wins).', src:'page.tsx:87-92'},
+    {lbl:'Next auto-debit', v:'ok', tags:[], flow:[ui('col'),route('page.tsx:123'),db('mandate=registered ? nextDue : null'),calc('proxy')], reason:'Shows the upcoming due date only when an E-NACH mandate exists.', src:'page.tsx:123,145-150'},
+    {lbl:'Drawer partial-payment bar', v:'ok', tags:['₹ ✓'], flow:[ui('drawer'),route('EmiTrackerClient:818'),db('amount, amount_paid (rupees)'),calc('remaining=max(0,due−paid); pct div-guarded')], reason:'Div-safe, rounding avoids float dust.', src:'EmiTrackerClient.tsx:818-874'},
+    {lbl:'Attempt history amounts', v:'ok', tags:['paise→₹ ✓'], flow:[ui('drawer'),route('/emi-schedule route'),db('emi_payment_attempts.amount_paise'),calc('/100')], reason:'Correct conversion; only succeeded/simulated shown.', src:'EmiTrackerClient.tsx:884'},
+    {lbl:'CSV export', v:'ok', tags:[], flow:[ui('button'),route('EmiTrackerClient:105'),db('filtered rows'),calc('no recompute; BOM+RFC-4180')], reason:'Mirrors on-screen columns.', src:'EmiTrackerClient.tsx:105-140'},
+  ]
+},
+{
+  id:'batteries', title:'Battery Monitoring', route:'components/nbfc-portal/BatteryMonitoringView.tsx',
+  note:'Does NOT read iot_devices. Every SoC/SoH/GPS/freshness/alert value reads a SEPARATE IoT VPS (vehicle_state, alerts) via the bastion tunnel. Without IOT_DATABASE_URL the whole telemetry surface collapses to null / “—” / “never” / MEDIUM. CDS/PCI arithmetic itself is correct and div-safe.',
+  items:[
+    {lbl:'Header — tenant name', v:'ok', tags:[], flow:[ui('header'),route(':471','getCurrentTenant'),db('nbfc_tenants.display_name'),calc('scoped by membership')], reason:'Properly scoped; requireNbfcAccess enforces it.', src:'BatteryMonitoringView.tsx:471'},
+    {lbl:'KPI · Critical', v:'warn', tags:['mislabeled source','VPS'],
+     flow:[ui('tile “Live from telemetry”'),route(':453','riskBucket'),db('cds_score (emi_schedules) + open_alerts (VPS)'),calc('critical = open_alerts>0 OR cds≥70')],
+     reason:'Section says “Live from telemetry” but Critical is driven mainly by CDS (from EMI history), not telemetry. Without the VPS open_alerts=0, so it collapses to pure CDS≥70. Count math itself is consistent (unified riskBucket).', src:'BatteryMonitoringView.tsx:139,453'},
+    {lbl:'KPI · Warning / Info', v:'ok', tags:['Info conflates no-data'],
+     flow:[ui('tiles'),route(':139','riskBucket'),db('cds_score'),calc('warn:40≤cds<70; info:cds<40 OR null')],
+     reason:'Arithmetic correct and div-safe. Note “Info” lumps genuinely-low-risk together with brand-new loans that have no score yet.', src:'BatteryMonitoringView.tsx:139'},
+    {lbl:'KPI · Geo Variation', v:'bad', tags:['label≠logic','wrong engine'],
+     flow:[ui('tile, red 📍'),route(':456'),db('vehicle_state.lat/lon (VPS)'),calc('count(lat!=null && lon!=null) — “has a GPS fix”')],
+     reason:'Counts vehicles that merely HAVE a GPS coordinate, not ones that moved. A stationary, perfectly-behaved battery increments this red “danger” tile. The real geo-shift engine (getGeoShiftDistances / haversine) exists but is not used here. Also 0 without the VPS.', src:'BatteryMonitoringView.tsx:456, iot-queries.ts:1019'},
+    {lbl:'Battery (vehicleno) + action badge', v:'ok', tags:[], flow:[ui('col'),route(':331'),db('nbfc_loans.vehicleno + nbfc_borrower_actions'),calc('latest action per loan')], reason:'Tenant-scoped, ordered desc, first-wins.', src:'BatteryMonitoringView.tsx:331'},
+    {lbl:'IMEI', v:'warn', tags:['fragile join'],
+     flow:[ui('col'),route(':271'),db('inventory.iot_imei_no','ON inventory.serial_number = vehicleno'),calc('assumes vehicleno == serial')],
+     reason:'Assumes nbfc_loans.vehicleno equals inventory.serial_number. If vehicleno is a registration number the join misses and IMEI shows “—”.', src:'BatteryMonitoringView.tsx:271-282'},
+    {lbl:'Customer', v:'ok', tags:[], flow:[ui('col'),route(':299'),db('coalesce(loan_files→apps→leads name)'),calc('fallback chain')], reason:'Sensible coalesce across left joins.', src:'BatteryMonitoringView.tsx:299'},
+    {lbl:'Dealer', v:'ok', tags:[], flow:[ui('col'),route(':305'),db('dealers.company_name'),calc('via dealer_id')], reason:'Correct.', src:'BatteryMonitoringView.tsx:251,305'},
+    {lbl:'SOH', v:'warn', tags:['VPS-only'],
+     flow:[ui('col'),route('iot-queries.ts:178'),db('vehicle_state.soh_pct (VPS)'),calc('round(soh_pct); “—” if null')],
+     reason:'Direct VPS passthrough — “—” fleet-wide without the tunnel. Note this is the raw live snapshot, not the derived battery_health_metrics used in the drawer.', src:'iot-queries.ts:178'},
+    {lbl:'EMI (On time / Xd overdue)', v:'warn', tags:['dual truth'],
+     flow:[ui('col'),route('BatteriesTable:179'),db('nbfc_loans.current_dpd (denormalized)'),calc('while CDS/PCI in same row read emi_schedules')],
+     reason:'EMI/DPD columns read denormalized current_dpd while CDS/PCI read emi_schedules.days_overdue — a row can show “On time” while its CDS reflects overdue EMIs. No sync writer found.', src:'BatteriesTable.tsx:179'},
+    {lbl:'DPD', v:'warn', tags:['stale column'], flow:[ui('col'),route('BatteriesTable:193'),db('nbfc_loans.current_dpd'),calc('?? 0')], reason:'Same denormalized column as EMI — possibly stale vs the score engine.', src:'BatteriesTable.tsx:193'},
+    {lbl:'CDS', v:'ok', tags:['telemetry-blind w/o VPS'],
+     flow:[ui('ScoreBadge'),route('computeCds.ts:157'),db('emi_schedules (last 6 elapsed)'),calc('weighted recency; div-guarded')],
+     reason:'Correct and well-guarded; matches the explainability drawer. Telemetry term forced to 0 without the tunnel (slightly understated), confidence never HIGH.', src:'computeCds.ts:157-266'},
+    {lbl:'PCI', v:'ok', tags:[], flow:[ui('ScoreBadge'),route('computePci.ts:108'),db('emi_schedules (6-window, due≤today)'),calc('Σ(emiScore×weight)/Σweight; guarded')], reason:'Div-safe; the future-EMI-flattens-PCI bug is avoided by the due_date≤today filter.', src:'computePci.ts:108-143'},
+    {lbl:'Risk badge', v:'ok', tags:[], flow:[ui('RiskBadge'),route('BatteriesTable:223'),db('round(cds) vs bands'),calc('≥85 VeryHigh…≥40 Med')], reason:'Consistent with the tile buckets (both band off the rounded integer).', src:'BatteriesTable.tsx:223'},
+    {lbl:'Geo (column)', v:'warn', tags:['misleading header'],
+     flow:[ui('col “Geo”'),route('BatteriesTable:231'),db('leads.city (static)'),calc('onboarding city string')],
+     reason:'Header “Geo” implies location/telemetry but renders the static onboarding city from leads, unrelated to GPS. Harmless data, misleading label.', src:'BatteriesTable.tsx:231'},
+    {lbl:'Freshness pill', v:'ok', tags:['“never” w/o VPS'],
+     flow:[ui('pill'),route('freshness.ts:46'),db('vehicle_state.last_gps_at (VPS)'),calc('<15m fresh…>24h offline; null=never')],
+     reason:'Correct pure-compute, but keys on last_gps_at only — a battery reporting on the CAN bus with no GPS reads “never/offline”. Every row is “never” without the VPS.', src:'freshness.ts:46'},
+    {lbl:'Conf. (HIGH/MED/LOW)', v:'warn', tags:['can never = HIGH'],
+     flow:[ui('col'),route('computeCds.ts:252'),db('needs fresh VPS telemetry'),calc('HIGH requires telemetry ≤12h')],
+     reason:'HIGH requires fresh IoT telemetry, so the column pins at MEDIUM even for a clean 6-EMI history in any env without the tunnel.', src:'computeCds.ts:252-259'},
+    {lbl:'Alerts (open count)', v:'ok', tags:['0 w/o VPS'],
+     flow:[ui('col'),route('iot-queries.ts:970'),db('alerts WHERE resolved_at IS NULL (VPS)'),calc('count per vehicleno')],
+     reason:'Correct query; 0 fleet-wide without the VPS, which also silently removes the alert-escalation into the Critical tile.', src:'iot-queries.ts:970'},
+    {lbl:'Fleet aggregates footer', v:'warn', tags:['two “fresh” defs','VPS'],
+     flow:[ui('footer'),route('iot-queries.ts:81','getFleetSummary'),db('vehicle_state + alerts (VPS)'),calc('fresh cutoff = 5min')],
+     reason:'Footer uses a 5-minute “fresh” cutoff while the per-row pill uses 15 minutes — two definitions of fresh on one page. Whole line hidden without the VPS.', src:'iot-queries.ts:81, freshness.ts:36'},
+    {lbl:'Master-table caption “N of M”', v:'ok', tags:[], flow:[ui('caption'),route(':595'),db('tableRows vs enriched'),calc('filtered / total')], reason:'Correct filtered-vs-total counts.', src:'BatteryMonitoringView.tsx:595'},
+    {lbl:'Filters (EMI/City/Status/Search)', v:'ok', tags:['dead branch'],
+     flow:[ui('filter bar'),route(':408'),db('derived from enriched'),calc('severity="open" branch unreachable')],
+     reason:'Correct, but inherit the empty-VPS / stale-current_dpd issues; the severity="open" filter has no UI control anymore (dead code).', src:'BatteryMonitoringView.tsx:408-429'},
+  ]
+},
+{
+  id:'risk', title:'Risk Alerts', route:'app/(dashboard)/nbfc/risk/page.tsx',
+  note:'Every number is a hypothesis card from risk_card_runs, or a live inline evaluation of 5 hand-coded evaluators querying the IoT VPS. The catalogue (risk_hypotheses) is seeded by 0033_nbfc_dashboard.sql — on a DB where that never ran, the page renders 0/0/0/0 and looks like a healthy portfolio.',
+  items:[
+    {lbl:'Stat line “N of M computed”', v:'ok', tags:[], flow:[ui('prose'),route(':179'),db('cards.filter(isComputed)'),calc('verdict_source ∈ {hand_coded, sandbox}')], reason:'Correct; an inconclusive hand-coded card is correctly not counted as computed.', src:'page.tsx:179-190'},
+    {lbl:'Freshness line', v:'ok', tags:[], flow:[ui('banner'),route('risk-run.ts:127','getRunFreshness'),db('risk_runs (latest)'),calc('stale if status≠completed OR >36h; no row=never')], reason:'Honestly surfaces “Never run” — the state a freshly/unseeded tenant is in (cards computed live on load).', src:'risk-run.ts:127-153'},
+    {lbl:'“High Alert” tab count', v:'warn', tags:['all-OK trap','cap'],
+     flow:[ui('tab badge'),route('SeverityTabs:48'),db('risk_hypotheses + risk_card_runs'),calc('count severity=high; unpromoted high→capped to warn')],
+     reason:'Can only be non-zero if the catalogue is seeded AND a promoted evaluator returns high. On a DB missing the 0033 seed, hyps=[] → all four buckets 0, rendering as healthy. capUnpromotedSeverity also forces unpromoted llm-v1 highs down to warn, so only the 5 promoted hand-coded cards can ever raise High.', src:'page.tsx:42-46, risk-hypothesis-graph.ts:528-534'},
+    {lbl:'“Warning” tab count', v:'ok', tags:['inherits zeroing'], flow:[ui('tab'),route('SeverityTabs'),db('severity=warn'),calc('incl. capped-from-high agent cards')], reason:'Mechanically correct; zeroes when the catalogue is unseeded; also the cap target for unpromoted highs.', src:'severity.ts:93-95'},
+    {lbl:'“Inconclusive” tab count', v:'ok', tags:['safety design'], flow:[ui('tab'),route('severity.ts:94'),db('severity ∈ {inconclusive,error}'),calc('folds error in')], reason:'Deliberate — a test that could not run or errored lands here instead of masquerading as OK.', src:'severity.ts:94'},
+    {lbl:'“OK” tab count', v:'ok', tags:['0 when empty = misleading'], flow:[ui('tab'),route('severity.ts:6'),db('severity=ok'),calc('“tested, found nothing”')], reason:'Genuinely “assessed & clean” when cards render — but when the catalogue is unseeded, OK is also 0 and the page is blank, not “all OK”.', src:'severity.ts:6-9'},
+    {lbl:'Card · 7-day usage cliff', v:'ok', tags:['governed'], flow:[ui('card'),route('hand-coded-cards.ts:104'),db('VPS distance_rollup (day)'),calc('drop≥usage_drop_pct; exclude prior<50km')], reason:'Threshold genuinely governed by nbfc_risk_rules, denominator = scored fraction, empty baseline → inconclusive.', src:'hand-coded-cards.ts:104-174'},
+    {lbl:'Card · Past-due + telemetry silent', v:'ok', tags:['governed'], flow:[ui('card'),route('hand-coded-cards.ts:178'),db('nbfc_loans.current_dpd + VPS vehicle_state'),calc('overdue≥30 & stale>24h, both governed')], reason:'Both thresholds now governed (previously hard-coded 7d/6h — a fixed bug). Null sec_since_gps treated as stale (correct).', src:'hand-coded-cards.ts:178-231'},
+    {lbl:'Card · Vehicle outside radius (geo-shift)', v:'ok', tags:['E-186 desc drift'],
+     flow:[ui('card'),route('hand-coded-cards.ts:242'),db('VPS telemetry_gps + vehicle_state (haversine)'),calc('dist>geo_shift_km, home≥50 pts')],
+     reason:'Calculation correct (fixed from an India-bounding-box test). But the card’s DB description still says “from onboarding region centroid” unless migration E-186 was applied — verify, given the E-145→E-154 migration drift.', src:'hand-coded-cards.ts:242-307, E-186_*.sql'},
+    {lbl:'Card · Accelerated battery degradation', v:'ok', tags:['hardcoded 5pp','VPS data'],
+     flow:[ui('card'),route('hand-coded-cards.ts:319'),db('VPS telemetry_can soh'),calc('delta≤−5pp/30d')],
+     reason:'5pp threshold intentionally not governed (no rule key exists) and the code says so — not fake-configurable. Perpetually inconclusive if telemetry_can has no SOH history (correctly surfaced, not a false OK).', src:'hand-coded-cards.ts:314-360'},
+    {lbl:'Card · Active loan, low utilization', v:'ok', tags:['fixed false-high'],
+     flow:[ui('card'),route('hand-coded-cards.ts:378'),db('VPS distance_rollup'),calc('avg over reported days only; exclude <7 days')],
+     reason:'Previously fired a false High by averaging missing days as zero-km; now averages only reported days and excludes thin coverage. Good null handling.', src:'hand-coded-cards.ts:378-488'},
+    {lbl:'Tenant scoping / which portfolio', v:'ok', tags:['dev-fallback caveat'],
+     flow:[ui('page'),route('tenant.ts:104','getCurrentTenant'),db('risk_card_runs + loan slice tenant-scoped'),calc('catalogue intentionally global')],
+     reason:'Properly scoped. Caveat: an internal admin session with no ?tenant= silently renders the first active tenant’s risk; the via field records it but the page doesn’t surface it.', src:'tenant.ts:142-164,251-269'},
+    {lbl:'Live loan count (feeds analysis)', v:'ok', tags:[], flow:[ui('LLM prompt'),route('tenant.ts:91','countActiveLoans'),db('nbfc_loans COUNT(*)'),calc('not the stale counter')], reason:'Uses the live count, not the drifting nbfc_tenants.active_loans.', src:'tenant.ts:83-97'},
+    {lbl:'“N pre-date verdict tracking (E-185)” banner', v:'ok', tags:[], flow:[ui('banner'),route(':180'),db('verdict_source=legacy_llm'),calc('count')], reason:'Honestly flags pre-E-185 rows whose numbers may have been stated by an LLM.', src:'page.tsx:180,220-226'},
+    {lbl:'RerunButton “N of M tested · K inconclusive”', v:'bad', tags:['excludes hand-coded'],
+     flow:[ui('button result'),route('risk-hypothesis-graph.ts:727'),db('state.results = LLM/sandbox only'),calc('excludes the 5 hand-coded cards')],
+     reason:'The 5 hand-coded cards are written by a separate node and never added to state.results. So cards_generated undercounts by 5, and when the Python sandbox is down the button reports “0 hypotheses tested” even though the real hand-coded cards just recomputed — directly contradicting the page’s own stat line, which counts hand-coded as computed.', src:'risk-hypothesis-graph.ts:635-736'},
+    {lbl:'Risk Action Framework table', v:'ok', tags:['static','placeholder grievance'],
+     flow:[ui('matrix + notice'),route('RiskActionFramework.tsx:31'),db('nbfc_tenants.legal_name/grievance_*'),calc('rows hardcoded; only grievance fields live')],
+     reason:'Intentionally static; falls back to display_name and placeholder 1800-XXX-XXXX for tenants that haven’t configured grievance fields.', src:'RiskActionFramework.tsx:31-78'},
+    {lbl:'Small-book severity cutoffs', v:'warn', tags:['fires High on 1 vehicle'],
+     flow:[ui('all cards'),route('hand-coded-cards.ts:75'),db('pickSeverity fractions'),calc('cutoffs 0.005/0.001 tuned for large books')],
+     reason:'On a 7-loan tenant a single affected vehicle = 14%, exceeding every high cutoff — so any one geo-shifted/decaying/idle vehicle instantly produces a High. Math is right; thresholds don’t degrade to the small books this system actually has.', src:'hand-coded-cards.ts:75-79'},
+    {lbl:'“All-OK” page guard (absence)', v:'warn', tags:['no empty-catalogue guard'],
+     flow:[ui('tab strip'),route('page.tsx:42'),db('risk_hypotheses empty → cards=[]'),calc('renders 0/0/0/0 with no distinguishing banner')],
+     reason:'The single most consequential issue: nothing distinguishes “0 High because healthy” from “0 cards because the catalogue was never seeded.” Recommend a guard when cards.length===0.', src:'page.tsx:42-56'},
+  ]
+},
+{
+  id:'recovery', title:'Recovery & Auction', route:'app/(dashboard)/nbfc/recovery/page.tsx',
+  note:'No paise/rupee unit errors and primary queries are tenant-scoped (marketplace lots are intentionally platform-wide). The issues are LIMIT caps applied before aggregation, terminal stages counted as active, and a bulk-immobilisation entity_id showing under a “Loan” header.',
+  items:[
+    {lbl:'“N assets in motion”', v:'warn', tags:['counts terminal','LIMIT 500'],
+     flow:[ui('header'),route(':469'),db('nbfc_recovery_pipeline','LIMIT 500'),calc('enrichedRows.length incl. resold/scrap')],
+     reason:'“In motion” also counts terminal resold/scrap rows, and the LIMIT 500 caps every metric in this section for large tenants.', src:'recovery/page.tsx:145-157,469'},
+    {lbl:'“Value locked”', v:'ok', tags:['LIMIT cap'], flow:[ui('KPI'),route(':279'),db('estimated_recovery_value','IN_PROGRESS_STAGES'),calc('Σ, null→0')], reason:'Correct sum over in-progress stages (subject to the LIMIT-500 cap).', src:'recovery/page.tsx:279-281'},
+    {lbl:'“Est. recovery”', v:'warn', tags:['estimate-of-estimates'],
+     flow:[ui('KPI'),route(':282'),db('estimated_recovery_value','stage≠scrap'),calc('Σ — incl. resold using estimate, not final_price')],
+     reason:'Sums estimated values even for already-resold rows and never reconciles to auction_settlements.final_price, so it mixes forward estimates with closed deals.', src:'recovery/page.tsx:282-284'},
+    {lbl:'“Recovery rate” (pipeline)', v:'ok', tags:['div-guarded'], flow:[ui('KPI'),route(':287'),db('resold / (resold+scrap)'),calc('null when 0')], reason:'Correct share of decided batteries resold vs scrapped.', src:'recovery/page.tsx:287-290'},
+    {lbl:'Stage stat cards', v:'ok', tags:[], flow:[ui('cards'),route(':486'),db('filter by stage'),calc('count per stage')], reason:'Correct; ready_for_auction intentionally has no card (lives in the kanban).', src:'recovery/page.tsx:486-500'},
+    {lbl:'Live lots (base/bid/bidders/SOH)', v:'ok', tags:['platform-wide by design'],
+     flow:[ui('lot cards'),route(':304'),db('auction_lots ⋈ auction_bids','status=live, LIMIT 50'),calc('MAX(amount); current_bid = max ?? base_price')],
+     reason:'Correct; a no-bid lot correctly falls back to base_price for “current bid” (contrast the standalone Auction page, which shows ₹0). Not tenant-scoped by design (shared marketplace).', src:'recovery/page.tsx:304-383'},
+    {lbl:'“Your last bid” / “Your auto-bid max”', v:'ok', tags:[], flow:[ui('lot cards'),route(':328'),db('auction_bids / auction_auto_bids','tenant_id = self'),calc('MAX / active')], reason:'Properly self-scoped to the viewer.', src:'recovery/page.tsx:328-364'},
+    {lbl:'Settlement metrics (total / rate / premium)', v:'warn', tags:['agg over LIMIT-50','INNER JOIN drops rows'],
+     flow:[ui('settlement KPIs'),route(':386'),db('auction_settlements ⋈ lots ⋈ tenants','LIMIT 50, INNER JOIN winner'),calc('sums over the 50-row display slice')],
+     reason:'Total value / recovery rate / premium are aggregated over the same LIMIT-50 slice used for the table — wrong for sellers with >50 settlements. The INNER JOIN on nbfc_tenants (winner) silently drops any settlement whose winner row is missing (e.g. an external buyer).', src:'recovery/page.tsx:386-429'},
+    {lbl:'Buyback requests (SOH/offer/status)', v:'ok', tags:['LIMIT 50'], flow:[ui('table'),route(':432'),db('nbfc_buyback_requests','tenant, LIMIT 50'),calc('values passthrough')], reason:'Values correct; header count ≤50 under-reports for busy tenants.', src:'recovery/page.tsx:432-448'},
+    {lbl:'Immobilisation “Loan” column', v:'bad', tags:['bulk = batch UUID'],
+     flow:[ui('col “Loan”'),route(':211'),db('dual_approval_requests.entity_id'),calc('single = loan_application_id; BULK = batch.id')],
+     reason:'Single immobilisation writes entity_id=loan_application_id, but bulk writes entity_id=batch.id — so bulk rows render a batch UUID under a “Loan” header, and the executed pill keys off approval_request_id which won’t match batch rows the same way. Mixed semantics in one column.', src:'battery-immobilisation/service.ts:82 vs bulk-immobilisation.ts:113'},
+    {lbl:'Kanban borrower enrichment (name/DPD/outstanding/IMEI)', v:'warn', tags:['fragile join'],
+     flow:[ui('kanban cards'),route(':161'),db('nbfc_loans ON vehicleno = pipeline.battery_serial'),calc('serial↔vehicleno join likely empty')],
+     reason:'Joins a battery serial to nbfc_loans.vehicleno; unless serials live in vehicleno the join returns nothing and borrower context is silently null. Doesn’t affect the headline KPIs.', src:'recovery/page.tsx:161-194'},
+  ]
+},
+{
+  id:'auction', title:'Standalone Auction', route:'app/(dashboard)/nbfc/auction/page.tsx',
+  note:'Client page → /api/nbfc/auction/lots → listLots(). Same AuctionLotsGrid component as the Recovery page, but a different “current bid” truth.',
+  items:[
+    {lbl:'Lot “Current bid”', v:'bad', tags:['₹0 vs base_price','inconsistent'],
+     flow:[ui('lot card'),route('service.ts:55','listLots'),db('auction_bids','MAX(amount)'),calc('current_bid = toNumber(max) → 0 when no bids')],
+     reason:'A no-bid lot shows “Current bid ₹0” here, whereas the identical grid on the Recovery page shows base_price for the same lot. Same component, two contradictory numbers — this page should fall back to base_price too.', src:'service.ts:95'},
+    {lbl:'bidder_count / avg SOH / base / qty / age', v:'ok', tags:[], flow:[ui('lot card'),route('service.ts:77'),db('auction_bids / auction_lots'),calc('per-lot aggregates')], reason:'Correct values.', src:'service.ts:77-100'},
+    {lbl:'listLots query shape', v:'warn', tags:['N+1','stale comment'],
+     flow:[ui('grid'),route('service.ts:77'),db('auction_lots','one aggregate query PER lot'),calc('not tenant-scoped (documented)')],
+     reason:'Comment claims “a single grouped query” but it actually runs N+1 per-lot aggregates. Platform-wide is intentional. Perf note, not a wrong number.', src:'service.ts:55-103'},
+  ]
+},
+{
+  id:'acquire', title:'Acquire / Lead Pipeline', route:'app/(dashboard)/nbfc/acquire/page.tsx',
+  note:'KPI cards, list and CSV all derive from a client-side LIMIT-1000 fetch with a non-deduped finance LEFT JOIN. The lead-detail page ([leadId]) is mostly correct passthrough with a proper LIMIT 1.',
+  items:[
+    {lbl:'6 KPI status cards', v:'warn', tags:['LIMIT 1000','withdrawn uncounted'],
+     flow:[ui('KPI cards'),route(':260'),db('nbfc_lead_assignments ⋈ leads','LIMIT 1000'),calc('filter by status over ≤1000 rows')],
+     reason:'Counts computed client-side over at most 1000 assignments — wrong past 1000 leads. And “withdrawn” rows appear in the table but are counted in none of the six cards, so cards don’t sum to the row total.', src:'acquire/page.tsx:152-179,260-263'},
+    {lbl:'“Asset price” column + amount filter', v:'warn', tags:['fan-out','double-count'],
+     flow:[ui('col'),route(':163'),db('product_selections.final_price','LEFT JOIN lead_id AND finance — no LIMIT 1'),calc('multiple finance PS → duplicate rows')],
+     reason:'The finance LEFT JOIN isn’t deduped; a lead with >1 finance product_selection fans the assignment into duplicates, double-counting it in KPIs, total, list and CSV. Also “Asset price” is product final_price, not a loan amount.', src:'acquire/page.tsx:163-194'},
+    {lbl:'Work-queue chip “· N”', v:'warn', tags:['diverges from bell badge'],
+     flow:[ui('need chip'),route(':209'),db('track tables ∩ enriched'),calc('filtered enriched length (≤1000)')],
+     reason:'The bell/sidebar badge uses a true COUNT(*) over the track tables, but this chip is the filtered enriched length bounded by the LIMIT-1000 fetch — so badge and chip disagree once a tenant exceeds 1000 assignments, breaking the “badge == list” guarantee. The track WHERE-builders themselves are correct.', src:'acquire/page.tsx:209-215'},
+    {lbl:'Lead detail · Asset price', v:'ok', tags:['LIMIT 1'], flow:[ui('[leadId] header'),route('[leadId]/page.tsx:97'),db('product_selections.final_price','finance, LIMIT 1'),calc('no fan-out')], reason:'The LIMIT 1 here avoids the fan-out the list page has.', src:'[leadId]/page.tsx:97-106'},
+    {lbl:'Lead detail · Indicated loan product', v:'ok', tags:[], flow:[ui('[leadId]'),route(':611'),db('nbfc_loan_products','ranges verbatim'),calc('pure display')], reason:'ROI/amount/tenure/down-payment/TAT rendered as-is, no computation.', src:'[leadId]/page.tsx:611-645'},
+    {lbl:'Lead detail · Section-G picks / “This NBFC”', v:'ok', tags:[], flow:[ui('[leadId]'),route(':119'),db('product_selections.selected_nbfcs (jsonb)'),calc('Number+isFinite guarded')], reason:'Correct; guards malformed picks.', src:'[leadId]/page.tsx:119-144'},
+    {lbl:'Lead detail · Stepper + disbursal gate', v:'ok', tags:[], flow:[ui('[leadId]'),route(':161'),db('service_config_snapshot + FI/VKYC/E-NACH tracks'),calc('disbursalReady = won & enachGate & verificationComplete')], reason:'Reads this NBFC’s own track rows and the per-lead frozen config snapshot (matches the in-flight-config rule).', src:'[leadId]/page.tsx:161-427'},
+  ]
+},
+];
+
+/* ---- RENDER ---- */
+const arrowSvg = '<svg width="30" height="14" viewBox="0 0 30 14" fill="none" aria-hidden="true"><path d="M1 7h25M22 2l6 5-6 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const VNAME={ok:'CORRECT',warn:'SUSPECT',bad:'WRONG'};
+let counts={ok:0,warn:0,bad:0,total:0};
+DATA.forEach(g=>g.items.forEach(it=>{counts[it.v]++;counts.total++;}));
+
+/* scoreboard */
+document.getElementById('scoreboard').innerHTML =
+ `<div class="tile total"><div class="stripe"></div><div class="n">${counts.total}</div><div class="k">Data points traced</div></div>
+  <div class="tile ok"><div class="stripe"></div><div class="n">${counts.ok}</div><div class="k">Correct</div></div>
+  <div class="tile warn"><div class="stripe"></div><div class="n">${counts.warn}</div><div class="k">Suspect</div></div>
+  <div class="tile bad"><div class="stripe"></div><div class="n">${counts.bad}</div><div class="k">Wrong</div></div>`;
+const pct=v=>(v/counts.total*100).toFixed(1);
+document.getElementById('distbar').innerHTML =
+ `<span class="s-ok" style="width:${pct(counts.ok)}%"></span><span class="s-warn" style="width:${pct(counts.warn)}%"></span><span class="s-bad" style="width:${pct(counts.bad)}%"></span>`;
+document.getElementById('distlabel').textContent =
+ `${pct(counts.ok)}% correct · ${pct(counts.warn)}% suspect · ${pct(counts.bad)}% wrong  —  across ${DATA.length} portal sections`;
+document.getElementById('c-all').textContent=`(${counts.total})`;
+document.getElementById('c-ok').textContent=`(${counts.ok})`;
+document.getElementById('c-warn').textContent=`(${counts.warn})`;
+document.getElementById('c-bad').textContent=`(${counts.bad})`;
+
+/* nav + sections */
+const main=document.getElementById('main');
+const sidenav=document.getElementById('sidenav');
+DATA.forEach((g,gi)=>{
+  const gc={ok:0,warn:0,bad:0}; g.items.forEach(it=>gc[it.v]++);
+  const worst = gc.bad?'bad':gc.warn?'warn':'ok';
+  const a=document.createElement('a');
+  a.href='#'+g.id; a.dataset.sec=g.id;
+  a.innerHTML=`<span>${g.title}</span><span class="cnt">${g.items.length}</span>`;
+  sidenav.appendChild(a);
+
+  const sec=document.createElement('section');
+  sec.className='grp'; sec.id=g.id;
+  let cards='';
+  g.items.forEach(it=>{
+    const flow = it.flow.map((n,i)=>{
+      const cls = n.type;
+      const nt = {ui:'UI metric',route:'source',db:'database',calc:'formula'}[n.type]||n.type;
+      const node=`<div class="node ${cls}"><span class="nt">${n.title||nt}</span><span class="nv">${esc(n.val)}</span></div>`;
+      const arr = i<it.flow.length-1 ? `<div class="arrow ${it.v}">${arrowSvg}</div>` : '';
+      return node+arr;
+    }).join('');
+    const tags = (it.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('');
+    cards+=`<article class="card v-${it.v}" data-v="${it.v}">
+      <div class="card-top">
+        <span class="lbl">${esc(it.lbl)}</span>
+        <span class="badge ${it.v}">${VNAME[it.v]}</span>
+        <span class="tags">${tags}</span>
+      </div>
+      <div class="flow-scroll"><div class="flow">${flow}</div></div>
+      <div class="reason ${it.v}"><span class="rk">${it.v==='ok'?'Why correct':it.v==='warn'?'Why suspect':'Why wrong'}</span>${esc(it.reason)}<span class="src">↳ ${esc(it.src)}</span></div>
+    </article>`;
+  });
+  sec.innerHTML=`<div class="grp-head"><span class="idx">${String(gi+1).padStart(2,'0')}</span><h2>${g.title}</h2><span class="route">${g.route}</span></div>
+    ${g.note?`<div class="grp-note"><b>Context — </b>${esc(g.note)}</div>`:''}${cards}`;
+  main.appendChild(sec);
+});
+
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+/* filters */
+let active='all';
+document.getElementById('filters').addEventListener('click',e=>{
+  const b=e.target.closest('.fbtn'); if(!b)return;
+  active=b.dataset.f;
+  document.querySelectorAll('.fbtn').forEach(x=>x.setAttribute('aria-pressed', x===b));
+  let anyShown=false;
+  document.querySelectorAll('.grp').forEach(sec=>{
+    let secShown=false;
+    sec.querySelectorAll('.card').forEach(c=>{
+      const show = active==='all'||c.dataset.v===active;
+      c.classList.toggle('hidden',!show);
+      if(show){secShown=true;anyShown=true;}
+    });
+    sec.classList.toggle('hidden',!secShown);
+  });
+  document.getElementById('empty').style.display=anyShown?'none':'block';
+});
+
+/* scroll-spy */
+const links=[...document.querySelectorAll('nav.side a')];
+const obs=new IntersectionObserver(es=>{
+  es.forEach(en=>{ if(en.isIntersecting){
+    links.forEach(l=>l.classList.toggle('active',l.dataset.sec===en.target.id));
+  }});
+},{rootMargin:'-20% 0px -70% 0px'});
+document.querySelectorAll('.grp').forEach(s=>obs.observe(s));
+
+/* theme toggle */
+document.getElementById('themebtn').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next = cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);
+});
+</script>
+</body>
+</html>

@@ -43,8 +43,13 @@ export default function DossierActions({ leadId }: { leadId: string }) {
   }
 
   function goToOffer() {
+    // Advance to the Offer step and mark Verification (Step 1) complete — the
+    // dossier review is the whole of Step 1 now that FI / Video KYC moved to
+    // the Offer step, so "Next: Offer" is the reviewer's sign-off.
     window.dispatchEvent(
-      new CustomEvent(OPEN_STEP_EVENT, { detail: { key: "offer" } }),
+      new CustomEvent(OPEN_STEP_EVENT, {
+        detail: { key: "offer", markDone: "verify" },
+      }),
     );
   }
 

@@ -182,9 +182,12 @@ function DocTile({
 export default function CustomerDossierPanel({
   dossier,
   leadId,
+  afterHero,
 }: {
   dossier: CustomerDossier;
   leadId: string;
+  /** Optional cards rendered right after the hero, before Customer details. */
+  afterHero?: React.ReactNode;
 }) {
   const { lead, productSelection: ps } = dossier;
   const batteryPhotos = (ps?.battery_photo_urls as string[] | null) ?? [];
@@ -211,6 +214,8 @@ export default function CustomerDossierPanel({
           <DossierActions leadId={leadId} />
         </div>
       </div>
+
+      {afterHero}
 
       {/* 1 — Customer details */}
       <SectionCard
