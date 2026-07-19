@@ -355,6 +355,9 @@ export default async function AcquireLeadDetailPage({
         <>
           <FiTrackPanel leadId={leadId} />
           <VkycTrackPanel leadId={leadId} />
+          {verificationComplete ? (
+            <GoToStepButton stepKey="enach" label="Next: E-NACH & Agreement" />
+          ) : null}
         </>
       ) : (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center">
