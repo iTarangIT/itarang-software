@@ -2376,6 +2376,10 @@ export const batterySpecModels = pgTable("battery_spec_models", {
   over_voltage_v: numeric("over_voltage_v", { precision: 6, scale: 2 }),
   over_current_a: numeric("over_current_a", { precision: 6, scale: 2 }),
   over_temperature_c: numeric("over_temperature_c", { precision: 5, scale: 2 }),
+  // E-201 — normal km-per-Ah efficiency band for the mileage charts. Spec-only per model
+  // (no app_settings/env rung, like rated_capacity_ah); NULL = no band line drawn.
+  min_mileage_km_per_ah: numeric("min_mileage_km_per_ah", { precision: 6, scale: 3 }),
+  max_mileage_km_per_ah: numeric("max_mileage_km_per_ah", { precision: 6, scale: 3 }),
   notes: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),

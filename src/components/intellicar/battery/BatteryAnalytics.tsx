@@ -408,9 +408,9 @@ export function BatteryAnalytics() {
                             <DriverBehaviourCards data={distance} />
                             <DistanceTrendChart data={distance} granularity={period.granularity} />
                             <DischargeVsKmChart data={km} />
-                            <AhVsMileageChart data={km} />
-                            <MileageTrendChart data={km} />
-                            <PerCycleMileageChart data={km} />
+                            <AhVsMileageChart data={km} thresholds={thresholds} />
+                            <MileageTrendChart data={km} thresholds={thresholds} />
+                            <PerCycleMileageChart data={km} thresholds={thresholds} />
                         </div>
                     )}
 
