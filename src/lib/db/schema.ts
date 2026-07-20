@@ -4314,6 +4314,28 @@ export const riskRuns = pgTable(
   }),
 );
 
+// E-199 — Per-NBFC risk-card visibility allowlist. STRICT: presence of a
+// (tenant_id, hypothesis_id) row means an admin has enabled that card for the
+// tenant. No row = hidden; a tenant with zero rows sees zero cards. Filtered at
+// display time in the Risk page's loadCards(), so it survives every re-run.
+export const nbfcRiskCardVisibility = pgTable(
+  "nbfc_risk_card_visibility",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id, { onDelete: "cascade" }),
+    hypothesis_id: uuid("hypothesis_id").notNull().references(() => riskHypotheses.id, { onDelete: "cascade" }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_by: uuid("updated_by"),
+  },
+  (table) => ({
+    tenantHypUniq: uniqueIndex("nbfc_risk_card_visibility_tenant_hyp_uidx").on(
+      table.tenant_id,
+      table.hypothesis_id,
+    ),
+    tenantIdx: index("nbfc_risk_card_visibility_tenant_idx").on(table.tenant_id),
+  }),
+);
+
 // -----------------------------------------------------------------------------
 // E-026 — Portfolio Overview summary cards (Section 6.1.3)
 // -----------------------------------------------------------------------------
