@@ -15,7 +15,7 @@
 
 /** Tags for errors the app raises deliberately and is safe to show the user. */
 const SAFE_PREFIXES =
-  /^(UNAUTHORIZED|FORBIDDEN|NOT_FOUND|BAD_REQUEST|VALIDATION|CONFLICT|TOO_MANY|PAYMENT_REQUIRED|GONE)\b/;
+  /^(UNAUTHORIZED|FORBIDDEN|NOT_FOUND|BAD_REQUEST|VALIDATION|CONFLICT|TOO_MANY|PAYMENT_REQUIRED|INSUFFICIENT_FUNDS|PROVIDER_ERROR|GONE)\b/;
 
 /**
  * Returns a client-safe error string for the `error` field of a JSON response.
