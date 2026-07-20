@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
+import { useBuybackNotificationSummary } from "@/hooks/useBuybackNotificationSummary";
 
 /**
  * peakAmp Battery Buyback — the iTarang-staff side.
@@ -65,6 +66,12 @@ const BUYBACK_ADMIN_SECTION = {
       label: "Buyback Dashboard",
       icon: LayoutDashboard,
       href: "/admin/buyback/dashboard",
+    },
+    {
+      id: "buyback-notifications",
+      label: "Notifications",
+      icon: Bell,
+      href: "/admin/buyback/notifications",
     },
     {
       id: "buyback-queue",
@@ -1111,6 +1118,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: Landmark,
           href: "/dealer-portal/buyback/payments",
         },
+        {
+          id: "buyback-notifications",
+          label: "Notifications",
+          icon: Bell,
+          href: "/dealer-portal/buyback/notifications",
+        },
       ],
     },
   ],
@@ -1170,7 +1183,7 @@ interface NavGroupForActive {
 // section. Folded into "My Requests" (buyback-requests), which is where a
 // detail page is conceptually reached from.
 const DEALER_BUYBACK_PREFIX = "/dealer-portal/buyback/";
-const DEALER_BUYBACK_STATIC_SIBLINGS = new Set(["new", "requests", "pickups", "payments"]);
+const DEALER_BUYBACK_STATIC_SIBLINGS = new Set(["new", "requests", "pickups", "payments", "notifications"]);
 
 function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): string | null {
   let winnerId: string | null = null;
@@ -1454,6 +1467,22 @@ export function Sidebar() {
     };
   }, [inferredRole]);
 
+  // Buyback notification badges. Shares the summary query with the header bell
+  // (same query key → one request) and updates live, so a mark-read anywhere
+  // decrements these. Gated to roles that actually have a buyback surface so a
+  // finance/service login never fires the request.
+  const isBuybackRole = [
+    "dealer",
+    "scrap_vendor",
+    "admin",
+    "ceo",
+    "business_head",
+    "sales_head",
+  ].includes(inferredRole);
+  const notifSummary = useBuybackNotificationSummary(isBuybackRole);
+  const totalUnread = notifSummary.unread.total;
+  const negotiationUnread = notifSummary.unread.byCategory.Negotiation ?? 0;
+
   if (pendingNbfcCount && pendingNbfcCount > 0) {
     menuItems = menuItems.map((group: any) => ({
       ...group,
@@ -1471,6 +1500,26 @@ export function Sidebar() {
       items: group.items.map((item: any) =>
         item.id === "vendor-inbox" ? { ...item, badge: vendorInboxCount } : item,
       ),
+    }));
+  }
+
+  // Total unread on the "Notifications" link (dealer / admin / vendor), and
+  // Negotiation-category unread on the admin "Negotiations" link.
+  if (totalUnread > 0 || negotiationUnread > 0) {
+    menuItems = menuItems.map((group: any) => ({
+      ...group,
+      items: group.items.map((item: any) => {
+        if (
+          (item.id === "buyback-notifications" || item.id === "vendor-notifications") &&
+          totalUnread > 0
+        ) {
+          return { ...item, badge: totalUnread > 99 ? "99+" : totalUnread };
+        }
+        if (item.id === "buyback-negotiations" && negotiationUnread > 0) {
+          return { ...item, badge: negotiationUnread > 99 ? "99+" : negotiationUnread };
+        }
+        return item;
+      }),
     }));
   }
 

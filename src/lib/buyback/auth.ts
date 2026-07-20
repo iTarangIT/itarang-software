@@ -132,6 +132,25 @@ export async function loadOwnRequest(actor: BuybackActor, requestId: string) {
   return row;
 }
 
+/**
+ * Resolve a CRM user to the buyback portal role its notifications belong to, or
+ * null if the user has no buyback surface. The dozen CRM roles collapse to the
+ * three the notification centre cares about — the same collapse requireDealer /
+ * requireBuybackAdmin / requireVendor do, but without throwing (a shared bell
+ * must degrade quietly for a role that simply has no buyback feed).
+ */
+export function portalRoleOf(
+  role: string | null | undefined,
+  hasDealerId: boolean,
+  hasVendorId: boolean,
+): ActorRole | null {
+  const r = (role ?? "").toLowerCase();
+  if (r === "dealer") return hasDealerId ? "dealer" : null;
+  if (r === "scrap_vendor") return hasVendorId ? "vendor" : null;
+  if ((BUYBACK_ADMIN_ROLES as readonly string[]).includes(r)) return "admin";
+  return null;
+}
+
 /** Load any request as an admin, or 404. */
 export async function loadAnyRequest(requestId: string) {
   const [row] = await db
