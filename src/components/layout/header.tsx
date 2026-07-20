@@ -109,14 +109,20 @@ export function Header() {
 
             {/* Right Actions */}
             <div className="flex items-center gap-4">
-                {/* Was a <button> with no onClick and a hardcoded red dot —
-                    permanently lit, so it reported nothing, while 997
-                    notifications sat unread. Scoped to the buyback feed by
-                    product decision; its PATCH carries the same filter as its
-                    GET, so "mark all read" cannot reach the non-buyback
-                    notifications this bell does not show. */}
+                {/* The buyback notification bell — live for all three roles
+                    (dealer, admin, vendor). Scoped to the buyback feed by
+                    product decision; its mutations carry the same filter as its
+                    reads, so "mark all read" cannot reach the non-buyback
+                    notifications this bell does not show. The role only shapes
+                    the "See all" target and per-row deep links. */}
                 <BuybackBell
-                    isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
+                    role={
+                        (user?.role ?? '').toLowerCase() === 'scrap_vendor'
+                            ? 'vendor'
+                            : BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())
+                                ? 'admin'
+                                : 'dealer'
+                    }
                 />
 
                 {/* Profile Dropdown */}
