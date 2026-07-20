@@ -289,6 +289,16 @@ export default function NbfcDirectory({
                             >
                               Billing
                             </Link>
+                            <Link
+                              href={`/admin/nbfc/${row.id}/risk-cards`}
+                              className="inline-flex items-center gap-1.5 px-3 h-8 rounded-lg text-[13px] font-semibold transition-all border hover:bg-[color:var(--color-bg)]"
+                              style={{
+                                color: "var(--color-brand-navy)",
+                                borderColor: "var(--color-border)",
+                              }}
+                            >
+                              Risk cards
+                            </Link>
                           </>
                         )}
                         {/* Always reserve the trash icon's slot so the

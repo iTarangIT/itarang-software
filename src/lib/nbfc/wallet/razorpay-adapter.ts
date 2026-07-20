@@ -67,9 +67,15 @@ export class RazorpayWalletFundsProvider implements WalletFundsProvider {
       };
     } catch (e) {
       // Vendor SDK rejects with a plain object, not an Error — unwrap it to a
-      // readable message here so callers (provider-agnostic routes) don't surface
-      // "[object Object]".
-      throw new Error(razorpayErrorMessage(e));
+      // readable message for the SERVER LOG only. The NBFC-facing message stays
+      // vendor-neutral (§3.2): never leak the vendor's name/detail to the UI.
+      // PROVIDER_ERROR is a safe prefix, so this reaches the NBFC as-is (and is
+      // NOT re-masked by clientError) — hence we log the real cause here.
+      console.error("[wallet-provider:razorpay] ensureCollectionAccount failed:", razorpayErrorMessage(e));
+      throw new Error(
+        "PROVIDER_ERROR: Couldn't issue the iTarang Virtual Account right now. " +
+          "Please retry in a moment; if it keeps failing, contact iTarang support.",
+      );
     }
   }
 
@@ -179,9 +185,13 @@ export class RazorpayWalletFundsProvider implements WalletFundsProvider {
         providerCustomerId: order.customer_id,
       };
     } catch (e) {
-      // Unwrap the vendor's object-shaped rejection to a readable message (see
-      // ensureCollectionAccount).
-      throw new Error(razorpayErrorMessage(e));
+      // Real vendor cause → server log only; NBFC sees a vendor-neutral message
+      // (§3.2). See ensureCollectionAccount for the PROVIDER_ERROR rationale.
+      console.error("[wallet-provider:razorpay] registerAutoRechargeMandate failed:", razorpayErrorMessage(e));
+      throw new Error(
+        "PROVIDER_ERROR: Couldn't start the auto-recharge mandate right now. " +
+          "Please retry in a moment; if it keeps failing, contact iTarang support.",
+      );
     }
   }
 

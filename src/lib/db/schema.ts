@@ -3268,6 +3268,10 @@ export const notifications = pgTable("notifications", {
   data: jsonb(),
   read: boolean().default(false),
   read_at: timestamp("read_at", { withTimezone: true }),
+  // E-200 — soft archive/delete for the buyback notification centre. NULL =
+  // active / not deleted, so no backfill was needed. Both apply CRM-wide.
+  archived_at: timestamp("archived_at", { withTimezone: true }),
+  deleted_at: timestamp("deleted_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
@@ -4311,6 +4315,28 @@ export const riskRuns = pgTable(
   },
   (table) => ({
     tenantStartedIdx: index("risk_runs_tenant_started_idx").on(table.tenant_id, table.started_at),
+  }),
+);
+
+// E-199 — Per-NBFC risk-card visibility allowlist. STRICT: presence of a
+// (tenant_id, hypothesis_id) row means an admin has enabled that card for the
+// tenant. No row = hidden; a tenant with zero rows sees zero cards. Filtered at
+// display time in the Risk page's loadCards(), so it survives every re-run.
+export const nbfcRiskCardVisibility = pgTable(
+  "nbfc_risk_card_visibility",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id, { onDelete: "cascade" }),
+    hypothesis_id: uuid("hypothesis_id").notNull().references(() => riskHypotheses.id, { onDelete: "cascade" }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_by: uuid("updated_by"),
+  },
+  (table) => ({
+    tenantHypUniq: uniqueIndex("nbfc_risk_card_visibility_tenant_hyp_uidx").on(
+      table.tenant_id,
+      table.hypothesis_id,
+    ),
+    tenantIdx: index("nbfc_risk_card_visibility_tenant_idx").on(table.tenant_id),
   }),
 );
 

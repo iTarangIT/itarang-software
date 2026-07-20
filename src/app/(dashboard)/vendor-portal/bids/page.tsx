@@ -12,6 +12,7 @@ import { useState } from "react";
 import { Card, DealTable, EmptyState } from "@/components/buyback/ui";
 import type { DealTableRow } from "@/components/buyback/ui";
 
+import { QuotationDetailModal } from "../_detail-modal";
 import { RespondModal } from "../_respond-modal";
 import {
   fmtDate,
@@ -27,6 +28,7 @@ import {
 export default function VendorBidsPage() {
   const { threads, loading, error, reload } = useVendorThreads();
   const [active, setActive] = useState<VendorThread | null>(null);
+  const [detail, setDetail] = useState<VendorThread | null>(null);
 
   const all = [...threads].sort((a, b) => (b.sent_at ?? "").localeCompare(a.sent_at ?? ""));
 
@@ -35,6 +37,8 @@ export default function VendorBidsPage() {
     const lastBid = topPerUnit(t.lines.map((l) => l.counter_price));
     return {
       key: t.thread_id,
+      onClick: () => setDetail(t),
+      ariaLabel: `Open ${t.quotation_no ?? "quotation"}`,
       cells: [
         <span key="lot" className="font-bold text-slate-900">
           {t.quotation_no}
@@ -55,7 +59,10 @@ export default function VendorBidsPage() {
         t.can_respond ? (
           <button
             key="act"
-            onClick={() => setActive(t)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setActive(t);
+            }}
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50"
           >
             Respond
@@ -98,6 +105,17 @@ export default function VendorBidsPage() {
             empty="No bids yet."
           />
         </Card>
+      )}
+
+      {detail && (
+        <QuotationDetailModal
+          thread={detail}
+          onClose={() => setDetail(null)}
+          onRespond={() => {
+            setActive(detail);
+            setDetail(null);
+          }}
+        />
       )}
 
       {active && (

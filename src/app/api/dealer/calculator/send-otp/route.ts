@@ -13,10 +13,13 @@ import {
   normalizeCalcPhone,
   sendCalcOtpWhatsApp,
 } from "@/lib/calculator/whatsapp";
+import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
 
 // Calculator OTP gate — send. The dealer enters the customer's details; before
-// schemes are shown, a 6-digit OTP goes to the customer's WhatsApp number and
-// must be verified (verify-otp). Mechanics mirror the Step 5 dispatch OTP:
+// schemes are shown, a 6-digit OTP is delivered to the customer and must be
+// verified (verify-otp). Delivery preference: 2Factor VOICE CALL first (the
+// customer hears the OTP read out on an automated phone call), then WhatsApp,
+// then a dev/hardcoded fallback. Mechanics mirror the Step 5 dispatch OTP:
 // SHA-256 hash, 10-min expiry, max 3 sends per session, 30-min cooldown after.
 
 export const dynamic = "force-dynamic";
@@ -91,18 +94,47 @@ export async function POST(req: NextRequest) {
       session = undefined;
     }
 
-    // Same dev shortcut as Step 5: without live WhatsApp creds we use a
-    // hardcoded OTP so the flow is testable end-to-end; verification still
-    // hash-compares through the exact production code path.
+    // Same dev shortcut as Step 5: without a live provider we use a hardcoded
+    // OTP so the flow is testable end-to-end; verification still hash-compares
+    // through the exact production code path.
+    const twofactorConfigured = twoFactorConfigured();
     const waConfigured = metaWhatsAppConfigured();
-    const otp = waConfigured
+    const providerConfigured = twofactorConfigured || waConfigured;
+    const otp = providerConfigured
       ? Math.floor(100000 + Math.random() * 900000).toString()
       : "123456";
     const otpHash = hashOtp(otp);
     const expiresAt = new Date(now.getTime() + OTP_LIFETIME_MS);
 
+    // Delivery channel surfaced to the UI so the copy matches the wire used.
+    let deliveryStatus: "voice_call" | "whatsapp" | "dev_hardcoded" = "dev_hardcoded";
+    // Persisted status column keeps its existing vocabulary.
     let waStatus: "sent" | "dev_hardcoded" | "failed" = "dev_hardcoded";
-    if (waConfigured) {
+
+    if (twofactorConfigured) {
+      // Primary: 2Factor places an automated phone call reading the OTP aloud.
+      const call = await sendTwoFactorVoiceOtp({ mobile_number: phone, otp });
+      if (!call.success) {
+        if (session) {
+          await db
+            .update(calcOtpVerifications)
+            .set({ sendCount: session.sendCount + 1, waStatus: "failed" })
+            .where(eq(calcOtpVerifications.id, session.id));
+        }
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              message: `Voice OTP call failed: ${call.error || "unknown error"}`,
+              code: "voice_failed",
+            },
+          },
+          { status: 502 },
+        );
+      }
+      deliveryStatus = "voice_call";
+      waStatus = "sent";
+    } else if (waConfigured) {
       const res = await sendCalcOtpWhatsApp(phone, otp, body.customerName);
       if (!res.ok) {
         // Record the failed attempt on the session (if any) so send_count still counts.
@@ -123,10 +155,11 @@ export async function POST(req: NextRequest) {
           { status: 502 },
         );
       }
+      deliveryStatus = "whatsapp";
       waStatus = "sent";
     } else {
       console.log(
-        `[Calculator Send OTP] WhatsApp not configured — using hardcoded OTP ${otp} for ${maskCalcPhone(phone)}.`,
+        `[Calculator Send OTP] No OTP provider configured — using hardcoded OTP ${otp} for ${maskCalcPhone(phone)}. Set TWOFACTOR_API_KEY (voice call) or Meta WhatsApp creds to switch to live delivery.`,
       );
     }
 
@@ -165,10 +198,11 @@ export async function POST(req: NextRequest) {
         expiresInSeconds: Math.floor(OTP_LIFETIME_MS / 1000),
         sendCount: session ? session.sendCount + 1 : 1,
         maxSends: MAX_SENDS,
+        deliveryStatus,
         waStatus,
         // Surface the OTP in dev / hardcoded mode so the tester (acting as
         // both dealer and customer) can complete the flow.
-        ...(waStatus === "dev_hardcoded" || isDev ? { _devOtp: otp } : {}),
+        ...(deliveryStatus === "dev_hardcoded" || isDev ? { _devOtp: otp } : {}),
       },
     });
   } catch (error) {

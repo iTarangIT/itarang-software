@@ -68,7 +68,8 @@ export async function assertChargeable(tenantId: string, trigger: ChargeTrigger)
   const wallet = await getOrCreateWallet(tenantId);
   if (n(wallet.balance) < total) {
     throw new Error(
-      `INSUFFICIENT_FUNDS: wallet balance ${n(wallet.balance)} < required ${total} for ${trigger}`,
+      `INSUFFICIENT_FUNDS: Wallet balance ₹${n(wallet.balance)} is too low — this action needs ₹${total}. ` +
+        `Please top up the prepaid wallet and try again.`,
     );
   }
 }

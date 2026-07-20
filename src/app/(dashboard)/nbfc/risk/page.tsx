@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { riskCardRuns, riskHypotheses, nbfcTenants } from "@/lib/db/schema";
+import { riskCardRuns, riskHypotheses, nbfcTenants, nbfcRiskCardVisibility } from "@/lib/db/schema";
 import { eq, desc, isNull } from "drizzle-orm";
 import { getCurrentTenant, getTenantLoanSlice } from "@/lib/nbfc/tenant";
 import { HAND_CODED_CARDS, type CardEvaluation } from "@/lib/risk/hand-coded-cards";
@@ -39,11 +39,25 @@ async function loadCards(tenantId: string): Promise<LoadCardsResult> {
   // "Re-run analysis" populates them).
   // Retired hypotheses (E-188) keep their history but are no longer run or
   // rendered — a test whose generated code is broken is not a risk signal.
-  const hyps = await db
+  const catalogue = await db
     .select()
     .from(riskHypotheses)
     .where(isNull(riskHypotheses.retired_at))
     .orderBy(riskHypotheses.source, riskHypotheses.slug);
+
+  // 1b. Admin allowlist gate (E-199). The catalogue is global, but each NBFC
+  // partner sees ONLY the cards an admin has explicitly enabled for their
+  // tenant. This is a STRICT allowlist: a hypothesis with no visibility row is
+  // hidden, and a tenant with no rows at all sees zero cards. The filter lives
+  // here — at display time — so it holds on every "Re-run analysis" (a re-run
+  // only writes risk_card_runs; it never bypasses loadCards). Managed from
+  // /admin/nbfc/[nbfcId]/risk-cards.
+  const visibleRows = await db
+    .select({ hypothesis_id: nbfcRiskCardVisibility.hypothesis_id })
+    .from(nbfcRiskCardVisibility)
+    .where(eq(nbfcRiskCardVisibility.tenant_id, tenantId));
+  const allowed = new Set(visibleRows.map((r) => r.hypothesis_id));
+  const hyps = catalogue.filter((h) => allowed.has(h.id));
 
   // 2. Latest run per hypothesis — one DISTINCT ON query, not one query per
   // hypothesis in a serial loop. The catalogue grows every time the agent
