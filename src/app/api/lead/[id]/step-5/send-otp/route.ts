@@ -7,6 +7,7 @@ import { leads, loanSanctions, otpConfirmations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { sendMsg91Otp } from "@/lib/msg91";
+import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
 
 // BRD V2 §3.2 — Step 5 OTP send.
 // Generates a 6-digit OTP, stores a SHA-256 hash with 10-minute expiry, and
@@ -113,39 +114,49 @@ export async function POST(
       .limit(1);
 
     // OTP value:
-    //   - If MSG91 env is configured → random 6-digit, MSG91 delivers the SMS.
-    //   - Otherwise (dev / not yet integrated) → hardcoded "123456" so the
-    //     team can run end-to-end Step 5 testing without a live SMS provider.
-    //     Verification (in confirm-dispatch) still hash-compares, so this path
-    //     uses the exact same code that production will use once MSG91 is
-    //     wired — only the SMS delivery step is short-circuited.
+    //   - If a real provider is configured (2Factor voice call OR MSG91 SMS) →
+    //     random 6-digit; the provider delivers it to the customer.
+    //   - Otherwise (dev / no provider) → hardcoded "123456" so the team can run
+    //     end-to-end Step 5 testing without a live provider.
+    //   Verification (in confirm-dispatch) always hash-compares locally, so every
+    //   path uses the exact same code — only the delivery wire differs.
     void loan;
+    // Delivery preference: 2Factor VOICE CALL first (customer hears the OTP read
+    // out on an automated phone call), then MSG91 SMS, then dev/hardcoded.
+    const twofactorConfigured = twoFactorConfigured();
     const msg91Configured = !!(
       process.env.MSG91_AUTH_KEY?.trim() &&
       process.env.MSG91_TEMPLATE_ID?.trim()
     );
-    const otp = msg91Configured
+    const providerConfigured = twofactorConfigured || msg91Configured;
+    const otp = providerConfigured
       ? Math.floor(100000 + Math.random() * 900000).toString()
       : "123456";
     const otpHash = hashOtp(otp);
     const expiresAt = new Date(now.getTime() + OTP_LIFETIME_MS);
 
     let otpRecordId: string;
+    // The send_count actually written to the row — used for the response so the
+    // UI's "X/maxSends" and resend gate match the DB (a fresh session after
+    // cooldown restarts at 1, not old-count+1).
+    let newSendCount: number;
     if (existing && existing.send_count < MAX_SENDS) {
       // Same session — replace the hash and bump send_count
       otpRecordId = existing.id;
+      newSendCount = existing.send_count + 1;
       await db
         .update(otpConfirmations)
         .set({
           otp_hash: otpHash,
           expires_at: expiresAt,
-          send_count: existing.send_count + 1,
+          send_count: newSendCount,
           attempt_count: 0,
           locked_until: null,
         })
         .where(eq(otpConfirmations.id, existing.id));
     } else {
       otpRecordId = await generateId("OTP");
+      newSendCount = 1;
       await db.insert(otpConfirmations).values({
         id: otpRecordId,
         lead_id: leadId,
@@ -154,20 +165,31 @@ export async function POST(
         phone_sent_to: phone,
         created_at: now,
         expires_at: expiresAt,
-        send_count: 1,
+        send_count: newSendCount,
         attempt_count: 0,
         is_used: false,
       });
     }
 
-    // Deliver via MSG91 only when configured. In dev/no-provider mode we
+    // Deliver via a live provider when configured. In dev/no-provider mode we
     // skip the network call and return the hardcoded OTP to the dealer UI
     // so the tester can paste it back into the form (acting as both
     // customer and dealer).
     const isDev = process.env.NODE_ENV !== "production";
-    let smsStatus: "sent" | "dev_hardcoded" = "dev_hardcoded";
+    let deliveryStatus: "voice_call" | "sms" | "dev_hardcoded" = "dev_hardcoded";
 
-    if (msg91Configured) {
+    if (twofactorConfigured) {
+      // Primary: 2Factor places an automated phone call reading the OTP aloud.
+      const call = await sendTwoFactorVoiceOtp({ mobile_number: phone, otp });
+      if (!call.success) {
+        const reason = `Voice OTP call failed: ${call.error || "unknown error"}`;
+        return NextResponse.json(
+          { success: false, error: { message: reason, smsStatus: "failed" } },
+          { status: 502 },
+        );
+      }
+      deliveryStatus = "voice_call";
+    } else if (msg91Configured) {
       const smsResult = await sendMsg91Otp({
         mobile_number: phone,
         otp,
@@ -180,10 +202,10 @@ export async function POST(
           { status: 502 },
         );
       }
-      smsStatus = "sent";
+      deliveryStatus = "sms";
     } else {
       console.log(
-        `[Step 5 Send OTP] MSG91 not configured — using hardcoded OTP ${otp} for ${leadId}. Set MSG91_AUTH_KEY + MSG91_TEMPLATE_ID to switch to live SMS.`,
+        `[Step 5 Send OTP] No OTP provider configured — using hardcoded OTP ${otp} for ${leadId}. Set TWOFACTOR_API_KEY (voice call) or MSG91_AUTH_KEY + MSG91_TEMPLATE_ID (SMS) to switch to live delivery.`,
       );
     }
 
@@ -196,12 +218,14 @@ export async function POST(
       data: {
         otpSentTo: maskPhone(phone),
         expiresInSeconds: Math.floor(OTP_LIFETIME_MS / 1000),
-        sendCount: existing ? existing.send_count + 1 : 1,
+        sendCount: newSendCount,
         maxSends: MAX_SENDS,
-        smsStatus,
+        deliveryStatus,
+        // Kept for backward-compat with any consumer reading `smsStatus`.
+        smsStatus: deliveryStatus === "sms" ? "sent" : deliveryStatus,
         // Surface the OTP to the UI in dev OR whenever we used the
         // hardcoded path — the dealer needs to see it to test the flow.
-        ...(smsStatus === "dev_hardcoded" || isDev ? { _devOtp: otp } : {}),
+        ...(deliveryStatus === "dev_hardcoded" || isDev ? { _devOtp: otp } : {}),
       },
     });
   } catch (error) {
