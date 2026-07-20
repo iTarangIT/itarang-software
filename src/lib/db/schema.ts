@@ -3268,6 +3268,10 @@ export const notifications = pgTable("notifications", {
   data: jsonb(),
   read: boolean().default(false),
   read_at: timestamp("read_at", { withTimezone: true }),
+  // E-200 — soft archive/delete for the buyback notification centre. NULL =
+  // active / not deleted, so no backfill was needed. Both apply CRM-wide.
+  archived_at: timestamp("archived_at", { withTimezone: true }),
+  deleted_at: timestamp("deleted_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 

@@ -14,12 +14,16 @@
  * to this vendor and masked twice over (see _shared.tsx / toVendorThread).
  */
 
+import { useState } from "react";
 import Link from "next/link";
 
 import { Card, DealTable, EmptyState, KpiCard } from "@/components/buyback/ui";
 import type { DealTableRow } from "@/components/buyback/ui";
+import BuybackActionCenter from "@/components/buyback/notifications/BuybackActionCenter";
 import { inr } from "@/lib/buyback/format";
 
+import { QuotationDetailModal } from "./_detail-modal";
+import { RespondModal } from "./_respond-modal";
 import {
   perUnitLabel,
   topPerUnit,
@@ -27,10 +31,13 @@ import {
   VendorPageShell,
   VendorStateNote,
   VendorStatusPill,
+  type VendorThread,
 } from "./_shared";
 
 export default function VendorPortalPage() {
-  const { threads, loading, error } = useVendorThreads();
+  const { threads, loading, error, reload } = useVendorThreads();
+  const [detail, setDetail] = useState<VendorThread | null>(null);
+  const [active, setActive] = useState<VendorThread | null>(null);
 
   /* Stat-card figures — all derived from this vendor's own threads. The vendor
      thread status IS the funnel: SENT (new) → COUNTERED (bidding) → AGREED
@@ -54,6 +61,8 @@ export default function VendorPortalPage() {
     const lastBid = topPerUnit(t.lines.map((l) => l.counter_price));
     return {
       key: t.thread_id,
+      onClick: () => setDetail(t),
+      ariaLabel: `Open ${t.quotation_no ?? "quotation"}`,
       cells: [
         <span key="lot" className="font-bold text-slate-900">
           {t.quotation_no}
@@ -74,6 +83,7 @@ export default function VendorPortalPage() {
 
   return (
     <VendorPageShell title="Vendor Dashboard" badge="V1.1 Preview">
+      <BuybackActionCenter className="mb-5" />
       {error || loading ? (
         <VendorStateNote loading={loading} error={error} />
       ) : threads.length === 0 ? (
@@ -125,6 +135,21 @@ export default function VendorPortalPage() {
             />
           </Card>
         </>
+      )}
+
+      {detail && (
+        <QuotationDetailModal
+          thread={detail}
+          onClose={() => setDetail(null)}
+          onRespond={() => {
+            setActive(detail);
+            setDetail(null);
+          }}
+        />
+      )}
+
+      {active && (
+        <RespondModal thread={active} onClose={() => setActive(null)} onDone={reload} />
       )}
     </VendorPageShell>
   );

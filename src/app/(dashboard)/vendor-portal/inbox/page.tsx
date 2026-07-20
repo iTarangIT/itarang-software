@@ -12,6 +12,7 @@ import { useState } from "react";
 import { Card, DealTable, EmptyState } from "@/components/buyback/ui";
 import type { DealTableRow } from "@/components/buyback/ui";
 
+import { QuotationDetailModal } from "../_detail-modal";
 import { RespondModal } from "../_respond-modal";
 import {
   fmtDate,
@@ -27,6 +28,7 @@ import {
 export default function VendorInboxPage() {
   const { threads, loading, error, reload } = useVendorThreads();
   const [active, setActive] = useState<VendorThread | null>(null);
+  const [detail, setDetail] = useState<VendorThread | null>(null);
 
   const inbox = threads
     .filter((t) => t.status === "SENT")
@@ -36,6 +38,8 @@ export default function VendorInboxPage() {
     const topAsk = topPerUnit(t.lines.map((l) => l.ask_price));
     return {
       key: t.thread_id,
+      onClick: () => setDetail(t),
+      ariaLabel: `Open ${t.quotation_no ?? "quotation"}`,
       cells: [
         <span key="lot" className="font-bold text-slate-900">
           {t.quotation_no}
@@ -52,7 +56,10 @@ export default function VendorInboxPage() {
         <VendorStatusPill key="status" status={t.status} />,
         <button
           key="act"
-          onClick={() => setActive(t)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActive(t);
+          }}
           className="rounded-lg bg-bb-navy px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90"
         >
           Respond
@@ -89,6 +96,17 @@ export default function VendorInboxPage() {
             empty="No new quotations right now."
           />
         </Card>
+      )}
+
+      {detail && (
+        <QuotationDetailModal
+          thread={detail}
+          onClose={() => setDetail(null)}
+          onRespond={() => {
+            setActive(detail);
+            setDetail(null);
+          }}
+        />
       )}
 
       {active && (
