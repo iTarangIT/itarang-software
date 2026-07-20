@@ -35,10 +35,71 @@ import {
     OVERLOAD_INDEX_WARN,
     isoDistanceAh,
 } from '@/lib/telemetry/load-math';
-import type { DistanceData, DischargeKmData, Granularity } from '../types';
+import type { ReactElement } from 'react';
+import type { BatteryThresholds, DistanceData, DischargeKmData, Granularity } from '../types';
 
 const DAY_FMT = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 const TIME_FMT = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/**
+ * E-201 — the model spec's normal km-per-Ah efficiency band, as labelled reference lines.
+ *
+ * Returns a bare ARRAY of <ReferenceLine> (never a fragment or wrapper component) so Recharts'
+ * child scan — which matches on element type among the chart's children — actually picks the
+ * lines up. `axis='y'` for the km/Ah trend charts (horizontal rules), `axis='x'` for the
+ * Ah-vs-mileage scatter (vertical rules). Draws nothing when the spec records no band: a pack
+ * with no recorded range gets no line rather than being judged against an invented number —
+ * the same rule capacityBands() follows for a missing nameplate.
+ *
+ * Coloured to stay distinct from the charts' existing data-derived lines (grey pack average,
+ * amber "pack's own best"): red floor = below it is poor mileage; green ceiling = above it is
+ * unusually efficient (worth a data check).
+ */
+function mileageBandLines(
+    t: BatteryThresholds | undefined,
+    axis: 'x' | 'y',
+): ReactElement[] {
+    const lines: ReactElement[] = [];
+    const min = t?.minMileageKmPerAh;
+    const max = t?.maxMileageKmPerAh;
+    if (typeof min === 'number' && Number.isFinite(min)) {
+        lines.push(
+            <ReferenceLine
+                key="mileage-band-min"
+                {...(axis === 'y' ? { y: min } : { x: min })}
+                stroke={VIZ.criticalLine}
+                strokeDasharray="4 4"
+                // The floor usually sits below every plotted point, so extend the axis to it
+                // rather than let Recharts clip the line (its default is to discard overflow).
+                ifOverflow="extendDomain"
+                label={{
+                    value: `Min ${min} km/Ah`,
+                    position: axis === 'y' ? 'insideBottomRight' : 'insideBottomLeft',
+                    fontSize: 10,
+                    fill: VIZ.criticalLine,
+                }}
+            />,
+        );
+    }
+    if (typeof max === 'number' && Number.isFinite(max)) {
+        lines.push(
+            <ReferenceLine
+                key="mileage-band-max"
+                {...(axis === 'y' ? { y: max } : { x: max })}
+                stroke={VIZ.bandGood}
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+                label={{
+                    value: `Max ${max} km/Ah`,
+                    position: axis === 'y' ? 'insideTopRight' : 'insideBottomRight',
+                    fontSize: 10,
+                    fill: VIZ.bandGood,
+                }}
+            />,
+        );
+    }
+    return lines;
+}
 
 /**
  * Kilometre Trend — distance per bucket.
@@ -321,7 +382,13 @@ export function DischargeVsKmChart({ data }: { data: DischargeKmData | undefined
  * distance for its charge — overload, heavy current draw, or misuse. A sustained slide of
  * the line is a mileage drop worth investigating.
  */
-export function MileageTrendChart({ data }: { data: DischargeKmData | undefined }) {
+export function MileageTrendChart({
+    data,
+    thresholds,
+}: {
+    data: DischargeKmData | undefined;
+    thresholds?: BatteryThresholds;
+}) {
     const points = (data?.points ?? []).filter((p) => p.km_per_ah != null);
     const s = data?.summary;
     const packAvg =
@@ -410,6 +477,8 @@ export function MileageTrendChart({ data }: { data: DischargeKmData | undefined 
                             }}
                         />
                     )}
+                    {/* E-201: the model spec's normal km/Ah band (drawn only when recorded). */}
+                    {mileageBandLines(thresholds, 'y')}
                     {/* Dots ON: the series is sparse and each day is a reading, not a sample of
                       * a continuous process — hiding the points would overstate the line. */}
                     <Line
@@ -443,7 +512,13 @@ export function MileageTrendChart({ data }: { data: DischargeKmData | undefined 
  * time instead of being averaged into its day. Dots below the dashed pack average (drawn in the
  * overload colour) are the trips that did little distance for their charge.
  */
-export function PerCycleMileageChart({ data }: { data: DischargeKmData | undefined }) {
+export function PerCycleMileageChart({
+    data,
+    thresholds,
+}: {
+    data: DischargeKmData | undefined;
+    thresholds?: BatteryThresholds;
+}) {
     const cs = data?.cycleSummary;
     // Aggregate ratio (Σkm ÷ ΣAh), not the mean of per-cycle ratios — matches the scatter
     // headline so both per-cycle views quote the same pack average.
@@ -570,6 +645,8 @@ export function PerCycleMileageChart({ data }: { data: DischargeKmData | undefin
                             }}
                         />
                     )}
+                    {/* E-201: the model spec's normal km/Ah band (drawn only when recorded). */}
+                    {mileageBandLines(thresholds, 'y')}
                     <Scatter
                         name="At / above pack average"
                         data={atOrAbove}
@@ -637,7 +714,13 @@ function niceContours(minKm: number, maxKm: number): number[] {
  * Left of the dashed baseline = this pack spent more charge per kilometre than it does at its own
  * best. High AND left = a lot of charge bought little distance: the overload signature.
  */
-export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }) {
+export function AhVsMileageChart({
+    data,
+    thresholds,
+}: {
+    data: DischargeKmData | undefined;
+    thresholds?: BatteryThresholds;
+}) {
     const cs = data?.cycleSummary;
     const baseline = cs?.baseline ?? null;
     const warn = cs?.gates?.overloadIndexWarn ?? OVERLOAD_INDEX_WARN;
@@ -869,6 +952,8 @@ export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }
                             }}
                         />
                     )}
+                    {/* E-201: the model spec's normal km/Ah band (drawn only when recorded). */}
+                    {mileageBandLines(thresholds, 'x')}
 
                     <Scatter
                         name="Discharge cycle"

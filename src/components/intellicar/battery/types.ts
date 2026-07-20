@@ -296,6 +296,13 @@ export interface BatteryThresholds {
     overTemperatureC: number;
     capacityWarningFrac: number;
     capacityCriticalFrac: number;
+    /**
+     * E-201 — normal km-per-Ah efficiency band from the model spec, when the picked
+     * vehicle maps to one. Spec-only and optional: null/absent means no band was recorded,
+     * and the mileage charts draw no line rather than inventing a fleet number.
+     */
+    minMileageKmPerAh?: number | null;
+    maxMileageKmPerAh?: number | null;
 }
 
 export interface ElectricalBucket {
