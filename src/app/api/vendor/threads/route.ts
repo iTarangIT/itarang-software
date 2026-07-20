@@ -53,6 +53,7 @@ export const GET = withErrorHandler(async () => {
         ask_price: l.ask_price,
         counter_price: l.counter_price,
         agreed_price: l.agreed_price,
+        photos: l.photos,
       })),
     }),
   );

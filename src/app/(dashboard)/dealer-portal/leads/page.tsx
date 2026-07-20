@@ -124,6 +124,29 @@ function DealerLeadsContent() {
         return amount ? `₹${Number(amount).toLocaleString()}` : '-';
     };
 
+    // The pipeline advances `kyc_status` (loan_sanctioned → dispatched → sold),
+    // while `lead_status` is frozen at 'new' the whole way through. So the badge
+    // is derived from kyc_status first — once Step 5 dispatch is confirmed the
+    // loan is disbursed and the unit dispatched, which we surface as "Disbursed".
+    // Falls back to the raw lead_status for leads still in the sales funnel.
+    const resolveLeadStatus = (lead: any): { label: string; cls: string } => {
+        const kyc = String(lead.kyc_status || '').toLowerCase();
+        if (kyc === 'dispatched' || kyc === 'sold') {
+            return { label: 'Disbursed', cls: 'bg-green-100 text-green-800' };
+        }
+        if (kyc === 'loan_sanctioned') {
+            return { label: 'Sanctioned', cls: 'bg-emerald-100 text-emerald-800' };
+        }
+        if (kyc === 'loan_rejected') {
+            return { label: 'Rejected', cls: 'bg-red-100 text-red-800' };
+        }
+        const status = lead.lead_status || 'new';
+        return {
+            label: status,
+            cls: status === 'new' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800',
+        };
+    };
+
     return (
         // -mx-6 cancels the dashboard layout's mobile p-6 so cards run
         // edge-to-edge on phones; the header keeps a small gutter via px-4 on
@@ -210,11 +233,14 @@ function DealerLeadsContent() {
                                             <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
                                         </td>
                                         <td className="px-6 py-4">
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
-                                                ${lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}
-                                            `}>
-                                                {lead.lead_status}
-                                            </span>
+                                            {(() => {
+                                                const s = resolveLeadStatus(lead);
+                                                return (
+                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${s.cls}`}>
+                                                        {s.label}
+                                                    </span>
+                                                );
+                                            })()}
                                         </td>
                                         <td className="px-6 py-4">
                                             <span className="inline-flex items-center gap-1.5 capitalize">
@@ -301,10 +327,14 @@ function DealerLeadsContent() {
                                         <div className="font-medium text-gray-900 truncate">{lead.owner_name}</div>
                                         <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
                                     </div>
-                                    <span className={`shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
-                                        ${lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}`}>
-                                        {lead.lead_status}
-                                    </span>
+                                    {(() => {
+                                        const s = resolveLeadStatus(lead);
+                                        return (
+                                            <span className={`shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${s.cls}`}>
+                                                {s.label}
+                                            </span>
+                                        );
+                                    })()}
                                 </div>
                                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                                     <div>

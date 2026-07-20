@@ -28,6 +28,8 @@ export interface VendorLine {
   ask_price: number | string | null;
   counter_price: number | string | null;
   agreed_price: number | string | null;
+  /** Battery photo ids — rendered via GET /api/vendor/threads/:id/photo. */
+  photos: { id: string }[];
 }
 
 export interface VendorThread {
