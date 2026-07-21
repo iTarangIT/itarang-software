@@ -51,11 +51,12 @@ export const MAX_CYCLES = 100;
 
 const HEADER_FILL = "FF1F4E78";
 const TZ_NOTE = "All timestamps are IST (Asia/Kolkata).";
-// The device streams ~30 s, but the AWS poller subsamples: ~100 rows/day, ~8.5 min median
-// between stored samples. The per-sample "Time Difference (s)" column is the REAL gap — it is
-// not 30 s, and treating it as 30 s under-integrates Ah (see docs/intellicar-calculations.md §5a).
+// Charging now integrates telemetry_battery (getbatterymetricshistory), the device's ~30 s
+// stream — not the CAN snapshot's ~100 rows/day. The per-sample "Time Difference (s)" column
+// remains the REAL gap between stored rows: mostly ~30 s while charging, wider across any
+// interval the device did not report. Always integrate against it, never a nominal 30 s.
 const CADENCE_NOTE =
-    "Cadence: device streams ~30 s, but stored telemetry is ~8.5 min apart (median; ~100 rows/day). Each sheet's 'Time Difference (s)' is the real gap between rows — not 30 s.";
+    "Cadence: ~30-second battery telemetry. Each sheet's 'Time Difference (s)' is the real gap between rows — usually ~30 s, wider across any reporting gap. AH is integrated against the real gap, never a nominal 30 s.";
 
 const IST_FORMAT = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
