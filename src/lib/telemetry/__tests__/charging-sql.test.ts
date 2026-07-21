@@ -131,10 +131,12 @@ describe("buildTimeWindow", () => {
 describe("cycleCTEs", () => {
     it("inlines the time-window fragment and orders parameters after vehicleno", () => {
         const { text, params } = render(cteFor("BAT-1001", { months: 6 }));
-        // Parameters bind in source order: vehicleno and the corrupt-frame bound sit in
-        // the `raw` CTE ahead of the time predicate, then each tuning constant as its
-        // CTE appears.
+        // Parameters bind in source order. The battery `raw` reads the nameplate from a
+        // telemetry_can scalar first (vehicleno binds there), then the telemetry_battery
+        // scan (vehicleno again, then the corrupt-current bound), then the time predicate,
+        // then each tuning constant as its CTE appears.
         expect(params).toEqual([
+            "BAT-1001",
             "BAT-1001",
             MAX_VALID_CURRENT_A,
             6,
@@ -146,14 +148,15 @@ describe("cycleCTEs", () => {
             MIN_CYCLE_SAMPLES,
             MIN_CYCLE_SOC_GAIN,
         ]);
-        expect(text).toContain("WHERE vehicleno = $1");
-        expect(flat(text)).toContain("AND time > now() - (interval '1 month' * $3)");
+        expect(text).toContain("WHERE tc.vehicleno = $1"); // nameplate lookup on telemetry_can
+        expect(text).toContain("WHERE vehicleno = $2");     // the telemetry_battery scan
+        expect(flat(text)).toContain("AND time > now() - (interval '1 month' * $4)");
     });
 
-    it("rejects corrupt CAN frames but keeps a missing current reading", () => {
+    it("rejects a corrupt current reading but keeps a missing one", () => {
         const { text } = render(cteFor("BAT-1001", { months: 3 }));
         const one = flat(text);
-        expect(one).toContain("payload->'current'->>'value' IS NULL OR ABS((payload->'current'->>'value')::float) <= $2");
+        expect(one).toContain("pack_current IS NULL OR ABS(pack_current) <= $3");
     });
 
     it("counts a cycle on evidence a charge happened, and nothing else", () => {
@@ -233,13 +236,20 @@ describe("cycleCTEs", () => {
         expect(flat(text)).not.toContain("dsoc > 0 AND pack_current IS NOT NULL");
     });
 
-    it("breaks a session on the configured gap and reads the payload keys the poller writes", () => {
+    it("breaks a session on the configured gap and reads the 30s battery columns", () => {
         const { text } = render(cteFor("BAT-1001", { months: 3 }));
-        expect(flat(text)).toContain("dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= $4");
-        expect(text).toContain("payload->'soc'->>'value'");
-        expect(text).toContain("payload->'current'->>'value'");
-        expect(text).toContain("payload->'battery_voltage'->>'value'");
-        expect(text).toContain("payload->'rated_capacity'->>'value'");
+        const one = flat(text);
+        expect(one).toContain("dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= $5");
+        // Charging integrates telemetry_battery's 30-second soc/current/voltage columns,
+        // not the ~100-rows/day CAN snapshot.
+        expect(one).toContain("FROM telemetry_battery");
+        expect(one).toContain("soc_pct::float AS soc_pct");
+        expect(one).toContain("pack_current::float AS pack_current");
+        expect(one).toContain("pack_voltage::float AS pack_voltage");
+        // The nameplate is the one field telemetry_battery lacks, so it is still read from
+        // the CAN payload — a per-battery constant.
+        expect(one).toContain("(tc.payload->'rated_capacity'->>'value')::float");
+        expect(one).toContain("FROM telemetry_can tc");
     });
 
     it("counts session breaks to group contiguous charging runs", () => {
@@ -287,7 +297,7 @@ describe("cycleCTEs", () => {
         const { text } = render(countSamplesQuery(sql, "BAT-1001", timePredicate));
         const one = flat(text);
         expect(one).toContain("SELECT DISTINCT ON (time)");
-        expect(one).toContain("<= $2"); // MAX_VALID_CURRENT_A still bounds the set
+        expect(one).toContain("<= $3"); // MAX_VALID_CURRENT_A still bounds the set
         expect(one).toContain("SELECT count(*)::int AS n FROM raw");
     });
 
@@ -308,6 +318,7 @@ describe("cycleCTEs", () => {
         expect(one.startsWith("WITH raw AS (")).toBe(true);
         expect(one).toContain(") SELECT break_id, start_time, ah_charged");
         expect(params).toEqual([
+            "BAT-1001",
             "BAT-1001",
             MAX_VALID_CURRENT_A,
             "2026-03-01",

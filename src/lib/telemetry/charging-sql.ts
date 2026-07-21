@@ -90,16 +90,14 @@ export function buildTimeWindow(iot: IotSql, opts: ChargingWindowOpts) {
  *
  * ## The rules
  *
- * **Dedupe first.** ~96% of telemetry_can rows repeat a timestamp — the AWS poller
- * re-inserts the latest CAN frame on every poll whether or not the device has
- * produced a new one. Without DISTINCT ON, `time - LAG(time)` is 0 across every
- * duplicate, so those samples contribute no Ah at all, and `LAG` over tied
- * timestamps picks an arbitrary row, making dsoc unstable between identical runs.
- * DISTINCT ON (time) collapses each device sample to one row and makes the window
- * deterministic. (This is a read-side workaround: the poller is Python on AWS and
- * outside this repo. Fixing it there is the real win — at ~100 distinct samples
- * per battery per day against a ~30 s device stream, we are integrating a current
- * curve we can barely see.)
+ * **Source: telemetry_battery, at ~30 s.** Charging reads the battery-history series
+ * (getbatterymetricshistory), which stores the device's real ~30-second
+ * soc/current/voltage — so the Ah integral finally follows the true current curve
+ * instead of the CAN snapshot's ~100 rows/day. (Discharge still reads telemetry_can;
+ * see SampleSource.) DISTINCT ON (time) is kept as a safety: telemetry_battery has no
+ * unique (time, vehicleno) constraint, so a re-run of the daily backfill or the
+ * sidecar's day-boundary overlap can leave a same-timestamp pair, and a duplicate
+ * would give `time - LAG(time)` = 0 (no Ah) with a non-deterministic LAG.
  *
  * **Session.** The VPS `charging` boolean is never populated, so charging is
  * inferred from rising SOC: a sample joins the current session when SOC did not
@@ -117,12 +115,13 @@ export function buildTimeWindow(iot: IotSql, opts: ChargingWindowOpts) {
  * stretches (the charger pausing mid-charge) stay *inside* the cycle: they
  * contribute no Ah but they must not split it in two.
  *
- * Battery telemetry lives in telemetry_can as a JSONB `payload`. Payload keys of
- * interest:
- *   payload->'soc'->>'value'             integer %  (0..100)
- *   payload->'current'->>'value'         pack current in A (unsigned magnitude)
- *   payload->'battery_voltage'->>'value' pack voltage in V (export only)
- *   payload->'rated_capacity'->>'value'  nameplate Ah — the plausibility check
+ * Charging reads telemetry_battery columns directly:
+ *   soc_pct       integer %  (0..100)
+ *   pack_current  pack current in A (unsigned magnitude)
+ *   pack_voltage  pack voltage in V (export only)
+ * The nameplate is the one field telemetry_battery lacks, so rated_capacity_ah is
+ * still read from the latest telemetry_can `payload->'rated_capacity'->>'value'`
+ * (a per-battery constant) — it drives the capacity plausibility check.
  */
 /**
  * The shared prefix of every per-battery telemetry query: `raw` → `samples` → `stepped`.
@@ -136,11 +135,63 @@ export function buildTimeWindow(iot: IotSql, opts: ChargingWindowOpts) {
  * Everything downstream of `stepped` differs, because charge and discharge are not
  * symmetric — see dischargeCTEs for the three asymmetries.
  */
-export function sampleCTEs(
+/**
+ * Which stored series the sample chain reads. Both carry the same BMS soc /
+ * current / voltage; they differ only in cadence and dedupe:
+ *
+ *   "can"     telemetry_can JSONB payload — the live-snapshot table. ~96% of rows
+ *             repeat a timestamp (the AWS poller re-inserts the latest CAN frame on
+ *             every poll), and the distinct stream is only ~100 rows/day.
+ *   "battery" telemetry_battery columns, from getbatterymetricshistory — the SAME
+ *             pack soc / current / voltage at the device's true ~30 s cadence, and
+ *             near dup-free. Nameplate (rated_capacity) is not in telemetry_battery,
+ *             so it is still read from telemetry_can — a per-battery constant.
+ *
+ * Charging reads "battery" so the Charging Analysis integrates the real current
+ * curve; discharge/mileage stay on "can" until separately verified.
+ */
+export type SampleSource = "can" | "battery";
+
+/**
+ * The `raw` CTE alone. Kept apart only so the two sources sit side by side; both
+ * open the WITH chain with `raw` and emit identical aliases (time, soc_pct,
+ * pack_current, pack_voltage, rated_capacity_ah), so everything downstream — the
+ * dsoc/dt window, the trapezoid, the whole cycle definition — is blind to the choice.
+ */
+function rawCTE(
     iot: IotSql,
     vehicleno: string,
     timePredicate: SqlFragment,
+    source: SampleSource,
 ) {
+    if (source === "battery") {
+        return iot`
+        WITH raw AS (
+            SELECT DISTINCT ON (time)
+                time,
+                soc_pct::float      AS soc_pct,
+                pack_current::float AS pack_current,
+                pack_voltage::float AS pack_voltage,
+                -- Nameplate lives only in the CAN payload and is a per-battery
+                -- constant, so an uncorrelated scalar reads it once (evaluated as an
+                -- InitPlan, not per row).
+                (SELECT (tc.payload->'rated_capacity'->>'value')::float
+                   FROM telemetry_can tc
+                  WHERE tc.vehicleno = ${vehicleno}
+                    AND tc.payload->'rated_capacity'->>'value' IS NOT NULL
+                  ORDER BY tc.time DESC
+                  LIMIT 1)                                    AS rated_capacity_ah
+            FROM telemetry_battery
+            WHERE vehicleno = ${vehicleno}
+              AND soc_pct IS NOT NULL
+              -- Same corrupt-reading guard as the CAN path: a current in the hundreds
+              -- on a pack that peaks near 57 A is a decode fault and would inflate the
+              -- AH integral. A missing reading is not corrupt, so it stays.
+              AND (pack_current IS NULL OR ABS(pack_current) <= ${MAX_VALID_CURRENT_A})
+              ${timePredicate}
+            ORDER BY time
+        )`;
+    }
     return iot`
         WITH raw AS (
             SELECT DISTINCT ON (time)
@@ -162,7 +213,17 @@ export function sampleCTEs(
               )
               ${timePredicate}
             ORDER BY time
-        ),
+        )`;
+}
+
+export function sampleCTEs(
+    iot: IotSql,
+    vehicleno: string,
+    timePredicate: SqlFragment,
+    source: SampleSource = "can",
+) {
+    return iot`
+        ${rawCTE(iot, vehicleno, timePredicate, source)},
         samples AS (
             SELECT
                 time,
@@ -193,8 +254,11 @@ export function cycleCTEs(
     vehicleno: string,
     timePredicate: SqlFragment,
 ) {
+    // "battery": charging integrates the 30 s telemetry_battery series, not the
+    // ~100-rows/day CAN snapshot. The export detail and the dashboard aggregate both
+    // build on this, so both move together and stay in agreement.
     return iot`
-        ${sampleCTEs(iot, vehicleno, timePredicate)},
+        ${sampleCTEs(iot, vehicleno, timePredicate, "battery")},
         flagged AS (
             SELECT *,
                 CASE WHEN dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= ${SESSION_GAP_MAX_S}
