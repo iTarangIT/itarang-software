@@ -232,8 +232,14 @@ export interface DischargeKmCyclePoint {
     ah_discharged: number;
     ah_per_km: number | null;
     km_per_ah: number | null;
+    /** Average discharge current over the cycle (A) — the chart's Y-axis. */
+    avg_discharge_current: number | null;
+    /** Peak discharge current in the cycle (A) — tooltip context. */
+    max_discharge_current: number | null;
     /** Ah/km against the pack's own best-fifth baseline. Null = no baseline, NOT "normal". */
     overload_index?: number | null;
+    /** Avg current against the pack's own median current. Null = uncharacterisable, NOT "normal". */
+    current_index?: number | null;
 }
 
 /** Client mirror of `Baseline` (load-math.ts) — the pack's own light-load reference. */
@@ -258,11 +264,16 @@ export interface DischargeKmData {
         baseline: LoadBaseline | null;
         /** Cycles at or above the overload warn threshold. Null when there is no baseline. */
         overloadedCycles: number | null;
+        /** The pack's own median (normal) average current, A. Null when no cycle carried current. */
+        baselineAvgCurrent: number | null;
+        /** Cycles at or above the current-load warn threshold. Null when there is no current baseline. */
+        heavyCurrentCycles: number | null;
         gates: {
             baselineMinCycles: number;
             baselineMinKm: number;
             baselineKmFraction: number;
             overloadIndexWarn: number;
+            currentLoadIndexWarn: number;
             minTripKm: number;
         };
     };
