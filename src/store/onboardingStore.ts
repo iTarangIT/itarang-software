@@ -182,6 +182,7 @@ const initialState: DealerOnboardingState = {
     companyName: "",
     companyAddress: "",
     companyType: "",
+    dealerType: "",
     gstNumber: "",
     companyPanNumber: "",
     businessSummary: "",
@@ -322,6 +323,7 @@ function buildSavePayload(state: DealerOnboardingState) {
     dealerCode: state.dealerId || undefined,
     companyName: c.companyName,
     companyType: c.companyType,
+    dealerType: c.dealerType,
     gstNumber: c.gstNumber,
     panNumber: c.companyPanNumber,
     businessAddress: c.companyAddress
@@ -370,6 +372,7 @@ function partializeOnboarding(state: DealerOnboardingState & StoreActions) {
       companyName: state.company.companyName,
       companyAddress: state.company.companyAddress,
       companyType: state.company.companyType,
+      dealerType: state.company.dealerType,
       gstNumber: state.company.gstNumber,
       companyPanNumber: state.company.companyPanNumber,
       businessSummary: state.company.businessSummary,
@@ -556,6 +559,9 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
         companyType: str(
           a.company_type,
         ) as DealerOnboardingState["company"]["companyType"],
+        dealerType: str(
+          a.dealer_type,
+        ) as DealerOnboardingState["company"]["dealerType"],
         gstNumber: str(a.gst_number),
         companyPanNumber: str(a.pan_number),
         companyAddress,
