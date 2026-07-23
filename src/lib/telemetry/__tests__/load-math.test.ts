@@ -4,12 +4,15 @@ import {
     BASELINE_KM_FRACTION,
     BASELINE_MIN_CYCLES,
     BASELINE_MIN_KM,
+    CURRENT_LOAD_INDEX_WARN,
     MIN_TRIP_KM,
     OVERLOAD_INDEX_WARN,
     type BaselineInput,
     baselineAhPerKm,
+    currentLoadIndex,
     isOverloaded,
     isoDistanceAh,
+    medianAvgCurrent,
     overloadIndex,
 } from "@/lib/telemetry/load-math";
 
@@ -137,6 +140,40 @@ describe("overloadIndex", () => {
     });
 });
 
+describe("medianAvgCurrent — the pack's own normal load", () => {
+    it("takes the median of an odd set", () => {
+        expect(medianAvgCurrent([10, 30, 20])).toBe(20);
+    });
+
+    it("averages the two middles of an even set", () => {
+        expect(medianAvgCurrent([10, 20, 30, 40])).toBe(25);
+    });
+
+    it("drops nulls, non-finite and non-positive values before ranking", () => {
+        // A parked cycle's zero, a missing reading and a NaN must not pull the reference down.
+        expect(medianAvgCurrent([20, null, 0, -5, Number.NaN, 40, 30])).toBe(30);
+    });
+
+    it("returns null on an empty (or all-filtered) set rather than throwing", () => {
+        expect(medianAvgCurrent([])).toBeNull();
+        expect(medianAvgCurrent([null, 0, -1])).toBeNull();
+    });
+});
+
+describe("currentLoadIndex", () => {
+    it("is 1.0 for a cycle at the pack's normal draw, and scales linearly", () => {
+        expect(currentLoadIndex(20, 20)).toBe(1);
+        expect(currentLoadIndex(30, 20)).toBe(1.5);
+        expect(currentLoadIndex(10, 20)).toBe(0.5);
+    });
+
+    it("declines without a baseline or current — unknown is not 1.0", () => {
+        expect(currentLoadIndex(30, null)).toBeNull();
+        expect(currentLoadIndex(null, 20)).toBeNull();
+        expect(currentLoadIndex(30, 0)).toBeNull();
+    });
+});
+
 describe("isoDistanceAh — the contour that makes the shared axis visible", () => {
     it("inverts mileage into the Ah that would cover a given distance", () => {
         // km = mileage x Ah, so a 30 km cycle at 1.5 km/Ah drew 20 Ah.
@@ -238,5 +275,6 @@ describe("gates are reported, so the UI can say what it filtered", () => {
         expect(BASELINE_KM_FRACTION).toBeGreaterThan(0);
         expect(BASELINE_KM_FRACTION).toBeLessThanOrEqual(1);
         expect(OVERLOAD_INDEX_WARN).toBeGreaterThan(1);
+        expect(CURRENT_LOAD_INDEX_WARN).toBeGreaterThan(1);
     });
 });

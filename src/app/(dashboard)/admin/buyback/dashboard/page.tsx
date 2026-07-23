@@ -22,6 +22,7 @@ import { useRouter } from "next/navigation";
 
 import { Card, DealTable, ExportCsvButton, FilterPill, KpiCard, PageHeader } from "@/components/buyback/ui";
 import type { DealTableHead, DealTableRow } from "@/components/buyback/ui";
+import BuybackActionCenter from "@/components/buyback/notifications/BuybackActionCenter";
 import { MoneyFlowChart, MixDonut } from "@/components/buyback/charts";
 import { inr } from "@/lib/buyback/format";
 
@@ -453,6 +454,8 @@ export default function AdminBuybackDashboardPage() {
           sub="iTarang buyback operations — money moved, margin made, pipeline health"
         />
 
+        <BuybackActionCenter className="mb-5" />
+
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <FilterPill
             label="Date"
@@ -487,12 +490,14 @@ export default function AdminBuybackDashboardPage() {
             value={dealerFilter}
             options={dealerOptions}
             onChange={(v) => beginLoad(() => setDealerFilter(v))}
+            searchable
           />
           <FilterPill
             label="Vendor"
             value={vendorFilter}
             options={vendorOptions}
             onChange={(v) => beginLoad(() => setVendorFilter(v))}
+            searchable
           />
         </div>
 
@@ -524,7 +529,7 @@ export default function AdminBuybackDashboardPage() {
         ) : (
           <>
             {/* ---- KPI row ---- */}
-            <div className="mb-[22px] grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="mb-[22px] grid grid-cols-1 gap-3.5 sm:grid-cols-3">
               <KpiCard
                 label="Total Dealers"
                 value={
@@ -550,45 +555,6 @@ export default function AdminBuybackDashboardPage() {
                     main={count(data.kpis.active_negotiations.value)}
                     delta={data.kpis.active_negotiations.delta}
                     presetDays={presetDays}
-                  />
-                }
-              />
-              {/* Two margins, because there are two and conflating them is what
-                  made this card look broken. It read "TOTAL MARGIN / Locked deal
-                  values" while summing CLOSED deals only — so a deal whose vendor
-                  price was locked at ₹6,000 against ₹4,100 showed ₹0 on a card
-                  that claimed to be showing locked values, for as long as it sat
-                  in pickup and invoicing. The note was the bug, not the sum. */}
-              {/* "Vendor agreed onward", not "not yet banked": the list runs
-                  through SETTLED and CLOSED, so this INCLUDES the earned figure
-                  beside it. Captioning it "not yet banked" invited exactly the
-                  misreading the other card was just fixed for — two identical
-                  numbers side by side, one of them captioned as if it were
-                  additional, and a reader summing them to double the margin. */}
-              <KpiCard
-                label="MARGIN LOCKED"
-                accent="text-green-600"
-                note="Vendor agreed onward — includes earned"
-                value={
-                  <KpiValue
-                    main={inr(data.kpis.margin_locked.value)}
-                    delta={data.kpis.margin_locked.delta}
-                    money
-                    presetDays={presetDays}
-                  />
-                }
-              />
-              <KpiCard
-                label="MARGIN EARNED"
-                variant="navy"
-                note="Closed deals only"
-                value={
-                  <KpiValue
-                    main={inr(data.kpis.margin.value)}
-                    delta={data.kpis.margin.delta}
-                    money
-                    presetDays={presetDays}
-                    navy
                   />
                 }
               />
