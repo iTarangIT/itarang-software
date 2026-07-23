@@ -9,6 +9,7 @@ import {
 import { and, desc, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { buildLocationHaystack } from "@/lib/dealer/location-haystack";
+import { dealerTypeLabel, normalizeDealerType } from "@/lib/dealer/dealer-type";
 
 // Excel export of the dealer verification queue.
 //
@@ -101,6 +102,9 @@ export async function GET(req: NextRequest) {
     const agreementStatus = (sp.get("agreementStatus") || "").trim();
     const statusParam = (sp.get("status") || "").trim();
     const companyTypeParam = (sp.get("companyType") || "").trim().toLowerCase();
+    // E-202 dealer type. "unspecified" selects pre-E-202 rows with no value —
+    // mirrors the queue's dropdown so a filtered export matches the screen.
+    const dealerTypeParam = (sp.get("dealerType") || "").trim().toLowerCase();
     const sourceParam = (sp.get("source") || "").trim().toLowerCase();
     const stateParam = (sp.get("state") || "").trim().toLowerCase();
     const cityParam = (sp.get("city") || "").trim().toLowerCase();
@@ -160,6 +164,11 @@ export async function GET(req: NextRequest) {
       if (statusParam && status !== statusParam) return false;
       if (companyTypeParam && (a.company_type || "").toLowerCase() !== companyTypeParam)
         return false;
+      if (dealerTypeParam) {
+        const t = normalizeDealerType(a.dealer_type);
+        if (dealerTypeParam === "unspecified" ? t !== null : t !== dealerTypeParam)
+          return false;
+      }
       if (sourceParam && (a.source || "web").toLowerCase() !== sourceParam) return false;
       const loc = stateParam || cityParam || pincodeParam ? locationHaystack(a) : "";
       if (stateParam && !loc.includes(stateParam)) return false;
@@ -259,6 +268,11 @@ export async function GET(req: NextRequest) {
       { key: "rejectionRemarks", label: "Rejection Remarks", width: 32, wrap: true },
       { key: "correctionRemarks", label: "Correction Remarks", width: 32, wrap: true },
       { key: "regenerateAgreement", label: "Re-genrate Agreement / CRM/ Dgio", width: 30, wrap: true },
+      // E-202. Appended at the END on purpose: the columns above mirror the
+      // "Agreement CRM Dump – Mandatory Fields" sheet, so inserting beside
+      // Company Type (where it belongs logically) would shift every later
+      // column letter and break anything downstream keyed on position.
+      { key: "dealerType", label: "Dealer Type", width: 24 },
     ];
 
     const records = filtered.map((a) => ({
@@ -299,6 +313,7 @@ export async function GET(req: NextRequest) {
       correctionRemarks: a.correction_remarks || "",
       // No data source — manual fill-in column kept for the team's workflow.
       regenerateAgreement: "",
+      dealerType: dealerTypeLabel(a.dealer_type, ""),
     }));
 
     // ── Build the styled workbook ──────────────────────────────────────────
