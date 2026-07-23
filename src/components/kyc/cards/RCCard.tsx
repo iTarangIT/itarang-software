@@ -8,6 +8,9 @@ interface RCCardProps {
   rcNumber?: string;
   ocrData?: Record<string, unknown> | null;
   applicant?: "primary" | "co_borrower";
+  // Lead-scoped KYC API base. Defaults to the admin route so the admin flow is
+  // unchanged; the NBFC Acquire panel passes its own mirror base.
+  kycBase?: string;
   existingVerification?: {
     id: string;
     status: string;
@@ -25,13 +28,12 @@ export default function RCCard({
   rcNumber: initRc = "",
   ocrData,
   applicant = "primary",
+  kycBase,
   existingVerification,
   onActionComplete,
 }: RCCardProps) {
-  const apiBase =
-    applicant === "co_borrower"
-      ? `/api/admin/kyc/${leadId}/coborrower`
-      : `/api/admin/kyc/${leadId}`;
+  const base = kycBase ?? `/api/admin/kyc/${leadId}`;
+  const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
   const [rcNumber, setRcNumber] = useState(initRc);
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState<CardStatus>(() => {
@@ -104,12 +106,12 @@ export default function RCCard({
     try {
       const vid = verificationId || existingVerification?.id;
       const res = vid
-        ? await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
+        ? await fetch(`${base}/verification/${vid}/action`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
           })
-        : await fetch(`/api/admin/kyc/${leadId}/verification/manual`, {
+        : await fetch(`${base}/verification/manual`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, verification_type: "rc", applicant, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
@@ -174,6 +176,7 @@ export default function RCCard({
             <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">Input Data</p>
             <OcrAutofillButton
               leadId={leadId}
+              ocrUrl={`${base}/ocr`}
               docType="rc_copy"
               cachedOcrData={ocrData}
               disabled={status === "loading"}

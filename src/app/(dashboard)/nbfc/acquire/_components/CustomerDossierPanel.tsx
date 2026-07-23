@@ -278,6 +278,8 @@ export default function CustomerDossierPanel({
           rows={dossier.customerKyc}
           aadhaar={dossier.aadhaar}
           docs={dossier.customerDocs}
+          leadId={leadId}
+          docFor="primary"
         />
       </SectionCard>
 
@@ -354,6 +356,8 @@ export default function CustomerDossierPanel({
               <KycVerificationDetails
                 rows={dossier.coBorrowerKyc}
                 aadhaar={null}
+                leadId={leadId}
+                docFor="co_borrower"
               />
             </div>
           ) : null}
@@ -406,6 +410,44 @@ export default function CustomerDossierPanel({
                 ))}
               </div>
             ) : null}
+            {/* E-208 — Step-4 pre-sanction documents the dealer attached. */}
+            {(() => {
+              const docs = (ps.pre_sanction_doc_urls ?? []) as {
+                url: string;
+                name: string;
+                type: string;
+                size: number;
+              }[];
+              if (!Array.isArray(docs) || docs.length === 0) return null;
+              return (
+                <div className="mt-4">
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Pre-sanction documents ({docs.length})
+                  </p>
+                  <ul className="space-y-1.5">
+                    {docs.map((d, i) => (
+                      <li
+                        key={`${d.url}-${i}`}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-1.5 text-sm"
+                      >
+                        <a
+                          href={d.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-brand-sky)] hover:underline"
+                          title={d.name}
+                        >
+                          {d.name}
+                        </a>
+                        <span className="shrink-0 text-[10px] uppercase tracking-wide text-slate-400">
+                          {(d.type?.split("/")[1] || d.type || "file").slice(0, 8)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
           </>
         ) : (
           <p className="text-sm text-slate-400">No product selection recorded.</p>

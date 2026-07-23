@@ -61,6 +61,7 @@ export default function SupportingDocsPanel({
   >({});
   const [loadingId, setLoadingId] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const handleReview = async (
@@ -74,6 +75,7 @@ export default function SupportingDocsPanel({
     }
     setLoadingId(`${doc.id}:${action}`);
     setError("");
+    setNotice("");
     try {
       const res = await fetch(
         `/api/admin/kyc/${leadId}/supporting-docs/${doc.id}/review`,
@@ -91,6 +93,11 @@ export default function SupportingDocsPanel({
       if (!data.success) {
         setError(data.error?.message ?? "Review failed");
         return;
+      }
+      if (data.data?.pushed_to_nbfc) {
+        setNotice(
+          "All requested documents verified — this request has been pushed back to the NBFC.",
+        );
       }
       onRefresh();
     } catch {
@@ -285,6 +292,12 @@ export default function SupportingDocsPanel({
       {error && (
         <div className="px-5 py-3 bg-red-50 border-t border-red-200 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div className="px-5 py-3 bg-emerald-50 border-t border-emerald-200 text-sm text-emerald-700">
+          {notice}
         </div>
       )}
 

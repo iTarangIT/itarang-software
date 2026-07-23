@@ -1,0 +1,669 @@
+import { readStoredDocument, StoredDocumentError } from '@/lib/storage/readStoredDocument';
+import { db } from '@/lib/db';
+import { kycDocuments, personalDetails } from '@/lib/db/schema';
+import { eq, and } from 'drizzle-orm';
+import { extractDocumentOcr, type OcrDocType } from '@/lib/decentro';
+import { extractTextFromImageBuffer } from '@/lib/ocr/tesseractOcr';
+import { parseBankDocument } from '@/lib/ocr/bankDocParser';
+import { isPdf, rasterizePdfFirstPage } from '@/lib/ocr/pdfToImage';
+
+/**
+ * Shared KYC OCR extraction logic.
+ *
+ * This holds the entire OCR pipeline that used to live inline in the admin
+ * route (`/api/admin/kyc/[leadId]/ocr`): document lookup + reclassification
+ * fallback, storage read, PDF rasterization, Decentro OCR, Tesseract fallback,
+ * field parsing, cache read, and write-back to `kycDocuments.ocr_data` /
+ * `personalDetails`. Auth is deliberately NOT handled here — every caller
+ * (admin, NBFC) performs its own auth check and then calls this helper.
+ *
+ * Returns the SAME body shape the admin route returns today. Error results
+ * carry an optional `status` so the caller can set the matching HTTP status;
+ * successful results omit `status` (caller defaults to 200).
+ */
+export type RunKycOcrResult = {
+    success: boolean;
+    ocr_data?: any;
+    source?: string;
+    decentro_error?: string;
+    error?: string;
+    doc_type?: string;
+    status?: number;
+};
+
+// Map internal doc types to Decentro OCR doc types.
+const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
+    pan_card: 'PAN',
+    aadhaar_front: 'AADHAAR',
+    aadhaar_back: 'AADHAAR',
+};
+
+// Doc types that use Tesseract OCR (regex-extracted from raw text).
+const TESSERACT_TYPES = ['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4', 'rc_copy'];
+
+// Per-doc-type Decentro options that mirror the working curl shape exactly.
+// PAN on our prod module rejects requests carrying `module_secret` and uses
+// a different `consent_purpose` than Aadhaar — sending the same shape we
+// verified end-to-end via curl avoids the metadata-only error response.
+const DECENTRO_OCR_OPTIONS: Record<string, { skipModuleSecret?: boolean; consentPurpose?: string }> = {
+    pan_card: {
+        skipModuleSecret: true,
+        consentPurpose: 'for bank account purpose only',
+    },
+};
+
+/** Helper: extract a string field from nested OCR response. Walks common nesting levels
+ *  (kycResult, extractedData, result, ocrResult, data) and accepts both strings and numbers.
+ */
+function getField(data: Record<string, unknown>, ...keys: string[]): string | undefined {
+    const targets: Record<string, unknown>[] = [data];
+    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data', 'ocr_data']) {
+        if (data[k] && typeof data[k] === 'object') targets.push(data[k] as Record<string, unknown>);
+    }
+    // Also look inside nested kycResult.extractedData etc.
+    for (const t of [...targets]) {
+        for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data']) {
+            if (t[k] && typeof t[k] === 'object') targets.push(t[k] as Record<string, unknown>);
+        }
+    }
+    for (const t of targets) {
+        for (const key of keys) {
+            const v = t[key];
+            if (typeof v === 'string' && v.trim()) return v.trim();
+            if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+        }
+    }
+    return undefined;
+}
+
+/** Flatten address field that Decentro may return as an object {line1, line2, city, state, pincode}. */
+function getAddress(data: Record<string, unknown>): string | undefined {
+    // Traverse the same nesting levels as getField so addresses buried under
+    // `ocr_data` (e.g. data.ocr_data.address) are discoverable.
+    const targets: Record<string, unknown>[] = [data];
+    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data', 'ocr_data']) {
+        if (data[k] && typeof data[k] === 'object') targets.push(data[k] as Record<string, unknown>);
+    }
+    for (const t of [...targets]) {
+        for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data', 'ocr_data']) {
+            if (t[k] && typeof t[k] === 'object') targets.push(t[k] as Record<string, unknown>);
+        }
+    }
+    for (const t of targets) {
+        // Case 1: plain string
+        for (const key of ['address', 'full_address', 'fullAddress', 'currentAddress', 'current_address', 'localAddress', 'addressLine']) {
+            const v = t[key];
+            if (typeof v === 'string' && v.trim()) return v.trim();
+        }
+        // Case 2: object — Decentro commonly returns { line1, line2, vtc, district, state, pincode, country }
+        for (const key of ['address', 'addressObject', 'address_object', 'addressData']) {
+            const v = t[key];
+            if (v && typeof v === 'object' && !Array.isArray(v)) {
+                const o = v as Record<string, unknown>;
+                const parts = [
+                    o.line1 || o.addressLine1 || o.address_line_1,
+                    o.line2 || o.addressLine2 || o.address_line_2,
+                    o.street,
+                    o.locality || o.landmark,
+                    o.vtc || o.village || o.town || o.city,
+                    o.subdistrict || o.sub_district,
+                    o.district,
+                    o.state,
+                    o.country,
+                    o.pincode || o.pin || o.postalCode || o.zip,
+                ].filter((p) => typeof p === 'string' && (p as string).trim()).map((p) => (p as string).trim());
+                if (parts.length > 0) return parts.join(', ');
+            }
+        }
+    }
+    return undefined;
+}
+
+/** Normalize a Decentro-returned Aadhaar ID into a clean 12-digit string (may be masked).
+ *  Only accepts a full 12-digit number or the canonical masked shape (XXXX followed by 8 digits). */
+function normalizeAadhaar(raw: string | undefined): string | undefined {
+    if (!raw) return undefined;
+    const cleaned = raw.replace(/[^0-9Xx]/g, '');
+    if (/^\d{12}$/.test(cleaned)) return cleaned;
+    if (/^[Xx]{4}\d{8}$/.test(cleaned)) return cleaned;
+    return undefined;
+}
+
+/** Parse various DOB formats Decentro may return into a Date, or null if unparseable.
+ *  Rejects impossible calendar dates (e.g. 31-02-2024) via a round-trip check —
+ *  JS normally silently shifts those instead of failing. */
+function parseDob(raw: string | undefined): Date | null {
+    if (!raw) return null;
+    const s = raw.trim();
+
+    const buildUtc = (y: number, m: number, d: number): Date | null => {
+        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+        if (y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+        const date = new Date(Date.UTC(y, m - 1, d));
+        if (!Number.isFinite(date.getTime())) return null;
+        // Round-trip: if JS normalised the components, this isn't a real calendar date.
+        if (
+            date.getUTCFullYear() !== y ||
+            date.getUTCMonth() + 1 !== m ||
+            date.getUTCDate() !== d
+        ) return null;
+        return date;
+    };
+
+    // DD-MM-YYYY or DD/MM/YYYY
+    const ddmmyyyy = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+    if (ddmmyyyy) {
+        const [, dd, mm, yyyy] = ddmmyyyy;
+        return buildUtc(Number(yyyy), Number(mm), Number(dd));
+    }
+
+    // YYYY-MM-DD ISO
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+        const [, yyyy, mm, dd] = isoMatch;
+        return buildUtc(Number(yyyy), Number(mm), Number(dd));
+    }
+
+    return null;
+}
+
+/** Upsert personalDetails — create if not exists, update only non-null fields */
+async function saveToPersonalDetails(leadId: string, fields: Record<string, unknown>) {
+    // Remove null/undefined values
+    const cleanFields: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(fields)) {
+        if (v !== null && v !== undefined && v !== '') cleanFields[k] = v;
+    }
+    if (Object.keys(cleanFields).length === 0) return;
+
+    const existing = await db.select({ id: personalDetails.id })
+        .from(personalDetails)
+        .where(eq(personalDetails.lead_id, leadId))
+        .limit(1);
+
+    if (existing.length > 0) {
+        await db.update(personalDetails)
+            .set({ ...cleanFields, ocr_processed_at: new Date() })
+            .where(eq(personalDetails.lead_id, leadId));
+    } else {
+        await db.insert(personalDetails).values({
+            id: crypto.randomUUID(),
+            lead_id: leadId,
+            ...cleanFields,
+            ocr_processed_at: new Date(),
+        });
+    }
+}
+
+export async function runKycOcr(
+    leadId: string,
+    opts: { docType: string; docFor: string },
+): Promise<RunKycOcrResult> {
+    try {
+        const doc_type: string | undefined = opts.docType;
+        // doc_for filters by applicant: 'customer' = primary, 'borrower' = co-borrower.
+        // Default 'customer' keeps existing callers (that don't send doc_for) on the
+        // primary doc — backward compatible with the autofill button before this fix.
+        const doc_for: string = typeof opts.docFor === 'string' ? opts.docFor : 'customer';
+
+        if (!doc_type) {
+            return { success: false, error: 'doc_type is required', status: 400 };
+        }
+
+        // Find the document record by exact doc_type AND doc_for so a co-borrower
+        // OCR call doesn't accidentally pick up the primary's PAN (or vice versa).
+        let [doc] = await db.select({
+            id: kycDocuments.id,
+            fileUrl: kycDocuments.file_url,
+            fileName: kycDocuments.file_name,
+            ocrData: kycDocuments.ocr_data,
+        }).from(kycDocuments)
+            .where(and(
+                eq(kycDocuments.lead_id, leadId),
+                eq(kycDocuments.doc_type, doc_type),
+                eq(kycDocuments.doc_for, doc_for),
+            ))
+            .limit(1);
+
+        // Fallback: if no exact match, search docs for this lead+doc_for and try to identify the right one
+        if (!doc) {
+            console.log(`[OCR Fallback] No exact match for doc_type="${doc_type}" doc_for="${doc_for}" on lead=${leadId}. Searching all docs...`);
+            const allDocs = await db.select({
+                id: kycDocuments.id,
+                fileUrl: kycDocuments.file_url,
+                fileName: kycDocuments.file_name,
+                ocrData: kycDocuments.ocr_data,
+                docType: kycDocuments.doc_type,
+            }).from(kycDocuments)
+                .where(and(
+                    eq(kycDocuments.lead_id, leadId),
+                    eq(kycDocuments.doc_for, doc_for),
+                ));
+
+            console.log(`[OCR Fallback] Found ${allDocs.length} docs:`, allDocs.map(d => ({ id: d.id, docType: d.docType, fileName: d.fileName })));
+
+            for (const candidate of allDocs) {
+                if (!candidate.fileUrl) continue;
+                try {
+                    // Read straight from storage — stored URLs are relative
+                    // proxy paths on the S3 backend, which fetch() can't parse.
+                    const stored = await readStoredDocument(candidate.fileUrl);
+                    let buf = stored.buffer;
+                    let ct = stored.contentType;
+                    let fname = candidate.fileName || stored.filename;
+
+                    // PDF candidates must be rasterized to PNG before any OCR
+                    // strategy can identify them (mirrors the primary path).
+                    if (isPdf(ct, candidate.fileName || candidate.fileUrl)) {
+                        try {
+                            buf = await rasterizePdfFirstPage(buf);
+                            ct = 'image/png';
+                            fname = fname.replace(/\.pdf($|\?)/i, '.png');
+                            if (!/\.png$/i.test(fname)) fname = 'doc.png';
+                        } catch (e) {
+                            console.log(`[OCR Fallback] PDF rasterization failed for doc ${candidate.id}:`, e);
+                            continue;
+                        }
+                    }
+
+                    // Strategy 1: Try Decentro OCR directly with expected type — if extraction succeeds, it's the right doc
+                    const decentroOcrType = DECENTRO_OCR_MAP[doc_type];
+                    if (decentroOcrType) {
+                        try {
+                            const blob = new Blob([buf], { type: ct });
+                            const side: 'FRONT' | 'BACK' | undefined =
+                                doc_type === 'aadhaar_front' ? 'FRONT'
+                                : doc_type === 'aadhaar_back' ? 'BACK'
+                                : undefined;
+                            const ocrRes = await extractDocumentOcr(
+                                decentroOcrType,
+                                blob,
+                                fname,
+                                side,
+                                undefined,
+                                undefined,
+                                DECENTRO_OCR_OPTIONS[doc_type],
+                            );
+                            // Decentro may use responseStatus or status field
+                            const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
+                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult || ocrRes.ocrResult;
+                            console.log(`[OCR Fallback] Decentro OCR for doc ${candidate.id}: isSuccess=${isSuccess}, hasData=${!!ocrPayload}`);
+                            if (isSuccess && ocrPayload) {
+                                await db.update(kycDocuments)
+                                    .set({ doc_type: doc_type, ocr_data: ocrPayload, updated_at: new Date() })
+                                    .where(eq(kycDocuments.id, candidate.id));
+                                doc = { id: candidate.id, fileUrl: candidate.fileUrl, fileName: candidate.fileName, ocrData: ocrPayload };
+                                console.log(`[OCR Fallback] Found match via Decentro OCR! Reclassified doc ${candidate.id} as ${doc_type}`);
+                                break;
+                            }
+                        } catch (e) {
+                            console.log(`[OCR Fallback] Decentro OCR failed for doc ${candidate.id}:`, e);
+                        }
+                    }
+
+                    // Strategy 2: Tesseract-based detection for PAN (look for PAN number pattern)
+                    if (!doc && doc_type === 'pan_card') {
+                        console.log(`[OCR Fallback] Trying Tesseract PAN detection for doc ${candidate.id}...`);
+                        try {
+                            const text = await extractTextFromImageBuffer(buf);
+                            console.log(`[OCR Fallback] Tesseract extracted ${text.length} chars from doc ${candidate.id}`);
+                            const panMatch = text.match(/[A-Z]{5}\d{4}[A-Z]/);
+                            if (panMatch) {
+                                const ocrResult = { pan_number: panMatch[0], rawText: text, source: 'tesseract_fallback' };
+                                await db.update(kycDocuments)
+                                    .set({ doc_type: doc_type, ocr_data: ocrResult, updated_at: new Date() })
+                                    .where(eq(kycDocuments.id, candidate.id));
+                                doc = { id: candidate.id, fileUrl: candidate.fileUrl, fileName: candidate.fileName, ocrData: ocrResult };
+                                console.log(`[OCR Fallback] Found PAN via Tesseract! PAN=${panMatch[0]}, reclassified doc ${candidate.id}`);
+                                break;
+                            } else {
+                                console.log(`[OCR Fallback] No PAN pattern found in Tesseract text. First 200 chars: ${text.slice(0, 200)}`);
+                            }
+                        } catch (e) {
+                            console.log(`[OCR Fallback] Tesseract PAN detection failed for doc ${candidate.id}:`, e);
+                        }
+                    }
+
+                    // Strategy 3: Tesseract-based detection for RC (look for RC number pattern)
+                    if (!doc && doc_type === 'rc_copy') {
+                        try {
+                            const text = await extractTextFromImageBuffer(buf);
+                            const rcMatch = text.match(/[A-Z]{2}[\s\-.]?\d{1,2}[\s\-.]?[A-Z]{1,3}[\s\-.]?\d{1,4}/i);
+                            if (rcMatch) {
+                                const ocrResult = { rc_number: rcMatch[0].replace(/[\s.]/g, '-').toUpperCase(), rawText: text };
+                                await db.update(kycDocuments)
+                                    .set({ doc_type: doc_type, ocr_data: ocrResult, updated_at: new Date() })
+                                    .where(eq(kycDocuments.id, candidate.id));
+                                doc = { id: candidate.id, fileUrl: candidate.fileUrl, fileName: candidate.fileName, ocrData: ocrResult };
+                                console.log(`[OCR Fallback] Found RC via Tesseract! RC=${rcMatch[0]}, reclassified doc ${candidate.id}`);
+                                break;
+                            }
+                        } catch (e) {
+                            console.log(`[OCR Fallback] Tesseract RC detection failed for doc ${candidate.id}:`, e);
+                        }
+                    }
+
+                    // Strategy 4: Tesseract-based detection for bank docs (look for account/IFSC patterns)
+                    if (!doc && ['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4'].includes(doc_type)) {
+                        try {
+                            const text = await extractTextFromImageBuffer(buf);
+                            const bankData = parseBankDocument(text);
+                            if (bankData.accountNumber || bankData.ifsc) {
+                                const ocrResult = {
+                                    account_number: bankData.accountNumber || null,
+                                    ifsc: bankData.ifsc || null,
+                                    bank_name: bankData.bankName || null,
+                                    branch: bankData.branch || null,
+                                    rawText: text,
+                                };
+                                await db.update(kycDocuments)
+                                    .set({ doc_type: doc_type, ocr_data: ocrResult, updated_at: new Date() })
+                                    .where(eq(kycDocuments.id, candidate.id));
+                                doc = { id: candidate.id, fileUrl: candidate.fileUrl, fileName: candidate.fileName, ocrData: ocrResult };
+                                console.log(`[OCR Fallback] Found bank doc via Tesseract! reclassified doc ${candidate.id}`);
+                                break;
+                            }
+                        } catch (e) {
+                            console.log(`[OCR Fallback] Tesseract bank detection failed for doc ${candidate.id}:`, e);
+                        }
+                    }
+                } catch (e) {
+                    console.log(`[OCR Fallback] Error processing candidate doc ${candidate.id}:`, e);
+                    continue;
+                }
+            }
+        }
+
+        if (!doc) {
+            return { success: false, error: `No ${doc_type} document found for this lead`, status: 404 };
+        }
+
+        // Return cached OCR data if available (already saved to DB on first run).
+        // BUT skip the cache when the cached payload is a Tesseract fallback —
+        // those rows were saved when Decentro was misconfigured (kyc_validate=1
+        // rejected by the prod module) and only contain rawText. Falling through
+        // to a fresh Decentro call gives us real structured fields instead of
+        // perpetually returning the bad cached result.
+        const cached = doc.ocrData as Record<string, unknown> | null;
+        const isFallbackCache =
+            !!cached &&
+            (cached.source === 'tesseract_fallback' ||
+                (Object.keys(cached).every((k) => k === 'rawText' || k === 'source')));
+        if (cached && Object.keys(cached).length > 0 && !isFallbackCache) {
+            return {
+                success: true,
+                ocr_data: cached,
+                source: 'db',
+                doc_type,
+            };
+        }
+
+        // No cached data — fetch the file and run OCR
+        if (!doc.fileUrl) {
+            return { success: false, error: 'Document has no file URL', status: 400 };
+        }
+
+        // Read straight from storage (S3/Supabase) — stored URLs are relative
+        // proxy paths on the S3 backend, which a server-side fetch() can't
+        // parse, and the proxy route requires a browser session anyway.
+        let stored;
+        try {
+            stored = await readStoredDocument(doc.fileUrl);
+        } catch (e) {
+            console.error(`[Admin OCR] file read failed for doc ${doc.id} on lead ${leadId}:`, e);
+            return {
+                success: false,
+                error: e instanceof StoredDocumentError
+                    ? e.message
+                    : 'Could not read the document file from storage. Ask the dealer to re-upload it.',
+                status: 502,
+            };
+        }
+
+        const fileBuffer = stored.buffer;
+        const contentType = stored.contentType;
+        const fileName = doc.fileName || stored.filename;
+
+        // OCR (Decentro + Tesseract) only understands image bytes. Dealers can
+        // upload KYC docs as PDFs, so rasterize page 1 → PNG before OCR.
+        // Falls through unchanged for image uploads.
+        let ocrBuffer = fileBuffer;
+        let ocrContentType = contentType;
+        let ocrFileName = fileName;
+        if (isPdf(contentType, doc.fileName || doc.fileUrl)) {
+            try {
+                ocrBuffer = await rasterizePdfFirstPage(fileBuffer);
+                ocrContentType = 'image/png';
+                ocrFileName = fileName.replace(/\.pdf($|\?)/i, '.png');
+                if (!/\.png$/i.test(ocrFileName)) ocrFileName = `${doc_type}.png`;
+            } catch (pdfErr) {
+                console.error(`[Admin OCR] PDF rasterization failed for doc ${doc.id} on lead ${leadId}:`, pdfErr);
+                return {
+                    success: false,
+                    error: "Couldn't read the PDF document. Ask the dealer to re-upload a clearer PDF or an image.",
+                    status: 422,
+                };
+            }
+        }
+
+        let ocrData: Record<string, unknown> = {};
+        let source: 'decentro' | 'tesseract' = 'decentro';
+        // Capture Decentro's own error message when extraction fails so the
+        // front-end can show admins the real cause (plan disabled, invalid
+        // module_secret, expired creds) instead of silently rendering the
+        // Tesseract fallback as if it were the truth.
+        let decentroError: string | null = null;
+
+        const decentroType = DECENTRO_OCR_MAP[doc_type];
+
+        if (decentroType) {
+            // Use Decentro OCR for supported types
+            const blob = new Blob([ocrBuffer], { type: ocrContentType });
+            const side: 'FRONT' | 'BACK' | undefined =
+                doc_type === 'aadhaar_front' ? 'FRONT'
+                : doc_type === 'aadhaar_back' ? 'BACK'
+                : undefined;
+            const decentroRes = await extractDocumentOcr(
+                decentroType,
+                blob,
+                ocrFileName,
+                side,
+                undefined,
+                undefined,
+                DECENTRO_OCR_OPTIONS[doc_type],
+            );
+            const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
+            // Decentro varies the wrapping key by document/SKU. Cover the
+            // shapes we've seen across PAN/Aadhaar/forensics endpoints.
+            const decentroPayload =
+                decentroRes.data ||
+                decentroRes.result ||
+                decentroRes.kycResult ||
+                decentroRes.ocrResult ||
+                decentroRes.ocr_result ||
+                decentroRes.kyc_result;
+            if (success && decentroPayload) {
+                ocrData = decentroPayload;
+                source = 'decentro';
+            } else {
+                // Decentro didn't give us usable structured data — capture why
+                // before falling back. The `error` field can be either a plain
+                // string OR a nested { message, code } / { message } / { errorMessage }
+                // object depending on the SKU and failure mode. Try every shape
+                // before falling back to a "couldn't read it" diagnostic.
+                const pickErrorMessage = (val: unknown): string | null => {
+                    if (typeof val === 'string' && val.trim()) return val.trim();
+                    if (val && typeof val === 'object') {
+                        const o = val as Record<string, unknown>;
+                        const candidate =
+                            (typeof o.message === 'string' && o.message) ||
+                            (typeof o.errorMessage === 'string' && o.errorMessage) ||
+                            (typeof o.error === 'string' && o.error) ||
+                            (typeof o.responseMessage === 'string' && o.responseMessage);
+                        const code =
+                            (typeof o.responseCode === 'string' && o.responseCode) ||
+                            (typeof o.code === 'string' && o.code) ||
+                            (typeof o.errorCode === 'string' && o.errorCode);
+                        if (candidate) {
+                            return code ? `${candidate} (${code})` : candidate;
+                        }
+                    }
+                    return null;
+                };
+                decentroError =
+                    pickErrorMessage(decentroRes.message) ||
+                    pickErrorMessage(decentroRes.error) ||
+                    pickErrorMessage(decentroRes.responseMessage) ||
+                    pickErrorMessage((decentroRes.data as Record<string, unknown> | undefined)?.error) ||
+                    `Decentro returned no extractable data (keys: ${Object.keys(decentroRes ?? {}).join(', ')})`;
+                console.error(
+                    `[Admin OCR] Decentro extraction failed for ${doc_type} on lead ${leadId}: success=${success} payload=${!!decentroPayload} message=${decentroError}`,
+                );
+
+                // Fallback to Tesseract — and salvage what we can from the raw
+                // text so the admin still gets autofill in degraded mode.
+                const text = await extractTextFromImageBuffer(ocrBuffer);
+                ocrData = { rawText: text, source: 'tesseract_fallback' };
+                source = 'tesseract';
+
+                // PAN: regex out the 5-letter / 4-digit / 1-letter pattern.
+                if (doc_type === 'pan_card') {
+                    const panMatch = text.match(/[A-Z]{5}\d{4}[A-Z]/);
+                    if (panMatch) {
+                        (ocrData as Record<string, unknown>).pan_number = panMatch[0];
+                    }
+                }
+            }
+        } else if (TESSERACT_TYPES.includes(doc_type)) {
+            // Use Tesseract for bank docs and RC
+            const text = await extractTextFromImageBuffer(ocrBuffer);
+            source = 'tesseract';
+
+            if (doc_type === 'rc_copy') {
+                const rcMatch = text.match(/[A-Z]{2}[\s\-.]?\d{1,2}[\s\-.]?[A-Z]{1,3}[\s\-.]?\d{1,4}/i);
+                ocrData = {
+                    rc_number: rcMatch?.[0]?.replace(/[\s.]/g, '-').toUpperCase() || null,
+                    rawText: text,
+                };
+            } else {
+                const bankData = parseBankDocument(text);
+                ocrData = {
+                    account_number: bankData.accountNumber || null,
+                    ifsc: bankData.ifsc || null,
+                    bank_name: bankData.bankName || null,
+                    branch: bankData.branch || null,
+                    rawText: text,
+                };
+            }
+        } else {
+            return { success: false, error: `OCR not supported for doc_type: ${doc_type}`, status: 400 };
+        }
+
+        // ── 1. Store OCR result in kycDocuments ──────────────────────────────
+        await db.update(kycDocuments)
+            .set({ ocr_data: ocrData, updated_at: new Date() })
+            .where(eq(kycDocuments.id, doc.id));
+
+        // ── 2. Save extracted fields to personalDetails (persistent DB storage) ──
+        // personalDetails holds the PRIMARY applicant's data only — skip the
+        // save for co-borrower OCR runs (doc_for !== 'customer') so we don't
+        // overwrite primary's PAN / Aadhaar / address with co-borrower values.
+        // Co-borrower OCR results still get persisted to kycDocuments.ocr_data
+        // above and surface on the co-borrower card via the case-review fetch.
+        if (doc_for === 'customer') {
+        if (doc_type === 'pan_card') {
+            const panNo = getField(ocrData, 'pan_number', 'panNumber', 'id_number', 'idNumber', 'pan', 'panNo');
+            const fatherName = getField(ocrData, 'fatherName', 'father_name', 'fatherOrHusbandName');
+            const dob = getField(ocrData, 'dob', 'dateOfBirth', 'date_of_birth');
+            const parsedDob = parseDob(dob);
+            await saveToPersonalDetails(leadId, {
+                pan_no: panNo?.toUpperCase(),
+                father_husband_name: fatherName,
+                ...(parsedDob ? { dob: parsedDob } : {}),
+            });
+        } else if (doc_type === 'aadhaar_front' || doc_type === 'aadhaar_back') {
+            // Decentro's Aadhaar OCR returns idNumber / nameOnDocument / dateOfBirth / fatherName / address.
+            // Front typically yields name + DOB + gender; back yields ID number + address + father's name.
+            // We extract everything we can from both sides and saveToPersonalDetails ignores empty values.
+            const aadhaarNo = normalizeAadhaar(
+                getField(
+                    ocrData,
+                    'idNumber', 'id_number',
+                    'aadhaar_number', 'aadhaarNumber', 'aadhaarNo', 'aadhaar_no',
+                    'uid', 'uidNumber', 'aadhaar',
+                    'maskedAadhaar', 'masked_aadhaar',
+                ),
+            );
+            const nameOnDoc = getField(
+                ocrData,
+                'nameOnDocument', 'name_on_document',
+                'name', 'fullName', 'full_name', 'holderName',
+            );
+            const fatherName = getField(
+                ocrData,
+                'fatherName', 'father_name', 'fathersName', 'fathers_name',
+                'fatherOrHusbandName', 'father_or_husband_name',
+                'careOf', 'careof', 'care_of', 'co',
+                'guardianName', 'guardian_name',
+            );
+            const address = getAddress(ocrData);
+            const pincode = getField(
+                ocrData,
+                'pincode', 'pinCode', 'pin_code', 'pin', 'postalCode', 'postal_code', 'zip',
+            );
+            const dobStr = getField(
+                ocrData,
+                'dob', 'dateOfBirth', 'date_of_birth', 'DOB',
+            );
+            const gender = getField(ocrData, 'gender', 'sex');
+            const parsedDob = parseDob(dobStr);
+
+            // Log only presence flags + non-PII context so server logs don't
+            // carry Aadhaar IDs, raw DOBs, pincodes, or gender.
+            console.log(
+                `[Admin OCR] Aadhaar ${doc_type} extracted: leadId=${leadId}, aadhaar=${aadhaarNo ? 'Y' : 'N'}, name=${nameOnDoc ? 'Y' : 'N'}, father=${fatherName ? 'Y' : 'N'}, addr=${address ? 'Y' : 'N'}, dob=${parsedDob ? 'Y' : 'N'}, pincode=${pincode ? 'Y' : 'N'}, gender=${gender ? 'Y' : 'N'}`,
+            );
+
+            await saveToPersonalDetails(leadId, {
+                aadhaar_no: aadhaarNo,
+                father_husband_name: fatherName,
+                local_address: address && pincode && !address.includes(pincode) ? `${address}, ${pincode}` : address,
+                ...(parsedDob ? { dob: parsedDob } : {}),
+            });
+        } else if (doc_type === 'rc_copy') {
+            const rcNumber = ocrData.rc_number as string | undefined;
+            if (rcNumber) {
+                await saveToPersonalDetails(leadId, { vehicle_rc: rcNumber });
+            }
+        } else if (['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4'].includes(doc_type)) {
+            await saveToPersonalDetails(leadId, {
+                bank_account_number: ocrData.account_number,
+                bank_ifsc: ocrData.ifsc,
+                bank_name: ocrData.bank_name,
+                bank_branch: ocrData.branch,
+            });
+        }
+        } // end doc_for === 'customer' gate
+
+        return {
+            success: true,
+            ocr_data: ocrData,
+            source,
+            doc_type,
+            ...(decentroError ? { decentro_error: decentroError } : {}),
+        };
+    } catch (error) {
+        // Surface the actual cause to the caller instead of a generic
+        // "Server error" — non-technical users were stuck staring at a red
+        // tag with zero context. Full stack still goes to pm2 logs via
+        // console.error, but the response carries the message itself.
+        console.error('[Admin OCR] error:', error);
+        const message =
+            error instanceof Error
+                ? error.message
+                : typeof error === 'string'
+                    ? error
+                    : 'OCR failed';
+        return { success: false, error: `OCR failed: ${message}`, status: 500 };
+    }
+}

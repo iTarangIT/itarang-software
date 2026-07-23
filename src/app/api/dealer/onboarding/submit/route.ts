@@ -11,6 +11,7 @@ import { readStoredDocument } from "@/lib/storage/readStoredDocument";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
+import { notifyRoles } from "@/lib/notifications/notify";
 
 type UploadLike = {
   id?: string;
@@ -703,6 +704,25 @@ export async function POST(req: NextRequest) {
         await tx.insert(dealerOnboardingDocuments).values(documentRows);
       }
     });
+
+    // Notify the Dealer Validation team (sales_head staffs /admin/dealer-
+    // verification per middleware.ts) that a dealer application has arrived for
+    // review. Lands in the unified NotificationBell; data.href deep-links to the
+    // dealer's verification page. Best-effort — never break the submission.
+    try {
+      const dealerLabel =
+        primaryOwner.ownerName ||
+        cleanString(company.companyName) ||
+        "A dealer";
+      await notifyRoles(["sales_head"], {
+        type: "dealer_onboarding_submitted",
+        title: "New dealer for validation",
+        message: `${dealerLabel} has submitted a dealer onboarding application for validation.`,
+        data: { href: `/admin/dealer-verification/${finalApplicationId}` },
+      });
+    } catch (notifyErr) {
+      console.error("[onboarding/submit] notify failed:", notifyErr);
+    }
 
     // E-179 central registry. No-op if the save-route autosave already
     // registered this application (unique on source_table + source_id).

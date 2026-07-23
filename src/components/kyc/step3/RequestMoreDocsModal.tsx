@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 // one otherDocumentRequests row per item and flips the lead into a Step 3
 // waiting state.
 
-type DocItem = {
+export type DocItem = {
   doc_label: string;
   is_required: boolean;
   reason: string;
@@ -45,6 +45,18 @@ interface RequestMoreDocsModalProps {
   // where the scope is implied by which card was clicked.
   lockScope?: boolean;
   onSuccess?: () => void;
+  // When provided, the modal calls this instead of POSTing to the admin
+  // step3/request-docs route — used by the NBFC Acquire panel to route the
+  // structured request to the admin via its own doc-requests endpoint. Return
+  // { success:false, error } to surface an error and keep the modal open.
+  submitItems?: (payload: {
+    items: DocItem[];
+    doc_for: "primary" | "co_borrower";
+  }) => Promise<{ success: boolean; error?: string }>;
+  // Optional overrides for the non-admin (NBFC) context.
+  title?: string;
+  noteText?: string;
+  submitLabel?: string;
 }
 
 export default function RequestMoreDocsModal({
@@ -56,6 +68,10 @@ export default function RequestMoreDocsModal({
   defaultDocFor = "primary",
   lockScope = false,
   onSuccess,
+  submitItems,
+  title,
+  noteText,
+  submitLabel,
 }: RequestMoreDocsModalProps) {
   const [docFor, setDocFor] = useState<"primary" | "co_borrower">(
     defaultDocFor,
@@ -183,6 +199,20 @@ export default function RequestMoreDocsModal({
     setSubmitting(true);
     setError("");
     try {
+      // NBFC context: hand the structured request to the caller (routes to the
+      // admin via the NBFC doc-requests endpoint) instead of the admin route.
+      if (submitItems) {
+        const out = await submitItems({ items: cleaned, doc_for: docFor });
+        if (!out.success) {
+          setError(out.error ?? "Request failed");
+          setSubmitting(false);
+          return;
+        }
+        onSuccess?.();
+        onClose();
+        return;
+      }
+
       const res = await fetch(
         `/api/admin/kyc/${leadId}/step3/request-docs`,
         {
@@ -216,7 +246,7 @@ export default function RequestMoreDocsModal({
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">
-              Request Additional Documents
+              {title ?? "Request Additional Documents"}
             </h2>
             {sourceCardLabel && (
               <p className="text-xs text-gray-500 mt-0.5">
@@ -395,8 +425,8 @@ export default function RequestMoreDocsModal({
           </div>
 
           <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500">
-            Notifications to the dealer (SMS / WhatsApp / Email) are sent from
-            the dealer portal after the request is created.
+            {noteText ??
+              "Notifications to the dealer (SMS / WhatsApp / Email) are sent from the dealer portal after the request is created."}
           </div>
 
           {error && (
@@ -426,7 +456,7 @@ export default function RequestMoreDocsModal({
             }
             className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {submitting ? "Sending request…" : "Send Request"}
+            {submitting ? "Sending request…" : (submitLabel ?? "Send Request")}
           </button>
         </div>
       </div>

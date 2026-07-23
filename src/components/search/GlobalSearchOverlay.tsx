@@ -21,6 +21,7 @@ type SearchResponse = {
         assets: SearchItem[];
         services: SearchItem[];
         campaigns: SearchItem[];
+        riskCards?: SearchItem[];
     };
 };
 
@@ -123,6 +124,7 @@ export function GlobalSearchOverlay({
             { title: 'Deployed Assets', key: 'assets' as const, items: results.assets },
             { title: 'Service Tickets', key: 'services' as const, items: results.services },
             { title: 'Campaigns', key: 'campaigns' as const, items: results.campaigns },
+            { title: 'Risk Cards', key: 'riskCards' as const, items: results.riskCards ?? [] },
         ].filter((s) => s.items?.length);
     }, [results]);
 
