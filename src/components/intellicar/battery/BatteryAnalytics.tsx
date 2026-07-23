@@ -67,8 +67,8 @@ const PerCycleMileageChart = dynamic(
     () => import('./charts/DistanceCharts').then((m) => m.PerCycleMileageChart),
     { ssr: false, loading: ChartFallback },
 );
-const AhVsMileageChart = dynamic(
-    () => import('./charts/DistanceCharts').then((m) => m.AhVsMileageChart),
+const CurrentVsMileageChart = dynamic(
+    () => import('./charts/DistanceCharts').then((m) => m.CurrentVsMileageChart),
     { ssr: false, loading: ChartFallback },
 );
 const VoltageTrendChart = dynamic(
@@ -408,9 +408,9 @@ export function BatteryAnalytics() {
                             <DriverBehaviourCards data={distance} />
                             <DistanceTrendChart data={distance} granularity={period.granularity} />
                             <DischargeVsKmChart data={km} />
-                            <AhVsMileageChart data={km} />
-                            <MileageTrendChart data={km} />
-                            <PerCycleMileageChart data={km} />
+                            <CurrentVsMileageChart data={km} thresholds={thresholds} />
+                            <MileageTrendChart data={km} thresholds={thresholds} />
+                            <PerCycleMileageChart data={km} thresholds={thresholds} />
                         </div>
                     )}
 

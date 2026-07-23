@@ -10,6 +10,9 @@ interface PANCardProps {
   dob?: string;
   ocrData?: Record<string, unknown> | null;
   applicant?: "primary" | "co_borrower";
+  // Lead-scoped KYC API base. Defaults to the admin route so the admin flow is
+  // unchanged; the NBFC Acquire panel passes its own mirror base.
+  kycBase?: string;
   existingVerification?: {
     id: string;
     status: string;
@@ -41,13 +44,12 @@ export default function PANCard({
   dob,
   ocrData,
   applicant = "primary",
+  kycBase,
   existingVerification,
   onActionComplete,
 }: PANCardProps) {
-  const apiBase =
-    applicant === "co_borrower"
-      ? `/api/admin/kyc/${leadId}/coborrower`
-      : `/api/admin/kyc/${leadId}`;
+  const base = kycBase ?? `/api/admin/kyc/${leadId}`;
+  const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
   const [pan, setPan] = useState(panNumber || "");
   const [status, setStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
@@ -120,12 +122,12 @@ export default function PANCard({
     try {
       const vid = verificationId || existingVerification?.id;
       const res = vid
-        ? await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
+        ? await fetch(`${base}/verification/${vid}/action`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
           })
-        : await fetch(`/api/admin/kyc/${leadId}/verification/manual`, {
+        : await fetch(`${base}/verification/manual`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, verification_type: "pan", applicant, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
@@ -231,6 +233,7 @@ export default function PANCard({
             </p>
             <OcrAutofillButton
               leadId={leadId}
+              ocrUrl={`${base}/ocr`}
               docType="pan_card"
               cachedOcrData={ocrData}
               disabled={status === "loading"}

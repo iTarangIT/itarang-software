@@ -29,16 +29,72 @@ import {
 // load-math is pure by construction (see its header), so a client component may import it. The
 // gate values still come from the server payload's `gates` — these constants are only the fallback
 // for a payload that predates them, since env overrides do not reach the browser.
-import {
-    BASELINE_MIN_CYCLES,
-    BASELINE_MIN_KM,
-    OVERLOAD_INDEX_WARN,
-    isoDistanceAh,
-} from '@/lib/telemetry/load-math';
-import type { DistanceData, DischargeKmData, Granularity } from '../types';
+import { CURRENT_LOAD_INDEX_WARN } from '@/lib/telemetry/load-math';
+import type { ReactElement } from 'react';
+import type { BatteryThresholds, DistanceData, DischargeKmData, Granularity } from '../types';
 
 const DAY_FMT = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 const TIME_FMT = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/**
+ * E-201 — the model spec's normal km-per-Ah efficiency band, as labelled reference lines.
+ *
+ * Returns a bare ARRAY of <ReferenceLine> (never a fragment or wrapper component) so Recharts'
+ * child scan — which matches on element type among the chart's children — actually picks the
+ * lines up. `axis='y'` for the km/Ah trend charts (horizontal rules), `axis='x'` for the
+ * Ah-vs-mileage scatter (vertical rules). Draws nothing when the spec records no band: a pack
+ * with no recorded range gets no line rather than being judged against an invented number —
+ * the same rule capacityBands() follows for a missing nameplate.
+ *
+ * Coloured to stay distinct from the charts' existing data-derived lines (grey pack average,
+ * amber "pack's own best"): red floor = below it is poor mileage; green ceiling = above it is
+ * unusually efficient (worth a data check).
+ */
+function mileageBandLines(
+    t: BatteryThresholds | undefined,
+    axis: 'x' | 'y',
+): ReactElement[] {
+    const lines: ReactElement[] = [];
+    const min = t?.minMileageKmPerAh;
+    const max = t?.maxMileageKmPerAh;
+    if (typeof min === 'number' && Number.isFinite(min)) {
+        lines.push(
+            <ReferenceLine
+                key="mileage-band-min"
+                {...(axis === 'y' ? { y: min } : { x: min })}
+                stroke={VIZ.criticalLine}
+                strokeDasharray="4 4"
+                // The floor usually sits below every plotted point, so extend the axis to it
+                // rather than let Recharts clip the line (its default is to discard overflow).
+                ifOverflow="extendDomain"
+                label={{
+                    value: `Min ${min} km/Ah`,
+                    position: axis === 'y' ? 'insideBottomRight' : 'insideBottomLeft',
+                    fontSize: 10,
+                    fill: VIZ.criticalLine,
+                }}
+            />,
+        );
+    }
+    if (typeof max === 'number' && Number.isFinite(max)) {
+        lines.push(
+            <ReferenceLine
+                key="mileage-band-max"
+                {...(axis === 'y' ? { y: max } : { x: max })}
+                stroke={VIZ.bandGood}
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+                label={{
+                    value: `Max ${max} km/Ah`,
+                    position: axis === 'y' ? 'insideTopRight' : 'insideBottomRight',
+                    fontSize: 10,
+                    fill: VIZ.bandGood,
+                }}
+            />,
+        );
+    }
+    return lines;
+}
 
 /**
  * Kilometre Trend — distance per bucket.
@@ -321,7 +377,13 @@ export function DischargeVsKmChart({ data }: { data: DischargeKmData | undefined
  * distance for its charge — overload, heavy current draw, or misuse. A sustained slide of
  * the line is a mileage drop worth investigating.
  */
-export function MileageTrendChart({ data }: { data: DischargeKmData | undefined }) {
+export function MileageTrendChart({
+    data,
+    thresholds,
+}: {
+    data: DischargeKmData | undefined;
+    thresholds?: BatteryThresholds;
+}) {
     const points = (data?.points ?? []).filter((p) => p.km_per_ah != null);
     const s = data?.summary;
     const packAvg =
@@ -410,6 +472,8 @@ export function MileageTrendChart({ data }: { data: DischargeKmData | undefined 
                             }}
                         />
                     )}
+                    {/* E-201: the model spec's normal km/Ah band (drawn only when recorded). */}
+                    {mileageBandLines(thresholds, 'y')}
                     {/* Dots ON: the series is sparse and each day is a reading, not a sample of
                       * a continuous process — hiding the points would overstate the line. */}
                     <Line
@@ -443,7 +507,13 @@ export function MileageTrendChart({ data }: { data: DischargeKmData | undefined 
  * time instead of being averaged into its day. Dots below the dashed pack average (drawn in the
  * overload colour) are the trips that did little distance for their charge.
  */
-export function PerCycleMileageChart({ data }: { data: DischargeKmData | undefined }) {
+export function PerCycleMileageChart({
+    data,
+    thresholds,
+}: {
+    data: DischargeKmData | undefined;
+    thresholds?: BatteryThresholds;
+}) {
     const cs = data?.cycleSummary;
     // Aggregate ratio (Σkm ÷ ΣAh), not the mean of per-cycle ratios — matches the scatter
     // headline so both per-cycle views quote the same pack average.
@@ -570,6 +640,8 @@ export function PerCycleMileageChart({ data }: { data: DischargeKmData | undefin
                             }}
                         />
                     )}
+                    {/* E-201: the model spec's normal km/Ah band (drawn only when recorded). */}
+                    {mileageBandLines(thresholds, 'y')}
                     <Scatter
                         name="At / above pack average"
                         data={atOrAbove}
@@ -594,62 +666,55 @@ export function PerCycleMileageChart({ data }: { data: DischargeKmData | undefin
     );
 }
 
-/**
- * Pick up to four round distances that actually cross the plotted data.
- *
- * Contours outside the data's range draw curves nobody can land on, and contours at arbitrary
- * values ("37.4 km") read as data rather than as a grid.
- */
-function niceContours(minKm: number, maxKm: number): number[] {
-    if (!(maxKm > 0)) return [];
-    const CANDIDATES = [1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200, 250, 300];
-    const inRange = CANDIDATES.filter((k) => k >= minKm * 0.9 && k <= maxKm * 1.1);
-    if (inRange.length <= 4) return inRange;
-    // Spread four across the range rather than clustering them at the bottom.
-    const step = (inRange.length - 1) / 3;
-    return [0, 1, 2, 3].map((i) => inRange[Math.round(i * step)]);
+/** Round a magnitude up to a clean axis maximum (nearest 10), minimum 10. */
+function niceCeil(v: number): number {
+    return Math.max(10, Math.ceil(v / 10) * 10);
 }
 
 /**
- * Ah vs Mileage — how much charge each discharge cycle spent, against how far it got per amp-hour.
+ * Current vs Mileage — how hard each discharge cycle worked the pack, against how far it got per
+ * amp-hour.
  *
- * X is kilometres per amp-hour (right = more efficient), Y is the amp-hours the cycle actually
- * drew. One point per discharge cycle: the finest grain distance can honestly be resolved at,
- * since `distance_rollup` is daily and the `trips` table is empty fleet-wide.
+ * X is kilometres per amp-hour (right = more efficient), Y is the cycle's average discharge current
+ * (A) — the sustained load. One point per discharge cycle.
  *
- * ## Read the contours, not the slope
+ * ## The axes share a tendency; read load against the pack's own normal
  *
- * The two axes are NOT independent — mileage is km / Ah, so amp-hours sit in the x-axis
- * denominator, and lines of constant distance are hyperbolae (km = mileage x Ah). Some of the
- * left-to-right fall is that constraint, not a finding. The dotted iso-distance curves make it
- * visible: WHICH contour a point sits on is how far it went; WHERE along it is how efficiently.
- * Hiding the constraint would turn arithmetic into a discovery.
- *
- * This is exactly why the requested "mileage vs current" chart does not exist. There the x-axis was
- * a *badly measured* quantity sitting in the y-axis denominator, so binning sorted intervals by
- * their own error and manufactured a ~9x curve out of a vehicle whose mileage never changed
- * (load-math.test.ts proves it arithmetically). Here both axes come from robust per-cycle
- * measurements — Ah is SOC-derived (two endpoints, ~2%, immune to the poller's sparseness) and km
- * is the rollup-calibrated chord — so the constraint is honest geometry rather than laundered noise.
+ * Mileage is km/Ah and, physically, km/Ah = (v.dt)/(I.dt) = v/I, so a heavier current tends to sit
+ * at a lower mileage for the same speed: some of the rise to the left is that inverse tendency, not
+ * a finding. It is honest here — unlike the binned "mileage vs current" load-math.ts refuses —
+ * because each point is one cycle, the mileage's Ah is SOC-derived (a different, robust measurement
+ * from the current samples, so the axes are not an arithmetic identity), and the y-value is a
+ * per-cycle average, not one instantaneous read. Still, read a point by how its load compares to
+ * this pack's OWN normal (the colour), never as an absolute.
  *
  * ## What it shows
  *
- * Left of the dashed baseline = this pack spent more charge per kilometre than it does at its own
- * best. High AND left = a lot of charge bought little distance: the overload signature.
+ * High AND left = the pack pulled heavy current for little distance: the overload signature. Orange =
+ * this cycle's average current is CURRENT_LOAD_INDEX_WARN x the pack's own median or more; the amber
+ * line is the pack's rated over-current, a peak ceiling shown for scale.
  */
-export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }) {
+export function CurrentVsMileageChart({
+    data,
+    thresholds,
+}: {
+    data: DischargeKmData | undefined;
+    thresholds?: BatteryThresholds;
+}) {
     const cs = data?.cycleSummary;
-    const baseline = cs?.baseline ?? null;
-    const warn = cs?.gates?.overloadIndexWarn ?? OVERLOAD_INDEX_WARN;
+    const warn = cs?.gates?.currentLoadIndexWarn ?? CURRENT_LOAD_INDEX_WARN;
+    const baselineCurrent = cs?.baselineAvgCurrent ?? null;
 
     const rows = (data?.cycles ?? [])
-        .filter((c) => c.km_per_ah != null && c.ah_discharged > 0)
+        .filter((c) => c.km_per_ah != null && c.avg_discharge_current != null)
         .map((c) => ({
             mileage: c.km_per_ah as number,
+            current: c.avg_discharge_current as number,
+            peak: c.max_discharge_current,
             ah: c.ah_discharged,
             km: c.km,
             ratio: c.ah_per_km,
-            index: c.overload_index ?? null,
+            index: c.current_index ?? null,
             dod: c.dod_pct,
             start: c.start_time,
             end: c.end_time,
@@ -657,98 +722,91 @@ export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }
             source: c.km_source,
         }));
 
-    // The baseline as the driver reads it: the reciprocal of the baseline Ah/km.
-    const baselineMileage = baseline ? Math.round((1 / baseline.ahPerKm) * 100) / 100 : null;
-
-    // Split on the index, never colour alone — the Legend names both. Cycles with no index (no
-    // baseline, or an uncalibrated chord) stay in the neutral series rather than being guessed.
+    // Split on the current index, never colour alone — the Legend names both. Cycles with no index
+    // (no current baseline) stay in the neutral series rather than being guessed.
     const heavy = rows.filter((r) => r.index != null && r.index >= warn);
     const normal = rows.filter((r) => !(r.index != null && r.index >= warn));
 
-    const xMin = rows.length ? Math.min(...rows.map((r) => r.mileage)) : 0;
-    const xMax = rows.length ? Math.max(...rows.map((r) => r.mileage)) : 1;
-    const contourSeries = (
-        rows.length
-            ? niceContours(Math.min(...rows.map((r) => r.km)), Math.max(...rows.map((r) => r.km)))
-            : []
-    ).map((km) => ({
-        km,
-        // 24 samples reads as a smooth curve without pretending to be data.
-        points: Array.from({ length: 24 }, (_, i) => {
-            const mileage = xMin + ((xMax - xMin) * i) / 23;
-            return { mileage, ah: isoDistanceAh(km, mileage) };
-        }).filter((p) => p.ah != null),
-    }));
+    // The rated over-current is a peak protection limit; drawn as a ceiling for scale, NOT the colour
+    // rule — a sustained average almost never reaches it, which is why colour is the own-normal index.
+    const ratedLimit =
+        typeof thresholds?.overCurrentA === 'number' && Number.isFinite(thresholds.overCurrentA)
+            ? thresholds.overCurrentA
+            : null;
+    // The horizontal cut the colour actually uses: current >= baseline x warn is orange, below is blue.
+    const heavyCut =
+        baselineCurrent != null ? Math.round(baselineCurrent * warn * 10) / 10 : null;
+
+    // Current is a magnitude, so a zero baseline is right. Fixed to the data plus the rated ceiling so
+    // the scale stays readable — a fraction of the old Ah range.
+    const dataMax = rows.length ? Math.max(...rows.map((r) => r.current)) : 0;
+    const yMax = niceCeil(Math.max(dataMax, ratedLimit ?? 0) * 1.1);
 
     const uncalibrated = rows.filter((r) => r.source === 'gps').length;
 
     return (
         <ChartCard
-            title="Ah vs Mileage"
-            subtitle="One point per discharge cycle: amp-hours drawn (up) against kilometres per amp-hour (right). Dotted curves are constant distance. Points high and to the left spent a lot of charge for little distance — the overload signature."
+            title="Current vs Mileage"
+            subtitle="One point per discharge cycle: average current drawn (up) against kilometres per amp-hour (right). Points high and to the left pulled heavy current for little distance — the overload signature."
             headline={
-                baselineMileage != null ? (
+                baselineCurrent != null ? (
                     <Headline
-                        value={baselineMileage.toFixed(2)}
-                        unit="km / Ah at its best"
+                        value={baselineCurrent.toFixed(1)}
+                        unit="A typical draw"
                         sub={
-                            cs?.overloadedCycles != null
-                                ? `${cs.overloadedCycles} of ${rows.length} cycles at or above ${warn}x that`
+                            cs?.heavyCurrentCycles != null
+                                ? `${cs.heavyCurrentCycles} of ${rows.length} cycles at or above ${warn}x that`
                                 : `${rows.length} cycles`
                         }
                     />
                 ) : (
-                    <Headline value={rows.length} unit="cycles" sub="no baseline — see below" />
+                    <Headline value={rows.length} unit="cycles" sub="no current baseline" />
                 )
             }
             empty={
                 rows.length === 0
                     ? (cs?.cyclesWithoutDistance ?? 0) > 0
-                        ? `${cs!.cyclesWithoutDistance} discharge cycle${cs!.cyclesWithoutDistance === 1 ? ' was' : 's were'} detected, but none had usable GPS distance — so none has a mileage to plot.`
-                        : 'No discharge cycle in this period covered a measurable distance.'
+                        ? `${cs!.cyclesWithoutDistance} discharge cycle${cs!.cyclesWithoutDistance === 1 ? ' was' : 's were'} detected, but none had both a usable distance and a current reading — so none can be plotted.`
+                        : 'No discharge cycle in this period carried a plottable current and distance.'
                     : undefined
             }
             caveat={
                 <>
                     <p>
-                        <strong>The axes are not independent.</strong> Mileage is km ÷ Ah, so amp-hours
-                        appear in both — the dotted curves are lines of constant distance, and some of the
-                        left-to-right fall is that geometry rather than a finding. Read a point by which
-                        contour it sits on (how far it went) and where along it (how efficiently).
+                        <strong>The axes share a tendency.</strong> Mileage is km ÷ Ah, and physically
+                        km/Ah is roughly speed ÷ current, so a heavier current tends to sit at a lower
+                        mileage for the same speed — some of the rise to the left is that arithmetic, not
+                        a finding. Read a point by how its load compares to this pack&apos;s own normal
+                        (the colour), not by the slope.
                     </p>
-                    {baseline ? (
-                        <p>
-                            The dashed line is this pack&apos;s <strong>own best fifth</strong> —{' '}
-                            {baseline.ahPerKm} Ah/km over {baseline.cycles} cycle
-                            {baseline.cycles === 1 ? '' : 's'} and {baseline.km} km, aggregated as total Ah ÷
-                            total km. It measures <strong>variation in load, not absolute load</strong>: if the
-                            vehicle was loaded on every trip in this window then the baseline is a loaded
-                            baseline and everything here reads normal. It cannot tell you the vehicle is
-                            overloaded — only that some trips cost more per kilometre than this pack&apos;s own
-                            best.
-                        </p>
-                    ) : (
-                        <p>
-                            <strong>No baseline.</strong> This period has fewer than{' '}
-                            {cs?.gates?.baselineMinCycles ?? BASELINE_MIN_CYCLES} calibrated cycles, or under{' '}
-                            {cs?.gates?.baselineMinKm ?? BASELINE_MIN_KM} km between them, so there is no honest
-                            &quot;this pack at its best&quot; to compare against — and a baseline drawn from one
-                            lucky trip would report overload on every normal one. Points are still plotted;
-                            none is judged.
-                        </p>
-                    )}
                     <p>
-                        Amp-hours are SOC-derived — the pack&apos;s own SOC swing against its nameplate —
-                        which needs only the cycle&apos;s two endpoints and so does not degrade as the poller
-                        gets sparser. Distance is the GPS chord calibrated against the daily rollup
+                        Current is the <strong>average</strong> over the cycle&apos;s falling-SOC samples,
+                        from the CAN feed — coarser than the SOC-derived Ah that fixes the mileage, and an
+                        unsigned magnitude. Heavy (orange) is a cycle that pulled {warn}x this pack&apos;s
+                        median current or more.
+                        {baselineCurrent != null ? (
+                            <> This pack&apos;s normal draw is {baselineCurrent.toFixed(1)} A.</>
+                        ) : (
+                            <> No cycle here carried a current reading, so none is judged.</>
+                        )}
+                        {ratedLimit != null ? (
+                            <>
+                                {' '}
+                                The amber line is the {ratedLimit} A rated over-current — a peak protection
+                                ceiling shown for scale; a sustained average rarely reaches it, so it is
+                                context, not the threshold.
+                            </>
+                        ) : null}
+                    </p>
+                    <p>
+                        Distance is the GPS chord calibrated against the daily rollup
                         {cs?.calibratedPct != null ? <> ({cs.calibratedPct}% of plotted cycles calibrated)</> : null}.
                         {uncalibrated > 0 ? (
                             <>
                                 {' '}
                                 <strong>{uncalibrated}</strong> point{uncalibrated === 1 ? '' : 's'} had no
-                                rollup to calibrate against and use the raw chord — it under-reads distance by
-                                roughly a quarter, which is the size of a real overload, so they are excluded
-                                from the baseline and are never marked heavy.
+                                rollup to calibrate against and use the raw chord — it under-reads distance,
+                                so those sit further left than the truth.
                             </>
                         ) : null}
                     </p>
@@ -758,13 +816,12 @@ export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }
             <Legend
                 items={[
                     { color: VIZ.distance, label: 'Discharge cycle' },
-                    ...(baseline
-                        ? [
-                              { color: VIZ.discharged, label: `Heavy — ${warn}x the pack's best or worse` },
-                              { color: VIZ.warningLine, label: "Pack's own best", dashed: true },
-                          ]
+                    ...(baselineCurrent != null
+                        ? [{ color: VIZ.discharged, label: `Heavy — ${warn}x the pack's own current` }]
                         : []),
-                    { color: VIZ.axis, label: 'Constant distance', dashed: true },
+                    ...(ratedLimit != null
+                        ? [{ color: VIZ.warningLine, label: 'Rated current limit', dashed: true }]
+                        : []),
                 ]}
             />
             <ResponsiveContainer width="100%" height={320}>
@@ -787,38 +844,39 @@ export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }
                             fill: VIZ.tick,
                         }}
                     />
-                    {/* Ah is a magnitude and the contours must be able to meet it, so the zero
-                      * baseline is correct here — unlike the capacity charts, where it would
-                      * flatten the very variation being read. */}
+                    {/* Current is a magnitude, so the zero baseline is correct. Domain is fixed to the
+                      * data plus the rated ceiling so the axis stays readable. */}
                     <YAxis
                         type="number"
-                        dataKey="ah"
-                        name="Ah drawn"
+                        dataKey="current"
+                        name="Avg current"
                         tick={TICK}
                         tickLine={false}
                         axisLine={false}
                         tickMargin={8}
                         width={52}
-                        unit=" Ah"
+                        unit=" A"
+                        domain={[0, yMax]}
+                        allowDecimals={false}
                     />
                     <ZAxis range={[70, 70]} />
                     <Tooltip
                         cursor={{ strokeDasharray: '3 3', stroke: VIZ.axis }}
                         content={({ active, payload }) => {
                             const p = payload?.[0]?.payload as (typeof rows)[number] | undefined;
-                            // Contour points carry no `start` — never draw a tooltip for a grid line.
                             if (!active || !p || !p.start) return null;
                             return (
                                 <TooltipShell
                                     title={DAY_FMT.format(new Date(p.start))}
                                     sub={`${TIME_FMT.format(new Date(p.start))}–${TIME_FMT.format(new Date(p.end))}`}
                                     rows={[
+                                        ['Avg current', `${p.current.toFixed(1)} A`],
+                                        ['Peak current', p.peak != null ? `${p.peak.toFixed(1)} A` : '—'],
                                         ['Mileage', `${p.mileage.toFixed(2)} km / Ah`],
-                                        ['Ah drawn', `${p.ah.toFixed(1)} Ah`],
                                         ['Distance', `${p.km.toFixed(1)} km`],
-                                        ['Efficiency', p.ratio != null ? `${p.ratio.toFixed(2)} Ah / km` : '—'],
+                                        ['Ah drawn', `${p.ah.toFixed(1)} Ah`],
                                         [
-                                            'vs pack best',
+                                            'vs normal load',
                                             p.index != null ? `${p.index.toFixed(2)}x` : 'no baseline',
                                         ],
                                         ['Depth of discharge', p.dod != null ? `${p.dod}%` : '—'],
@@ -828,11 +886,11 @@ export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }
                                         p.source === 'gps' ? (
                                             <p className="text-[11px] text-amber-600">
                                                 Raw GPS distance — a lower bound, so the true mileage is further
-                                                right than plotted. Not judged against the baseline.
+                                                right than plotted.
                                             </p>
                                         ) : p.index != null && p.index >= warn ? (
                                             <p className="text-[11px] text-amber-600">
-                                                Spent {p.index.toFixed(2)}x this pack&apos;s best charge per km.
+                                                Pulled {p.index.toFixed(2)}x this pack&apos;s normal current.
                                                 Heavy load, gradient or traffic — evidence, not proof.
                                             </p>
                                         ) : undefined
@@ -842,30 +900,34 @@ export function AhVsMileageChart({ data }: { data: DischargeKmData | undefined }
                         }}
                     />
 
-                    {/* Contours first, so the cycles draw on top of the grid rather than under it. */}
-                    {contourSeries.map((c) => (
-                        <Scatter
-                            key={`iso-${c.km}`}
-                            name={`${c.km} km`}
-                            data={c.points}
-                            line={{ stroke: VIZ.axis, strokeWidth: 1, strokeDasharray: '2 4' }}
-                            lineType="joint"
-                            shape={() => <g />}
-                            legendType="none"
-                            isAnimationActive={false}
-                        />
-                    ))}
+                    {/* E-201: the model spec's normal km/Ah band (vertical; drawn only when recorded). */}
+                    {mileageBandLines(thresholds, 'x')}
 
-                    {baselineMileage != null && (
+                    {heavyCut != null && (
                         <ReferenceLine
-                            x={baselineMileage}
+                            y={heavyCut}
+                            stroke={VIZ.discharged}
+                            strokeDasharray="5 4"
+                            ifOverflow="extendDomain"
+                            label={{
+                                value: `Heavy ≥ ${heavyCut} A`,
+                                position: 'insideTopLeft',
+                                fontSize: 10,
+                                fill: VIZ.discharged,
+                            }}
+                        />
+                    )}
+                    {ratedLimit != null && (
+                        <ReferenceLine
+                            y={ratedLimit}
                             stroke={VIZ.warningLine}
                             strokeDasharray="5 4"
+                            ifOverflow="extendDomain"
                             label={{
-                                value: `${baselineMileage.toFixed(2)} km/Ah — pack's best`,
+                                value: `${ratedLimit} A — rated limit`,
                                 position: 'insideTopRight',
                                 fontSize: 10,
-                                fill: VIZ.tick,
+                                fill: VIZ.warningLine,
                             }}
                         />
                     )}

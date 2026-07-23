@@ -12,6 +12,9 @@ interface OcrAutofillButtonProps {
   // applicant's document. Pass "co_borrower" from a co-borrower card so the
   // backend filters kyc_documents by doc_for and returns the right doc.
   applicant?: "primary" | "co_borrower";
+  // OCR endpoint. Defaults to the admin route so the admin flow is unchanged;
+  // the NBFC Acquire panel passes its own mirror route (no coupon side-effect).
+  ocrUrl?: string;
 }
 
 export default function OcrAutofillButton({
@@ -21,6 +24,7 @@ export default function OcrAutofillButton({
   onOcrResult,
   disabled,
   applicant = "primary",
+  ocrUrl,
 }: OcrAutofillButtonProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -52,7 +56,7 @@ export default function OcrAutofillButton({
 
     for (const dt of types) {
       try {
-        const res = await fetch(`/api/admin/kyc/${leadId}/ocr`, {
+        const res = await fetch(ocrUrl ?? `/api/admin/kyc/${leadId}/ocr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

@@ -16,17 +16,26 @@
  * endpoints and does not degrade as the poller gets sparser. That robustness is what makes this
  * whole module possible.
  *
- * ## Why there is no "mileage vs current" here
+ * ## "Mileage vs current", and the one honest form of it
  *
- * Because km/Ah = (v.dt)/(I.dt) = v/I identically, plotting mileage against current plots a
- * quantity against its own denominator — a hyperbola produced by division. Binning does not save
- * it: at our cadence the current that labels an interval is one instantaneous read of a value that
- * swung 0-50 A across the interval, so binning sorts intervals by their own error and manufactures
- * a ~9x collapse out of a vehicle whose mileage never changed. `load-math.test.ts` proves this
- * arithmetically and stands as the tripwire against rebuilding it.
+ * The tempting-but-wrong chart bins current and plots mileage against it. Because
+ * km/Ah = (v.dt)/(I.dt) = v/I identically, that plots a quantity against its own denominator — a
+ * hyperbola produced by division. Binning does not save it: at our cadence the current that labels
+ * an interval is one instantaneous read of a value that swung 0-50 A across the interval, so binning
+ * sorts intervals by their own error and manufactures a ~9x collapse out of a vehicle whose mileage
+ * never changed. `load-math.test.ts` proves this arithmetically and stands as the tripwire against
+ * rebuilding *that* form.
  *
- * The honest question survives: *how much charge does this pack spend per kilometre, against the
- * best this same pack achieves?* That is the index below.
+ * The Current-vs-Mileage scatter the dashboard *does* ship (CurrentVsMileageChart) is the defensible
+ * case, not that one: one point per discharge cycle (no binning), the mileage's Ah is SOC-derived —
+ * independent of the current samples, so the axes are not an arithmetic identity — and the y-value is
+ * the cycle's *average* current, a sustained load, which is what overload actually is. The shared v/I
+ * tendency still exists, so that chart says so in its caveat and reads load against the pack's own
+ * normal (medianAvgCurrent / currentLoadIndex below), never as an absolute — exactly as the Ah/km
+ * index does.
+ *
+ * The honest question either way: *how hard does this pack work, against the best/normal this same
+ * pack achieves?* That is what the indices below measure.
  *
  * ## No imports
  *
@@ -83,6 +92,15 @@ export const BASELINE_KM_FRACTION = envNumber("TELEMETRY_LOAD_BASELINE_KM_FRACTI
 export const OVERLOAD_INDEX_WARN = envNumber("TELEMETRY_OVERLOAD_INDEX_WARN", 1.25);
 
 /**
+ * Where a current-load index stops being ordinary variation and is worth a look.
+ *
+ * The current twin of OVERLOAD_INDEX_WARN and, like it, deliberately wide: 1.25 says this cycle
+ * pulled a quarter more average current than this pack's normal trip. Same invented-until-measured
+ * caveat applies.
+ */
+export const CURRENT_LOAD_INDEX_WARN = envNumber("TELEMETRY_CURRENT_LOAD_INDEX_WARN", 1.25);
+
+/**
  * Below this, a cycle's "distance" is GPS jitter around a parked vehicle rather than a trip, and
  * its Ah/km is a division by noise.
  *
@@ -99,6 +117,7 @@ export function loadGates() {
         baselineMinKm: BASELINE_MIN_KM,
         baselineKmFraction: BASELINE_KM_FRACTION,
         overloadIndexWarn: OVERLOAD_INDEX_WARN,
+        currentLoadIndexWarn: CURRENT_LOAD_INDEX_WARN,
         minTripKm: MIN_TRIP_KM,
     };
 }
@@ -195,6 +214,42 @@ export function overloadIndex(
 /** Reported, not enforced — an unknown index is not a passing one. */
 export function isOverloaded(index: number | null): boolean {
     return index != null && index >= OVERLOAD_INDEX_WARN;
+}
+
+/**
+ * The pack's own normal average discharge current — the load every current index is read against.
+ *
+ * The MEDIAN of the per-cycle average currents, not the best fifth used for Ah/km. Current is a
+ * direct CAN measurement with no GPS-chord luck to guard against, so the robust reference is the
+ * typical cycle rather than the lightest: "how does this cycle's load compare to what this pack
+ * usually pulls?" A mean would let one idle near-zero cycle or one heavy haul drag the reference;
+ * the median is the load a normal trip on this pack actually carries.
+ *
+ * Returns null on an empty set — a pack we cannot characterise gets no index and no cut line, and
+ * the scatter still renders (mirrors baselineAhPerKm).
+ */
+export function medianAvgCurrent(values: readonly (number | null)[]): number | null {
+    const usable = values.filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+    if (usable.length === 0) return null;
+    const sorted = [...usable].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+    return Math.round(median * 10) / 10;
+}
+
+/**
+ * How heavy this cycle's sustained load was, against the pack's own normal.
+ *
+ * The current twin of overloadIndex: a ratio of two like-measured currents on the same pack in the
+ * same window, so the multiplicative biases cancel. Null baseline (or null current) yields null,
+ * never 1.0 — "not characterised" is not "normal".
+ */
+export function currentLoadIndex(
+    avgCurrent: number | null,
+    baselineAvgCurrent: number | null,
+): number | null {
+    if (avgCurrent == null || baselineAvgCurrent == null || baselineAvgCurrent <= 0) return null;
+    return Math.round((avgCurrent / baselineAvgCurrent) * 100) / 100;
 }
 
 /**

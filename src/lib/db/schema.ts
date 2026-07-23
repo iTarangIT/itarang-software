@@ -1612,6 +1612,10 @@ export const consentRecords = pgTable("consent_records", {
   // consent_otp_verifications). Set when a consent is captured via OTP.
   otp_verification_id: uuid("otp_verification_id"),
   otp_verified_at: timestamp("otp_verified_at", { withTimezone: true }),
+  // E-206: which NBFC tenant captured this consent (Acquire "run consent yourself"
+  // flow). NULL ⇒ iTarang/dealer-captured. The NBFC's DPDP card filters to its own
+  // tenant so it never sees iTarang's customer/co-borrower consent.
+  initiated_by_tenant_id: uuid("initiated_by_tenant_id"),
 });
 
 // E-180: OTP sessions for OTP-based customer consent (replaces Digio Aadhaar
@@ -1839,7 +1843,99 @@ export const otherDocumentRequests = pgTable("other_document_requests", {
   document_name: text("document_name"),
   document_url: text("document_url"),
   status: varchar({ length: 20 }).default('pending'),
+  // E-200 — when set, this row is a child of an nbfc_doc_requests wrapper
+  // (NBFC-originated). NULL for the ordinary admin→dealer request flow.
+  nbfc_request_id: varchar("nbfc_request_id", { length: 255 }),
+  // E-200 — origin of the request: 'admin' (default, existing flow) | 'nbfc'.
+  source: varchar("source", { length: 16 }).default('admin'),
 });
+
+// E-200 — NBFC-originated request thread on the Acquire workspace. One wrapper
+// row → many otherDocumentRequests children (which carry the files); a
+// request_type='message' row (admin → NBFC direct, Change 3) has zero children.
+// `status` is the 7-hop cycle NBFC→Admin→Dealer→Customer→Dealer→Admin→NBFC,
+// derived from child min-state at hops 4–6 and stored denormalised.
+export const nbfcDocRequests = pgTable(
+  "nbfc_doc_requests",
+  {
+    id: varchar({ length: 255 }).primaryKey().notNull(), // 'NBFCREQ-YYYYMMDD-SSSS'
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    assignment_id: uuid("assignment_id").notNull(), // nbfc_lead_assignments.id
+    nbfc_id: integer("nbfc_id").notNull(), // nbfc.id (serial int)
+    tenant_id: uuid("tenant_id").notNull(), // nbfc_tenants.id (session scope)
+    // 'correction' | 'additional_docs' | 'step4_extra_items' | 'message'
+    request_type: varchar("request_type", { length: 24 }).notNull(),
+    doc_for: varchar("doc_for", { length: 20 }).default('primary').notNull(),
+    target_doc_key: varchar("target_doc_key", { length: 120 }),
+    nbfc_comments: text("nbfc_comments"),
+    admin_notes: text("admin_notes"),
+    // nbfc_raised → admin_review → forwarded_to_dealer → with_customer →
+    // dealer_review → admin_review_upload → pushed_to_nbfc | closed | rejected.
+    status: varchar({ length: 32 }).default('nbfc_raised').notNull(),
+    item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
+    raised_by: uuid("raised_by").notNull(), // NBFC actor
+    reviewed_by: uuid("reviewed_by"), // admin who forwarded / pushed
+    // Email "act from mail" (Change 5) — sha256-hashed token + expiry.
+    act_token_hash: varchar("act_token_hash", { length: 64 }),
+    act_token_expires_at: timestamp("act_token_expires_at", { withTimezone: true }),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    leadStatusIdx: index("nbfc_doc_requests_lead_status_idx").on(
+      table.lead_id,
+      table.status,
+    ),
+    assignmentIdx: index("nbfc_doc_requests_assignment_idx").on(
+      table.assignment_id,
+    ),
+    nbfcStatusIdx: index("nbfc_doc_requests_nbfc_status_idx").on(
+      table.nbfc_id,
+      table.status,
+    ),
+  }),
+);
+
+// E-201 — per-NBFC KYC verdict on each customer/co-borrower document, kept
+// separate from the admin's own verification. One row per (assignment_id,
+// doc_for, doc_key); upsert. Feeds the admin "NBFC KYC Verification" card.
+export const nbfcDocumentVerifications = pgTable(
+  "nbfc_document_verifications",
+  {
+    id: serial().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    doc_for: varchar("doc_for", { length: 20 }).default('primary').notNull(),
+    doc_key: varchar("doc_key", { length: 120 }).notNull(),
+    // 'pending' | 'verified' | 'queried' | 'rejected'
+    verdict: varchar({ length: 16 }).default('pending').notNull(),
+    notes: text("notes"),
+    // E-207 — supporting documents the NBFC attached to a verdict/rejection/
+    // correction (list of { url, name, type, size }). Viewable by the admin.
+    attachments: jsonb("attachments").default(sql`'[]'::jsonb`),
+    verified_by: uuid("verified_by").notNull(),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    // E-209 — admin "Forward to dealer" on a queried/rejected verdict. Stamps
+    // the forward and links the correction wrapper (nbfc_doc_requests) it spawned.
+    forwarded_at: timestamp("forwarded_at", { withTimezone: true }),
+    forwarded_request_id: varchar("forwarded_request_id", { length: 255 }),
+    forwarded_by: uuid("forwarded_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqueDoc: uniqueIndex("nbfc_document_verifications_unique").on(
+      table.assignment_id,
+      table.doc_for,
+      table.doc_key,
+    ),
+    leadIdx: index("nbfc_document_verifications_lead_idx").on(table.lead_id),
+    nbfcIdx: index("nbfc_document_verifications_nbfc_idx").on(table.nbfc_id),
+  }),
+);
 
 export const coBorrowerRequests = pgTable(
   "co_borrower_requests",
@@ -2376,6 +2472,10 @@ export const batterySpecModels = pgTable("battery_spec_models", {
   over_voltage_v: numeric("over_voltage_v", { precision: 6, scale: 2 }),
   over_current_a: numeric("over_current_a", { precision: 6, scale: 2 }),
   over_temperature_c: numeric("over_temperature_c", { precision: 5, scale: 2 }),
+  // E-201 — normal km-per-Ah efficiency band for the mileage charts. Spec-only per model
+  // (no app_settings/env rung, like rated_capacity_ah); NULL = no band line drawn.
+  min_mileage_km_per_ah: numeric("min_mileage_km_per_ah", { precision: 6, scale: 3 }),
+  max_mileage_km_per_ah: numeric("max_mileage_km_per_ah", { precision: 6, scale: 3 }),
   notes: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -3352,6 +3452,10 @@ export const productSelections = pgTable("product_selections", {
   charger_photo_urls: jsonb("charger_photo_urls"),
   selected_nbfcs: jsonb("selected_nbfcs"),
   customer_disclosure_ack: boolean("customer_disclosure_ack"),
+  // E-208 — optional Step-4 pre-sanction document bucket (≤10 items, all formats:
+  // image/video/zip/pdf; a combined PDF counts as one). Array of
+  // { url, name, type, size }. Viewable by the NBFC (Acquire dossier) + admin.
+  pre_sanction_doc_urls: jsonb("pre_sanction_doc_urls").default(sql`'[]'::jsonb`),
 
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3707,6 +3811,11 @@ export const nbfcServiceConfig = pgTable(
     esign_provider: varchar("esign_provider", { length: 24 }),
     store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
     store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
+    // E-205 — the NBFC's own DPDP consent-template PDF (uploaded once in Settings,
+    // reused across all leads for the Acquire e-sign/OTP consent flow). Stored in
+    // the private nbfc-documents bucket; URL is the /nbfc-uploads/<key> proxy path.
+    consent_template_url: text("consent_template_url"),
+    consent_template_size: integer("consent_template_size"),
     track_completion_gate: boolean("track_completion_gate").default(true).notNull(),
     track_failure_halts: boolean("track_failure_halts").default(false).notNull(),
     // E-148 §10.7/§15.4.2 — per-NBFC FI agent-form + review parameters.

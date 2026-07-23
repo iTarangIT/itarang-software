@@ -4,6 +4,12 @@ import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQu
 import { eq, and, desc } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
 import { createWorkflowId, determineCaseType, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
+import { notifyRoles } from '@/lib/notifications/notify';
+
+// Roles that staff the admin KYC review queue (mirrors the /admin/kyc-review
+// route guard in middleware.ts). These are the users who should hear about a
+// lead arriving for verification.
+const KYC_REVIEW_ROLES = ['admin', 'sales_head', 'business_head', 'ceo'];
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -282,6 +288,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 created_at: now,
                 updated_at: now,
             });
+
+            // Fresh arrival in the verification queue → notify the KYC review
+            // team so it surfaces in the in-app NotificationBell (which links to
+            // /admin/kyc-review/<leadId>). Best-effort: a notification failure
+            // must never break the dealer's submission.
+            try {
+                const ownerName = lead[0].owner_name?.trim() || 'A customer';
+                await notifyRoles(KYC_REVIEW_ROLES, {
+                    type: 'kyc_verification_submitted',
+                    title: 'New lead for KYC verification',
+                    message: `${ownerName} (${leadId}) has been submitted for KYC verification.`,
+                    leadId,
+                    data: { leadId },
+                });
+            } catch (notifyErr) {
+                console.error('[Submit verification] notify failed:', notifyErr);
+            }
         }
 
         // Return current verification state

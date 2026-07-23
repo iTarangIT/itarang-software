@@ -37,9 +37,12 @@ import {
 import { SESSION_GAP_MAX_S } from "@/lib/telemetry/charging-math";
 import {
     baselineAhPerKm,
+    currentLoadIndex,
     isOverloaded,
     loadGates,
+    medianAvgCurrent,
     overloadIndex,
+    CURRENT_LOAD_INDEX_WARN,
 } from "@/lib/telemetry/load-math";
 import { getBatteryThresholds } from "@/lib/telemetry/thresholds";
 import { fetchChargingCycleAggregate } from "@/lib/telemetry/queries";
@@ -760,12 +763,22 @@ export interface DischargeKmCyclePoint {
     ah_discharged: number;
     ah_per_km: number | null;
     km_per_ah: number | null;
+    /** Average discharge current over the cycle (A) — the sustained load, the Y-axis of the chart. */
+    avg_discharge_current: number | null;
+    /** Peak discharge current in the cycle (A) — tooltip context only. */
+    max_discharge_current: number | null;
     /**
      * This cycle's Ah/km against the pack's own best-fifth baseline. >1 means it spent more charge
      * per kilometre than this same pack does at its lightest. Null when no baseline was computable
      * — which is NOT the same as 1.0.
      */
     overload_index?: number | null;
+    /**
+     * This cycle's average current against the pack's own median (normal) current. >1 means it
+     * pulled a heavier sustained load than this pack's typical trip. Null when uncharacterisable —
+     * NOT the same as 1.0.
+     */
+    current_index?: number | null;
 }
 
 /**
@@ -850,6 +863,8 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
             ah_discharged: ah,
             ah_per_km: ahPerKm(ah, dist.km),
             km_per_ah: kmPerAh(dist.km, ah),
+            avg_discharge_current: c.avg_discharge_current,
+            max_discharge_current: c.max_discharge_current,
         });
     }
     const cycleKmTotal = Math.round(cyclePoints.reduce((a, c) => a + c.km, 0) * 10) / 10;
@@ -870,6 +885,17 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
         c.overload_index = overloadIndex(c.ah_per_km, baseline?.ahPerKm ?? null);
     }
 
+    // The pack's own normal sustained load, and each cycle's load against it. Median rather than the
+    // Ah/km best-fifth: current is a direct measurement with no chord luck to guard against, so the
+    // honest reference is the typical cycle. Computed here for the same reason the Ah index is — one
+    // source for the number the card quotes and the number the scatter colours.
+    const baselineAvgCurrent = medianAvgCurrent(
+        cyclePoints.map((c) => c.avg_discharge_current),
+    );
+    for (const c of cyclePoints) {
+        c.current_index = currentLoadIndex(c.avg_discharge_current, baselineAvgCurrent);
+    }
+
     return {
         vehicleno,
         points,
@@ -887,6 +913,15 @@ export async function fetchDischargeVsKm(vehicleno: string, opts: ChargingWindow
             overloadedCycles: baseline
                 ? cyclePoints.filter((c) => isOverloaded(c.overload_index ?? null)).length
                 : null,
+            /** The pack's own median (normal) average current, A. Null when no cycle carried current. */
+            baselineAvgCurrent,
+            /** Cycles at or above CURRENT_LOAD_INDEX_WARN. Null when there is no current baseline. */
+            heavyCurrentCycles:
+                baselineAvgCurrent != null
+                    ? cyclePoints.filter(
+                          (c) => c.current_index != null && c.current_index >= CURRENT_LOAD_INDEX_WARN,
+                      ).length
+                    : null,
             gates: loadGates(),
             /** Aggregate ratio, not mean-of-ratios — same reasoning as the daily summary. */
             avgAhPerKm:

@@ -346,7 +346,11 @@ export default function KYCPage() {
                     uploaded_at: serverDoc?.uploaded_at || new Date().toISOString(),
                 },
             }));
-            await loadPageData(true);
+            // The optimistic state above already shows the uploaded file, so we
+            // don't block the UI on a full reload (access-check + 3 fetches).
+            // Refresh verifications/consent in the background instead — the
+            // upload feels instant.
+            void loadPageData(true);
         } catch (err: any) {
             setApiError(err?.message || 'Document upload failed');
         }
@@ -1087,7 +1091,9 @@ export default function KYCPage() {
                         docs surface here, and the dealer can add custom items
                         proactively. These never gate Submit-for-Verification —
                         only the standard 9 required docs do. */}
-                    <OtherDocumentsSection leadId={leadId} docFor="primary" scopeLabel="Primary Borrower (Customer)" onChanged={setAdditionalDocs} />
+                    <div id="other-documentation" className="scroll-mt-24">
+                        <OtherDocumentsSection leadId={leadId} docFor="primary" scopeLabel="Primary Borrower (Customer)" onChanged={setAdditionalDocs} />
+                    </div>
 
                     {/* ─── Verification Action ────────────────────────── */}
                     <SectionCard title="Verification Action" action={
