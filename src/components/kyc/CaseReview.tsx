@@ -19,6 +19,7 @@ import CoBorrowerPanel, {
 } from "./step3/CoBorrowerPanel";
 import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
 import RequestMoreDocsModal from "./step3/RequestMoreDocsModal";
+import NbfcKycVerificationCard from "./NbfcKycVerificationCard";
 
 interface CrossMatchResult {
   overallPass: boolean;
@@ -206,7 +207,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [data, setData] = useState<CaseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"verifications" | "documents">("verifications");
+  const [activeTab, setActiveTab] = useState<"verifications" | "documents" | "nbfc">("verifications");
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [pdfViewer, setPdfViewer] = useState<{ url: string; title: string } | null>(null);
   const [decision, setDecision] = useState<"approved" | "rejected" | "">("");
@@ -1209,6 +1210,15 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             activeTab === "documents" ? "bg-teal-100 text-teal-700" : "bg-gray-200 text-gray-600"
           }`}>{documents.length}</span>
         </button>
+        <button onClick={() => setActiveTab("nbfc")}
+          className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+            activeTab === "nbfc"
+              ? "bg-white text-teal-700 shadow-md ring-1 ring-teal-100"
+              : "text-gray-600 hover:text-gray-900 hover:bg-white/60"
+          }`}>
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+          NBFC Actions
+        </button>
       </div>
 
       {/* Verification Cards */}
@@ -1329,6 +1339,16 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           onRefresh={fetchData}
           onRequestDocs={() => setShowGlobalDocsModal(true)}
         />
+      )}
+
+      {/* Change 6 — everything the NBFC has verified / asked for on this lead,
+          with Forward / Push / Decline / Message controls. Self-fetches; renders
+          nothing when there is no NBFC activity. */}
+      {/* NBFC Actions — its own tab. Every NBFC-originated action for this lead
+          (per-doc verdicts + notes + attachments, correction / additional-doc /
+          co-borrower requests, manual-consent uploads, direct messages). */}
+      {activeTab === "nbfc" && (
+        <NbfcKycVerificationCard leadId={leadId} />
       )}
 
       {/* Step 3 — Panel 3: Co-Borrower KYC Review (BRD §2.9.3) */}

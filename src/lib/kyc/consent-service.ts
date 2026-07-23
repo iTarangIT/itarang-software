@@ -26,6 +26,7 @@ import {
   leads,
 } from "@/lib/db/schema";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
+import { sendEmail } from "@/lib/email/mailer";
 import { sendMsg91Otp } from "@/lib/msg91";
 import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
 import {
@@ -234,9 +235,16 @@ export type SendConsentResult =
  */
 export async function sendConsentForLead(opts: {
   leadId: string;
-  channel: "sms" | "whatsapp";
+  channel: "sms" | "whatsapp" | "email";
   consentFor?: ConsentFor;
   dealerName?: string;
+  // NBFC Acquire "run consent yourself" flow: sign THIS document (the NBFC's own
+  // uploaded consent template) instead of the per-lead iTarang-generated PDF. When
+  // omitted, the default dealer/admin behaviour is unchanged.
+  documentOverride?: { pdfBase64: string; fileName: string; url: string };
+  // Stamp the consent_records row with the acting NBFC tenant (Req 1 — the NBFC
+  // only sees its own consent). NULL/omitted ⇒ iTarang/dealer-captured.
+  initiatedByTenantId?: string;
 }): Promise<SendConsentResult> {
   const role = toRole(opts.consentFor);
   const resolved = await resolveSigner(opts.leadId, role);
@@ -252,6 +260,17 @@ export async function sendConsentForLead(opts: {
         role === "co_borrower"
           ? "Co-borrower phone number not available"
           : "Customer phone number not available",
+    };
+  }
+  // The e-sign link can also be delivered by email — requires an address on file.
+  if (opts.channel === "email" && !signer.email) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        role === "co_borrower"
+          ? "Co-borrower email address not available"
+          : "Customer email address not available",
     };
   }
 
@@ -307,42 +326,51 @@ export async function sendConsentForLead(opts: {
 
   const now = new Date();
   const consentId = newConsentId(now);
-  const html = buildHtml(lead, signer, consentId, opts.dealerName || "", now);
-  const pdfBuffer = await renderPdfFromHtml(html);
-  const pdfBase64 = pdfBuffer.toString("base64");
+  const override = opts.documentOverride;
+  // Default flow renders the per-lead iTarang consent PDF; the NBFC flow signs
+  // the NBFC's own uploaded template as-is.
+  const pdfBase64 = override
+    ? override.pdfBase64
+    : await renderPdfFromHtml(
+        buildHtml(lead, signer, consentId, opts.dealerName || "", now),
+      ).then((buf) => buf.toString("base64"));
   const cleanPhone = signer.phone.replace(/\D/g, "").slice(-10);
 
   // Unsigned-PDF storage + Digio agreement run in parallel (both network-bound).
+  // For the NBFC override we already have a stored template URL — reuse it.
   const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
   const storagePath = `kyc/${opts.leadId}/consent/unsigned-${Date.now()}.pdf`;
-  const storageUploadPromise: Promise<string | null> = (async () => {
-    try {
-      if (isS3Backend) {
-        await putObject(bucket, storagePath, pdfBuffer, "application/pdf");
-        return filesProxyPath(bucket, storagePath);
-      }
-      const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-      if (!supabaseUrl || !serviceRoleKey) return null;
-      const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
-      const { error } = await supabase.storage
-        .from(bucket)
-        .upload(storagePath, pdfBuffer, {
-          contentType: "application/pdf",
-          upsert: true,
-        });
-      if (error) return null;
-      const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-      return data?.publicUrl || null;
-    } catch (e) {
-      console.warn("[consent-service] unsigned PDF storage error:", e);
-      return null;
-    }
-  })();
+  const storageUploadPromise: Promise<string | null> = override
+    ? Promise.resolve(override.url)
+    : (async () => {
+        try {
+          const pdfBuffer = Buffer.from(pdfBase64, "base64");
+          if (isS3Backend) {
+            await putObject(bucket, storagePath, pdfBuffer, "application/pdf");
+            return filesProxyPath(bucket, storagePath);
+          }
+          const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+          const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+          if (!supabaseUrl || !serviceRoleKey) return null;
+          const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
+          const { error } = await supabase.storage
+            .from(bucket)
+            .upload(storagePath, pdfBuffer, {
+              contentType: "application/pdf",
+              upsert: true,
+            });
+          if (error) return null;
+          const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+          return data?.publicUrl || null;
+        } catch (e) {
+          console.warn("[consent-service] unsigned PDF storage error:", e);
+          return null;
+        }
+      })();
 
   const digioPromise = createDigioAgreement({
     fileData: pdfBase64,
-    fileName: `consent_${opts.leadId}_${consentId}.pdf`,
+    fileName: override?.fileName ?? `consent_${opts.leadId}_${consentId}.pdf`,
     signers: [
       {
         identifier: cleanPhone,
@@ -403,6 +431,7 @@ export async function sendConsentForLead(opts: {
         verified_at: null,
         rejected_by: null,
         rejected_at: null,
+        initiated_by_tenant_id: opts.initiatedByTenantId ?? null,
         updated_at: now,
       })
       .where(eq(consentRecords.id, refreshable.id));
@@ -418,6 +447,7 @@ export async function sendConsentForLead(opts: {
       consent_link_sent_at: now,
       esign_transaction_id: digioDocumentId,
       generated_pdf_url: generatedPdfUrl,
+      initiated_by_tenant_id: opts.initiatedByTenantId ?? null,
       created_at: now,
       updated_at: now,
     });
@@ -461,6 +491,20 @@ export async function sendConsentForLead(opts: {
   }
 
   await syncApplicantStatus(role, opts.leadId, "link_sent", now);
+
+  // Email delivery of the signing link (best-effort — never blocks the send).
+  if (opts.channel === "email" && signer.email && customerSigningUrl) {
+    try {
+      await sendEmail({
+        to: signer.email,
+        subject: "[iTarang] Please sign your consent document",
+        text: `Dear ${signer.name},\n\nPlease review and sign your consent document using the secure link below:\n\n${customerSigningUrl}\n\nThank you,\niTarang`,
+        html: `<p>Dear ${signer.name},</p><p>Please review and sign your consent document using the secure link below:</p><p><a href="${customerSigningUrl}">Review &amp; sign your consent →</a></p><p>Thank you,<br/>iTarang</p>`,
+      });
+    } catch (e) {
+      console.error("[consent-service] e-sign email delivery failed:", e);
+    }
+  }
 
   return {
     ok: true,
@@ -678,8 +722,9 @@ function smsOtpConfigured(): boolean {
 }
 
 /** OTP delivery channel. 'call' = 2Factor automated voice call (primary);
- *  'whatsapp' = Meta (currently "coming soon" in the UI); 'sms' = MSG91 (legacy). */
-export type ConsentOtpChannel = "call" | "sms" | "whatsapp";
+ *  'whatsapp' = Meta (currently "coming soon" in the UI); 'sms' = MSG91 (legacy);
+ *  'email' = transactional email via the shared mailer. */
+export type ConsentOtpChannel = "call" | "sms" | "whatsapp" | "email";
 
 export type SendConsentOtpResult =
   | {
@@ -714,17 +759,39 @@ export async function sendConsentOtp(opts: {
   consentFor?: ConsentFor;
   dealerName?: string;
   requestedBy?: string | null;
+  // NBFC Acquire flow: show/consent to the NBFC's own uploaded template instead
+  // of the per-lead iTarang preview PDF. Omitted ⇒ default behaviour unchanged.
+  documentOverride?: { pdfBase64: string; fileName: string; url: string };
+  // Stamp the consent_records row with the acting NBFC tenant (Req 1).
+  initiatedByTenantId?: string;
 }): Promise<SendConsentOtpResult> {
   const role = toRole(opts.consentFor);
   const channel: ConsentOtpChannel =
-    opts.channel === "whatsapp" ? "whatsapp" : opts.channel === "sms" ? "sms" : "call";
+    opts.channel === "whatsapp"
+      ? "whatsapp"
+      : opts.channel === "sms"
+        ? "sms"
+        : opts.channel === "email"
+          ? "email"
+          : "call";
 
   const resolved = await resolveSigner(opts.leadId, role);
   if (!resolved) {
     return { ok: false, status: 404, error: "Lead or co-borrower not found" };
   }
   const { signer } = resolved;
-  if (!signer.phone) {
+  // Email OTP needs an address on file; every other channel needs a phone.
+  if (channel === "email" && !signer.email) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        role === "co_borrower"
+          ? "Co-borrower email address not available"
+          : "Customer email address not available",
+    };
+  }
+  if (channel !== "email" && !signer.phone) {
     return {
       ok: false,
       status: 400,
@@ -735,10 +802,19 @@ export async function sendConsentOtp(opts: {
     };
   }
 
-  const tenDigit = signer.phone.replace(/\D/g, "").slice(-10);
-  const normalized = normalizeCalcPhone(signer.phone); // "91XXXXXXXXXX" or null
-  const storedPhone = normalized || tenDigit;
-  const masked = normalized ? maskCalcPhone(normalized) : `XXXXXX${tenDigit.slice(-4)}`;
+  const tenDigit = (signer.phone ?? "").replace(/\D/g, "").slice(-10);
+  const normalized = signer.phone ? normalizeCalcPhone(signer.phone) : null; // "91XXXXXXXXXX" or null
+  const storedPhone = normalized || tenDigit || signer.email;
+  const maskedEmail =
+    signer.email.length > 0
+      ? `${signer.email.slice(0, 2)}***@${signer.email.split("@")[1] ?? ""}`
+      : "";
+  const masked =
+    channel === "email"
+      ? maskedEmail
+      : normalized
+        ? maskCalcPhone(normalized)
+        : `XXXXXX${tenDigit.slice(-4)}`;
 
   // Latest open OTP session for (lead, consent_for) — reused (send_count bumped)
   // until OTP_MAX_SENDS, then a cooldown before a fresh session is allowed.
@@ -775,28 +851,36 @@ export async function sendConsentOtp(opts: {
     session = undefined;
   }
 
-  // Render + store the consent PDF (best-effort — never blocks the OTP).
+  // Render + store the consent PDF (best-effort — never blocks the OTP). For the
+  // NBFC flow the document is the NBFC's own uploaded template, already stored.
   let previewUrl: string | null = null;
   let pdfBuffer: Buffer | null = null;
-  const preview = await renderConsentPreviewPdf({
-    leadId: opts.leadId,
-    consentFor: opts.consentFor,
-    dealerName: opts.dealerName,
-  });
-  if (preview.ok) {
-    previewUrl = preview.url;
-    pdfBuffer = preview.pdfBuffer;
+  if (opts.documentOverride) {
+    previewUrl = opts.documentOverride.url;
+    pdfBuffer = Buffer.from(opts.documentOverride.pdfBase64, "base64");
+  } else {
+    const preview = await renderConsentPreviewPdf({
+      leadId: opts.leadId,
+      consentFor: opts.consentFor,
+      dealerName: opts.dealerName,
+    });
+    if (preview.ok) {
+      previewUrl = preview.url;
+      pdfBuffer = preview.pdfBuffer;
+    }
   }
 
   // Dev shortcut mirrors Step 5 / calculator: without live provider creds we use
   // a hardcoded OTP so the flow is testable; verification still hash-compares
   // through the exact production path.
   const configured =
-    channel === "whatsapp"
-      ? metaWhatsAppConfigured()
-      : channel === "sms"
-        ? smsOtpConfigured()
-        : twoFactorConfigured();
+    channel === "email"
+      ? true // mailer is always available; failures surface at delivery below
+      : channel === "whatsapp"
+        ? metaWhatsAppConfigured()
+        : channel === "sms"
+          ? smsOtpConfigured()
+          : twoFactorConfigured();
   const otp = configured
     ? Math.floor(100000 + Math.random() * 900000).toString()
     : "123456";
@@ -806,11 +890,26 @@ export async function sendConsentOtp(opts: {
   let deliveryStatus: "sent" | "dev_hardcoded" | "failed" = "dev_hardcoded";
   if (configured) {
     const delivered =
-      channel === "whatsapp"
-        ? (await sendCalcOtpWhatsApp(normalized || `91${tenDigit}`, otp, signer.name)).ok
-        : channel === "sms"
-          ? (await sendMsg91Otp({ mobile_number: signer.phone, otp, otp_expiry_minutes: 10 })).success
-          : (await sendTwoFactorVoiceOtp({ mobile_number: signer.phone, otp })).success;
+      channel === "email"
+        ? await (async () => {
+            try {
+              await sendEmail({
+                to: signer.email,
+                subject: "[iTarang] Your consent OTP",
+                text: `Dear ${signer.name},\n\nYour consent OTP is ${otp}. It is valid for 10 minutes.\n\nIf you did not request this, please ignore this email.\n\nThank you,\niTarang`,
+                html: `<p>Dear ${signer.name},</p><p>Your consent OTP is <strong style="font-size:18px;letter-spacing:2px">${otp}</strong>. It is valid for 10 minutes.</p><p>If you did not request this, please ignore this email.</p><p>Thank you,<br/>iTarang</p>`,
+              });
+              return true;
+            } catch (e) {
+              console.error("[consent-service] email OTP delivery failed:", e);
+              return false;
+            }
+          })()
+        : channel === "whatsapp"
+          ? (await sendCalcOtpWhatsApp(normalized || `91${tenDigit}`, otp, signer.name)).ok
+          : channel === "sms"
+            ? (await sendMsg91Otp({ mobile_number: signer.phone!, otp, otp_expiry_minutes: 10 })).success
+            : (await sendTwoFactorVoiceOtp({ mobile_number: signer.phone!, otp })).success;
     if (!delivered) {
       // Record the failed attempt so send_count still counts against the cap.
       if (session) {
@@ -864,6 +963,7 @@ export async function sendConsentOtp(opts: {
     verified_at: null,
     otp_verified_at: null,
     otp_verification_id: null,
+    initiated_by_tenant_id: opts.initiatedByTenantId ?? null,
     updated_at: now,
   };
   if (existingRec) {

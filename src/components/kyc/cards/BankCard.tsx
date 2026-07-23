@@ -12,6 +12,9 @@ interface BankCardProps {
   branch?: string;
   ocrData?: Record<string, unknown> | null;
   applicant?: "primary" | "co_borrower";
+  // Lead-scoped KYC API base. Defaults to the admin route so the admin flow is
+  // unchanged; the NBFC Acquire panel passes its own mirror base.
+  kycBase?: string;
   existingVerification?: {
     id: string;
     status: string;
@@ -35,13 +38,12 @@ export default function BankCard({
   branch: initBranch = "",
   ocrData,
   applicant = "primary",
+  kycBase,
   existingVerification,
   onActionComplete,
 }: BankCardProps) {
-  const apiBase =
-    applicant === "co_borrower"
-      ? `/api/admin/kyc/${leadId}/coborrower`
-      : `/api/admin/kyc/${leadId}`;
+  const base = kycBase ?? `/api/admin/kyc/${leadId}`;
+  const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
   const [accountNumber, setAccountNumber] = useState(initAccNo);
   const [ifsc, setIfsc] = useState(initIfsc);
   const [bankName, setBankName] = useState(initBank);
@@ -132,12 +134,12 @@ export default function BankCard({
     try {
       const vid = verificationId || existingVerification?.id;
       const res = vid
-        ? await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
+        ? await fetch(`${base}/verification/${vid}/action`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
           })
-        : await fetch(`/api/admin/kyc/${leadId}/verification/manual`, {
+        : await fetch(`${base}/verification/manual`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, verification_type: "bank", applicant, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
@@ -230,6 +232,7 @@ export default function BankCard({
             </p>
             <OcrAutofillButton
               leadId={leadId}
+              ocrUrl={`${base}/ocr`}
               docType={["bank_statement", "cheque_1", "cheque_2", "cheque_3", "cheque_4"]}
               cachedOcrData={ocrData}
               disabled={status === "loading"}

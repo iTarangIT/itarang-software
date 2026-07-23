@@ -380,6 +380,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/loan-products",
         },
         {
+          id: "nbfc-risk-cards",
+          label: "Risk Cards",
+          icon: AlertTriangle,
+          href: "/admin/nbfc/risk-cards",
+        },
+        {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",
           icon: FileText,

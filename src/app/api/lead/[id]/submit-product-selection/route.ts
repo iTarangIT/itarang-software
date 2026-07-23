@@ -62,6 +62,18 @@ const BodySchema = z.object({
   // a downstream phase can tighten validation per legal/ops review).
   batteryPhotoUrls: z.array(storedFileUrl).optional(),
   chargerPhotoUrls: z.array(storedFileUrl).optional(),
+  // E-208 — Step-4 pre-sanction document bucket (≤10 items, all formats).
+  preSanctionDocs: z
+    .array(
+      z.object({
+        url: storedFileUrl,
+        name: z.string(),
+        type: z.string(),
+        size: z.number(),
+      }),
+    )
+    .max(10)
+    .optional(),
   selectedNbfcs: z.array(z.object({
     nbfc_id: z.string(),
     loan_product_id: z.union([z.string(), z.number()]).optional(),
@@ -179,6 +191,7 @@ export async function POST(
         // E-130 / Addendum V0.1 §5.1, §5.3
         battery_photo_urls: body.batteryPhotoUrls ?? [],
         charger_photo_urls: body.chargerPhotoUrls ?? [],
+        pre_sanction_doc_urls: body.preSanctionDocs ?? [],
         selected_nbfcs: body.selectedNbfcs ?? [],
         customer_disclosure_ack: body.customerDisclosureAck ?? false,
         submitted_by: user.id,

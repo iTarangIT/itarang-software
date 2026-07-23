@@ -1,0 +1,850 @@
+"use client";
+
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+
+// Change 6 — the admin's "NBFC KYC Verification" card in the KYC case-review.
+// One place where the admin sees, per NBFC: every per-document verdict the NBFC
+// recorded, and every correction / additional-document request it raised — with
+// controls to Forward the request to the dealer, Push the finished docs back to
+// the NBFC, Decline, or post a direct message to the NBFC (Change 3).
+
+interface VerdictAttachment {
+  url: string;
+  name: string;
+  type: string;
+  size: number;
+}
+interface Verdict {
+  id: number;
+  nbfc_id: number;
+  doc_for: string;
+  doc_key: string;
+  verdict: string;
+  notes: string | null;
+  attachments: VerdictAttachment[] | null;
+  // E-209 — set once the admin has forwarded this verdict to the dealer.
+  forwarded_at: string | null;
+  forwarded_request_id: string | null;
+}
+interface ReqItem {
+  id: string;
+  doc_label: string;
+  upload_status: string | null;
+  file_url: string | null;
+  rejection_reason: string | null;
+}
+interface Wrapper {
+  id: string;
+  assignment_id: string;
+  nbfc_id: number;
+  request_type: string;
+  status: string;
+  doc_for: string;
+  target_doc_key: string | null;
+  nbfc_comments: string | null;
+  admin_notes: string | null;
+}
+interface Entry {
+  request: Wrapper;
+  items: ReqItem[];
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  nbfc_raised: "Raised — review",
+  admin_review: "With admin",
+  forwarded_to_dealer: "Forwarded to dealer",
+  with_customer: "Collecting from customer",
+  dealer_review: "Dealer reviewing",
+  admin_review_upload: "Upload ready — review",
+  pushed_to_nbfc: "Pushed to NBFC",
+  closed: "Closed",
+  rejected: "Declined",
+};
+
+// The manual-consent wrapper carries the NBFC's uploaded consent-document URL
+// inline in its comments ("Document: <url>") — linkify it so the admin can open
+// and review the document before forwarding it to the dealer for signing.
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+function firstUrl(text: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(URL_RE);
+  return m?.[0] ?? null;
+}
+function LinkifiedText({ text }: { text: string }) {
+  const parts = text.split(URL_RE);
+  return (
+    <>
+      {parts.map((p, i) =>
+        /^https?:\/\//.test(p) ? (
+          <a
+            key={i}
+            href={p}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-[color:var(--color-brand-sky)] hover:underline break-all"
+          >
+            {p}
+          </a>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) {
+  const [thread, setThread] = useState<Entry[]>([]);
+  const [verdicts, setVerdicts] = useState<Verdict[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  // forward composer: requestId → comma/line separated labels
+  const [forwardFor, setForwardFor] = useState<string | null>(null);
+  const [forwardLabels, setForwardLabels] = useState("");
+  const [banner, setBanner] = useState<string | null>(null);
+  // Per-verdict message the admin must type before forwarding to the dealer.
+  const [verdictMsg, setVerdictMsg] = useState<Record<number, string>>({});
+  // Per-child rejection-reason drafts for the re-uploaded doc under a verdict.
+  const [childReject, setChildReject] = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/admin/nbfc-requests?leadId=${leadId}`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (json.success) {
+        setThread(json.data.thread ?? []);
+        setVerdicts(json.data.verdicts ?? []);
+      }
+    } catch {
+      // best-effort
+    } finally {
+      setLoading(false);
+    }
+  }, [leadId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const forward = async (requestId: string) => {
+    // For a manual-consent request, attach the NBFC's uploaded consent document
+    // to each forwarded item so the dealer knows exactly which document the
+    // customer must sign before uploading the signed copy back.
+    const wrapper = thread.find((e) => e.request.id === requestId)?.request;
+    const consentUrl =
+      wrapper?.request_type === "manual_consent"
+        ? firstUrl(wrapper.nbfc_comments)
+        : null;
+    const reason = consentUrl
+      ? `Print/share the NBFC consent document (${consentUrl}), obtain the customer's signature, then upload the signed copy.`
+      : undefined;
+    const items = forwardLabels
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((doc_label) => ({ doc_label, ...(reason ? { reason } : {}) }));
+    if (items.length === 0) {
+      setBanner("Enter at least one document label to forward.");
+      return;
+    }
+    setBusy(requestId);
+    setBanner(null);
+    try {
+      const res = await fetch(`/api/admin/nbfc-requests/${requestId}/forward`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "forward", items }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setForwardFor(null);
+        setForwardLabels("");
+        await load();
+      } else {
+        setBanner(json.error?.message ?? "Forward failed");
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const simpleAction = async (
+    requestId: string,
+    kind: "decline" | "push",
+  ) => {
+    setBusy(requestId);
+    setBanner(null);
+    try {
+      const url =
+        kind === "push"
+          ? `/api/admin/nbfc-requests/${requestId}/push`
+          : `/api/admin/nbfc-requests/${requestId}/forward`;
+      const body =
+        kind === "push" ? {} : { action: "decline" };
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!json.success) setBanner(json.error?.message ?? `${kind} failed`);
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // One-click action for an NBFC-initiated co-borrower request: triggers the
+  // standard dealer co-borrower KYC flow with the NBFC's reason, then pushes the
+  // wrapper back to the NBFC.
+  const requestCoBorrower = async (requestId: string) => {
+    setBusy(requestId);
+    setBanner(null);
+    try {
+      const res = await fetch(
+        `/api/admin/nbfc-requests/${requestId}/request-coborrower`,
+        { method: "POST", headers: { "Content-Type": "application/json" } },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setBanner(json.error?.message ?? "Could not request co-borrower");
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const postMessage = async (assignmentId: string, message: string) => {
+    if (!message.trim()) return;
+    setBusy(assignmentId);
+    try {
+      const res = await fetch(`/api/admin/nbfc-requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignmentId, message }),
+      });
+      const json = await res.json();
+      if (!json.success) setBanner(json.error?.message ?? "Message failed");
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Forward an NBFC per-document verdict to the dealer as a re-upload request.
+  // A primary/customer verdict lands on Step 2; a co-borrower verdict on Step 3.
+  const forwardVerdict = async (verdictId: number) => {
+    const message = (verdictMsg[verdictId] ?? "").trim();
+    if (!message) {
+      setBanner("Type a message for the dealer before forwarding.");
+      return;
+    }
+    const key = `verdict-${verdictId}`;
+    setBusy(key);
+    setBanner(null);
+    try {
+      const res = await fetch(
+        `/api/admin/nbfc-requests/verdicts/${verdictId}/forward`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setBanner(json.error?.message ?? "Forward failed");
+      } else {
+        setVerdictMsg((prev) => {
+          const next = { ...prev };
+          delete next[verdictId];
+          return next;
+        });
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Approve / reject the dealer's re-uploaded doc directly under the verdict.
+  // Approve of the last outstanding doc auto-pushes the request to the NBFC
+  // (handled server-side in the supporting-docs review route).
+  const reviewChild = async (
+    childId: string,
+    action: "approve" | "reject",
+  ) => {
+    const reason = (childReject[childId] ?? "").trim();
+    if (action === "reject" && !reason) {
+      setBanner("Enter a rejection reason for the dealer.");
+      return;
+    }
+    setBusy(`child-${childId}`);
+    setBanner(null);
+    try {
+      const res = await fetch(
+        `/api/admin/kyc/${leadId}/supporting-docs/${childId}/review`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            rejection_reason: action === "reject" ? reason : undefined,
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setBanner(json.error?.message ?? "Review failed");
+      } else {
+        if (json.data?.pushed_to_nbfc) {
+          setBanner(
+            "Approved — the corrected document has been sent back to the NBFC.",
+          );
+        }
+        setChildReject((prev) => {
+          const next = { ...prev };
+          delete next[childId];
+          return next;
+        });
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (loading) return null;
+
+  const isEmpty = thread.length === 0 && verdicts.length === 0;
+
+  // Quick lookup of the wrapper (+ its re-uploaded child docs) a forwarded
+  // verdict spawned, keyed by wrapper id.
+  const wrapperById = new Map<string, Entry>(
+    thread.map((e) => [e.request.id, e]),
+  );
+
+  // Wrappers spawned by a forwarded verdict are shown under that verdict, so
+  // drop them from the standalone thread list below to avoid duplication.
+  const verdictWrapperIds = new Set(
+    verdicts
+      .map((v) => v.forwarded_request_id)
+      .filter((x): x is string => !!x),
+  );
+  const standaloneThread = thread.filter(
+    (e) => !verdictWrapperIds.has(e.request.id),
+  );
+
+  // Group verdicts by NBFC for the summary strip.
+  const verdictsByNbfc = new Map<number, Verdict[]>();
+  for (const v of verdicts) {
+    const arr = verdictsByNbfc.get(v.nbfc_id) ?? [];
+    arr.push(v);
+    verdictsByNbfc.set(v.nbfc_id, arr);
+  }
+
+  // Change 6 — this is the single, clearly-separated "NBFC" section of the admin
+  // KYC review. Every NBFC-originated action for the lead surfaces here: per-doc
+  // verdicts, and the request thread (corrections, additional-docs, co-borrower,
+  // manual-consent uploads, and admin↔NBFC direct messages). Always rendered so
+  // the section is a consistent, labelled home for NBFC activity.
+  return (
+    <div className="rounded-2xl border-2 border-[color:var(--color-brand-navy,#1e3a5f)]/15 bg-[color:var(--color-brand-navy,#1e3a5f)]/[0.03] p-5">
+      <div className="mb-4 flex items-center gap-2.5">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-[color:var(--color-brand-navy,#1e3a5f)] text-white text-[11px] font-bold">
+          N
+        </span>
+        <div>
+          <h3 className="text-sm font-bold uppercase tracking-wider text-[color:var(--color-brand-navy,#1e3a5f)]">
+            NBFC Actions
+          </h3>
+          <p className="text-[11px] text-slate-500">
+            Everything the NBFC partner has raised or recorded for this lead.
+          </p>
+        </div>
+      </div>
+
+      {banner ? (
+        <p className="mb-3 rounded-md bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-700">
+          {banner}
+        </p>
+      ) : null}
+
+      {isEmpty ? (
+        <p className="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-400">
+          No NBFC activity yet. Verdicts, document requests, co-borrower requests
+          and consent uploads from the NBFC will appear here.
+        </p>
+      ) : null}
+
+      {verdicts.length > 0 ? (
+        <div className="mb-4">
+          <p className="mb-1.5 text-xs font-semibold text-slate-500">
+            NBFC document verdicts
+          </p>
+          <ul className="space-y-1.5">
+            {verdicts.map((v) => {
+              const tone =
+                v.verdict === "verified"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : v.verdict === "rejected"
+                    ? "border-rose-200 bg-rose-50 text-rose-700"
+                    : v.verdict === "queried"
+                      ? "border-amber-200 bg-amber-50 text-amber-700"
+                      : "border-slate-200 bg-slate-50 text-slate-600";
+              const label =
+                v.verdict === "verified"
+                  ? "Approved"
+                  : v.verdict === "rejected"
+                    ? "Rejected"
+                    : v.verdict === "queried"
+                      ? "Correction requested"
+                      : v.verdict;
+              return (
+                <li
+                  key={v.id}
+                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-slate-700">
+                      {v.doc_for === "co_borrower" ? "Co-borrower · " : ""}
+                      {v.doc_key}
+                    </span>
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
+                    >
+                      {label}
+                    </span>
+                  </div>
+                  {v.notes ? (
+                    <p className="mt-1 whitespace-pre-line text-slate-600">{v.notes}</p>
+                  ) : null}
+                  {v.attachments && v.attachments.length > 0 ? (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {v.attachments.map((a, i) => (
+                        <a
+                          key={i}
+                          href={a.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100"
+                        >
+                          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                          </svg>
+                          {a.name}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                  {/* Forward a correction-requested / rejected verdict to the
+                      dealer. Primary → Step 2, co-borrower → Step 3. */}
+                  {v.verdict === "queried" || v.verdict === "rejected" ? (
+                    <div className="mt-2 border-t border-slate-100 pt-2">
+                      {v.forwarded_at ? (
+                        <ForwardedVerdictStatus
+                          entry={
+                            v.forwarded_request_id
+                              ? wrapperById.get(v.forwarded_request_id)
+                              : undefined
+                          }
+                          docFor={v.doc_for}
+                          busy={busy}
+                          rejectDrafts={childReject}
+                          setRejectDrafts={setChildReject}
+                          onReview={reviewChild}
+                        />
+                      ) : (
+                        <div className="space-y-1.5">
+                          <textarea
+                            value={verdictMsg[v.id] ?? ""}
+                            onChange={(e) =>
+                              setVerdictMsg((prev) => ({
+                                ...prev,
+                                [v.id]: e.target.value,
+                              }))
+                            }
+                            rows={2}
+                            placeholder="Message to the dealer — what the customer must correct/re-upload (required)…"
+                            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={
+                                busy === `verdict-${v.id}` ||
+                                !(verdictMsg[v.id] ?? "").trim()
+                              }
+                              onClick={() => forwardVerdict(v.id)}
+                              className="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {busy === `verdict-${v.id}`
+                                ? "Forwarding…"
+                                : "Forward to dealer"}
+                            </button>
+                            <span className="text-[11px] text-slate-500">
+                              Goes to the dealer&apos;s{" "}
+                              {v.doc_for === "co_borrower"
+                                ? "Step 3 (co-borrower documents)"
+                                : "Step 2 (customer documents)"}{" "}
+                              with your message.
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+
+      {standaloneThread.length > 0 ? (
+        <ul className="space-y-3">
+          {standaloneThread.map(({ request, items }) => (
+            <li
+              key={request.id}
+              className="rounded-lg border border-slate-200 p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800 capitalize">
+                    {request.request_type.replace(/_/g, " ")}
+                    {request.target_doc_key ? ` — ${request.target_doc_key}` : ""}
+                  </p>
+                  {request.nbfc_comments ? (
+                    <p className="mt-0.5 whitespace-pre-line text-xs text-slate-600">
+                      <LinkifiedText text={request.nbfc_comments} />
+                    </p>
+                  ) : null}
+                  {request.request_type === "manual_consent" &&
+                  firstUrl(request.nbfc_comments) ? (
+                    <a
+                      href={firstUrl(request.nbfc_comments) as string}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 hover:bg-sky-100"
+                    >
+                      View uploaded consent document ↗
+                    </a>
+                  ) : null}
+                </div>
+                <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  {STATUS_LABEL[request.status] ?? request.status}
+                </span>
+              </div>
+
+              {items.length > 0 ? (
+                <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-xs">
+                  {items.map((it) => (
+                    <li key={it.id} className="flex justify-between">
+                      <span className="text-slate-600">{it.doc_label}</span>
+                      <span className="text-slate-400">
+                        {it.upload_status ?? "not_uploaded"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {/* Admin controls per hop */}
+              {request.request_type !== "message" ? (
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  {(request.status === "nbfc_raised" ||
+                    request.status === "admin_review") &&
+                    request.request_type === "co_borrower" && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={busy === request.id}
+                          onClick={() => requestCoBorrower(request.id)}
+                          className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 disabled:opacity-50"
+                        >
+                          {busy === request.id
+                            ? "Requesting…"
+                            : "Request co-borrower from dealer"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy === request.id}
+                          onClick={() => simpleAction(request.id, "decline")}
+                          className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 disabled:opacity-50"
+                        >
+                          Decline
+                        </button>
+                      </>
+                    )}
+                  {(request.status === "nbfc_raised" ||
+                    request.status === "admin_review") &&
+                    request.request_type !== "co_borrower" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const opening = forwardFor !== request.id;
+                          setForwardFor(opening ? request.id : null);
+                          if (opening) {
+                            setForwardLabels(
+                              request.request_type === "manual_consent"
+                                ? "Customer-signed DPDP consent document"
+                                : "",
+                            );
+                          }
+                        }}
+                        className="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"
+                      >
+                        Forward to dealer
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy === request.id}
+                        onClick={() => simpleAction(request.id, "decline")}
+                        className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 disabled:opacity-50"
+                      >
+                        Decline
+                      </button>
+                    </>
+                  )}
+                  {request.status === "admin_review_upload" && (
+                    <button
+                      type="button"
+                      disabled={busy === request.id}
+                      onClick={() => simpleAction(request.id, "push")}
+                      className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 disabled:opacity-50"
+                    >
+                      Push to NBFC
+                    </button>
+                  )}
+                </div>
+              ) : null}
+
+              {forwardFor === request.id ? (
+                <div className="mt-2 rounded-md border border-slate-300 bg-slate-50 p-2.5">
+                  <textarea
+                    value={forwardLabels}
+                    onChange={(e) => setForwardLabels(e.target.value)}
+                    rows={2}
+                    placeholder="Document labels to request (one per line, e.g. 'Updated bank statement')"
+                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy === request.id}
+                    onClick={() => forward(request.id)}
+                    className="mt-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {busy === request.id ? "Forwarding…" : "Create request & forward"}
+                  </button>
+                </div>
+              ) : null}
+
+              <DirectMessage
+                assignmentId={request.assignment_id}
+                busy={busy === request.assignment_id}
+                onSend={(m) => postMessage(request.assignment_id, m)}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// Live status of a forwarded verdict: the wrapper's hop-status, the dealer's
+// re-uploaded doc(s) with View + Approve/Reject, and a "sent back to NBFC" note
+// once approved. Approving the last outstanding doc auto-pushes to the NBFC.
+function ForwardedVerdictStatus({
+  entry,
+  docFor,
+  busy,
+  rejectDrafts,
+  setRejectDrafts,
+  onReview,
+}: {
+  entry: Entry | undefined;
+  docFor: string;
+  busy: string | null;
+  rejectDrafts: Record<string, string>;
+  setRejectDrafts: Dispatch<SetStateAction<Record<string, string>>>;
+  onReview: (childId: string, action: "approve" | "reject") => void;
+}) {
+  const stepLabel = docFor === "co_borrower" ? "Step 3" : "Step 2";
+
+  // Fallback while the thread hasn't loaded / linked wrapper not found.
+  if (!entry) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+        Forwarded to dealer · {stepLabel}
+      </span>
+    );
+  }
+
+  const status = entry.request.status;
+  const pushed = status === "pushed_to_nbfc" || status === "closed";
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+          Forwarded · {stepLabel}
+        </span>
+        <span
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+            pushed
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-slate-200 bg-slate-50 text-slate-600"
+          }`}
+        >
+          {STATUS_LABEL[status] ?? status}
+        </span>
+      </div>
+
+      {entry.items.map((it) => {
+        const st = it.upload_status ?? "not_uploaded";
+        const tone =
+          st === "verified"
+            ? "border-emerald-200 bg-emerald-50"
+            : st === "rejected"
+              ? "border-rose-200 bg-rose-50"
+              : st === "uploaded"
+                ? "border-amber-200 bg-amber-50"
+                : "border-slate-200 bg-white";
+        const stLabel =
+          st === "verified"
+            ? "Verified"
+            : st === "rejected"
+              ? "Rejected — back with dealer"
+              : st === "uploaded"
+                ? "Uploaded — review"
+                : "Awaiting dealer upload";
+        const childBusy = busy === `child-${it.id}`;
+        return (
+          <div key={it.id} className={`rounded-md border ${tone} p-2`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-700">
+                {it.doc_label}
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                {stLabel}
+              </span>
+            </div>
+            {it.rejection_reason ? (
+              <p className="mt-0.5 text-[11px] text-rose-700">
+                {it.rejection_reason}
+              </p>
+            ) : null}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {it.file_url ? (
+                <a
+                  href={it.file_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  View
+                </a>
+              ) : null}
+              {st === "uploaded" ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={childBusy}
+                    onClick={() => onReview(it.id, "approve")}
+                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-50"
+                  >
+                    {childBusy ? "Approving…" : "Approve"}
+                  </button>
+                  <input
+                    value={rejectDrafts[it.id] ?? ""}
+                    onChange={(e) =>
+                      setRejectDrafts((prev) => ({
+                        ...prev,
+                        [it.id]: e.target.value,
+                      }))
+                    }
+                    placeholder="Rejection reason…"
+                    className="min-w-[10rem] flex-1 rounded-md border border-slate-300 px-2 py-1 text-[11px]"
+                  />
+                  <button
+                    type="button"
+                    disabled={childBusy || !(rejectDrafts[it.id] ?? "").trim()}
+                    onClick={() => onReview(it.id, "reject")}
+                    className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+
+      {pushed ? (
+        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+          ✓ Sent back to NBFC
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function DirectMessage({
+  assignmentId,
+  busy,
+  onSend,
+}: {
+  assignmentId: string;
+  busy: boolean;
+  onSend: (message: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  void assignmentId;
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-2 text-xs font-medium text-slate-500 hover:text-slate-700"
+      >
+        + Message the NBFC directly
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 flex items-end gap-2">
+      <textarea
+        value={msg}
+        onChange={(e) => setMsg(e.target.value)}
+        rows={2}
+        placeholder="Post an update straight to the NBFC (no dealer round-trip)…"
+        className="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+      />
+      <button
+        type="button"
+        disabled={busy || !msg.trim()}
+        onClick={() => {
+          onSend(msg);
+          setMsg("");
+          setOpen(false);
+        }}
+        className="rounded-md bg-[color:var(--color-brand-navy,#1e3a5f)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+      >
+        Send
+      </button>
+    </div>
+  );
+}

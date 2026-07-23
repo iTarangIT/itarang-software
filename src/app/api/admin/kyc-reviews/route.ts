@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import {
+  accounts,
   adminKycReviews,
   adminVerificationQueue,
   coBorrowerDocuments,
@@ -517,10 +518,18 @@ export async function GET(req: NextRequest) {
         .select({
           id: leads.id,
           owner_name: leads.owner_name,
-          dealer_name: leads.business_name,
+          // The dealer name is the dealer ACCOUNT's business entity name,
+          // resolved via leads.dealer_id → accounts.id (the same join coupons/
+          // inventory use). `leads.business_name` is the CUSTOMER's business
+          // name, not the dealer's — sourcing dealer_name from it (and then
+          // falling back to owner_name) is what made the card show the customer
+          // name after "Dealer:".
+          dealer_id: leads.dealer_id,
+          dealer_name: accounts.business_entity_name,
           kyc_status: leads.kyc_status,
         })
         .from(leads)
+        .leftJoin(accounts, eq(accounts.id, leads.dealer_id))
         .where(inArray(leads.id, leadIds)),
       db
         .select({ lead_id: coBorrowers.lead_id })
@@ -544,7 +553,11 @@ export async function GET(req: NextRequest) {
       .map((lead) => {
         const documents = documentsByLead.get(lead.id) ?? [];
         const ownerName = lead.owner_name?.trim() || "Unknown";
-        const dealerName = lead.dealer_name?.trim() || ownerName;
+        // Never fall back to the owner/customer name here — that was the bug.
+        // If the dealer account name is missing, show the dealer id (or a dash)
+        // so the field stays honestly a dealer identifier.
+        const dealerName =
+          lead.dealer_name?.trim() || lead.dealer_id?.trim() || "—";
 
         return {
           lead_id: lead.id,

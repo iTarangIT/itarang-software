@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { otherDocumentRequests } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { recomputeWrapperStatus } from "@/lib/nbfc/doc-requests";
+import { notifyAdminsOfUpload } from "@/lib/nbfc/doc-request-notify";
 
 /**
  * GET — Fetch all document requests for a lead (from admin "Request More Docs")
@@ -133,6 +135,18 @@ export async function POST(
                 uploaded_at: new Date(),
             })
             .where(eq(otherDocumentRequests.id, requestId));
+
+        // E-200 — if this doc belongs to an NBFC request wrapper, reproject its
+        // hop-status and notify the admins that an upload is ready to review.
+        if (request.nbfc_request_id) {
+            await recomputeWrapperStatus(request.nbfc_request_id).catch(() => {});
+            await notifyAdminsOfUpload({
+                leadId,
+                requestId: request.nbfc_request_id,
+                docLabel: request.doc_label,
+                req,
+            }).catch(() => {});
+        }
 
         return NextResponse.json({
             success: true,

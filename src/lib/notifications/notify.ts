@@ -59,3 +59,29 @@ export async function notifyUser(
         )
     `);
 }
+
+// Notify every member of an NBFC tenant — one row per active nbfc_users seat for
+// that tenant, keyed to user_id. Used to push an admin update up to the NBFC
+// (Change 3/5). Same best-effort contract as notifyRoles.
+export async function notifyNbfcTenant(
+    tenantId: string,
+    n: {
+        type: string;
+        title: string;
+        message: string;
+        data?: unknown;
+        leadId?: string | null;
+    },
+): Promise<void> {
+    if (!tenantId) return;
+    await db.execute(sql`
+        INSERT INTO notifications
+            (id, user_id, type, title, message, data, lead_id, read, created_at)
+        SELECT
+            gen_random_uuid()::text, nu.user_id, ${n.type}, ${n.title}, ${n.message},
+            ${JSON.stringify(n.data ?? {})}::jsonb, ${n.leadId ?? null},
+            false, NOW()
+        FROM nbfc_users nu
+        WHERE nu.tenant_id = ${tenantId}::uuid
+    `);
+}
