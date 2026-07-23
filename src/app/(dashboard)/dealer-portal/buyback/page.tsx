@@ -32,6 +32,7 @@ import DealerRequestsTable, {
   type DealerRequestRow,
 } from "@/components/buyback/DealerRequestsTable";
 import DraftBanner from "@/components/buyback/DraftBanner";
+import BuybackActionCenter from "@/components/buyback/notifications/BuybackActionCenter";
 import { Card, EmptyState, KpiCard, PageHeader } from "@/components/buyback/ui";
 
 const PENDING_STATES = new Set([
@@ -133,6 +134,8 @@ export default function DealerBuybackPage() {
             </div>
           }
         />
+
+        <BuybackActionCenter className="mb-5" />
 
         {error ? (
           <p className="text-sm text-red-600">{error}</p>

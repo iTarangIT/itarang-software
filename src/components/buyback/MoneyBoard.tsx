@@ -597,7 +597,12 @@ export default function MoneyBoard({
               raises it against the vendor's PO; the vendor pays against it. Only
               shown once the POs are exchanged, because a proforma answers a PO.
               vendor_po_number gates the raise: no PO, nothing to answer. */}
-          {m.vendor_po_number && (
+          {/* m?. not m.: this block sits under a status-gated parent, but `m`
+              (money) is fetched by this component and is briefly null on the
+              reload that follows an approve (window.location.reload). Without the
+              guard that load window crashed on `m.vendor_po_number` — the block
+              simply doesn't render until the money data has loaded. */}
+          {m?.vendor_po_number && (
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold text-slate-700">Proforma invoice</span>

@@ -57,6 +57,11 @@ export const DEAL_ACTIONS = [
   "dealer_counter",
   "dealer_accept",
   "dealer_decline",
+  // Accept the standing MID-NEGOTIATION counter directly — the dealer takes
+  // iTarang's last counter without waiting for a formal final offer. The mirror
+  // of the vendor leg's `vendor_agree`, and kept distinct from `dealer_accept`
+  // (a final-offer answer) so the audit log tells the two apart.
+  "dealer_accept_counter",
   // Admin — the four review actions (BRD M06)
   "start_review",
   "accept",
@@ -69,6 +74,11 @@ export const DEAL_ACTIONS = [
   // final offer" feel like a wrong extra button — the desk was not asking to
   // delete the final-offer artifact, only to stop being forced into it.
   "admin_counter",
+  // Accept the dealer's standing counter directly, mid-negotiation — the "yes"
+  // the admin previously lacked (their only close was send_final_offer). The
+  // accept route snapshots the dealer's last counter as the accepted final
+  // offer. Mirror of admin_counter.
+  "admin_accept_counter",
   "request_info",
   // Admin — the rest of the dealer leg
   "send_final_offer",
@@ -215,6 +225,14 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
     // deliberate "this is my last word", not the only way to say a number.
     dealer_counter: { to: "NEGOTIATING", roles: ["dealer"] },
     admin_counter: { to: "NEGOTIATING", roles: ["admin"] },
+    // Direct accept of the OTHER side's standing counter, without the
+    // final-offer ceremony. Both land in DEALER_ACCEPTED; the accept route
+    // snapshots the accepted prices into an ACCEPTED final_offer so
+    // linesForRequest / set_margin read them exactly as they would a
+    // final-offer acceptance. send_final_offer stays as the deliberate "last
+    // word" path.
+    admin_accept_counter: { to: "DEALER_ACCEPTED", roles: ["admin"] },
+    dealer_accept_counter: { to: "DEALER_ACCEPTED", roles: ["dealer"] },
     send_final_offer: { to: "FINAL_OFFER_SENT", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },

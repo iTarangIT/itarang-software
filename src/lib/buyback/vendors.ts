@@ -67,6 +67,8 @@ export interface ThreadLineRow {
   ask_price: string | null;
   counter_price: string | null;
   agreed_price: string | null;
+  /** Battery photo row ids for this line — bytes served by the vendor photo route. */
+  photos: { id: string }[];
 }
 
 export interface ThreadRow {
@@ -107,7 +109,19 @@ export async function threadsForDeal(
             'ah',            cv.ah,
             'ask_price',     vtl.ask_price,
             'counter_price', vtl.counter_price,
-            'agreed_price',  vtl.agreed_price
+            'agreed_price',  vtl.agreed_price,
+            -- Battery photo ids for this line (capped). IDs only — the vendor
+            -- photo route re-scopes each id to the caller's own thread before it
+            -- serves bytes, so an id is safe to hand over; a key never is.
+            'photos', COALESCE((
+              SELECT json_agg(pj) FROM (
+                SELECT json_build_object('id', p.id) AS pj
+                FROM buyback_photos p
+                WHERE p.line_id = vtl.line_id
+                ORDER BY p.created_at
+                LIMIT 12
+              ) ph
+            ), '[]'::json)
           )
           ORDER BY cv.voltage, cv.ah
         ) FILTER (WHERE vtl.id IS NOT NULL),
@@ -262,7 +276,19 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
             'ah',            cv.ah,
             'ask_price',     vtl.ask_price,
             'counter_price', vtl.counter_price,
-            'agreed_price',  vtl.agreed_price
+            'agreed_price',  vtl.agreed_price,
+            -- Battery photo ids for this line (capped). IDs only — the vendor
+            -- photo route re-scopes each id to the caller's own thread before it
+            -- serves bytes, so an id is safe to hand over; a key never is.
+            'photos', COALESCE((
+              SELECT json_agg(pj) FROM (
+                SELECT json_build_object('id', p.id) AS pj
+                FROM buyback_photos p
+                WHERE p.line_id = vtl.line_id
+                ORDER BY p.created_at
+                LIMIT 12
+              ) ph
+            ), '[]'::json)
           )
           ORDER BY cv.voltage, cv.ah
         ) FILTER (WHERE vtl.id IS NOT NULL),

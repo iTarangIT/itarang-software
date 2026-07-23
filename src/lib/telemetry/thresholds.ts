@@ -46,6 +46,15 @@ export interface ResolvedBatteryThresholds extends BatteryThresholds {
      * rated_capacity is absent (the discharge Ah-out series).
      */
     ratedCapacityAh?: number | null;
+    /**
+     * Normal km-per-Ah efficiency band from the model spec (E-201), when a vehicleno
+     * resolved to one. Spec-only like ratedCapacityAh — expected efficiency is a property
+     * of the pack model, not a display preference — so no app_settings/env/default rung.
+     * NULL means "no band recorded"; the mileage charts then draw no line rather than
+     * inventing a fleet number.
+     */
+    minMileageKmPerAh?: number | null;
+    maxMileageKmPerAh?: number | null;
 }
 
 /** Drizzle returns numeric columns as strings; a NULL column means "no limit recorded". */
@@ -68,6 +77,8 @@ async function fetchSpecPatch(vehicleno: string): Promise<{
     modelName: string | null;
     patch: Partial<Record<keyof BatteryThresholds, number | null>> | null;
     ratedCapacityAh: number | null;
+    minMileageKmPerAh: number | null;
+    maxMileageKmPerAh: number | null;
 }> {
     // A vehicle can appear more than once in device_battery_map (re-deployments);
     // the active row with the latest installed_at is the current pack.
@@ -75,6 +86,8 @@ async function fetchSpecPatch(vehicleno: string): Promise<{
         .select({
             modelName: batterySpecModels.model_name,
             ratedCapacityAh: batterySpecModels.rated_capacity_ah,
+            minMileageKmPerAh: batterySpecModels.min_mileage_km_per_ah,
+            maxMileageKmPerAh: batterySpecModels.max_mileage_km_per_ah,
             underVoltageV: batterySpecModels.under_voltage_v,
             overVoltageV: batterySpecModels.over_voltage_v,
             overCurrentA: batterySpecModels.over_current_a,
@@ -93,10 +106,20 @@ async function fetchSpecPatch(vehicleno: string): Promise<{
         )
         .orderBy(desc(deviceBatteryMap.installed_at))
         .limit(1);
-    if (!row) return { modelName: null, patch: null, ratedCapacityAh: null };
+    if (!row)
+        return {
+            modelName: null,
+            patch: null,
+            ratedCapacityAh: null,
+            minMileageKmPerAh: null,
+            maxMileageKmPerAh: null,
+        };
     return {
         modelName: row.modelName,
         ratedCapacityAh: toNum(row.ratedCapacityAh),
+        // Spec-only, like ratedCapacityAh — a property of the pack, so no resolve patch.
+        minMileageKmPerAh: toNum(row.minMileageKmPerAh),
+        maxMileageKmPerAh: toNum(row.maxMileageKmPerAh),
         patch: {
             underVoltageV: toNum(row.underVoltageV),
             overVoltageV: toNum(row.overVoltageV),
@@ -117,7 +140,13 @@ export async function getBatteryThresholds(
             fetchSettingsPatch(),
             vehicleno
                 ? fetchSpecPatch(vehicleno)
-                : Promise.resolve({ modelName: null, patch: null, ratedCapacityAh: null }),
+                : Promise.resolve({
+                      modelName: null,
+                      patch: null,
+                      ratedCapacityAh: null,
+                      minMileageKmPerAh: null,
+                      maxMileageKmPerAh: null,
+                  }),
         ]);
         const { thresholds, specKeys } = resolveThresholds(
             defaults,
@@ -129,6 +158,8 @@ export async function getBatteryThresholds(
             modelName: spec.modelName,
             specKeys,
             ratedCapacityAh: spec.ratedCapacityAh,
+            minMileageKmPerAh: spec.minMileageKmPerAh,
+            maxMileageKmPerAh: spec.maxMileageKmPerAh,
         };
     } catch (err) {
         console.error("[Thresholds] Failed to read battery thresholds:", err);

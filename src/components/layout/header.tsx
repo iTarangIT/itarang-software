@@ -115,11 +115,23 @@ export function Header() {
                     dealer validation, inventory uploads, escalations, etc. The
                     former separate BuybackBell was a scoped subset of the same
                     table; folding it in removes the duplicate bell and gives one
-                    place that holds all notifications. isAdmin drives role-aware
-                    deep links (e.g. admin vs dealer buyback pages). */}
+                    place that holds all notifications.
+
+                    portalRole shapes the buyback deep links, which differ per
+                    role: admin and dealer each open the request on their own
+                    page, and a vendor — who has neither — is sent to the
+                    matching vendor-portal surface. isAdmin still drives the
+                    non-buyback admin/dealer split. */}
                 <NotificationBell
                     variant="admin"
                     isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
+                    portalRole={
+                        (user?.role ?? '').toLowerCase() === 'scrap_vendor'
+                            ? 'vendor'
+                            : BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())
+                                ? 'admin'
+                                : 'dealer'
+                    }
                 />
 
                 {/* Profile Dropdown */}

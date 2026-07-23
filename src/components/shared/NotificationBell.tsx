@@ -10,7 +10,8 @@
  *
  * Routing (`hrefFor`) is type/data-aware:
  *  - buyback (type `buyback.*` or `data.request_id`) → admin vs dealer deal page
- *    (chosen by `isAdmin`),
+ *    (chosen by `isAdmin`), or the per-category vendor-portal surface when
+ *    `portalRole` is "vendor",
  *  - lead-linked (`lead_id`/`data.leadId`) → admin KYC review or NBFC Acquire
  *    detail (chosen by `variant`),
  *  - anything carrying an explicit `data.href` → that URL verbatim (the escape
@@ -19,6 +20,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bell } from "lucide-react";
 import { useRouter } from "next/navigation";
+
+// Pure, framework-free taxonomy shared with the buyback API — the one place
+// that knows which page a buyback event opens for which portal role.
+import { categorize, linkFor, type NotificationRole } from "@/lib/buyback/notification-meta";
 
 const POLL_MS = 60_000;
 
@@ -37,6 +42,7 @@ function hrefFor(
   note: Note,
   variant: "admin" | "nbfc",
   isAdmin: boolean,
+  portalRole: NotificationRole,
 ): string | null {
   const data = (note.data ?? {}) as {
     leadId?: string;
@@ -51,9 +57,12 @@ function hrefFor(
   if (data.href) return data.href;
   if (data.url) return data.url;
 
-  // Buyback → the request-scoped deal page. The same id maps to two screens:
-  // a dealer has no admin deal page.
+  // Buyback → the request-scoped deal page. The same id maps to three screens:
+  // a dealer has no admin deal page, and a vendor has neither — its surfaces are
+  // per-category (bids, inbox, orders, payments), which only linkFor knows. Ask
+  // it rather than keep a second, drifting copy of that mapping here.
   if (type.startsWith("buyback.") || data.request_id) {
+    if (portalRole === "vendor") return linkFor("vendor", categorize(type), data);
     if (!data.request_id) return null;
     return isAdmin
       ? `/admin/buyback/${data.request_id}`
@@ -81,11 +90,15 @@ function timeAgo(iso: string): string {
 export default function NotificationBell({
   variant = "admin",
   isAdmin = false,
+  portalRole = "dealer",
 }: {
   variant?: "admin" | "nbfc";
   // Drives role-aware deep links (admin vs dealer buyback pages). The feed
   // itself is always the signed-in user's own notifications regardless.
   isAdmin?: boolean;
+  // Which portal the viewer is in, for buyback deep links only. Defaults to
+  // "dealer" so every existing caller keeps its current behaviour.
+  portalRole?: NotificationRole;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -141,7 +154,7 @@ export default function NotificationBell({
   };
 
   const openNote = (note: Note) => {
-    const href = hrefFor(note, variant, isAdmin);
+    const href = hrefFor(note, variant, isAdmin, portalRole);
     void fetch("/api/notifications", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -189,7 +202,7 @@ export default function NotificationBell({
             <ul className="max-h-[380px] overflow-y-auto">
               {notes.map((n) => {
                 const isUnread = n.read !== true;
-                const href = hrefFor(n, variant, isAdmin);
+                const href = hrefFor(n, variant, isAdmin, portalRole);
                 return (
                   <li key={n.id}>
                     <button

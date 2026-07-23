@@ -674,6 +674,8 @@ export interface VendorLineView {
   iot_brand_label: string | null;
   /** "6 working · 3 non-working · 1 untested", zero-parts omitted. */
   condition_split_label: string | null;
+  /** Battery photo ids — rendered via GET /api/vendor/threads/:id/photo. */
+  photos: { id: string }[];
 }
 
 /** The masked quotation. This — and only this — is what the PDF template sees. */
@@ -759,6 +761,14 @@ export interface VendorLineSource {
   non_functional_qty?: number | null;
   iot_battery?: boolean | null;
   iot_brand_name?: string | null;
+  /**
+   * Battery photo row ids for this line (E-198 photos, surfaced in the portal).
+   * IDs ONLY — never an S3 key. The bytes come from the vendor-scoped photo
+   * endpoint, which re-scopes the id to the caller's own thread. A battery photo
+   * is a property of the battery, not of the seller, and vendors already receive
+   * these as the quotation email's attachments.
+   */
+  photos?: { id: string }[];
 }
 
 /** Σ of a line's declared unit weight, or null when the dealer didn't declare one. */
@@ -812,6 +822,9 @@ export function toVendorLine(line: VendorLineSource): VendorLineView {
     // that. Same reason condition_split_label below is a string, not three ints.
     iot_brand_label: iotBrandLabel(line),
     condition_split_label: conditionSplitLabel(line),
+    // IDs only, defaulting to []. A source that never fetched photos omits them;
+    // the field stays present so the vendor UI can render "no photos" honestly.
+    photos: line.photos ?? [],
   };
 }
 
