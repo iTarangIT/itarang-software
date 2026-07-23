@@ -1210,6 +1210,30 @@ export default function DealerReviewPage() {
   // sees an iTarang Signers block for them.
   const isWhatsAppDealer     = (data?.source || "web").toLowerCase() === "whatsapp";
 
+  // Primary signer = the dealer signer on the executed agreement. Once signing
+  // completes, the reliable source is the synced signers table (tracking), which
+  // Digio populates with the real name/email — the stored agreement snapshot is
+  // often blank (WhatsApp dealers never fill a Step-5 signatory). Fall back to
+  // the snapshot fields so nothing regresses for web dealers.
+  const primarySigner = useMemo(() => {
+    const dealerSigner = tracking?.signers?.find((s) => s.signerRole === "dealer");
+    const trackedName =
+      dealerSigner?.signerName && dealerSigner.signerName !== "Not available"
+        ? dealerSigner.signerName
+        : "";
+    const name =
+      trackedName ||
+      data?.agreement?.signerName ||
+      data?.agreement?.dealerSignerName ||
+      "";
+    const email =
+      dealerSigner?.signerEmail ||
+      data?.agreement?.signerEmail ||
+      data?.agreement?.dealerSignerEmail ||
+      "";
+    return { name, email };
+  }, [tracking?.signers, data?.agreement]);
+
   const reloadDealer = async () => {
     try {
       const [dr, tr] = await Promise.all([
@@ -1718,7 +1742,10 @@ export default function DealerReviewPage() {
                   <EditableField label="Company Address"        value={editForm.companyAddress} onChange={handleEditField("companyAddress")} />
                   <EditableField label="GST Number"             value={editForm.gstNumber}      onChange={handleEditField("gstNumber")} />
                   <EditableField label="PAN Number"             value={editForm.panNumber}      onChange={handleEditField("panNumber")} />
-                  <EditableField label="CIN Number"             value={editForm.cinNumber}      onChange={handleEditField("cinNumber")} />
+                  {/* A sole proprietorship is not an incorporated company and has no CIN. */}
+                  {editForm.companyType !== "sole_proprietorship" && (
+                    <EditableField label="CIN Number"           value={editForm.cinNumber}      onChange={handleEditField("cinNumber")} />
+                  )}
                   <EditableField label="Company Type"           value={editForm.companyType}    onChange={handleEditField("companyType")} />
                   <EditableField label="Primary Contact Name"   value={editForm.ownerName}      onChange={handleEditField("ownerName")} />
                   <EditableField label="Primary Contact Phone"  value={editForm.ownerPhone}     onChange={handleEditField("ownerPhone")} />
@@ -1731,7 +1758,10 @@ export default function DealerReviewPage() {
                   <InfoField label="Company Address"       value={data.companyAddress} />
                   <InfoField label="GST Number"            value={data.gstNumber} />
                   <InfoField label="PAN Number"            value={data.panNumber} />
-                  <InfoField label="CIN Number"            value={data.cinNumber} />
+                  {/* A sole proprietorship is not an incorporated company and has no CIN. */}
+                  {data.companyType !== "sole_proprietorship" && (
+                    <InfoField label="CIN Number"          value={data.cinNumber} />
+                  )}
                   <InfoField label="Company Type"          value={data.companyType?.replaceAll("_", " ")} />
                   <InfoField label="Primary Contact Name"  value={data.ownerName} />
                   <InfoField label="Primary Contact Phone" value={data.ownerPhone} />
@@ -2036,8 +2066,8 @@ export default function DealerReviewPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Agreement Status</p>
                   <div className="mt-2"><AgreementBadge value={agreementStatusForUi || undefined} /></div>
                 </div>
-                <InfoField label="Primary Signer Name"  value={data.agreement?.signerName  || data.agreement?.dealerSignerName  || undefined} />
-                <InfoField label="Primary Signer Email" value={data.agreement?.signerEmail || data.agreement?.dealerSignerEmail || undefined} />
+                <InfoField label="Primary Signer Name"  value={primarySigner.name  || undefined} />
+                <InfoField label="Primary Signer Email" value={primarySigner.email || undefined} />
               </div>
 
               <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">

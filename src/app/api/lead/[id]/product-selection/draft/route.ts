@@ -52,6 +52,18 @@ const BodySchema = z.object({
   netSubtotal: z.number().min(0).optional(),
   category: z.string().optional(),
   subCategory: z.string().optional(),
+  // E-208 — Step-4 pre-sanction docs persist across Save Draft.
+  preSanctionDocs: z
+    .array(
+      z.object({
+        url: z.string(),
+        name: z.string(),
+        type: z.string(),
+        size: z.number(),
+      }),
+    )
+    .max(10)
+    .optional(),
 });
 
 const numOrNull = (n: number | undefined) =>
@@ -119,6 +131,7 @@ export async function POST(
       gross_subtotal: numOrNull(body.grossSubtotal),
       gst_subtotal: numOrNull(body.gstSubtotal),
       net_subtotal: numOrNull(body.netSubtotal),
+      pre_sanction_doc_urls: body.preSanctionDocs ?? [],
       payment_mode: paymentMode,
       admin_decision: "draft",
       submitted_by: user.id,

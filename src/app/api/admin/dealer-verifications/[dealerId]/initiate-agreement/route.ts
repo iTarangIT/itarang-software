@@ -11,6 +11,9 @@ import {
   insertAgreementSigners,
 } from "@/lib/agreement/tracking";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
+import { backfillMissingAgreementFields } from "@/lib/agreement/document-backfill";
+import { defaultDealerDesignation } from "@/lib/onboarding/dealer-address";
+import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { getAdapter } from "@/lib/whatsapp";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
@@ -510,17 +513,46 @@ export async function POST(
           ? ["dealer", "itarang_1", "itarang_2"]
           : ["dealer", "itarang_1"];
 
+    // Owner residential address, bank branch and account type are NOT columns —
+    // they live in provider_raw_response.submissionSnapshot.ownership. The GST
+    // Principal Place of Business (submissionSnapshot.gstAddresses) is the
+    // company-address fallback for WhatsApp dealers whose business_address column
+    // was never written. Reconstruct the same values the admin detail GET returns
+    // so the agreement PDF renders them instead of leaving the placeholders
+    // blank. For any field still missing from the snapshot, backfill it from the
+    // dealer's uploaded documents (GST cert, bank statement / cheque) — reading
+    // the stored extraction for free and only re-calling Gemini when needed. This
+    // mutates application.provider_raw_response in memory and persists the fill,
+    // and is best-effort (never blocks initiation).
+    const { ownershipSnapshot, dealerOfficeAddress } =
+      await backfillMissingAgreementFields(application);
+
+    // Dealer designation: keep an explicitly-captured value (web Step-5), else
+    // default by firm type (WhatsApp dealers never capture one).
+    const dealerSignerDesignation =
+      cleanString(agreement.dealerSignerDesignation) ||
+      defaultDealerDesignation(application.company_type);
+
+    // iTarang signatory doubles as the "Authorised Financer Partner" signer on
+    // the agreement. Default its designation to a generic authorized-signatory
+    // title when the config didn't carry one (WhatsApp flow).
+    const itarangSignatory1 = hydratedAgreement.itarangSignatory1
+      ? {
+          ...hydratedAgreement.itarangSignatory1,
+          designation:
+            cleanString(hydratedAgreement.itarangSignatory1.designation) ||
+            "Authorized Signatory",
+        }
+      : null;
+
     const createAgreementPayload = {
       applicationId: application.id,
       company: {
         companyName: application.company_name || "",
         companyType: application.company_type || "",
-        companyAddress:
-          typeof application.business_address === "object" &&
-          application.business_address &&
-          "address" in application.business_address
-            ? String((application.business_address as any).address || "")
-            : "",
+        // Full reconstructed office address (the template joins address parts,
+        // so the single joined string is sufficient).
+        companyAddress: dealerOfficeAddress,
         gstNumber: application.gst_number || "",
         panNumber: application.pan_number || "",
       },
@@ -529,27 +561,39 @@ export async function POST(
         ownerPhone: application.owner_phone || "",
         ownerEmail: application.owner_email || "",
         businessAddress: application.business_address || {},
+        // Owner RESIDENTIAL address (Schedule 3) — from the ownership snapshot.
+        ownerAddressLine1: ownershipSnapshot?.ownerAddressLine1 || "",
+        ownerCity: ownershipSnapshot?.ownerCity || "",
+        ownerDistrict: ownershipSnapshot?.ownerDistrict || "",
+        ownerState: ownershipSnapshot?.ownerState || "",
+        ownerPinCode: ownershipSnapshot?.ownerPinCode || "",
         bankName: application.bank_name || "",
         accountNumber: application.account_number || "",
         ifscCode: application.ifsc_code || "",
         beneficiaryName: application.beneficiary_name || "",
+        branch: ownershipSnapshot?.branch || "",
+        accountType: normalizeAccountType(ownershipSnapshot?.accountType),
       },
       agreement: {
         agreementName:
           cleanString(agreement.agreementName) ||
           "Dealer Finance Enablement Agreement",
         agreementVersion: cleanString(agreement.agreementVersion) || "v1.0",
-        dateOfSigning: cleanString(agreement.dateOfSigning),
+        // Stamp the initiation date so "executed on this __ day of ___" and the
+        // "Date & Stamp with Signature" cell are populated when no date was set.
+        dateOfSigning:
+          cleanString(agreement.dateOfSigning) || new Date().toISOString(),
         mouDate: cleanString(agreement.mouDate),
         financierName: "",
         dealerSignerName: cleanString(hydratedAgreement.dealerSignerName),
-        dealerSignerDesignation: cleanString(agreement.dealerSignerDesignation),
+        dealerSignerDesignation,
         dealerSignerEmail: cleanString(hydratedAgreement.dealerSignerEmail),
         dealerSignerPhone: normalizePhone(hydratedAgreement.dealerSignerPhone),
         dealerSigningMethod:
           cleanString(hydratedAgreement.dealerSigningMethod) || "aadhaar_esign",
-        financierSignatory: null,
-        itarangSignatory1: hydratedAgreement.itarangSignatory1 || null,
+        // The Authorised Financer Partner signer IS the iTarang signatory.
+        financierSignatory: itarangSignatory1,
+        itarangSignatory1,
         itarangSignatory2: itarangSigner2
           ? hydratedAgreement.itarangSignatory2 || null
           : null,

@@ -75,6 +75,29 @@ function cleanString(value?: string) {
   return (value || "").trim();
 }
 
+// Read a key off the legacy businessAddress object (backward-compat fallback for
+// owner residential address when the explicit owner* keys aren't supplied).
+function bizAddr(businessAddress: unknown, key: string): string {
+  return typeof businessAddress === "object" &&
+    businessAddress &&
+    key in businessAddress
+    ? String((businessAddress as any)[key] || "")
+    : "";
+}
+
+// Ensure a signatory object prints a designation. iTarang / financer-partner
+// signers onboarded via WhatsApp never capture one, so default to a generic
+// authorized-signatory title. Returns null for absent signatories.
+function withDefaultDesignation<T extends { designation?: string } | null | undefined>(
+  signatory: T,
+): T {
+  if (!signatory) return signatory;
+  return {
+    ...signatory,
+    designation: cleanString(signatory.designation) || "Authorized Signatory",
+  };
+}
+
 function cleanPhone(value?: string) {
   return (value || "").replace(/\D/g, "");
 }
@@ -393,37 +416,26 @@ export async function POST(req: NextRequest) {
         ownerPhone: ownership.ownerPhone || "",
         ownerEmail: ownership.ownerEmail || "",
         ownerAge: "",
+        // Owner RESIDENTIAL address — prefer the explicit owner* keys the
+        // initiate route now sends from the ownership snapshot; fall back to the
+        // legacy businessAddress object for older callers.
         ownerAddressLine1:
-          typeof ownership.businessAddress === "object" &&
-            ownership.businessAddress &&
-            "address" in ownership.businessAddress
-            ? String((ownership.businessAddress as any).address || "")
-            : "",
+          ownership.ownerAddressLine1 ||
+          bizAddr(ownership.businessAddress, "address"),
         ownerCity:
-          typeof ownership.businessAddress === "object" &&
-            ownership.businessAddress &&
-            "city" in ownership.businessAddress
-            ? String((ownership.businessAddress as any).city || "")
-            : "",
-        ownerDistrict: "",
+          ownership.ownerCity || bizAddr(ownership.businessAddress, "city"),
+        ownerDistrict: ownership.ownerDistrict || "",
         ownerState:
-          typeof ownership.businessAddress === "object" &&
-            ownership.businessAddress &&
-            "state" in ownership.businessAddress
-            ? String((ownership.businessAddress as any).state || "")
-            : "",
+          ownership.ownerState || bizAddr(ownership.businessAddress, "state"),
         ownerPinCode:
-          typeof ownership.businessAddress === "object" &&
-            ownership.businessAddress &&
-            "pincode" in ownership.businessAddress
-            ? String((ownership.businessAddress as any).pincode || "")
-            : "",
+          ownership.ownerPinCode ||
+          bizAddr(ownership.businessAddress, "pincode"),
         bankName: ownership.bankName || "",
         accountNumber: ownership.accountNumber || "",
         ifsc: ownership.ifscCode || "",
         beneficiaryName: ownership.beneficiaryName || "",
-        branch: "",
-        accountType: "",
+        branch: ownership.branch || "",
+        accountType: ownership.accountType || "",
       },
       agreement: {
         dateOfSigning: agreement.dateOfSigning || "",
@@ -438,8 +450,16 @@ export async function POST(req: NextRequest) {
         manufacturer: agreement.manufacturer || "",
         brand: agreement.brand || "",
         statePresence: agreement.statePresence || "",
-        itarangSignatory1: agreement.itarangSignatory1 || null,
-        itarangSignatory2: itarangSigner2 ? agreement.itarangSignatory2 || null : null,
+        // The "Authorised Financer Partner (Authorized Signatory)" block is the
+        // iTarang signer — forward the financierSignatory the initiate route sets
+        // (falling back to iTarang signatory 1). Default a generic designation.
+        financierSignatory: withDefaultDesignation(
+          agreement.financierSignatory || agreement.itarangSignatory1,
+        ),
+        itarangSignatory1: withDefaultDesignation(agreement.itarangSignatory1),
+        itarangSignatory2: itarangSigner2
+          ? withDefaultDesignation(agreement.itarangSignatory2)
+          : null,
       },
     });
 

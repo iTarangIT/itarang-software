@@ -11,6 +11,11 @@ import {
   createWorkflowId,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
+import {
+  autoPushNbfcIfAllVerified,
+  recomputeWrapperStatus,
+} from "@/lib/nbfc/doc-requests";
+import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
 
 // BRD §2.9.3 Panel 2 "Per-Document Action Buttons" — admin verifies or
 // rejects an uploaded supporting document from the case-review screen.
@@ -126,9 +131,41 @@ export async function POST(
       timestamp: now,
     });
 
+    // E-200 — if this doc is a child of an NBFC request wrapper, reproject the
+    // wrapper's hop-status. Guarded: admin-origin rows (nbfc_request_id NULL)
+    // never enter the NBFC loop, so the existing admin→dealer flow is untouched.
+    let autoPushedToNbfc = false;
+    if (row.nbfc_request_id) {
+      await recomputeWrapperStatus(row.nbfc_request_id).catch(() => {});
+      // E-209 — approving the LAST outstanding doc hands the request straight
+      // back to the NBFC (no manual "Push to NBFC" step).
+      if (action === "approve") {
+        try {
+          const pushed = await autoPushNbfcIfAllVerified(
+            row.nbfc_request_id,
+            appUser.id,
+          );
+          if (pushed.pushed) {
+            autoPushedToNbfc = true;
+            await notifyNbfcOfUpdate({
+              tenantId: pushed.tenantId!,
+              leadId: pushed.leadId!,
+              requestId: row.nbfc_request_id,
+            }).catch(() => {});
+          }
+        } catch {
+          // best-effort — the manual Push to NBFC control remains as a fallback.
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      data: { request_id: requestId, upload_status: newStatus },
+      data: {
+        request_id: requestId,
+        upload_status: newStatus,
+        pushed_to_nbfc: autoPushedToNbfc,
+      },
     });
   } catch (error) {
     console.error("[Supporting Doc Review] Error:", error);

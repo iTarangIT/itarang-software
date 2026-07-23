@@ -39,6 +39,7 @@ import {
   fieldLabel as correctionFieldLabel,
 } from "@/lib/onboarding/correction-catalog";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
+import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { catalogDocToWhatsapp } from "./correction-map";
 import { getAdapter } from "./index";
 import {
@@ -2670,7 +2671,7 @@ async function fillFromDoc(
   const ct = session.detected_company_type as CompanyType | null;
   const patch: Record<string, unknown> = {};
   switch (docType) {
-    case "gst":
+    case "gst": {
       if (str(fields.gstin)) patch.gst_number = str(fields.gstin);
       // Company name = the TRADE name (the business), preferring it over the
       // legal name. For a sole proprietorship the GST legal name is the
@@ -2681,10 +2682,37 @@ async function fillFromDoc(
       }
       // GST Principal + every Additional Place of Business → address cards the
       // admin tags as billing/dispatch/other. Stored in the snapshot (no column).
+      const gstAddresses = buildGstAddresses(fields);
       await setGstAddressesSnapshot(
         session.application_id,
-        buildGstAddresses(fields) as unknown as Record<string, any>,
+        gstAddresses as unknown as Record<string, any>,
       );
+      // Also persist the GST Principal Place of Business into the
+      // `business_address` column so the admin "Company Address" field is
+      // populated for WhatsApp dealers. Web onboarding writes this column on
+      // submit; the WhatsApp path previously wrote ONLY the gstAddresses
+      // snapshot, so Company Address always showed "MISSING". Shape mirrors the
+      // admin extractAddress() reader: {"address": "…"}.
+      const principal = gstAddresses.principal;
+      const fullAddress =
+        principal.raw ||
+        [
+          principal.addressLine1,
+          principal.city,
+          principal.district,
+          principal.state,
+          principal.pincode,
+        ]
+          .filter(Boolean)
+          .join(", ");
+      if (fullAddress) {
+        patch.business_address = JSON.stringify({
+          address: fullAddress,
+          city: principal.city,
+          state: principal.state,
+          pincode: principal.pincode,
+        });
+      }
       // For a sole proprietorship the GST legal name IS the proprietor — use it
       // as the owner name. Udyam (read later) overrides if it carries one.
       if (ct === "sole_proprietorship" && str(fields.legal_name)) {
@@ -2698,6 +2726,7 @@ async function fillFromDoc(
         );
       }
       break;
+    }
     case "company_pan":
       if (str(fields.pan)) patch.pan_number = str(fields.pan);
       break;
@@ -2717,9 +2746,15 @@ async function fillFromDoc(
       // Bank branch + account type, and (for a sole proprietorship) the account
       // holder's address as the owner residential address. These have no columns
       // — they live in the ownership snapshot the admin page reads.
+      // Account type: normalise the extracted label ('SB'/'CA'/'Savings' → the
+      // canonical word). We store ONLY what the bank document actually printed —
+      // if it didn't state a type (cheques and many statements don't), leave it
+      // blank rather than inferring from the holder name, so the admin review
+      // page flags it as "Not available / Missing".
+      const accountType = normalizeAccountType(str(fields.account_type));
       const ownership: Record<string, unknown> = {
         branch: str(fields.branch),
-        accountType: str(fields.account_type),
+        accountType,
       };
       // Bank statement holder address is the PRIMARY owner residential address
       // (overrides any GST/Udyam fallback already written).

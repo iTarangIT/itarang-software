@@ -173,6 +173,9 @@ export async function GET(
         net_subtotal: productSelections.net_subtotal,
         admin_decision: productSelections.admin_decision,
         submitted_at: productSelections.submitted_at,
+        // E-208 — Step-4 pre-sanction document bucket, so the dealer's uploads
+        // hydrate when resuming a draft / re-opening a submitted selection.
+        pre_sanction_doc_urls: productSelections.pre_sanction_doc_urls,
       })
       .from(productSelections)
       .where(eq(productSelections.lead_id, leadId))
@@ -211,12 +214,20 @@ export async function GET(
     // same signal here so the dealer is never shown a Next button that this
     // gate then rejects with a dead-end error.
     if (FINANCE_UNLOCKED.has(kycStatus) || finalDecision === "approved") {
+      // Once the dealer has SUBMITTED Step 4 (the product selection + file went
+      // to admin/NBFC), freeze the cards in their selected state even if
+      // kyc_status still reads as an unlocked value — only the pre-sanction
+      // bucket stays editable (handled client-side). `submitted_at` is set only
+      // by submit-product-selection (drafts keep it null), so this never freezes
+      // an in-progress draft.
+      const alreadySubmitted = !!priorSelection?.submitted_at;
       return NextResponse.json({
         success: true,
         data: {
           allowed: true,
           paymentMode: "finance",
           ...sharedFields,
+          readOnly: alreadySubmitted,
           kycStatus,
         },
       });
