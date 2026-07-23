@@ -144,6 +144,26 @@ function yesNo(value?: boolean) {
   return value ? "Yes" : "No";
 }
 
+export type DealerAgreementType = "new" | "scrap" | "both";
+
+// Resolve which agreement template to render for a dealer type (E-202). Today
+// every type uses the same base template — there are no separate scrap/both
+// templates yet — so all cases fall through to buildTarangDealerAgreementHtml.
+// When those templates exist, return a different builder from the matching case;
+// this is the ONLY place that needs to change.
+export function resolveDealerAgreementHtml(
+  dealerType: string | null | undefined,
+  data: AgreementTemplateInput,
+): string {
+  switch (dealerType) {
+    case "scrap": // TODO: buildScrapDealerAgreementHtml(data) when a template exists
+    case "both": // TODO: buildCombinedDealerAgreementHtml(data) when a template exists
+    case "new":
+    default:
+      return buildTarangDealerAgreementHtml(data);
+  }
+}
+
 export function buildTarangDealerAgreementHtml(data: AgreementTemplateInput) {
   const { company, ownership, agreement } = data;
 
