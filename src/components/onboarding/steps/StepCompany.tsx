@@ -2,6 +2,7 @@
 
 import FileUploadCard from "../FileUploadCard";
 import { useOnboardingStore } from "@/store/onboardingStore";
+import { DEALER_TYPE_OPTIONS } from "@/lib/dealer/dealer-type";
 
 export default function StepCompany() {
   const company = useOnboardingStore((s) => s.company);
@@ -16,6 +17,40 @@ export default function StepCompany() {
   return (
     <div className="rounded-3xl border border-[#E3E8EF] bg-white p-6 shadow-sm md:p-8">
       <h2 className="mb-8 text-2xl font-bold text-[#173F63]">Business Details</h2>
+
+      {/* Dealer type — New / Scrap / Both. Drives later agreement & dashboard
+          branching (E-202); for now it is captured on the application. */}
+      <div className="mb-8">
+        <label className={labelCls}>Dealer Type{requiredMark}</label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {DEALER_TYPE_OPTIONS.map((option) => {
+            const selected = company.dealerType === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setField("company", "dealerType", option.value)}
+                aria-pressed={selected}
+                className={`rounded-2xl border px-4 py-4 text-left transition ${
+                  selected
+                    ? "border-[#1F5C8F] bg-[#F4F8FC] ring-2 ring-blue-100"
+                    : "border-[#E3E8EF] bg-white hover:border-[#1F5C8F]/60"
+                }`}
+              >
+                <span className="block text-sm font-semibold text-[#173F63]">
+                  {option.shortLabel}
+                </span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  {option.description}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {errors.dealerType && (
+          <p className="mt-2 text-sm text-red-600">{errors.dealerType}</p>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <div>

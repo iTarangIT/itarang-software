@@ -127,6 +127,7 @@ export async function POST(req: NextRequest) {
 
     const companyName = cleanString(body.companyName);
     const companyType = cleanString(body.companyType);
+    const dealerType = cleanString(body.dealerType);
     const gstNumber = cleanString(body.gstNumber);
     const panNumber = cleanString(body.panNumber);
 
@@ -321,6 +322,7 @@ export async function POST(req: NextRequest) {
       dealer_code: dealerCode,
       company_name: companyName,
       company_type: companyType,
+      dealer_type: dealerType,
       gst_number: gstNumber,
       pan_number: panNumber,
       business_address: businessAddress ? JSON.stringify(businessAddress) : null,

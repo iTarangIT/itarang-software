@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
+import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -468,6 +469,7 @@ export default function StepReview() {
         // Keep the flat payload while the backend submit flow is being unified.
         companyName: state.company?.companyName || "",
         companyType: state.company?.companyType || "",
+        dealerType: state.company?.dealerType || "",
         gstNumber: state.company?.gstNumber || "",
         panNumber: state.company?.companyPanNumber || "",
         businessAddress: {
@@ -670,6 +672,10 @@ export default function StepReview() {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <InfoRow label="Company Name" value={state.company?.companyName} />
           <InfoRow label="Company Type" value={state.company?.companyType} />
+          <InfoRow
+            label="Dealer Type"
+            value={dealerTypeLabel(state.company?.dealerType, "—")}
+          />
           <InfoRow label="GST Number" value={state.company?.gstNumber} />
           <InfoRow label="PAN Number" value={state.company?.companyPanNumber} />
           <div className="md:col-span-2">

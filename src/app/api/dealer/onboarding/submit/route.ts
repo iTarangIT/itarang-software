@@ -390,6 +390,7 @@ export async function POST(req: NextRequest) {
     const company = rawBody.company || {
       companyName: rawBody.companyName,
       companyType: rawBody.companyType,
+      dealerType: rawBody.dealerType,
       gstNumber: rawBody.gstNumber,
       companyPanNumber: rawBody.companyPanNumber || rawBody.panNumber,
       companyAddress:
@@ -597,6 +598,7 @@ export async function POST(req: NextRequest) {
       dealer_code: dealerCode || existingApplication?.dealer_code || null,
       company_name: cleanString(company.companyName),
       company_type: cleanString(company.companyType) || null,
+      dealer_type: cleanString(company.dealerType) || null,
       gst_number: toNullable(company.gstNumber),
       pan_number: toNullable(company.companyPanNumber),
       business_address: JSON.stringify(buildAddress(
