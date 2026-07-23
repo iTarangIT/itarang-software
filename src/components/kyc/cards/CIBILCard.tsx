@@ -11,6 +11,12 @@ interface CIBILCardProps {
   phone?: string;
   address?: string;
   applicant?: "primary" | "co_borrower";
+  // Lead-scoped KYC API base. Defaults to the admin route so the admin flow is
+  // unchanged; the NBFC Acquire panel passes its own mirror base.
+  kycBase?: string;
+  // Hide the "Request Co-Borrower" action (its modal posts to an admin-only
+  // route). The NBFC surface uses its own doc-request composer instead.
+  hideCoBorrowerRequest?: boolean;
   existingVerification?: {
     id: string;
     status: string;
@@ -50,13 +56,13 @@ export default function CIBILCard({
   phone,
   address,
   applicant = "primary",
+  kycBase,
+  hideCoBorrowerRequest,
   existingVerification,
   onActionComplete,
 }: CIBILCardProps) {
-  const apiBase =
-    applicant === "co_borrower"
-      ? `/api/admin/kyc/${leadId}/coborrower`
-      : `/api/admin/kyc/${leadId}`;
+  const base = kycBase ?? `/api/admin/kyc/${leadId}`;
+  const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
   const [status, setStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
@@ -165,12 +171,12 @@ export default function CIBILCard({
     try {
       const vid = verificationId || existingVerification?.id;
       const res = vid
-        ? await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
+        ? await fetch(`${base}/verification/${vid}/action`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
           })
-        : await fetch(`/api/admin/kyc/${leadId}/verification/manual`, {
+        : await fetch(`${base}/verification/manual`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action, verification_type: "cibil", applicant, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
@@ -378,10 +384,12 @@ export default function CIBILCard({
             {/* Request Co-Borrower — contextual to the no-credit-history
                 outcome. Accept/Reject lives in the persistent decision panel
                 at the bottom of the card. */}
-            <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
-              className="w-full bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-              Request Co-Borrower
-            </button>
+            {!hideCoBorrowerRequest && (
+              <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                Request Co-Borrower
+              </button>
+            )}
           </div>
         )}
 
@@ -550,12 +558,14 @@ export default function CIBILCard({
         )}
       </div>
 
-      <RequestCoBorrowerModal
-        open={showCoBorrowerModal}
-        onClose={() => setShowCoBorrowerModal(false)}
-        leadId={leadId}
-        onSuccess={() => onActionComplete?.()}
-      />
+      {!hideCoBorrowerRequest && (
+        <RequestCoBorrowerModal
+          open={showCoBorrowerModal}
+          onClose={() => setShowCoBorrowerModal(false)}
+          leadId={leadId}
+          onSuccess={() => onActionComplete?.()}
+        />
+      )}
     </div>
   );
 }

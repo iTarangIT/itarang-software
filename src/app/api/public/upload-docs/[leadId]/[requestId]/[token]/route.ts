@@ -4,6 +4,8 @@ import { eq, and } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { createClient } from '@supabase/supabase-js';
 import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
+import { recomputeWrapperStatus } from '@/lib/nbfc/doc-requests';
+import { notifyAdminsOfUpload } from '@/lib/nbfc/doc-request-notify';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -47,9 +49,11 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     const [docRequest] = await db.select({
         id: otherDocumentRequests.id,
         doc_key: otherDocumentRequests.doc_key,
+        doc_label: otherDocumentRequests.doc_label,
         upload_token: otherDocumentRequests.upload_token,
         token_expires_at: otherDocumentRequests.token_expires_at,
         upload_status: otherDocumentRequests.upload_status,
+        nbfc_request_id: otherDocumentRequests.nbfc_request_id,
     })
         .from(otherDocumentRequests)
         .where(and(
@@ -95,6 +99,17 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         upload_status: 'uploaded',
         uploaded_at: new Date(),
     }).where(eq(otherDocumentRequests.id, requestId));
+
+    // E-200 — NBFC request child: reproject the wrapper + notify admins.
+    if (docRequest.nbfc_request_id) {
+        await recomputeWrapperStatus(docRequest.nbfc_request_id).catch(() => {});
+        await notifyAdminsOfUpload({
+            leadId,
+            requestId: docRequest.nbfc_request_id,
+            docLabel: docRequest.doc_label,
+            req,
+        }).catch(() => {});
+    }
 
     return successResponse({ message: 'Document uploaded successfully' });
 });

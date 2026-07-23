@@ -170,6 +170,7 @@ interface PriorSelection {
   net_subtotal: string | null;
   admin_decision: string | null;
   submitted_at: string | null;
+  pre_sanction_doc_urls?: { url: string; name: string; type: string; size: number }[] | null;
 }
 
 interface AccessData {
@@ -275,6 +276,14 @@ export default function ProductSelectionPage() {
   const [chargerPhotoUrls, setChargerPhotoUrls] = useState<string[]>([]);
   const [photoUploading, setPhotoUploading] = useState<string | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
+
+  // E-208 — Step-4 pre-sanction document bucket (≤10 items, all formats). Items
+  // are uploaded immediately and held here; sent with the submit / draft payload
+  // and stored on product_selections.pre_sanction_doc_urls.
+  type PreSanctionDoc = { url: string; name: string; type: string; size: number };
+  const [preSanctionDocs, setPreSanctionDocs] = useState<PreSanctionDoc[]>([]);
+  const [preSanctionUploading, setPreSanctionUploading] = useState(false);
+  const [preSanctionError, setPreSanctionError] = useState<string | null>(null);
 
   // E-130 / Addendum V0.1 §5.2 — Section G Financing Options (finance only).
   // The customer picks 1 or 2 NBFCs from the BRE-matched list (stub returns
@@ -524,6 +533,10 @@ export default function ProductSelectionPage() {
         }
         if (prior.submitted_at) {
           setLastSaved(formatLastSaved(new Date(prior.submitted_at)));
+        }
+        // E-208 — restore the pre-sanction bucket.
+        if (Array.isArray(prior.pre_sanction_doc_urls)) {
+          setPreSanctionDocs(prior.pre_sanction_doc_urls);
         }
         draftRestoredRef.current = true;
         return;
@@ -1090,6 +1103,64 @@ export default function ProductSelectionPage() {
     [leadId],
   );
 
+  // E-208/E-209 — persist the current pre-sanction bucket to
+  // product_selections.pre_sanction_doc_urls immediately, so uploads survive a
+  // reload even when Save Draft / Submit are unavailable (i.e. after the
+  // selection is frozen). No-ops server-side if no selection row exists yet —
+  // in that case Save Draft / Submit will persist it. Best-effort.
+  const persistPreSanctionDocs = useCallback(
+    async (items: PreSanctionDoc[]) => {
+      try {
+        await fetch(`/api/lead/${leadId}/pre-sanction-doc`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items }),
+        });
+      } catch {
+        // best-effort; the next Save Draft / Submit will reconcile.
+      }
+    },
+    [leadId],
+  );
+
+  // E-208 — upload files into the Step-4 pre-sanction bucket. mode 'separate'
+  // adds one item per file; 'combine' merges image/PDF files into one PDF item.
+  const uploadPreSanctionDocs = useCallback(
+    async (fileList: FileList | File[], mode: "separate" | "combine") => {
+      const files = Array.from(fileList);
+      if (files.length === 0) return;
+      setPreSanctionError(null);
+      // Enforce the 10-item cap (a combined upload is one item).
+      const willAdd = mode === "combine" ? 1 : files.length;
+      if (preSanctionDocs.length + willAdd > 10) {
+        setPreSanctionError(`Up to 10 items only (you have ${preSanctionDocs.length}).`);
+        return;
+      }
+      setPreSanctionUploading(true);
+      try {
+        const fd = new FormData();
+        files.forEach((f) => fd.append("files", f));
+        fd.append("mode", mode);
+        const res = await fetch(`/api/lead/${leadId}/pre-sanction-doc`, {
+          method: "POST",
+          body: fd,
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) {
+          throw new Error(json?.error || "Upload failed");
+        }
+        const next = [...preSanctionDocs, ...(json.items as PreSanctionDoc[])];
+        setPreSanctionDocs(next);
+        void persistPreSanctionDocs(next);
+      } catch (err: unknown) {
+        setPreSanctionError(err instanceof Error ? err.message : "Upload failed");
+      } finally {
+        setPreSanctionUploading(false);
+      }
+    },
+    [leadId, preSanctionDocs, persistPreSanctionDocs],
+  );
+
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!canSubmit || !selectedBattery) return;
@@ -1139,6 +1210,8 @@ export default function ProductSelectionPage() {
                 loan_product_id: s.loan_product_id,
               })),
               customerDisclosureAck,
+              // E-208 — Step-4 pre-sanction document bucket (finance/NBFC only).
+              preSanctionDocs,
             }
           : {}),
       };
@@ -1217,6 +1290,8 @@ export default function ProductSelectionPage() {
         netSubtotal,
         category: access?.category ?? undefined,
         subCategory: access?.productId ?? undefined,
+        // E-208 — persist the pre-sanction bucket across Save Draft.
+        preSanctionDocs,
       };
       const res = await fetch(
         `/api/lead/${leadId}/product-selection/draft`,
@@ -1792,6 +1867,124 @@ export default function ProductSelectionPage() {
                 onDisclosureChange={setCustomerDisclosureAck}
               />
             )}
+
+            {/* Pre-sanction documents bucket (E-208) — optional, finance only.
+                Up to 10 items, any format; the NBFC + admin can view these
+                before sanction. Combine multiple images/PDFs into one PDF.
+                Stays enabled even after the selection is frozen (readOnly) — the
+                dealer can send pre-sanction docs to the lender at any time; each
+                add/remove is persisted immediately (see uploadPreSanctionDocs). */}
+            {isFinanceLead && (
+              <SectionCard
+                title="Pre-sanction documents (optional)"
+                action={
+                  <span className="text-xs font-semibold text-slate-500">
+                    {preSanctionDocs.length}/10
+                  </span>
+                }
+              >
+                <p className="mb-3 text-xs text-slate-500">
+                  Attach anything the lender needs before sanction — installation
+                  images, NBFC-signed docs, agreements. Any format (image, video,
+                  zip, PDF), up to 10 items. You can also merge several images /
+                  PDFs into one PDF.
+                </p>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <label
+                    className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 ${
+                      preSanctionUploading || preSanctionDocs.length >= 10
+                        ? "pointer-events-none opacity-50"
+                        : ""
+                    }`}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add documents
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      disabled={preSanctionUploading || preSanctionDocs.length >= 10}
+                      onChange={(e) => {
+                        if (e.target.files?.length) {
+                          void uploadPreSanctionDocs(e.target.files, "separate");
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <label
+                    className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-sm font-semibold text-teal-700 hover:bg-teal-100 ${
+                      preSanctionUploading || preSanctionDocs.length >= 10
+                        ? "pointer-events-none opacity-50"
+                        : ""
+                    }`}
+                  >
+                    <Package className="h-4 w-4" />
+                    Combine &amp; upload as one PDF
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,application/pdf"
+                      className="hidden"
+                      disabled={preSanctionUploading || preSanctionDocs.length >= 10}
+                      onChange={(e) => {
+                        if (e.target.files?.length) {
+                          void uploadPreSanctionDocs(e.target.files, "combine");
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {preSanctionUploading ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Uploading…
+                    </span>
+                  ) : null}
+                </div>
+                {preSanctionError ? (
+                  <p className="mb-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+                    {preSanctionError}
+                  </p>
+                ) : null}
+                {preSanctionDocs.length > 0 ? (
+                  <ul className="space-y-2">
+                    {preSanctionDocs.map((d, i) => (
+                      <li
+                        key={`${d.url}-${i}`}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <a
+                          href={d.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="min-w-0 flex-1 truncate text-sm font-medium text-teal-700 hover:underline"
+                          title={d.name}
+                        >
+                          {d.name}
+                        </a>
+                        <span className="shrink-0 text-[10px] uppercase tracking-wide text-slate-400">
+                          {(d.type.split("/")[1] || d.type || "file").slice(0, 8)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = preSanctionDocs.filter((_, idx) => idx !== i);
+                            setPreSanctionDocs(next);
+                            void persistPreSanctionDocs(next);
+                          }}
+                          className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-rose-600"
+                          aria-label="Remove"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-slate-400">No documents added yet.</p>
+                )}
+              </SectionCard>
+            )}
           </div>
 
           {/* Right rail — Pricing summary (sticky on desktop, stays pinned
@@ -1856,7 +2049,20 @@ export default function ProductSelectionPage() {
       </div>
 
       <StickyBottomBar lastSaved={lastSaved}>
-        <OutlineButton onClick={() => router.back()}>Back</OutlineButton>
+        {/* Exactly one step back in the wizard: finance → Step 3
+            (borrower-consent); cash → Step 1 (lead detail, its only prior step).
+            router.back() was unreliable (browser history, not the wizard). */}
+        <OutlineButton
+          onClick={() =>
+            router.push(
+              access.paymentMode === "cash"
+                ? `/dealer-portal/leads/${leadId}`
+                : `/dealer-portal/leads/${leadId}/borrower-consent`,
+            )
+          }
+        >
+          Back
+        </OutlineButton>
         {access.readOnly ? (
           // Read-only follow-ups by lead state. Once admin has acted, the
           // dealer's next move lives at Step 5 — surface a clear CTA so they

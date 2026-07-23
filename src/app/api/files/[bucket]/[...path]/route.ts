@@ -84,6 +84,14 @@ export async function GET(
       "Content-Type": contentType,
       "Content-Disposition": "inline",
       "Content-Length": String(buf.byteLength),
+      // Upload keys are timestamp-unique (see upload-document/route.ts:
+      // `${docType}_${Date.now()}.${ext}`) and their bytes never change — a
+      // re-upload mints a NEW key/URL. So the object at any given URL is
+      // effectively immutable and safe to cache hard. `private` keeps PII out
+      // of shared/CDN caches while still letting the browser reuse the bytes,
+      // so preview thumbnails stop re-downloading the full file (and re-hitting
+      // the Supabase auth check) on every page load and re-render.
+      "Cache-Control": "private, max-age=3600, immutable",
     },
   });
 }

@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
-import BuybackBell from '@/components/buyback/BuybackBell';
+import NotificationBell from '@/components/shared/NotificationBell';
 // Dependency-free by design (middleware runs it on Edge), so a client component
 // can share the one list rather than keep a second copy that drifts.
 import { BUYBACK_ADMIN_ROLES } from '@/lib/buyback/roles';
@@ -109,13 +109,16 @@ export function Header() {
 
             {/* Right Actions */}
             <div className="flex items-center gap-4">
-                {/* Was a <button> with no onClick and a hardcoded red dot —
-                    permanently lit, so it reported nothing, while 997
-                    notifications sat unread. Scoped to the buyback feed by
-                    product decision; its PATCH carries the same filter as its
-                    GET, so "mark all read" cannot reach the non-buyback
-                    notifications this bell does not show. */}
-                <BuybackBell
+                {/* Single unified in-app bell. Reads /api/notifications, which
+                    returns EVERY notification row keyed to the signed-in user —
+                    KYC verification arrivals, NBFC Acquire events, buyback,
+                    dealer validation, inventory uploads, escalations, etc. The
+                    former separate BuybackBell was a scoped subset of the same
+                    table; folding it in removes the duplicate bell and gives one
+                    place that holds all notifications. isAdmin drives role-aware
+                    deep links (e.g. admin vs dealer buyback pages). */}
+                <NotificationBell
+                    variant="admin"
                     isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
                 />
 

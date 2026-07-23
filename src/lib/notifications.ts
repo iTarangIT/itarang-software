@@ -159,35 +159,48 @@ export async function notifyKycCardAction(params: {
   action: string; // accepted, rejected, request_more_docs
   notes?: string | null;
   adminId: string;
+  // 'co_borrower' routes the dealer bell to Step 3; anything else → Step 2.
+  verificationFor?: string | null;
 }) {
   const label = VERIFICATION_LABELS[params.verificationType] || params.verificationType;
+
+  // Deep-link the dealer bell to the exact page + point (the bell prioritises
+  // data.href). Requested/rejected docs surface in the Additional Documents
+  // section, so anchor there.
+  const isCoBorrower = (params.verificationFor ?? "").toLowerCase() === "co_borrower";
+  const basePage = isCoBorrower
+    ? `/dealer-portal/leads/${params.leadId}/borrower-consent`
+    : `/dealer-portal/leads/${params.leadId}/kyc`;
+  const docsHref = `${basePage}#other-documentation`;
 
   if (params.action === "request_more_docs") {
     await notifyDealerForLead({
       leadId: params.leadId,
       type: "kyc_docs_requested",
-      title: `${label} Verification - More Documents Needed`,
+      title: `${label} — more documents needed`,
       message: params.notes
-        ? `Admin has requested additional documents for ${label} verification. Reason: ${params.notes}`
-        : `Admin has requested additional documents for ${label} verification. Please upload the required documents.`,
+        ? `iTarang admin requested additional documents for ${label} verification. Reason: ${params.notes}`
+        : `iTarang admin requested additional documents for ${label} verification. Please upload the required documents.`,
       data: {
         verification_type: params.verificationType,
         action: params.action,
         admin_notes: params.notes,
+        href: docsHref,
       },
     });
   } else if (params.action === "rejected") {
     await notifyDealerForLead({
       leadId: params.leadId,
       type: "kyc_rejected",
-      title: `${label} Verification Rejected`,
+      title: `${label} verification rejected`,
       message: params.notes
-        ? `${label} verification was rejected. Reason: ${params.notes}`
-        : `${label} verification was rejected. Please review and re-submit.`,
+        ? `iTarang admin rejected the ${label} verification. Reason: ${params.notes}`
+        : `iTarang admin rejected the ${label} verification. Please review and re-submit.`,
       data: {
         verification_type: params.verificationType,
         action: params.action,
         admin_notes: params.notes,
+        href: basePage,
       },
     });
   } else if (params.action === "accepted") {

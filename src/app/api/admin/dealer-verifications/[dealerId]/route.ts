@@ -14,6 +14,8 @@ import {
   fieldLabel,
 } from "@/lib/onboarding/correction-catalog";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
+import { normalizeAccountType } from "@/lib/onboarding/account-type";
+import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
 
 const AddressRoleEnum = z.enum(["billing", "dispatch", "other"]);
 const GstAddressSchema = z.object({
@@ -86,31 +88,6 @@ function parseProviderRawResponse(value: unknown) {
   }
   if (typeof value === "object") return value as Record<string, any>;
   return {};
-}
-
-function extractAddress(value: unknown) {
-  if (!value) return "";
-  // business_address is a TEXT column that may hold a raw address or a
-  // JSON-encoded object like '{"address":"Pune"}'. Parse first so the UI
-  // never sees the wrapper braces/quotes.
-  let normalized: unknown = value;
-  if (typeof normalized === "string") {
-    const trimmed = normalized.trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      try { normalized = JSON.parse(trimmed); } catch { return trimmed; }
-    } else {
-      return trimmed;
-    }
-  }
-  if (typeof normalized === "object" && normalized !== null) {
-    const obj = normalized as Record<string, any>;
-    return (
-      obj.address ||
-      obj.fullAddress ||
-      [obj.line1, obj.line2, obj.city, obj.state, obj.pincode].filter(Boolean).join(", ")
-    );
-  }
-  return "";
 }
 
 // Build the gstAddresses payload for the review page. Prefer the value stored
@@ -327,6 +304,18 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       ? ownershipSnapshot.directors
       : [];
 
+    const gstAddressesSnapshot = (providerData as any)?.submissionSnapshot?.gstAddresses;
+    // Company Address: prefer the business_address column; fall back to the GST
+    // Principal Place of Business (always captured in the snapshot) so WhatsApp
+    // dealers whose column was never written still show an address.
+    const companyAddress =
+      extractAddress(row.business_address) || gstPrincipalAddress(gstAddressesSnapshot);
+    // Account Type: ONLY surface a value that a bank document actually stated
+    // (normalised to 'savings'/'current'). We deliberately do NOT infer it from
+    // the holder/company name — when no document prints it, leave it blank so the
+    // admin UI flags it as "Not available / Missing" for manual review.
+    const accountType = normalizeAccountType(ownershipSnapshot?.accountType);
+
     return NextResponse.json({
       success: true,
       data: {
@@ -334,7 +323,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         dealerId: row.id,
 
         companyName: row.company_name,
-        companyAddress: extractAddress(row.business_address),
+        companyAddress,
         gstNumber: row.gst_number,
         panNumber: row.pan_number,
         // cinNumber: row.cinNumber,
@@ -352,7 +341,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
         // Bank extras captured in onboarding step 3 — live in snapshot JSON
         bankBranch: ownershipSnapshot?.branch || "",
-        accountType: ownershipSnapshot?.accountType || "",
+        accountType,
 
         // Owner residential address for sole-proprietorship — snapshot JSON
         ownerAddressLine1: ownershipSnapshot?.ownerAddressLine1 || "",
@@ -363,15 +352,12 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
         // GST Places of Business (principal + additional) with billing/dispatch/
         // other role tags. Synthesized from company address for older dealers.
-        gstAddresses: buildGstAddressesResponse(
-          (providerData as any)?.submissionSnapshot?.gstAddresses,
-          {
-            companyAddress: extractAddress(row.business_address),
-            city: row.city,
-            state: row.state,
-            pincode: row.pincode,
-          },
-        ),
+        gstAddresses: buildGstAddressesResponse(gstAddressesSnapshot, {
+          companyAddress,
+          city: row.city,
+          state: row.state,
+          pincode: row.pincode,
+        }),
 
         // Partner / director lists — read-only reference for admins
         partners: partnersSnapshot,

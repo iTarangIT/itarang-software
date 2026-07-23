@@ -49,6 +49,7 @@ interface ProductSelection {
   payment_mode: string | null;
   admin_decision: string | null;
   submitted_at: string | null;
+  pre_sanction_doc_urls?: { url: string; name: string; type: string; size: number }[] | null;
 }
 
 interface LoanSanction {
@@ -351,6 +352,37 @@ export default function AdminProductReviewPage() {
               value={<span className="font-bold">₹{selection.final_price ?? 0}</span>}
             />
           </div>
+
+          {/* E-208 — Step-4 pre-sanction documents attached by the dealer. */}
+          {Array.isArray(selection.pre_sanction_doc_urls) &&
+          selection.pre_sanction_doc_urls.length > 0 ? (
+            <div className="pt-4 border-t">
+              <p className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
+                Pre-sanction documents ({selection.pre_sanction_doc_urls.length})
+              </p>
+              <ul className="space-y-1.5">
+                {selection.pre_sanction_doc_urls.map((d, i) => (
+                  <li
+                    key={`${d.url}-${i}`}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-1.5 text-sm"
+                  >
+                    <a
+                      href={d.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="min-w-0 flex-1 truncate font-medium text-teal-700 hover:underline"
+                      title={d.name}
+                    >
+                      {d.name}
+                    </a>
+                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-gray-400">
+                      {(d.type?.split("/")[1] || d.type || "file").slice(0, 8)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </section>
       )}
 

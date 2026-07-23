@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type {
   digilockerTransactions,
@@ -8,6 +8,46 @@ import type {
   kycVerifications,
 } from "@/lib/db/schema";
 import { extractOcrFields } from "@/lib/nbfc/ocr-display";
+
+// The NBFC's OWN per-document verdict + supporting attachments (E-201/E-207),
+// keyed by (doc_for, doc_key). Loaded once for the table and rendered in the
+// per-row Action column.
+interface VerdictAttachment {
+  url: string;
+  name: string;
+  type: string;
+  size: number;
+}
+interface NbfcVerdictRow {
+  doc_for: string;
+  doc_key: string;
+  verdict: string;
+  notes: string | null;
+  attachments: VerdictAttachment[] | null;
+}
+
+// Map a Decentro verification_type to the canonical NBFC verdict doc_key.
+function toDocKey(verificationType: string | null | undefined): string {
+  const t = (verificationType ?? "").toLowerCase();
+  if (t.includes("pan")) return "pan";
+  if (t.includes("bank")) return "bank";
+  if (t.includes("cibil") || t.includes("credit") || t.includes("equifax")) return "cibil";
+  if (t.includes("rc") || t.includes("vehicle")) return "rc";
+  if (t.includes("aadhaar") || t.includes("aadhar")) return "aadhaar";
+  return t;
+}
+
+const VERDICT_TONE: Record<string, string> = {
+  verified: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  rejected: "bg-rose-50 text-rose-700 border-rose-200",
+  queried: "bg-amber-50 text-amber-700 border-amber-200",
+};
+const VERDICT_LABEL: Record<string, string> = {
+  verified: "Approved",
+  rejected: "Rejected",
+  queried: "Correction",
+  pending: "—",
+};
 
 // Read-only NBFC review of the Decentro KYC results. The same extracted detail
 // the admin sees on /admin/kyc-review, surfaced for the lender of record — but
@@ -837,19 +877,59 @@ export default function KycVerificationDetails({
   rows,
   aadhaar,
   docs = [],
+  leadId,
+  docFor,
 }: {
   rows: KycRow[];
   aadhaar: Aadhaar | null;
   docs?: KycDoc[];
+  // When provided, an "Action" column lets the NBFC record its own verdict +
+  // note + supporting uploads per document. Omit for a purely read-only table.
+  leadId?: string;
+  docFor?: "primary" | "co_borrower";
 }) {
+  // Hide the internal DigiO consent audit rows (esign_consent / esign_consent_sync)
+  // and the address row — they aren't KYC document verdicts the NBFC reviews.
+  const HIDDEN_TYPES = new Set([
+    "address",
+    "esign_consent",
+    "esign_consent_sync",
+  ]);
   const visible = rows.filter(
-    (v) => (v.verification_type ?? "").toLowerCase() !== "address",
+    (v) => !HIDDEN_TYPES.has((v.verification_type ?? "").toLowerCase()),
   );
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [verdicts, setVerdicts] = useState<Record<string, NbfcVerdictRow>>({});
+  const actionable = Boolean(leadId && docFor);
+
+  const loadVerdicts = useCallback(async () => {
+    if (!leadId || !docFor) return;
+    try {
+      const res = await fetch(`/api/nbfc/acquire/${leadId}/verify-doc`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (json.ok) {
+        const map: Record<string, NbfcVerdictRow> = {};
+        for (const v of (json.verdicts ?? []) as NbfcVerdictRow[]) {
+          if ((v.doc_for ?? "primary") === docFor) map[v.doc_key] = v;
+        }
+        setVerdicts(map);
+      }
+    } catch {
+      // best-effort
+    }
+  }, [leadId, docFor]);
+
+  useEffect(() => {
+    if (actionable) loadVerdicts();
+  }, [actionable, loadVerdicts]);
 
   if (visible.length === 0) {
     return <p className="text-sm text-slate-400">No verifications recorded.</p>;
   }
+
+  const colSpan = actionable ? 6 : 5;
 
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200">
@@ -860,19 +940,21 @@ export default function KycVerificationDetails({
             <th className="px-3 py-2">Status</th>
             <th className="px-3 py-2">Admin action</th>
             <th className="px-3 py-2">Completed</th>
+            {actionable ? <th className="px-3 py-2">Action</th> : null}
             <th className="px-3 py-2 text-right">Details</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {visible.map((v) => {
             const isOpen = open[v.id] ?? false;
+            const docKey = toDocKey(v.verification_type);
             return (
               <Fragment key={v.id}>
-                <tr
-                  onClick={() => setOpen((o) => ({ ...o, [v.id]: !isOpen }))}
-                  className="cursor-pointer hover:bg-slate-50/60"
-                >
-                  <td className="px-3 py-2 font-medium text-slate-700">
+                <tr className="hover:bg-slate-50/60">
+                  <td
+                    onClick={() => setOpen((o) => ({ ...o, [v.id]: !isOpen }))}
+                    className="cursor-pointer px-3 py-2 font-medium text-slate-700"
+                  >
                     {titleCase(v.verification_type)}
                   </td>
                   <td className="px-3 py-2">
@@ -884,7 +966,21 @@ export default function KycVerificationDetails({
                   <td className="px-3 py-2 text-slate-500">
                     {fmtDate(v.completed_at ?? v.submitted_at)}
                   </td>
-                  <td className="px-3 py-2">
+                  {actionable ? (
+                    <td className="px-3 py-2">
+                      <ActionCell
+                        leadId={leadId as string}
+                        docFor={docFor as "primary" | "co_borrower"}
+                        docKey={docKey}
+                        current={verdicts[docKey] ?? null}
+                        onDone={loadVerdicts}
+                      />
+                    </td>
+                  ) : null}
+                  <td
+                    onClick={() => setOpen((o) => ({ ...o, [v.id]: !isOpen }))}
+                    className="cursor-pointer px-3 py-2"
+                  >
                     <span className="flex items-center justify-end gap-1 text-xs font-medium text-[color:var(--color-brand-sky)]">
                       {isOpen ? (
                         <>
@@ -900,7 +996,7 @@ export default function KycVerificationDetails({
                 </tr>
                 {isOpen ? (
                   <tr className="bg-slate-50/40">
-                    <td colSpan={5} className="px-4 py-4">
+                    <td colSpan={colSpan} className="px-4 py-4">
                       {renderDetail(v, aadhaar, docs)}
                       {v.admin_action_notes ? (
                         <p className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
@@ -918,6 +1014,165 @@ export default function KycVerificationDetails({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Per-row Action cell — the NBFC's own verdict + note + supporting uploads ──
+
+const ACTIONS: { key: "verified" | "rejected" | "queried"; label: string }[] = [
+  { key: "verified", label: "Approve" },
+  { key: "rejected", label: "Reject" },
+  { key: "queried", label: "Request correction" },
+];
+
+function ActionCell({
+  leadId,
+  docFor,
+  docKey,
+  current,
+  onDone,
+}: {
+  leadId: string;
+  docFor: "primary" | "co_borrower";
+  docKey: string;
+  current: NbfcVerdictRow | null;
+  onDone: () => void;
+}) {
+  const [openForm, setOpenForm] = useState(false);
+  const [verdict, setVerdict] = useState<"verified" | "rejected" | "queried">(
+    "verified",
+  );
+  const [notes, setNotes] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const form = new FormData();
+      form.append("doc_for", docFor);
+      form.append("doc_key", docKey);
+      form.append("verdict", verdict);
+      if (notes.trim()) form.append("notes", notes.trim());
+      files.forEach((f) => form.append("files", f));
+      const res = await fetch(`/api/nbfc/acquire/${leadId}/verify-doc/action`, {
+        method: "POST",
+        body: form,
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setOpenForm(false);
+        setNotes("");
+        setFiles([]);
+        onDone();
+      } else {
+        setErr(json.error ?? "Could not save");
+      }
+    } catch {
+      setErr("Network error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cur = current?.verdict ?? "pending";
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpenForm((o) => !o)}
+        className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
+          VERDICT_TONE[cur] ?? "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+        }`}
+      >
+        {VERDICT_LABEL[cur] ?? "Action"}
+        <ChevronDown className="h-3 w-3" />
+      </button>
+      {current?.attachments && current.attachments.length > 0 ? (
+        <span className="ml-1 text-[10px] text-slate-400">
+          · {current.attachments.length} file
+          {current.attachments.length > 1 ? "s" : ""}
+        </span>
+      ) : null}
+
+      {openForm ? (
+        <div className="absolute right-0 z-20 mt-1 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
+          <div className="mb-2 flex gap-1">
+            {ACTIONS.map((a) => (
+              <button
+                key={a.key}
+                type="button"
+                onClick={() => setVerdict(a.key)}
+                className={`flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
+                  verdict === a.key
+                    ? VERDICT_TONE[a.key]
+                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+          <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            {verdict === "verified" ? "Note (optional)" : "Message to admin"}
+            {verdict !== "verified" ? <span className="text-rose-500"> *</span> : null}
+          </label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            placeholder={
+              verdict === "verified"
+                ? "Optional note…"
+                : "Explain the reason / what needs correcting…"
+            }
+            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+          />
+          <label className="mt-2 mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Attach supporting documents (optional)
+          </label>
+          <input
+            type="file"
+            multiple
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+            className="w-full text-[11px] file:mr-2 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-[11px]"
+          />
+          {files.length > 0 ? (
+            <p className="mt-1 text-[10px] text-emerald-600">
+              {files.length} file{files.length > 1 ? "s" : ""} attached — will be sent to the admin.
+            </p>
+          ) : null}
+          {err ? (
+            <p className="mt-1.5 text-[11px] text-rose-600">{err}</p>
+          ) : null}
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              disabled={busy || (verdict !== "verified" && !notes.trim())}
+              onClick={submit}
+              title={
+                verdict !== "verified" && !notes.trim()
+                  ? "Add a message explaining the reason"
+                  : ""
+              }
+              className="rounded-md bg-[color:var(--color-brand-navy)] px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+            >
+              {busy ? "Saving…" : "Send to admin"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpenForm(false)}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-[11px] font-medium text-slate-600"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

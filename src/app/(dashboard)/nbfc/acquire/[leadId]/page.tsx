@@ -24,6 +24,8 @@ import FiTrackPanel from "../_components/FiTrackPanel";
 import OfferPanel from "../_components/OfferPanel";
 import GoToStepButton from "../_components/GoToStepButton";
 import SanctionPanel from "../_components/SanctionPanel";
+import NbfcVerificationPanel from "../_components/NbfcVerificationPanel";
+import NbfcConsentPanel from "../_components/NbfcConsentPanel";
 import LeadStageStepper, {
   type NextAction,
   type StepperStage,
@@ -324,6 +326,12 @@ export default async function AcquireLeadDetailPage({
           }
         />
       ) : null}
+      {/* Change 7 — DPDP consent view/track + NBFC-initiated re-capture.
+          Consent leads the verification loop, so it renders above the KYC card. */}
+      <NbfcConsentPanel leadId={leadId} />
+      {/* Change 1 & 2 — the NBFC's own per-document verification + the
+          correction / additional-document request loop (routes to the admin). */}
+      <NbfcVerificationPanel leadId={leadId} />
     </div>
   );
 

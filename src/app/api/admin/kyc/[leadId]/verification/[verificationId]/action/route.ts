@@ -156,6 +156,7 @@ export async function POST(
       action: adminAction,
       notes: notes || rejectionReason,
       adminId: appUser.id,
+      verificationFor: verification.verification_for,
     }).catch(() => {});
 
     return NextResponse.json({

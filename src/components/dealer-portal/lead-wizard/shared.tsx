@@ -210,7 +210,7 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                 <div className="relative aspect-[4/3] bg-gradient-to-br from-gray-50 to-gray-100">
                     {isImage && (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={fileUrl!} alt={label} className="w-full h-full object-cover" />
+                        <img src={fileUrl!} alt={label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     )}
                     {isPdf && (
                         <div className="w-full h-full flex flex-col items-center justify-center">
