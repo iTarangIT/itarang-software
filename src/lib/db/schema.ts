@@ -2727,6 +2727,9 @@ export const dealerOnboardingApplications = pgTable(
     dealer_user_id: uuid("dealer_user_id"),
     company_name: text("company_name").notNull(),
     company_type: text("company_type"),
+    // E-202 — dealer business type: 'new' | 'scrap' | 'both'. Selected in
+    // onboarding Step 1. Distinct from company_type (legal structure).
+    dealer_type: varchar("dealer_type", { length: 16 }),
     gst_number: text("gst_number"),
     pan_number: text("pan_number"),
     cin_number: text("cin_number"),
@@ -5885,6 +5888,9 @@ export const dealers = pgTable(
     dealer_id: varchar("dealer_id", { length: 50 }).unique(),
     company_name: varchar("company_name", { length: 200 }).notNull(),
     company_type: varchar("company_type", { length: 32 }).notNull(),
+    // E-202 — dealer business type ('new' | 'scrap' | 'both'), copied from the
+    // onboarding application at approval. Distinct from company_type (legal).
+    dealer_type: varchar("dealer_type", { length: 16 }),
     gst_number: varchar("gst_number", { length: 20 }),
     pan_number: varchar("pan_number", { length: 20 }),
     registered_address: jsonb("registered_address"),

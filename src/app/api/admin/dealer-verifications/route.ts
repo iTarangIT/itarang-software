@@ -16,6 +16,9 @@ export async function GET() {
         id: dealerOnboardingApplications.id,
         companyName: dealerOnboardingApplications.company_name,
         companyType: dealerOnboardingApplications.company_type,
+        // E-202 — dealer business type (new | scrap | both); drives the queue's
+        // dealer-type badge and filter.
+        dealerType: dealerOnboardingApplications.dealer_type,
         gstNumber: dealerOnboardingApplications.gst_number,
         panNumber: dealerOnboardingApplications.pan_number,
         businessAddress: dealerOnboardingApplications.business_address,
@@ -219,6 +222,9 @@ export async function GET() {
         gstNumber: item.gstNumber,
         financeEnabled: item.financeEnabled,
         companyType: item.companyType,
+        // Null for applications submitted before E-202 — the UI badges those as
+        // "Not specified" rather than hiding them.
+        dealerType: item.dealerType || null,
         salesManagerName: item.salesManagerName,
         salesManagerEmail: item.salesManagerEmail,
         salesManagerMobile: item.salesManagerMobile,

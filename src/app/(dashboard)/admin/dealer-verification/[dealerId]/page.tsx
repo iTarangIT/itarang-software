@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import RequestCorrectionDialog from "@/components/admin/dealer-verification/RequestCorrectionDialog";
+import DealerTypeBadge from "@/components/admin/dealer-verification/DealerTypeBadge";
+import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import CorrectionResponsePanel, {
   type CorrectionRound,
 } from "@/components/admin/dealer-verification/CorrectionResponsePanel";
@@ -151,6 +153,9 @@ type DealerReviewData = {
   panNumber?: string;
   cinNumber?: string;
   companyType?: string;
+  // E-202 — 'new' | 'scrap' | 'both'. Read-only here; the dealer picks it at
+  // onboarding Step 1 and it selects the agreement template.
+  dealerType?: string | null;
   ownerName?: string;
   ownerPhone?: string;
   ownerEmail?: string;
@@ -1676,11 +1681,19 @@ export default function DealerReviewPage() {
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-2xl bg-slate-50 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Submitted At</p>
             <p className="mt-2 text-sm font-medium text-slate-900">
               {data.submittedAt ? new Date(data.submittedAt).toLocaleString() : "Not available"}
+            </p>
+          </div>
+          {/* E-202 — what the dealer sells. Kept beside Company Type (the legal
+              structure) so the two are never confused during review. */}
+          <div className="rounded-2xl bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Dealer Type</p>
+            <p className="mt-2 text-sm font-medium text-slate-900">
+              <DealerTypeBadge value={data.dealerType} />
             </p>
           </div>
           <div className="rounded-2xl bg-slate-50 p-4">
@@ -1763,6 +1776,9 @@ export default function DealerReviewPage() {
                     <InfoField label="CIN Number"          value={data.cinNumber} />
                   )}
                   <InfoField label="Company Type"          value={data.companyType?.replaceAll("_", " ")} />
+                  {/* Read-only: the dealer sets this at onboarding Step 1 and it
+                      drives the agreement template, so it is not admin-editable. */}
+                  <InfoField label="Dealer Type"           value={dealerTypeLabel(data.dealerType)} />
                   <InfoField label="Primary Contact Name"  value={data.ownerName} />
                   <InfoField label="Primary Contact Phone" value={data.ownerPhone} />
                   <InfoField label="Primary Contact Email" value={data.ownerEmail} />
