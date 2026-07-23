@@ -426,6 +426,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
           dealer_id: dealerCode,
           company_name: application.company_name,
           company_type: application.company_type ?? "individual",
+          dealer_type: application.dealer_type ?? null,
           gst_number: application.gst_number ?? null,
           pan_number: application.pan_number ?? null,
           registered_address: application.registered_address ?? null,

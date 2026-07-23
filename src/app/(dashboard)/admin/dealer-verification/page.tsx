@@ -18,6 +18,12 @@ import {
   GitBranch,
   MessageCircle,
 } from "lucide-react";
+import DealerTypeBadge from "@/components/admin/dealer-verification/DealerTypeBadge";
+import {
+  DEALER_TYPE_OPTIONS,
+  dealerTypeLabel,
+  normalizeDealerType,
+} from "@/lib/dealer/dealer-type";
 
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
 
@@ -80,6 +86,8 @@ type DealerVerificationItem = {
   gstNumber?: string | null;
   financeEnabled?: boolean | null;
   companyType?: string | null;
+  // E-202 — 'new' | 'scrap' | 'both'; null for pre-E-202 applications.
+  dealerType?: string | null;
   salesManagerName?: string | null;
   salesManagerEmail?: string | null;
   salesManagerMobile?: string | null;
@@ -239,6 +247,7 @@ export default function DealerVerificationPage() {
   const [agreementFilter, setAgreementFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [companyTypeFilter, setCompanyTypeFilter] = useState("");
+  const [dealerTypeFilter, setDealerTypeFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [cityFilter, setCityFilter] = useState("");
@@ -250,6 +259,7 @@ export default function DealerVerificationPage() {
     agreementFilter !== "" ||
     statusFilter !== "" ||
     companyTypeFilter !== "" ||
+    dealerTypeFilter !== "" ||
     sourceFilter !== "" ||
     stateFilter !== "" ||
     cityFilter !== "" ||
@@ -328,6 +338,15 @@ export default function DealerVerificationPage() {
       );
     }
 
+    // E-202 dealer type. "unspecified" matches the pre-E-202 rows that have no
+    // value, so an admin can find and chase them up.
+    if (dealerTypeFilter) {
+      result = result.filter((item) => {
+        const t = normalizeDealerType(item.dealerType);
+        return dealerTypeFilter === "unspecified" ? t === null : t === dealerTypeFilter;
+      });
+    }
+
     if (sourceFilter) {
       result = result.filter(
         (item) => (item.source || "web").toLowerCase() === sourceFilter,
@@ -359,6 +378,8 @@ export default function DealerVerificationPage() {
           item.gstNumber || "",
           item.status,
           item.companyType || "",
+          // Search the human label ("scrap dealer") rather than the raw slug.
+          dealerTypeLabel(item.dealerType, ""),
           item.salesManagerName || "",
           item.salesManagerEmail || "",
         ]
@@ -377,6 +398,7 @@ export default function DealerVerificationPage() {
     agreementFilter,
     statusFilter,
     companyTypeFilter,
+    dealerTypeFilter,
     sourceFilter,
     stateFilter,
     cityFilter,
@@ -437,6 +459,7 @@ export default function DealerVerificationPage() {
     if (agreementFilter) params.set("agreementStatus", agreementFilter);
     if (statusFilter) params.set("status", statusFilter);
     if (companyTypeFilter) params.set("companyType", companyTypeFilter);
+    if (dealerTypeFilter) params.set("dealerType", dealerTypeFilter);
     if (sourceFilter) params.set("source", sourceFilter);
     if (stateFilter.trim()) params.set("state", stateFilter.trim());
     if (cityFilter.trim()) params.set("city", cityFilter.trim());
@@ -452,6 +475,7 @@ export default function DealerVerificationPage() {
     agreementFilter,
     statusFilter,
     companyTypeFilter,
+    dealerTypeFilter,
     sourceFilter,
     stateFilter,
     cityFilter,
@@ -550,7 +574,8 @@ export default function DealerVerificationPage() {
                   onClick={() => {
                     setDateFrom(""); setDateTo("");
                     setAgreementFilter(""); setStatusFilter("");
-                    setCompanyTypeFilter(""); setSourceFilter("");
+                    setCompanyTypeFilter(""); setDealerTypeFilter("");
+                    setSourceFilter("");
                     setStateFilter(""); setCityFilter(""); setPincodeFilter("");
                   }}
                   className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
@@ -625,6 +650,20 @@ export default function DealerVerificationPage() {
                   {t.replaceAll("_", " ")}
                 </option>
               ))}
+            </select>
+
+            <select
+              value={dealerTypeFilter}
+              onChange={(e) => setDealerTypeFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Dealer type: all</option>
+              {DEALER_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+              <option value="unspecified">Not specified</option>
             </select>
 
             <select
@@ -749,6 +788,9 @@ export default function DealerVerificationPage() {
                       <p className="mt-1 text-sm capitalize text-slate-400">
                         {(item.companyType || "Not available").replaceAll("_", " ")}
                       </p>
+                      {/* E-202 — what the dealer sells, distinct from the legal
+                          company type above it. */}
+                      <DealerTypeBadge value={item.dealerType} className="mt-1.5" />
                     </td>
 
                     <td className="px-6 py-5 align-top">

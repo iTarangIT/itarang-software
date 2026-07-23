@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { launchBrowser, resetBrowser } from "@/lib/pdf/launch-browser";
-import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
+import { resolveDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 import {
   extractAttachedEstampDetails,
   extractStampCertificateIds,
@@ -12,6 +12,9 @@ type AgreementPayload = {
   company?: any;
   ownership?: any;
   agreement?: any;
+  // Dealer business type (new | scrap | both) — selects the agreement template
+  // (E-202). Optional; absent → the base template. Set by the admin initiate flow.
+  dealerType?: string | null;
   // Set by the admin initiate-agreement route for WhatsApp dealers: persist the
   // generated (unsigned) PDF to storage so it can be sent as a WhatsApp document.
   applicationId?: string;
@@ -329,6 +332,8 @@ export async function POST(req: NextRequest) {
     const ownership = body.ownership || {};
     const storeUnsignedCopy = !!body.storeUnsignedCopy;
     const applicationId = cleanString(body.applicationId);
+    // Dealer type selects the agreement template (E-202). Absent → base template.
+    const dealerType = cleanString(body.dealerType) || null;
 
     const dealerSigner = buildSigner(
       agreement.dealerSignerEmail,
@@ -398,8 +403,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Generate agreement PDF from HTML template
-    const html = buildTarangDealerAgreementHtml({
+    // Generate agreement PDF from HTML template (per dealer type — E-202)
+    const html = resolveDealerAgreementHtml(dealerType, {
       company: {
         companyName: company.companyName || "",
         companyAddress: company.companyAddress || "",
