@@ -569,6 +569,9 @@ export async function POST(
         suppressSignerEmails: false,
       },
       applicationId: dealerId,
+      // Dealer business type (new | scrap | both) — selects the agreement
+      // template in create-agreement (E-202). Same template for all three today.
+      dealerType: application.dealer_type ?? null,
       // Persist the unsigned PDF only for WhatsApp dealers — we send it as a
       // WhatsApp document below. Web dealers don't need the extra storage.
       storeUnsignedCopy: isWhatsappDealer,
