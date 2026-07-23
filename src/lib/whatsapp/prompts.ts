@@ -46,7 +46,8 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       ifsc: "the IFSC code",
       account_holder_name: "the account holder's name",
       branch: "branch name, if shown",
-      account_type: "account type — 'savings' or 'current' — if shown",
+      account_type:
+        "the account type, normalised to exactly 'savings' or 'current'. Look for an explicit label (e.g. 'Account Type', 'A/C Type', 'Scheme') AND for common indicators: 'SB'/'SBA'/'Savings Bank' → 'savings'; 'CA'/'CD'/'Current Account'/'OD'/'Overdraft' → 'current'. Return the normalised word only, or omit if genuinely not determinable.",
       address_line1: "the account holder's street/house address line, if shown",
       city: "the account holder's city, if shown",
       district: "the account holder's district, if shown",
@@ -63,7 +64,8 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       ifsc: "the IFSC code",
       account_holder_name: "the account holder's name printed on the cheque or passbook",
       branch: "branch name or branch address printed on the cheque or passbook, if shown",
-      account_type: "account type — 'savings' or 'current' — if shown",
+      account_type:
+        "the account type, normalised to exactly 'savings' or 'current'. Look for an explicit label AND for common indicators: 'SB'/'SBA'/'Savings Bank' → 'savings'; 'CA'/'CD'/'Current Account'/'OD'/'Overdraft' → 'current'. Return the normalised word only, or omit if genuinely not determinable.",
     },
   },
   udyam: {

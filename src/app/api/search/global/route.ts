@@ -1,13 +1,22 @@
 import { db } from '@/lib/db';
-import { campaigns, inventory, leads, loanApplications, deployedAssets, serviceTickets } from '@/lib/db/schema';
-import { and, eq, ilike, or } from 'drizzle-orm';
+import { campaigns, inventory, leads, loanApplications, deployedAssets, serviceTickets, riskHypotheses } from '@/lib/db/schema';
+import { and, eq, ilike, isNull, or } from 'drizzle-orm';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+
+// Roles that see the admin-side "Risk Cards" results (the global risk-hypothesis
+// catalogue). Dealers never see these; the dealer-scoped categories below are
+// gated the other way, so each side only searches what it owns.
+const RISK_CARD_ROLES = ['admin', 'sales_head', 'ceo', 'business_head'];
 
 // Global search across dealer ecosystem.
 // Supported params (per BRD): customer name, mobile, lead id, loan id, asset/inventory id, service ticket, campaign id
 export const GET = withErrorHandler(async (req: Request) => {
-    const user = await requireRole(['dealer']);
+    // Widened beyond 'dealer' so admin/sales roles can search the risk-card
+    // catalogue. Dealer-scoped categories are guarded by `isDealer` below, so an
+    // admin (who has no dealer_id) gets empty dealer results, not another
+    // dealer's rows.
+    const user = await requireRole(['dealer', ...RISK_CARD_ROLES]);
     const { searchParams } = new URL(req.url);
     const qRaw = (searchParams.get('q') || '').trim();
 
@@ -18,8 +27,16 @@ export const GET = withErrorHandler(async (req: Request) => {
     const q = qRaw.replace(/\s+/g, ' ');
     const like = `%${q}%`;
 
+    const isDealer = user.role === 'dealer' && !!user.dealer_id;
+    const canSeeRiskCards = RISK_CARD_ROLES.includes(user.role);
+
+    // Dealer-scoped categories only run for an actual dealer. For everyone else
+    // they resolve to empty arrays without touching the DB.
+    const emptySix: [any[], any[], any[], any[], any[], any[]] = [[], [], [], [], [], []];
+
     // NOTE: keep each category small for fast UI.
-    const [leadRows, loanRows, inventoryRows, assetRows, serviceRows, campaignRows] = await Promise.all([
+    const [leadRows, loanRows, inventoryRows, assetRows, serviceRows, campaignRows] = isDealer
+      ? await Promise.all([
         db
             .select({
                 id: leads.id,
@@ -148,7 +165,32 @@ export const GET = withErrorHandler(async (req: Request) => {
                 )
             )
             .limit(8),
-    ]);
+      ])
+      : emptySix;
+
+    // Risk-card catalogue search (admin/sales roles only). Global, non-tenant
+    // table — matched by title, slug, or description; retired cards excluded.
+    const riskCardRows = canSeeRiskCards
+      ? await db
+          .select({
+              id: riskHypotheses.id,
+              slug: riskHypotheses.slug,
+              title: riskHypotheses.title,
+              source: riskHypotheses.source,
+          })
+          .from(riskHypotheses)
+          .where(
+              and(
+                  isNull(riskHypotheses.retired_at),
+                  or(
+                      ilike(riskHypotheses.title, like),
+                      ilike(riskHypotheses.slug, like),
+                      ilike(riskHypotheses.description, like)
+                  )
+              )
+          )
+          .limit(8)
+      : [];
 
     return successResponse({
         leads: leadRows.map((r) => ({
@@ -188,6 +230,12 @@ export const GET = withErrorHandler(async (req: Request) => {
             label: `${r.name} · ${r.id}`,
             subLabel: `${String(r.type).toUpperCase()} · ${String(r.status).toUpperCase()}`,
             href: `/dealer-portal/campaigns?open=${encodeURIComponent(r.id)}`,
+        })),
+        riskCards: riskCardRows.map((r) => ({
+            id: r.id,
+            label: r.title,
+            subLabel: `${r.slug} · ${r.source === 'human' ? 'Hand-coded' : 'AI-generated'}`,
+            href: `/admin/nbfc/risk-cards?card=${encodeURIComponent(r.id)}`,
         })),
     });
 });

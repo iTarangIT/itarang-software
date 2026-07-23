@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
-import BuybackBell from '@/components/buyback/BuybackBell';
+import NotificationBell from '@/components/shared/NotificationBell';
 // Dependency-free by design (middleware runs it on Edge), so a client component
 // can share the one list rather than keep a second copy that drifts.
 import { BUYBACK_ADMIN_ROLES } from '@/lib/buyback/roles';
@@ -109,14 +109,23 @@ export function Header() {
 
             {/* Right Actions */}
             <div className="flex items-center gap-4">
-                {/* The buyback notification bell — live for all three roles
-                    (dealer, admin, vendor). Scoped to the buyback feed by
-                    product decision; its mutations carry the same filter as its
-                    reads, so "mark all read" cannot reach the non-buyback
-                    notifications this bell does not show. The role only shapes
-                    the "See all" target and per-row deep links. */}
-                <BuybackBell
-                    role={
+                {/* Single unified in-app bell. Reads /api/notifications, which
+                    returns EVERY notification row keyed to the signed-in user —
+                    KYC verification arrivals, NBFC Acquire events, buyback,
+                    dealer validation, inventory uploads, escalations, etc. The
+                    former separate BuybackBell was a scoped subset of the same
+                    table; folding it in removes the duplicate bell and gives one
+                    place that holds all notifications.
+
+                    portalRole shapes the buyback deep links, which differ per
+                    role: admin and dealer each open the request on their own
+                    page, and a vendor — who has neither — is sent to the
+                    matching vendor-portal surface. isAdmin still drives the
+                    non-buyback admin/dealer split. */}
+                <NotificationBell
+                    variant="admin"
+                    isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
+                    portalRole={
                         (user?.role ?? '').toLowerCase() === 'scrap_vendor'
                             ? 'vendor'
                             : BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())
