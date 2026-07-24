@@ -16,6 +16,8 @@ import { videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { resolveVkycByToken } from "@/lib/nbfc/vkyc";
 import { videoLiveness } from "@/lib/decentro";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
+import { notifyVkycEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -132,6 +134,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       })
       .where(eq(videoKycAttempts.id, attempt.id));
   }
+
+  // Customer → NBFC. This is a public token-gated route with no session, so the
+  // provenance is the customer's own submission; the NBFC and admin bells are
+  // the only way either learns the capture happened.
+  await notifyVkycEvent({
+    leadId: track.lead_id,
+    event: "captured",
+    nbfcName: await tenantDisplayName(track.tenant_id),
+    tenantId: track.tenant_id,
+    reason: failureReason,
+  });
 
   return NextResponse.json({ ok: true, status: verified ? "verified" : "failed" });
 }

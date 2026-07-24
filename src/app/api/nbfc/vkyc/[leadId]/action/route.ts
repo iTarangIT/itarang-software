@@ -6,6 +6,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
+import { notifyVkycEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 
@@ -71,6 +73,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         updated_at: now,
       })
       .where(eq(videoKycVerifications.id, track.id));
+
+    await notifyVkycEvent({
+      leadId,
+      event: parsed.data.action === "accept" ? "approved" : "rejected",
+      nbfcName: await tenantDisplayName(actor.tenant_id),
+      tenantId: actor.tenant_id,
+      reason: parsed.data.notes ?? null,
+    });
 
     return NextResponse.json({ ok: true });
   } catch (e) {

@@ -22,6 +22,8 @@ import { fieldInvestigations, fieldInvestigationPhotos, nbfcServiceConfig } from
 import { haversineMeters, resolveFiByToken } from "@/lib/nbfc/fi";
 import { watermarkPhoto } from "@/lib/nbfc/fi-watermark";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
+import { notifyFiEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -168,6 +170,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         updated_at: now,
       })
       .where(eq(fieldInvestigations.id, fi.id));
+
+    // Agent → NBFC. The visit is now waiting on a Coordinator decision, and
+    // this is the only signal the NBFC gets that the agent has been and gone.
+    await notifyFiEvent({
+      leadId: fi.lead_id,
+      event: "submitted",
+      nbfcName: await tenantDisplayName(fi.tenant_id),
+      tenantId: fi.tenant_id,
+      agentName: fi.assigned_to,
+    });
 
     return NextResponse.json({ ok: true, status: "submitted" });
   } catch (err) {

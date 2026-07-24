@@ -26,6 +26,7 @@ import {
 } from "@/lib/onboarding/correction-token";
 import { CATALOG_TO_WHATSAPP_DOC } from "@/lib/whatsapp/correction-map";
 import { startCorrectionOverWhatsApp } from "@/lib/whatsapp/orchestrator";
+import { notifyOnboardingDecision } from "@/lib/notifications/events";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -370,6 +371,18 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
       console.log("CORRECTION WHATSAPP:", { dealerId, whatsappCorrection });
     }
+
+    // In-app row for the dealer's bell + an audit copy for the admins. The
+    // correction EMAIL (and, for WhatsApp dealers, the in-chat prompt) already
+    // went out above, so this sends no second email.
+    await notifyOnboardingDecision({
+      dealerId,
+      businessName: application.company_name || "Your company",
+      decision: "correction_requested",
+      reason: [remarks, ...requestedFieldLabels, ...requestedDocumentLabels]
+        .filter(Boolean)
+        .join(" · "),
+    });
 
     return NextResponse.json({
       success: true,

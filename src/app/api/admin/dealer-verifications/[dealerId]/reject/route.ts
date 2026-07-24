@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { sendDealerRejectionNotificationEmail } from "@/lib/email/sendDealerRejectionNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { notifyOnboardingDecision } from "@/lib/notifications/events";
 import {
   sendDealerRejectedWhatsApp,
   type WhatsAppDelivery,
@@ -144,6 +145,16 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
       console.log("DEALER REJECT WHATSAPP:", { dealerId, whatsappDelivery });
     }
+
+    // In-app row for the dealer's bell + an audit copy for the admins. The
+    // rejection EMAIL is already sent above, so this passes email:false rather
+    // than sending a second one. Best-effort by emit()'s contract.
+    await notifyOnboardingDecision({
+      dealerId,
+      businessName: application.company_name || "Your company",
+      decision: "rejected",
+      reason: remarks,
+    });
 
     return NextResponse.json({
       success: true,

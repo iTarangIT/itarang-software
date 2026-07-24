@@ -2,12 +2,11 @@
  * Unified verification-track gate — BRD Addendum V0.2 §7.4 (Track Rules).
  *
  * A winning NBFC runs up to three verification tracks for a lead: Field
- * Investigation (§6.3), Active Video KYC (§10) and E-NACH (§9). Which tracks
- * apply is frozen in the per-lead service-config SNAPSHOT taken when the lead
- * bound to the NBFC (§7.4) — never live config, so a later settings edit cannot
- * disturb an in-flight lead.
+ * Investigation (§6.3), Active Video KYC (§10) and E-NACH (§9). WHICH tracks
+ * apply is read from the NBFC's live Service Opt-In (resolveServiceOptIn), so
+ * switching a service off drops it out of the gate for in-flight leads too.
  *
- * Two per-NBFC Track Rules (also snapshotted) govern disbursal:
+ * Two per-NBFC Track Rules (still snapshotted per lead) govern disbursal:
  *
  *   • track_completion_gate — whether ALL opted-in tracks must reach a passing
  *     terminal state before financing conditions (sanction/disbursal). Default ON.
@@ -23,12 +22,13 @@
 import { evaluateEnachGate, getWinningAssignment } from "@/lib/nbfc/enach";
 import { getFiTrack } from "@/lib/nbfc/fi";
 import { getVkycTrack } from "@/lib/nbfc/vkyc";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 
 export type TrackKey = "fi" | "vkyc" | "enach";
 
 export interface TrackState {
   key: TrackKey;
-  /** Opted-in for the winning NBFC (per the lead's frozen snapshot). */
+  /** Opted-in for the winning NBFC (per its live Service Opt-In). */
   required: boolean;
   /** Canonical status string (track-specific), or null when no row exists yet. */
   status: string | null;
@@ -51,9 +51,6 @@ export interface TrackGate {
 }
 
 interface Snapshot {
-  fi_enabled?: boolean;
-  vkyc_enabled?: boolean;
-  enach_enabled?: boolean;
   track_completion_gate?: boolean;
   track_failure_halts?: boolean;
 }
@@ -80,10 +77,13 @@ export async function evaluateTrackGate(leadId: string): Promise<TrackGate> {
   const snap = (winner.snapshot ?? {}) as Snapshot;
   const completionGate = snap.track_completion_gate ?? true;
   const failureHalts = snap.track_failure_halts ?? false;
+  // Which tracks apply is read LIVE (resolveServiceOptIn); only the two Track
+  // Rules above stay frozen per lead.
+  const optIn = await resolveServiceOptIn(winner.tenant_id, winner.snapshot);
 
   // FI (winning NBFC's current attempt). V0.3.1 §10.4: complete = 'passed'
   // ('completed' kept for any pre-E-148 row). failed = 'failed'.
-  const fiRequired = snap.fi_enabled ?? false;
+  const fiRequired = optIn.fi_enabled;
   const fiRow = fiRequired ? await getFiTrack(leadId, winner.nbfc_id) : null;
   const fiStatus = fiRow?.status ?? null;
   const fiState: TrackState = {
@@ -95,7 +95,7 @@ export async function evaluateTrackGate(leadId: string): Promise<TrackGate> {
   };
 
   // VKYC (winning NBFC's row). complete = 'verified'.
-  const vkycRequired = snap.vkyc_enabled ?? false;
+  const vkycRequired = optIn.vkyc_enabled;
   const vkycRow = vkycRequired ? await getVkycTrack(leadId, winner.nbfc_id) : null;
   const vkycStatus = vkycRow?.status ?? null;
   const vkycState: TrackState = {

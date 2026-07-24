@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import { leads, nbfc, nbfcLeadAssignments } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { sendNotSelectedEmail } from "@/lib/email/sendManualHandoffEmail";
+import { notifyWinnerSelected } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -138,6 +139,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       } catch (err) {
         console.error("[select-winner] loser notification failed:", err);
       }
+    }
+
+    // In-app: the winner is told to proceed, every loser is told the lead is
+    // gone, and the admin sees the decision. The loser email above stays — it
+    // reaches NBFC contacts who have no portal login.
+    const [winnerNbfc] = await db
+      .select({ tenant_id: nbfc.tenant_id, legal_name: nbfc.legal_name, short_name: nbfc.short_name })
+      .from(nbfc)
+      .where(eq(nbfc.id, chosenNbfcId))
+      .limit(1);
+    if (winnerNbfc?.tenant_id) {
+      await notifyWinnerSelected({
+        leadId,
+        winnerTenantId: winnerNbfc.tenant_id,
+        winnerName: winnerNbfc.legal_name || winnerNbfc.short_name || "the lender",
+      });
     }
 
     return NextResponse.json({

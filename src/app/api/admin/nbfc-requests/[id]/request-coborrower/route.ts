@@ -18,6 +18,7 @@ import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 import { requestCoBorrowerForLead } from "@/lib/kyc/coborrower-request";
 import { NBFC_DOC_STATUS } from "@/lib/nbfc/doc-requests";
 import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
+import { notifyCoBorrowerRequested } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,6 +102,14 @@ export async function POST(
       leadId: wrapper.lead_id,
       requestId: id,
     }).catch(() => {});
+
+    // The dealer is the one who has to DO something here — add the co-borrower
+    // and their KYC — and until now the ask reached them only as a lead-status
+    // change they had to notice on their own.
+    await notifyCoBorrowerRequested({
+      leadId: wrapper.lead_id,
+      reason,
+    });
 
     return NextResponse.json({
       success: true,

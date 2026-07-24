@@ -145,8 +145,11 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
         </h2>
         <p className="text-xs text-slate-500 mt-0.5">
           Choose which verification steps run through iTarang for this NBFC. Opting out means you
-          perform that step off-platform. Changes apply to <strong>new leads only</strong> — leads
-          already in flight keep the configuration captured when they bound to you.
+          perform that step off-platform — the matching step in your Acquire workspace is shown as{" "}
+          <strong>Skipped</strong> and locked, with no actions available. These switches apply{" "}
+          <strong>immediately, to every lead</strong> including ones already in flight; switching a
+          service back on re-opens its step. The configuration underneath each switch (VKYC mode,
+          E-NACH handoff, storage, Track Rules) stays frozen per lead at the moment it bound to you.
         </p>
       </div>
 
@@ -314,17 +317,28 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
         <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">
           Document Handling
         </h3>
+        {/* A null method is the explicit opt-OUT: the agreement rail never runs
+            through iTarang, and the "E-NACH & Agreement" step in the NBFC's
+            Acquire workspace reads "Skipped" once E-NACH is off too. Rendered
+            as its own radio choice so the state is deliberate, not just
+            "nothing picked yet". */}
         <Radio
           name="agreement_method"
           legend="Agreement method"
-          value={cfg.doc_agreement_method}
+          value={cfg.doc_agreement_method ?? "off"}
           disabled={!canEdit || busy}
-          onChange={(v) => set("doc_agreement_method", v as ServiceConfig["doc_agreement_method"])}
+          onChange={(v) =>
+            set(
+              "doc_agreement_method",
+              v === "off" ? null : (v as ServiceConfig["doc_agreement_method"]),
+            )
+          }
           options={[
             { value: "upload", label: "Upload signed copy" },
             { value: "digio", label: "iTarang e-sign", hint: "iTarang facilitates the e-sign — on iTarang's account, or your own provider (Digio / Leegality / …) with your keys." },
             { value: "api_autofetch", label: "API autofetch" },
             { value: "own_esign", label: "Own e-sign (handoff)", hint: "iTarang triggers + records; you e-sign on your own platform and POST the signed result back." },
+            { value: "off", label: "Not through iTarang (off-platform)", hint: "You handle the loan agreement entirely on your own systems. The Agreement panel is removed from the Acquire workspace." },
           ]}
         />
         {cfg.doc_agreement_method === "digio" ? (

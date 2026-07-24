@@ -242,9 +242,10 @@ export async function commitLeadDraft(
   if (!lead.product_category_id) return { ok: false, error: "Product category is required." };
   if (!lead.primary_product_id) return { ok: false, error: "Product is required." };
   if (!lead.interest_level) return { ok: false, error: "Interest level is required." };
+  // Email is optional — only its format is checked when one was captured.
   const email = (lead.owner_email || "").trim();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-    return { ok: false, error: "A valid customer email is required." };
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return { ok: false, error: "Enter a valid customer email address." };
   if (!lead.state?.trim()) return { ok: false, error: "State is required." };
   if (!lead.city?.trim()) return { ok: false, error: "City is required." };
 

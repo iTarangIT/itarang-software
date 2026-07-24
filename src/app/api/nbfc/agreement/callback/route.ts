@@ -22,6 +22,8 @@ import { db } from "@/lib/db";
 import { nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
 import { AGREEMENT_STATES, type AgreementState } from "@/lib/nbfc/agreement";
 import { verifyInboundSignature } from "@/lib/nbfc/handoff";
+import { notifyLoanAgreementEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,6 +99,18 @@ export async function POST(req: NextRequest) {
         updated_at: now,
       })
       .where(eq(nbfcLoanAgreements.id, row.id));
+
+    // Only the terminal "signed" transition is news; the intermediate states
+    // this callback also carries would be noise in three bells at once.
+    if (nextStatus === "signed") {
+      await notifyLoanAgreementEvent({
+        leadId: row.lead_id,
+        event: "signed",
+        nbfcName: await tenantDisplayName(row.tenant_id),
+        tenantId: row.tenant_id,
+        signerName: pickStr(body, "signer_name", "signed_by"),
+      });
+    }
 
     return new NextResponse("Accepted", { status: 200 });
   } catch (error) {

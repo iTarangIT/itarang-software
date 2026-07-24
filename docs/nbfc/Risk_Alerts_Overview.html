@@ -1,0 +1,1531 @@
+<title>iTarang Risk Alerts — What We Show, and Where It Comes From</title>
+
+<style>
+  /* ── tokens ─────────────────────────────────────────────────────────── */
+  :root {
+    --paper:      #F7FAFB;
+    --surface:    #FFFFFF;
+    --surface-2:  #EFF4F7;
+    --ink:        #10222F;
+    --ink-2:      #47606F;
+    --ink-3:      #7B8E9C;
+    --line:       #D9E3EA;
+    --line-soft:  #E8EFF3;
+    --accent:     #1B6BAC;
+    --accent-2:   #146F66;
+    --accent-soft:#E6F0F8;
+
+    --sev-high:   #BC3A2C;
+    --sev-warn:   #A9720A;
+    --sev-ok:     #16755A;
+    --sev-inc:    #5E7385;
+    --sev-err:    #67459F;
+
+    --sev-high-bg:#FBEBE8;
+    --sev-warn-bg:#FBF2E0;
+    --sev-ok-bg:  #E4F3EC;
+    --sev-inc-bg: #EAEFF3;
+    --sev-err-bg: #EFEAF8;
+
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+    --mono:  "Cascadia Mono", Consolas, "SF Mono", "DejaVu Sans Mono", Menlo, monospace;
+
+    --measure: 68ch;
+    --gutter: clamp(1.1rem, 4vw, 3.5rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #0B151D;
+      --surface:    #111F29;
+      --surface-2:  #162834;
+      --ink:        #E4EDF3;
+      --ink-2:      #A5B9C7;
+      --ink-3:      #718696;
+      --line:       #22394B;
+      --line-soft:  #1A2E3D;
+      --accent:     #5AA9E0;
+      --accent-2:   #3EAE9E;
+      --accent-soft:#12303F;
+
+      --sev-high:   #EA8073;
+      --sev-warn:   #DFA63F;
+      --sev-ok:     #4CC08F;
+      --sev-inc:    #94A8B7;
+      --sev-err:    #A98CE0;
+
+      --sev-high-bg:#2C1714;
+      --sev-warn-bg:#2C2211;
+      --sev-ok-bg:  #10291F;
+      --sev-inc-bg: #1B2932;
+      --sev-err-bg: #221A33;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:#0B151D; --surface:#111F29; --surface-2:#162834;
+    --ink:#E4EDF3; --ink-2:#A5B9C7; --ink-3:#718696;
+    --line:#22394B; --line-soft:#1A2E3D;
+    --accent:#5AA9E0; --accent-2:#3EAE9E; --accent-soft:#12303F;
+    --sev-high:#EA8073; --sev-warn:#DFA63F; --sev-ok:#4CC08F; --sev-inc:#94A8B7; --sev-err:#A98CE0;
+    --sev-high-bg:#2C1714; --sev-warn-bg:#2C2211; --sev-ok-bg:#10291F; --sev-inc-bg:#1B2932; --sev-err-bg:#221A33;
+  }
+  :root[data-theme="light"] {
+    --paper:#F7FAFB; --surface:#FFFFFF; --surface-2:#EFF4F7;
+    --ink:#10222F; --ink-2:#47606F; --ink-3:#7B8E9C;
+    --line:#D9E3EA; --line-soft:#E8EFF3;
+    --accent:#1B6BAC; --accent-2:#146F66; --accent-soft:#E6F0F8;
+    --sev-high:#BC3A2C; --sev-warn:#A9720A; --sev-ok:#16755A; --sev-inc:#5E7385; --sev-err:#67459F;
+    --sev-high-bg:#FBEBE8; --sev-warn-bg:#FBF2E0; --sev-ok-bg:#E4F3EC; --sev-inc-bg:#EAEFF3; --sev-err-bg:#EFEAF8;
+  }
+
+  /* ── base ───────────────────────────────────────────────────────────── */
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+  }
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 var(--gutter) 6rem;
+  }
+  p, ul, ol { max-width: var(--measure); }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+  strong { font-weight: 700; }
+  code, .mono { font-family: var(--mono); }
+  code {
+    font-size: 0.86em;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: 0.05em 0.34em;
+    word-break: break-word;
+  }
+
+  /* ── masthead ───────────────────────────────────────────────────────── */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(2.5rem, 7vw, 4.5rem) 0 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+  .masthead h1 {
+    font-size: clamp(2rem, 5.2vw, 3.3rem);
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0;
+    max-width: 20ch;
+  }
+  .standfirst {
+    font-size: clamp(1.02rem, 2vw, 1.2rem);
+    color: var(--ink-2);
+    margin: 0;
+    max-width: 62ch;
+  }
+  .masthead-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 2.2rem;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.03em;
+    padding-top: 0.5rem;
+  }
+  .masthead-meta b { color: var(--ink-2); font-weight: 600; }
+
+  /* ── contents ───────────────────────────────────────────────────────── */
+  .toc {
+    margin: 2.2rem 0 0;
+    padding: 1.3rem 1.5rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+  }
+  .toc h2 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 0.85rem;
+    font-weight: 600;
+  }
+  .toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-width: none;
+    columns: 2;
+    column-gap: 2.5rem;
+    font-size: 15px;
+  }
+  .toc li { break-inside: avoid; padding: 0.16rem 0; }
+  .toc a { text-decoration: none; color: var(--ink); display: flex; gap: 0.7rem; }
+  .toc a:hover { color: var(--accent); }
+  .toc .num { font-family: var(--mono); font-size: 12px; color: var(--ink-3); min-width: 1.6em; }
+  @media (max-width: 620px) { .toc ol { columns: 1; } }
+
+  /* ── sections ───────────────────────────────────────────────────────── */
+  section { padding-top: 3.4rem; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.85rem;
+    border-top: 1px solid var(--line);
+    padding-top: 1rem;
+    margin-bottom: 1.1rem;
+  }
+  .sec-head .num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    padding-top: 0.35em;
+  }
+  .sec-head h2 {
+    font-size: clamp(1.35rem, 3vw, 1.85rem);
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.12rem;
+    letter-spacing: -0.01em;
+    margin: 2.1rem 0 0.6rem;
+    text-wrap: balance;
+  }
+  h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    margin: 1.6rem 0 0.55rem;
+  }
+  .lede { font-size: 1.06rem; color: var(--ink-2); }
+
+  /* ── tables ─────────────────────────────────────────────────────────── */
+  .scroller {
+    overflow-x: auto;
+    margin: 1.2rem 0 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.7rem 0.85rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  tbody td {
+    padding: 0.66rem 0.85rem;
+    border-top: 1px solid var(--line-soft);
+    vertical-align: top;
+    line-height: 1.45;
+  }
+  tbody tr:first-child td { border-top: none; }
+  td.t { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  td.n { font-family: var(--mono); font-size: 12.5px; text-align: right; white-space: nowrap; }
+  td.k { font-weight: 700; }
+  .caption {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    margin: 0.5rem 0 0;
+    max-width: var(--measure);
+    font-style: italic;
+  }
+
+  /* ── severity chips ─────────────────────────────────────────────────── */
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 0.2em 0.55em;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .chip.high { color: var(--sev-high); background: var(--sev-high-bg); }
+  .chip.warn { color: var(--sev-warn); background: var(--sev-warn-bg); }
+  .chip.ok   { color: var(--sev-ok);   background: var(--sev-ok-bg); }
+  .chip.inc  { color: var(--sev-inc);  background: var(--sev-inc-bg); }
+  .chip.err  { color: var(--sev-err);  background: var(--sev-err-bg); }
+  .chip.ai   { color: var(--ink-3);    background: var(--surface-2); }
+
+  /* ── callout ────────────────────────────────────────────────────────── */
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.9rem 1.15rem;
+    margin: 1.5rem 0;
+    border-radius: 0 4px 4px 0;
+    max-width: var(--measure);
+  }
+  .note p { margin: 0; font-size: 15.5px; }
+  .note p + p { margin-top: 0.6rem; }
+  .note .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.3rem;
+    font-weight: 700;
+  }
+
+  /* ── figure ─────────────────────────────────────────────────────────── */
+  figure { margin: 1.8rem 0 0.5rem; }
+  figure .scroller { margin-top: 0; }
+  figcaption {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    margin-top: 0.6rem;
+    font-style: italic;
+    max-width: var(--measure);
+  }
+  .diagram { display: block; width: 100%; min-width: 900px; height: auto; }
+  .d-box   { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+  .d-box-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.2; }
+  .d-lane  { fill: var(--surface-2); stroke: none; }
+  .d-t     { font-family: var(--mono); font-size: 12px; font-weight: 700; fill: var(--ink); }
+  .d-s     { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-2); }
+  .d-h     { font-family: var(--mono); font-size: 10px; font-weight: 700; fill: var(--ink-3); letter-spacing: 0.12em; }
+  .d-fam   { font-family: var(--mono); font-size: 10.5px; font-weight: 700; fill: var(--accent); letter-spacing: 0.05em; }
+  .d-line  { stroke: var(--ink-3); stroke-width: 1.3; fill: none; }
+
+  /* ── card anatomy mock ──────────────────────────────────────────────── */
+  .anatomy {
+    display: grid;
+    grid-template-columns: minmax(280px, 380px) minmax(280px, 1fr);
+    gap: 1.6rem;
+    align-items: start;
+    margin: 1.6rem 0 0.5rem;
+  }
+  @media (max-width: 780px) { .anatomy { grid-template-columns: 1fr; } }
+  .mock {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1.15rem 1.2rem 1.3rem;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .mock-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .mock h5 {
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0.75rem 0 0.3rem;
+    line-height: 1.3;
+  }
+  .mock .summary { font-size: 13px; color: var(--ink-2); margin: 0; line-height: 1.45; }
+  .mock .bignum {
+    display: flex; align-items: baseline; gap: 0.4rem;
+    margin-top: 0.95rem;
+  }
+  .mock .bignum b { font-size: 26px; font-weight: 650; color: var(--sev-high); line-height: 1; }
+  .mock .bignum span { font-size: 13px; color: var(--ink-3); }
+  .mock .bar { height: 4px; border-radius: 2px; background: var(--surface-2); margin-top: 0.6rem; overflow: hidden; }
+  .mock .bar i { display: block; height: 100%; width: 66%; background: var(--sev-high); }
+  .pin {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    font-family: var(--mono); font-size: 10px; font-weight: 700;
+    vertical-align: 1px; margin-right: 0.45rem; flex: none;
+  }
+  .keys { list-style: none; margin: 0; padding: 0; max-width: none; }
+  .keys li {
+    display: flex; gap: 0.1rem; align-items: flex-start;
+    padding: 0.42rem 0;
+    border-top: 1px solid var(--line-soft);
+    font-size: 14.5px;
+    line-height: 1.45;
+  }
+  .keys li:first-child { border-top: none; }
+  .keys b { font-weight: 700; }
+  .keys .src { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-top: 0.12rem; }
+
+  /* ── card detail blocks ─────────────────────────────────────────────── */
+  .cards { display: grid; gap: 1rem; margin-top: 1.4rem; }
+  .cardblk {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    padding: 1.05rem 1.25rem 1.15rem;
+    break-inside: avoid;
+  }
+  .cardblk header { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
+  .cardblk h3 { margin: 0; font-size: 1.05rem; }
+  .cardblk .slug { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .cardblk dl {
+    display: grid;
+    grid-template-columns: minmax(90px, 128px) 1fr;
+    gap: 0.3rem 1rem;
+    margin: 0.8rem 0 0;
+    font-size: 14.5px;
+  }
+  .cardblk dt {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    padding-top: 0.34em;
+  }
+  .cardblk dd { margin: 0; line-height: 1.45; }
+
+  /* ── stat strip ─────────────────────────────────────────────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 1.5rem 0 0.4rem;
+  }
+  .stat { background: var(--surface); padding: 0.95rem 1rem; }
+  .stat b { display: block; font-size: 1.75rem; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .stat span {
+    display: block; margin-top: 0.4rem;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-3); line-height: 1.35;
+  }
+
+  hr.rule { border: none; border-top: 1px solid var(--line); margin: 3rem 0 0; }
+
+  .footer {
+    margin-top: 3.5rem;
+    padding-top: 1.2rem;
+    border-top: 2px solid var(--ink);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.7;
+  }
+
+  ul.tight { padding-left: 1.15rem; }
+  ul.tight li { margin: 0.32rem 0; }
+
+  /* ── print ──────────────────────────────────────────────────────────── */
+  @media print {
+    :root {
+      --paper:#fff; --surface:#fff; --surface-2:#f4f6f8;
+      --ink:#000; --ink-2:#333; --ink-3:#666; --line:#bbb; --line-soft:#ddd;
+    }
+    body { font-size: 10.5pt; }
+    .wrap { max-width: none; padding: 0; }
+    .toc { break-after: page; }
+    section { break-inside: auto; padding-top: 1.6rem; }
+    .sec-head { break-after: avoid; }
+    h3, h4 { break-after: avoid; }
+    table, figure, .cardblk, .note, .anatomy { break-inside: avoid; }
+    .scroller { overflow: visible; }
+    .diagram { min-width: 0; }
+    a { color: #000; text-decoration: none; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">iTarang · NBFC Platform · Internal Briefing</p>
+    <h1>Risk Alerts: what we show, and where every number comes from</h1>
+    <p class="standfirst">
+      Our lending partners see risk the way an instrument panel shows an engine — a small set of
+      cards and alerts, each one the answer to a question we can defend with data. This document
+      lists every card and alert we can put on screen, what is printed inside each one, which
+      database column it was read from, and who is allowed to change the thresholds.
+    </p>
+    <div class="masthead-meta">
+      <span><b>Prepared</b> 24 July 2026</span>
+      <span><b>Audience</b> Leadership, Product, NBFC partners</span>
+      <span><b>Scope</b> NBFC Risk &amp; Alerts subsystem</span>
+      <span><b>Source of truth</b> Production code, not slideware</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#s1"><span class="num">01</span><span>The idea in one page</span></a></li>
+      <li><a href="#s2"><span class="num">02</span><span>The four families of alert</span></a></li>
+      <li><a href="#s3"><span class="num">03</span><span>Where a user actually sees them</span></a></li>
+      <li><a href="#s4"><span class="num">04</span><span>The risk-card catalogue</span></a></li>
+      <li><a href="#s5"><span class="num">05</span><span>What is printed inside a card</span></a></li>
+      <li><a href="#s6"><span class="num">06</span><span>Severity, and how much to trust it</span></a></li>
+      <li><a href="#s7"><span class="num">07</span><span>Battery &amp; telemetry alerts</span></a></li>
+      <li><a href="#s8"><span class="num">08</span><span>Borrower scores: CDS and PCI</span></a></li>
+      <li><a href="#s9"><span class="num">09</span><span>Portfolio anomaly flags</span></a></li>
+      <li><a href="#s10"><span class="num">10</span><span>Where the data comes from</span></a></li>
+      <li><a href="#s11"><span class="num">11</span><span>The end-to-end pipeline</span></a></li>
+      <li><a href="#s12"><span class="num">12</span><span>Who controls the thresholds</span></a></li>
+      <li><a href="#s13"><span class="num">13</span><span>From alert to action</span></a></li>
+      <li><a href="#s14"><span class="num">14</span><span>Glossary</span></a></li>
+      <li><a href="#s15"><span class="num">15</span><span>Known gaps — read before you demo</span></a></li>
+    </ol>
+  </nav>
+
+  <!-- ══════════════════════════════════════════════════════════ 1 ── -->
+  <section id="s1">
+    <div class="sec-head"><span class="num">01</span><h2>The idea in one page</h2></div>
+
+    <p class="lede">
+      A risk alert is a <strong>testable statement about borrowers, answered with real data</strong> —
+      never a vibe and never a guess.
+    </p>
+
+    <p>
+      Take one: <em>“Borrowers who are past due on their EMI <strong>and</strong> whose vehicle has
+      stopped reporting GPS are hiding the asset.”</em> To answer it, the platform pulls the loan
+      book from our CRM database, pulls the vehicle's live telemetry from the separate IoT database,
+      joins the two on the vehicle registration number, runs the test, and writes down the verdict:
+      a severity colour, a count, and the actual rows that triggered it. The NBFC then sees one card.
+    </p>
+
+    <p>
+      Everything in this document hangs off that one picture. Two things are worth carrying into
+      the room with you:
+    </p>
+
+    <ul class="tight">
+      <li><strong>The colour measures prevalence, not money.</strong> “High Alert” means a large
+        <em>share</em> of the assessed population tripped the test — it is not a rupee figure.</li>
+      <li><strong>A test that could not run says so.</strong> It is shown as
+        <span class="chip inc">Inconclusive</span>, never as a green
+        <span class="chip ok">OK</span>. A coverage gap is not a clean bill of health, and the
+        product refuses to present it as one.</li>
+    </ul>
+
+    <div class="stats">
+      <div class="stat"><b>4</b><span>Alert families</span></div>
+      <div class="stat"><b>5</b><span>Governed risk cards</span></div>
+      <div class="stat"><b>12</b><span>Agent-authored card slots</span></div>
+      <div class="stat"><b>8</b><span>Battery telemetry rules</span></div>
+      <div class="stat"><b>8</b><span>Board-governed thresholds</span></div>
+      <div class="stat"><b>5</b><span>Severity levels</span></div>
+    </div>
+    <p class="caption">The numbers a partner sees are a subset — an iTarang admin allowlists which
+      cards each NBFC is shown.</p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 2 ── -->
+  <section id="s2">
+    <div class="sec-head"><span class="num">02</span><h2>The four families of alert</h2></div>
+
+    <p>
+      “Risk alerts” is one phrase covering four independent machines. They have different inputs,
+      different schedules, different shapes on screen, and different owners. Keeping them straight is
+      the single most useful thing in this document.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Family</th>
+            <th>What it watches</th>
+            <th>Shape on screen</th>
+            <th>Refreshed</th>
+            <th>Stored in</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">Risk cards</td>
+            <td>Loan book × vehicle telemetry, tested hypothesis by hypothesis</td>
+            <td>A grid of cards with a severity chip and a share bar</td>
+            <td class="t">Nightly 01:30&nbsp;IST<br>+ on demand</td>
+            <td class="t">risk_card_runs</td>
+          </tr>
+          <tr>
+            <td class="k">Battery &amp; telemetry alerts</td>
+            <td>Each battery packet: faults, heat, charge, mileage, location, health</td>
+            <td>Rows in the alert feed and on the battery page</td>
+            <td class="t">On every packet<br>+ every 15&nbsp;min</td>
+            <td class="t">telemetry_alerts</td>
+          </tr>
+          <tr>
+            <td class="k">Borrower risk alerts</td>
+            <td>Repayment behaviour — the CDS and PCI scores per loan</td>
+            <td>Rows in the alert feed, scores on the borrower</td>
+            <td class="t">Nightly 00:00 &amp; 00:15</td>
+            <td class="t">nbfc_risk_alerts<br>borrower_risk_scores</td>
+          </tr>
+          <tr>
+            <td class="k">Portfolio anomaly flags</td>
+            <td>A whole NBFC's book against peer thresholds</td>
+            <td>A red/amber flag on the NBFC, for iTarang admins</td>
+            <td class="t">Nightly 00:10</td>
+            <td class="t">nbfc_anomaly_flags</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Family one is the “Risk” page. Families two and three merge into the single
+      “Needs attention now” feed on the portfolio dashboard. Family four is ours, not the partner's.</p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 3 ── -->
+  <section id="s3">
+    <div class="sec-head"><span class="num">03</span><h2>Where a user actually sees them</h2></div>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Screen</th><th>Who sees it</th><th>What it shows</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="t">/nbfc/risk</td>
+            <td>NBFC partner</td>
+            <td>The sidebar calls it <b>“Risk Alerts”</b>; the page header reads <b>“Risk —
+              hypothesis-driven cards.”</b> The card grid, split into four tabs
+              (High Alert · Warning · Inconclusive · OK) and paginated at 24 per tab, a freshness
+              line, a <em>Re-run analysis</em> button, and the Risk Action Framework reference table
+              at the foot.</td>
+          </tr>
+          <tr>
+            <td class="t">/nbfc/portfolio</td>
+            <td>NBFC partner</td>
+            <td><b>“Needs attention now.”</b> One merged feed of borrower risk alerts and battery
+              telemetry alerts, grouped into collapsible Critical / Warning / Info sections, Critical
+              open by default. Every row carries a <em>View case</em> link.</td>
+          </tr>
+          <tr>
+            <td class="t">/nbfc/batteries</td>
+            <td>NBFC partner, Risk Head</td>
+            <td>Battery monitoring for the financed fleet — the per-battery state behind the
+              telemetry alerts.</td>
+          </tr>
+          <tr>
+            <td class="t">/admin/nbfc/&lt;id&gt;/risk-cards</td>
+            <td>iTarang admin</td>
+            <td><b>“Visible risk cards.”</b> The allowlist. Only cards ticked here appear on that
+              partner's Risk dashboard, and the filter is applied at display time so a re-run can
+              never bypass it.</td>
+          </tr>
+          <tr>
+            <td class="t">/admin/nbfc/risk-rules</td>
+            <td>Risk Head, iTarang admin</td>
+            <td>The eight governed thresholds, behind a two-person approval gate.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 4 ── -->
+  <section id="s4">
+    <div class="sec-head"><span class="num">04</span><h2>The risk-card catalogue</h2></div>
+
+    <p>
+      There are <strong>five governed cards</strong> — written by our engineers, reviewed, and
+      deterministic. Alongside them the platform keeps up to <strong>twelve agent-authored cards</strong>
+      active at a time: an AI agent proposes a new hypothesis, writes the Python that tests it, and
+      that Python is executed against real data in a sandbox. Agent cards carry a small
+      <span class="chip ai">AI</span> badge and, until a human promotes them, they are
+      <strong>capped at Warning</strong> — they may raise a concern, they may not declare a High Alert.
+    </p>
+
+    <h3>The five governed cards</h3>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Card</th>
+            <th>The question</th>
+            <th>Who is counted<br>(the denominator)</th>
+            <th>Trips when</th>
+            <th style="text-align:right">High ≥</th>
+            <th style="text-align:right">Warn ≥</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">7-day usage cliff</td>
+            <td>Has the borrower's mileage fallen off a cliff this week?</td>
+            <td>Vehicles with ≥50 km in the prior week</td>
+            <td>Week-on-week km drop ≥ <b>40%</b></td>
+            <td class="n">5%</td><td class="n">1%</td>
+          </tr>
+          <tr>
+            <td class="k">Past-due + telemetry silent</td>
+            <td>Is an overdue borrower hiding the vehicle?</td>
+            <td>Loans past the overdue trigger</td>
+            <td>No GPS for <b>24 h+</b> while <b>30+</b> days past due</td>
+            <td class="n">3%</td><td class="n">1%</td>
+          </tr>
+          <tr>
+            <td class="k">Vehicle far from its usual operating area</td>
+            <td>Has the asset been moved out of its home area?</td>
+            <td>Vehicles with an established 30-day home base</td>
+            <td>More than <b>100 km</b> from its own home cluster</td>
+            <td class="n">0.5%</td><td class="n">0.1%</td>
+          </tr>
+          <tr>
+            <td class="k">Accelerated battery degradation</td>
+            <td>Is the collateral losing value faster than it should?</td>
+            <td>Vehicles with an SOH reading at both ends of 30 days</td>
+            <td>SOH down more than <b>5 percentage points</b> in 30 days</td>
+            <td class="n">2%</td><td class="n">0.5%</td>
+          </tr>
+          <tr>
+            <td class="k">Active loan, low utilisation</td>
+            <td>Is the vehicle earning enough to service the EMI?</td>
+            <td>Active-EMI vehicles reporting on ≥7 of 14 days</td>
+            <td>Average under <b>20 km/day</b> over 14 days</td>
+            <td class="n">10%</td><td class="n">4%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Bold thresholds in the “trips when” column are read live from the governed
+      rule table — a Risk Head can change them (§12). The 5 pp and 20 km/day figures are documented
+      constants, because the rule catalogue has no entry for them.</p>
+
+    <div class="note">
+      <span class="tag">The point worth making out loud</span>
+      <p>Every card counts only the population it can honestly measure. A vehicle with no telemetry
+        is <em>excluded from the denominator</em> and reported as a coverage note — it is never
+        counted as a healthy 0 km. That distinction is why an ingestion outage no longer fires a
+        false High Alert across the whole fleet.</p>
+    </div>
+
+    <h3>Card by card, in full</h3>
+
+    <div class="cards">
+
+      <article class="cardblk">
+        <header><h3>7-day usage cliff</h3><span class="slug">usage-drop-7d</span></header>
+        <dl>
+          <dt>Hypothesis</dt>
+          <dd>Borrowers whose 7-day km is at least 40% below their prior 7-day baseline. Sharp
+            utilisation drops historically precede payment delinquency by 2–3 weeks.</dd>
+          <dt>Reads</dt>
+          <dd>Loan book (<code>nbfc_loans</code>) joined to 14 days of daily mileage from the IoT
+            <code>distance_rollup</code> table.</dd>
+          <dt>Method</dt>
+          <dd>Sum km for the last 7 days and the 7 days before that, per vehicle. Vehicles with a
+            prior week under 50 km are excluded as having no usable baseline.</dd>
+          <dt>Evidence</dt>
+          <dd>Top 10 vehicles by drop %, each with prior km, recent km and drop %; a bar chart; and
+            a note stating how many loans had a usable baseline.</dd>
+        </dl>
+      </article>
+
+      <article class="cardblk">
+        <header><h3>Past-due + telemetry silent</h3><span class="slug">dpd-7-no-telemetry</span></header>
+        <dl>
+          <dt>Hypothesis</dt>
+          <dd>Loans past due whose vehicles have stopped reporting GPS. The combination signals
+            concealment risk, not just a flat battery.</dd>
+          <dt>Reads</dt>
+          <dd><code>nbfc_loans.current_dpd</code> for the overdue pool, then the IoT
+            <code>vehicle_state</code> table for seconds since the last GPS fix.</dd>
+          <dt>Method</dt>
+          <dd>Two governed thresholds combine: days past due (default 30) and GPS silence
+            (default 24 h). A loan with no telemetry row at all also counts as silent.</dd>
+          <dt>Evidence</dt>
+          <dd>Up to 10 loans with their DPD, EMI, vehicle number and seconds since last GPS.</dd>
+        </dl>
+      </article>
+
+      <article class="cardblk">
+        <header><h3>Vehicle far from its usual operating area</h3><span class="slug">geo-shift</span></header>
+        <dl>
+          <dt>Hypothesis</dt>
+          <dd>Vehicles operating far outside their usual area. Possible asset diversion.</dd>
+          <dt>Reads</dt>
+          <dd>30 days of GPS fixes per vehicle from the IoT database.</dd>
+          <dt>Method</dt>
+          <dd>The vehicle's “home” is the most-visited ~11 km GPS cell over 30 days, and that cell
+            needs at least 50 fixes to count as a home at all. Distance from home is compared against
+            the governed 100 km rule. Vehicles without an establishable home are excluded and
+            reported as a coverage gap.</dd>
+          <dt>Evidence</dt>
+          <dd>Vehicle number, distance from home in km, current lat/lon and home lat/lon.</dd>
+        </dl>
+      </article>
+
+      <article class="cardblk">
+        <header><h3>Accelerated battery degradation</h3><span class="slug">battery-soh-decay</span></header>
+        <dl>
+          <dt>Hypothesis</dt>
+          <dd>Vehicles whose State-of-Health has dropped more than 5 percentage points in 30 days.
+            Affects both asset value and operator income.</dd>
+          <dt>Reads</dt>
+          <dd>Oldest and newest SOH reading in a 30-day window, from IoT CAN telemetry.</dd>
+          <dt>Method</dt>
+          <dd>Signed delta between the two ends. Only vehicles with a reading at <em>both</em> ends
+            are measurable; the rest are excluded, and if none qualify the card returns Inconclusive.</dd>
+          <dt>Evidence</dt>
+          <dd>The 10 worst decayers with their start SOH, end SOH and delta, plus a note that the
+            5 pp threshold is a documented constant, not a tunable rule.</dd>
+        </dl>
+      </article>
+
+      <article class="cardblk">
+        <header><h3>Active loan, low utilisation</h3><span class="slug">low-utilization-active-loan</span></header>
+        <dl>
+          <dt>Hypothesis</dt>
+          <dd>Loans with a current EMI obligation whose vehicles averaged under 20 km/day over
+            14 days. The operator may be churning or sub-letting.</dd>
+          <dt>Reads</dt>
+          <dd>Active-EMI loans, joined to 14 days of daily mileage.</dd>
+          <dt>Method</dt>
+          <dd>Average over the days the vehicle <em>actually reported</em> — never over a fixed 14.
+            A missing day is a pipeline gap, not a zero-km day. Vehicles reporting on fewer than
+            7 days are excluded as unmeasurable.</dd>
+          <dt>Evidence</dt>
+          <dd>Vehicle number, average km/day, days reported and EMI amount — plus explicit counts of
+            how many vehicles had no telemetry and how many had too thin a window.</dd>
+        </dl>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 5 ── -->
+  <section id="s5">
+    <div class="sec-head"><span class="num">05</span><h2>What is printed inside a card</h2></div>
+
+    <p>
+      Every card has two layers: a <strong>face</strong> you scan, and a <strong>drawer</strong> you
+      open when you want to argue with it. The face carries six things.
+    </p>
+
+    <div class="anatomy">
+      <div class="mock" role="img" aria-label="Mock of a risk card showing a High Alert chip, title, finding summary, affected count and share bar">
+        <div class="mock-row">
+          <span class="pin">1</span><span class="chip high">High Alert</span>
+          <span class="pin" style="margin-left:.35rem">2</span><span class="chip ai">AI</span>
+        </div>
+        <h5><span class="pin">3</span>Past-due + telemetry silent</h5>
+        <p class="summary"><span class="pin">4</span>2 of 3 borrowers are 30+ DPD and have not
+          reported GPS for 24h+.</p>
+        <div class="bignum">
+          <span class="pin">5</span><b>2</b><span>/ 3 affected</span>
+        </div>
+        <div class="bar"><i></i></div>
+        <div style="margin-top:.75rem;font-size:11.5px;color:var(--ink-3);font-family:var(--mono)">
+          <span class="pin">6</span>66.7% share
+        </div>
+      </div>
+
+      <ol class="keys">
+        <li><span class="pin">1</span><span><b>Severity chip.</b> One of five states — see §6.
+          <span class="src">risk_card_runs.severity</span></span></li>
+        <li><span class="pin">2</span><span><b>Provenance badges.</b> <span class="chip ai">AI</span>
+          if the agent wrote the hypothesis; <span class="chip err">Unverified</span> for legacy rows
+          predating verdict tracking.
+          <span class="src">risk_hypotheses.source · risk_card_runs.verdict_source</span></span></li>
+        <li><span class="pin">3</span><span><b>Card title.</b> The stable, human name of the
+          hypothesis.<span class="src">risk_hypotheses.title</span></span></li>
+        <li><span class="pin">4</span><span><b>Finding summary.</b> One sentence describing what
+          <em>this run</em> found, written by the evaluator with the live numbers in it.
+          <span class="src">risk_card_runs.finding_summary</span></span></li>
+        <li><span class="pin">5</span><span><b>Affected / assessed.</b> The count that tripped, over
+          the population that could be measured. If no verdict was computed, this is replaced by
+          “No verdict computed” — never a fake zero.
+          <span class="src">affected_count · total_count</span></span></li>
+        <li><span class="pin">6</span><span><b>Share bar.</b> Affected ÷ assessed. The same fraction
+          that chose the colour — deliberately, so the bar and the chip can never disagree.</span></li>
+      </ol>
+    </div>
+
+    <h4>Open the card and you also get</h4>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Section</th><th>What it contains</th><th>Comes from</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Hypothesis</td><td>The full statement being tested, in plain English</td><td class="t">risk_hypotheses.description</td></tr>
+          <tr><td class="k">Affected · Total · Share</td><td>The three numbers, spelled out</td><td class="t">risk_card_runs</td></tr>
+          <tr><td class="k">Sample evidence</td><td>Up to 10 real rows that triggered the finding — vehicle number, loan reference, the metric that tripped</td><td class="t">evidence_json.sample_rows</td></tr>
+          <tr><td class="k">Methodology notes</td><td>The thresholds used, how the population was scoped, and exactly how many records were excluded and why</td><td class="t">evidence_json.notes</td></tr>
+          <tr><td class="k">Caveats</td><td>Machine-written warnings, including “severity capped from High to Warning”</td><td class="t">risk_card_runs.llm_critique</td></tr>
+          <tr><td class="k">Provenance line</td><td>Last run time · who computed the verdict · who authored the hypothesis</td><td class="t">run_at · verdict_source · source</td></tr>
+          <tr><td class="k">Promote / Retire</td><td>On unvetted agent cards only: a human can promote it (letting it raise High Alert) or retire it (stop running it)</td><td class="t">promoted_at · retired_at</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="tag">Why the evidence table matters commercially</span>
+      <p>A lender cannot act on a number it cannot audit. Every card carries the rows that produced
+        it and the thresholds it was judged by, snapshotted at run time — so a card read six months
+        from now is still read against the rules that were in force when it was written, not
+        today's.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 6 ── -->
+  <section id="s6">
+    <div class="sec-head"><span class="num">06</span><h2>Severity, and how much to trust it</h2></div>
+
+    <p>Two separate axes. <strong>Severity</strong> answers “how widespread is this?”
+      <strong>Verdict source</strong> answers “who actually did the arithmetic?” A card is only
+      trustworthy when both are good.</p>
+
+    <h4>Five severities, four tabs</h4>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>State</th><th>Means</th><th>Tab</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip high">High Alert</span></td><td>Test ran; the affected share crossed the card's high cutoff</td><td>High Alert</td></tr>
+          <tr><td><span class="chip warn">Warning</span></td><td>Test ran; the share crossed the warn cutoff — or an unvetted AI card was capped down from High</td><td>Warning</td></tr>
+          <tr><td><span class="chip ok">OK</span></td><td>Test ran and found nothing. Only ever means this.</td><td>OK</td></tr>
+          <tr><td><span class="chip inc">Inconclusive</span></td><td>Test could not run — no measurable population, or the sandbox was unavailable</td><td>Inconclusive</td></tr>
+          <tr><td><span class="chip err">Error</span></td><td>Test crashed, or the IoT database was unreachable</td><td>Inconclusive</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Inconclusive and Error share a tab — to an operator both mean “no verdict” —
+      but they stay distinct in the database so we can tell a crash from a coverage gap.</p>
+
+    <h4>Four verdict sources</h4>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Source</th><th>Label on screen</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="t">hand_coded</td><td>Computed</td><td>One of our five reviewed TypeScript evaluators did the arithmetic</td></tr>
+          <tr><td class="t">sandbox</td><td>Computed (sandbox)</td><td>Agent-authored Python, executed deterministically on real data</td></tr>
+          <tr><td class="t">none</td><td>Not computed</td><td>No verdict was produced. The card shows no counts at all.</td></tr>
+          <tr><td class="t">legacy_llm</td><td>Unverified (legacy)</td><td>A pre-upgrade row where a language model may have stated the numbers itself. Flagged in violet, banner at the top of the page, and replaced on the next run.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="tag">The governing rule</span>
+      <p>A language model may <strong>propose</strong> a hypothesis and <strong>write</strong> the
+        code that tests it. It may never <strong>state</strong> the verdict. Severity and counts are
+        computed from data or they do not exist — and an unvetted agent hypothesis cannot raise a
+        High Alert until a human has reviewed it and pressed Promote.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 7 ── -->
+  <section id="s7">
+    <div class="sec-head"><span class="num">07</span><h2>Battery &amp; telemetry alerts</h2></div>
+
+    <p>
+      These are per-battery, not per-portfolio. Six of them are evaluated the instant a telemetry
+      packet arrives; two fire on the <em>absence</em> of a packet and are swept every 15 minutes.
+      At most one open alert exists per battery per rule, so a stuck fault does not spam the feed.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Rule</th><th style="text-align:left">Fires when</th><th>Severity</th><th>Notified to</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">BMS Fault</td><td>Battery management system reports a fault state</td><td><span class="chip high">Critical</span></td><td>NBFC · Dealer · After-sales</td></tr>
+          <tr><td class="k">High Temperature</td><td>Pack temperature above 55&nbsp;°C</td><td><span class="chip high">Critical</span></td><td>NBFC · Dealer · Safety</td></tr>
+          <tr><td class="k">Geo-Shift</td><td>More than 100 km from the battery's home cluster</td><td><span class="chip high">Critical</span></td><td>NBFC · Admin</td></tr>
+          <tr><td class="k">Battery Offline</td><td>No packet for 24–48 hours</td><td><span class="chip high">Critical</span></td><td>NBFC dashboard</td></tr>
+          <tr><td class="k">Battery Offline Extended</td><td>No packet for over 48 hours — supersedes the above and feeds the credit score</td><td><span class="chip high">Critical</span></td><td>NBFC dashboard</td></tr>
+          <tr><td class="k">Usage Drop</td><td>Today's km below 60% of the 7-day average</td><td><span class="chip warn">Warning</span></td><td>NBFC dashboard</td></tr>
+          <tr><td class="k">SOH Decline</td><td>State-of-Health down more than 5 pp versus 30 days ago</td><td><span class="chip warn">Warning</span></td><td>NBFC · Warranty check</td></tr>
+          <tr><td class="k">Low SOC</td><td>Charge under 10% with no charger connected</td><td><span class="chip inc">Info</span></td><td>Dealer dashboard</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>What a feed row shows</h4>
+    <p>
+      In the “Needs attention now” feed each alert renders as one line: a severity dot, the rule
+      name, a detail clause built from the alert's captured context, then a metadata strip of
+      <em>battery serial · borrower name · city · relative time</em>, and a <strong>View case</strong>
+      link through to the borrower's loan. Each alert also stores a payload snapshot of the exact
+      inputs that fired it — for example the SOC reading, the charger state and the threshold — so
+      the firing context is reproducible without going back to raw telemetry.
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 8 ── -->
+  <section id="s8">
+    <div class="sec-head"><span class="num">08</span><h2>Borrower scores: CDS and PCI</h2></div>
+
+    <p>
+      Two scores are computed per active loan every night. They are the repayment-behaviour half of
+      the risk picture — the half that owes nothing to telemetry.
+    </p>
+
+    <h3>CDS — Credit Default Score</h3>
+    <p>
+      Runs at midnight. Looks back over the last <strong>6 EMI instalments</strong> and asks how
+      badly, and how recently, the borrower has slipped. Each instalment gets a weight — 0 for paid,
+      0.5 for up to a week late, 0.7 for later than that, 0.85–1.0 for an active overdue depending on
+      days, 1.0 for a miss — multiplied by a recency factor that fades from 1.0 for the newest to a
+      floor of 0.4. Consecutive misses add a streak penalty. Stale telemetry adds a further risk
+      term. The result is normalised to <strong>0–100</strong>.
+    </p>
+    <p>
+      The score is banded for display — <strong>Low 0–39 · Medium 40–69 · High 70–84 · Very High
+      85+</strong> — using the three governed CDS boundaries.
+    </p>
+    <p>
+      Every run also records a <strong>confidence</strong>: <em>High</em> with six or more EMI records
+      and telemetry ingested within 12 hours, <em>Medium</em> with three to five records or stale
+      telemetry, <em>Low</em> below three records or when a restructuring flag is set. Each run
+      <em>inserts</em> a new score row rather than overwriting — an immutable history, per RBI's
+      Digital Lending Directions.
+    </p>
+
+    <h3>PCI — Payment Consistency Index</h3>
+    <p>
+      Runs fifteen minutes later. A cleaner, single-purpose measure of habit:
+      <strong>PCI = Σ(EMI score × weight) ÷ Σ(weights)</strong>, where each instalment scores 1.0 if
+      paid on time, 0.5 if paid within a week late, 0.0 if missed — and the newest instalment carries
+      the heaviest weight, stepping down linearly to the oldest. The result lands between 0 and 1 and
+      is banded <strong>below 0.40 high concern · 0.40–0.75 monitoring · above 0.75 healthy</strong>,
+      with the concern boundary read from the governed <code>pci_concern</code> rule.
+    </p>
+    <p>
+      Because the weights are explicit, the platform can show <em>why</em> a score is what it is:
+      every instalment's score, its weight and its exact contribution to the final number.
+    </p>
+
+    <h4>Which of these actually becomes an alert row</h4>
+    <p>
+      Only PCI does, today. When a loan's PCI falls below the concern threshold, the nightly job
+      writes a borrower risk alert of type <code>pci_low</code> — marked <em>critical</em> if the
+      score is below half the threshold, otherwise <em>high</em> — carrying the score, the threshold
+      and the EMI window that produced it. That row is what appears in the “Needs attention now”
+      feed. CDS is displayed as a score and a band on the borrower, and it feeds the risk cards'
+      context, but it does not itself raise a feed row.
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 9 ── -->
+  <section id="s9">
+    <div class="sec-head"><span class="num">09</span><h2>Portfolio anomaly flags</h2></div>
+
+    <p>
+      The only family aimed at us rather than at the lender. Each night the platform rolls up every
+      NBFC's whole book and tests three thresholds:
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Metric</th><th>Breaches when</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Delinquency rate</td><td>above 15%</td></tr>
+          <tr><td class="k">Recovery rate</td><td>below 70%</td></tr>
+          <tr><td class="k">Average DPD</td><td>above 30 days</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:1rem">
+      Two or three breaches raise a <strong>red</strong> flag, exactly one raises
+      <strong>amber</strong>, none clears any open flag. At most one open flag exists per NBFC at a
+      time; if the reasons drift, the existing flag is updated in place rather than duplicated, and
+      when metrics recover the flag is closed with a timestamp. The flag stores the list of
+      human-readable reasons that produced it.
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 10 ── -->
+  <section id="s10">
+    <div class="sec-head"><span class="num">10</span><h2>Where the data comes from</h2></div>
+
+    <p>
+      The single most important architectural fact: risk alerts <strong>join across two separate
+      Postgres servers</strong>, over the network, with no foreign key between them. The join key is
+      the <strong>vehicle registration number</strong>, and the join happens in application memory.
+    </p>
+
+    <h4>CRM database — the money side</h4>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Table</th><th>Holds</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr><td class="t">nbfc_loans</td><td>One row per loan: vehicle number, current DPD, EMI amount, outstanding</td><td>The population every risk card measures</td></tr>
+          <tr><td class="t">loan_sanctions</td><td>The sanctioned loan record per borrower</td><td>Ties alerts back to a case</td></tr>
+          <tr><td class="t">emi_schedules</td><td>Instalment-level payment history and days overdue</td><td>Both CDS and PCI</td></tr>
+          <tr><td class="t">borrower_risk_scores</td><td>Append-only CDS and PCI history per loan</td><td>Score display and explainability</td></tr>
+          <tr><td class="t">risk_hypotheses</td><td>The catalogue of questions — title, description, author, promoted/retired state</td><td>What cards can exist at all</td></tr>
+          <tr><td class="t">risk_card_runs</td><td>Append-only verdict log: severity, summary, counts, evidence, provenance, thresholds used</td><td>What the Risk page renders</td></tr>
+          <tr><td class="t">risk_runs</td><td>One row per analysis run: who triggered it, status, timings, cards computed / inconclusive / errored, token spend</td><td>The concurrency lock and the freshness line</td></tr>
+          <tr><td class="t">nbfc_risk_alerts</td><td>Score-derived alerts per borrower</td><td>The portfolio alert feed</td></tr>
+          <tr><td class="t">telemetry_alerts</td><td>Battery rule firings, with payload and resolution time</td><td>The portfolio alert feed and battery page</td></tr>
+          <tr><td class="t">nbfc_anomaly_flags</td><td>Open red/amber flags per NBFC with reasons</td><td>iTarang admin oversight</td></tr>
+          <tr><td class="t">nbfc_risk_rules</td><td>The eight governed thresholds and their current values</td><td>Feeds every evaluator</td></tr>
+          <tr><td class="t">nbfc_risk_rule_change_requests</td><td>Requested value, previous value, requester, approver, status</td><td>The two-person approval gate</td></tr>
+          <tr><td class="t">nbfc_risk_card_visibility</td><td>Which cards each NBFC is allowed to see</td><td>The admin allowlist</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>IoT database — the asset side (read-only)</h4>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Table</th><th>Holds</th><th>Feeds</th></tr></thead>
+        <tbody>
+          <tr><td class="t">vehicle_state</td><td>Latest known state per vehicle: last GPS time, position, speed, ignition, SOC, SOH, voltage, temperature</td><td>Telemetry-silent and geo-shift cards</td></tr>
+          <tr><td class="t">distance_rollup</td><td>Daily kilometres per vehicle</td><td>Usage-cliff and low-utilisation cards</td></tr>
+          <tr><td class="t">telemetry_can</td><td>Raw CAN payloads including State-of-Health</td><td>Battery degradation card</td></tr>
+          <tr><td class="t">telemetry_gps · telemetry_battery</td><td>Position and pack history</td><td>Home-cluster derivation, battery views</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="tag">A deliberate design choice</span>
+      <p>The portfolio alert feed reads <code>telemetry_alerts</code> from our own CRM database, not
+        from the IoT server. That means the command centre renders in full even when the IoT link is
+        down. The risk cards do reach across, and when they cannot, the page says so in an amber
+        banner and marks those cards <span class="chip err">Error</span> — never OK.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 11 ── -->
+  <section id="s11">
+    <div class="sec-head"><span class="num">11</span><h2>The end-to-end pipeline</h2></div>
+
+    <p>Four families, four independent paths, one shared discipline: raw signal → an engine that
+      applies a rule → a durable row → a surface a human reads → an action with an audit trail.</p>
+
+    <figure>
+      <div class="scroller">
+        <svg class="diagram" viewBox="0 0 1180 560" role="img"
+             aria-label="Diagram: four alert families flowing from data source, through a computation engine, into a storage table, and out to a screen.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- column headers -->
+          <text class="d-h" x="152" y="26">SOURCE SIGNAL</text>
+          <text class="d-h" x="412" y="26">ENGINE — APPLIES THE RULE</text>
+          <text class="d-h" x="672" y="26">DURABLE RECORD</text>
+          <text class="d-h" x="932" y="26">WHERE IT SURFACES</text>
+          <line x1="20" y1="38" x2="1160" y2="38" stroke="currentColor" stroke-width="1" opacity="0.25"/>
+
+          <!-- ROW 1 — risk cards -->
+          <text class="d-fam" x="20" y="72">RISK</text>
+          <text class="d-fam" x="20" y="86">CARDS</text>
+          <rect class="d-box" x="146" y="50" width="222" height="76" rx="4"/>
+          <text class="d-t" x="160" y="72">Loan book × telemetry</text>
+          <text class="d-s" x="160" y="90">nbfc_loans · distance_rollup</text>
+          <text class="d-s" x="160" y="105">vehicle_state · telemetry_can</text>
+          <text class="d-s" x="160" y="118">joined on vehicle number</text>
+
+          <rect class="d-box-a" x="406" y="50" width="222" height="76" rx="4"/>
+          <text class="d-t" x="420" y="72">Hypothesis engine</text>
+          <text class="d-s" x="420" y="90">5 reviewed evaluators</text>
+          <text class="d-s" x="420" y="105">+ agent Python in a sandbox</text>
+          <text class="d-s" x="420" y="118">nightly 01:30 · or on demand</text>
+
+          <rect class="d-box" x="666" y="50" width="222" height="76" rx="4"/>
+          <text class="d-t" x="680" y="72">risk_card_runs</text>
+          <text class="d-s" x="680" y="90">severity · summary · counts</text>
+          <text class="d-s" x="680" y="105">evidence · provenance</text>
+          <text class="d-s" x="680" y="118">thresholds snapshot</text>
+
+          <rect class="d-box" x="926" y="50" width="222" height="76" rx="4"/>
+          <text class="d-t" x="940" y="72">/nbfc/risk</text>
+          <text class="d-s" x="940" y="90">card grid, 4 severity tabs</text>
+          <text class="d-s" x="940" y="105">evidence drawer</text>
+          <text class="d-s" x="940" y="118">admin allowlist applied</text>
+
+          <g class="d-line" color="currentColor">
+            <line x1="368" y1="88" x2="400" y2="88" marker-end="url(#ah)"/>
+            <line x1="628" y1="88" x2="660" y2="88" marker-end="url(#ah)"/>
+            <line x1="888" y1="88" x2="920" y2="88" marker-end="url(#ah)"/>
+          </g>
+
+          <!-- ROW 2 — telemetry -->
+          <text class="d-fam" x="20" y="188">BATTERY</text>
+          <text class="d-fam" x="20" y="202">ALERTS</text>
+          <rect class="d-box" x="146" y="164" width="222" height="76" rx="4"/>
+          <text class="d-t" x="160" y="186">Battery packet</text>
+          <text class="d-s" x="160" y="204">BMS state · temperature</text>
+          <text class="d-s" x="160" y="219">SOC · SOH · GPS · daily km</text>
+          <text class="d-s" x="160" y="232">— or the absence of one</text>
+
+          <rect class="d-box-a" x="406" y="164" width="222" height="76" rx="4"/>
+          <text class="d-t" x="420" y="186">Telemetry rule evaluator</text>
+          <text class="d-s" x="420" y="204">6 rules on packet arrival</text>
+          <text class="d-s" x="420" y="219">2 offline rules every 15 min</text>
+          <text class="d-s" x="420" y="232">one open alert per rule</text>
+
+          <rect class="d-box" x="666" y="164" width="222" height="76" rx="4"/>
+          <text class="d-t" x="680" y="186">telemetry_alerts</text>
+          <text class="d-s" x="680" y="204">rule · severity · payload</text>
+          <text class="d-s" x="680" y="219">notified_to · resolved_at</text>
+          <text class="d-s" x="680" y="232">cds_flagged</text>
+
+          <rect class="d-box" x="926" y="164" width="222" height="76" rx="4"/>
+          <text class="d-t" x="940" y="186">Needs attention now</text>
+          <text class="d-s" x="940" y="204">/nbfc/portfolio feed</text>
+          <text class="d-s" x="940" y="219">/nbfc/batteries detail</text>
+          <text class="d-s" x="940" y="232">Critical · Warning · Info</text>
+
+          <g class="d-line" color="currentColor">
+            <line x1="368" y1="202" x2="400" y2="202" marker-end="url(#ah)"/>
+            <line x1="628" y1="202" x2="660" y2="202" marker-end="url(#ah)"/>
+            <line x1="888" y1="202" x2="920" y2="202" marker-end="url(#ah)"/>
+          </g>
+
+          <!-- ROW 3 — scores -->
+          <text class="d-fam" x="20" y="302">BORROWER</text>
+          <text class="d-fam" x="20" y="316">SCORES</text>
+          <rect class="d-box" x="146" y="278" width="222" height="76" rx="4"/>
+          <text class="d-t" x="160" y="300">Repayment history</text>
+          <text class="d-s" x="160" y="318">emi_schedules — status and</text>
+          <text class="d-s" x="160" y="333">days overdue, last 6 EMIs</text>
+          <text class="d-s" x="160" y="346">+ telemetry freshness</text>
+
+          <rect class="d-box-a" x="406" y="278" width="222" height="76" rx="4"/>
+          <text class="d-t" x="420" y="300">CDS &amp; PCI nightly jobs</text>
+          <text class="d-s" x="420" y="318">CDS 00:00 — weighted default</text>
+          <text class="d-s" x="420" y="333">PCI 00:15 — payment habit</text>
+          <text class="d-s" x="420" y="346">insert-only, with confidence</text>
+
+          <rect class="d-box" x="666" y="278" width="222" height="76" rx="4"/>
+          <text class="d-t" x="680" y="300">borrower_risk_scores</text>
+          <text class="d-s" x="680" y="318">cds_score 0–100 · confidence</text>
+          <text class="d-s" x="680" y="333">pci_score 0–1 · band</text>
+          <text class="d-s" x="680" y="346">→ nbfc_risk_alerts</text>
+
+          <rect class="d-box" x="926" y="278" width="222" height="76" rx="4"/>
+          <text class="d-t" x="940" y="300">Portfolio &amp; borrower</text>
+          <text class="d-s" x="940" y="318">alert feed rows</text>
+          <text class="d-s" x="940" y="333">score explainability</text>
+          <text class="d-s" x="940" y="346">EMI tracker</text>
+
+          <g class="d-line" color="currentColor">
+            <line x1="368" y1="316" x2="400" y2="316" marker-end="url(#ah)"/>
+            <line x1="628" y1="316" x2="660" y2="316" marker-end="url(#ah)"/>
+            <line x1="888" y1="316" x2="920" y2="316" marker-end="url(#ah)"/>
+          </g>
+
+          <!-- ROW 4 — anomaly -->
+          <text class="d-fam" x="20" y="416">PORTFOLIO</text>
+          <text class="d-fam" x="20" y="430">FLAGS</text>
+          <rect class="d-box" x="146" y="392" width="222" height="76" rx="4"/>
+          <text class="d-t" x="160" y="414">Whole-book rollup</text>
+          <text class="d-s" x="160" y="432">delinquency % · avg DPD</text>
+          <text class="d-s" x="160" y="447">recovery rate %</text>
+          <text class="d-s" x="160" y="460">per NBFC tenant</text>
+
+          <rect class="d-box-a" x="406" y="392" width="222" height="76" rx="4"/>
+          <text class="d-t" x="420" y="414">Anomaly evaluator</text>
+          <text class="d-s" x="420" y="432">3 thresholds, nightly 00:10</text>
+          <text class="d-s" x="420" y="447">2–3 breaches → red</text>
+          <text class="d-s" x="420" y="460">1 breach → amber</text>
+
+          <rect class="d-box" x="666" y="392" width="222" height="76" rx="4"/>
+          <text class="d-t" x="680" y="414">nbfc_anomaly_flags</text>
+          <text class="d-s" x="680" y="432">severity · reasons[]</text>
+          <text class="d-s" x="680" y="447">one open flag per NBFC</text>
+          <text class="d-s" x="680" y="460">cleared_at on recovery</text>
+
+          <rect class="d-box" x="926" y="392" width="222" height="76" rx="4"/>
+          <text class="d-t" x="940" y="414">iTarang admin</text>
+          <text class="d-s" x="940" y="432">NBFC health oversight</text>
+          <text class="d-s" x="940" y="447">ops notification</text>
+          <text class="d-s" x="940" y="460">not shown to the partner</text>
+
+          <g class="d-line" color="currentColor">
+            <line x1="368" y1="430" x2="400" y2="430" marker-end="url(#ah)"/>
+            <line x1="628" y1="430" x2="660" y2="430" marker-end="url(#ah)"/>
+            <line x1="888" y1="430" x2="920" y2="430" marker-end="url(#ah)"/>
+          </g>
+
+          <!-- governance band -->
+          <line x1="20" y1="490" x2="1160" y2="490" stroke="currentColor" stroke-width="1" opacity="0.25"/>
+          <rect class="d-box" x="146" y="502" width="482" height="44" rx="4"/>
+          <text class="d-t" x="160" y="522">nbfc_risk_rules — 8 governed thresholds</text>
+          <text class="d-s" x="160" y="538">changed only through a two-person approval gate · snapshotted into every card run</text>
+
+          <rect class="d-box" x="666" y="502" width="482" height="44" rx="4"/>
+          <text class="d-t" x="680" y="522">Action framework — reminder · field visit · immobilisation · restructure · recovery</text>
+          <text class="d-s" x="680" y="538">tiered approvals, every action audit-logged</text>
+
+          <g class="d-line" color="currentColor">
+            <path d="M 387 490 L 387 502" marker-end="url(#ah)"/>
+            <path d="M 387 468 L 387 490" opacity="0.35"/>
+            <path d="M 907 490 L 907 502" marker-end="url(#ah)"/>
+          </g>
+        </svg>
+      </div>
+      <figcaption>Figure 1 — The four alert families, each carried from raw signal to a screen. The
+        governed threshold table at the foot feeds every engine above it; the action framework
+        catches everything that surfaces.</figcaption>
+    </figure>
+
+    <h4>The schedule, in one list</h4>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Schedule</th><th>Job</th><th>Produces</th></tr></thead>
+        <tbody>
+          <tr><td class="t">every 15 min</td><td>Offline-battery scan</td><td>Battery Offline / Battery Offline Extended alerts</td></tr>
+          <tr><td class="t">on each packet</td><td>Per-packet rule evaluator</td><td>The six live battery rules</td></tr>
+          <tr><td class="t">00:00</td><td>CDS computation</td><td>A new credit-default score per active loan</td></tr>
+          <tr><td class="t">00:10</td><td>Anomaly flag evaluation</td><td>Red/amber flags per NBFC</td></tr>
+          <tr><td class="t">00:15</td><td>PCI computation</td><td>Payment-consistency score and band</td></tr>
+          <tr><td class="t">01:30</td><td>Risk-hypothesis analysis</td><td>A fresh card run for every active NBFC</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Schedules are the configured cron expressions; the risk analysis is fired by a
+      crontab entry on our own VPS rather than by the hosting platform. Tenants are swept one at a
+      time — each run calls the model and the sandbox, and a simultaneous fan-out would stampede
+      both.</p>
+
+    <h4>Three run-control guarantees</h4>
+    <ul class="tight">
+      <li><strong>One run per lender at a time.</strong> The lock is a database constraint, not
+        application logic — a second caller is rejected outright with a “run already in flight”
+        response rather than being allowed to double-charge the model. A run that dies is reaped
+        after 15 minutes.</li>
+      <li><strong>Staleness is visible.</strong> A result older than <strong>36 hours</strong> earns a
+        <em>Stale</em> badge on the page header. A lender who has never had a run sees an explicit
+        “Never run — these cards are computed live on page load” notice, not a silent blank.</li>
+      <li><strong>Broken tests retire themselves.</strong> A hypothesis that errors on three
+        consecutive runs is soft-retired with a reason. Its history is kept; it stops being run and
+        stops being shown.</li>
+    </ul>
+
+    <h4>What the sandbox is allowed to do</h4>
+    <p>
+      Agent-written Python never touches our systems. It runs in a separate token-authenticated
+      service with no network and no database access, restricted to a vetted list of language
+      constructs and to pandas and numpy only, with a 30-second execution ceiling. It receives three
+      prepared tables — loans, vehicle states, daily kilometres — and returns a verdict object. If the
+      sandbox is unavailable, every agent card that run is <span class="chip inc">Inconclusive</span>.
+      There is no fallback that lets a model answer in its place.
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 12 ── -->
+  <section id="s12">
+    <div class="sec-head"><span class="num">12</span><h2>Who controls the thresholds</h2></div>
+
+    <p>
+      Eight numbers decide when most alerts fire. They live in a governed table, are edited through
+      an admin screen, and every change passes a two-person approval gate. Crucially, the evaluators
+      <strong>read them at run time and snapshot them into the card's evidence</strong> — so changing
+      a rule changes tomorrow's cards without rewriting yesterday's.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Rule</th><th>Label in the admin screen</th><th>Unit</th><th style="text-align:right">Default</th><th>Used by</th></tr></thead>
+        <tbody>
+          <tr><td class="t">usage_drop_pct</td><td>Usage Drop Threshold</td><td>%</td><td class="n">40</td><td>7-day usage cliff</td></tr>
+          <tr><td class="t">emi_overdue_days</td><td>EMI Overdue Trigger</td><td>days</td><td class="n">30</td><td>Past-due + telemetry silent</td></tr>
+          <tr><td class="t">offline_alert_hours</td><td>Offline Alert Threshold</td><td>hours</td><td class="n">24</td><td>Past-due + telemetry silent</td></tr>
+          <tr><td class="t">geo_shift_km</td><td>Geo-Shift Threshold</td><td>km</td><td class="n">100</td><td>Far from usual operating area</td></tr>
+          <tr><td class="t">cds_low_medium</td><td>CDS: Low/Medium boundary</td><td>score</td><td class="n">40</td><td>CDS banding</td></tr>
+          <tr><td class="t">cds_medium_high</td><td>CDS: Medium/High boundary</td><td>score</td><td class="n">70</td><td>CDS banding</td></tr>
+          <tr><td class="t">cds_high_very_high</td><td>CDS: High/Very High boundary</td><td>score</td><td class="n">85</td><td>CDS banding</td></tr>
+          <tr><td class="t">pci_concern</td><td>PCI: Concern threshold</td><td>score</td><td class="n">0.40</td><td>PCI banding</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Three further controls</h4>
+    <ul class="tight">
+      <li><strong>Card visibility allowlist.</strong> Per NBFC, an iTarang admin ticks which cards
+        that partner sees. It is a strict allowlist — a card with no entry is hidden, and the filter
+        runs at display time so no re-run can slip past it.</li>
+      <li><strong>Promote.</strong> An agent-authored hypothesis is capped at Warning until a human
+        reviews the question and the code and promotes it. Only then can it declare a High Alert.</li>
+      <li><strong>Retire.</strong> A hypothesis that turns out to be badly posed is retired: its
+        history is kept, but it is no longer run and no longer rendered.</li>
+    </ul>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 13 ── -->
+  <section id="s13">
+    <div class="sec-head"><span class="num">13</span><h2>From alert to action</h2></div>
+
+    <p>
+      An alert that cannot be acted on is decoration. The Risk page publishes the action framework
+      alongside the cards, so the approval cost of every response is visible before anyone reaches
+      for it.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Action</th><th>Approval required</th><th>Reversible</th><th>Audit log</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Send Payment Reminder</td><td>Single — NBFC User</td><td>n/a</td><td>Yes — automatic</td></tr>
+          <tr><td class="k">Request Field Visit</td><td>Single — NBFC Manager</td><td>Yes</td><td>Yes — reason required</td></tr>
+          <tr><td class="k">Request Immobilisation</td><td><b>Dual</b> — Risk Head + Ops</td><td>Yes — re-mobilised on EMI settlement</td><td>Yes — borrower notice preview required</td></tr>
+          <tr><td class="k">Review for Loan Restructuring</td><td><b>Dual</b> — Risk Head + Credit Manager</td><td>Depends on terms</td><td>Yes — before/after terms logged</td></tr>
+          <tr><td class="k">Flag for Recovery</td><td>Single — Risk Head</td><td>No — permanent</td><td>Yes</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:1rem">
+      The tiering is the argument: the higher the impact on the borrower, the more people must sign,
+      and the more the system insists on a written reason. Immobilisation — remotely disabling a
+      financed battery — sits at the top and cannot be executed by one person.
+    </p>
+
+    <h4>Immobilisation — borrower notice preview</h4>
+    <p>
+      Directly beneath the action table the page publishes the five things any immobilisation notice
+      must carry, per the RBI Digital Lending Directions 2025:
+    </p>
+    <ol class="tight">
+      <li>Lender identity</li>
+      <li>Loan Service Provider identity</li>
+      <li>Outstanding amount and the steps to restore service</li>
+      <li>Grievance channel</li>
+      <li>Plain, non-coercive language</li>
+    </ol>
+    <p>
+      The lender's own legal name, grievance URL and helpline are filled in from their profile, so
+      the preview is the actual notice, not a template.
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 14 ── -->
+  <section id="s14">
+    <div class="sec-head"><span class="num">14</span><h2>Glossary</h2></div>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="k">DPD</td><td>Days Past Due — how many days late the borrower's EMI is.</td></tr>
+          <tr><td class="k">EMI</td><td>Equated Monthly Instalment — the fixed monthly loan payment.</td></tr>
+          <tr><td class="k">CDS</td><td>Credit Default Score, 0–100. Weighted recent repayment behaviour plus a consecutive-miss penalty and a stale-telemetry term.</td></tr>
+          <tr><td class="k">PCI</td><td>Payment Consistency Index, 0–1. Recency-weighted share of instalments paid on time.</td></tr>
+          <tr><td class="k">SOC</td><td>State of Charge — how full the battery is right now, as a percentage.</td></tr>
+          <tr><td class="k">SOH</td><td>State of Health — how much capacity the battery has permanently lost. 100% is new; below roughly 60% is end of life.</td></tr>
+          <tr><td class="k">BMS</td><td>Battery Management System — the on-pack controller that reports faults.</td></tr>
+          <tr><td class="k">Telemetry silent</td><td>The vehicle has not sent a GPS fix within the governed window. Either the device failed, or someone disconnected it.</td></tr>
+          <tr><td class="k">Hypothesis</td><td>A testable statement about the portfolio. One hypothesis, tested for one lender at one moment, is one card.</td></tr>
+          <tr><td class="k">Evidence</td><td>The actual rows that triggered a finding, plus the methodology notes and the thresholds used — stored with the verdict.</td></tr>
+          <tr><td class="k">Immobilisation</td><td>Remotely disabling a financed battery so the vehicle cannot be driven. Dual approval, borrower notice, fully audited.</td></tr>
+          <tr><td class="k">Tenant</td><td>One NBFC on the platform. Every number on every screen is scoped to a single tenant.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ 15 ── -->
+  <section id="s15">
+    <div class="sec-head"><span class="num">15</span><h2>Known gaps — read before you demo</h2></div>
+
+    <p class="lede">Internal only. None of these break the story; all of them are things a sharp
+      question could expose, so it is better to own them.</p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Gap</th><th>What it means in a demo</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="k">One name, two systems</td>
+            <td>The sidebar item reads <b>“Risk Alerts”</b> and opens the hypothesis-card page — but
+              the “open alerts” counter on that same nav tile is fed by the borrower alert table, a
+              different system. The number and the page do not describe the same thing.</td>
+          </tr>
+          <tr>
+            <td class="k">Two battery-alert stores</td>
+            <td>Battery alerts exist both in our CRM database (raised by our own rule evaluators) and
+              in a separate table on the IoT server. The portfolio feed reads the first; parts of the
+              battery page read the second. They can show different counts.</td>
+          </tr>
+          <tr>
+            <td class="k">CDS raises no alert row</td>
+            <td>An alert type for a high credit-default score is defined but never written at
+              runtime. Only the PCI concern alert is produced. A very high CDS shows on the borrower
+              but does not reach the feed.</td>
+          </tr>
+          <tr>
+            <td class="k">Battery page score bands are hard-coded</td>
+            <td>The battery monitoring view looks up its CDS band boundaries under key names that do
+              not exist in the rule catalogue, so it always falls back to 40 / 70 and never applies
+              the governed “Very High” cut at 85. Changing the rule does not move those bands.</td>
+          </tr>
+          <tr>
+            <td class="k">The offline flag is written, not read</td>
+            <td>An extended battery outage sets a flag intended to feed the credit score. The scoring
+              job does not currently read it back.</td>
+          </tr>
+          <tr>
+            <td class="k">Migration drift across environments</td>
+            <td><b>The important one.</b> Several of the upgrades this document describes — verdict
+              provenance, the nightly cron, the per-partner card allowlist — are recorded as applied
+              on some environments and not others. Confirm which database the demo points at before
+              claiming any of them. If the five governed hypotheses were never seeded on that
+              database, the page renders with no computed cards at all.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="tag">Before any live demo</span>
+      <p>Check three things: the IoT link is up (otherwise every telemetry card shows
+        <span class="chip err">Error</span>), the tenant has a card allowlist configured (otherwise
+        the page is empty by design), and a run has happened in the last 36 hours (otherwise the
+        header shows <em>Stale</em>).</p>
+    </div>
+
+    <hr class="rule">
+
+    <p class="footer">
+      iTarang · NBFC Risk &amp; Alerts · internal briefing document<br>
+      Compiled 24 July 2026 from the live implementation — evaluators, cron jobs, database schema and UI components.<br>
+      Threshold values shown are the documented defaults; the live values are whatever the governed rule table currently holds.
+    </p>
+  </section>
+
+</div>
