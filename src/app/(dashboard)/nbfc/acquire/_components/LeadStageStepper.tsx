@@ -15,12 +15,22 @@
  * open/collapse UI state.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, ChevronDown, Lock, X } from "lucide-react";
+import { Check, ChevronDown, Lock, Minus, X } from "lucide-react";
 
 /** Event a step's content can dispatch to make the stepper open another step. */
 export const OPEN_STEP_EVENT = "nbfc:acquire-open-step";
 
-export type NodeState = "done" | "active" | "locked" | "failed";
+/**
+ * `skipped` — the NBFC opted this step's service(s) OUT in Settings → Service
+ * Opt-In, so it never runs through iTarang for this lead (Addendum V0.3.1
+ * §13.2.3: "shown … dimmed but visible"). The node stays on the rail so the
+ * journey reads end-to-end, but it carries no action surface: the panel renders
+ * an opted-out notice instead of the track panels, and the matching APIs reject
+ * (they already gate on the same snapshot flags). Re-enabling the service in
+ * Settings restores the step — for NEW leads only, since each lead runs on the
+ * config snapshot frozen when it bound to the NBFC.
+ */
+export type NodeState = "done" | "active" | "locked" | "failed" | "skipped";
 
 export interface StepperStage {
   key: string;
@@ -45,6 +55,7 @@ const NODE_TONE: Record<NodeState, string> = {
     "bg-[color:var(--color-brand-navy)] text-white border-[color:var(--color-brand-navy)] ring-4 ring-[color:var(--color-brand-navy)]/15",
   failed: "bg-rose-500 text-white border-rose-500",
   locked: "bg-white text-slate-300 border-slate-200",
+  skipped: "bg-slate-50 text-slate-400 border-dashed border-slate-300",
 };
 
 const LABEL_TONE: Record<NodeState, string> = {
@@ -52,6 +63,7 @@ const LABEL_TONE: Record<NodeState, string> = {
   active: "text-[color:var(--color-brand-navy)] font-semibold",
   failed: "text-rose-600 font-semibold",
   locked: "text-slate-400",
+  skipped: "text-slate-400",
 };
 
 const BANNER_TONE: Record<BannerTone, string> = {
@@ -75,12 +87,17 @@ const STATE_BADGE: Record<NodeState, { label: string; cls: string }> = {
     cls: "bg-rose-50 text-rose-700 border-rose-200",
   },
   locked: { label: "Locked", cls: "bg-slate-50 text-slate-500 border-slate-200" },
+  skipped: {
+    label: "Skipped",
+    cls: "bg-slate-50 text-slate-500 border-dashed border-slate-300",
+  },
 };
 
 function NodeIcon({ state, index }: { state: NodeState; index: number }) {
   if (state === "done") return <Check className="h-4 w-4" />;
   if (state === "failed") return <X className="h-4 w-4" />;
   if (state === "locked") return <Lock className="h-3.5 w-3.5" />;
+  if (state === "skipped") return <Minus className="h-3.5 w-3.5" />;
   return <span className="text-xs font-bold">{index + 1}</span>;
 }
 
@@ -111,9 +128,12 @@ export default function LeadStageStepper({
   }, [ackKey]);
 
   // A stage's displayed state — an acknowledged step shows as done unless the
-  // server marks it failed (a real failure must never be hidden).
+  // server marks it failed (a real failure must never be hidden) or skipped (an
+  // opted-out step was never run, so it must not read as completed).
   const dispState = (s: StepperStage): NodeState =>
-    ackDone.has(s.key) && s.state !== "failed" ? "done" : s.state;
+    ackDone.has(s.key) && s.state !== "failed" && s.state !== "skipped"
+      ? "done"
+      : s.state;
 
   // Default the accordion to the first step needing attention (active/failed),
   // else the most recently completed step, else the first node.
@@ -173,9 +193,17 @@ export default function LeadStageStepper({
         {stages.map((s, i) => {
           const state = dispState(s);
           const prev = stages[i - 1];
-          const connectorDone = prev ? dispState(prev) === "done" : false;
+          // A skipped step still passes the chain through — just not in the
+          // "completed" green, since nothing actually ran.
+          const prevState = prev ? dispState(prev) : null;
+          const connectorCls =
+            prevState === "done"
+              ? "bg-emerald-400"
+              : prevState === "skipped"
+                ? "bg-slate-300"
+                : "bg-slate-200";
           const isOpen = s.key === openKey;
-          const sub = ackDone.has(s.key) && s.state !== "failed" ? "complete" : s.sub;
+          const sub = state === "done" && ackDone.has(s.key) ? "complete" : s.sub;
           return (
             <li
               key={s.key}
@@ -184,9 +212,7 @@ export default function LeadStageStepper({
               {/* Connector to the previous node. */}
               {i > 0 && (
                 <span
-                  className={`absolute top-4 right-1/2 left-[-50%] h-0.5 ${
-                    connectorDone ? "bg-emerald-400" : "bg-slate-200"
-                  }`}
+                  className={`absolute top-4 right-1/2 left-[-50%] h-0.5 ${connectorCls}`}
                   aria-hidden
                 />
               )}
@@ -240,6 +266,9 @@ export default function LeadStageStepper({
               {dispState(openStage) === "done" && (
                 <Lock className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
               )}
+              {openStage.state === "skipped" && (
+                <Lock className="h-3.5 w-3.5 text-slate-400" aria-hidden />
+              )}
               <h3 className="text-sm font-semibold text-slate-800">
                 {openStage.label}
               </h3>
@@ -253,7 +282,14 @@ export default function LeadStageStepper({
             </span>
           </div>
 
-          {openStage.state === "done" ? (
+          {openStage.state === "skipped" ? (
+            <p className="text-[11px] text-slate-500 mb-3">
+              This step is locked — the service is switched off in Settings →
+              Service Opt-In, so it does not run through iTarang for this lead
+              and no action can be taken here. Switching it back on re-opens the
+              step for <strong>new leads</strong>.
+            </p>
+          ) : openStage.state === "done" ? (
             <p className="text-[11px] text-slate-500 mb-3">
               This step is complete and locked — the values below are read-only.
             </p>

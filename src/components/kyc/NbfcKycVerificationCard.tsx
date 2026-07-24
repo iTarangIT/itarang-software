@@ -49,6 +49,11 @@ interface Wrapper {
   target_doc_key: string | null;
   nbfc_comments: string | null;
   admin_notes: string | null;
+  // E-210 — documents the admin uploaded and sent to the NBFC with this
+  // message, and the verdict the message answers (if any).
+  attachments: VerdictAttachment[] | null;
+  verdict_id: number | null;
+  created_at: string;
 }
 interface Entry {
   request: Wrapper;
@@ -112,6 +117,12 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
   const [verdictMsg, setVerdictMsg] = useState<Record<number, string>>({});
   // Per-child rejection-reason drafts for the re-uploaded doc under a verdict.
   const [childReject, setChildReject] = useState<Record<string, string>>({});
+  // E-210 — the admin's own upload composer per verdict: files + note, sent
+  // straight to the NBFC without a dealer round-trip.
+  const [replyFiles, setReplyFiles] = useState<Record<number, File[]>>({});
+  const [replyMsg, setReplyMsg] = useState<Record<number, string>>({});
+  // Bumped after a successful send so the <input type="file"> remounts empty.
+  const [replyReset, setReplyReset] = useState<Record<number, number>>({});
 
   const load = useCallback(async () => {
     try {
@@ -223,15 +234,31 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
     }
   };
 
-  const postMessage = async (assignmentId: string, message: string) => {
+  // Direct admin → NBFC post. Multipart when the admin attached documents
+  // (E-210), plain JSON otherwise — the route accepts both.
+  const postMessage = async (
+    assignmentId: string,
+    message: string,
+    files: File[] = [],
+  ) => {
     if (!message.trim()) return;
     setBusy(assignmentId);
     try {
-      const res = await fetch(`/api/admin/nbfc-requests`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignmentId, message }),
-      });
+      let init: RequestInit;
+      if (files.length > 0) {
+        const fd = new FormData();
+        fd.append("assignmentId", assignmentId);
+        fd.append("message", message);
+        for (const f of files) fd.append("files", f);
+        init = { method: "POST", body: fd };
+      } else {
+        init = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ assignmentId, message }),
+        };
+      }
+      const res = await fetch(`/api/admin/nbfc-requests`, init);
       const json = await res.json();
       if (!json.success) setBanner(json.error?.message ?? "Message failed");
       await load();
@@ -269,6 +296,52 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
           delete next[verdictId];
           return next;
         });
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // E-210 — the admin uploads the customer document himself and sends it, with
+  // a note, straight to the NBFC (no dealer round-trip). Multipart POST.
+  const sendVerdictDocs = async (verdictId: number) => {
+    const files = replyFiles[verdictId] ?? [];
+    const message = (replyMsg[verdictId] ?? "").trim();
+    if (files.length === 0) {
+      setBanner("Choose at least one document to send to the NBFC.");
+      return;
+    }
+    if (!message) {
+      setBanner("Type a message for the NBFC before sending.");
+      return;
+    }
+    const key = `reply-${verdictId}`;
+    setBusy(key);
+    setBanner(null);
+    try {
+      const fd = new FormData();
+      fd.append("message", message);
+      for (const f of files) fd.append("files", f);
+      const res = await fetch(
+        `/api/admin/nbfc-requests/verdicts/${verdictId}/respond`,
+        { method: "POST", body: fd },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setBanner(json.error?.message ?? "Could not send the document");
+      } else {
+        setReplyFiles((prev) => {
+          const next = { ...prev };
+          delete next[verdictId];
+          return next;
+        });
+        setReplyMsg((prev) => {
+          const next = { ...prev };
+          delete next[verdictId];
+          return next;
+        });
+        setReplyReset((prev) => ({ ...prev, [verdictId]: (prev[verdictId] ?? 0) + 1 }));
       }
       await load();
     } finally {
@@ -340,8 +413,26 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
       .map((v) => v.forwarded_request_id)
       .filter((x): x is string => !!x),
   );
+  // E-210 — admin replies (documents the admin sent to the NBFC himself) are
+  // grouped under the verdict they answer, not in the standalone list.
+  const repliesByVerdict = new Map<number, Entry[]>();
+  for (const e of thread) {
+    const vid = e.request.verdict_id;
+    if (vid == null) continue;
+    const arr = repliesByVerdict.get(vid) ?? [];
+    arr.push(e);
+    repliesByVerdict.set(vid, arr);
+  }
+
+  // A reply is hidden here only while its verdict is on screen to host it. If
+  // the NBFC has since approved the document the verdict drops out of the feed
+  // (approvals never reach the admin), so the reply falls back to the list
+  // below rather than disappearing with it.
+  const shownVerdictIds = new Set(verdicts.map((v) => v.id));
   const standaloneThread = thread.filter(
-    (e) => !verdictWrapperIds.has(e.request.id),
+    (e) =>
+      !verdictWrapperIds.has(e.request.id) &&
+      !(e.request.verdict_id != null && shownVerdictIds.has(e.request.verdict_id)),
   );
 
   // Group verdicts by NBFC for the summary strip.
@@ -368,7 +459,8 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
             NBFC Actions
           </h3>
           <p className="text-[11px] text-slate-500">
-            Everything the NBFC partner has raised or recorded for this lead.
+            What the NBFC partner needs from iTarang on this lead — rejections
+            and correction requests. Approvals stay with the NBFC.
           </p>
         </div>
       </div>
@@ -381,15 +473,16 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
 
       {isEmpty ? (
         <p className="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-400">
-          No NBFC activity yet. Verdicts, document requests, co-borrower requests
-          and consent uploads from the NBFC will appear here.
+          Nothing needs your attention. Rejections, correction requests,
+          co-borrower requests and consent uploads from the NBFC will appear
+          here — approved documents don&apos;t.
         </p>
       ) : null}
 
       {verdicts.length > 0 ? (
         <div className="mb-4">
           <p className="mb-1.5 text-xs font-semibold text-slate-500">
-            NBFC document verdicts
+            Documents the NBFC rejected or wants corrected
           </p>
           <ul className="space-y-1.5">
             {verdicts.map((v) => {
@@ -501,6 +594,24 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                           </div>
                         </div>
                       )}
+
+                      {/* E-210 — or skip the dealer entirely: upload the
+                          customer document yourself and send it to the NBFC. */}
+                      <AdminReplyComposer
+                        docFor={v.doc_for}
+                        replies={repliesByVerdict.get(v.id) ?? []}
+                        files={replyFiles[v.id] ?? []}
+                        message={replyMsg[v.id] ?? ""}
+                        resetKey={replyReset[v.id] ?? 0}
+                        busy={busy === `reply-${v.id}`}
+                        onFiles={(files) =>
+                          setReplyFiles((prev) => ({ ...prev, [v.id]: files }))
+                        }
+                        onMessage={(m) =>
+                          setReplyMsg((prev) => ({ ...prev, [v.id]: m }))
+                        }
+                        onSend={() => sendVerdictDocs(v.id)}
+                      />
                     </div>
                   ) : null}
                 </li>
@@ -539,6 +650,11 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                       View uploaded consent document ↗
                     </a>
                   ) : null}
+                  {/* E-210 — documents the admin attached to this message. */}
+                  <AttachmentChips
+                    attachments={request.attachments ?? []}
+                    tone="emerald"
+                  />
                 </div>
                 <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                   {STATUS_LABEL[request.status] ?? request.status}
@@ -652,12 +768,218 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
               <DirectMessage
                 assignmentId={request.assignment_id}
                 busy={busy === request.assignment_id}
-                onSend={(m) => postMessage(request.assignment_id, m)}
+                onSend={(m, files) =>
+                  postMessage(request.assignment_id, m, files)
+                }
               />
             </li>
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** The × that collapses an open composer back to its "+ …" link. */
+function CloseButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="-mr-0.5 -mt-0.5 shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+    >
+      <svg
+        className="h-3.5 w-3.5"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M18 6 6 18M6 6l12 12" />
+      </svg>
+    </button>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** File chips — used for both NBFC verdict attachments and admin uploads. */
+function AttachmentChips({
+  attachments,
+  tone = "sky",
+}: {
+  attachments: VerdictAttachment[];
+  tone?: "sky" | "emerald";
+}) {
+  if (attachments.length === 0) return null;
+  const cls =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+      : "border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100";
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1.5">
+      {attachments.map((a, i) => (
+        <a
+          key={i}
+          href={a.url}
+          target="_blank"
+          rel="noreferrer"
+          className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+        >
+          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+          </svg>
+          {a.name}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * E-210 — the admin's own document uploader for an NBFC verdict.
+ *
+ * When the admin already holds the corrected customer document there is no
+ * reason to route the correction through the dealer: pick the file(s), write a
+ * note, and it lands in the NBFC's request thread immediately. Sits alongside
+ * "Forward to dealer" — either, both, or several sends over time are fine.
+ */
+function AdminReplyComposer({
+  docFor,
+  replies,
+  files,
+  message,
+  resetKey,
+  busy,
+  onFiles,
+  onMessage,
+  onSend,
+}: {
+  docFor: string;
+  replies: Entry[];
+  files: File[];
+  message: string;
+  resetKey: number;
+  busy: boolean;
+  onFiles: (files: File[]) => void;
+  onMessage: (message: string) => void;
+  onSend: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const applicant = docFor === "co_borrower" ? "co-borrower's" : "customer's";
+
+  return (
+    <div className="mt-2 border-t border-slate-100 pt-2">
+      {replies.length > 0 ? (
+        <ul className="mb-2 space-y-1.5">
+          {replies.map(({ request }) => (
+            <li
+              key={request.id}
+              className="rounded-md border border-emerald-200 bg-emerald-50/60 px-2.5 py-1.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                  ✓ Sent to NBFC
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  {request.created_at
+                    ? new Date(request.created_at).toLocaleString("en-IN")
+                    : ""}
+                </span>
+              </div>
+              {request.nbfc_comments ? (
+                <p className="mt-0.5 whitespace-pre-line text-[11px] text-slate-600">
+                  {request.nbfc_comments}
+                </p>
+              ) : null}
+              <AttachmentChips
+                attachments={request.attachments ?? []}
+                tone="emerald"
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-[11px] font-semibold text-slate-500 hover:text-slate-700"
+        >
+          + Upload the {applicant} document and send it to the NBFC yourself
+        </button>
+      ) : (
+        <div className="space-y-1.5 rounded-md border border-slate-300 bg-slate-50 p-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-[11px] font-semibold text-slate-600">
+              Send the document straight to the NBFC — no dealer round-trip.
+            </p>
+            {/* Minimise back to the "+ Upload…" link. The chosen files and the
+                typed note are kept, so reopening resumes where you left off. */}
+            <CloseButton
+              label="Minimise the uploader"
+              onClick={() => setOpen(false)}
+            />
+          </div>
+          <input
+            key={resetKey}
+            type="file"
+            multiple
+            onChange={(e) => onFiles(Array.from(e.target.files ?? []))}
+            className="block w-full text-[11px] text-slate-600 file:mr-2 file:rounded-md file:border-0 file:bg-slate-200 file:px-2.5 file:py-1 file:text-[11px] file:font-semibold file:text-slate-700"
+          />
+          {files.length > 0 ? (
+            <ul className="space-y-0.5">
+              {files.map((f, i) => (
+                <li key={i} className="text-[11px] text-slate-500">
+                  {f.name}{" "}
+                  <span className="text-slate-400">({formatBytes(f.size)})</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[10px] text-slate-400">
+              Up to 5 files, 15 MB each. Any format.
+            </p>
+          )}
+          <textarea
+            value={message}
+            onChange={(e) => onMessage(e.target.value)}
+            rows={2}
+            placeholder="Message to the NBFC — what you are sending and why (required)…"
+            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || files.length === 0 || !message.trim()}
+              onClick={onSend}
+              className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? "Sending…" : "Send to NBFC"}
+            </button>
+            <span className="text-[11px] text-slate-500">
+              Appears in the NBFC&apos;s request thread for this lead.
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -808,10 +1130,11 @@ function DirectMessage({
 }: {
   assignmentId: string;
   busy: boolean;
-  onSend: (message: string) => void;
+  onSend: (message: string, files: File[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [msg, setMsg] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   void assignmentId;
   if (!open) {
     return (
@@ -825,26 +1148,51 @@ function DirectMessage({
     );
   }
   return (
-    <div className="mt-2 flex items-end gap-2">
-      <textarea
-        value={msg}
-        onChange={(e) => setMsg(e.target.value)}
-        rows={2}
-        placeholder="Post an update straight to the NBFC (no dealer round-trip)…"
-        className="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+    <div className="mt-2 space-y-1.5 rounded-md border border-slate-200 bg-slate-50 p-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[11px] font-semibold text-slate-600">
+          Message the NBFC directly
+        </p>
+        {/* Minimise — the typed note and any attached files are kept. */}
+        <CloseButton
+          label="Minimise the message box"
+          onClick={() => setOpen(false)}
+        />
+      </div>
+      <div className="flex items-end gap-2">
+        <textarea
+          value={msg}
+          onChange={(e) => setMsg(e.target.value)}
+          rows={2}
+          placeholder="Post an update straight to the NBFC (no dealer round-trip)…"
+          className="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+        />
+        <button
+          type="button"
+          disabled={busy || !msg.trim()}
+          onClick={() => {
+            onSend(msg, files);
+            setMsg("");
+            setFiles([]);
+            setOpen(false);
+          }}
+          className="rounded-md bg-[color:var(--color-brand-navy,#1e3a5f)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+        >
+          Send
+        </button>
+      </div>
+      {/* E-210 — attach customer documents to the message. */}
+      <input
+        type="file"
+        multiple
+        onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+        className="block w-full text-[11px] text-slate-600 file:mr-2 file:rounded-md file:border-0 file:bg-slate-200 file:px-2.5 file:py-1 file:text-[11px] file:font-semibold file:text-slate-700"
       />
-      <button
-        type="button"
-        disabled={busy || !msg.trim()}
-        onClick={() => {
-          onSend(msg);
-          setMsg("");
-          setOpen(false);
-        }}
-        className="rounded-md bg-[color:var(--color-brand-navy,#1e3a5f)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-      >
-        Send
-      </button>
+      <p className="text-[10px] text-slate-400">
+        {files.length > 0
+          ? `${files.length} file(s) attached: ${files.map((f) => f.name).join(", ")}`
+          : "Optionally attach documents (up to 5 files, 15 MB each)."}
+      </p>
     </div>
   );
 }

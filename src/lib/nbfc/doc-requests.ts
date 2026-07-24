@@ -99,6 +99,14 @@ function slugKey(label: string): string {
 
 // --- Types ---
 
+/** A file stored in the private nbfc-documents bucket (E-207/E-210 shape). */
+export interface RequestAttachment {
+  url: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
 export interface CreateWrapperInput {
   leadId: string;
   assignmentId: string;
@@ -111,6 +119,10 @@ export interface CreateWrapperInput {
   raisedBy: string;
   /** Message requests are already 'pushed_to_nbfc'; NBFC-raised start 'nbfc_raised'. */
   initialStatus?: NbfcDocStatus;
+  /** E-210 — documents the admin uploaded and is sending to the NBFC. */
+  attachments?: RequestAttachment[];
+  /** E-210 — the NBFC verdict this reply answers (groups it under that verdict). */
+  verdictId?: number | null;
 }
 
 export interface ForwardItem {
@@ -140,6 +152,8 @@ export async function createNbfcDocRequest(
     doc_for: input.docFor ?? "primary",
     target_doc_key: input.targetDocKey ?? null,
     nbfc_comments: input.comments ?? null,
+    attachments: input.attachments ?? [],
+    verdict_id: input.verdictId ?? null,
     status: input.initialStatus ?? NBFC_DOC_STATUS.RAISED,
     item_count: 0,
     raised_by: input.raisedBy,
@@ -418,6 +432,88 @@ export async function forwardVerdictToDealer(opts: {
     docFor,
     step: docFor === "co_borrower" ? 3 : 2,
     docLabel,
+  };
+}
+
+/**
+ * Admin answers an NBFC per-document verdict by sending the document HIMSELF
+ * (E-210) — no dealer round-trip.
+ *
+ * When the admin already holds the correct customer document (a fresh CIBIL
+ * pull, a clearer Aadhaar scan, the bank's own statement…), forwarding the
+ * verdict to the dealer only adds delay. This uploads the file(s) against the
+ * verdict and hands them straight to the NBFC as a `message` wrapper born
+ * 'pushed_to_nbfc' — the NBFC sees it in its request thread, opens the
+ * document, and acknowledges/re-verifies. `verdict_id` groups the reply under
+ * the verdict it answers in the admin's NBFC Actions card.
+ *
+ * Independent of "Forward to dealer": the admin may do either, both, or send
+ * several documents over time.
+ */
+export async function sendVerdictDocumentToNbfc(opts: {
+  verdictId: number;
+  adminUserId: string;
+  /** The admin's note to the NBFC — required. */
+  message: string;
+  attachments: RequestAttachment[];
+}): Promise<{
+  requestId: string;
+  leadId: string;
+  tenantId: string;
+  docLabel: string;
+  attachmentCount: number;
+}> {
+  const [verdict] = await db
+    .select()
+    .from(nbfcDocumentVerifications)
+    .where(eq(nbfcDocumentVerifications.id, opts.verdictId))
+    .limit(1);
+  if (!verdict) throw new Error("NOT_FOUND: verdict not found");
+
+  const message = opts.message.trim();
+  if (!message) throw new Error("BAD_REQUEST: a message for the NBFC is required");
+  if (opts.attachments.length === 0) {
+    throw new Error("BAD_REQUEST: attach at least one document to send");
+  }
+
+  const docFor: "primary" | "co_borrower" =
+    verdict.doc_for === "co_borrower" ? "co_borrower" : "primary";
+  const docLabel = VERDICT_DOC_LABELS[verdict.doc_key] ?? verdict.doc_key;
+  const applicant = docFor === "co_borrower" ? "co-borrower" : "customer";
+  const comments = [
+    `iTarang admin uploaded the ${applicant}'s ${docLabel} in response to your ${
+      verdict.verdict === "rejected" ? "rejection" : "correction request"
+    }.`,
+    message,
+  ].join("\n");
+
+  // A message wrapper: no children, already with the NBFC.
+  const { id: requestId } = await createNbfcDocRequest({
+    leadId: verdict.lead_id,
+    assignmentId: verdict.assignment_id,
+    nbfcId: verdict.nbfc_id,
+    tenantId: verdict.tenant_id,
+    requestType: "message",
+    docFor,
+    targetDocKey: verdict.doc_key,
+    comments,
+    raisedBy: opts.adminUserId,
+    initialStatus: NBFC_DOC_STATUS.PUSHED,
+    attachments: opts.attachments,
+    verdictId: verdict.id,
+  });
+
+  await db
+    .update(nbfcDocumentVerifications)
+    .set({ updated_at: new Date() })
+    .where(eq(nbfcDocumentVerifications.id, verdict.id));
+
+  return {
+    requestId,
+    leadId: verdict.lead_id,
+    tenantId: verdict.tenant_id,
+    docLabel,
+    attachmentCount: opts.attachments.length,
   };
 }
 

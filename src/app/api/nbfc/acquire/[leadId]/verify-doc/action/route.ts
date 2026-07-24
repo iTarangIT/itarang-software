@@ -22,6 +22,8 @@ import {
   type NbfcVerdict,
   type VerdictAttachment,
 } from "@/lib/nbfc/doc-verdict";
+import { notifyNbfcDocVerdict } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -138,6 +140,17 @@ export async function POST(
       notes,
       attachments,
       verifiedBy: actor.user_id,
+    });
+
+    // The admin owns the relationship with the dealer, so an NBFC verdict on a
+    // document is theirs to act on. Previously it only appeared if someone
+    // happened to open the lead's NBFC Actions section.
+    await notifyNbfcDocVerdict({
+      leadId,
+      nbfcName: await tenantDisplayName(actor.tenant_id),
+      docLabel: docFor === "co_borrower" ? `${docKey} (co-borrower)` : docKey,
+      verdict,
+      comments: notes,
     });
 
     return NextResponse.json({ ok: true, verdict, attachments });

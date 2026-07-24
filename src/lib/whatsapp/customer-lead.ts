@@ -18,6 +18,7 @@ import { and, desc, eq, inArray, isNotNull, ne, notInArray, or, sql } from "driz
 import { generateId } from "@/lib/api-utils";
 import { db } from "@/lib/db/index";
 import { nextReference } from "@/lib/leads/draftService";
+import { notifyLeadCreated } from "@/lib/notifications/events";
 import {
   adminVerificationQueue,
   dealerOnboardingApplications,
@@ -183,6 +184,17 @@ export async function createCustomerLead(
       id: crypto.randomUUID(),
       lead_id: leadId,
     });
+  });
+
+  // A WhatsApp lead is real the moment it is inserted — unlike the web wizard
+  // there is no draft placeholder stage — so the admin bell fires here.
+  // Best-effort: emit() never throws, so it cannot fail the lead creation.
+  await notifyLeadCreated({
+    leadId,
+    customerName: name === PENDING_CUSTOMER_NAME ? null : name,
+    paymentMethod,
+    source: "whatsapp",
+    dealerName: dealer.dealerName || dealer.dealerCode,
   });
 
   return leadId;

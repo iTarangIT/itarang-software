@@ -31,12 +31,15 @@ import {
   getLatestAgreement,
   type AgreementMethod,
 } from "@/lib/nbfc/agreement";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getEsignProvider } from "@/lib/nbfc/esign/registry";
 import { loadProviderCredentials } from "@/lib/nbfc/esign/credentials";
 import type { EsignSigner } from "@/lib/nbfc/esign/provider";
 import { getNbfcObject } from "@/lib/nbfc/nbfc-storage";
 import { buildHandoffUrl, postHandoff } from "@/lib/nbfc/handoff";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
+import { notifyLoanAgreementEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,33 +103,38 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       );
     }
 
-    // Resolve the signing mechanism: snapshot first (§7.4), then live config.
+    // The signing mechanism is read LIVE from Settings → Document Handling, so
+    // "Not through iTarang" removes the rail from in-flight leads too. Storage
+    // opt-in stays snapshot-first (it is a per-lead promise to the customer).
     const snap = (winner.snapshot ?? {}) as {
-      doc_agreement_method?: AgreementMethod | null;
       esign_provider?: string | null;
       store_sanction_letter?: boolean;
       store_loan_agreement?: boolean;
     };
-    let method: AgreementMethod | null = snap.doc_agreement_method ?? null;
+    const method: AgreementMethod | null = (
+      await resolveServiceOptIn(actor.tenant_id, winner.snapshot)
+    ).doc_agreement_method;
     let storeSanction = snap.store_sanction_letter ?? false;
     let storeLoan = snap.store_loan_agreement ?? false;
-    if (!method) {
+    if (snap.store_sanction_letter === undefined || snap.store_loan_agreement === undefined) {
       const [cfg] = await db
         .select({
-          m: nbfcServiceConfig.doc_agreement_method,
           s: nbfcServiceConfig.store_sanction_letter,
           l: nbfcServiceConfig.store_loan_agreement,
         })
         .from(nbfcServiceConfig)
         .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
         .limit(1);
-      method = (cfg?.m ?? null) as AgreementMethod | null;
-      storeSanction = cfg?.s ?? false;
-      storeLoan = cfg?.l ?? false;
+      storeSanction = snap.store_sanction_letter ?? cfg?.s ?? false;
+      storeLoan = snap.store_loan_agreement ?? cfg?.l ?? false;
     }
     if (!method) {
       return NextResponse.json(
-        { ok: false, error: "BAD_REQUEST: no agreement method configured in Settings → Document Handling" },
+        {
+          ok: false,
+          error:
+            "BAD_REQUEST: the loan agreement does not run through iTarang for this NBFC (Settings -> Document Handling) - handled off-platform",
+        },
         { status: 400 },
       );
     }
@@ -537,6 +545,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         updated_at: now,
       })
       .returning({ id: nbfcLoanAgreements.id });
+
+    // Names who is being asked to sign. §17.3 makes the NBFC counter-signature
+    // optional, so "who still has to sign" is genuinely ambiguous without this —
+    // sometimes only the customer, sometimes the customer and an NBFC signatory.
+    await notifyLoanAgreementEvent({
+      leadId,
+      event: "initiated",
+      nbfcName: await tenantDisplayName(actor.tenant_id),
+      tenantId: actor.tenant_id,
+      signerName: customerName,
+      pendingSigner: nbfcSigns && nbfcSignerName ? nbfcSignerName : null,
+    });
 
     return NextResponse.json({
       ok: true,

@@ -9,6 +9,7 @@ import { generateId, storedFileUrl } from "@/lib/api-utils";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
 import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
+import { notifyFulfilmentToAdmin } from "@/lib/notifications/events";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
 // No admin approval step. All writes (product_selection + inventory + warranty
@@ -227,6 +228,10 @@ export async function POST(
       paymentMode,
       finalPrice: body.finalPrice,
     }).catch(() => {});
+
+    // The admin mirror — a completed cash sale closes the lead outright, and
+    // there was previously no signal of it outside the dealer's own bell.
+    await notifyFulfilmentToAdmin({ leadId, event: "cash_sale" });
 
     return NextResponse.json({
       success: true,

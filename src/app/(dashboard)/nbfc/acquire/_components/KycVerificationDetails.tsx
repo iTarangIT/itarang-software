@@ -19,11 +19,53 @@ interface VerdictAttachment {
   size: number;
 }
 interface NbfcVerdictRow {
+  id: number;
   doc_for: string;
   doc_key: string;
   verdict: string;
   notes: string | null;
   attachments: VerdictAttachment[] | null;
+  verified_at: string | null;
+}
+
+// What came BACK for a document after the NBFC asked for a correction: the
+// admin's own upload + message (E-210, `verdict_id`-linked) and the dealer's
+// re-upload travelling on the correction wrapper (E-200/E-209). Both are
+// nbfc_doc_requests rows keyed to the same target_doc_key, so one thread fetch
+// feeds the whole Response column.
+interface ThreadItem {
+  id: string;
+  doc_label: string;
+  upload_status: string | null;
+  file_url: string | null;
+  rejection_reason: string | null;
+}
+interface ThreadWrapper {
+  id: string;
+  request_type: string;
+  status: string;
+  doc_for: string;
+  target_doc_key: string | null;
+  nbfc_comments: string | null;
+  admin_notes: string | null;
+  attachments: VerdictAttachment[] | null;
+  verdict_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+interface ThreadEntry {
+  request: ThreadWrapper;
+  items: ThreadItem[];
+}
+
+const DELIVERED = new Set(["pushed_to_nbfc", "closed"]);
+
+/** When did this response land with the NBFC? Null while it's still in flight. */
+function deliveredAt(w: ThreadWrapper): number | null {
+  // An admin document reply (verdict_id set) is born 'pushed_to_nbfc'.
+  if (!w.verdict_id && !DELIVERED.has(w.status)) return null;
+  const t = new Date(w.updated_at ?? w.created_at).getTime();
+  return isNaN(t) ? null : t;
 }
 
 // Map a Decentro verification_type to the canonical NBFC verdict doc_key.
@@ -900,22 +942,26 @@ export default function KycVerificationDetails({
   );
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [verdicts, setVerdicts] = useState<Record<string, NbfcVerdictRow>>({});
+  const [thread, setThread] = useState<ThreadEntry[]>([]);
   const actionable = Boolean(leadId && docFor);
 
   const loadVerdicts = useCallback(async () => {
     if (!leadId || !docFor) return;
     try {
-      const res = await fetch(`/api/nbfc/acquire/${leadId}/verify-doc`, {
-        cache: "no-store",
-      });
-      const json = await res.json();
-      if (json.ok) {
+      const [verdictRes, threadRes] = await Promise.all([
+        fetch(`/api/nbfc/acquire/${leadId}/verify-doc`, { cache: "no-store" }),
+        fetch(`/api/nbfc/acquire/${leadId}/doc-requests`, { cache: "no-store" }),
+      ]);
+      const verdictJson = await verdictRes.json();
+      if (verdictJson.ok) {
         const map: Record<string, NbfcVerdictRow> = {};
-        for (const v of (json.verdicts ?? []) as NbfcVerdictRow[]) {
+        for (const v of (verdictJson.verdicts ?? []) as NbfcVerdictRow[]) {
           if ((v.doc_for ?? "primary") === docFor) map[v.doc_key] = v;
         }
         setVerdicts(map);
       }
+      const threadJson = await threadRes.json();
+      if (threadJson.ok) setThread((threadJson.thread ?? []) as ThreadEntry[]);
     } catch {
       // best-effort
     }
@@ -929,7 +975,22 @@ export default function KycVerificationDetails({
     return <p className="text-sm text-slate-400">No verifications recorded.</p>;
   }
 
-  const colSpan = actionable ? 6 : 5;
+  // Everything the admin (or the dealer, via the admin) sent back, bucketed by
+  // the document it answers — oldest first.
+  const responsesFor = (docKey: string, verdict: NbfcVerdictRow | null) =>
+    thread
+      .filter(({ request: r }) => {
+        if ((r.doc_for ?? "primary") !== docFor) return false;
+        if (verdict && r.verdict_id === verdict.id) return true;
+        return r.verdict_id == null && r.target_doc_key === docKey;
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.request.created_at).getTime() -
+          new Date(b.request.created_at).getTime(),
+      );
+
+  const colSpan = actionable ? 7 : 5;
 
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200">
@@ -941,6 +1002,7 @@ export default function KycVerificationDetails({
             <th className="px-3 py-2">Admin action</th>
             <th className="px-3 py-2">Completed</th>
             {actionable ? <th className="px-3 py-2">Action</th> : null}
+            {actionable ? <th className="px-3 py-2">Response</th> : null}
             <th className="px-3 py-2 text-right">Details</th>
           </tr>
         </thead>
@@ -948,6 +1010,17 @@ export default function KycVerificationDetails({
           {visible.map((v) => {
             const isOpen = open[v.id] ?? false;
             const docKey = toDocKey(v.verification_type);
+            const verdict = verdicts[docKey] ?? null;
+            const responses = actionable ? responsesFor(docKey, verdict) : [];
+            // A response that landed AFTER our last verdict re-opens the row:
+            // the Action control flips to "Re-review" so the NBFC decides again.
+            const verdictAt = verdict?.verified_at
+              ? new Date(verdict.verified_at).getTime()
+              : 0;
+            const needsReview = responses.some(({ request }) => {
+              const at = deliveredAt(request);
+              return at != null && at > verdictAt;
+            });
             return (
               <Fragment key={v.id}>
                 <tr className="hover:bg-slate-50/60">
@@ -972,8 +1045,21 @@ export default function KycVerificationDetails({
                         leadId={leadId as string}
                         docFor={docFor as "primary" | "co_borrower"}
                         docKey={docKey}
-                        current={verdicts[docKey] ?? null}
+                        current={verdict}
+                        needsReview={needsReview}
                         onDone={loadVerdicts}
+                      />
+                    </td>
+                  ) : null}
+                  {actionable ? (
+                    <td className="px-3 py-2 align-top">
+                      <ResponseCell
+                        entries={responses}
+                        verdictAt={verdictAt}
+                        awaiting={
+                          verdict?.verdict === "queried" ||
+                          verdict?.verdict === "rejected"
+                        }
                       />
                     </td>
                   ) : null}
@@ -1018,6 +1104,138 @@ export default function KycVerificationDetails({
   );
 }
 
+// ── Per-row Response cell — what came back for this document ────────────────
+
+const HOP_LABEL: Record<string, string> = {
+  nbfc_raised: "Sent — with admin",
+  admin_review: "With admin",
+  forwarded_to_dealer: "Forwarded to dealer",
+  with_customer: "Collecting from customer",
+  dealer_review: "Dealer reviewing",
+  admin_review_upload: "Admin reviewing upload",
+  pushed_to_nbfc: "Response received",
+  closed: "Closed",
+  rejected: "Declined by admin",
+};
+
+function FileChip({ url, name }: { url: string; name: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex max-w-full items-center gap-1 truncate rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-100"
+    >
+      <svg className="h-2.5 w-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+      </svg>
+      <span className="truncate">{name}</span>
+    </a>
+  );
+}
+
+/**
+ * Everything that came back to the NBFC for one document: the admin's message +
+ * the documents shared with it (uploaded by the admin directly, or re-collected
+ * from the dealer/customer). In-flight requests show their hop status instead,
+ * so the NBFC always knows where its correction request stands.
+ */
+function ResponseCell({
+  entries,
+  verdictAt,
+  awaiting,
+}: {
+  entries: ThreadEntry[];
+  verdictAt: number;
+  awaiting: boolean;
+}) {
+  if (entries.length === 0) {
+    return (
+      <span className="text-[11px] text-slate-400">
+        {awaiting ? "Awaiting admin response" : "—"}
+      </span>
+    );
+  }
+
+  return (
+    <div className="min-w-[13rem] max-w-[20rem] space-y-1.5">
+      {entries.map(({ request: r, items }) => {
+        const landed = deliveredAt(r);
+        const isNew = landed != null && landed > verdictAt;
+        const fromAdmin = r.verdict_id != null;
+        const files = (r.attachments ?? []).filter((a) => a?.url);
+        const returned = landed != null ? items.filter((it) => it.file_url) : [];
+        return (
+          <div
+            key={r.id}
+            className={`rounded-md border px-2 py-1.5 ${
+              isNew
+                ? "border-emerald-300 bg-emerald-50/70"
+                : "border-slate-200 bg-white"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                {isNew ? (
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                ) : null}
+                {fromAdmin
+                  ? "Admin document"
+                  : (HOP_LABEL[r.status] ?? r.status)}
+              </span>
+              <span className="shrink-0 text-[10px] text-slate-400">
+                {fmtDateTime(r.updated_at ?? r.created_at)}
+              </span>
+            </div>
+
+            {r.nbfc_comments ? (
+              <p className="mt-0.5 whitespace-pre-line text-[11px] leading-snug text-slate-600">
+                {/* On a forwarded correction the comments are the NBFC's own
+                    ask — label it so the admin's reply reads as the answer. */}
+                {!fromAdmin ? (
+                  <span className="font-semibold text-slate-400">
+                    Your request:{" "}
+                  </span>
+                ) : null}
+                {r.nbfc_comments}
+              </p>
+            ) : null}
+            {r.admin_notes && r.admin_notes !== r.nbfc_comments ? (
+              <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                <span className="font-semibold">Admin:</span> {r.admin_notes}
+              </p>
+            ) : null}
+
+            {files.length > 0 ? (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {files.map((a, i) => (
+                  <FileChip key={i} url={a.url} name={a.name} />
+                ))}
+              </div>
+            ) : null}
+
+            {returned.length > 0 ? (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {returned.map((it) => (
+                  <FileChip
+                    key={it.id}
+                    url={it.file_url as string}
+                    name={it.doc_label}
+                  />
+                ))}
+              </div>
+            ) : landed == null && items.length > 0 ? (
+              <p className="mt-1 text-[10px] text-slate-400">
+                {items.map((it) => it.doc_label).join(", ")} — awaiting upload
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Per-row Action cell — the NBFC's own verdict + note + supporting uploads ──
 
 const ACTIONS: { key: "verified" | "rejected" | "queried"; label: string }[] = [
@@ -1031,12 +1249,15 @@ function ActionCell({
   docFor,
   docKey,
   current,
+  needsReview,
   onDone,
 }: {
   leadId: string;
   docFor: "primary" | "co_borrower";
   docKey: string;
   current: NbfcVerdictRow | null;
+  /** A response landed after our last verdict — the row is open again. */
+  needsReview: boolean;
   onDone: () => void;
 }) {
   const [openForm, setOpenForm] = useState(false);
@@ -1085,11 +1306,28 @@ function ActionCell({
       <button
         type="button"
         onClick={() => setOpenForm((o) => !o)}
+        title={
+          needsReview
+            ? "A response came back — record your decision again"
+            : undefined
+        }
         className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
-          VERDICT_TONE[cur] ?? "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          needsReview
+            ? "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100"
+            : (VERDICT_TONE[cur] ??
+              "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")
         }`}
       >
-        {VERDICT_LABEL[cur] ?? "Action"}
+        {/* A response reopens the row: the stale verdict gives way to a fresh
+            "Re-review" so the NBFC acts on what came back. */}
+        {needsReview ? (
+          <>
+            <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+            Re-review
+          </>
+        ) : (
+          (VERDICT_LABEL[cur] ?? "Action")
+        )}
         <ChevronDown className="h-3 w-3" />
       </button>
       {current?.attachments && current.attachments.length > 0 ? (
@@ -1097,6 +1335,11 @@ function ActionCell({
           · {current.attachments.length} file
           {current.attachments.length > 1 ? "s" : ""}
         </span>
+      ) : null}
+      {needsReview && cur !== "pending" ? (
+        <p className="mt-0.5 text-[10px] text-slate-400">
+          was {VERDICT_LABEL[cur] ?? cur}
+        </p>
       ) : null}
 
       {openForm ? (
