@@ -20,6 +20,8 @@ import { leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { uploadFileToStorage } from "@/lib/storage";
 import { combineToPdf, isCombinable } from "@/lib/pdf/combine";
+import { notifyDocsShared } from "@/lib/notifications/events";
+import { dealerDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -217,6 +219,20 @@ export async function PATCH(
       .update(productSelections)
       .set({ pre_sanction_doc_urls: items, updated_at: new Date() })
       .where(eq(productSelections.id, row.id));
+
+    // Fired on PATCH, not POST: POST only parks a file in the bucket and the
+    // client calls it once per upload, so notifying there would fire per file
+    // and for items the dealer might still remove. PATCH is the moment the
+    // bucket is committed to the lead — i.e. actually shared.
+    if (items.length > 0) {
+      await notifyDocsShared({
+        leadId,
+        docLabel: "pre-sanction documents",
+        count: items.length,
+        dealerName: await dealerDisplayName(user.dealer_id),
+        stage: "Step 4 · Pre-sanction documents",
+      });
+    }
 
     return NextResponse.json({ ok: true, persisted: true, items });
   } catch (err) {

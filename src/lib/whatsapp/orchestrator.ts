@@ -90,6 +90,10 @@ import {
   resolveHouseDealer,
 } from "./customer-lead";
 import { maskAccount, maskGstin, maskIfsc, maskPan } from "./masking";
+import {
+  notifyOnboardingChatStarted,
+  notifyOnboardingDocsUploaded,
+} from "@/lib/notifications/events";
 import { removeMedia, saveMedia } from "./storage";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 
@@ -1303,6 +1307,16 @@ async function ingestClassifiedFile(
       ? " (some values were hard to read — our team will double-check)"
       : "";
   await reply(session, `Got your *${spec?.label ?? c.documentType}* ✅${note}`);
+
+  // Tell the admins a document landed. Deliberately only for a STORED required
+  // document — the unreadable and wrong-document branches above return early,
+  // and notifying on those would fill the bell with a dealer's failed retries.
+  await notifyOnboardingDocsUploaded({
+    phone: session.wa_phone,
+    docLabel: spec?.label ?? c.documentType,
+    businessName: session.wa_contact_name ?? null,
+  });
+
   await advanceDocument(await loadSession(session.id));
 }
 
@@ -2417,6 +2431,14 @@ async function getOrCreateSession(event: InboundEvent): Promise<SessionRow> {
     .update(dealerOnboardingApplications)
     .set({ wa_session_id: session.id })
     .where(eq(dealerOnboardingApplications.id, application.id));
+
+  // A brand-new WhatsApp onboarding conversation. Fires once per session, on
+  // creation — the only signal iTarang gets that a dealer has walked in the
+  // WhatsApp door, since there is no form submission until the very end.
+  await notifyOnboardingChatStarted({
+    phone: event.waPhone,
+    sessionId: session.id,
+  });
 
   return session;
 }

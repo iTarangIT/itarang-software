@@ -15,6 +15,7 @@ import { and, eq, desc } from "drizzle-orm";
 import { dualApprovalRequests } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { createDualApprovalRequest } from "@/lib/nbfc/dual-approval/service";
+import { notifyDualApprovalRequested } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,6 +87,16 @@ export async function POST(req: NextRequest) {
       evidence_snapshot: parsed.data.evidence_snapshot,
       borrower_notice_id: parsed.data.borrower_notice_id ?? null,
     });
+
+    // A dual-approval request is BLOCKED until a second approver acts, so the
+    // approver needs telling. Without this the request just sat in a queue
+    // nobody was watching.
+    await notifyDualApprovalRequested({
+      tenantId: actor.tenant_id,
+      requestId: row.id,
+      actionLabel: parsed.data.action_type.replace(/_/g, " "),
+    });
+
     return NextResponse.json(
       {
         id: row.id,

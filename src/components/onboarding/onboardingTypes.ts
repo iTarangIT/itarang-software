@@ -1,10 +1,16 @@
 import type { UploadCardValue } from "./FileUploadCard";
+import type { DealerTypeValue } from "@/lib/dealer/dealer-type";
 
 export type CompanyType =
   | "sole_proprietorship"
   | "partnership_firm"
   | "private_limited_firm"
   | "";
+
+// E-202 — dealer business type, selected at Step 1. Distinct from CompanyType
+// (legal structure). Values + labels live in @/lib/dealer/dealer-type; "" is the
+// wizard's "nothing chosen yet" state, which the DB column never stores.
+export type DealerType = DealerTypeValue | "";
 
 export type VerificationState =
   | "idle"
@@ -47,6 +53,8 @@ export type CompanyStepData = {
   companyName: string;
   companyAddress: string;
   companyType: CompanyType;
+  // E-202 — New / Scrap / Both battery dealer.
+  dealerType: DealerType;
   gstNumber: string;
   companyPanNumber: string;
   businessSummary?: string;

@@ -19,12 +19,15 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fieldInvestigations, leads, nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { generateFiLinkToken, geocodeAddress, getCurrentFiTrack, slaDueFrom } from "@/lib/nbfc/fi";
 import { getFiAgent } from "@/lib/nbfc/fi-agents";
 import { dispatchFiLink } from "@/lib/nbfc/fi-dispatch";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
+import { notifyFiEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -113,16 +116,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       if (!d.agent_id) {
         return NextResponse.json({ ok: false, error: "BAD_REQUEST: agent_id required" }, { status: 400 });
       }
-      // FI must be opted in (per-lead snapshot first, §3.4).
-      let enabled = (assignment.snapshot as { fi_enabled?: boolean }).fi_enabled ?? false;
-      if ((assignment.snapshot as { fi_enabled?: boolean }).fi_enabled === undefined) {
-        const cfg = await db
-          .select({ fi: nbfcServiceConfig.fi_enabled })
-          .from(nbfcServiceConfig)
-          .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-          .limit(1);
-        enabled = cfg[0]?.fi ?? false;
-      }
+      // FI must be opted in. Read LIVE (resolveServiceOptIn) — an NBFC that has
+      // switched FI off cannot assign an agent on any lead.
+      const enabled = (
+        await resolveServiceOptIn(actor.tenant_id, assignment.snapshot)
+      ).fi_enabled;
       if (!enabled) {
         return NextResponse.json({ ok: false, error: "BAD_REQUEST: Field Investigation is not opted in for this NBFC" }, { status: 400 });
       }
@@ -178,6 +176,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           .update(fieldInvestigations)
           .set({ status: "in_progress", link_sent_at: now, link_channel: sent.channel, updated_at: new Date() })
           .where(eq(fieldInvestigations.id, fiId));
+        // NBFC → agent. Recorded so the chain (requested → assigned → submitted
+        // → reviewed) reads end to end and it is always clear who holds it.
+        await notifyFiEvent({
+          leadId,
+          event: "assigned",
+          nbfcName: await tenantDisplayName(actor.tenant_id),
+          tenantId: actor.tenant_id,
+          agentName: agent.name,
+        });
         return NextResponse.json({ ok: true, status: "in_progress", channel: sent.channel, sla_due_at: sla });
       }
       // Link minted (row saved) but dispatch failed — Coordinator can resend.
@@ -242,6 +249,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           updated_at: now,
         })
         .where(eq(fieldInvestigations.id, track.id));
+      await notifyFiEvent({
+        leadId,
+        event: "reviewed",
+        nbfcName: await tenantDisplayName(actor.tenant_id),
+        tenantId: actor.tenant_id,
+        agentName: track.assigned_to,
+        outcome: d.decision === "pass" ? "Passed" : "Failed",
+        notes: d.reason?.trim() || null,
+      });
       return NextResponse.json({ ok: true, status: d.decision === "pass" ? "passed" : "failed" });
     }
 
@@ -334,6 +350,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           .set({ status: "in_progress", link_sent_at: now, link_channel: sent.channel, updated_at: new Date() })
           .where(eq(fieldInvestigations.id, row.id));
       }
+      // A re-inspection also reaches the DEALER — it usually means the customer
+      // has to be available again, which is theirs to arrange.
+      await notifyFiEvent({
+        leadId,
+        event: "reinspection",
+        nbfcName: await tenantDisplayName(actor.tenant_id),
+        tenantId: actor.tenant_id,
+        agentName: agent.name,
+        notes: d.reason.trim(),
+      });
       return NextResponse.json({ ok: true, status: sent.ok ? "in_progress" : "assigned", attempt_no: track.attempt_no + 1, channel: sent.channel });
     }
 

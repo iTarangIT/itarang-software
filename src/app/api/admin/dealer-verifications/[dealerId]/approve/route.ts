@@ -6,6 +6,7 @@ import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword"
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
+import { notifyOnboardingDecision } from "@/lib/notifications/events";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 import { ensureDealerAuditTrailUrl } from "@/lib/digio/ensure-audit-trail";
@@ -426,6 +427,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
           dealer_id: dealerCode,
           company_name: application.company_name,
           company_type: application.company_type ?? "individual",
+          dealer_type: application.dealer_type ?? null,
           gst_number: application.gst_number ?? null,
           pan_number: application.pan_number ?? null,
           registered_address: application.registered_address ?? null,
@@ -678,6 +680,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
       email: dealerLoginEmail,
       approvedAt: new Date().toISOString(),
       notificationRecipients,
+    });
+
+    // In-app row for the new dealer's bell + an audit copy for the admins.
+    // Keyed to `dealerCode`, not the application id: dealerCode IS the value
+    // written to users.dealer_id just above, and that is what the bell resolves
+    // a dealer audience by. The welcome EMAIL already went out, so this sends
+    // no second one.
+    await notifyOnboardingDecision({
+      dealerId: dealerCode,
+      businessName: application.company_name || "Your company",
+      decision: "approved",
     });
 
     return NextResponse.json({

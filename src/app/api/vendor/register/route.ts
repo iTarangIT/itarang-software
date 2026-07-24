@@ -33,6 +33,7 @@ import { accounts, businessEntityRoles, scrapVendors, users } from "@/lib/db/sch
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { HttpError, ValidationError } from "@/lib/buyback/errors";
+import { notifyVendorRegistered } from "@/lib/notifications/events";
 import { CHEMISTRIES } from "@/lib/buyback/line-spec";
 
 export const runtime = "nodejs";
@@ -232,6 +233,11 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     return { vendor_id: row.id, entity_id: entityId };
   });
+
+  // Vendors self-register with no approval step (see the comment on the
+  // businessEntityRoles insert above), so this is the only way an admin finds
+  // out a new vendor exists and is routable.
+  await notifyVendorRegistered({ vendorName: body.name, vendorId: vendor.vendor_id });
 
   return successResponse(
     {

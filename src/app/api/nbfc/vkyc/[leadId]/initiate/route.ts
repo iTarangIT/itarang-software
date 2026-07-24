@@ -20,12 +20,15 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, nbfcServiceConfig, videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { generateVkycRef, getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
 import { dispatchVkycLink, type VkycChannel } from "@/lib/nbfc/vkyc-dispatch";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 import { assertChargeable, postCharge } from "@/lib/nbfc/charging";
 import { buildHandoffUrl, postHandoff } from "@/lib/nbfc/handoff";
+import { notifyVkycEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,16 +74,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       return NextResponse.json({ ok: false, error: "BAD_REQUEST: no assignment for this lead under this tenant" }, { status: 400 });
     }
 
-    // Opt-in: per-lead snapshot first (§7.4), fall back to live config.
-    let enabled = assignment.snapshot.vkyc_enabled ?? false;
-    if (assignment.snapshot.vkyc_enabled === undefined) {
-      const cfg = await db
-        .select({ enabled: nbfcServiceConfig.vkyc_enabled })
-        .from(nbfcServiceConfig)
-        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-        .limit(1);
-      enabled = cfg[0]?.enabled ?? false;
-    }
+    // Opt-in is read LIVE (resolveServiceOptIn) — an NBFC that has switched
+    // Video KYC off cannot start a run on any lead, in-flight ones included.
+    const enabled = (
+      await resolveServiceOptIn(actor.tenant_id, assignment.snapshot)
+    ).vkyc_enabled;
     if (!enabled) {
       return NextResponse.json({ ok: false, error: "BAD_REQUEST: Video KYC is not opted in for this lead's NBFC" }, { status: 400 });
     }
@@ -343,6 +341,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     } catch (chargeErr) {
       console.error("[NBFC VKYC] charge posting failed:", chargeErr);
     }
+
+    // The customer now holds this — the dealer usually has to chase them, so
+    // they are told too, not just the NBFC and admin.
+    await notifyVkycEvent({
+      leadId,
+      event: "initiated",
+      nbfcName: await tenantDisplayName(actor.tenant_id),
+      tenantId: actor.tenant_id,
+    });
 
     return NextResponse.json({
       ok: true,

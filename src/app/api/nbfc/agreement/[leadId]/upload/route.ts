@@ -17,6 +17,7 @@ import { nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getWinningAssignment } from "@/lib/nbfc/enach";
 import { generateAgreementRef, getLatestAgreement, type AgreementMethod } from "@/lib/nbfc/agreement";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
@@ -83,28 +84,38 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       );
     }
 
-    // Resolve mechanism + storage opt-in: per-lead snapshot first (§3.4), then live config.
+    // Mechanism is read LIVE ("Not through iTarang" removes the rail); storage
+    // opt-in stays snapshot-first (a per-lead promise to the customer).
     const snap = (winner.snapshot ?? {}) as {
-      doc_agreement_method?: AgreementMethod | null;
       store_sanction_letter?: boolean;
       store_loan_agreement?: boolean;
     };
-    let method: AgreementMethod | null = snap.doc_agreement_method ?? null;
+    const method: AgreementMethod | null = (
+      await resolveServiceOptIn(actor.tenant_id, winner.snapshot)
+    ).doc_agreement_method;
+    if (!method) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "BAD_REQUEST: the loan agreement does not run through iTarang for this NBFC (Settings -> Document Handling) - handled off-platform",
+        },
+        { status: 400 },
+      );
+    }
     let storeSanction = snap.store_sanction_letter ?? false;
     let storeLoan = snap.store_loan_agreement ?? false;
-    if (!method) {
+    if (snap.store_sanction_letter === undefined || snap.store_loan_agreement === undefined) {
       const [cfg] = await db
         .select({
-          m: nbfcServiceConfig.doc_agreement_method,
           s: nbfcServiceConfig.store_sanction_letter,
           l: nbfcServiceConfig.store_loan_agreement,
         })
         .from(nbfcServiceConfig)
         .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
         .limit(1);
-      method = (cfg?.m ?? "digio") as AgreementMethod | null;
-      storeSanction = cfg?.s ?? false;
-      storeLoan = cfg?.l ?? false;
+      storeSanction = snap.store_sanction_letter ?? cfg?.s ?? false;
+      storeLoan = snap.store_loan_agreement ?? cfg?.l ?? false;
     }
 
     const now = new Date();

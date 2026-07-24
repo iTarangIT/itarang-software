@@ -9,6 +9,7 @@ import {
   getExpectedConsentAadhaar,
 } from "./aadhaar-match";
 import { getConsentSignerIdentity } from "./signer-aadhaar";
+import { notifyConsentSigned } from "@/lib/notifications/events";
 
 export const CONSENT_WAITING_STATUSES = [
   "link_sent",
@@ -206,6 +207,18 @@ export async function syncConsentStatusFromDigio(
     .update(leads)
     .set({ consent_status: "esign_completed", updated_at: now })
     .where(eq(leads.id, record.lead_id));
+
+  // Announced only once the Aadhaar integrity gate above has PASSED — a consent
+  // signed with the wrong Aadhaar returns early and must never be reported as
+  // signed. Says who signed and in which capacity, which is the whole point of
+  // that gate: a co-borrower signing in the borrower's place is exactly what it
+  // exists to catch.
+  await notifyConsentSigned({
+    leadId: record.lead_id,
+    signerName: signerIdentity.name ?? null,
+    signerRole: meta?.consent_for === "co_borrower" ? "co_borrower" : "borrower",
+    method: "esign",
+  });
 
   return {
     consent_status: "esign_completed",

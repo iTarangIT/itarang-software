@@ -1869,6 +1869,12 @@ export const nbfcDocRequests = pgTable(
     target_doc_key: varchar("target_doc_key", { length: 120 }),
     nbfc_comments: text("nbfc_comments"),
     admin_notes: text("admin_notes"),
+    // E-210 — documents the ADMIN uploaded with this request/message and sent
+    // straight to the NBFC (list of { url, name, type, size }).
+    attachments: jsonb("attachments").default(sql`'[]'::jsonb`),
+    // E-210 — the NBFC verdict (nbfc_document_verifications.id) this admin reply
+    // answers; NULL for a free-standing admin→NBFC message.
+    verdict_id: integer("verdict_id"),
     // nbfc_raised → admin_review → forwarded_to_dealer → with_customer →
     // dealer_review → admin_review_upload → pushed_to_nbfc | closed | rejected.
     status: varchar({ length: 32 }).default('nbfc_raised').notNull(),
@@ -1894,6 +1900,7 @@ export const nbfcDocRequests = pgTable(
       table.nbfc_id,
       table.status,
     ),
+    verdictIdx: index("nbfc_doc_requests_verdict_idx").on(table.verdict_id),
   }),
 );
 
@@ -2727,6 +2734,9 @@ export const dealerOnboardingApplications = pgTable(
     dealer_user_id: uuid("dealer_user_id"),
     company_name: text("company_name").notNull(),
     company_type: text("company_type"),
+    // E-202 — dealer business type: 'new' | 'scrap' | 'both'. Selected in
+    // onboarding Step 1. Distinct from company_type (legal structure).
+    dealer_type: varchar("dealer_type", { length: 16 }),
     gst_number: text("gst_number"),
     pan_number: text("pan_number"),
     cin_number: text("cin_number"),
@@ -3357,23 +3367,43 @@ export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
 
 // --- NOTIFICATIONS ---
 
-export const notifications = pgTable("notifications", {
-  id: text().primaryKey().notNull(),
-  user_id: uuid("user_id"),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  lead_id: varchar("lead_id", { length: 100 }),
-  type: varchar({ length: 50 }).notNull(),
-  title: text().notNull(),
-  message: text().notNull(),
-  data: jsonb(),
-  read: boolean().default(false),
-  read_at: timestamp("read_at", { withTimezone: true }),
-  // E-200 — soft archive/delete for the buyback notification centre. NULL =
-  // active / not deleted, so no backfill was needed. Both apply CRM-wide.
-  archived_at: timestamp("archived_at", { withTimezone: true }),
-  deleted_at: timestamp("deleted_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
-});
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text().primaryKey().notNull(),
+    // The recipient LOGIN. Every row the notification hub writes sets this —
+    // /api/notifications is scoped by user_id, so a row without it is invisible
+    // in the bell. (That is exactly why dealer notifications, which used to set
+    // only dealer_id, never appeared.) See src/lib/notifications/emit.ts.
+    user_id: uuid("user_id"),
+    dealer_id: varchar("dealer_id", { length: 255 }),
+    lead_id: varchar("lead_id", { length: 100 }),
+    // `<domain>.<event>` — src/lib/notifications/catalog.ts. varchar(50): a
+    // longer type string fails the INSERT with 22001.
+    type: varchar({ length: 50 }).notNull(),
+    title: text().notNull(),
+    message: text().notNull(),
+    // Carries the deep link (`href`), the provenance pair (`from`/`to`/`stage`)
+    // and any inline `actions` the bell renders as buttons. Deliberately jsonb
+    // rather than columns — see the E-211 header.
+    data: jsonb(),
+    read: boolean().default(false),
+    read_at: timestamp("read_at", { withTimezone: true }),
+    // E-200 — soft archive/delete for the buyback notification centre. NULL =
+    // active / not deleted, so no backfill was needed. Both apply CRM-wide.
+    archived_at: timestamp("archived_at", { withTimezone: true }),
+    deleted_at: timestamp("deleted_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  // E-211 — the four access paths the CRM-wide bell runs on every page load.
+  (table) => ({
+    userCreatedIdx: index("notifications_user_created_idx").on(table.user_id, table.created_at),
+    leadIdx: index("notifications_lead_idx").on(table.lead_id, table.created_at),
+    // The two partial indexes (user_unread, legacy_dealer) are created by the
+    // migration; drizzle's builder has no partial-index syntax, so they are
+    // intentionally absent here. The migration file is the source of truth.
+  }),
+);
 
 export const scraperCityQueue = pgTable("scraper_city_queue", {
   id: text().primaryKey().notNull(),
@@ -5885,6 +5915,9 @@ export const dealers = pgTable(
     dealer_id: varchar("dealer_id", { length: 50 }).unique(),
     company_name: varchar("company_name", { length: 200 }).notNull(),
     company_type: varchar("company_type", { length: 32 }).notNull(),
+    // E-202 — dealer business type ('new' | 'scrap' | 'both'), copied from the
+    // onboarding application at approval. Distinct from company_type (legal).
+    dealer_type: varchar("dealer_type", { length: 16 }),
     gst_number: varchar("gst_number", { length: 20 }),
     pan_number: varchar("pan_number", { length: 20 }),
     registered_address: jsonb("registered_address"),

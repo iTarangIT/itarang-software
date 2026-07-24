@@ -26,7 +26,13 @@ export type NotificationCategory =
 
 export type NotificationPriority = "Info" | "Warning" | "Critical";
 
-export type NotificationRole = "dealer" | "admin" | "vendor";
+/**
+ * "nbfc" was added when the bell was generalised CRM-wide: the NBFC partner
+ * portal now runs the same shared bell as every other portal, so this type is
+ * the role vocabulary for ALL notifications, not just buyback's. Buyback itself
+ * never addresses an NBFC — see `linkFor` for what that role resolves to.
+ */
+export type NotificationRole = "dealer" | "admin" | "vendor" | "nbfc";
 
 /** Ordered exactly as the filter bar should list them. */
 export const CATEGORIES: NotificationCategory[] = [
@@ -180,6 +186,13 @@ export function linkFor(
   data: NotificationLinkData | null | undefined,
 ): string | null {
   const requestId = data?.request_id ? String(data.request_id) : null;
+
+  // An NBFC partner has no buyback surface at all — not /admin/buyback (no
+  // access) and not /dealer-portal/buyback (not their portal). Returning null
+  // renders the row as "nothing to open", which is the honest answer; sending
+  // them to a page that 403s would be worse. Buyback never addresses an NBFC,
+  // so this only guards a dual-role login.
+  if (role === "nbfc") return null;
 
   if (role === "vendor") {
     switch (category) {

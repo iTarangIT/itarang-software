@@ -15,6 +15,7 @@ import { finalizeSale } from "@/lib/sales/sale-finalization";
 import { projectDisbursedLoan } from "@/lib/nbfc/servicing/projectDisbursedLoan";
 import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyDispatchConfirmed } from "@/lib/notifications";
+import { notifyFulfilmentToAdmin, notifyLoanDisbursed } from "@/lib/notifications/events";
 import { sendKycSms } from "@/lib/sms";
 
 // BRD V2 §3.3 — Step 5 OTP validation + dispatch confirmation.
@@ -225,6 +226,25 @@ export async function POST(
       warrantyId: result.warrantyId,
       batterySerial: selection.battery_serial!,
     }).catch(() => {});
+
+    // The admin mirror.
+    await notifyFulfilmentToAdmin({
+      leadId,
+      event: "dispatched",
+      batterySerial: selection.battery_serial ?? null,
+    });
+
+    // This route also flips the loan_sanctions row straight to 'disbursed'
+    // (dispatch confirmation = funds released). There is no separate disbursal
+    // endpoint anywhere in the app, so this is the only place the milestone can
+    // be announced — and nobody was being told.
+    if (loan) {
+      await notifyLoanDisbursed({
+        leadId,
+        lenderName: loan.loan_approved_by ?? null,
+        loanAmount: loan.loan_amount ?? null,
+      });
+    }
 
     // BRD §3.5: customer is told their battery is dispatched. The "fully
     // sold" SMS goes out later from mark-delivered / cron.
