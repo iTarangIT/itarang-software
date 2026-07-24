@@ -11,7 +11,7 @@ import { readStoredDocument } from "@/lib/storage/readStoredDocument";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
-import { notifyRoles } from "@/lib/notifications/notify";
+import { notifyOnboardingSubmitted } from "@/lib/notifications/events";
 
 type UploadLike = {
   id?: string;
@@ -391,6 +391,7 @@ export async function POST(req: NextRequest) {
     const company = rawBody.company || {
       companyName: rawBody.companyName,
       companyType: rawBody.companyType,
+      dealerType: rawBody.dealerType,
       gstNumber: rawBody.gstNumber,
       companyPanNumber: rawBody.companyPanNumber || rawBody.panNumber,
       companyAddress:
@@ -598,6 +599,7 @@ export async function POST(req: NextRequest) {
       dealer_code: dealerCode || existingApplication?.dealer_code || null,
       company_name: cleanString(company.companyName),
       company_type: cleanString(company.companyType) || null,
+      dealer_type: cleanString(company.dealerType) || null,
       gst_number: toNullable(company.gstNumber),
       pan_number: toNullable(company.companyPanNumber),
       business_address: JSON.stringify(buildAddress(
@@ -705,24 +707,18 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    // Notify the Dealer Validation team (sales_head staffs /admin/dealer-
-    // verification per middleware.ts) that a dealer application has arrived for
-    // review. Lands in the unified NotificationBell; data.href deep-links to the
-    // dealer's verification page. Best-effort — never break the submission.
-    try {
-      const dealerLabel =
-        primaryOwner.ownerName ||
-        cleanString(company.companyName) ||
-        "A dealer";
-      await notifyRoles(["sales_head"], {
-        type: "dealer_onboarding_submitted",
-        title: "New dealer for validation",
-        message: `${dealerLabel} has submitted a dealer onboarding application for validation.`,
-        data: { href: `/admin/dealer-verification/${finalApplicationId}` },
-      });
-    } catch (notifyErr) {
-      console.error("[onboarding/submit] notify failed:", notifyErr);
-    }
+    // Notify the Dealer Validation team that an application has arrived.
+    // Widened from sales_head alone to the full admin audience: sales_head
+    // staffs /admin/dealer-verification per middleware.ts, but admin/CEO/
+    // business_head all work that queue too and were being left out.
+    // Best-effort — never break the submission.
+    await notifyOnboardingSubmitted({
+      dealerId: finalApplicationId,
+      applicationId: finalApplicationId,
+      businessName:
+        cleanString(company.companyName) || primaryOwner.ownerName || "A dealer",
+      channel: "portal",
+    });
 
     // E-179 central registry. No-op if the save-route autosave already
     // registered this application (unique on source_table + source_id).

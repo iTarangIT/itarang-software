@@ -7,6 +7,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import NotificationBell from '@/components/shared/NotificationBell';
+import type { NotificationRole } from '@/lib/notifications/catalog';
 // Dependency-free by design (middleware runs it on Edge), so a client component
 // can share the one list rather than keep a second copy that drifts.
 import { BUYBACK_ADMIN_ROLES } from '@/lib/buyback/roles';
@@ -37,6 +38,17 @@ export function Header() {
     // docs/nbfc/NOTES.md for the seed-personas fix path.
     const displayRole = user?.role || 'user';
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+
+    // Which portal's "View all notifications" page this viewer belongs on.
+    const role = (user?.role ?? '').toLowerCase();
+    const portalRole: NotificationRole =
+        role === 'scrap_vendor'
+            ? 'vendor'
+            : role.startsWith('nbfc') || role === 'risk_head'
+                ? 'nbfc'
+                : BUYBACK_ADMIN_ROLES.includes(role)
+                    ? 'admin'
+                    : 'dealer';
 
     const handleLogout = () => {
         if (loggingOut) return;
@@ -110,29 +122,19 @@ export function Header() {
             {/* Right Actions */}
             <div className="flex items-center gap-4">
                 {/* Single unified in-app bell. Reads /api/notifications, which
-                    returns EVERY notification row keyed to the signed-in user —
-                    KYC verification arrivals, NBFC Acquire events, buyback,
-                    dealer validation, inventory uploads, escalations, etc. The
-                    former separate BuybackBell was a scoped subset of the same
-                    table; folding it in removes the duplicate bell and gives one
-                    place that holds all notifications.
+                    returns EVERY notification row addressed to the signed-in
+                    user — leads, KYC and consent, the NBFC request loop, FI /
+                    VKYC / E-NACH / agreement, product selection, sanction and
+                    disbursal, dealer onboarding, inventory, buyback,
+                    escalations.
 
-                    portalRole shapes the buyback deep links, which differ per
-                    role: admin and dealer each open the request on their own
-                    page, and a vendor — who has neither — is sent to the
-                    matching vendor-portal surface. isAdmin still drives the
-                    non-buyback admin/dealer split. */}
-                <NotificationBell
-                    variant="admin"
-                    isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
-                    portalRole={
-                        (user?.role ?? '').toLowerCase() === 'scrap_vendor'
-                            ? 'vendor'
-                            : BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())
-                                ? 'admin'
-                                : 'dealer'
-                    }
-                />
+                    Each row arrives with its deep link already resolved for
+                    THIS viewer's portal, so portalRole is only needed for the
+                    "View all" destination. NBFC users get their bell from
+                    NbfcPortalHeader, not here — /nbfc/* renders its own chrome
+                    (see LayoutWrapper) — but the role is mapped anyway so a
+                    dual-role login lands on the right page. */}
+                <NotificationBell portalRole={portalRole} />
 
                 {/* Profile Dropdown */}
                 <div className="relative" ref={dropdownRef}>

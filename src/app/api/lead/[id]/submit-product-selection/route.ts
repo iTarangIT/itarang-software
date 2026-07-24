@@ -3,10 +3,12 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { inventory, leads, nbfc, nbfcLeadAssignments, nbfcServiceConfig, productSelections } from "@/lib/db/schema";
+import { inventory, leads, nbfc, nbfcLeadAssignments, nbfcLoanProducts, nbfcServiceConfig, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId, storedFileUrl } from "@/lib/api-utils";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
+import { notifyProductSubmitted } from "@/lib/notifications/events";
+import { dealerDisplayName } from "@/lib/notifications/emit";
 import { InventoryLifecycleError, reserveInventorySerial } from "@/lib/inventory/lifecycle";
 
 // BRD V2 §2.4 — finance path submit for Step 4.
@@ -321,6 +323,34 @@ export async function POST(
       paymentMode: "finance",
       finalPrice: body.finalPrice,
     }).catch(() => {});
+
+    // Admin + the picked NBFCs. Carries WHICH lenders and WHICH loan product the
+    // dealer selected — the first thing anyone asks when a Step-4 submission
+    // lands, and the reason this is more than a bare "Step 4 submitted".
+    // Resolved after the transaction so the names come from committed rows.
+    const picked = await db
+      .select({
+        name: nbfc.legal_name,
+        short: nbfc.short_name,
+        product: nbfcLoanProducts.product_name,
+      })
+      .from(nbfcLeadAssignments)
+      .innerJoin(nbfc, eq(nbfc.id, nbfcLeadAssignments.nbfc_id))
+      .leftJoin(
+        nbfcLoanProducts,
+        eq(nbfcLoanProducts.id, nbfcLeadAssignments.loan_product_id),
+      )
+      .where(eq(nbfcLeadAssignments.lead_id, leadId));
+
+    await notifyProductSubmitted({
+      leadId,
+      productSelectionId: result.productSelectionId,
+      paymentMode: "finance",
+      finalPrice: body.finalPrice,
+      nbfcNames: picked.map((p) => p.name || p.short || "").filter(Boolean),
+      loanProduct: picked.map((p) => p.product).filter(Boolean).join(", ") || null,
+      dealerName: await dealerDisplayName(user.dealer_id),
+    });
 
     return NextResponse.json({
       success: true,

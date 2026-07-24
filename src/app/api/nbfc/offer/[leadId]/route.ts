@@ -22,6 +22,8 @@ import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { createDualApprovalRequest, FINANCING_OFFER_DEVIATION_ACTION } from "@/lib/nbfc/dual-approval/service";
 import { computeOfferDeviation, type DeviationResult } from "@/lib/nbfc/offer-deviation";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
+import { notifyOfferSubmitted } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -296,6 +298,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             eq(dualApprovalRequests.status, "pending_approval"),
           ),
         );
+    }
+
+    // An offer parked for CEO approval is not yet an offer anyone can act on,
+    // so only announce the ones that actually landed.
+    if (ceoStatus !== "pending") {
+      await notifyOfferSubmitted({
+        leadId,
+        nbfcName: await tenantDisplayName(actor.tenant_id),
+        loanAmount: parsed.data.loan_amount ?? null,
+        emi: parsed.data.emi_amount ?? null,
+        tenureMonths:
+          parsed.data.tenure_months == null ? null : Number(parsed.data.tenure_months),
+      });
     }
 
     return NextResponse.json({

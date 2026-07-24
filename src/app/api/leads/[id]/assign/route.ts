@@ -5,6 +5,7 @@ import { withErrorHandler, successResponse, errorResponse, generateId } from '@/
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 import { triggerN8nWebhook } from '@/lib/n8n';
+import { notifyLeadAssigned } from '@/lib/notifications/events';
 
 const assignSchema = z.object({
     lead_owner: z.string().uuid().optional(),
@@ -116,6 +117,12 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
             assignment_type: 'actor',
             assigned_by: user.id
         });
+    }
+
+    // Tell whoever now owns the lead. The n8n webhooks above are outbound
+    // automation, not something the assignee ever sees in the product.
+    for (const assignee of [lead_owner, lead_actor]) {
+        if (assignee) await notifyLeadAssigned({ leadId, assigneeUserId: assignee });
     }
 
     return successResponse({ message: 'Assignment updated' });

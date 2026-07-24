@@ -13,12 +13,20 @@ interface ThreadItem {
   upload_status: string | null;
   file_url: string | null;
 }
+interface Attachment {
+  url: string;
+  name: string;
+  type: string;
+  size: number;
+}
 interface ThreadRequest {
   id: string;
   request_type: string;
   status: string;
   nbfc_comments: string | null;
   admin_notes: string | null;
+  // E-210 — documents the iTarang admin uploaded and sent with this message.
+  attachments: Attachment[] | null;
   created_at: string;
 }
 interface ThreadEntry {
@@ -145,7 +153,10 @@ export default function NbfcRequestThread({
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">
-                {TYPE_LABEL[request.request_type] ?? request.request_type}
+                {request.request_type === "message" &&
+                (request.attachments?.length ?? 0) > 0
+                  ? "Document from admin"
+                  : (TYPE_LABEL[request.request_type] ?? request.request_type)}
               </p>
               {request.nbfc_comments ? (
                 <p className="mt-0.5 whitespace-pre-line text-xs text-slate-600">
@@ -156,6 +167,26 @@ export default function NbfcRequestThread({
                 <p className="mt-0.5 text-xs text-slate-500">
                   <span className="font-medium">Admin:</span> {request.admin_notes}
                 </p>
+              ) : null}
+              {/* E-210 — files the admin uploaded for this lead. Served by the
+                  authenticated /api/nbfc-uploads route. */}
+              {request.attachments && request.attachments.length > 0 ? (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {request.attachments.map((a, i) => (
+                    <a
+                      key={i}
+                      href={a.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100"
+                    >
+                      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                      </svg>
+                      {a.name}
+                    </a>
+                  ))}
+                </div>
               ) : null}
             </div>
             <span

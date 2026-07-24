@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { launchBrowser, resetBrowser } from "@/lib/pdf/launch-browser";
-import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
+import { resolveDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 import {
   extractAttachedEstampDetails,
   extractStampCertificateIds,
@@ -12,6 +12,9 @@ type AgreementPayload = {
   company?: any;
   ownership?: any;
   agreement?: any;
+  // Dealer business type (new | scrap | both) — selects the agreement template
+  // (E-202). Optional; absent → the base template. Set by the admin initiate flow.
+  dealerType?: string | null;
   // Set by the admin initiate-agreement route for WhatsApp dealers: persist the
   // generated (unsigned) PDF to storage so it can be sent as a WhatsApp document.
   applicationId?: string;
@@ -75,13 +78,24 @@ function cleanString(value?: string) {
   return (value || "").trim();
 }
 
-// Read a key off the legacy businessAddress object (backward-compat fallback for
+// Read a key off the legacy businessAddress value (backward-compat fallback for
 // owner residential address when the explicit owner* keys aren't supplied).
+// business_address is a TEXT column that may hold a JSON-encoded object, so a
+// plain `typeof === "object"` test silently skipped every string-shaped row and
+// the fallback never fired. Parse first.
 function bizAddr(businessAddress: unknown, key: string): string {
-  return typeof businessAddress === "object" &&
-    businessAddress &&
-    key in businessAddress
-    ? String((businessAddress as any)[key] || "")
+  let value: unknown = businessAddress;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{")) return "";
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return "";
+    }
+  }
+  return value && typeof value === "object" && key in value
+    ? String((value as any)[key] || "")
     : "";
 }
 
@@ -329,6 +343,8 @@ export async function POST(req: NextRequest) {
     const ownership = body.ownership || {};
     const storeUnsignedCopy = !!body.storeUnsignedCopy;
     const applicationId = cleanString(body.applicationId);
+    // Dealer type selects the agreement template (E-202). Absent → base template.
+    const dealerType = cleanString(body.dealerType) || null;
 
     const dealerSigner = buildSigner(
       agreement.dealerSignerEmail,
@@ -398,8 +414,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Generate agreement PDF from HTML template
-    const html = buildTarangDealerAgreementHtml({
+    // Generate agreement PDF from HTML template (per dealer type — E-202)
+    const html = resolveDealerAgreementHtml(dealerType, {
       company: {
         companyName: company.companyName || "",
         companyAddress: company.companyAddress || "",
@@ -424,7 +440,8 @@ export async function POST(req: NextRequest) {
           bizAddr(ownership.businessAddress, "address"),
         ownerCity:
           ownership.ownerCity || bizAddr(ownership.businessAddress, "city"),
-        ownerDistrict: ownership.ownerDistrict || "",
+        ownerDistrict:
+          ownership.ownerDistrict || bizAddr(ownership.businessAddress, "district"),
         ownerState:
           ownership.ownerState || bizAddr(ownership.businessAddress, "state"),
         ownerPinCode:

@@ -50,6 +50,10 @@ export function validateStep(
       errors.companyType = "Company type is required";
     }
 
+    if (!state.company.dealerType) {
+      errors.dealerType = "Dealer type is required";
+    }
+
     if (!state.company.gstNumber.trim()) {
       errors.gstNumber = "GST number is required";
     } else if (!GST_REGEX.test(state.company.gstNumber.trim().toUpperCase())) {

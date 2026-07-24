@@ -328,6 +328,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         panNumber: row.pan_number,
         // cinNumber: row.cinNumber,
         companyType: row.company_type,
+        // E-202 dealer business type (new | scrap | both) — what the dealer
+        // sells, as opposed to companyType (legal structure). Null for
+        // applications submitted before the field existed.
+        dealerType: row.dealer_type || null,
 
         ownerName: row.owner_name,
         ownerPhone: row.owner_phone,
