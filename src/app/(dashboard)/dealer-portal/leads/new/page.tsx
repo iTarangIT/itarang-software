@@ -300,10 +300,14 @@ function NewLeadWizardContent() {
         if (!formData.phone) e.phone = 'Phone is required';
         else if (!phoneRegex.test(formData.phone)) e.phone = 'Must be exactly 10 digits';
 
-        // Email — mandatory for every lead (also the Digio e-sign signer id).
+        // Email — optional. Only validated when the dealer actually fills it in.
+        // It still doubles as the Digio e-sign signer id, so the agreement /
+        // consent routes ask for it later if a finance lead reaches e-sign
+        // without one.
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!formData.email?.trim()) e.email = 'Email is required';
-        else if (!emailRegex.test(formData.email.trim())) e.email = 'Enter a valid email address';
+        if (formData.email?.trim() && !emailRegex.test(formData.email.trim())) {
+            e.email = 'Enter a valid email address';
+        }
 
         if (!formData.dob) e.dob = 'Required';
         else if (calculateAge(formData.dob) < 18) e.dob = 'Must be 18+';
@@ -692,9 +696,10 @@ function NewLeadWizardContent() {
 
                             <InputField label="Phone Number" value={formData.phone} onChange={v => updateField('phone', v)} onBlur={handlePhoneBlur} error={errors.phone} placeholder="9876543210" required inputMode="numeric" maxLength={10} />
 
-                            {/* Customer email — mandatory for every lead (also the
-                                signer identifier for the Digio loan-agreement e-sign, §11.3). */}
-                            <InputField label="Email Address" value={formData.email} onChange={v => updateField('email', v)} error={errors.email} placeholder="customer@example.com" required inputMode="email" type="email" />
+                            {/* Customer email — optional. Still the signer identifier for
+                                the Digio loan-agreement e-sign (§11.3), so finance leads
+                                are asked for it at that step if it was left blank here. */}
+                            <InputField label="Email Address" value={formData.email} onChange={v => updateField('email', v)} error={errors.email} placeholder="customer@example.com (optional)" inputMode="email" type="email" />
 
                             <div className="md:col-span-2">
                                 <TextAreaField label="Current Address" value={formData.current_address} onChange={v => updateField('current_address', v)} error={errors.current_address} placeholder="123, Main Street, City, State - 123456" required />

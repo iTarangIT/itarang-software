@@ -20,7 +20,7 @@ import {
   declineNbfcDocRequest,
   forwardNbfcDocRequest,
 } from "@/lib/nbfc/doc-requests";
-import { notifyDealerForLead } from "@/lib/notifications";
+import { notifyNbfcRequestForwarded } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -99,20 +99,15 @@ export async function POST(
       adminNotes: parsed.data.adminNotes ?? null,
     });
 
-    // Best-effort: nudge the dealer that Step-3 documents are required. The
-    // data.href deep-links the bell to Step 3's Additional Documents section.
-    await notifyDealerForLead({
+    // Nudge the dealer that documents are required, naming them so they know
+    // what to collect without opening the lead first. The href deep-links to
+    // Step 3's Additional Documents section.
+    await notifyNbfcRequestForwarded({
       leadId: wrapper.lead_id,
-      type: "nbfc_doc_request_forwarded",
-      title: `${result.requests.length} document(s) requested`,
-      message: `iTarang admin (NBFC request) — please collect and upload ${result.requests.length} document(s) on Step 3.`,
-      data: {
-        requestId: id,
-        count: result.requests.length,
-        step: 3,
-        href: `/dealer-portal/leads/${wrapper.lead_id}/borrower-consent#other-documentation`,
-      },
-    }).catch(() => {});
+      requestId: id,
+      docLabels: parsed.data.items.map((i) => i.doc_label).filter(Boolean),
+      targetStep: "borrower-consent",
+    });
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {

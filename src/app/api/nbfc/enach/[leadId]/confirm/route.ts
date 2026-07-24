@@ -24,6 +24,8 @@ import { enachMandates } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getWinningAssignment } from "@/lib/nbfc/enach";
 import { fetchPayment, verifyPaymentSignature } from "@/lib/razorpay";
+import { notifyEnachEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -134,6 +136,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           updated_at: now,
         })
         .where(eq(enachMandates.id, row.id));
+      await notifyEnachEvent({
+        leadId,
+        event: "failed",
+        nbfcName: await tenantDisplayName(actor.tenant_id),
+        tenantId: actor.tenant_id,
+        reason: asStr(payment?.error_description) ?? null,
+      });
       return NextResponse.json({ ok: true, mandate_id: row.id, status: "failed" });
     }
 
@@ -153,6 +162,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         updated_at: now,
       })
       .where(eq(enachMandates.id, row.id));
+
+    await notifyEnachEvent({
+      leadId,
+      event: "confirmed",
+      nbfcName: await tenantDisplayName(actor.tenant_id),
+      tenantId: actor.tenant_id,
+    });
 
     return NextResponse.json({ ok: true, mandate_id: row.id, status: "registered" });
   } catch (e) {

@@ -28,7 +28,7 @@ import {
   pushNbfcDocRequest,
   NBFC_DOC_STATUS_LABEL,
 } from "@/lib/nbfc/doc-requests";
-import { notifyDealerForLead } from "@/lib/notifications";
+import { notifyNbfcRequestForwarded } from "@/lib/notifications/events";
 import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
 
 export const runtime = "nodejs";
@@ -134,13 +134,12 @@ export async function POST(
         items,
         adminNotes: adminNotes ?? null,
       });
-      await notifyDealerForLead({
+      await notifyNbfcRequestForwarded({
         leadId: wrapper.lead_id,
-        type: "nbfc_doc_request_forwarded",
-        title: "Documents requested",
-        message: `An NBFC has requested ${fwd.requests.length} document(s) for this lead.`,
-        data: { requestId: id },
-      }).catch(() => {});
+        requestId: id,
+        docLabels: items.map((i) => i.doc_label).filter(Boolean),
+        targetStep: "borrower-consent",
+      });
       result = fwd;
     } else {
       await pushNbfcDocRequest({ requestId: id, adminUserId: appUser.id });

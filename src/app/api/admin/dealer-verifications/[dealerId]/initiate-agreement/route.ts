@@ -18,6 +18,7 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { getAdapter } from "@/lib/whatsapp";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
+import { notifyDealerAgreementInitiated } from "@/lib/notifications/events";
 
 type AgreementParty = {
   name?: string | null;
@@ -917,6 +918,18 @@ export async function POST(
         console.error("[INITIATE] WhatsApp agreement send threw:", waErr);
       }
     }
+
+    // Bell rows for both sides. Names BOTH signers on purpose: the question
+    // everyone asks at this point is who it is waiting on, and the dealer's
+    // signer and the iTarang counter-signatory are two different people on two
+    // different channels (WhatsApp/email vs Digio email).
+    await notifyDealerAgreementInitiated({
+      dealerId,
+      businessName: application.company_name || "the dealer",
+      dealerSigner: dealerSigner.name || null,
+      itarangSigner: itarangSigner1.name || null,
+      channel: isWhatsappDealer ? "whatsapp" : "email",
+    });
 
     return NextResponse.json({
       success: true,

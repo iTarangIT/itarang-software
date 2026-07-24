@@ -23,6 +23,7 @@ import {
   getLatestAgreement,
   type AgreementMethod,
 } from "@/lib/nbfc/agreement";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,25 +72,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       );
     }
 
+    // The agreement rail can be switched off entirely (Settings → Document
+    // Handling → "Not through iTarang"), in which case there is nothing to
+    // record here — the NBFC keeps the paperwork on its own systems.
     // Storage opt-in — §11.4. A signed-copy URL is retained only when the NBFC
     // allows it; otherwise we keep the §11.6 audit record without the PDF.
     const snap = (winner.snapshot ?? {}) as {
-      doc_agreement_method?: AgreementMethod | null;
       store_loan_agreement?: boolean;
     };
     let storeLoan = snap.store_loan_agreement ?? false;
-    let method: AgreementMethod | null = snap.doc_agreement_method ?? null;
-    if (method == null) {
+    const method: AgreementMethod | null = (
+      await resolveServiceOptIn(actor.tenant_id, winner.snapshot)
+    ).doc_agreement_method;
+    if (!method) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "BAD_REQUEST: the loan agreement does not run through iTarang for this NBFC (Settings -> Document Handling) - handled off-platform",
+        },
+        { status: 400 },
+      );
+    }
+    if (snap.store_loan_agreement === undefined) {
       const [cfg] = await db
-        .select({
-          l: nbfcServiceConfig.store_loan_agreement,
-          m: nbfcServiceConfig.doc_agreement_method,
-        })
+        .select({ l: nbfcServiceConfig.store_loan_agreement })
         .from(nbfcServiceConfig)
         .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
         .limit(1);
       storeLoan = cfg?.l ?? false;
-      method = (cfg?.m ?? null) as AgreementMethod | null;
     }
 
     const d = parsed.data;

@@ -17,15 +17,17 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, loanSanctions, nbfc, nbfcFinancingOffers, nbfcServiceConfig, productSelections } from "@/lib/db/schema";
+import { leads, loanSanctions, nbfc, nbfcFinancingOffers, productSelections } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { evaluateTrackGate } from "@/lib/nbfc/track-gate";
 import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreement";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { syncLoanAgreementStatusFromDigio } from "@/lib/nbfc/sync-loan-agreement-status";
 import { postCharge } from "@/lib/nbfc/charging";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanSanctioned } from "@/lib/notifications";
+import { notifyLoanDisbursed, notifyLoanSanctionedEvent } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,18 +67,12 @@ async function loadContext(leadId: string, tenantId: string) {
   const gate = await evaluateTrackGate(leadId);
 
   // Agreement status — advisory only (§17.5, Step-5 OTP is the hard gate), but
-  // surfaced on the disbursal card so the NBFC can see the signing state. Method
-  // comes from the per-lead snapshot first, falling back to live config.
-  const snap = (assignment?.snapshot ?? {}) as { doc_agreement_method?: AgreementMethod | null };
-  let agreementMethod: AgreementMethod | null = snap.doc_agreement_method ?? null;
-  if (!agreementMethod && assignment) {
-    const [cfg] = await db
-      .select({ m: nbfcServiceConfig.doc_agreement_method })
-      .from(nbfcServiceConfig)
-      .where(eq(nbfcServiceConfig.tenant_id, tenantId))
-      .limit(1);
-    agreementMethod = (cfg?.m ?? null) as AgreementMethod | null;
-  }
+  // surfaced on the disbursal card so the NBFC can see the signing state. The
+  // method is read LIVE, so "Not through iTarang" drops the rail here too.
+  const agreementMethod: AgreementMethod | null = assignment
+    ? (await resolveServiceOptIn(tenantId, assignment.snapshot))
+        .doc_agreement_method
+    : null;
   // Reconcile against Digio first so a signed agreement surfaces even when the
   // webhook never arrived (local dev / missed callback). Best-effort.
   if (assignment) {
@@ -214,14 +210,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       console.error("[NBFC sanction] on_disbursal charge failed:", chargeErr);
     }
 
+    const lenderName = me?.legal_name ?? me?.short_name ?? "NBFC";
+
     notifyLoanSanctioned({
       leadId,
       loanSanctionId,
-      lenderName: me?.legal_name ?? me?.short_name ?? "NBFC",
+      lenderName,
       loanAmount: offer?.loan_amount ? Number(offer.loan_amount) : 0,
       emi: offer?.emi_amount ? Number(offer.emi_amount) : 0,
       tenureMonths: offer?.tenure_months ?? 0,
     }).catch(() => {});
+
+    // The dealer copy is the notifyLoanSanctioned call above (Step-5 nudge).
+    // These two put the same milestone in the ADMIN's bell, which had no signal
+    // at all that a lead had been sanctioned or disbursed. Both fire because
+    // this route writes `sanctioned_at` AND `disbursed_at` in the same insert —
+    // there is no separate disbursal endpoint to hang the second one off.
+    await notifyLoanSanctionedEvent({
+      leadId,
+      lenderName,
+      tenantId: actor.tenant_id,
+      loanAmount: offer?.loan_amount ?? null,
+    });
+    await notifyLoanDisbursed({
+      leadId,
+      lenderName,
+      tenantId: actor.tenant_id,
+      loanAmount: offer?.loan_amount ?? null,
+    });
 
     return NextResponse.json({
       ok: true,

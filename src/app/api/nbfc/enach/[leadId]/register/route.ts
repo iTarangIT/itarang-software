@@ -22,6 +22,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { generateEnachRef, getWinningAssignment } from "@/lib/nbfc/enach";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
@@ -64,18 +65,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       );
     }
 
-    // Read the per-lead config snapshot (§7.4) — falls back to live config for
-    // legacy rows created before snapshots existed.
-    let snap = (winner.snapshot ?? null) as { enach_enabled?: boolean } | null;
-    if (!snap) {
-      const cfg = await db
-        .select({ enach_enabled: nbfcServiceConfig.enach_enabled })
-        .from(nbfcServiceConfig)
-        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-        .limit(1);
-      snap = cfg[0] ?? { enach_enabled: false };
-    }
-    if (!snap.enach_enabled) {
+    // Opt-in is read LIVE (resolveServiceOptIn) — an NBFC that has switched
+    // E-NACH off cannot register a mandate on any lead, in-flight ones included.
+    const optIn = await resolveServiceOptIn(actor.tenant_id, winner.snapshot);
+    if (!optIn.enach_enabled) {
       return NextResponse.json(
         { ok: false, error: "BAD_REQUEST: E-NACH is not opted in for this lead's NBFC" },
         { status: 400 },

@@ -9,6 +9,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { enachMandates, nbfcLeadAssignments } from "@/lib/db/schema";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 
 export const ENACH_STATES = [
   "not_applicable",
@@ -30,8 +31,6 @@ export function generateEnachRef(leadId: string): string {
     .toString(36)
     .slice(2, 8)}`.toUpperCase();
 }
-
-type Snapshot = { enach_enabled?: boolean } & Record<string, unknown>;
 
 /**
  * Resolves the lead's winning NBFC assignment (status='selected'). E-NACH is
@@ -73,9 +72,10 @@ export interface EnachGate {
 }
 
 /**
- * Evaluates the E-NACH disbursal gate for a lead (§9.4). The gate reads the
- * winning NBFC's per-lead config SNAPSHOT (not live config) so in-flight leads
- * are unaffected by later config edits (§7.4).
+ * Evaluates the E-NACH disbursal gate for a lead (§9.4). Whether E-NACH applies
+ * comes from the winning NBFC's LIVE Service Opt-In (resolveServiceOptIn) — an
+ * NBFC that switches E-NACH off stops being gated on it, in-flight leads
+ * included. The lead's snapshot still governs the handoff mechanics.
  *
  *   - No winner / E-NACH off for that NBFC → not required, satisfied.
  *   - Latest mandate 'registered' or 'skipped' (waived) → satisfied.
@@ -86,8 +86,10 @@ export async function evaluateEnachGate(leadId: string): Promise<EnachGate> {
   if (!winner) {
     return { required: false, satisfied: true, status: null, reason: "No winning NBFC selected.", attempts: 0 };
   }
-  const snap = (winner.snapshot ?? {}) as Snapshot;
-  if (!snap.enach_enabled) {
+  // Live Service Opt-In wins over the lead's frozen snapshot (see
+  // resolveServiceOptIn) — switching E-NACH off takes the gate off this lead.
+  const optIn = await resolveServiceOptIn(winner.tenant_id, winner.snapshot);
+  if (!optIn.enach_enabled) {
     return {
       required: false,
       satisfied: true,
