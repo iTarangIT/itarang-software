@@ -1,12 +1,28 @@
+/**
+ * Dealer-facing notification helpers.
+ *
+ * These are the oldest notification writers in the codebase and every one of
+ * them was invisible. They inserted rows keyed ONLY by `dealer_id`, while the
+ * bell (`/api/notifications`) is scoped by `user_id` — so the dealer bell was
+ * permanently empty no matter how many rows piled up. The one route that did
+ * read `dealer_id` was never wired to any component.
+ *
+ * The fix is a single change of plumbing, not of behaviour: every helper here
+ * now goes through `emit()` (src/lib/notifications/emit.ts), which resolves the
+ * dealer to their actual logins and writes one row per person WITH `user_id`
+ * set (and `dealer_id` still stamped, so anything else reading it keeps
+ * working). The call sites, the copy, the `type` strings and the `data` payloads
+ * are unchanged — this file's public API is exactly what it was.
+ *
+ * Every helper stays best-effort: `emit()` never throws, so a notification can
+ * never fail the action that produced it.
+ */
 import { db } from "@/lib/db";
-import { notifications, leads } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
-function genId(): string {
-  const ts = Date.now().toString(36).toUpperCase();
-  const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
-  return `NOTIF-${ts}-${rand}`;
-}
+import { emit } from "@/lib/notifications/emit";
+import { actingParty, dealerParty, type Party } from "@/lib/notifications/provenance";
 
 interface NotifyDealerParams {
   leadId: string;
@@ -14,6 +30,10 @@ interface NotifyDealerParams {
   title: string;
   message: string;
   data?: Record<string, unknown>;
+  /** Where in the journey this happened — rendered on the provenance line. */
+  stage?: string | null;
+  /** Who raised it. Defaults to the acting session (usually the admin). */
+  from?: Party;
 }
 
 /**
@@ -26,22 +46,25 @@ export async function notifyInventoryAssigned(params: {
   count: number;
   reportId?: string | null;
 }) {
-  try {
-    await db.insert(notifications).values({
-      id: genId(),
-      dealer_id: params.dealerId,
-      type: "inventory_assigned",
-      title: "New stock available",
-      message: `${params.count} ${params.assetType} item${params.count === 1 ? "" : "s"} assigned to your inventory.`,
-      data: {
-        asset_type: params.assetType,
-        count: params.count,
-        report_id: params.reportId ?? null,
+  await emit({
+    type: "inventory_assigned",
+    title: "New stock available",
+    message: `${params.count} ${params.assetType} item${params.count === 1 ? "" : "s"} assigned to your inventory.`,
+    stage: "Inventory",
+    from: await actingParty(),
+    data: {
+      asset_type: params.assetType,
+      count: params.count,
+      report_id: params.reportId ?? null,
+    },
+    to: [
+      {
+        audience: { kind: "dealer", dealerId: params.dealerId },
+        as: dealerParty("Dealer"),
+        href: "/dealer-portal/inventory",
       },
-    });
-  } catch (error) {
-    console.error("[Notification] notifyInventoryAssigned failed:", error);
-  }
+    ],
+  });
 }
 
 /**
@@ -54,25 +77,28 @@ export async function notifyInventoryTransferIncoming(params: {
   serialCount: number;
   sourceDealerName?: string | null;
 }) {
-  try {
-    await db.insert(notifications).values({
-      id: genId(),
-      dealer_id: params.targetDealerId,
-      type: "inventory_transfer_incoming",
-      title: "Incoming inventory transfer",
-      message:
-        `${params.serialCount} item${params.serialCount === 1 ? "" : "s"} are being transferred to you` +
-        (params.sourceDealerName ? ` from ${params.sourceDealerName}` : "") +
-        ". Acknowledge receipt when stock arrives.",
-      data: {
-        transfer_id: params.transferId,
-        serial_count: params.serialCount,
-        source_dealer_name: params.sourceDealerName ?? null,
+  await emit({
+    type: "inventory_transfer_incoming",
+    title: "Incoming inventory transfer",
+    message:
+      `${params.serialCount} item${params.serialCount === 1 ? "" : "s"} are being transferred to you` +
+      (params.sourceDealerName ? ` from ${params.sourceDealerName}` : "") +
+      ". Acknowledge receipt when stock arrives.",
+    stage: "Inventory",
+    from: params.sourceDealerName ? dealerParty(params.sourceDealerName) : await actingParty(),
+    data: {
+      transfer_id: params.transferId,
+      serial_count: params.serialCount,
+      source_dealer_name: params.sourceDealerName ?? null,
+    },
+    to: [
+      {
+        audience: { kind: "dealer", dealerId: params.targetDealerId },
+        as: dealerParty("Dealer"),
+        href: "/dealer-portal/inventory",
       },
-    });
-  } catch (error) {
-    console.error("[Notification] notifyInventoryTransferIncoming failed:", error);
-  }
+    ],
+  });
 }
 
 /**
@@ -85,34 +111,40 @@ export async function notifyInventoryTransferAcknowledged(params: {
   serialCount: number;
   targetDealerName?: string | null;
 }) {
-  try {
-    await db.insert(notifications).values({
-      id: genId(),
-      dealer_id: params.sourceDealerId,
-      type: "inventory_transfer_acknowledged",
-      title: "Transfer acknowledged",
-      message:
-        `${params.serialCount} item${params.serialCount === 1 ? "" : "s"} acknowledged` +
-        (params.targetDealerName ? ` by ${params.targetDealerName}` : "") +
-        ". Stock has left your inventory.",
-      data: {
-        transfer_id: params.transferId,
-        serial_count: params.serialCount,
-        target_dealer_name: params.targetDealerName ?? null,
+  await emit({
+    type: "inventory_transfer_acknowledged",
+    title: "Transfer acknowledged",
+    message:
+      `${params.serialCount} item${params.serialCount === 1 ? "" : "s"} acknowledged` +
+      (params.targetDealerName ? ` by ${params.targetDealerName}` : "") +
+      ". Stock has left your inventory.",
+    stage: "Inventory",
+    from: params.targetDealerName ? dealerParty(params.targetDealerName) : await actingParty(),
+    data: {
+      transfer_id: params.transferId,
+      serial_count: params.serialCount,
+      target_dealer_name: params.targetDealerName ?? null,
+    },
+    to: [
+      {
+        audience: { kind: "dealer", dealerId: params.sourceDealerId },
+        as: dealerParty("Dealer"),
+        href: "/dealer-portal/inventory",
       },
-    });
-  } catch (error) {
-    console.error("[Notification] notifyInventoryTransferAcknowledged failed:", error);
-  }
+    ],
+  });
 }
 
 /**
  * Creates a notification for the dealer who owns the lead.
- * Looks up dealer_id from the lead record.
+ *
+ * The workhorse behind almost every dealer notification. `emit()` resolves
+ * leads.dealer_id → that dealer's logins, so the row lands in a bell rather than
+ * in a column nobody reads.
  */
 export async function notifyDealerForLead(params: NotifyDealerParams) {
   try {
-    const leadRows = await db
+    const [lead] = await db
       .select({
         dealer_id: leads.dealer_id,
         full_name: leads.full_name,
@@ -122,20 +154,27 @@ export async function notifyDealerForLead(params: NotifyDealerParams) {
       .where(eq(leads.id, params.leadId))
       .limit(1);
 
-    const lead = leadRows[0];
     if (!lead?.dealer_id) return;
 
-    await db.insert(notifications).values({
-      id: genId(),
-      dealer_id: lead.dealer_id,
-      lead_id: params.leadId,
+    const leadName = lead.full_name || lead.owner_name || "";
+    const href =
+      (params.data?.href as string | undefined) ?? `/dealer-portal/leads/${params.leadId}`;
+
+    await emit({
       type: params.type,
       title: params.title,
       message: params.message,
-      data: {
-        ...params.data,
-        lead_name: lead.full_name || lead.owner_name || "",
-      },
+      leadId: params.leadId,
+      stage: params.stage ?? null,
+      from: params.from ?? (await actingParty()),
+      data: { ...params.data, lead_name: leadName },
+      to: [
+        {
+          audience: { kind: "dealer", dealerId: lead.dealer_id },
+          as: dealerParty("Dealer"),
+          href,
+        },
+      ],
     });
   } catch (error) {
     console.error("[Notification] Failed to create:", error);
@@ -172,12 +211,14 @@ export async function notifyKycCardAction(params: {
     ? `/dealer-portal/leads/${params.leadId}/borrower-consent`
     : `/dealer-portal/leads/${params.leadId}/kyc`;
   const docsHref = `${basePage}#other-documentation`;
+  const stage = isCoBorrower ? "Step 3 · Co-borrower KYC" : "Step 2 · KYC";
 
   if (params.action === "request_more_docs") {
     await notifyDealerForLead({
       leadId: params.leadId,
       type: "kyc_docs_requested",
       title: `${label} — more documents needed`,
+      stage,
       message: params.notes
         ? `iTarang admin requested additional documents for ${label} verification. Reason: ${params.notes}`
         : `iTarang admin requested additional documents for ${label} verification. Please upload the required documents.`,
@@ -193,6 +234,7 @@ export async function notifyKycCardAction(params: {
       leadId: params.leadId,
       type: "kyc_rejected",
       title: `${label} verification rejected`,
+      stage,
       message: params.notes
         ? `iTarang admin rejected the ${label} verification. Reason: ${params.notes}`
         : `iTarang admin rejected the ${label} verification. Please review and re-submit.`,
@@ -208,10 +250,12 @@ export async function notifyKycCardAction(params: {
       leadId: params.leadId,
       type: "kyc_accepted",
       title: `${label} Verification Accepted`,
+      stage,
       message: `${label} verification has been accepted successfully.`,
       data: {
         verification_type: params.verificationType,
         action: params.action,
+        href: basePage,
       },
     });
   }
@@ -234,6 +278,7 @@ export async function notifyKycFinalDecision(params: {
       leadId: params.leadId,
       type: isStep3 ? "step_3_cleared" : "kyc_approved_final",
       title: isStep3 ? "Step 3 Cleared — Product Selection Unlocked" : "KYC Approved",
+      stage: isStep3 ? "Step 3" : "Step 2 · KYC",
       message: isStep3
         ? "Re-verification approved. You can now proceed to product selection."
         : "KYC verification has been approved. The lead is now verified and ready to proceed.",
@@ -244,6 +289,7 @@ export async function notifyKycFinalDecision(params: {
       leadId: params.leadId,
       type: "kyc_rejected_final",
       title: "KYC Rejected",
+      stage: "Step 2 · KYC",
       message: params.rejectionReason
         ? `KYC verification has been rejected. Reason: ${params.rejectionReason}`
         : "KYC verification has been rejected. Please contact admin for details.",
@@ -280,11 +326,13 @@ export async function notifyStep3DealerActionRequired(params: {
     leadId: params.leadId,
     type: "step_3_dealer_action_required",
     title: `Action Required — ${label}`,
+    stage: "Step 3",
     message: params.rejectionReason || params.notes || "Admin has returned this lead with outstanding items. Please review and re-submit.",
     data: {
       lead_status: params.leadStatus,
       admin_notes: params.notes,
       rejection_reason: params.rejectionReason,
+      href: `/dealer-portal/leads/${params.leadId}/borrower-consent`,
     },
   });
 }
@@ -304,6 +352,7 @@ export async function notifyLoanSanctioned(params: {
     leadId: params.leadId,
     type: "loan_sanctioned",
     title: "Loan Sanctioned — Customer Approval Needed",
+    stage: "Step 4 · Sanction",
     message: `Loan of ₹${params.loanAmount} sanctioned by ${params.lenderName}. Proceed to Step 5 for customer OTP confirmation.`,
     data: {
       loan_sanction_id: params.loanSanctionId,
@@ -327,6 +376,7 @@ export async function notifyLoanRejected(params: {
     leadId: params.leadId,
     type: "loan_rejected",
     title: "Loan Rejected",
+    stage: "Step 4 · Sanction",
     message: `Loan application was not approved${params.lenderName ? ` by ${params.lenderName}` : ""}. Reason: ${params.rejectionReason}`,
     data: {
       rejection_reason: params.rejectionReason,
@@ -349,6 +399,7 @@ export async function notifyProductSelectionSubmitted(params: {
     leadId: params.leadId,
     type: params.paymentMode === "cash" ? "cash_sale_confirmed" : "product_selection_submitted",
     title: params.paymentMode === "cash" ? "Sale Confirmed" : "Submitted for Final Approval",
+    stage: "Step 4 · Product Selection",
     message:
       params.paymentMode === "cash"
         ? `Sale confirmed for ₹${params.finalPrice}. Warranty activated.`
@@ -373,6 +424,7 @@ export async function notifyDispatchConfirmed(params: {
     leadId: params.leadId,
     type: "dispatch_confirmed",
     title: "Dispatch Confirmed",
+    stage: "Step 5 · Dispatch",
     message: `Battery ${params.batterySerial} dispatched. Warranty ${params.warrantyId} activated. Awaiting delivery confirmation.`,
     data: {
       warranty_id: params.warrantyId,
@@ -395,6 +447,7 @@ export async function notifyDelivered(params: {
     leadId: params.leadId,
     type: "delivery_confirmed",
     title: "Delivery Confirmed",
+    stage: "Step 5 · Delivery",
     message:
       params.source === "manual"
         ? `Battery ${params.batterySerial} marked delivered. Sale finalized.`
