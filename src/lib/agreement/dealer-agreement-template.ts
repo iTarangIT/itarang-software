@@ -1,3 +1,5 @@
+import { CORRECTION_DOCUMENTS } from "@/lib/onboarding/correction-catalog";
+
 type AgreementTemplateInput = {
   company: {
     companyName?: string;
@@ -128,11 +130,20 @@ function formatDateParts(input?: string) {
   };
 }
 
+// Join address parts, skipping any part the line already contains. The first
+// part is usually a FULL address line (the GST "principal place of business" is
+// stored both as one line and as city/district/state/pincode), so a naive join
+// printed "…, Jaipur, Rajasthan, 302001, Jaipur, Jaipur, Rajasthan, 302001".
 function joinParts(parts: Array<string | undefined>) {
-  return parts
-    .map((p) => (p || "").trim())
-    .filter(Boolean)
-    .join(", ");
+  const out: string[] = [];
+  for (const raw of parts) {
+    const part = (raw || "").trim();
+    if (!part) continue;
+    const haystack = out.join(", ").toLowerCase();
+    if (haystack.includes(part.toLowerCase())) continue;
+    out.push(part);
+  }
+  return out.join(", ");
 }
 
 function safe(value?: string, fallback = "________________") {
@@ -142,6 +153,13 @@ function safe(value?: string, fallback = "________________") {
 
 function yesNo(value?: boolean) {
   return value ? "Yes" : "No";
+}
+
+// The account type is stored canonically lowercase ("savings" | "current");
+// print it capitalised, since this is a legal document.
+function titleCase(value?: string) {
+  const v = (value || "").trim();
+  return v ? v.charAt(0).toUpperCase() + v.slice(1) : "";
 }
 
 export type DealerAgreementType = "new" | "scrap" | "both";
@@ -752,7 +770,7 @@ export function buildTarangDealerAgreementHtml(data: AgreementTemplateInput) {
       <div class="sign-line"></div>
       <p><strong>For and on behalf of</strong></p>
       <p><strong>The Distributor / Company</strong></p>
-      <p>e iTarang technologies LLP</p>
+      <p>The iTarang technologies LLP</p>
       <p>Name: ${esc(safe(agreement.itarangSignatory1?.name))}</p>
       <p>Designation: ${esc(safe(agreement.itarangSignatory1?.designation))}</p>
     </div>
@@ -930,7 +948,14 @@ export function buildTarangDealerAgreementHtml(data: AgreementTemplateInput) {
       <p><strong>For Company</strong></p>
       <p>Signed and delivered by within named M/s The iTarang technologies LLP, by its duly authorized representative</p>
       <p>Mr. ${esc(safe(agreement.itarangSignatory1?.name))}</p>
-      <p>Mr. ${esc(safe(agreement.itarangSignatory2?.name))}</p>
+      ${
+        // Signatory 2 is optional (initiate-agreement only adds it when the
+        // operator entered one), so print the line only when there IS one —
+        // otherwise every single-signatory agreement showed a stray blank.
+        (agreement.itarangSignatory2?.name || "").trim()
+          ? `<p>Mr. ${esc(agreement.itarangSignatory2!.name)}</p>`
+          : ""
+      }
     </div>
 
     <div class="signature-box">
@@ -968,7 +993,7 @@ export function buildTarangDealerAgreementHtml(data: AgreementTemplateInput) {
     <tr><td class="label">A/C No.</td><td>${esc(ownership.accountNumber)}</td></tr>
     <tr><td class="label">IFSC Code</td><td>${esc(ownership.ifsc)}</td></tr>
     <tr><td class="label">Branch</td><td>${esc(ownership.branch)}</td></tr>
-    <tr><td class="label">Account Type</td><td>${esc(ownership.accountType)}</td></tr>
+    <tr><td class="label">Account Type</td><td>${esc(titleCase(ownership.accountType))}</td></tr>
     <tr><td class="label">Date & Stamp with Signature</td><td>${esc(signedDate.day)} ${esc(signedDate.month)} ${esc(signedDate.year)}</td></tr>
   </table>
 
@@ -1205,6 +1230,143 @@ export function buildTarangDealerAgreementHtml(data: AgreementTemplateInput) {
   </div>
   `
   }
+
+  <div class="page-break"></div>
+
+  <h2>Data Protection Notice &amp; Consent — Digital Personal Data Protection Act, 2023</h2>
+
+  <p>
+    This notice forms an integral part of this Agreement and is issued under the Digital Personal
+    Data Protection Act, 2023 (&ldquo;DPDP Act&rdquo;). It records the personal data iTarang collects
+    from the Dealer, the purposes for which it is processed, how long it is retained, and the
+    Dealer&rsquo;s consent to that processing.
+  </p>
+
+  <h3>1. Data Fiduciary</h3>
+
+  <p>
+    The iTarang technologies LLP, having its registered office at B103, Business zone, Tower B,
+    Nirvana Country, Gurugram - 122018, GST 06AALFI7813E1ZE (&ldquo;iTarang&rdquo;), is the
+    <strong>Data Fiduciary</strong> in respect of the personal data described below. The Dealer, and
+    each individual whose personal data the Dealer provides, is a <strong>Data Principal</strong>.
+  </p>
+
+  <h3>2. Personal Data Processed</h3>
+
+  <ul>
+    <li><strong>Identity &amp; contact data:</strong> name of the proprietor / partners / directors and the authorised signatory, date of birth, photograph, mobile number and email address.</li>
+    <li><strong>Address data:</strong> residential address of the owner and the office / principal place of business, including city, district, state and PIN code.</li>
+    <li><strong>Business &amp; statutory data:</strong> firm name and constitution, GSTIN, PAN, CIN, Udyam registration number.</li>
+    <li><strong>Financial data:</strong> bank name, account number, IFSC, branch, account type, bank statements, undated cheques and income tax returns.</li>
+    <li><strong>Identity documents:</strong> Aadhaar details of the authorised signatory, used solely to verify that the Aadhaar used to electronically sign this Agreement belongs to that signatory.</li>
+    <li><strong>Transaction data:</strong> orders, dispatches, payments, service tickets and other records generated in the course of this Agreement.</li>
+  </ul>
+
+  <h3>3. Documents Retained</h3>
+
+  <p>
+    iTarang <strong>retains a copy of every document the Dealer shared during onboarding</strong>,
+    together with the data extracted from those documents, as the record of the Dealer&rsquo;s
+    verification. These documents are:
+  </p>
+
+  <ul>
+    ${CORRECTION_DOCUMENTS.map((d) => `<li>${esc(d.label)}</li>`).join("\n    ")}
+  </ul>
+
+  <p>
+    Documents are stored on access-controlled infrastructure and are made available only to
+    authorised iTarang personnel and to the recipients listed in Section 4.
+  </p>
+
+  <h3>4. Purposes of Processing</h3>
+
+  <ul>
+    <li>Onboarding the Dealer, and verifying the Dealer&rsquo;s identity, constitution, address and banking details.</li>
+    <li>Executing this Agreement, including electronic signature and electronic stamping through iTarang&rsquo;s e-signature service provider.</li>
+    <li>Facilitating financing for the Dealer and the Dealer&rsquo;s customers, including sharing the necessary data with iTarang&rsquo;s Authorised Financer Partner(s) and NBFC lending partners for credit appraisal and loan processing.</li>
+    <li>Meeting statutory and regulatory obligations under the Companies Act 2013, the Income Tax Act 1961, GST law and applicable RBI directions.</li>
+    <li>Preventing, detecting and investigating fraud, and enforcing this Agreement.</li>
+    <li>Operating the iTarang platform &mdash; order management, dispatch, inventory, warranty, service and support &mdash; and communicating with the Dealer about the same.</li>
+  </ul>
+
+  <h3>5. Retention</h3>
+
+  <p>
+    Personal data and the documents listed in Section 3 are retained for the term of this Agreement
+    and thereafter for as long as required to satisfy iTarang&rsquo;s obligations under the Income
+    Tax Act 1961, GST law, applicable RBI / NBFC lending norms and any limitation period for legal
+    claims. When no purpose and no legal obligation requires the data any longer, it is erased.
+  </p>
+
+  <h3>6. Rights of the Data Principal</h3>
+
+  <p>Under Sections 11 to 14 of the DPDP Act, the Dealer may:</p>
+
+  <ul>
+    <li><strong>Access</strong> a summary of the personal data being processed and the identities of the parties with whom it has been shared.</li>
+    <li><strong>Correct, complete or update</strong> inaccurate or incomplete personal data.</li>
+    <li><strong>Erase</strong> personal data that is no longer necessary for the purposes set out above, subject to the retention obligations in Section 5.</li>
+    <li><strong>Withdraw consent</strong> at any time, with the same ease with which it was given. Withdrawal does not affect the lawfulness of processing carried out before the withdrawal; where the withdrawn data is essential to this Agreement, iTarang may be unable to continue performing it.</li>
+    <li><strong>Nominate</strong> another individual to exercise these rights in the event of death or incapacity.</li>
+    <li><strong>Raise a grievance</strong> with the Grievance Officer named in Section 7, and thereafter with the Data Protection Board of India.</li>
+  </ul>
+
+  <h3>7. Grievance Officer</h3>
+
+  <div class="boxed">
+    <p style="margin:2px 0;"><strong>Name:</strong> Chirag Garg</p>
+    <p style="margin:2px 0;"><strong>Email:</strong> care.itarang@gmail.com</p>
+    <p style="margin:2px 0;"><strong>Phone:</strong> +91-8076841497</p>
+    <p style="margin:2px 0;"><strong>Address:</strong> B103, Business zone, Tower B, Nirvana Country, Gurugram - 122018</p>
+  </div>
+
+  <h3>8. Consent</h3>
+
+  <p>
+    M/S ${esc(safe(company.companyName))}, through its authorised signatory
+    ${esc(safe(agreement.dealerSignerName))}, having read and understood this notice, hereby gives
+    <strong>free, specific, informed, unconditional and unambiguous consent</strong> under Section 6
+    of the DPDP Act for the collection, storage, use, retention and sharing of the personal data and
+    documents described above, for the purposes set out in Section 4.
+  </p>
+
+  <p>
+    The Dealer confirms that it is authorised to share the personal data of its proprietor, partners,
+    directors, authorised signatories and employees for these purposes, and that it has obtained
+    their consent to do so. The Dealer further agrees that iTarang shall retain the documents shared
+    during onboarding as set out in Sections 3 and 5.
+  </p>
+
+  <p>
+    <strong>By electronically signing this Agreement, the Dealer signs and agrees to this Data
+    Protection Notice &amp; Consent.</strong> This consent is given on
+    <strong>${esc(signedDate.day)} ${esc(signedDate.month)} ${esc(signedDate.year)}</strong> and
+    remains in force until withdrawn in writing to the Grievance Officer named above.
+  </p>
+
+  <div class="signature-grid">
+    <div class="signature-box">
+      <div class="sign-line"></div>
+      <p><strong>For the Dealer (Data Principal)</strong></p>
+      <p>M/S ${esc(safe(company.companyName))}</p>
+      <p>Name: ${esc(safe(agreement.dealerSignerName))}</p>
+      <p>Designation: ${esc(safe(agreement.dealerSignerDesignation))}</p>
+    </div>
+
+    <div class="signature-box">
+      <div class="sign-line"></div>
+      <p><strong>For iTarang (Data Fiduciary)</strong></p>
+      <p>The iTarang technologies LLP</p>
+      <p>Name: ${esc(safe(agreement.itarangSignatory1?.name))}</p>
+      <p>Designation: ${esc(safe(agreement.itarangSignatory1?.designation))}</p>
+    </div>
+  </div>
+
+  <p class="small" style="margin-top:14px; text-align:center;">
+    iTarang Technologies LLP &nbsp;|&nbsp; care@itarang.com &nbsp;|&nbsp; Compliant with the Digital
+    Personal Data Protection Act, 2023
+  </p>
 </body>
 </html>
 `;
