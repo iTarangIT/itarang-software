@@ -78,13 +78,24 @@ function cleanString(value?: string) {
   return (value || "").trim();
 }
 
-// Read a key off the legacy businessAddress object (backward-compat fallback for
+// Read a key off the legacy businessAddress value (backward-compat fallback for
 // owner residential address when the explicit owner* keys aren't supplied).
+// business_address is a TEXT column that may hold a JSON-encoded object, so a
+// plain `typeof === "object"` test silently skipped every string-shaped row and
+// the fallback never fired. Parse first.
 function bizAddr(businessAddress: unknown, key: string): string {
-  return typeof businessAddress === "object" &&
-    businessAddress &&
-    key in businessAddress
-    ? String((businessAddress as any)[key] || "")
+  let value: unknown = businessAddress;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{")) return "";
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return "";
+    }
+  }
+  return value && typeof value === "object" && key in value
+    ? String((value as any)[key] || "")
     : "";
 }
 
@@ -429,7 +440,8 @@ export async function POST(req: NextRequest) {
           bizAddr(ownership.businessAddress, "address"),
         ownerCity:
           ownership.ownerCity || bizAddr(ownership.businessAddress, "city"),
-        ownerDistrict: ownership.ownerDistrict || "",
+        ownerDistrict:
+          ownership.ownerDistrict || bizAddr(ownership.businessAddress, "district"),
         ownerState:
           ownership.ownerState || bizAddr(ownership.businessAddress, "state"),
         ownerPinCode:

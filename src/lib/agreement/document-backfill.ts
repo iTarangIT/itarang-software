@@ -64,11 +64,29 @@ type DocRow = {
   extracted_data: unknown;
 };
 
+// Canonical extraction key (a DOC_FIELDS key in lib/whatsapp/prompts.ts) → every
+// `document_type` string the DB may hold for it. The two onboarding paths write
+// DIFFERENT strings for the same document — the WhatsApp orchestrator writes the
+// short prompt names, while the web wizard
+// (api/dealer/onboarding/submit/route.ts) writes its own longer keys. Looking up
+// only the short name silently matched NOTHING for every web-onboarded dealer,
+// which is why Schedule 3's office/residential address, branch and account type
+// stayed blank on their agreements.
+const DOC_TYPE_ALIASES: Record<string, string[]> = {
+  gst: ["gst", "gst_certificate"],
+  bank_statement: ["bank_statement", "bank_statement_3_months"],
+  cancelled_cheque: ["cancelled_cheque", "undated_cheques"],
+  udyam: ["udyam", "udyam_certificate"],
+};
+
 // Return the document's extracted fields, preferring the stored extraction and
 // falling back to a fresh Gemini read only when the stored extraction has NONE
 // of the fields we need (extraction failed at onboarding, or none was stored).
+// `canonicalType` is the DOC_FIELDS key — NOT doc.document_type, which for a
+// web-onboarded document is a string the prompt catalog has no spec for.
 async function resolveDocFields(
   doc: DocRow,
+  canonicalType: string,
   neededKeys: string[],
 ): Promise<Rec> {
   const existing: Rec =
@@ -82,7 +100,7 @@ async function resolveDocFields(
   try {
     const buf = await getObject(doc.bucket_name, doc.storage_path);
     if (!buf) return existing;
-    const res = await readDocument(buf, guessMime(doc), doc.document_type || "");
+    const res = await readDocument(buf, guessMime(doc), canonicalType);
     if (res.ok && res.fields && typeof res.fields === "object") {
       return { ...existing, ...res.fields };
     }
@@ -157,16 +175,23 @@ export async function backfillMissingAgreementFields(
     return { ownershipSnapshot, gstAddressesSnapshot, dealerOfficeAddress };
   }
 
-  const byType = (t: string) => rows.find((r) => (r.document_type || "").toLowerCase() === t);
+  // Find the document stored under ANY of a canonical type's known aliases.
+  const byType = (canonical: string) => {
+    const aliases = DOC_TYPE_ALIASES[canonical] ?? [canonical];
+    return rows.find((r) =>
+      aliases.includes((r.document_type || "").toLowerCase()),
+    );
+  };
 
   let ownershipChanged = false;
   let businessAddressToWrite: string | null = null;
 
   // ── Bank docs: residential address + branch + account type ────────────────
   if (missing.residential || missing.branch || missing.accountType) {
-    const bankDoc = byType("bank_statement") || byType("cancelled_cheque");
+    const bankType = byType("bank_statement") ? "bank_statement" : "cancelled_cheque";
+    const bankDoc = byType(bankType);
     if (bankDoc) {
-      const f = await resolveDocFields(bankDoc, [
+      const f = await resolveDocFields(bankDoc, bankType, [
         "branch",
         "account_type",
         "address_line1",
@@ -187,25 +212,40 @@ export async function backfillMissingAgreementFields(
           ownershipChanged = true;
         }
       }
-      if (missing.residential && nonEmpty(f.address_line1)) {
-        ownershipSnapshot.ownerAddressLine1 = str(f.address_line1);
-        if (nonEmpty(f.city)) ownershipSnapshot.ownerCity = str(f.city);
-        if (nonEmpty(f.district)) ownershipSnapshot.ownerDistrict = str(f.district);
-        if (nonEmpty(f.state)) ownershipSnapshot.ownerState = str(f.state);
-        if (nonEmpty(f.pincode)) ownershipSnapshot.ownerPinCode = str(f.pincode);
-        ownershipChanged = true;
+      // Each owner-address part fills independently. Gating city/district/state/
+      // pincode behind a blank address line 1 left partially-captured addresses
+      // permanently partial — Schedule 3 prints those parts as their own rows.
+      if (missing.residential) {
+        const parts: Array<[string, string]> = [
+          ["ownerAddressLine1", "address_line1"],
+          ["ownerCity", "city"],
+          ["ownerDistrict", "district"],
+          ["ownerState", "state"],
+          ["ownerPinCode", "pincode"],
+        ];
+        for (const [snapshotKey, fieldKey] of parts) {
+          if (!nonEmpty(ownershipSnapshot[snapshotKey]) && nonEmpty(f[fieldKey])) {
+            ownershipSnapshot[snapshotKey] = str(f[fieldKey]);
+            ownershipChanged = true;
+          }
+        }
       }
     }
   }
 
-  // ── GST cert: office/company address ──────────────────────────────────────
+  // ── GST cert (then Udyam): office/company address ─────────────────────────
+  // The Udyam certificate carries the official enterprise address and is the
+  // fallback for dealers who uploaded no GST certificate or whose GST scan the
+  // extractor couldn't read.
   if (missing.office) {
-    const gstDoc = byType("gst");
-    if (gstDoc) {
-      const f = await resolveDocFields(gstDoc, [
+    for (const canonical of ["gst", "udyam"]) {
+      const doc = byType(canonical);
+      if (!doc) continue;
+      const f = await resolveDocFields(doc, canonical, [
         "address",
         "address_line1",
         "city",
+        "district",
         "state",
         "pincode",
       ]);
@@ -222,9 +262,14 @@ export async function backfillMissingAgreementFields(
         businessAddressToWrite = JSON.stringify({
           address: str(f.address) || office,
           city: str(f.city),
+          // district is carried too: Schedule 3 prints it as its own row, and
+          // without it the cell stayed blank even though the GST/Udyam
+          // certificate states the district.
+          district: str(f.district),
           state: str(f.state),
           pincode: str(f.pincode),
         });
+        break;
       }
     }
   }
