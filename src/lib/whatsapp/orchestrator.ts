@@ -383,7 +383,7 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   // machine to the lead-creation console. This must run BEFORE the greeting
   // so an approved dealer's "hi" opens the menu instead of restarting onboarding.
   const application = await loadApplication(session.application_id);
-  const dealer = resolveActiveDealer(application);
+  const dealer = await resolveActiveDealer(application);
   if (dealer) {
     return await runConsoleTurn(session, event, dealer);
   }
@@ -401,6 +401,9 @@ export async function runTurn(event: InboundEvent): Promise<void> {
         dealerCode: webDealer.dealerCode,
         uploaderId: webDealer.dealerUserId,
         dealerName: webDealer.dealerName || session.wa_contact_name || "there",
+        // resolveWhatsAppDealer's "web" branch reads dealers.finance_enabled —
+        // the same canonical column the E-105 lead gate uses.
+        financeEnabled: webDealer.financeEnabled,
       });
     }
   } catch (err) {
@@ -727,7 +730,7 @@ async function runCustomerTurn(
       case "DC_LEAD_MOBILE":
         return await onLeadMobile(session, event);
       case "DC_LEAD_INTEREST":
-        return await onLeadInterest(session, event);
+        return await onLeadInterest(session, event, houseDealer);
       case "DC_LEAD_PAYMENT":
         return await onLeadPayment(session, event, houseDealer);
       case "DC_LEAD_PRODUCT":
@@ -2992,6 +2995,34 @@ const PAYMENT_BUTTONS: ReplyButton[] = [
   { id: "pay_other", title: "Other Finance" },
 ];
 
+// Cash-only dealers (dealers.finance_enabled = false) must never be offered a
+// finance path. The web lead route enforces this server-side via the E-105 gate
+// (FINANCE_NOT_ENABLED in /api/leads/create), but the WhatsApp console writes
+// leads directly through customer-lead.ts and so bypasses that route — without
+// this the buttons offered financing to every approved dealer regardless.
+const CASH_ONLY_PAYMENT_BUTTONS: ReplyButton[] = [
+  { id: "pay_cash", title: "Cash" },
+];
+
+function paymentButtons(dealer: ActiveDealer): ReplyButton[] {
+  return dealer.financeEnabled ? PAYMENT_BUTTONS : CASH_ONLY_PAYMENT_BUTTONS;
+}
+
+function paymentPrompt(dealer: ActiveDealer): string {
+  return dealer.financeEnabled
+    ? "*Payment method*\n\nHow will the customer pay? Tap an option 👇"
+    : "*Payment method*\n\nHow will the customer pay? Tap an option 👇\n\n" +
+        "_Financing isn't enabled on your account yet, so leads are cash only. " +
+        "Contact iTarang if you'd like to offer financing._";
+}
+
+function paymentRetryPrompt(dealer: ActiveDealer): string {
+  return dealer.financeEnabled
+    ? "Please tap *iTarang Finance*, *Cash* or *Other Finance*."
+    : "Financing isn't enabled on your account, so this lead can only be *Cash*. " +
+        "Please tap *Cash*, or contact iTarang to enable financing.";
+}
+
 /** One turn for an admin-approved dealer (the post-onboarding console). */
 async function runConsoleTurn(
   session: SessionRow,
@@ -3013,7 +3044,7 @@ async function runConsoleTurn(
       case "DC_LEAD_MOBILE":
         return await onLeadMobile(session, event);
       case "DC_LEAD_INTEREST":
-        return await onLeadInterest(session, event);
+        return await onLeadInterest(session, event, dealer);
       case "DC_LEAD_PAYMENT":
         return await onLeadPayment(session, event, dealer);
       case "DC_LEAD_PRODUCT":
@@ -3399,6 +3430,7 @@ function parseInterest(event: InboundEvent): InterestLevel | null {
 async function onLeadInterest(
   session: SessionRow,
   event: InboundEvent,
+  dealer: ActiveDealer,
 ): Promise<void> {
   const interest = parseInterest(event);
   if (!interest) {
@@ -3413,24 +3445,36 @@ async function onLeadInterest(
     ctx.lead = { ...(ctx.lead ?? {}), interest };
   });
   await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
-  await reply(
-    session,
-    "*Payment method*\n\nHow will the customer pay? Tap an option 👇",
-    PAYMENT_BUTTONS,
-  );
+  await reply(session, paymentPrompt(dealer), paymentButtons(dealer));
 }
 
-function parsePayment(event: InboundEvent): PaymentMethod | null {
+/**
+ * Parse the dealer's payment choice. A cash-only dealer (finance not enabled)
+ * is never shown the finance buttons, but the free-text branch below would
+ * still match a typed "finance" — so finance choices resolve to null for them
+ * and the caller re-prompts. This is the WhatsApp-side equivalent of the
+ * FINANCE_NOT_ENABLED gate in /api/leads/create.
+ */
+function parsePayment(
+  event: InboundEvent,
+  financeEnabled: boolean,
+): PaymentMethod | null {
   const t = (event.text ?? "").trim().toLowerCase();
+  let picked: PaymentMethod | null = null;
+
   if (event.type === "interactive") {
-    if (t === "pay_finance") return "finance";
-    if (t === "pay_cash") return "cash";
-    if (t === "pay_other") return "other_finance";
+    if (t === "pay_finance") picked = "finance";
+    else if (t === "pay_cash") picked = "cash";
+    else if (t === "pay_other") picked = "other_finance";
   }
-  if (/other/.test(t)) return "other_finance";
-  if (/itarang|finance/.test(t)) return "finance";
-  if (/cash/.test(t)) return "cash";
-  return null;
+  if (!picked) {
+    if (/other/.test(t)) picked = "other_finance";
+    else if (/itarang|finance/.test(t)) picked = "finance";
+    else if (/cash/.test(t)) picked = "cash";
+  }
+
+  if (!financeEnabled && picked !== "cash") return null;
+  return picked;
 }
 
 async function onLeadPayment(
@@ -3438,13 +3482,9 @@ async function onLeadPayment(
   event: InboundEvent,
   dealer: ActiveDealer,
 ): Promise<void> {
-  const paymentMethod = parsePayment(event);
+  const paymentMethod = parsePayment(event, dealer.financeEnabled);
   if (!paymentMethod) {
-    await reply(
-      session,
-      "Please tap *iTarang Finance*, *Cash* or *Other Finance*.",
-      PAYMENT_BUTTONS,
-    );
+    await reply(session, paymentRetryPrompt(dealer), paymentButtons(dealer));
     return;
   }
 

@@ -6,6 +6,7 @@ import {
   leads,
   inventory,
   loanApplications,
+  dealers,
 } from "@/lib/db/schema";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { findLatestDealerOnboardingApplication } from "@/lib/dealer-onboarding";
@@ -53,6 +54,23 @@ export async function GET() {
       email: authUser.email,
     });
     const dealerId = appUser.dealer_id || dealerApp?.dealer_code || null;
+
+    // Canonical finance flag — see the financeEnabled comment in the response
+    // below. dealers.dealer_id is the dealer CODE (same value as
+    // users.dealer_id / applications.dealer_code).
+    let financeLive = false;
+    if (dealerId) {
+      try {
+        const [dealerRow] = await db
+          .select({ financeEnabled: dealers.finance_enabled })
+          .from(dealers)
+          .where(eq(dealers.dealer_id, dealerId))
+          .limit(1);
+        financeLive = Boolean(dealerRow?.financeEnabled);
+      } catch {
+        financeLive = false;
+      }
+    }
 
     // Safe defaults so dashboard always loads
     let totalLeads = 0;
@@ -130,7 +148,14 @@ export async function GET() {
               dealerAccountStatus: dealerApp.dealer_account_status,
               approvedAt: dealerApp.approved_at,
               submittedAt: dealerApp.submitted_at,
-              financeEnabled: dealerApp.finance_enabled ?? false,
+              // Canonical dealers.finance_enabled, NOT the application flag.
+              // The two diverge during post-approval finance enablement: the
+              // application flag flips when the admin enables finance, but
+              // financing isn't usable until the agreement is signed. Showing
+              // the application flag here would advertise "Financing: Yes"
+              // while /api/leads/create still rejects finance leads with
+              // FINANCE_NOT_ENABLED.
+              financeEnabled: financeLive,
               isApproved:
                 dealerApp.onboarding_status === "approved" ||
                 dealerApp.review_status === "approved" ||

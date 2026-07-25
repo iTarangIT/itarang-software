@@ -158,6 +158,11 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
     const application = applicationRows[0];
 
+    // See the review_status write below — an already-approved dealer is signing
+    // their agreement through the post-approval finance-enablement flow, so the
+    // review fields must not be rewound.
+    const isPostApprovalRun = application?.onboarding_status === "approved";
+
     if (!application) {
       return NextResponse.json(
         { success: false, message: "Application not found" },
@@ -399,17 +404,27 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           mergedStampCertificateIds.length > 0
             ? "attached"
             : application.stamp_status || null,
-        completion_status: normalizedStatus === "completed" ? "completed" : "pending",
         ...(aadhaarMismatchReason
           ? {
               agreement_failure_reason: aadhaarMismatchReason,
               agreement_failed_at: new Date(),
             }
           : {}),
-        review_status:
-          normalizedStatus === "completed"
-            ? "agreement_completed"
-            : "agreement_in_progress",
+        // Post-approval finance enablement: an already-approved dealer signing
+        // their finance agreement must stay "approved" in the review queue —
+        // they were reviewed and activated long ago. Only a still-in-review
+        // application tracks its review state off the agreement. (agreement_status
+        // above is the real signal activate-finance gates on either way.)
+        ...(isPostApprovalRun
+          ? {}
+          : {
+              completion_status:
+                normalizedStatus === "completed" ? "completed" : "pending",
+              review_status:
+                normalizedStatus === "completed"
+                  ? "agreement_completed"
+                  : "agreement_in_progress",
+            }),
         signed_at:
           normalizedStatus === "completed"
             ? new Date(extractSignedAt(parsed) || new Date())

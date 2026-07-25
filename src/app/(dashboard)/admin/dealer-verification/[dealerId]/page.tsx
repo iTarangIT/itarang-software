@@ -178,6 +178,10 @@ type DealerReviewData = {
   directors?: OwnershipPerson[];
   agreementLanguage?: string;   // ✅ NEW
   financeEnabled?: boolean;
+  /** Whether financing is actually LIVE (dealers.finance_enabled), as opposed
+   *  to merely requested on the application. These diverge while a
+   *  post-approval finance enablement is waiting on its agreement. */
+  financeLive?: boolean;
   onboardingStatus?: string;
   reviewStatus?: string;
   submittedAt?: string | null;
@@ -608,6 +612,134 @@ function SignerStatusBadge({ value }: { value?: string | null }) {
 
 // ─── ActionCard (unchanged) ───────────────────────────────────────────────────
 
+/**
+ * Post-approval finance enablement — for a dealer approved WITHOUT financing
+ * who now wants it (common on the WhatsApp flow, where finance is a single
+ * yes/no tap that's easy to get wrong).
+ *
+ * Approve is a one-shot action, so the fix is a two-step side path that never
+ * touches the dealer's credentials:
+ *   1. Enable Finance   → unlocks Section 3 so the agreement can be initiated
+ *   2. dealer signs      → (the normal Digio flow, unchanged)
+ *   3. Activate Finance  → flips dealers.finance_enabled, financing goes live
+ *
+ * Only rendered for an already-approved dealer; everyone else reaches finance
+ * through the ordinary approve path.
+ */
+function FinanceEnablementCard({
+  financeEnabled, financeLive, isAgreementCompleted, hasInitiatedAgreement,
+  busy, onEnable, onActivate,
+}: {
+  financeEnabled?: boolean;
+  financeLive?: boolean;
+  isAgreementCompleted: boolean;
+  hasInitiatedAgreement: boolean;
+  busy: boolean;
+  onEnable: () => void;
+  onActivate: () => void;
+}) {
+  const live = !!financeLive;
+  const awaitingAgreement = !!financeEnabled && !live && !isAgreementCompleted;
+  const readyToActivate = !!financeEnabled && !live && isAgreementCompleted;
+
+  return (
+    <motion.aside
+      initial={{ opacity: 0, x: 12 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.28, delay: 0.05 }}
+      className="mt-6 rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm"
+    >
+      <div className="flex items-center gap-3">
+        <div className={`rounded-2xl p-3 ${live ? "bg-emerald-50 text-emerald-700" : "bg-slate-50 text-slate-700"}`}>
+          <Landmark className="h-5 w-5" />
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900">Finance Enablement</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {live
+              ? "Financing is active for this dealer."
+              : "Turn financing on for this already-approved dealer."}
+          </p>
+        </div>
+      </div>
+
+      {live && (
+        <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+            <p className="text-sm text-emerald-800">
+              Financing is <span className="font-semibold">live</span>. The dealer can
+              select a finance payment method on new leads — including from WhatsApp.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!financeEnabled && !live && (
+        <>
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 h-4 w-4 text-slate-500" />
+              <p className="text-sm text-slate-600">
+                This dealer was approved <span className="font-semibold">without</span>{" "}
+                financing, so no dealer agreement exists. Enabling finance unlocks
+                Section&nbsp;3 so you can initiate the agreement. Financing only goes
+                live once that agreement is signed — the dealer keeps their current
+                login throughout.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onEnable}
+            disabled={busy}
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Landmark className="h-4 w-4" />
+            {busy ? "Enabling…" : "Enable Finance"}
+          </button>
+        </>
+      )}
+
+      {awaitingAgreement && (
+        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
+            <p className="text-sm text-amber-800">
+              Finance is enabled but <span className="font-semibold">not yet live</span>.{" "}
+              {hasInitiatedAgreement
+                ? "The dealer agreement is out for signature — once every party has signed, refresh its status in Section 3 and come back here to activate."
+                : "Initiate the dealer agreement in Section 3 above, then return here once it's signed."}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {readyToActivate && (
+        <>
+          <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+              <p className="text-sm text-emerald-800">
+                The dealer agreement is <span className="font-semibold">signed</span>.
+                Activating sends the dealer their signed copy and turns on the finance
+                payment options. No new password is issued.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onActivate}
+            disabled={busy}
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            {busy ? "Activating…" : "Activate Finance"}
+          </button>
+        </>
+      )}
+    </motion.aside>
+  );
+}
+
 function ActionCard({
   remarks, setRemarks, submitting,
   onApprove, onCorrection, onReject, onBack,
@@ -677,15 +809,28 @@ function ActionCard({
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start gap-3">
             <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
-            <p className="text-sm text-amber-800">
-              Approval is blocked — the dealer hasn&apos;t submitted onboarding yet
-              (current status:&nbsp;
-              <span className="font-semibold">
-                {(onboardingStatus || "").replaceAll("_", " ") || "draft"}
-              </span>
-              ). Ask the dealer to complete and submit the onboarding form before
-              approving.
-            </p>
+            {/* An ALREADY-APPROVED dealer also fails the "must be submitted"
+                gate, but telling the admin they "haven't submitted yet" is
+                simply wrong and reads as a bug. Approve is a one-shot action —
+                say so. */}
+            {onboardingStatus === "approved" ? (
+              <p className="text-sm text-amber-800">
+                This dealer is already <span className="font-semibold">approved</span> and
+                live — Approve only runs once. To change what they can do from here,
+                use the actions below rather than re-approving (re-approval would
+                reset their password and re-send their credentials).
+              </p>
+            ) : (
+              <p className="text-sm text-amber-800">
+                Approval is blocked — the dealer hasn&apos;t submitted onboarding yet
+                (current status:&nbsp;
+                <span className="font-semibold">
+                  {(onboardingStatus || "").replaceAll("_", " ") || "draft"}
+                </span>
+                ). Ask the dealer to complete and submit the onboarding form before
+                approving.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -804,6 +949,8 @@ export default function DealerReviewPage() {
   const [remarks, setRemarks]   = useState("");
   const [loading, setLoading]   = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Post-approval finance enablement (Enable Finance / Activate Finance).
+  const [financeBusy, setFinanceBusy] = useState(false);
   // Explicit admin acknowledgement for branch-classified approvals — the
   // approve endpoint returns 409 without it.
   const [branchAck, setBranchAck] = useState(false);
@@ -1239,6 +1386,34 @@ export default function DealerReviewPage() {
       "";
     return { name, email };
   }, [tracking?.signers, data?.agreement]);
+
+  // Post-approval finance enablement (Enable Finance → sign → Activate Finance).
+  // Both endpoints are guarded server-side; this only drives the UI state.
+  const handleFinanceAction = async (action: "enable" | "activate") => {
+    if (data?.onboardingStatus === "rejected") {
+      toast.error("This application is rejected and locked.");
+      return;
+    }
+    setFinanceBusy(true);
+    try {
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/${action}-finance`,
+        { method: "POST" },
+      );
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        toast.error(json.message || `Failed to ${action} finance`);
+        return;
+      }
+      toast.success(json.message);
+      await reloadDealer();
+    } catch (error: any) {
+      console.error(`${action} finance failed`, error);
+      toast.error(error?.message || `Failed to ${action} finance`);
+    } finally {
+      setFinanceBusy(false);
+    }
+  };
 
   const reloadDealer = async () => {
     try {
@@ -2517,6 +2692,21 @@ export default function DealerReviewPage() {
           branchAck={branchAck}
           setBranchAck={setBranchAck}
         />
+
+        {/* Finance enablement for a dealer already approved WITHOUT it. Not
+            shown pre-approval — until then finance is decided by the normal
+            approve path. */}
+        {data.onboardingStatus === "approved" && !isRejected && (
+          <FinanceEnablementCard
+            financeEnabled={data.financeEnabled}
+            financeLive={data.financeLive}
+            isAgreementCompleted={isAgreementCompleted}
+            hasInitiatedAgreement={hasInitiatedAgreement}
+            busy={financeBusy}
+            onEnable={() => handleFinanceAction("enable")}
+            onActivate={() => handleFinanceAction("activate")}
+          />
+        )}
       </div>
 
       <RequestCorrectionDialog

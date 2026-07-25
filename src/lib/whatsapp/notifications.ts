@@ -139,6 +139,90 @@ export async function sendDealerWelcomeWhatsApp(
   return delivery;
 }
 
+export type FinanceActivatedWhatsAppParams = {
+  waPhone: string;
+  waSessionId: string | null;
+  dealerName: string;
+  companyName: string;
+  dealerCode: string;
+  supportEmail: string;
+  supportPhone: string;
+  signedAgreementUrl?: string | null;
+  auditTrailUrl?: string | null;
+};
+
+/**
+ * Post-approval finance activation → dealer notification over WhatsApp.
+ *
+ * Sent by the activate-finance route once the dealer agreement is signed and
+ * `dealers.finance_enabled` flips to true. Unlike the welcome message this
+ * carries NO credentials — the dealer is already live and keeps the login they
+ * were given at approval. It only tells them the finance option is now
+ * available and hands over the signed PDFs for their records.
+ */
+export async function sendFinanceActivatedWhatsApp(
+  p: FinanceActivatedWhatsAppParams,
+): Promise<WhatsAppDelivery> {
+  const adapter = getAdapter();
+  const delivery: WhatsAppDelivery = { attempted: true, ok: false, error: null };
+
+  try {
+    const body =
+      `✅ *Financing is now enabled, ${p.dealerName}!*\n\n` +
+      `Your dealer agreement for *${p.companyName}* is signed, and financing is ` +
+      `now active on your account (*${p.dealerCode}*).\n\n` +
+      `You can now choose *iTarang Finance* or *Other Finance* as the payment ` +
+      `method when you create a new lead here on WhatsApp — just send *hi* and ` +
+      `tap *🆕 New Lead*.\n\n` +
+      (p.signedAgreementUrl
+        ? p.auditTrailUrl
+          ? `Your *signed agreement* and *audit trail* are attached below for your records.\n\n`
+          : `Your *signed agreement* is attached below for your records.\n\n`
+        : "") +
+      `Need help? Email ${p.supportEmail} or call ${p.supportPhone}.`;
+
+    const textRes = await adapter.sendText(p.waPhone, body);
+    await logOutbound(p.waSessionId, textRes, {
+      messageType: "text",
+      textBody: body,
+    });
+    delivery.ok = textRes.ok;
+    delivery.error = textRes.error ?? null;
+
+    if (p.signedAgreementUrl) {
+      const res = await adapter.sendDocument(
+        p.waPhone,
+        p.signedAgreementUrl,
+        `signed-agreement-${p.dealerCode}.pdf`,
+        "Signed Dealer Agreement",
+      );
+      await logOutbound(p.waSessionId, res, {
+        messageType: "document",
+        textBody: "Signed Dealer Agreement",
+      });
+      if (!res.ok) delivery.error = delivery.error || res.error || null;
+    }
+    if (p.auditTrailUrl) {
+      const res = await adapter.sendDocument(
+        p.waPhone,
+        p.auditTrailUrl,
+        `audit-trail-${p.dealerCode}.pdf`,
+        "Agreement Audit Trail",
+      );
+      await logOutbound(p.waSessionId, res, {
+        messageType: "document",
+        textBody: "Agreement Audit Trail",
+      });
+      if (!res.ok) delivery.error = delivery.error || res.error || null;
+    }
+  } catch (err: any) {
+    delivery.error = err?.message || "whatsapp_send_error";
+    console.error("[WhatsApp/notifications] finance-activated send threw:", err);
+  }
+
+  return delivery;
+}
+
 export type DealerRejectedWhatsAppParams = {
   waPhone: string;
   waSessionId: string | null;
