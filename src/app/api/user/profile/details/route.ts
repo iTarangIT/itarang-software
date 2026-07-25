@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { accounts, scrapVendors } from "@/lib/db/schema";
+import { accounts, dealers, scrapVendors } from "@/lib/db/schema";
 import { requireAuthWithSupabaseUser } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { findLatestDealerOnboardingApplication } from "@/lib/dealer-onboarding";
@@ -48,6 +48,20 @@ export const GET = withErrorHandler(async () => {
       account = row ?? null;
     }
 
+    // Canonical dealers.finance_enabled — the application's flag diverges from
+    // it during post-approval finance enablement (enabled on the application
+    // while the agreement is still being signed, but not yet usable).
+    const dealerCode = dbUser.dealer_id || app?.dealer_code || null;
+    let financeLive = false;
+    if (dealerCode) {
+      const [dealerRow] = await db
+        .select({ financeEnabled: dealers.finance_enabled })
+        .from(dealers)
+        .where(eq(dealers.dealer_id, dealerCode))
+        .limit(1);
+      financeLive = Boolean(dealerRow?.financeEnabled);
+    }
+
     if (!app && !account) return successResponse({ kind: "none" as const });
 
     return successResponse({
@@ -60,7 +74,7 @@ export const GET = withErrorHandler(async () => {
         dealerType: app?.dealer_type ?? null,
         gstNumber: app?.gst_number ?? account?.gstin ?? null,
         panNumber: app?.pan_number ?? null,
-        financeEnabled: Boolean(app?.finance_enabled),
+        financeEnabled: financeLive,
         onboardingStatus: app?.onboarding_status ?? null,
         reviewStatus: app?.review_status ?? null,
         city: app?.city ?? account?.city ?? null,
