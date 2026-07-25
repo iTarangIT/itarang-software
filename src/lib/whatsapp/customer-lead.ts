@@ -22,6 +22,7 @@ import { notifyLeadCreated } from "@/lib/notifications/events";
 import {
   adminVerificationQueue,
   dealerOnboardingApplications,
+  dealers,
   inventory,
   leads,
   paraphernaliaStock,
@@ -40,6 +41,43 @@ export interface ActiveDealer {
   uploaderId: string;
   /** Display name for greetings ("Hi Acme Motors"). */
   dealerName: string;
+  /**
+   * Whether this dealer may create finance-path leads. Sourced from
+   * `dealers.finance_enabled` — the SAME column /api/leads/create's E-105 gate
+   * reads — and deliberately NOT from the onboarding application's flag: during
+   * post-approval finance enablement the application flag flips to true the
+   * moment the agreement is initiated, while finance must stay off until the
+   * agreement is actually signed and activate-finance runs.
+   */
+  financeEnabled: boolean;
+}
+
+/**
+ * Look up the canonical `dealers.finance_enabled` for a dealer code. Defaults
+ * to false when the row is missing — a dealer we can't verify never gets the
+ * finance path.
+ */
+export async function resolveDealerFinanceEnabled(
+  dealerCode: string,
+): Promise<boolean> {
+  if (!dealerCode) return false;
+  const [row] = await db
+    .select({ financeEnabled: dealers.finance_enabled })
+    .from(dealers)
+    .where(eq(dealers.dealer_id, dealerCode))
+    .limit(1);
+  if (!row) {
+    // Failing closed is right — we can't verify the dealer may finance — but a
+    // missing dealers row also silently turns the console cash-only, which
+    // looks like a bug from the outside. Say so. (For the house dealer this
+    // means provision-house-dealer.mjs hasn't been run on this environment.)
+    console.warn(
+      "[WhatsApp/customer-lead] no dealers row for dealer_code " +
+        `${dealerCode} — treating as cash-only.`,
+    );
+    return false;
+  }
+  return Boolean(row.financeEnabled);
 }
 
 /**
@@ -48,9 +86,9 @@ export interface ActiveDealer {
  * approved or is missing the post-approval identity columns — in which case the
  * caller keeps the dealer in the onboarding flow.
  */
-export function resolveActiveDealer(
+export async function resolveActiveDealer(
   application: Application | null | undefined,
-): ActiveDealer | null {
+): Promise<ActiveDealer | null> {
   if (!application) return null;
   const approved =
     application.onboarding_status === "approved" &&
@@ -62,6 +100,7 @@ export function resolveActiveDealer(
     uploaderId: application.dealer_user_id,
     dealerName:
       application.owner_name || application.company_name || "there",
+    financeEnabled: await resolveDealerFinanceEnabled(application.dealer_code),
   };
 }
 
@@ -91,7 +130,12 @@ export async function resolveHouseDealer(): Promise<ActiveDealer | null> {
     )
     .limit(1);
   if (!u || !u.dealerId) return null;
-  return { dealerCode: u.dealerId, uploaderId: u.id, dealerName: "iTarang" };
+  return {
+    dealerCode: u.dealerId,
+    uploaderId: u.id,
+    dealerName: "iTarang",
+    financeEnabled: await resolveDealerFinanceEnabled(u.dealerId),
+  };
 }
 
 export type InterestLevel = "hot" | "warm" | "cold";
