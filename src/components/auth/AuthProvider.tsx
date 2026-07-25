@@ -35,7 +35,12 @@ const AuthContext = createContext<AuthContextType>({
 // provider and would otherwise block the whole tree on a fresh
 // /api/user/profile round-trip; the snapshot renders immediately while the
 // fetch below revalidates in the background. Cleared on sign-out/logout.
-const PROFILE_SNAPSHOT_KEY = "itarang:profile:v1";
+// v2: /api/user/profile used to return the whole users row including
+// `password_hash`, so every browser that loaded the app cached a bcrypt hash
+// here. The server side is fixed (auth-utils.ts USER_COLUMNS), but bumping the
+// key is what actually evicts the already-poisoned snapshots — a stale v1 entry
+// would otherwise survive for the life of the tab.
+const PROFILE_SNAPSHOT_KEY = "itarang:profile:v2";
 
 function readProfileSnapshot(): AppUser | null {
   try {

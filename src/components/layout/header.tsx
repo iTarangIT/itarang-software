@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from 'lucide-react';
+import { Search, LogOut, User, ChevronDown, Settings, Menu } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
@@ -24,6 +24,7 @@ export function Header() {
     // and on the shared /expenses pages (a common route any role can reach, where
     // the user would otherwise be stranded with no way to open navigation).
     const openSidebar = useUIStore((s) => s.openSidebar);
+    const openChangePassword = useUIStore((s) => s.openChangePassword);
     const showMobileNav = pathname.startsWith('/dealer-portal') || pathname.startsWith('/expenses');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -172,18 +173,25 @@ export function Header() {
                             </div>
 
                             <div className="py-1">
-                                <Link href="/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
+                                <Link
+                                    href="/profile"
+                                    onClick={() => setIsProfileOpen(false)}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors"
+                                >
                                     <User className="w-4 h-4" />
                                     View Profile
                                 </Link>
-                                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
+                                <button
+                                    type="button"
+                                    onClick={() => { setIsProfileOpen(false); openChangePassword(); }}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors"
+                                >
                                     <Settings className="w-4 h-4" />
                                     Change Password
                                 </button>
-                                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
-                                    <CreditCard className="w-4 h-4" />
-                                    Subscription: <span className="text-green-600 font-medium text-xs bg-green-50 px-1.5 py-0.5 rounded-full">Active</span>
-                                </button>
+                                {/* The "Subscription: Active" item that used to sit here was a
+                                    dead button advertising a state that exists nowhere in the
+                                    schema. Removed rather than left next to a live one. */}
                             </div>
 
                             <div className="border-t border-gray-100 my-1"></div>
