@@ -34,9 +34,12 @@ export default function UsersSection({ currentUserId, members }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   // A selected value is either "sys:<role>" (system role) or "custom:<roleId>".
   const [roleValue, setRoleValue] = useState("sys:viewer");
   const [customRoles, setCustomRoles] = useState<{ id: string; name: string }[]>([]);
+  // Set once when a brand-new login is provisioned — shown to the admin to relay.
+  const [newLogin, setNewLogin] = useState<{ email: string; password: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,8 +61,12 @@ export default function UsersSection({ currentUserId, members }: Props) {
     }
     setBusy(true);
     setError(null);
+    setNewLogin(null);
     try {
-      const body: { email: string; role?: string; role_id?: string } = { email: email.trim() };
+      const body: { email: string; name?: string; role?: string; role_id?: string } = {
+        email: email.trim(),
+      };
+      if (name.trim()) body.name = name.trim();
       if (roleValue.startsWith("custom:")) body.role_id = roleValue.slice("custom:".length);
       else body.role = roleValue.slice("sys:".length);
       const res = await fetch("/api/nbfc/users", {
@@ -67,11 +74,22 @@ export default function UsersSection({ currentUserId, members }: Props) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        created?: boolean;
+        tempPassword?: string | null;
+        email?: string;
+      };
       if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? `HTTP ${res.status}`);
       }
+      // A brand-new login was provisioned — surface the one-time password so the
+      // admin can relay it. Existing-user links just refresh the list.
+      if (j.created && j.tempPassword) {
+        setNewLogin({ email: j.email ?? email.trim(), password: j.tempPassword });
+      }
       setEmail("");
+      setName("");
       setRoleValue("sys:viewer");
       router.refresh();
     } catch (e) {
@@ -178,6 +196,19 @@ export default function UsersSection({ currentUserId, members }: Props) {
               placeholder="user@example.com"
             />
           </div>
+          <div className="flex-1 min-w-[160px]">
+            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+              Name <span className="font-normal normal-case text-slate-400">(new logins)</span>
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={busy}
+              className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+              placeholder="Jane Partner"
+            />
+          </div>
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
               Role
@@ -222,8 +253,42 @@ export default function UsersSection({ currentUserId, members }: Props) {
         {error ? (
           <div className="mt-2 px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div>
         ) : null}
+        {newLogin ? (
+          <div className="mt-3 px-3 py-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded text-xs space-y-2">
+            <div className="font-bold text-emerald-800 dark:text-emerald-300">
+              New login created — share these once. The user must change the password on first login.
+            </div>
+            <div className="font-mono text-slate-700 dark:text-slate-200">
+              <div>
+                <span className="text-slate-500">Email:</span> {newLogin.email}
+              </div>
+              <div>
+                <span className="text-slate-500">Password:</span> {newLogin.password}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() =>
+                  navigator.clipboard?.writeText(
+                    `Login: ${newLogin.email}\nPassword: ${newLogin.password}`,
+                  )
+                }
+                className="text-emerald-700 dark:text-emerald-300 font-bold hover:underline"
+              >
+                Copy credentials
+              </button>
+              <button
+                onClick={() => setNewLogin(null)}
+                className="text-slate-500 hover:underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        ) : null}
         <p className="text-[11px] text-slate-500 mt-2">
-          The invited email must already have an iTarang account; we link it to this tenant.
+          If the email already has an iTarang account we link it to this tenant. Otherwise a brand-new
+          login is created and a one-time password is shown here for you to relay.
         </p>
       </div>
     </section>
