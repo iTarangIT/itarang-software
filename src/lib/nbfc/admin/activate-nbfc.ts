@@ -65,7 +65,7 @@ export function maskEmail(email: string): string {
   return `${head}${"*".repeat(Math.max(2, local.length - 2))}${domain}`;
 }
 
-async function ensureSupabaseUser(
+export async function ensureSupabaseUser(
   email: string,
   password: string,
 ): Promise<string> {
