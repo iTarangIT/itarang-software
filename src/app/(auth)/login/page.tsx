@@ -6,6 +6,11 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
+import ForgotPasswordModal from '@/components/auth/ForgotPasswordModal';
+
+// Shared by sign-in validation and the forgot-password gate, so the two entry
+// points can never disagree about what counts as a valid address.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Hard-navigate (full HTML fetch) instead of router.push so the destination
 // page boots with the current build's manifest. Client-side router.push reuses
@@ -21,6 +26,7 @@ export default function LoginPage() {
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+    const [forgotOpen, setForgotOpen] = useState(false);
 
     const validate = (): boolean => {
         const e: { email?: string; password?: string } = {};
@@ -28,7 +34,7 @@ export default function LoginPage() {
 
         if (!trimmedEmail) {
             e.email = 'Email is required';
-        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+        } else if (!EMAIL_RE.test(trimmedEmail)) {
             e.email = 'Enter a valid email address';
         }
 
@@ -40,6 +46,28 @@ export default function LoginPage() {
 
         setErrors(e);
         return Object.keys(e).length === 0;
+    };
+
+    // The modal shows the address read-only, so it must never open with a blank
+    // or malformed one — the user would be staring at an empty chip wondering
+    // where the mail went. Gate it here and send them back to the email field.
+    const handleForgotPassword = () => {
+        const trimmedEmail = email.trim().toLowerCase();
+
+        if (!trimmedEmail) {
+            setErrors(prev => ({ ...prev, email: 'Email is required' }));
+            toast.error('Enter your email address first, then click "Forgot password?".');
+            document.getElementById('email')?.focus();
+            return;
+        }
+        if (!EMAIL_RE.test(trimmedEmail)) {
+            setErrors(prev => ({ ...prev, email: 'Enter a valid email address' }));
+            toast.error("That email address doesn't look right. Fix it, then click \"Forgot password?\".");
+            document.getElementById('email')?.focus();
+            return;
+        }
+
+        setForgotOpen(true);
     };
 
     const handleLogin = async (e: React.FormEvent) => {
@@ -219,9 +247,18 @@ export default function LoginPage() {
                                 <label htmlFor="password" className="block text-sm font-medium text-gray-700">
                                     Password
                                 </label>
-                                <a href="#" className="text-sm font-medium text-blue-600 hover:text-blue-500">
+                                {/* type="button" is MANDATORY — this sits inside
+                                    <form onSubmit={handleLogin}>, and a button
+                                    without it defaults to type="submit" and
+                                    would fire a login attempt instead. */}
+                                <button
+                                    type="button"
+                                    onClick={handleForgotPassword}
+                                    disabled={loading}
+                                    className="text-sm font-medium text-blue-600 hover:text-blue-500 disabled:opacity-60"
+                                >
                                     Forgot password?
-                                </a>
+                                </button>
                             </div>
                             <div className="relative">
                                 <input
@@ -310,6 +347,12 @@ export default function LoginPage() {
                     </form>
                 </div>
             </div>
+
+            <ForgotPasswordModal
+                open={forgotOpen}
+                email={email.trim().toLowerCase()}
+                onClose={() => setForgotOpen(false)}
+            />
         </div>
     );
 }

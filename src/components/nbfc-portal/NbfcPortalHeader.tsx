@@ -10,12 +10,13 @@
  * the same global search overlay as the admin header.
  */
 import React, { useState, useRef, useEffect } from "react";
-import { Search, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from "lucide-react";
+import { Search, LogOut, User, ChevronDown, Settings, Menu } from "lucide-react";
 import Link from "next/link";
 import { GlobalSearchOverlay } from "@/components/search/GlobalSearchOverlay";
 import { useAuth } from "@/components/auth/AuthProvider";
 import NotificationBell from "@/components/shared/NotificationBell";
 import NbfcWorkQueueBlock from "@/components/nbfc-portal/NbfcWorkQueueBlock";
+import { useUIStore } from "@/store/uiStore";
 import { toast } from "sonner";
 
 export default function NbfcPortalHeader({
@@ -26,6 +27,7 @@ export default function NbfcPortalHeader({
     onMenuClick?: () => void;
 }) {
     const { user } = useAuth();
+    const openChangePassword = useUIStore((s) => s.openChangePassword);
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
@@ -153,18 +155,27 @@ export default function NbfcPortalHeader({
                             </div>
 
                             <div className="py-1">
-                                <Link href="/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
+                                {/* /nbfc/profile, not /profile: the shared route falls
+                                    outside NbfcPortalShell and would drop the user into
+                                    the admin sidebar with no way back to NBFC nav. */}
+                                <Link
+                                    href="/nbfc/profile"
+                                    onClick={() => setIsProfileOpen(false)}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors"
+                                >
                                     <User className="w-4 h-4" />
                                     View Profile
                                 </Link>
-                                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
+                                <button
+                                    type="button"
+                                    onClick={() => { setIsProfileOpen(false); openChangePassword(); }}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors"
+                                >
                                     <Settings className="w-4 h-4" />
                                     Change Password
                                 </button>
-                                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
-                                    <CreditCard className="w-4 h-4" />
-                                    Subscription: <span className="text-green-600 font-medium text-xs bg-green-50 px-1.5 py-0.5 rounded-full">Active</span>
-                                </button>
+                                {/* The dead "Subscription: Active" item was removed here too
+                                    — see the note in components/layout/header.tsx. */}
                             </div>
 
                             <div className="border-t border-gray-100 my-1"></div>

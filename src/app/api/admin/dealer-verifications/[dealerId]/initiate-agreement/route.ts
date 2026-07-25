@@ -756,6 +756,14 @@ export async function POST(
       );
     }
 
+    // Post-approval finance enablement (enable-finance route): the dealer is
+    // ALREADY approved and live, and is only now signing the finance agreement.
+    // Resetting review_status/completion_status would drop them back into the
+    // admin's pending-review queue and contradict their approved state, so the
+    // review fields are left alone for an approved application. Only the
+    // agreement-tracking fields below move.
+    const isPostApprovalRun = application.onboarding_status === "approved";
+
     await db
       .update(dealerOnboardingApplications)
       .set({
@@ -763,8 +771,12 @@ export async function POST(
           agreementStatus === "requested"
             ? "sent_to_external_party"
             : agreementStatus,
-        review_status: "pending_admin_review",
-        completion_status: "pending",
+        ...(isPostApprovalRun
+          ? {}
+          : {
+              review_status: "pending_admin_review",
+              completion_status: "pending",
+            }),
         provider_document_id: providerDocumentId || null,
         request_id: requestId,
         provider_signing_url: signingUrl || null,

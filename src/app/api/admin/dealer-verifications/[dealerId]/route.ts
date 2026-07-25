@@ -5,6 +5,7 @@ import {
   dealerCorrectionRounds,
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
+  dealers,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -177,6 +178,22 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         { success: false, message: "Dealer onboarding application not found" },
         { status: 404 }
       );
+    }
+
+    // Whether financing is actually LIVE for this dealer, as opposed to merely
+    // requested on the application. These diverge during post-approval finance
+    // enablement: `financeEnabled` flips to true when the admin clicks Enable
+    // Finance, but `financeLive` only follows once the agreement is signed and
+    // Activate Finance runs. `dealers.finance_enabled` is the column the E-105
+    // lead-creation gate and the WhatsApp console both read.
+    let financeLive = false;
+    if (row.dealer_code) {
+      const [dealerRow] = await db
+        .select({ financeEnabled: dealers.finance_enabled })
+        .from(dealers)
+        .where(eq(dealers.dealer_id, row.dealer_code))
+        .limit(1);
+      financeLive = Boolean(dealerRow?.financeEnabled);
     }
 
     // Keep only the most recent upload per document_type so the admin sees a
@@ -376,6 +393,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         agreementLanguage: row.agreement_language,
 
         financeEnabled: row.finance_enabled,
+        financeLive,
         onboardingStatus: row.onboarding_status,
         reviewStatus: row.review_status,
         submittedAt: row.submitted_at,

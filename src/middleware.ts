@@ -126,7 +126,13 @@ export async function middleware(request: NextRequest) {
     scrap_vendor: "/vendor-portal",
   };
 
-  const isPublicRoute = path === "/login" || path === "/logout";
+  // E-212 — /reset-password is reached from an emailed token link by a user who
+  // by definition has no session. It sits under no roleDashboards prefix, so it
+  // already falls through un-redirected today, but that is accidental rather
+  // than intentional: listing it means a future isProtectedRoute widening can't
+  // silently lock the only way back into a locked-out account.
+  const isPublicRoute =
+    path === "/login" || path === "/logout" || path === "/reset-password";
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>
@@ -143,6 +149,13 @@ export async function middleware(request: NextRequest) {
     path.startsWith("/provisions") ||
     path.startsWith("/disputes") ||
     path.startsWith("/expenses") ||
+    // /profile is every role's own account page. It is deliberately NOT in
+    // roleDashboards — those values also drive the "wrong role → bounce to your
+    // own dashboard" check below, so a /profile entry keyed to one role would
+    // bounce every OTHER role off their own profile. Listing it here only means
+    // "you must be signed in", which is what was missing: before this, an
+    // unauthenticated visitor rendered the page instead of being sent to /login.
+    path === "/profile" ||
     path === "/" ||
     path === "/dashboard";
 
