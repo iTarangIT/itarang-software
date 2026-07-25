@@ -33,7 +33,6 @@ import ServiceOptInSection, {
 } from "./_components/ServiceOptInSection";
 import StepOwnersSection from "./_components/StepOwnersSection";
 import WalletSection from "./_components/WalletSection";
-import ConsentTemplateSection from "./_components/ConsentTemplateSection";
 
 export const dynamic = "force-dynamic";
 
@@ -184,19 +183,6 @@ export default async function SettingsPage() {
         initialConfig={serviceConfig}
         canEdit={canEdit}
         callbackBase={callbackBase}
-      />
-
-      {/* Consent document — the NBFC's own DPDP consent template (E-205) */}
-      <ConsentTemplateSection
-        canEdit={canEdit}
-        initialTemplate={
-          serviceCfgRow?.consent_template_url
-            ? {
-                url: serviceCfgRow.consent_template_url,
-                size: serviceCfgRow.consent_template_size ?? null,
-              }
-            : null
-        }
       />
 
       {/* Notification Channels — per-NBFC Email/SMS/WhatsApp gateways (§15.5) */}
