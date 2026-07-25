@@ -220,8 +220,15 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .update(dealerOnboardingApplications)
       .set({
         agreement_status: "completed",
-        review_status: "agreement_completed",
-        completion_status: "completed",
+        // An already-approved dealer completing their agreement via the
+        // post-approval finance-enablement flow stays "approved" — rewinding
+        // review_status would put a live dealer back in the pending queue.
+        ...(application.onboarding_status === "approved"
+          ? {}
+          : {
+              review_status: "agreement_completed",
+              completion_status: "completed",
+            }),
         signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
         signed_agreement_storage_path: signedPath,
         audit_trail_url: auditTrailUrl || application.audit_trail_url,
