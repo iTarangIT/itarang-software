@@ -49,7 +49,10 @@ const batteryRowSchema = z
       .trim()
       .optional()
       .nullable()
-      .refine((v) => !v || /^[0-9]{15}$/.test(v), "IMEI ID must be 15 digits"),
+      .refine(
+        (v) => !v || /^[A-Za-z0-9]{16}$/.test(v),
+        "IMEI ID must be 16 alphanumeric characters",
+      ),
     iot_enabled: yesNoBool,
     material_code: z.string().min(1, "Material Code is required"),
     category: z

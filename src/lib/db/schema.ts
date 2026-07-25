@@ -8879,3 +8879,94 @@ export const bankStatementRows = pgTable(
     refIdx: index("bank_statement_rows_ref_idx").on(t.txn_ref),
   }),
 );
+
+// --- E-212: FORGOT PASSWORD ---
+//
+// Single-use, sha256-hashed password-reset tokens backing the "Forgot
+// password?" flow on /login. See drizzle/E-212_password_reset_tokens.sql for
+// the full rationale (two password stores, why we don't use Supabase's own
+// recovery link). A token is usable iff:
+//   used_at IS NULL AND invalidated_at IS NULL AND expires_at > now()
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // users.id === Supabase auth user id.
+    user_id: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Audit only. NEVER look a user up by this — Supabase lower-cases emails
+    // while users.email may be mixed-case and Postgres `=` is case-sensitive.
+    email: text().notNull(),
+    token_hash: varchar("token_hash", { length: 64 }).notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    used_at: timestamp("used_at", { withTimezone: true }),
+    invalidated_at: timestamp("invalidated_at", { withTimezone: true }),
+    requested_ip: varchar("requested_ip", { length: 64 }),
+    requested_ua: text("requested_ua"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    hashKey: uniqueIndex("password_reset_tokens_hash_key").on(t.token_hash),
+    userCreatedIdx: index("password_reset_tokens_user_created_idx").on(
+      t.user_id,
+      t.created_at,
+    ),
+    // password_reset_tokens_live_idx is partial — migration-only, drizzle's
+    // builder has no partial-index syntax (same note as E-211).
+  }),
+);
+
+// --- E-213: IN-APP CHANGE PASSWORD (OTP) ---
+//
+// 4-digit email OTP sessions for the Change Password modal. See
+// drizzle/E-213_password_change_otps.sql for why this is a new table rather
+// than a reuse of consent_otp_verifications / calc_otp_verifications /
+// otp_confirmations (all three are lead-scoped, and one stores an email in a
+// column named `phone`).
+//
+// A session is usable for verify iff:
+//   verified_at IS NULL AND consumed_at IS NULL AND expires_at > now()
+// and usable for confirm iff:
+//   verified_at IS NOT NULL AND consumed_at IS NULL AND expires_at > now()
+export const passwordChangeOtps = pgTable(
+  "password_change_otps",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // users.id === Supabase auth user id.
+    user_id: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Audit only. NEVER look a user up by this — users.email can be mixed-case.
+    email: text().notNull(),
+    otp_hash: varchar("otp_hash", { length: 64 }).notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    send_count: integer("send_count").default(1).notNull(),
+    attempt_count: integer("attempt_count").default(0).notNull(),
+    locked_until: timestamp("locked_until", { withTimezone: true }),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    consumed_at: timestamp("consumed_at", { withTimezone: true }),
+    delivery_status: varchar("delivery_status", { length: 20 })
+      .default("sent")
+      .notNull(),
+    requested_ip: varchar("requested_ip", { length: 64 }),
+    requested_ua: text("requested_ua"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("password_change_otps_user_created_idx").on(
+      t.user_id,
+      t.created_at,
+    ),
+    // password_change_otps_open_idx and _verified_idx are partial —
+    // migration-only, drizzle's builder has no partial-index syntax (same note
+    // as E-211/E-212).
+  }),
+);
