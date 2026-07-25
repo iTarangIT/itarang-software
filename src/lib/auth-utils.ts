@@ -4,6 +4,32 @@ import { eq } from "drizzle-orm";
 import { createClient } from "./supabase/server";
 import { redirect } from "next/navigation";
 
+// SECURITY: this projection exists so the queries below never do a bare
+// `db.select()`. A bare select returns EVERY users column — including
+// `password_hash` — and this result is returned verbatim by
+// /api/user/profile, which AuthProvider then writes into sessionStorage.
+// That put every logged-in user's bcrypt hash in the browser, readable by any
+// XSS, any extension, any devtools screenshot. Add new columns here
+// deliberately; never reintroduce `.select()` with no argument.
+//
+// `dealer_id` and `vendor_entity_id` MUST stay: requireDealer/requireVendor
+// (src/lib/buyback/auth.ts) and the buyback notification routes read them off
+// this result.
+const USER_COLUMNS = {
+  id: users.id,
+  email: users.email,
+  name: users.name,
+  role: users.role,
+  dealer_id: users.dealer_id,
+  vendor_entity_id: users.vendor_entity_id,
+  phone: users.phone,
+  avatar_url: users.avatar_url,
+  is_active: users.is_active,
+  must_change_password: users.must_change_password,
+  created_at: users.created_at,
+  updated_at: users.updated_at,
+} as const;
+
 /**
  * Like requireAuth, but also returns the Supabase auth user so callers that
  * need `app_metadata` (e.g. /api/user/profile's role sync) don't have to pay
@@ -23,7 +49,7 @@ export async function requireAuthWithSupabaseUser() {
     let dbUser =
       (
         await db
-          .select()
+          .select(USER_COLUMNS)
           .from(users)
           .where(eq(users.id, user.id))
           .limit(1)
@@ -34,7 +60,7 @@ export async function requireAuthWithSupabaseUser() {
       dbUser =
         (
           await db
-            .select()
+            .select(USER_COLUMNS)
             .from(users)
             .where(eq(users.email, user.email))
             .limit(1)
@@ -43,6 +69,9 @@ export async function requireAuthWithSupabaseUser() {
 
     if (!dbUser) {
       console.log(`[Auth] No DB user found for auth user: ${user.id} / ${user.email}`);
+      // Same key set as the real row above (minus the DB-only timestamps), so
+      // callers that read e.g. vendor_entity_id off this result see null
+      // rather than undefined.
       return {
         dbUser: {
           id: user.id,
@@ -50,6 +79,11 @@ export async function requireAuthWithSupabaseUser() {
           email: user.email || "",
           role: "user",
           dealer_id: null,
+          vendor_entity_id: null,
+          phone: null,
+          avatar_url: null,
+          is_active: true,
+          must_change_password: false,
         },
         authUser: user,
       };
