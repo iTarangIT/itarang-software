@@ -3,6 +3,7 @@ import "./globals.css";
 
 import Providers from "@/components/Providers";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import ChangePasswordModal from "@/components/auth/ChangePasswordModal";
 import ChunkReloadGuard from "@/components/ChunkReloadGuard";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { WhatsAppFab } from "@/components/shared/whatsapp-fab";
@@ -45,7 +46,14 @@ export default function RootLayout({
       <body suppressHydrationWarning>
         <ChunkReloadGuard />
         <Providers>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            {children}
+            {/* E-213 — one instance for all four triggers (both headers, the
+                Risk Head shell, the profile Security card). Must sit INSIDE
+                AuthProvider, not beside ConfirmDialogHost below, because it
+                reads useAuth() for the registered address. */}
+            <ChangePasswordModal />
+          </AuthProvider>
         </Providers>
         <Toaster position="top-right" richColors closeButton duration={4000} />
         <ConfirmDialogHost />

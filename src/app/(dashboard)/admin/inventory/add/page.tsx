@@ -635,7 +635,7 @@ export default function AddInventoryItemPage() {
                       ? "Disabled — model is not IoT-compatible"
                       : !iotEnabled
                         ? "Enable IoT to enter IMEI"
-                        : "15-digit IMEI"
+                        : "16-character alphanumeric IMEI"
                   }
                   className={
                     !selectedBattery.iot_compatible || !iotEnabled

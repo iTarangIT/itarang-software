@@ -8,10 +8,12 @@
  * The header is intentionally lean (tenant identity + logout) — the Risk Head
  * only reviews and signs off on immobilisation requests.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { Menu, LogOut } from "lucide-react";
+import Link from "next/link";
+import { Menu, LogOut, User, Settings, ChevronDown } from "lucide-react";
 import RiskHeadSidebar from "@/components/risk-head/RiskHeadSidebar";
+import { useUIStore } from "@/store/uiStore";
 
 export default function RiskHeadShell({
   tenantName,
@@ -23,11 +25,27 @@ export default function RiskHeadShell({
   children: ReactNode;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const openChangePassword = useUIStore((s) => s.openChangePassword);
   const pathname = usePathname();
 
   useEffect(() => {
     setDrawerOpen(false);
+    setProfileOpen(false);
   }, [pathname]);
+
+  // Close the profile menu on any outside click.
+  useEffect(() => {
+    if (!profileOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setProfileOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [profileOpen]);
 
   useEffect(() => {
     if (!drawerOpen) return;
@@ -105,21 +123,58 @@ export default function RiskHeadShell({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div
-              className="w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm"
-              style={{ background: "var(--gradient-primary)" }}
-              aria-hidden
+          {/* Was avatar + a bare logout link, which left this role with no route
+              to a profile or to Change Password at all. */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              type="button"
+              onClick={() => setProfileOpen((v) => !v)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-slate-50"
+              aria-haspopup="menu"
+              aria-expanded={profileOpen}
             >
-              {initials}
-            </div>
-            <a
-              href="/api/auth/logout"
-              className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">Logout</span>
-            </a>
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm"
+                style={{ background: "var(--gradient-primary)" }}
+                aria-hidden
+              >
+                {initials}
+              </div>
+              <ChevronDown
+                className={`w-4 h-4 text-slate-400 transition-transform ${profileOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {profileOpen && (
+              <div className="absolute right-0 mt-2 w-56 rounded-xl border border-gray-100 bg-white py-2 shadow-lg animate-in fade-in slide-in-from-top-2 z-50">
+                <div className="py-1">
+                  <Link
+                    href="/risk-head/profile"
+                    onClick={() => setProfileOpen(false)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    <User className="w-4 h-4" />
+                    View Profile
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => { setProfileOpen(false); openChangePassword(); }}
+                    className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Change Password
+                  </button>
+                </div>
+                <div className="my-1 border-t border-gray-100" />
+                <a
+                  href="/api/auth/logout"
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Logout
+                </a>
+              </div>
+            )}
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-6 md:p-8 overflow-y-auto">
