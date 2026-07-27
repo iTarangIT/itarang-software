@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
 import { useBuybackNotificationSummary } from "@/hooks/useBuybackNotificationSummary";
+import { useNavActivity } from "@/hooks/useNavActivity";
 
 /**
  * peakAmp Battery Buyback — the iTarang-staff side.
@@ -1501,6 +1502,23 @@ export function Sidebar() {
   const notifSummary = useBuybackNotificationSummary(isBuybackRole);
   const totalUnread = notifSummary.unread.total;
   const negotiationUnread = notifSummary.unread.byCategory.Negotiation ?? 0;
+
+  // New arrivals in the admin work queues since this person last opened each
+  // page — Dealer Validation, KYC Review, WhatsApp Onboarding. Clears on visit.
+  const navActivity = useNavActivity(
+    ["admin", "sales_head", "ceo", "business_head"].includes(inferredRole),
+    pathname,
+  );
+
+  if (Object.keys(navActivity).length > 0) {
+    menuItems = menuItems.map((group) => ({
+      ...group,
+      items: group.items.map((item: { id: string }) => {
+        const n = navActivity[item.id];
+        return n ? { ...item, badge: n > 99 ? "99+" : n } : item;
+      }),
+    }));
+  }
 
   if (pendingNbfcCount && pendingNbfcCount > 0) {
     menuItems = menuItems.map((group: any) => ({
