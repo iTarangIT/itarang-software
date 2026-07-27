@@ -32,6 +32,7 @@ import {
   Settings,
   BarChart3,
   GitMerge,
+  MessageSquare,
   UserMinus,
   History,
   X,
@@ -326,6 +327,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/onboarding-dropouts",
         },
         {
+          id: "sh-whatsapp-onboarding",
+          label: "WhatsApp Onboarding",
+          icon: MessageSquare,
+          href: "/admin/whatsapp-onboarding",
+        },
+        {
           id: "sh-lead-upload",
           label: "Bulk Lead Upload",
           icon: Upload,
@@ -610,6 +617,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Onboarding Dropouts",
           icon: UserMinus,
           href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "admin-whatsapp-onboarding",
+          label: "WhatsApp Onboarding",
+          icon: MessageSquare,
+          href: "/admin/whatsapp-onboarding",
         },
         {
           id: "admin-lead-upload",
