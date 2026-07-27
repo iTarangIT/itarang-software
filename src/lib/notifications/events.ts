@@ -156,7 +156,10 @@ export async function notifyOnboardingChatStarted(p: {
     stage: "Onboarding · WhatsApp",
     from: { party: "dealer", label: `WhatsApp ${p.phone}` },
     data: { phone: p.phone, session_id: p.sessionId ?? null },
-    to: [toAdmins({ href: "/admin/dealer-verification" })],
+    // NOT /admin/dealer-verification: that queue hides unfinished applications,
+    // so this link used to land the admin on a page where the new contact was
+    // nowhere to be seen. The WhatsApp console shows them from message one.
+    to: [toAdmins({ href: "/admin/whatsapp-onboarding?tab=live" })],
   });
 }
 
@@ -173,7 +176,9 @@ export async function notifyOnboardingDocsUploaded(p: {
     stage: "Onboarding · WhatsApp",
     from: dealerParty(p.businessName ?? `WhatsApp ${p.phone}`),
     data: { phone: p.phone, doc_label: p.docLabel },
-    to: [toAdmins({ href: "/admin/dealer-verification" })],
+    // Same reason as above — the document is on file long before the dealer
+    // submits, and only the WhatsApp console will show it that early.
+    to: [toAdmins({ href: "/admin/whatsapp-onboarding?tab=live" })],
   });
 }
 
