@@ -355,6 +355,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
             id: String(application.id),
             wa_session_id: (application.wa_session_id as string | null) ?? null,
             wa_phone: application.wa_phone as string,
+            // E-214 — route the correction to whichever channel owns the file.
+            // For an operator-uploaded dealer the dealer's own number may never
+            // have messaged us, so wa_session_id would be a dead end.
+            onboarding_channel:
+              (application.onboarding_channel as string | null) ?? null,
+            wa_operator_session_id:
+              (application.wa_operator_session_id as string | null) ?? null,
           },
           roundId: round.id,
           roundNumber: nextRoundNumber,
