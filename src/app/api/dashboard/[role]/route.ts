@@ -20,6 +20,7 @@ import {
 import { eq, gte, lt, sql, and, desc, count, inArray } from "drizzle-orm";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { approvedExpenseInWindow } from "@/lib/dashboard/salesWindow";
 import { LSP_IN_FLIGHT_STATUSES } from "@/components/admin/nbfc/lspStatusTone";
 
 export const GET = withErrorHandler(
@@ -189,10 +190,12 @@ export const GET = withErrorHandler(
         .where(gte(inventory.oem_invoice_date, startOfMonthDate));
 
       // Other business expenses MTD — only approved entries count.
-      const approvedThisMonth = and(
-        eq(expenseSubmissions.status, "approved"),
-        gte(expenseSubmissions.approved_at, startOfMonthDate),
-      );
+      //
+      // E-214 — windowed on COALESCE(expense_date, approved_at::date) rather
+      // than approved_at, so an invoice counts in the month it was RAISED, not
+      // the month somebody happened to import it. Open-ended (no end bound):
+      // month-to-date.
+      const approvedThisMonth = approvedExpenseInWindow(startOfMonthDateStr, null);
 
       const expensesAggQ = db
         .select({

@@ -6830,6 +6830,25 @@ export const expenseSubmissions = pgTable(
     // E-172 — invoice number (dedup key for AI rows) + original upload filename.
     invoice_number: varchar("invoice_number", { length: 120 }),
     file_name: varchar("file_name", { length: 255 }),
+    // E-214 — Google Drive provenance. `source` stays 'ai' for Drive rows (all
+    // four existing consumers filter on it); drive_file_id is what tells a
+    // scanned row apart from a hand-uploaded one.
+    drive_file_id: varchar("drive_file_id", { length: 128 }),
+    // Identity of one row inside a costing spreadsheet, since sheet rows carry
+    // no invoice number. NULL for invoices.
+    drive_row_ref: varchar("drive_row_ref", { length: 64 }),
+    // Imported but not fully trusted. Still counts towards dashboard totals —
+    // the flag routes the row to a human, it does not withhold it.
+    needs_attention: boolean("needs_attention").default(false).notNull(),
+    attention_reason: text("attention_reason"),
+    // E-215 — multi-currency. `amount` above is ALWAYS INR because every
+    // report SUMs it; these record what the document actually said and the
+    // arithmetic that connects the two.
+    currency: varchar("currency", { length: 8 }),
+    original_amount: numeric("original_amount", { precision: 14, scale: 2 }),
+    fx_rate: numeric("fx_rate", { precision: 18, scale: 8 }),
+    fx_rate_date: date("fx_rate_date"),
+    fx_source: varchar("fx_source", { length: 16 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6854,6 +6873,190 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsInvoiceNumberIdx: index(
       "expense_submissions_invoice_number_idx",
     ).on(sql`lower(${table.invoice_number})`),
+    // E-214 — the three indexes below are declared here for drizzle's benefit,
+    // but their partial predicates (WHERE drive_file_id IS NOT NULL / WHERE
+    // needs_attention / WHERE status = 'approved') live in the migration only:
+    // drizzle has no partial-index syntax. The migration is the source of truth.
+    expenseSubmissionsDriveRowUnique: uniqueIndex(
+      "expense_submissions_drive_row_unique",
+    ).on(table.drive_file_id, table.drive_row_ref),
+    expenseSubmissionsNeedsAttentionIdx: index(
+      "expense_submissions_needs_attention_idx",
+    ).on(table.created_at),
+    // NOT an expression index on COALESCE(expense_date, approved_at::date):
+    // timestamptz::date is STABLE, so Postgres rejects that with 42P17. The
+    // readers split it into an OR over two plain columns instead — this index
+    // serves the expense_date branch, E-105's approved_at index the other.
+    expenseSubmissionsApprovedExpenseDateIdx: index(
+      "expense_submissions_approved_expense_date_idx",
+    ).on(table.expense_date),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-215 — cached FX rates, keyed by date.
+// -----------------------------------------------------------------------------
+// One row per (base, quote, date), populated on demand from the ECB daily
+// reference rates. Keyed by date rather than "latest" so a given invoice always
+// converts to the same rupee figure — otherwise last month's expense total
+// would drift every time it was recomputed.
+// -----------------------------------------------------------------------------
+
+export const fxRates = pgTable(
+  "fx_rates",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    base_currency: varchar("base_currency", { length: 8 }).notNull(),
+    quote_currency: varchar("quote_currency", { length: 8 }).default("INR").notNull(),
+    // The date the rate APPLIES to — the date the provider returned, which for
+    // a weekend invoice is the preceding business day.
+    rate_date: date("rate_date").notNull(),
+    rate: numeric("rate", { precision: 18, scale: 8 }).notNull(),
+    // 'ecb' (fetched) | 'fallback' (configured default) | 'manual' (typed in)
+    source: varchar("source", { length: 16 }).default("ecb").notNull(),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    fxRatesPairDateUnique: uniqueIndex("fx_rates_pair_date_unique").on(
+      table.base_currency,
+      table.quote_currency,
+      table.rate_date,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-214 — Google Drive → CEO Expenses ingestion
+// -----------------------------------------------------------------------------
+// A scheduled scanner reads configured Drive folders, extracts each invoice or
+// costing sheet, and writes the result into `expense_submissions` above as an
+// ordinary source='ai' row. These three tables hold the state that ingestion
+// needs: which folders to read, what each run did, and what happened to every
+// individual file. See drizzle/E-214_drive_expense_ingestion.sql for the full
+// rationale, including why Drive rows keep source='ai' and how the three dedup
+// layers stack.
+// -----------------------------------------------------------------------------
+
+export const driveExpenseFolders = pgTable(
+  "drive_expense_folders",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    drive_folder_id: varchar("drive_folder_id", { length: 128 }).notNull(),
+    label: varchar("label", { length: 160 }),
+    is_active: boolean("is_active").default(true).notNull(),
+    recursive: boolean("recursive").default(true).notNull(),
+    // ALLOWLIST — only files at or below a folder matching one of these are
+    // imported, scope inherited by descendants. Defaults to 'purchase': only
+    // the purchase side of an accounts folder is an expense, and an allowlist
+    // fails closed where a denylist would fail open.
+    include_names: text("include_names").default("purchase").notNull(),
+    // Denylist, applied even inside an allowlisted branch — catches a sales
+    // folder misfiled under Purchase.
+    exclude_names: text("exclude_names").default("sale").notNull(),
+    last_scanned_at: timestamp("last_scanned_at", { withTimezone: true }),
+    // Also the fallback submitted_by/approved_by for ticker runs, which have
+    // no human actor.
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    driveExpenseFoldersFolderIdUnique: uniqueIndex(
+      "drive_expense_folders_folder_id_unique",
+    ).on(table.drive_folder_id),
+    // Partial (WHERE is_active) in the migration only.
+    driveExpenseFoldersActiveIdx: index("drive_expense_folders_active_idx").on(
+      table.is_active,
+    ),
+  }),
+);
+
+export const driveScanRuns = pgTable(
+  "drive_scan_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // NULL = scanned every active folder.
+    folder_id: uuid("folder_id"),
+    // NULL = triggered by the in-process ticker rather than a person.
+    triggered_by: uuid("triggered_by"),
+    // text + CHECK, not pgEnum — ALTER TYPE on a shared drifting DB is what the
+    // migration conventions exist to avoid. 'running' | 'success' | 'failed'.
+    status: text().default("running").notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    duration_ms: integer("duration_ms"),
+    files_seen: integer("files_seen").default(0).notNull(),
+    // Files that got past the md5 check and actually cost a download + a model
+    // call. files_seen minus files_new is what the dedup saved.
+    files_new: integer("files_new").default(0).notNull(),
+    imported: integer("imported").default(0).notNull(),
+    skipped_duplicate: integer("skipped_duplicate").default(0).notNull(),
+    needs_attention: integer("needs_attention").default(0).notNull(),
+    unsupported: integer("unsupported").default(0).notNull(),
+    failed: integer("failed").default(0).notNull(),
+    // Set only when the RUN died. A single failing file increments `failed`
+    // and the run still completes.
+    error_message: text("error_message"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Partial (WHERE status = 'running') in the migration only — this is the
+    // concurrency guard's index.
+    driveScanRunsRunningIdx: index("drive_scan_runs_running_idx").on(
+      table.started_at,
+    ),
+    driveScanRunsStartedIdx: index("drive_scan_runs_started_idx").on(
+      table.started_at,
+    ),
+  }),
+);
+
+export const driveExpenseFiles = pgTable(
+  "drive_expense_files",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    run_id: uuid("run_id"),
+    folder_id: uuid("folder_id"),
+    drive_file_id: varchar("drive_file_id", { length: 128 }).notNull(),
+    drive_file_name: varchar("drive_file_name", { length: 512 }),
+    // "2026 / March 2026 / Purchase / iTarang account / Trontek" — in an
+    // accounts folder the path carries the month, the entity and the
+    // purchase-vs-sale distinction, so it is the audit trail's best column.
+    folder_path: text("folder_path"),
+    mime_type: varchar("mime_type", { length: 160 }),
+    // Google's content hash. Native Google Sheets/Docs have none — the code
+    // stores the RFC3339 modifiedTime instead, so this is never null and the
+    // unique index below actually bites.
+    md5_checksum: varchar("md5_checksum", { length: 128 }),
+    drive_modified_time: timestamp("drive_modified_time", { withTimezone: true }),
+    // 'imported' | 'duplicate' | 'needs_attention' | 'unsupported' | 'failed'
+    status: text().notNull(),
+    // Shown verbatim in the needs-attention panel — write it for the person
+    // who has to fix the row.
+    reason: text(),
+    // Array: a costing sheet yields many expense ids, an invoice yields one.
+    expense_ids: jsonb("expense_ids").default([]).notNull(),
+    storage_key: text("storage_key"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Dedup layer 1 — an unchanged file is never re-downloaded or re-sent to
+    // the model. This is what makes re-scanning a folder free.
+    driveExpenseFilesFileVersionUnique: uniqueIndex(
+      "drive_expense_files_file_version_unique",
+    ).on(table.drive_file_id, table.md5_checksum),
+    driveExpenseFilesFileIdx: index("drive_expense_files_file_idx").on(
+      table.drive_file_id,
+    ),
+    driveExpenseFilesRunIdx: index("drive_expense_files_run_idx").on(
+      table.run_id,
+      table.created_at,
+    ),
+    // Partial (WHERE status IN ('needs_attention','failed')) in the migration only.
+    driveExpenseFilesAttentionIdx: index("drive_expense_files_attention_idx").on(
+      table.created_at,
+    ),
   }),
 );
 

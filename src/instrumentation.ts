@@ -23,11 +23,13 @@ export async function register() {
       startBuybackDispatchTicker,
       startBuybackDedupTicker,
       startBuybackGatewayTicker,
+      startDriveExpenseTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
     await startBuybackDispatchTicker();
     await startBuybackDedupTicker();
     await startBuybackGatewayTicker();
+    await startDriveExpenseTicker();
   }
 }
