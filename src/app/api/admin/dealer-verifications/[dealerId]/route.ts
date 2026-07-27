@@ -53,7 +53,20 @@ const PatchBodySchema = z.object({
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
   beneficiaryName: z.string().optional(),
-  ifscCode: z.string().optional(),
+  // IFSC is varchar(11) on accounts.ifsc_code — an over-long or malformed code
+  // (WhatsApp onboarding extracts it from a cheque/passbook photo, so OCR can
+  // add or drop a digit) sails through onboarding and only explodes at
+  // approval time as a raw "value too long for type character varying(11)"
+  // 500. Validate the canonical RBI shape here so it is caught at the point
+  // the admin can actually fix it.
+  ifscCode: z
+    .string()
+    .optional()
+    .transform((v) => (typeof v === "string" ? v.trim().toUpperCase() : v))
+    .refine((v) => !v || /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v), {
+      message:
+        "IFSC code must be 11 characters: 4 letters, then 0, then 6 letters/digits (e.g. HDFC0000516).",
+    }),
   agreementLanguage: z.string().optional(),
 
   // Owner residential address (sole proprietorship) — persisted in
@@ -484,10 +497,16 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
     const parsed = PatchBodySchema.safeParse(rawBody);
     if (!parsed.success) {
+      // Surface the actual field message — a bare "Invalid request body" gives
+      // the admin nothing to act on when e.g. the IFSC fails its format check.
+      const firstIssue = parsed.error.issues[0];
+      const fieldPath = firstIssue?.path?.join(".") || "";
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid request body",
+          message: firstIssue
+            ? `${fieldPath ? `${fieldPath}: ` : ""}${firstIssue.message}`
+            : "Invalid request body",
           errors: parsed.error.issues,
         },
         { status: 400 }
