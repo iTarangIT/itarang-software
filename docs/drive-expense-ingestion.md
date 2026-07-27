@@ -1,4 +1,4 @@
-# Google Drive → CEO Expenses (E-214)
+# Google Drive → CEO Expenses (E-216)
 
 Invoices and costing sheets dropped into a Google Drive folder are scanned,
 read, validated and written into `expense_submissions` — the same table the CEO
@@ -147,10 +147,10 @@ Three layers, each catching what the one above cannot:
 Native Google Sheets have no `md5Checksum`; the code stores `modifiedTime`
 instead, so editing a Sheet makes it eligible for re-processing.
 
-## Foreign-currency invoices (E-215)
+## Foreign-currency invoices (E-217)
 
 `expense_submissions.amount` is one numeric column that every dashboard SUMs
-with no notion of currency. Before E-215 a $200 Anthropic bill was therefore
+with no notion of currency. Before E-217 a $200 Anthropic bill was therefore
 added to the rupee total as **₹200** — $1,123 of SaaS spend booked as ₹1,123,
 understating expenses by roughly ₹95,000 and producing a total denominated in
 nothing.
@@ -186,7 +186,7 @@ If the lookup fails, the row still imports using
 snapshot, and is flagged `needs_attention` with the rate used. Approximation
 beats dropping the expense; silence would not.
 
-Reconvert rows imported before E-215:
+Reconvert rows imported before E-217:
 
 ```bash
 node --import tsx --env-file=.env.local scripts/_backfill-expense-currency.ts          # report
@@ -199,10 +199,10 @@ Nothing is held back for approval, so this queue is where doubt shows up. It
 holds two different populations:
 
 The split is by *whether an expense row exists*, not by whether it is perfect.
-E-214 originally marked a file `needs_attention` whenever the imported row
+E-216 originally marked a file `needs_attention` whenever the imported row
 carried any flag, so ten files that had imported fine were reported under
 "could not be imported — this spend is not on the dashboard" when it was. Fixed
-in E-215; the file status now answers one question only.
+in E-217; the file status now answers one question only.
 
 **Could not be imported** — no amount could be read, so there is no expense row
 and this spend is *missing from the dashboard*. `expense_submissions.amount` is
@@ -228,7 +228,7 @@ merely cautious (a genuine cash receipt with no invoice number).
 
 ## Which date an expense counts under
 
-**E-214 changed this.** Every CEO expense figure used to window on
+**E-216 changed this.** Every CEO expense figure used to window on
 `approved_at` — for an AI row, the moment somebody imported it. That was fine
 while invoices were dragged in one at a time. It breaks the instant a folder of
 historic invoices is scanned: a year of spend would land in whichever month the
@@ -305,7 +305,7 @@ itself cannot do once it is running.
 | Cron | `src/app/api/cron/drive-expenses` |
 | Ticker | `startDriveExpenseTicker` in `src/instrumentation-node.ts` |
 | UI | `src/app/(dashboard)/admin/expense-tracker/_components/{DriveFoldersPanel,NeedsAttentionPanel}.tsx` |
-| Migration | `drizzle/E-214_drive_expense_ingestion.sql` |
+| Migration | `drizzle/E-216_drive_expense_ingestion.sql` |
 
 ## Troubleshooting
 

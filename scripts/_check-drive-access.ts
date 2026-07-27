@@ -1,5 +1,5 @@
 /**
- * E-214 — does the service account actually reach a Drive folder?
+ * E-216 — does the service account actually reach a Drive folder?
  *
  * Run: node --import tsx --env-file=.env.local scripts/_check-drive-access.ts <folderId>
  *

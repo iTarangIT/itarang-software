@@ -1,10 +1,10 @@
 /**
- * E-215 — reconvert foreign-currency expense rows that were imported before
+ * E-217 — reconvert foreign-currency expense rows that were imported before
  * conversion existed.
  *
  * Run: node --import tsx --env-file=.env.local scripts/_backfill-expense-currency.ts [--apply]
  *
- * Without --apply it only reports. E-214 stored a foreign invoice's face value
+ * Without --apply it only reports. E-216 stored a foreign invoice's face value
  * straight into `amount`, so a $200 bill sits in the rupee total as ₹200. This
  * finds those rows (currency from ai_raw), converts at the rate for the
  * invoice's own date, and rewrites amount / original_amount / fx_*.

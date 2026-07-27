@@ -2851,6 +2851,21 @@ export const dealerOnboardingApplications = pgTable(
     // signed with a different person's Aadhaar. Mirrors the customer-consent gate.
     owner_aadhaar_no: varchar("owner_aadhaar_no", { length: 12 }),
     owner_aadhaar_verified: boolean("owner_aadhaar_verified").default(false).notNull(),
+    // ---- E-216 internal WhatsApp onboarding operator ----
+    // The internal team member who created this file over WhatsApp. Deliberately
+    // NOT dealer_user_id: the approve route overwrites that column with the
+    // DEALER's Supabase auth id, which destroys creator attribution.
+    onboarding_operator_id: uuid("onboarding_operator_id"),
+    // 'self' | 'operator' | 'operator_handoff' — which channel currently owns the
+    // file. 'self' reproduces every pre-E-216 row.
+    onboarding_channel: varchar("onboarding_channel", { length: 24 })
+      .default('self')
+      .notNull(),
+    // The OPERATOR's per-dealer file session. wa_session_id above keeps its
+    // existing meaning (the DEALER's own session); after a handoff both are set.
+    wa_operator_session_id: uuid("wa_operator_session_id"),
+    operator_invited_at: timestamp("operator_invited_at", { withTimezone: true }),
+    operator_handoff_at: timestamp("operator_handoff_at", { withTimezone: true }),
   },
 );
 
@@ -2953,6 +2968,40 @@ export const dealerOnboardingDocuments = pgTable(
   }),
 );
 
+// ── E-216 internal WhatsApp onboarding operators ────────────────────────────
+// Admin-managed allowlist of internal team members who may onboard MANY dealers
+// from their own WhatsApp number. Identity is the phone alone — user_id is an
+// optional attribution link, NOT the key, so a team member with no CRM login
+// still works. Deliberately not users.role: resolveKnownContact() already
+// matches users.phone for a cosmetic greeting, and making that load-bearing
+// would silently promote every staff member with a mobile on file.
+export const whatsappOperators = pgTable(
+  "whatsapp_operators",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // E.164 WITHOUT '+', exactly as Meta delivers it ('919876543210').
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    display_name: text("display_name").notNull(),
+    user_id: uuid("user_id"),
+    email: varchar("email", { length: 150 }),
+    is_active: boolean("is_active").default(true).notNull(),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    deactivated_by: uuid("deactivated_by"),
+    created_by: uuid("created_by"),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    waPhoneKey: uniqueIndex("whatsapp_operators_wa_phone_key").on(table.wa_phone),
+    activeIdx: index("whatsapp_operators_active_idx").on(table.wa_phone),
+  }),
+);
+
 // ── E-167 WhatsApp dealer-onboarding chatbot ────────────────────────────────
 // One row per dealer conversation. Persists the conversation state machine so a
 // dropped chat resumes exactly where it left off (design §4). State values are
@@ -2980,6 +3029,18 @@ export const whatsappOnboardingSessions = pgTable(
     session_status: varchar("session_status", { length: 24 })
       .default('active')
       .notNull(),
+    // ---- E-216 operator sessions ----
+    // 'dealer'        — every pre-E-216 row, and every self-onboarding dealer
+    // 'operator_hub'  — one per operator number; holds the OP_* menu state
+    // 'operator_file' — one per dealer file an operator has open. Carries the
+    //                   OPERATOR's wa_phone (so replies reach them) while
+    //                   application_id points at a dealer's file, which is what
+    //                   lets the unmodified onboarding handlers run per dealer.
+    session_kind: varchar("session_kind", { length: 16 })
+      .default('dealer')
+      .notNull(),
+    operator_id: uuid("operator_id"),
+    parent_session_id: uuid("parent_session_id"),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2997,6 +3058,13 @@ export const whatsappOnboardingSessions = pgTable(
     applicationIdIdx: index(
       "whatsapp_onboarding_sessions_application_id_idx",
     ).on(table.application_id),
+    phoneKindIdx: index("whatsapp_onboarding_sessions_phone_kind_idx").on(
+      table.wa_phone,
+      table.session_kind,
+    ),
+    operatorIdx: index("whatsapp_onboarding_sessions_operator_idx").on(
+      table.operator_id,
+    ),
   }),
 );
 
@@ -6830,7 +6898,7 @@ export const expenseSubmissions = pgTable(
     // E-172 — invoice number (dedup key for AI rows) + original upload filename.
     invoice_number: varchar("invoice_number", { length: 120 }),
     file_name: varchar("file_name", { length: 255 }),
-    // E-214 — Google Drive provenance. `source` stays 'ai' for Drive rows (all
+    // E-216 — Google Drive provenance. `source` stays 'ai' for Drive rows (all
     // four existing consumers filter on it); drive_file_id is what tells a
     // scanned row apart from a hand-uploaded one.
     drive_file_id: varchar("drive_file_id", { length: 128 }),
@@ -6841,7 +6909,7 @@ export const expenseSubmissions = pgTable(
     // the flag routes the row to a human, it does not withhold it.
     needs_attention: boolean("needs_attention").default(false).notNull(),
     attention_reason: text("attention_reason"),
-    // E-215 — multi-currency. `amount` above is ALWAYS INR because every
+    // E-217 — multi-currency. `amount` above is ALWAYS INR because every
     // report SUMs it; these record what the document actually said and the
     // arithmetic that connects the two.
     currency: varchar("currency", { length: 8 }),
@@ -6873,7 +6941,7 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsInvoiceNumberIdx: index(
       "expense_submissions_invoice_number_idx",
     ).on(sql`lower(${table.invoice_number})`),
-    // E-214 — the three indexes below are declared here for drizzle's benefit,
+    // E-216 — the three indexes below are declared here for drizzle's benefit,
     // but their partial predicates (WHERE drive_file_id IS NOT NULL / WHERE
     // needs_attention / WHERE status = 'approved') live in the migration only:
     // drizzle has no partial-index syntax. The migration is the source of truth.
@@ -6894,7 +6962,7 @@ export const expenseSubmissions = pgTable(
 );
 
 // -----------------------------------------------------------------------------
-// E-215 — cached FX rates, keyed by date.
+// E-217 — cached FX rates, keyed by date.
 // -----------------------------------------------------------------------------
 // One row per (base, quote, date), populated on demand from the ECB daily
 // reference rates. Keyed by date rather than "latest" so a given invoice always
@@ -6926,13 +6994,13 @@ export const fxRates = pgTable(
 );
 
 // -----------------------------------------------------------------------------
-// E-214 — Google Drive → CEO Expenses ingestion
+// E-216 — Google Drive → CEO Expenses ingestion
 // -----------------------------------------------------------------------------
 // A scheduled scanner reads configured Drive folders, extracts each invoice or
 // costing sheet, and writes the result into `expense_submissions` above as an
 // ordinary source='ai' row. These three tables hold the state that ingestion
 // needs: which folders to read, what each run did, and what happened to every
-// individual file. See drizzle/E-214_drive_expense_ingestion.sql for the full
+// individual file. See drizzle/E-216_drive_expense_ingestion.sql for the full
 // rationale, including why Drive rows keep source='ai' and how the three dedup
 // layers stack.
 // -----------------------------------------------------------------------------

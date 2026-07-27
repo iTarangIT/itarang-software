@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
--- E-215: multi-currency expenses — convert foreign invoices to INR.
+-- E-217: multi-currency expenses — convert foreign invoices to INR.
 --
--- E-214 started importing invoices from Google Drive, and the accounts folder
+-- E-216 started importing invoices from Google Drive, and the accounts folder
 -- turned out to contain foreign-currency SaaS bills (Anthropic, OpenAI, Canva,
 -- Fireflies) alongside the rupee ones. `expense_submissions.amount` is a single
 -- numeric column that every dashboard SUMs with no notion of currency, so a
@@ -23,7 +23,7 @@
 --   recomputed later without guessing which rate was used.
 --
 -- WHY A RATE PER INVOICE DATE, NOT ONE CURRENT RATE:
---   An expense belongs to the month it was incurred, and E-214 already made
+--   An expense belongs to the month it was incurred, and E-216 already made
 --   the dashboard bucket by invoice date. Converting a May invoice at today's
 --   rate would make last month's total drift every time it was recomputed.
 --   Rates are therefore keyed by date and cached in `fx_rates`, so the same
@@ -57,7 +57,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS fx_rates_pair_date_unique
   ON fx_rates (base_currency, quote_currency, rate_date);
 
 COMMENT ON TABLE fx_rates IS
-  'E-215: cached FX rates keyed by date so a given invoice always converts to the same rupee figure. Populated on demand; never re-fetched for a stored date.';
+  'E-217: cached FX rates keyed by date so a given invoice always converts to the same rupee figure. Populated on demand; never re-fetched for a stored date.';
 COMMENT ON COLUMN fx_rates.rate_date IS
   'The date the rate applies to — the date the provider returned, which for a weekend invoice is the preceding business day.';
 
@@ -72,17 +72,17 @@ ALTER TABLE expense_submissions
   ADD COLUMN IF NOT EXISTS fx_source       varchar(16);
 
 COMMENT ON COLUMN expense_submissions.amount IS
-  'E-215: ALWAYS INR. Every report SUMs this column, so a foreign invoice is stored here already converted. The figure printed on the document is original_amount + currency.';
+  'E-217: ALWAYS INR. Every report SUMs this column, so a foreign invoice is stored here already converted. The figure printed on the document is original_amount + currency.';
 COMMENT ON COLUMN expense_submissions.currency IS
-  'E-215: the currency printed on the document. NULL or INR means no conversion happened and amount = original_amount.';
+  'E-217: the currency printed on the document. NULL or INR means no conversion happened and amount = original_amount.';
 COMMENT ON COLUMN expense_submissions.original_amount IS
-  'E-215: the face value as printed, before conversion. Equals amount for rupee invoices.';
+  'E-217: the face value as printed, before conversion. Equals amount for rupee invoices.';
 COMMENT ON COLUMN expense_submissions.fx_rate IS
-  'E-215: units of INR per 1 unit of `currency`, as applied. Recorded per row so a converted figure can be audited without guessing which rate was used.';
+  'E-217: units of INR per 1 unit of `currency`, as applied. Recorded per row so a converted figure can be audited without guessing which rate was used.';
 COMMENT ON COLUMN expense_submissions.fx_rate_date IS
-  'E-215: the date whose rate was used — the invoice date, or the preceding business day.';
+  'E-217: the date whose rate was used — the invoice date, or the preceding business day.';
 COMMENT ON COLUMN expense_submissions.fx_source IS
-  'E-215: ecb | fallback | manual. `fallback` means the rate lookup failed and a configured default was used, so the row is approximate and flagged.';
+  'E-217: ecb | fallback | manual. `fallback` means the rate lookup failed and a configured default was used, so the row is approximate and flagged.';
 
 -- Backfill: every existing row is a rupee row. Idempotent via the NULL guard.
 UPDATE expense_submissions
@@ -98,9 +98,9 @@ CREATE INDEX IF NOT EXISTS expense_submissions_currency_idx
   WHERE currency IS NOT NULL AND currency <> 'INR';
 
 
--- 3. Correct E-214's file-status classification ------------------------------
+-- 3. Correct E-216's file-status classification ------------------------------
 --
--- E-214's scanner marked a Drive file `needs_attention` whenever the imported
+-- E-216's scanner marked a Drive file `needs_attention` whenever the imported
 -- row carried ANY flag — a missing invoice number, a low-confidence
 -- department, a foreign currency. But the admin panel reads that status as
 -- "this file produced no expense row", and shows those files under
@@ -122,13 +122,13 @@ DO $do$ BEGIN
      AND expense_ids IS NOT NULL
      AND jsonb_array_length(expense_ids) > 0;
 EXCEPTION WHEN undefined_table THEN
-  RAISE NOTICE 'drive_expense_files does not exist here yet (E-214 not applied) — skipping E-215 part 3';
+  RAISE NOTICE 'drive_expense_files does not exist here yet (E-216 not applied) — skipping E-217 part 3';
 END; $do$;
 
 
 -- 4. Release scans killed by the request timeout -----------------------------
 --
--- E-214's "Scan now" route caps at 100 files with maxDuration = 300s, but a
+-- E-216's "Scan now" route caps at 100 files with maxDuration = 300s, but a
 -- file takes ~15s (download + one vision call), so a full batch cannot finish
 -- inside the timeout. The handler is killed mid-run and its drive_scan_runs row
 -- stays 'running' forever, which then blocks the next scan for 30 minutes.
@@ -141,9 +141,9 @@ DO $do$ BEGIN
      SET status        = 'failed',
          completed_at  = now(),
          error_message = COALESCE(error_message,
-           'Abandoned: the request timed out before the scan finished. Released by E-215.')
+           'Abandoned: the request timed out before the scan finished. Released by E-217.')
    WHERE status = 'running'
      AND started_at < now() - interval '30 minutes';
 EXCEPTION WHEN undefined_table THEN
-  RAISE NOTICE 'drive_scan_runs does not exist here yet (E-214 not applied) — skipping E-215 part 4';
+  RAISE NOTICE 'drive_scan_runs does not exist here yet (E-216 not applied) — skipping E-217 part 4';
 END; $do$;

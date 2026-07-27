@@ -29,7 +29,7 @@ const PatchSchema = z
       .nullable()
       .optional(),
     description: z.string().trim().max(2000).nullable().optional(),
-    // E-214 — let the needs-attention panel clear a flag without editing a
+    // E-216 — let the needs-attention panel clear a flag without editing a
     // field, for the case where the extraction was right and the flag was
     // merely cautious (e.g. a genuinely un-numbered receipt).
     needs_attention: z.boolean().optional(),
@@ -72,7 +72,7 @@ export async function PATCH(
     if (d.expense_date !== undefined) update.expense_date = d.expense_date;
     if (d.description !== undefined) update.description = d.description || null;
 
-    // E-214 — an admin who corrects any field has, by definition, dealt with
+    // E-216 — an admin who corrects any field has, by definition, dealt with
     // whatever the flag was warning about, so clear it rather than making them
     // do it as a second step. An explicit `needs_attention` in the body still
     // wins, so the panel can also flag a row back up.

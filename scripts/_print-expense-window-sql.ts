@@ -1,5 +1,5 @@
 /**
- * E-214 — print the SQL that `approvedExpenseInWindow` generates.
+ * E-216 — print the SQL that `approvedExpenseInWindow` generates.
  *
  * Run: node --import tsx --env-file=.env.local scripts/_print-expense-window-sql.ts
  *

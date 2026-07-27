@@ -191,7 +191,7 @@ export const GET = withErrorHandler(
 
       // Other business expenses MTD — only approved entries count.
       //
-      // E-214 — windowed on COALESCE(expense_date, approved_at::date) rather
+      // E-216 — windowed on COALESCE(expense_date, approved_at::date) rather
       // than approved_at, so an invoice counts in the month it was RAISED, not
       // the month somebody happened to import it. Open-ended (no end bound):
       // month-to-date.

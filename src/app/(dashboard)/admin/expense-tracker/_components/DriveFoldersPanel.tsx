@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-214 — Google Drive folder management + "Scan now" for the expense tracker.
+ * E-216 — Google Drive folder management + "Scan now" for the expense tracker.
  *
  * Kept out of ExpenseTrackerView (already 736 lines) so the manual-upload flow
  * and the automated flow stay separately readable.

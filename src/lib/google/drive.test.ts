@@ -6,7 +6,7 @@ import {
     parseDriveFolderId,
 } from "./drive";
 
-// E-214. `folderMatchesToken` drives both the Purchase allowlist and the Sale
+// E-216. `folderMatchesToken` drives both the Purchase allowlist and the Sale
 // denylist — together the only thing stopping the scanner booking the
 // company's entire turnover as expenses (and double-counting it against the
 // Zoho revenue sync). The live accounts folder names these subfolders four

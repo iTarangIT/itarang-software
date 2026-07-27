@@ -149,7 +149,7 @@ export async function GET(req: NextRequest) {
     const guard = await requireApiAdmin();
     if (!guard.ok) return guard.response;
 
-    // E-214 — ?needs_attention=1 backs the needs-attention panel. Same route
+    // E-216 — ?needs_attention=1 backs the needs-attention panel. Same route
     // and same shape as the full tracker list, so the two cannot disagree
     // about what a row looks like.
     const onlyAttention = req.nextUrl.searchParams.get("needs_attention") === "1";
@@ -169,12 +169,12 @@ export async function GET(req: NextRequest) {
         expense_date: expenseSubmissions.expense_date,
         bill_url: expenseSubmissions.bill_url,
         created_at: expenseSubmissions.created_at,
-        // E-214 — provenance + flag, so the tracker can mark which rows came
+        // E-216 — provenance + flag, so the tracker can mark which rows came
         // from Drive and why any of them need a look.
         drive_file_id: expenseSubmissions.drive_file_id,
         needs_attention: expenseSubmissions.needs_attention,
         attention_reason: expenseSubmissions.attention_reason,
-        // E-215 — `amount` above is INR; these say what the document said, so
+        // E-217 — `amount` above is INR; these say what the document said, so
         // the tracker can show "$200 @ 86.4" rather than a bare rupee figure.
         currency: expenseSubmissions.currency,
         original_amount: expenseSubmissions.original_amount,
