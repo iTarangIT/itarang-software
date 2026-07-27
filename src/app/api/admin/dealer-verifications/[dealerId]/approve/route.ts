@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications, users, accounts, dealers } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
@@ -37,6 +37,73 @@ function generateDealerCode() {
     .toString(16)
     .padStart(6, "0");
   return `ACC-ITARANG-${yyyy}${mm}${dd}-${random}`;
+}
+
+/**
+ * Guards the narrow varchar columns on `accounts` that the approval
+ * transaction writes verbatim from the onboarding record. Returns a list of
+ * human-readable problems ("" when everything fits).
+ *
+ * These are NOT re-derivable from the application row's own column types —
+ * dealer_onboarding_applications stores them wider (or as text), so an
+ * over-long value is only rejected at the moment we copy it across.
+ */
+function validateAccountFields(application: any): string[] {
+  const problems: string[] = [];
+
+  const addressObj =
+    typeof application.business_address === "object" &&
+    application.business_address
+      ? (application.business_address as Record<string, any>)
+      : null;
+
+  const ifsc =
+    typeof application.ifsc_code === "string"
+      ? application.ifsc_code.trim().toUpperCase()
+      : "";
+  if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+    problems.push(
+      `Bank IFSC "${application.ifsc_code}" is invalid (${ifsc.length} characters) — an IFSC is exactly 11: 4 letters, then 0, then 6 letters/digits (e.g. HDFC0000516).`
+    );
+  }
+
+  const gstin =
+    typeof application.gst_number === "string"
+      ? application.gst_number.trim()
+      : "";
+  if (gstin && gstin.length > 15) {
+    problems.push(
+      `GSTIN "${gstin}" is ${gstin.length} characters — a GSTIN is exactly 15.`
+    );
+  }
+
+  const pan =
+    typeof application.pan_number === "string"
+      ? application.pan_number.trim()
+      : "";
+  if (pan && pan.length > 10) {
+    problems.push(
+      `PAN "${pan}" is ${pan.length} characters — a PAN is exactly 10.`
+    );
+  }
+
+  const pincode =
+    typeof addressObj?.pincode === "string" ? addressObj.pincode.trim() : "";
+  if (pincode && pincode.length > 6) {
+    problems.push(
+      `Business address PIN code "${pincode}" is ${pincode.length} digits — a PIN code is 6.`
+    );
+  }
+
+  const phone =
+    typeof application.owner_phone === "string"
+      ? application.owner_phone.trim()
+      : "";
+  if (phone && phone.length > 20) {
+    problems.push(`Owner phone "${phone}" is longer than 20 characters.`);
+  }
+
+  return problems;
 }
 
 function resolveDealerLoginEmail(application: any) {
@@ -151,6 +218,28 @@ export async function POST(req: NextRequest, context: RouteContext) {
           { status: 400 }
         );
       }
+    }
+
+    // Pre-flight the fields that get copied verbatim into `accounts`, whose
+    // columns are narrow varchars (gstin 15, pan 10, pincode 6, ifsc_code 11,
+    // contact_phone 20). WhatsApp-onboarded dealers have these OCR-extracted
+    // from document photos, so a stray digit is common — and without this
+    // check the only symptom is a 500 with a raw "value too long for type
+    // character varying(N)" halfway through the approval transaction, which
+    // names no field. Fail early and say exactly what to fix.
+    const accountFieldProblems = validateAccountFields(application);
+
+    if (accountFieldProblems.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Cannot approve — fix these details in the dealer record first: ${accountFieldProblems.join(
+            " "
+          )}`,
+          fieldErrors: accountFieldProblems,
+        },
+        { status: 400 }
+      );
     }
 
     // GSTIN duplicate detection. We classify BEFORE any auth-user work so a
@@ -316,6 +405,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
     );
 
     let authUserId: string;
+    // Tracks whether THIS request minted the auth user. If the DB transaction
+    // below then fails, we delete it again — an auth user is not covered by
+    // the pg rollback, and leaving one behind wedges every future retry on the
+    // "email already exists" gate above.
+    let createdAuthUserInThisRequest = false;
 
     if (existingAuthUser) {
       // Prevent account takeover: only reuse an existing Supabase Auth user if
@@ -328,10 +422,91 @@ export async function POST(req: NextRequest, context: RouteContext) {
         typeof meta.dealer_code === "string" ? meta.dealer_code : null;
       const existingAppDealerUserId = application.dealer_user_id || null;
 
-      const isThisDealer =
+      let isThisDealer =
         metaRole === "dealer" &&
         (metaDealerCode === dealerCode ||
           existingAuthUser.id === existingAppDealerUserId);
+
+      // A previous approve attempt for THIS application can die after the auth
+      // user is created but before the DB transaction commits (the auth user
+      // lives outside the pg transaction, so a rollback does not remove it).
+      // That leaves a role=dealer auth user stamped with a dealer_code that
+      // exists nowhere in the DB, while the application still has
+      // dealer_code = NULL / dealer_user_id = NULL. Every retry then mints a
+      // FRESH random dealer code, so neither branch above can ever match and
+      // the admin is permanently locked out with "email already exists".
+      //
+      // Adopt such an orphan — but only after proving nothing else claims it:
+      // no users row (by id or email), no other application, and no
+      // accounts/dealers row keyed by its stamped dealer_code. If any claim
+      // exists it really is someone else's account and we still hard-block.
+      if (!isThisDealer && metaRole === "dealer") {
+        const [
+          claimedByAuthId,
+          claimedByEmail,
+          claimedByOtherApp,
+          claimedAccount,
+          claimedDealer,
+        ] = await Promise.all([
+          db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, existingAuthUser.id))
+            .limit(1),
+          db
+            .select({ id: users.id })
+            .from(users)
+            .where(sql`lower(${users.email}) = lower(${dealerLoginEmail})`)
+            .limit(1),
+          db
+            .select({ id: dealerOnboardingApplications.id })
+            .from(dealerOnboardingApplications)
+            .where(
+              and(
+                eq(
+                  dealerOnboardingApplications.dealer_user_id,
+                  existingAuthUser.id
+                ),
+                ne(dealerOnboardingApplications.id, dealerId)
+              )
+            )
+            .limit(1),
+          metaDealerCode
+            ? db
+                .select({ id: accounts.id })
+                .from(accounts)
+                .where(eq(accounts.id, metaDealerCode))
+                .limit(1)
+            : Promise.resolve([] as { id: string }[]),
+          metaDealerCode
+            ? db
+                .select({ id: dealers.dealer_id })
+                .from(dealers)
+                .where(eq(dealers.dealer_id, metaDealerCode))
+                .limit(1)
+            : Promise.resolve([] as { id: string }[]),
+        ]);
+
+        const isOrphan =
+          claimedByAuthId.length === 0 &&
+          claimedByEmail.length === 0 &&
+          claimedByOtherApp.length === 0 &&
+          claimedAccount.length === 0 &&
+          claimedDealer.length === 0;
+
+        if (isOrphan) {
+          console.warn(
+            "APPROVE — adopting orphaned auth user left by a failed prior attempt",
+            {
+              applicationId: application.id,
+              authUserId: existingAuthUser.id,
+              staleDealerCode: metaDealerCode,
+              newDealerCode: dealerCode,
+            }
+          );
+          isThisDealer = true;
+        }
+      }
 
       if (!isThisDealer) {
         return NextResponse.json(
@@ -390,6 +565,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
 
       authUserId = createdAuthUser.user.id;
+      createdAuthUserInThisRequest = true;
     }
 
     // Run the local DB side of approval atomically: if any of the three
@@ -508,7 +684,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
           pincode: addressObj?.pincode || null,
           bank_name: application.bank_name || null,
           bank_account_number: application.account_number || null,
-          ifsc_code: application.ifsc_code || null,
+          ifsc_code: application.ifsc_code?.trim().toUpperCase() || null,
           status: "active",
           onboarding_status: "approved",
           created_by: authUserId,
@@ -554,6 +730,20 @@ export async function POST(req: NextRequest, context: RouteContext) {
           updated_at: new Date(),
         });
       }
+    }).catch(async (txError) => {
+      // The pg rollback cannot undo the Supabase Auth user created above.
+      // Remove it so the next retry starts clean instead of colliding with
+      // its own leftover on the "email already exists" gate.
+      if (createdAuthUserInThisRequest) {
+        const { error: cleanupError } =
+          await supabaseAdmin.auth.admin.deleteUser(authUserId);
+        console.error("APPROVE — transaction failed, rolled back auth user", {
+          applicationId: application.id,
+          authUserId,
+          cleanupError: cleanupError?.message || null,
+        });
+      }
+      throw txError;
     });
 
     let emailSent = false;
