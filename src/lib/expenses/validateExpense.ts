@@ -1,5 +1,5 @@
 /**
- * E-214 — Validation between "the model said something" and "we wrote it to
+ * E-216 — Validation between "the model said something" and "we wrote it to
  * the books".
  *
  * There is no approval step in this pipeline, so this file is the only thing
@@ -127,7 +127,7 @@ export function validateExpense(
   }
 
   // --- currency -------------------------------------------------------------
-  // E-215 — no longer a warning. The caller converts to INR before storing, so
+  // E-217 — no longer a warning. The caller converts to INR before storing, so
   // a foreign invoice is a normal expense; only a FAILED conversion is worth a
   // human's time, and that flag is raised by the converter itself.
   const currency = trimOrNull(candidate.currency, 8)?.toUpperCase() ?? null;

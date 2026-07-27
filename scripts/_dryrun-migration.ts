@@ -1,10 +1,10 @@
 /**
  * Dry-run a migration file: execute it inside a transaction, then ROLLBACK.
  *
- * Run: node --import tsx --env-file=.env.local scripts/_dryrun-migration.ts drizzle/E-214_...sql
+ * Run: node --import tsx --env-file=.env.local scripts/_dryrun-migration.ts drizzle/E-216_...sql
  *
  * DDL is transactional in Postgres, so this proves the file applies cleanly
- * without leaving anything behind. Exists because E-214 shipped an index on
+ * without leaving anything behind. Exists because E-216 shipped an index on
  * COALESCE(expense_date, approved_at::date) that Postgres rejects — a
  * volatility error no amount of reading the file would have caught, and which
  * only showed up when a human pasted it into pgAdmin.

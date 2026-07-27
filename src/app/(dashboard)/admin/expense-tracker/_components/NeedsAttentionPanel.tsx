@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-214 — the needs-attention queue.
+ * E-216 — the needs-attention queue.
  *
  * This pipeline has no approval step, so nothing is held back waiting for a
  * human. That makes this panel the only place a doubtful import is visible,

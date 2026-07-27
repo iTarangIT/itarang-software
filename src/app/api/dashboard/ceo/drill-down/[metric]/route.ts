@@ -219,7 +219,7 @@ export async function GET(
         console.warn("[drill-down/sales] manual_dealer_sales unavailable:", errorMessage(e));
       }
     } else if (metric === "expenses") {
-      // E-214 — must match the Expenses card exactly: windowed on
+      // E-216 — must match the Expenses card exactly: windowed on
       // COALESCE(expense_date, approved_at::date), not approved_at. If these
       // two drift, clicking the card opens a list whose rows do not add up to
       // the number that was clicked.

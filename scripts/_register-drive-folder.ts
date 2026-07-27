@@ -1,5 +1,5 @@
 /**
- * E-214 — register a Google Drive folder for the expense scanner.
+ * E-216 — register a Google Drive folder for the expense scanner.
  *
  * Run: node --import tsx --env-file=.env.local scripts/_register-drive-folder.ts \
  *        <folderUrlOrId> <ownerUserId> [label]

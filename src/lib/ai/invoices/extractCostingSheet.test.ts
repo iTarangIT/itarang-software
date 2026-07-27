@@ -5,7 +5,7 @@ import {
     parseSheetDate,
 } from "./extractCostingSheet";
 
-// E-214. These are the deterministic halves of the costing-sheet importer —
+// E-216. These are the deterministic halves of the costing-sheet importer —
 // the model only ever reports the sheet's LAYOUT, and everything below turns
 // that layout into money. A bug here silently misstates spend on the CEO
 // dashboard, so it is worth pinning down without burning a model call.

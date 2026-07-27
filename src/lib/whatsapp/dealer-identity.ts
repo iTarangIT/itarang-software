@@ -66,6 +66,11 @@ export async function resolveWhatsAppDealer(
       and(
         inArray(dealerOnboardingApplications.wa_phone, variants),
         eq(dealerOnboardingApplications.onboarding_status, "approved"),
+        // E-214: also require the account to be ACTIVE. resolveActiveDealer()
+        // (customer-lead.ts) checks both, and runTurn now routes this branch
+        // into the dealer console too — without this a deactivated dealer would
+        // get in through the phone-matched gate.
+        eq(dealerOnboardingApplications.dealer_account_status, "active"),
       ),
     )
     .limit(1);

@@ -1,5 +1,5 @@
 /**
- * E-214 — the Google Drive expense scanner.
+ * E-216 — the Google Drive expense scanner.
  *
  * Walks the configured Drive folders, and for each file it has not already
  * processed: downloads it, extracts the expense data, validates it, dedupes
@@ -626,7 +626,7 @@ async function insertExpense(args: {
 }): Promise<string | "duplicate"> {
   const now = new Date();
 
-  // E-215 — `amount` is the column every report SUMs, so it must always be
+  // E-217 — `amount` is the column every report SUMs, so it must always be
   // INR. What the document said is preserved separately, along with the rate
   // that connects them.
   const fx = await convertToInr(
@@ -671,7 +671,7 @@ async function insertExpense(args: {
     return row.id;
   } catch (e: unknown) {
     // Race backstop for both partial unique indexes (E-172 invoice number,
-    // E-214 drive file+row).
+    // E-216 drive file+row).
     if (typeof e === "object" && e !== null && (e as { code?: string }).code === "23505") {
       return "duplicate";
     }

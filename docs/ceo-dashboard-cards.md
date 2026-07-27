@@ -188,7 +188,7 @@ export function approvedExpenseInWindow(startStr: string, endStr: string | null)
 }
 ```
 
-> **E-214 changed the date basis.** This used to window on `approved_at` — for
+> **E-216 changed the date basis.** This used to window on `approved_at` — for
 > an AI-extracted row, the moment somebody imported it. Once invoices are
 > scanned in bulk from a Google Drive folder that stops working: a year of
 > historic bills would all land in the month the scan ran. Expenses now count
@@ -198,7 +198,7 @@ export function approvedExpenseInWindow(startStr: string, endStr: string | null)
 **Where the rows come from:** three sources, all in `expense_submissions`:
 - Staff submissions via `/expenses/submit` (`source='manual'`, needs approval)
 - Invoices uploaded at `/admin/expense-tracker` (`source='ai'`, auto-approved)
-- Invoices scanned from Google Drive (`source='ai'` with `drive_file_id` set, auto-approved — E-214)
+- Invoices scanned from Google Drive (`source='ai'` with `drive_file_id` set, auto-approved — E-216)
 
 **Flow diagram:** `diagrams/other-expenses.excalidraw` · [Open interactive »](https://excalidraw.com/#json=EQ7YkTmIs7s3txzgduRpL,hTvxG_IQADPETm6X3DMFLQ)
 

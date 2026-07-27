@@ -37,7 +37,7 @@ export function resolveWindow(
 }
 
 /**
- * E-214 — the date an expense belongs to.
+ * E-216 — the date an expense belongs to.
  *
  * Every CEO expense figure used to window on `approved_at`, which for an
  * AI-extracted row is the moment somebody imported it, not the date on the
@@ -77,7 +77,7 @@ export const expenseEffectiveDate = () =>
  *
  *   Splitting it into two branches keeps the exact same semantics while
  *   comparing plain columns against constants, so each branch is served by an
- *   ordinary b-tree: `expense_submissions_approved_expense_date_idx` (E-214)
+ *   ordinary b-tree: `expense_submissions_approved_expense_date_idx` (E-216)
  *   and `expense_submissions_approved_at_idx` (E-105).
  *
  * Callers must keep `status = 'approved'` — it is part of both partial indexes.
@@ -87,7 +87,7 @@ export function approvedExpenseInWindow(startStr: string, endStr: string | null)
     if (endStr) byExpenseDate.push(lt(expenseSubmissions.expense_date, endStr));
 
     // Date literal vs timestamptz resolves at the session timezone, exactly as
-    // the pre-E-214 queries did — the fallback path's behaviour is unchanged.
+    // the pre-E-216 queries did — the fallback path's behaviour is unchanged.
     const byApprovedAt = [gte(expenseSubmissions.approved_at, sql`${startStr}::date`)];
     if (endStr) byApprovedAt.push(lt(expenseSubmissions.approved_at, sql`${endStr}::date`));
 

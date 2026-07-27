@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
     if (endStr) salesConds.push(lt(zohoInvoices.invoice_date, endStr));
 
     // expenses — approved only, windowed on the expense's effective date
-    // (E-214: COALESCE(expense_date, approved_at::date)) so `net` below is
+    // (E-216: COALESCE(expense_date, approved_at::date)) so `net` below is
     // computed against the same figure the Expenses card shows.
     const expenseWhere = approvedExpenseInWindow(startStr, endStr);
 

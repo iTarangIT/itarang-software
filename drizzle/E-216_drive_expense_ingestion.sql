@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------------
--- E-214: Google Drive → CEO Expenses ingestion.
+-- E-216: Google Drive → CEO Expenses ingestion.
 --
 -- Today expenses reach the CEO dashboard exactly one way: a human opens
 -- /admin/expense-tracker and drags in up to 10 invoice files (E-172's bulk
@@ -103,13 +103,13 @@ CREATE INDEX IF NOT EXISTS drive_expense_folders_active_idx
   ON drive_expense_folders (is_active) WHERE is_active;
 
 COMMENT ON TABLE drive_expense_folders IS
-  'E-214: Google Drive folders the expense scanner reads. In the DB rather than env because prod shared/.env is rewritten from a GitHub secret on every deploy.';
+  'E-216: Google Drive folders the expense scanner reads. In the DB rather than env because prod shared/.env is rewritten from a GitHub secret on every deploy.';
 COMMENT ON COLUMN drive_expense_folders.created_by IS
   'users.id of the admin who added the folder. Also the fallback submitted_by/approved_by for ticker runs, which have no human actor.';
 COMMENT ON COLUMN drive_expense_folders.include_names IS
-  'E-214: ALLOWLIST — only files at or below a folder matching one of these (comma-separated, leading-word match, scope inherited by descendants) are imported. Defaults to ''purchase''. An allowlist because a denylist fails open: the live folder names its sales side four different ways across two yearly conventions.';
+  'E-216: ALLOWLIST — only files at or below a folder matching one of these (comma-separated, leading-word match, scope inherited by descendants) are imported. Defaults to ''purchase''. An allowlist because a denylist fails open: the live folder names its sales side four different ways across two yearly conventions.';
 COMMENT ON COLUMN drive_expense_folders.exclude_names IS
-  'E-214: denylist applied even inside an allowlisted branch — catches a sales folder misfiled under Purchase. Defaults to ''sale''.';
+  'E-216: denylist applied even inside an allowlisted branch — catches a sales folder misfiled under Purchase. Defaults to ''sale''.';
 
 
 -- 2. One row per scan run ----------------------------------------------------
@@ -173,7 +173,7 @@ CREATE INDEX IF NOT EXISTS drive_scan_runs_started_idx
   ON drive_scan_runs (started_at DESC);
 
 COMMENT ON TABLE drive_scan_runs IS
-  'E-214: one row per Drive expense scan. Also the concurrency lock — a status=running row blocks a second scan. In the DB, not memory, so it survives a pm2 restart mid-run.';
+  'E-216: one row per Drive expense scan. Also the concurrency lock — a status=running row blocks a second scan. In the DB, not memory, so it survives a pm2 restart mid-run.';
 COMMENT ON COLUMN drive_scan_runs.files_new IS
   'Files that got past the (drive_file_id, md5_checksum) check and actually cost a download plus a model call. files_seen minus files_new is what the dedup saved.';
 COMMENT ON COLUMN drive_scan_runs.error_message IS
@@ -249,7 +249,7 @@ CREATE INDEX IF NOT EXISTS drive_expense_files_attention_idx
   WHERE status IN ('needs_attention', 'failed');
 
 COMMENT ON TABLE drive_expense_files IS
-  'E-214: one row per Drive file per scan outcome. Audit trail for where an expense came from, and the work queue behind the needs-attention panel. Every touched file gets a row, including skipped and unreadable ones.';
+  'E-216: one row per Drive file per scan outcome. Audit trail for where an expense came from, and the work queue behind the needs-attention panel. Every touched file gets a row, including skipped and unreadable ones.';
 COMMENT ON COLUMN drive_expense_files.md5_checksum IS
   'Google''s content hash. Native Google Sheets/Docs have none — the code stores the RFC3339 modifiedTime instead. Either way: the version of this file already processed.';
 COMMENT ON COLUMN drive_expense_files.expense_ids IS
@@ -267,13 +267,13 @@ ALTER TABLE expense_submissions
   ADD COLUMN IF NOT EXISTS attention_reason text;
 
 COMMENT ON COLUMN expense_submissions.drive_file_id IS
-  'E-214: the Google Drive file this row was extracted from. NULL for manually uploaded rows — this is how Drive rows are told apart from hand-uploaded ones without changing `source`, which stays ''ai'' so all four existing consumers keep working.';
+  'E-216: the Google Drive file this row was extracted from. NULL for manually uploaded rows — this is how Drive rows are told apart from hand-uploaded ones without changing `source`, which stays ''ai'' so all four existing consumers keep working.';
 COMMENT ON COLUMN expense_submissions.drive_row_ref IS
-  'E-214: identity of a single row inside a costing spreadsheet (sheet:<name>:row:<n>). NULL for invoices, which are identified by invoice_number instead.';
+  'E-216: identity of a single row inside a costing spreadsheet (sheet:<name>:row:<n>). NULL for invoices, which are identified by invoice_number instead.';
 COMMENT ON COLUMN expense_submissions.needs_attention IS
-  'E-214: imported but not fully trusted — missing vendor/date/invoice number, low-confidence department, or a non-INR currency. The row DOES count towards dashboard totals; the flag routes it to a human, it does not withhold it.';
+  'E-216: imported but not fully trusted — missing vendor/date/invoice number, low-confidence department, or a non-INR currency. The row DOES count towards dashboard totals; the flag routes it to a human, it does not withhold it.';
 COMMENT ON COLUMN expense_submissions.attention_reason IS
-  'E-214: why needs_attention is set, in plain English, shown verbatim to the admin who fixes it.';
+  'E-216: why needs_attention is set, in plain English, shown verbatim to the admin who fixes it.';
 
 -- Dedup layer 3 — spreadsheet rows carry no invoice number, so file + row is
 -- their only stable identity. Safe to add as UNIQUE: both columns are brand

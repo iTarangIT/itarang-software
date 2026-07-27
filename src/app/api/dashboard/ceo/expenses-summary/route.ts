@@ -6,7 +6,7 @@
  * refetch. Uses the same filter as the main CEO dashboard: status='approved'
  * with the expense's effective date inside the window.
  *
- * E-214 — that effective date is COALESCE(expense_date, approved_at::date),
+ * E-216 — that effective date is COALESCE(expense_date, approved_at::date),
  * not approved_at alone. For an AI-extracted row approved_at is the moment
  * somebody imported it, so a scan of a Drive folder full of historic invoices
  * would otherwise pile a year of spend into whichever month the scan ran.
@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // E-214 — windowed on the invoice's own date, not approved_at (= import
+    // E-216 — windowed on the invoice's own date, not approved_at (= import
     // time). A bill dated March counts in March however late it was scanned.
     const [agg] = await db
       .select({

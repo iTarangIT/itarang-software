@@ -1,5 +1,5 @@
 /**
- * E-215 — currency conversion for expenses.
+ * E-217 — currency conversion for expenses.
  *
  * `expense_submissions.amount` is a single numeric column that every dashboard
  * SUMs with no notion of currency, so anything not in rupees must be converted
@@ -7,7 +7,7 @@
  * just understate spend — it produces a number denominated in nothing.
  *
  * Rates are keyed by the INVOICE's date, not today's. An expense belongs to the
- * month it was incurred (E-214 made the dashboard bucket that way), so
+ * month it was incurred (E-216 made the dashboard bucket that way), so
  * converting a May bill at today's rate would make last month's total drift
  * every time it was recomputed. Cached in `fx_rates`, so the same invoice
  * always converts to the same rupee figure.

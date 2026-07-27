@@ -7,7 +7,7 @@ import {
     round2,
 } from "./currency";
 
-// E-215. `expense_submissions.amount` is a single column that every dashboard
+// E-217. `expense_submissions.amount` is a single column that every dashboard
 // SUMs with no notion of currency, so anything mis-classified here is silently
 // added to the total at face value — which is how $1,123 of SaaS invoices came
 // to be booked as ₹1,123, understating spend by about ₹95,000.

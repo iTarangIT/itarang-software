@@ -1,5 +1,5 @@
 /**
- * E-215 — pure currency helpers.
+ * E-217 — pure currency helpers.
  *
  * Deliberately separate from `fx.ts`, which imports the DB client and so
  * cannot be loaded by the vitest suite (scoped to pure, no-I/O units — see
