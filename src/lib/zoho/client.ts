@@ -13,6 +13,8 @@
 //                           Delhi. Falls back to ZOHO_ORGANIZATION_ID if unset.)
 //   ZOHO_REGION            ("in" or "com" — defaults to "in")
 
+import type { ZohoListOrganizationsResponse } from "./types";
+
 const ZOHO_REGION = process.env.ZOHO_REGION || "in";
 const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID;
 const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET;
@@ -78,8 +80,14 @@ export async function getAccessToken(): Promise<string> {
   return cached.accessToken;
 }
 
-// Every org the sync should pull from. Prefer the explicit comma-separated
+// Every org configured in the environment. Prefer the explicit comma-separated
 // list; otherwise fall back to the single primary org.
+//
+// NOTE: this is only ONE of the sources the sync uses — see
+// resolveSyncOrganizationIds() in ./sync. Relying on it alone is what silently
+// dropped the Delhi org from prod: shared/.env is regenerated from a deploy
+// secret, ZOHO_ORGANIZATION_IDS went missing, and the fallback below narrowed
+// the sync to the primary org without any error.
 export function getOrganizationIds(): string[] {
   assertConfigured();
   if (ZOHO_ORGANIZATION_IDS) {
@@ -96,6 +104,20 @@ export function getOrganizationIds(): string[] {
 export function getOrganizationId(): string {
   assertConfigured();
   return ZOHO_ORGANIZATION_ID ?? getOrganizationIds()[0];
+}
+
+// Every organization this Zoho login can actually see. Lets the sync discover
+// an org it was never configured for, so adding a new entity in Zoho (or losing
+// an env var) can't quietly remove that entity's revenue from the dashboard.
+// Callers must tolerate this throwing — a token whose scope doesn't cover
+// /organizations is not a reason to abort a sync.
+export async function listOrganizationIdsFromApi(): Promise<string[]> {
+  const res = await zohoFetch("/organizations", { method: "GET" });
+  const json = (await res.json()) as ZohoListOrganizationsResponse;
+  return (json.organizations ?? [])
+    .filter((o) => o.is_org_active !== false)
+    .map((o) => o.organization_id)
+    .filter((v): v is string => !!v);
 }
 
 export async function zohoFetch(

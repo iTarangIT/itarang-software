@@ -2,23 +2,27 @@
 // so each run pulls every invoice and upserts into zoho_invoices keyed on
 // zoho_invoice_id. zoho_sync_state tracks last-run status for observability.
 //
-// Multi-org (E-171): the Zoho login owns more than one organization (Haryana +
-// Delhi). We pull from every org returned by getOrganizationIds() into the one
-// zoho_invoices table so the CEO dashboard totals are company-wide. Zoho
-// invoice_id is globally unique across a login's orgs, so the upsert key holds.
+// Multi-org (E-171): the Zoho login owns more than one organization (Haryana
+// "ITG" + Delhi "ITD"). We pull from every org resolveSyncOrganizationIds()
+// resolves into the one zoho_invoices table so the CEO dashboard totals are
+// company-wide. Zoho invoice_id is globally unique across a login's orgs, so
+// the upsert key holds.
 
-import { and, inArray, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { zohoInvoices, zohoSyncState } from "@/lib/db/schema";
 import { iterateAllInvoices } from "./invoices";
 import { iterateAllPayments } from "./payments";
-import { getOrganizationIds } from "./client";
+import { getOrganizationIds, listOrganizationIdsFromApi } from "./client";
 import type { ZohoInvoice, ZohoPayment } from "./types";
 
 export interface SyncResult {
   upserted: number;
   durationMs: number;
   lastRunAt: string;
+  /** Orgs this run actually pulled from, and where that list came from. */
+  organizationIds: string[];
+  organizationSources: string;
   // "ok" = clean run, "partial" = some orgs/phases failed but invoices landed
   // for at least one org, "error" = every org's invoice pull failed.
   status: "ok" | "partial" | "error";
@@ -47,6 +51,62 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Which orgs a run pulls from. Union of three sources — an org can only ever be
+// ADDED here, never dropped, because a missing org is invisible in the UI (the
+// CEO dashboard sums zoho_invoices unfiltered, so a dropped org just makes the
+// company look smaller):
+//   1. env — ZOHO_ORGANIZATION_IDS, else the single ZOHO_ORGANIZATION_ID.
+//   2. db  — every org already present in zoho_invoices. Survives an env reset
+//            and needs no extra Zoho scope; this is the source that re-attaches
+//            Delhi (ITD) on prod, where shared/.env is regenerated from
+//            PROD_ENV_FILE_B64 on each deploy and lost ZOHO_ORGANIZATION_IDS.
+//   3. api — Zoho /organizations, so a newly created entity is picked up
+//            without an env edit. Best-effort: a token whose scope doesn't
+//            cover it must not break the sync.
+// Set ZOHO_ORGANIZATION_DISCOVERY=0 to trust the env list alone (e.g. if the
+// login ever owns an org whose invoices must NOT count as company revenue).
+export async function resolveSyncOrganizationIds(): Promise<{
+  ids: string[];
+  sources: string;
+}> {
+  // Also asserts Zoho is configured at all — throws exactly as before if not.
+  const envIds = getOrganizationIds();
+  const ids = new Set(envIds);
+  const sources = [`env=${envIds.join("+") || "none"}`];
+
+  if (process.env.ZOHO_ORGANIZATION_DISCOVERY === "0") {
+    return { ids: [...ids], sources: `${sources.join(" ")} discovery=off` };
+  }
+
+  try {
+    const rows = await db
+      .selectDistinct({ organization_id: zohoInvoices.organization_id })
+      .from(zohoInvoices)
+      .where(isNotNull(zohoInvoices.organization_id));
+    const known = rows
+      .map((r) => r.organization_id)
+      .filter((v): v is string => !!v);
+    const added = known.filter((id) => !ids.has(id));
+    for (const id of known) ids.add(id);
+    sources.push(`db=${known.length}${added.length ? `(+${added.join("+")})` : ""}`);
+  } catch (err) {
+    sources.push(`db=failed(${errMsg(err)})`);
+  }
+
+  try {
+    const live = await listOrganizationIdsFromApi();
+    const added = live.filter((id) => !ids.has(id));
+    for (const id of live) ids.add(id);
+    sources.push(`api=${live.length}${added.length ? `(+${added.join("+")})` : ""}`);
+  } catch (err) {
+    // Env + db still cover every org we've ever synced; only a brand-new org
+    // would be missed. Recorded in the sources string so it stays diagnosable.
+    sources.push(`api=failed(${errMsg(err)})`);
+  }
+
+  return { ids: [...ids], sources: sources.join(" ") };
+}
+
 async function recordSyncState(
   status: SyncResult["status"],
   error: string | null,
@@ -73,9 +133,19 @@ export async function syncInvoicesSinceLastRun(): Promise<SyncResult> {
   let upserted = 0;
   let orgsWithInvoices = 0; // orgs whose invoice pull completed cleanly
   const errors: string[] = [];
+  let organizationIds: string[] = [];
+  let organizationSources = "";
 
   try {
-    for (const organizationId of getOrganizationIds()) {
+    ({ ids: organizationIds, sources: organizationSources } =
+      await resolveSyncOrganizationIds());
+    // Log the resolved set every run — a sync that quietly narrowed to one org
+    // is precisely the failure this replaces, so it must be visible in the logs.
+    console.log(
+      `[zoho-sync] pulling ${organizationIds.length} org(s): ${organizationIds.join(", ")} [${organizationSources}]`,
+    );
+
+    for (const organizationId of organizationIds) {
       // Invoices are revenue-critical. Isolate each org so one org's failure
       // (bad token, transient 5xx) doesn't starve the others. On failure we
       // skip this org's payments too and move on to the next org.
@@ -133,6 +203,8 @@ export async function syncInvoicesSinceLastRun(): Promise<SyncResult> {
     upserted,
     durationMs: Date.now() - start,
     lastRunAt: new Date().toISOString(),
+    organizationIds,
+    organizationSources,
     status,
     errors,
   };
