@@ -424,3 +424,91 @@ export async function startBuybackGatewayTicker() {
 
   console.log("[instrumentation] buyback-gateway poller (60s) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// E-214 — Google Drive expense scan.
+//
+// Mirrors /api/cron/drive-expenses. Same reasoning as the Zoho ticker above:
+// Vercel crons do not fire on the Hostinger PM2 boxes, so without this the
+// scanner would only ever run when somebody remembered to press "Scan now" —
+// which defeats the point of scanning a folder people drop invoices into.
+//
+// The work is deliberately capped per tick (DRIVE_EXPENSE_MAX_FILES_PER_RUN,
+// default 25). Each new file costs a download plus one GPT-4o call, so a first
+// scan of a folder holding two years of invoices must not try to finish in one
+// pass. It doesn't need to: "already processed" is a property of the file (its
+// md5 recorded in drive_expense_files), not of the run, so each tick simply
+// picks up where the last one stopped.
+// ---------------------------------------------------------------------------
+export async function startDriveExpenseTicker() {
+  // Skip on Vercel — the cron entry owns it there.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process double-scanning.
+  if (process.env.ENABLE_DRIVE_EXPENSE_SCAN === "0") return;
+
+  // No service-account credentials → nothing to scan. Say so once at boot
+  // rather than failing silently every six hours.
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+    console.log(
+      "[instrumentation:drive-expenses] Google service account not configured — ticker disabled",
+    );
+    return;
+  }
+
+  const SCAN_INTERVAL_MS =
+    Number(process.env.DRIVE_EXPENSE_SCAN_INTERVAL_MS || "") || 6 * 60 * 60_000;
+  const MAX_FILES = Number(process.env.DRIVE_EXPENSE_MAX_FILES_PER_RUN || "") || 25;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the
+      // googleapis graph is never pulled into the Edge compile.
+      const { runDriveScan } = await import("@/lib/expenses/driveScan");
+      const r = await runDriveScan({ triggeredBy: null, maxFiles: MAX_FILES });
+
+      // Log only when something actually happened — a quiet folder should not
+      // write a line every six hours forever.
+      if (r.status === "skipped") {
+        if (r.skipped_reason) {
+          console.log(`[instrumentation:drive-expenses] skipped — ${r.skipped_reason}`);
+        }
+      } else if (r.files_new > 0 || r.failed > 0 || r.status === "failed") {
+        console.log(
+          `[instrumentation:drive-expenses] status=${r.status} seen=${r.files_seen} ` +
+            `new=${r.files_new} imported=${r.imported} duplicate=${r.skipped_duplicate} ` +
+            `attention=${r.needs_attention} unsupported=${r.unsupported} failed=${r.failed} ` +
+            `durationMs=${r.duration_ms}`,
+        );
+      }
+      if (r.error) {
+        console.error(`[instrumentation:drive-expenses] run failed: ${r.error}`);
+      }
+    } catch (err) {
+      // runDriveScan records its own failure to drive_scan_runs; surface it.
+      console.error(
+        "[instrumentation:drive-expenses] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered behind dialer (5s), Zoho (20s), dispatch (35s), gateway (45s)
+  // and dedup (60s), so a cold boot doesn't fire six jobs at once.
+  const kickoff = setTimeout(tick, 90_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, SCAN_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] drive-expense-scan (${Math.round(
+      SCAN_INTERVAL_MS / 60_000,
+    )}m) started in-process`,
+  );
+}
