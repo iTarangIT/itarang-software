@@ -29,6 +29,10 @@ const PatchSchema = z
       .nullable()
       .optional(),
     description: z.string().trim().max(2000).nullable().optional(),
+    // E-216 — let the needs-attention panel clear a flag without editing a
+    // field, for the case where the extraction was right and the flag was
+    // merely cautious (e.g. a genuinely un-numbered receipt).
+    needs_attention: z.boolean().optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: "No fields to update" });
 
@@ -67,6 +71,19 @@ export async function PATCH(
     if (d.amount !== undefined) update.amount = d.amount.toFixed(2);
     if (d.expense_date !== undefined) update.expense_date = d.expense_date;
     if (d.description !== undefined) update.description = d.description || null;
+
+    // E-216 — an admin who corrects any field has, by definition, dealt with
+    // whatever the flag was warning about, so clear it rather than making them
+    // do it as a second step. An explicit `needs_attention` in the body still
+    // wins, so the panel can also flag a row back up.
+    const editedAField = Object.keys(update).length > 1;
+    if (d.needs_attention !== undefined) {
+      update.needs_attention = d.needs_attention;
+      if (!d.needs_attention) update.attention_reason = null;
+    } else if (editedAField) {
+      update.needs_attention = false;
+      update.attention_reason = null;
+    }
 
     const [row] = await db
       .update(expenseSubmissions)

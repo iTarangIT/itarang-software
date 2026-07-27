@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EXPENSE_DEPARTMENTS, expenseDepartmentLabel } from "@/lib/expenses";
+import { DriveFoldersPanel } from "./DriveFoldersPanel";
+import { NeedsAttentionPanel } from "./NeedsAttentionPanel";
 
 interface ExtractedInvoice {
   vendor: string | null;
@@ -294,6 +296,15 @@ export function ExpenseTrackerView() {
 
   return (
     <div className="space-y-8">
+      {/* E-216 — automated Drive ingestion. Above the manual uploader because
+          it is now the main way invoices arrive; the uploader is the exception
+          for a bill that never made it into a folder. */}
+      <DriveFoldersPanel />
+
+      {/* E-216 — anything imported that a human still needs to look at. Renders
+          nothing at all when the queue is empty. */}
+      <NeedsAttentionPanel />
+
       {/* Upload + extract */}
       <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm space-y-5">
         <div className="flex flex-wrap items-center gap-3">

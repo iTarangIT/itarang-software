@@ -113,9 +113,13 @@ import {
   setSession,
 } from "./session-store";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
+// Defined in ./labels so admin API routes and client components can read it
+// without importing this module (and its whole dependency tree) at eval time.
+// Re-exported here because three call sites already import it from here.
+import { PLACEHOLDER_COMPANY } from "./labels";
+export { PLACEHOLDER_COMPANY };
 
 const MIN_CONFIDENCE = Number(process.env.WHATSAPP_MIN_CONFIDENCE ?? 0.55);
-export const PLACEHOLDER_COMPANY = "WhatsApp onboarding (pending)";
 
 const CONFIRM_WORDS = /^(confirm|confirmed|ok|okay|yes|yep|y|haan|ha|sahi)$/i;
 const CHANGE_WORDS = /^(change|edit|wrong|correct|no|nahi|galat)$/i;

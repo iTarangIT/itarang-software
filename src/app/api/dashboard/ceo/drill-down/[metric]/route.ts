@@ -14,6 +14,10 @@ import { db } from "@/lib/db";
 import { expenseSubmissions, inventory, manualDealerSales, users, zohoInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import {
+  approvedExpenseInWindow,
+  expenseEffectiveDate,
+} from "@/lib/dashboard/salesWindow";
 import { fetchInvoiceLineItems } from "@/lib/zoho/invoices";
 
 export const runtime = "nodejs";
@@ -215,11 +219,10 @@ export async function GET(
         console.warn("[drill-down/sales] manual_dealer_sales unavailable:", errorMessage(e));
       }
     } else if (metric === "expenses") {
-      const conds = [
-        eq(expenseSubmissions.status, "approved"),
-        gte(expenseSubmissions.approved_at, sql`${startStr}::date`),
-      ];
-      if (endStr) conds.push(lt(expenseSubmissions.approved_at, sql`${endStr}::date`));
+      // E-216 — must match the Expenses card exactly: windowed on
+      // COALESCE(expense_date, approved_at::date), not approved_at. If these
+      // two drift, clicking the card opens a list whose rows do not add up to
+      // the number that was clicked.
       rows = await db
         .select({
           invoice_number: expenseSubmissions.invoice_number,
@@ -234,8 +237,8 @@ export async function GET(
         })
         .from(expenseSubmissions)
         .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-        .where(and(...conds))
-        .orderBy(desc(expenseSubmissions.approved_at))
+        .where(approvedExpenseInWindow(startStr, endStr))
+        .orderBy(desc(expenseEffectiveDate()))
         .limit(ROW_CAP);
       total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
     } else if (metric === "inventory") {

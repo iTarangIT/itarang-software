@@ -61,23 +61,33 @@ export const GET = withErrorHandler(
       .limit(1);
     if (!session) return errorResponse("Session not found", 404);
 
-    // Only conversations that belong to an operator-run onboarding are readable
-    // here — either the operator's own file row, or the dealer session of an
-    // application an operator owns. This keeps the endpoint from becoming a
-    // generic "read any WhatsApp chat by id" hole.
+    // Readable iff the admin WhatsApp-Onboarding console lists the conversation:
+    // an operator's per-dealer file row, or a dealer conversation attached to a
+    // WhatsApp-collected application. Widened from operator-run only, because a
+    // self-serve prospect's chat was unreadable — the same gap that kept them
+    // invisible in the CRM until they submitted.
+    //
+    // This is still NOT a generic "read any chat by id" hole. An `operator_hub`
+    // row is an internal team MENU whose context carries that operator's whole
+    // dealer list and their in-progress draft, so it stays 403; so does a session
+    // whose application isn't WhatsApp-sourced.
     let allowed = session.kind === "operator_file";
     if (!allowed && session.applicationId) {
       const [app] = await db
         .select({
           operatorId: dealerOnboardingApplications.onboarding_operator_id,
+          source: dealerOnboardingApplications.source,
         })
         .from(dealerOnboardingApplications)
         .where(eq(dealerOnboardingApplications.id, session.applicationId))
         .limit(1);
-      allowed = Boolean(app?.operatorId);
+      allowed =
+        Boolean(app?.operatorId) ||
+        (session.kind === "dealer" &&
+          (app?.source ?? "").toLowerCase() === "whatsapp");
     }
     if (!allowed) {
-      return errorResponse("Not an operator-run onboarding conversation", 403);
+      return errorResponse("Not a WhatsApp onboarding conversation", 403);
     }
 
     const limit = Math.min(

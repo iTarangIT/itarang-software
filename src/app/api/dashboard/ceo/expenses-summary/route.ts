@@ -4,18 +4,24 @@
  * Returns the approved-expense total for a chosen window so the CEO Expenses
  * card can switch between months / the financial year without a full dashboard
  * refetch. Uses the same filter as the main CEO dashboard: status='approved'
- * with approved_at inside the window.
+ * with the expense's effective date inside the window.
+ *
+ * E-216 — that effective date is COALESCE(expense_date, approved_at::date),
+ * not approved_at alone. For an AI-extracted row approved_at is the moment
+ * somebody imported it, so a scan of a Drive folder full of historic invoices
+ * would otherwise pile a year of spend into whichever month the scan ran.
  *
  *   ?month=YYYY-MM   → that calendar month
  *   ?period=mtd      → current month (default)
  *   ?period=fy       → financial year to date (since 1 Apr)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { expenseSubmissions } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import { approvedExpenseInWindow } from "@/lib/dashboard/salesWindow";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,21 +103,14 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // approved_at is a timestamptz; the date strings compare against its date.
-    const conds = [
-      eq(expenseSubmissions.status, "approved"),
-      gte(expenseSubmissions.approved_at, sql`${startStr}::date`),
-    ];
-    if (endStr) {
-      conds.push(lt(expenseSubmissions.approved_at, sql`${endStr}::date`));
-    }
-
+    // E-216 — windowed on the invoice's own date, not approved_at (= import
+    // time). A bill dated March counts in March however late it was scanned.
     const [agg] = await db
       .select({
         total: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)`,
       })
       .from(expenseSubmissions)
-      .where(and(...conds));
+      .where(approvedExpenseInWindow(startStr, endStr));
 
     return NextResponse.json({
       success: true,

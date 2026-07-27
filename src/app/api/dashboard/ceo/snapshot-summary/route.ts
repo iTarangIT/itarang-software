@@ -17,12 +17,12 @@
  *   - otherExpenses→ SUM(expense_submissions.amount) by approved_at, status='approved'
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { expenseSubmissions, inventory, zohoInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
-import { resolveWindow } from "@/lib/dashboard/salesWindow";
+import { approvedExpenseInWindow, resolveWindow } from "@/lib/dashboard/salesWindow";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,12 +82,10 @@ export async function GET(req: NextRequest) {
     ];
     if (endStr) salesConds.push(lt(zohoInvoices.invoice_date, endStr));
 
-    // expenses — approved_at is a timestamptz; compare ::date, approved only.
-    const expenseConds = [
-      eq(expenseSubmissions.status, "approved"),
-      gte(expenseSubmissions.approved_at, sql`${startStr}::date`),
-    ];
-    if (endStr) expenseConds.push(lt(expenseSubmissions.approved_at, sql`${endStr}::date`));
+    // expenses — approved only, windowed on the expense's effective date
+    // (E-216: COALESCE(expense_date, approved_at::date)) so `net` below is
+    // computed against the same figure the Expenses card shows.
+    const expenseWhere = approvedExpenseInWindow(startStr, endStr);
 
     const [purchaseAgg, salesAgg, expenseAgg] = await Promise.all([
       db
@@ -101,7 +99,7 @@ export async function GET(req: NextRequest) {
       db
         .select({ total: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)` })
         .from(expenseSubmissions)
-        .where(and(...expenseConds)),
+        .where(expenseWhere),
     ]);
 
     const purchases = Number(purchaseAgg[0]?.total || 0);
