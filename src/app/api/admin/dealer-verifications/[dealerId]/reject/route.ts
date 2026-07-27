@@ -3,6 +3,7 @@ import { db } from "@/lib/db/index";
 import {
   dealerOnboardingApplications,
   whatsappOnboardingSessions,
+  whatsappOperators,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { sendDealerRejectionNotificationEmail } from "@/lib/email/sendDealerRejectionNotificationEmail";
@@ -11,6 +12,7 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { notifyOnboardingDecision } from "@/lib/notifications/events";
 import {
   sendDealerRejectedWhatsApp,
+  sendOperatorRejectionWhatsApp,
   type WhatsAppDelivery,
 } from "@/lib/whatsapp/notifications";
 
@@ -144,6 +146,39 @@ export async function POST(req: NextRequest, context: RouteContext) {
         console.error("REJECT — could not close WhatsApp session:", sessErr);
       }
       console.log("DEALER REJECT WHATSAPP:", { dealerId, whatsappDelivery });
+    }
+
+    // E-214 - tell the internal operator who onboarded this dealer, so their
+    // file does not just go quiet. Attribution is onboarding_operator_id, never
+    // dealer_user_id.
+    if (application.onboarding_operator_id) {
+      try {
+        const [op] = await db
+          .select({
+            waPhone: whatsappOperators.wa_phone,
+            displayName: whatsappOperators.display_name,
+          })
+          .from(whatsappOperators)
+          .where(
+            eq(
+              whatsappOperators.id,
+              application.onboarding_operator_id as string,
+            ),
+          )
+          .limit(1);
+        if (op?.waPhone) {
+          await sendOperatorRejectionWhatsApp({
+            waPhone: op.waPhone,
+            waSessionId:
+              (application.wa_operator_session_id as string | null) ?? null,
+            operatorName: op.displayName,
+            companyName: application.company_name || "The dealer",
+            reason: remarks || null,
+          });
+        }
+      } catch (opErr) {
+        console.error("REJECT - operator notice failed:", opErr);
+      }
     }
 
     // In-app row for the dealer's bell + an audit copy for the admins. The

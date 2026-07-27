@@ -15,7 +15,7 @@
 // Decentro / Meta network calls — that would tie up a connection from the small
 // (max 5) pool for seconds. Rapid interleaved uploads are a Phase-2 concern.
 
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
@@ -59,6 +59,10 @@ import {
 // runDealerTurn when switching back to the dealer-orchestrator increment.
 // import { runDealerTurn } from "./dealer-orchestrator";
 import { resolveKnownContact, resolveWhatsAppDealer } from "./dealer-identity";
+import {
+  type WhatsAppOperator,
+  resolveOperator,
+} from "./operator-identity";
 import { classifyDocument } from "./extraction";
 import { answerGeneralQuestion } from "./general-info";
 import { classifyIntent } from "./intent";
@@ -95,10 +99,23 @@ import {
   notifyOnboardingDocsUploaded,
 } from "@/lib/notifications/events";
 import { removeMedia, saveMedia } from "./storage";
+// Session access + outbound messaging live in session-store.ts (E-214) so the
+// operator state machine can reuse them without importing this module.
+import {
+  type Ctx,
+  type SessionRow,
+  attachInboundToSession,
+  loadSession,
+  mergeContext,
+  patchApplication,
+  reply,
+  replyList,
+  setSession,
+} from "./session-store";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 
 const MIN_CONFIDENCE = Number(process.env.WHATSAPP_MIN_CONFIDENCE ?? 0.55);
-const PLACEHOLDER_COMPANY = "WhatsApp onboarding (pending)";
+export const PLACEHOLDER_COMPANY = "WhatsApp onboarding (pending)";
 
 const CONFIRM_WORDS = /^(confirm|confirmed|ok|okay|yes|yep|y|haan|ha|sahi)$/i;
 const CHANGE_WORDS = /^(change|edit|wrong|correct|no|nahi|galat)$/i;
@@ -224,78 +241,6 @@ function asCompanyType(id: string | null | undefined): CompanyType | null {
   return id && KNOWN_COMPANY_TYPES.includes(id) ? (id as CompanyType) : null;
 }
 
-type SessionRow = typeof whatsappOnboardingSessions.$inferSelect;
-type Ctx = {
-  answers?: Record<string, unknown>;
-  docs?: Record<string, { fields: Record<string, unknown>; confidence: number }>;
-  fieldIndex?: number;
-  /** Index into SIGNER_FIELDS while the dealer is re-entering the signer
-   *  (owner) name/phone/email via the "Change" button on the signer confirm. */
-  signerIndex?: number;
-  /** True when the dealer is editing a SINGLE signer field (picked Name/Email/
-   *  Phone from the "Change" menu). After collecting that one field we loop back
-   *  to the signer confirmation instead of walking through the remaining fields. */
-  signerSingleEdit?: boolean;
-  /** Document types the dealer couldn't provide / we gave up on — handled by the
-   *  admin instead, so the flow doesn't get stuck. */
-  skipped?: string[];
-  /** Per-document failed-attempt counter, to auto-skip after a few bad tries. */
-  attempts?: Record<string, number>;
-  /** Active in-chat correction round (set when the admin requests corrections on
-   *  a WhatsApp-onboarded dealer). The dealer fixes only the queued items. */
-  correction?: {
-    roundId: string;
-    roundNumber: number;
-    /** Ordered items to fix — fields first, then documents. `key` is the
-     *  correction-catalog key (camelCase field / web doc key). */
-    queue: Array<{ kind: "field" | "document"; key: string }>;
-    /** Index into `queue` of the item we're currently collecting. */
-    index: number;
-  };
-  /** When set, this session is a CUSTOMER self-onboarding a lead (entry-chooser
-   *  option 2) rather than dealer onboarding. Routes to runCustomerTurn and
-   *  attributes the created lead to the house dealer (dealer@itarang.com). */
-  flow?: "customer";
-  /** Active "General Information" Q&A (entry-chooser option 3). `turns` caps
-   *  the LLM spend per session; `history` (last few Q/A pairs, answers
-   *  truncated) gives follow-up questions their context. */
-  info?: { turns: number; history: Array<{ q: string; a: string }> };
-  /** The onboarding state we interrupted with the Resume/Start-Over prompt
-   *  (ASK_RESUME); restored verbatim when the applicant taps Resume. */
-  resumeState?: string;
-  /** Recognized-contact stamp from the greeting-time phone lookup (staff /
-   *  existing lead), kept for reuse so we don't re-query every greeting. */
-  known?: { kind: "staff" | "lead"; name: string; role?: string };
-  /** Active customer-lead being created in the post-approval dealer console
-   *  (states prefixed DC_*). Independent of the onboarding fields above. */
-  lead?: {
-    leadId?: string;
-    mobile?: string;
-    /** Customer name established from the first ID document (Aadhaar/PAN); used
-     *  to reject a later ID that belongs to a different person. */
-    customerName?: string;
-    interest?: "hot" | "warm" | "cold";
-    paymentMethod?: "finance" | "cash" | "other_finance";
-    /** Customer KYC document types collected so far (DC_LEAD_DOCS). */
-    docs?: Record<string, true>;
-    /** The product list offered at DC_LEAD_PRODUCT, so a tapped row resolves
-     *  back to its catalogue ids. */
-    productOptions?: Array<{
-      productId: string;
-      categoryId: string;
-      name: string;
-      assetType: string | null;
-    }>;
-    /** Index into ADDITIONAL_FINANCE_QUESTIONS while collecting the post-consent
-     *  resident-status / health- / life-insurance answers (DC_LEAD_FINANCE_Q). */
-    financeQIndex?: number;
-    /** Wrong-OTP attempts on the current consent OTP session (DC_LEAD_CONSENT_OTP_WAIT). */
-    consentOtpAttempts?: number;
-    /** Channel the consent OTP was sent over, so Resend uses the same one. */
-    consentOtpChannel?: "call" | "sms" | "whatsapp";
-  };
-};
-
 // After this many failed attempts at one document (illegible / wrong type /
 // unreadable key field), stop nagging and move on — the admin follows up.
 const MAX_DOC_ATTEMPTS = 3;
@@ -352,8 +297,39 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   //   // Fall through to onboarding rather than dropping the message.
   // }
 
-  const session = await getOrCreateSession(event);
+  // E-214 — internal onboarding operator. Resolved BEFORE the session so an
+  // allowlisted number gets a bare `operator_hub` row instead of a dealer draft.
+  const operator = await resolveOperator(event.waPhone);
+
+  const session = await getOrCreateSession(event, operator);
   await setSession(session.id, { last_inbound_at: new Date() });
+  // recordInbound() ran in the webhook before we knew the session, so the row is
+  // sitting there with session_id = NULL. Attribute it now (an operator turn
+  // re-attributes it to the dealer file it actually belongs to).
+  await attachInboundToSession(event.providerMessageId, session.id);
+
+  // E-214 — internal onboarding operator: one number, many dealer files. This
+  // gate is placed HERE, ahead of every other gate, on purpose:
+  //
+  //  • Ahead of the approved-dealer console below. That gate reads
+  //    session.application_id → resolveActiveDealer(); if an operator's hub
+  //    still pointed at a dealer file that later got approved, the OPERATOR
+  //    would be dropped into that dealer's lead console and create leads
+  //    attributed to a dealer they don't own. Returning here makes that
+  //    structurally unreachable. (closeFile() also nulls the hub's
+  //    application_id, so the trap is disarmed twice.)
+  //  • Ahead of the stop word. handleStop() wipes ctx.docs/answers on the row it
+  //    is given — catastrophic mid-file. In operator mode "stop" means "park
+  //    this dealer file and go back to the menu", which runOperatorTurn owns.
+  //  • Ahead of the website Apply button. An allowlisted internal number is
+  //    never a retail customer.
+  //
+  // Imported lazily so operator-orchestrator.ts can import this module for the
+  // shared onboarding state machine without a module-eval cycle.
+  if (operator) {
+    const { runOperatorTurn } = await import("./operator-orchestrator");
+    return await runOperatorTurn(session, event, operator);
+  }
 
   // Global stop word (stop / end / exit): bail out of whatever flow is active
   // and return to the start. Runs BEFORE every other gate so it works from the
@@ -388,15 +364,21 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     return await runConsoleTurn(session, event, dealer);
   }
 
-  // Web-onboarded approved dealer: their number matches dealers.owner_phone but
-  // their session's application row is just a stray WhatsApp draft, so the gate
-  // above misses them. Route to the SAME post-approval console. Only the "web"
-  // match is honoured here — the approved-application ("whatsapp") match is
-  // owned by resolveActiveDealer above, which also checks the account status.
+  // Approved dealer whose SESSION doesn't point at their approved application,
+  // so the gate above misses them. Two ways that happens:
+  //   • web-onboarded — matched on dealers.owner_phone; their session's
+  //     application row is just a stray WhatsApp draft;
+  //   • E-214 operator-uploaded — an internal operator collected every document
+  //     from their own number, so the dealer's number has no session at all and
+  //     their first "hi" mints a fresh draft.
+  // Both route to the SAME post-approval console. Previously only the "web"
+  // match was honoured here, which left operator-onboarded dealers stuck in
+  // onboarding forever; resolveWhatsAppDealer's "whatsapp" branch now checks
+  // dealer_account_status='active' too, so it is as strict as resolveActiveDealer.
   // This must never call the disabled E-170 runDealerTurn fork.
   try {
     const webDealer = await resolveWhatsAppDealer(event.waPhone);
-    if (webDealer?.matchedVia === "web" && webDealer.dealerUserId) {
+    if (webDealer?.dealerUserId) {
       return await runConsoleTurn(session, event, {
         dealerCode: webDealer.dealerCode,
         uploaderId: webDealer.dealerUserId,
@@ -420,72 +402,91 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   }
 
   try {
-    // A greeting word (hi/hello/menu/start…) at the entry of the flow re-greets
-    // (with known-contact recognition); mid-application it offers Resume /
-    // Start Over instead of restarting. Post-submission states keep their own
-    // replies (see GREETING_EXCLUDED_STATES).
-    if (
-      isGreetingWord(event) &&
-      !GREETING_EXCLUDED_STATES.has(session.current_state)
-    ) {
-      if (!hasOnboardingProgress(session)) {
-        return await greetEntry(session, event);
-      }
-      if (RESUMABLE_STATES.has(session.current_state)) {
-        return await askResume(session);
-      }
-      // Progress in a non-resumable state — fall through; the state handler
-      // simply re-prompts (e.g. an impatient "hi" during a document read).
-    }
-
-    switch (session.current_state) {
-      case "GREETING":
-        return await greetEntry(session, event);
-      case "CHOOSE_FLOW":
-        return await onChooseFlow(session, event);
-      case "GENERAL_INFO":
-        return await onGeneralInfo(session, event);
-      case "ASK_RESUME":
-        return await onAskResume(session, event);
-      case "ASK_COMPANY_TYPE":
-        return await onCompanyType(session, event);
-      case "ASK_UPLOAD_MODE":
-        return await onUploadMode(session, event);
-      case "COLLECTING_DOC":
-        return await onDocument(session, event);
-      case "ASK_FINANCE":
-        return await onFinance(session, event);
-      case "ASK_FIELD":
-        return await onField(session, event);
-      case "CONFIRM_SIGNER":
-        return await onSignerConfirm(session, event);
-      case "ASK_SIGNER_CHOICE":
-        return await onSignerChoice(session, event);
-      case "ASK_SIGNER_FIELD":
-        return await onSignerField(session, event);
-      case "AWAIT_CONFIRM":
-        return await onConfirm(session, event);
-      case "CORRECTION":
-        return await onCorrection(session, event);
-      case "REJECTED":
-        return void (await reply(
-          session,
-          "This application was not approved. Please contact our team if you'd like to discuss it.",
-        ));
-      case "SUBMITTED":
-        return void (await reply(
-          session,
-          "Your application is already submitted and under review. Our team will contact you shortly.",
-        ));
-      default:
-        return await greetEntry(session, event);
-    }
+    return await runOnboardingStates(session, event);
   } catch (err) {
     console.error("[WhatsApp/orchestrator] turn failed:", err);
     await reply(
       session,
       "Sorry, something went wrong on our side. Please try again in a moment.",
     );
+  }
+}
+
+/**
+ * The dealer-onboarding state machine for ONE session row.
+ *
+ * Split out of runTurn (E-214) so the operator flow can drive it against a
+ * per-dealer `operator_file` session while the replies still go to the
+ * operator's own number (see session-store.ts). Every handler below reads and
+ * writes only the row it is handed, which is what makes many dealer files per
+ * WhatsApp number work without touching the document pipeline.
+ *
+ * Errors propagate — the caller owns the "something went wrong" reply so the
+ * message lands on the right conversation.
+ */
+export async function runOnboardingStates(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  // A greeting word (hi/hello/menu/start…) at the entry of the flow re-greets
+  // (with known-contact recognition); mid-application it offers Resume /
+  // Start Over instead of restarting. Post-submission states keep their own
+  // replies (see GREETING_EXCLUDED_STATES).
+  if (
+    isGreetingWord(event) &&
+    !GREETING_EXCLUDED_STATES.has(session.current_state)
+  ) {
+    if (!hasOnboardingProgress(session)) {
+      return await greetEntry(session, event);
+    }
+    if (RESUMABLE_STATES.has(session.current_state)) {
+      return await askResume(session);
+    }
+    // Progress in a non-resumable state — fall through; the state handler
+    // simply re-prompts (e.g. an impatient "hi" during a document read).
+  }
+
+  switch (session.current_state) {
+    case "GREETING":
+      return await greetEntry(session, event);
+    case "CHOOSE_FLOW":
+      return await onChooseFlow(session, event);
+    case "GENERAL_INFO":
+      return await onGeneralInfo(session, event);
+    case "ASK_RESUME":
+      return await onAskResume(session, event);
+    case "ASK_COMPANY_TYPE":
+      return await onCompanyType(session, event);
+    case "ASK_UPLOAD_MODE":
+      return await onUploadMode(session, event);
+    case "COLLECTING_DOC":
+      return await onDocument(session, event);
+    case "ASK_FINANCE":
+      return await onFinance(session, event);
+    case "ASK_FIELD":
+      return await onField(session, event);
+    case "CONFIRM_SIGNER":
+      return await onSignerConfirm(session, event);
+    case "ASK_SIGNER_CHOICE":
+      return await onSignerChoice(session, event);
+    case "ASK_SIGNER_FIELD":
+      return await onSignerField(session, event);
+    case "AWAIT_CONFIRM":
+      return await onConfirm(session, event);
+    case "CORRECTION":
+      return await onCorrection(session, event);
+    case "REJECTED":
+      return void (await reply(
+        session,
+        "This application was not approved. Please contact our team if you'd like to discuss it.",
+      ));
+    case "SUBMITTED":
+      return void (await reply(
+        session,
+        "Your application is already submitted and under review. Our team will contact you shortly.",
+      ));
+    default:
+      return await greetEntry(session, event);
   }
 }
 
@@ -806,7 +807,7 @@ function isStopWord(event: InboundEvent): boolean {
 // sender); an approved dealer's next message re-enters the console via the gate
 // in runTurn. We confirm the stop rather than dumping the welcome, so the user
 // isn't nagged — they can send "hi" when they're ready.
-async function handleStop(session: SessionRow): Promise<void> {
+export async function handleStop(session: SessionRow): Promise<void> {
   await mergeContext(session, (ctx) => {
     ctx.flow = undefined;
     ctx.lead = undefined;
@@ -834,7 +835,7 @@ async function handleStop(session: SessionRow): Promise<void> {
 // re-greeting: SUBMITTED ("under review"), CORRECTION / REJECTED (a stray "hi"
 // must NOT wipe a mid-correction or declined application), GREETING (the
 // switch already greets) and the resume prompt itself.
-const GREETING_EXCLUDED_STATES = new Set([
+export const GREETING_EXCLUDED_STATES = new Set([
   "GREETING",
   "SUBMITTED",
   "CORRECTION",
@@ -847,7 +848,7 @@ const GREETING_EXCLUDED_STATES = new Set([
 // progress. Anything else with progress falls through to its state handler —
 // dealers often type "hi" out of impatience during a slow document read, and
 // the handler simply re-prompts the step.
-const RESUMABLE_STATES = new Set([
+export const RESUMABLE_STATES = new Set([
   "ASK_COMPANY_TYPE",
   "ASK_UPLOAD_MODE",
   "COLLECTING_DOC",
@@ -1021,7 +1022,7 @@ async function promptForState(
 // Clear any collected progress and re-greet, so "hi" mid-flow is a genuine
 // fresh start. The application row + session are kept (same dealer); only the
 // in-conversation context is reset.
-async function restartOnboarding(session: SessionRow): Promise<void> {
+export async function restartOnboarding(session: SessionRow): Promise<void> {
   await mergeContext(session, (ctx) => {
     ctx.docs = {};
     ctx.answers = {};
@@ -1043,7 +1044,7 @@ async function restartOnboarding(session: SessionRow): Promise<void> {
 // fallback still works (onCompanyType also accepts free text), so dealers on
 // clients that don't render buttons can reply with a word. Moves the session to
 // ASK_COMPANY_TYPE and clears any leftover expected document.
-async function askCompanyType(
+export async function askCompanyType(
   session: SessionRow,
   prefix?: string,
 ): Promise<void> {
@@ -2138,6 +2139,10 @@ export async function startCorrectionOverWhatsApp(params: {
     id: string;
     wa_session_id: string | null;
     wa_phone: string | null;
+    // E-214 — which channel currently owns the file, and the operator's own
+    // per-dealer session. Optional so existing callers keep compiling.
+    onboarding_channel?: string | null;
+    wa_operator_session_id?: string | null;
   };
   roundId: string;
   roundNumber: number;
@@ -2147,16 +2152,31 @@ export async function startCorrectionOverWhatsApp(params: {
 }): Promise<{ ok: boolean; error?: string }> {
   const { application, roundId, roundNumber, remarks } = params;
 
-  // Locate the dealer's session: prefer the linked one, else latest by phone.
+  // Locate the session that OWNS the file, so the correction lands in the chat
+  // the documents actually came from. E-214: when the operator is uploading on
+  // the dealer's behalf ('operator'), the dealer's own number may never have
+  // messaged us — sending there would be a dead end.
+  const preferredSessionId =
+    application.onboarding_channel === "operator"
+      ? (application.wa_operator_session_id ?? application.wa_session_id)
+      : (application.wa_session_id ?? application.wa_operator_session_id ?? null);
+
   let session: SessionRow | undefined;
-  if (application.wa_session_id) {
-    session = await loadSession(application.wa_session_id);
+  if (preferredSessionId) {
+    session = await loadSession(preferredSessionId);
   }
   if (!session && application.wa_phone) {
+    // Phone fallback. Skip operator_file rows — they carry the OPERATOR's phone,
+    // never the dealer's, so a match here would be the wrong conversation.
     const [row] = await db
       .select()
       .from(whatsappOnboardingSessions)
-      .where(eq(whatsappOnboardingSessions.wa_phone, application.wa_phone))
+      .where(
+        and(
+          eq(whatsappOnboardingSessions.wa_phone, application.wa_phone),
+          ne(whatsappOnboardingSessions.session_kind, "operator_file"),
+        ),
+      )
       .orderBy(desc(whatsappOnboardingSessions.created_at))
       .limit(1);
     session = row;
@@ -2391,14 +2411,94 @@ async function ingestCorrectionDoc(
 
 // ── DB helpers ──────────────────────────────────────────────────────────────
 
-async function getOrCreateSession(event: InboundEvent): Promise<SessionRow> {
+/**
+ * The conversation row for an inbound number.
+ *
+ * E-214: `operator_file` rows are EXCLUDED from the lookup. They carry the
+ * operator's own wa_phone (so replies reach them) but belong to a specific
+ * dealer file; without this filter the newest-by-created_at pick would hand the
+ * operator's next message to whichever dealer file they opened last instead of
+ * their menu hub. Every pre-E-214 row defaults to session_kind='dealer', so no
+ * existing number changes behaviour.
+ *
+ * `operator` is passed when the sender is on the internal allowlist: they get a
+ * bare `operator_hub` row with NO placeholder application — an operator saying
+ * "hi" is not a dealer walking in the door.
+ */
+async function getOrCreateSession(
+  event: InboundEvent,
+  operator?: WhatsAppOperator | null,
+): Promise<SessionRow> {
   const existing = await db
     .select()
     .from(whatsappOnboardingSessions)
-    .where(eq(whatsappOnboardingSessions.wa_phone, event.waPhone))
+    .where(
+      and(
+        eq(whatsappOnboardingSessions.wa_phone, event.waPhone),
+        ne(whatsappOnboardingSessions.session_kind, "operator_file"),
+      ),
+    )
     .orderBy(desc(whatsappOnboardingSessions.created_at))
     .limit(1);
-  if (existing.length > 0) return existing[0];
+
+  if (existing.length > 0) {
+    const row = existing[0];
+    // A number that used to onboard as a DEALER has just been allowlisted as an
+    // operator. Promote its existing row to the hub rather than leaving a
+    // `dealer` row driving the OP_* states: the partial unique index and every
+    // `session_kind` filter (admin pipeline, handoff lookup, listOpenFiles) key
+    // off this column, so an unpromoted row would be invisible to them. The old
+    // application stays on disk; showOperatorMenu clears the pointer to it.
+    if (operator && row.session_kind !== "operator_hub") {
+      await db
+        .update(whatsappOnboardingSessions)
+        .set({
+          session_kind: "operator_hub",
+          operator_id: operator.id,
+          updated_at: new Date(),
+        })
+        .where(eq(whatsappOnboardingSessions.id, row.id));
+      return { ...row, session_kind: "operator_hub", operator_id: operator.id };
+    }
+    return row;
+  }
+
+  if (operator) {
+    try {
+      const [hub] = await db
+        .insert(whatsappOnboardingSessions)
+        .values({
+          wa_phone: event.waPhone,
+          wa_contact_name: event.contactName ?? operator.displayName,
+          provider: getAdapter().provider,
+          provider_conversation_id: event.conversationId ?? null,
+          application_id: null,
+          session_kind: "operator_hub",
+          operator_id: operator.id,
+          current_state: "OP_MENU",
+          session_status: "active",
+          last_inbound_at: new Date(),
+        })
+        .returning();
+      return hub;
+    } catch (err) {
+      // whatsapp_onboarding_sessions_operator_hub_key (partial UNIQUE) — two
+      // near-simultaneous first messages raced. getOrCreateSession is a
+      // deliberately unlocked read-then-insert, so re-select the winner.
+      const [hub] = await db
+        .select()
+        .from(whatsappOnboardingSessions)
+        .where(
+          and(
+            eq(whatsappOnboardingSessions.wa_phone, event.waPhone),
+            eq(whatsappOnboardingSessions.session_kind, "operator_hub"),
+          ),
+        )
+        .limit(1);
+      if (hub) return hub;
+      throw err;
+    }
+  }
 
   // New conversation → create a draft application + session. company_name is
   // NOT NULL, so seed a placeholder; it's overwritten once the GST is read.
@@ -2444,50 +2544,6 @@ async function getOrCreateSession(event: InboundEvent): Promise<SessionRow> {
   });
 
   return session;
-}
-
-async function loadSession(id: string): Promise<SessionRow> {
-  const [row] = await db
-    .select()
-    .from(whatsappOnboardingSessions)
-    .where(eq(whatsappOnboardingSessions.id, id))
-    .limit(1);
-  return row;
-}
-
-async function setSession(
-  id: string,
-  patch: Partial<SessionRow>,
-): Promise<void> {
-  await db
-    .update(whatsappOnboardingSessions)
-    .set({ ...patch, updated_at: new Date() } as any)
-    .where(eq(whatsappOnboardingSessions.id, id));
-}
-
-/** Read-modify-write the session context jsonb. */
-async function mergeContext(
-  session: SessionRow,
-  mutate: (ctx: Ctx) => void,
-): Promise<void> {
-  const fresh = await loadSession(session.id);
-  const ctx = ((fresh.context ?? {}) as Ctx) || {};
-  mutate(ctx);
-  await db
-    .update(whatsappOnboardingSessions)
-    .set({ context: ctx as any, updated_at: new Date() })
-    .where(eq(whatsappOnboardingSessions.id, session.id));
-}
-
-async function patchApplication(
-  applicationId: string | null,
-  patch: Record<string, unknown>,
-): Promise<void> {
-  if (!applicationId || Object.keys(patch).length === 0) return;
-  await db
-    .update(dealerOnboardingApplications)
-    .set({ ...patch, updated_at: new Date() } as any)
-    .where(eq(dealerOnboardingApplications.id, applicationId));
 }
 
 // Merge extracted values into provider_raw_response.submissionSnapshot.ownership
@@ -2867,48 +2923,8 @@ function buildExtractionSummary(ctx: Ctx): Record<string, unknown> {
 }
 
 // ── Misc helpers ────────────────────────────────────────────────────────────
-
-async function reply(
-  session: SessionRow,
-  body: string,
-  buttons?: ReplyButton[],
-): Promise<void> {
-  const adapter = getAdapter();
-  const res = buttons
-    ? await adapter.sendInteractive(session.wa_phone, body, buttons)
-    : await adapter.sendText(session.wa_phone, body);
-
-  await db.insert(whatsappMessages).values({
-    session_id: session.id,
-    provider_message_id: res.providerMessageId,
-    direction: "outbound",
-    message_type: buttons ? "interactive" : "text",
-    text_body: body,
-    delivery_status: res.ok ? "sent" : "failed",
-    raw_payload: (res.raw ?? null) as any,
-  });
-  await setSession(session.id, { last_outbound_at: new Date() });
-}
-
-/** Send an interactive List (for >3 choices, e.g. the dealer console menu). */
-async function replyList(
-  session: SessionRow,
-  body: string,
-  button: string,
-  rows: ListRow[],
-): Promise<void> {
-  const res = await getAdapter().sendList(session.wa_phone, body, button, rows);
-  await db.insert(whatsappMessages).values({
-    session_id: session.id,
-    provider_message_id: res.providerMessageId,
-    direction: "outbound",
-    message_type: "interactive",
-    text_body: body,
-    delivery_status: res.ok ? "sent" : "failed",
-    raw_payload: (res.raw ?? null) as any,
-  });
-  await setSession(session.id, { last_outbound_at: new Date() });
-}
+// (reply / replyList / loadSession / setSession / mergeContext / patchApplication
+//  now live in ./session-store — see the import block at the top of this file.)
 
 function parseFieldValue(
   kind: "text" | "phone" | "email" | "yesno",
@@ -3024,7 +3040,7 @@ function paymentRetryPrompt(dealer: ActiveDealer): string {
 }
 
 /** One turn for an admin-approved dealer (the post-onboarding console). */
-async function runConsoleTurn(
+export async function runConsoleTurn(
   session: SessionRow,
   event: InboundEvent,
   dealer: ActiveDealer,
