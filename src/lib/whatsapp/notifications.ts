@@ -139,6 +139,89 @@ export async function sendDealerWelcomeWhatsApp(
   return delivery;
 }
 
+/**
+ * E-214 — confirmation copy to the internal operator who onboarded this dealer.
+ *
+ * SECURITY: this params type deliberately has NO `password` and NO `loginId`
+ * field. The operator is told WHERE the credentials went, never what they are —
+ * omission enforced by the type, not by discipline at the call site. Do not add
+ * those fields; if an operator needs to re-issue access, use the admin console's
+ * "Reset & resend credentials", which mints a fresh password for the dealer.
+ */
+export type OperatorApprovalWhatsAppParams = {
+  waPhone: string;
+  waSessionId: string | null;
+  operatorName: string;
+  companyName: string;
+  dealerCode: string;
+  /** Masked dealer phone, e.g. "••••3210". */
+  dealerPhoneMasked: string;
+  dealerEmail: string;
+  financeEnabled: boolean;
+};
+
+export async function sendOperatorApprovalConfirmationWhatsApp(
+  p: OperatorApprovalWhatsAppParams,
+): Promise<WhatsAppDelivery> {
+  const delivery: WhatsAppDelivery = { attempted: true, ok: false, error: null };
+  try {
+    const body =
+      `✅ *${p.companyName}* has been approved.\n\n` +
+      `🏷️ *Dealer ID:* ${p.dealerCode}\n` +
+      `💳 *Financing:* ${p.financeEnabled ? "enabled" : "cash only"}\n\n` +
+      `Login credentials were sent directly to the dealer on WhatsApp ` +
+      `(${p.dealerPhoneMasked}) and by email (${p.dealerEmail}).\n` +
+      `🔒 For security, the password is not shared with you.\n\n` +
+      `Nice work, ${p.operatorName}! Type *menu* to start the next dealer.`;
+
+    const res = await getAdapter().sendText(p.waPhone, body);
+    await logOutbound(p.waSessionId, res, {
+      messageType: "text",
+      textBody: body,
+    });
+    delivery.ok = res.ok;
+    delivery.error = res.error ?? null;
+  } catch (err: any) {
+    delivery.error = err?.message || "whatsapp_send_error";
+    console.error("[WhatsApp/notifications] operator confirmation threw:", err);
+  }
+  return delivery;
+}
+
+/** E-214 — tell the operator their file was declined, instead of silence. */
+export async function sendOperatorRejectionWhatsApp(p: {
+  waPhone: string;
+  waSessionId: string | null;
+  operatorName: string;
+  companyName: string;
+  reason?: string | null;
+}): Promise<WhatsAppDelivery> {
+  const delivery: WhatsAppDelivery = { attempted: true, ok: false, error: null };
+  try {
+    const body =
+      `❌ *${p.companyName}* was not approved.\n\n` +
+      (p.reason ? `*Reason:* ${p.reason}\n\n` : "") +
+      `The dealer has been informed. Type *menu* to start another onboarding.`;
+    const res = await getAdapter().sendText(p.waPhone, body);
+    await logOutbound(p.waSessionId, res, {
+      messageType: "text",
+      textBody: body,
+    });
+    delivery.ok = res.ok;
+    delivery.error = res.error ?? null;
+  } catch (err: any) {
+    delivery.error = err?.message || "whatsapp_send_error";
+    console.error("[WhatsApp/notifications] operator rejection threw:", err);
+  }
+  return delivery;
+}
+
+/** Last 4 digits only, for telling an operator where credentials landed. */
+export function maskPhone(phone: string | null | undefined): string {
+  const digits = (phone || "").replace(/\D/g, "");
+  return digits.length >= 4 ? `••••${digits.slice(-4)}` : "••••";
+}
+
 export type FinanceActivatedWhatsAppParams = {
   waPhone: string;
   waSessionId: string | null;
