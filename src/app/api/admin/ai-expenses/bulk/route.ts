@@ -18,6 +18,7 @@ import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
 import { extractInvoice } from "@/lib/ai/invoices/extractInvoice";
 import { EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import { resolveBucket } from "@/lib/expenses/resolveBucket";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -144,6 +145,17 @@ export async function POST(req: NextRequest) {
           ? (extracted.department as string)
           : "ops";
 
+        // E-218 — same resolver as the Drive scanner, so a bill hand-uploaded
+        // here and the same bill picked up by a folder scan land in the same
+        // bucket.
+        const bucket = resolveBucket({
+          vendor: extracted.vendor,
+          description: extracted.description,
+          project_tag: extracted.project_tag,
+          aiBucket: extracted.bucket,
+          aiConfidence: extracted.bucket_confidence,
+        });
+
         let inserted: { id: string } | undefined;
         try {
           [inserted] = await db
@@ -160,6 +172,8 @@ export async function POST(req: NextRequest) {
               approved_at: new Date(),
               department,
               project_tag: extracted.project_tag ?? null,
+              bucket: bucket.bucket,
+              bucket_source: bucket.source,
               vendor: extracted.vendor ?? null,
               expense_date: extracted.date ?? null,
               source: "ai",

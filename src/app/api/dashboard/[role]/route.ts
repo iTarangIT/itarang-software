@@ -262,6 +262,8 @@ export const GET = withErrorHandler(
           amount: expenseSubmissions.amount,
           description: expenseSubmissions.description,
           department: expenseSubmissions.department,
+          // E-218 — the ledger shows and filters on the spend bucket.
+          bucket: expenseSubmissions.bucket,
           project_tag: expenseSubmissions.project_tag,
           expense_date: expenseSubmissions.expense_date,
           bill_url: expenseSubmissions.bill_url,

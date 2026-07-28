@@ -9,7 +9,7 @@
  *   ?period=mtd|fy  or  ?month=YYYY-MM   (inventory & outstanding ignore period)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { expenseSubmissions, inventory, manualDealerSales, users, zohoInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
@@ -17,8 +17,10 @@ import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import {
   approvedExpenseInWindow,
   expenseEffectiveDate,
+  resolveWindow,
 } from "@/lib/dashboard/salesWindow";
 import { fetchInvoiceLineItems } from "@/lib/zoho/invoices";
+import { UNCLASSIFIED_BUCKET_KEY, isExpenseBucket } from "@/lib/expenses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,42 +70,15 @@ export async function GET(
     }
 
     const sp = req.nextUrl.searchParams;
-    const monthParam = sp.get("month");
-    const yearParam = sp.get("year");
-    const period = sp.get("period") || "mtd";
 
-    // Resolve the [start, end) window as local date strings.
-    const now = new Date();
-    const pad2 = (n: number) => String(n).padStart(2, "0");
-    const curYear = now.getFullYear();
-    const curMonth = now.getMonth();
-
-    let startStr: string;
-    let endStr: string | null = null;
-    const monthMatch = monthParam?.match(/^(\d{4})-(\d{2})$/);
-    const yearMatch = yearParam?.match(/^(\d{4})$/);
-    if (monthMatch) {
-      const y = Number(monthMatch[1]);
-      const mo = Number(monthMatch[2]);
-      startStr = `${y}-${pad2(mo)}-01`;
-      const ey = mo === 12 ? y + 1 : y;
-      const em = mo === 12 ? 1 : mo + 1;
-      endStr = `${ey}-${pad2(em)}-01`;
-    } else if (yearMatch) {
-      // Whole calendar year — total of all its months (Jan–Dec).
-      const y = Number(yearMatch[1]);
-      startStr = `${y}-01-01`;
-      endStr = `${y + 1}-01-01`;
-    } else if (period === "fy") {
-      const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
-      startStr = `${fyStartYear}-04-01`;
-      endStr = null;
-    } else {
-      startStr = `${curYear}-${pad2(curMonth + 1)}-01`;
-      const ey = curMonth === 11 ? curYear + 1 : curYear;
-      const em = curMonth === 11 ? 1 : curMonth + 2;
-      endStr = `${ey}-${pad2(em)}-01`;
-    }
+    // Resolve the [start, end) window as local date strings. Shared with the
+    // Expenses card and the bucket panel — a private copy here is how a
+    // drill-down starts disagreeing with the number that opened it.
+    const { startStr, endStr } = resolveWindow(
+      sp.get("month"),
+      sp.get("period"),
+      sp.get("year"),
+    );
 
     let rows: Record<string, unknown>[] = [];
     let total = 0;
@@ -223,11 +198,24 @@ export async function GET(
       // COALESCE(expense_date, approved_at::date), not approved_at. If these
       // two drift, clicking the card opens a list whose rows do not add up to
       // the number that was clicked.
+      //
+      // E-218 — ?bucket= narrows to one tile of the bucket panel. "unclassified"
+      // is the synthetic key for rows the backfill has not reached, so it maps
+      // to IS NULL rather than to a stored value.
+      const bucketParam = sp.get("bucket");
+      const bucketFilter =
+        bucketParam === UNCLASSIFIED_BUCKET_KEY
+          ? isNull(expenseSubmissions.bucket)
+          : isExpenseBucket(bucketParam)
+            ? eq(expenseSubmissions.bucket, bucketParam)
+            : undefined;
+
       rows = await db
         .select({
           invoice_number: expenseSubmissions.invoice_number,
           vendor: expenseSubmissions.vendor,
           department: expenseSubmissions.department,
+          bucket: expenseSubmissions.bucket,
           project_tag: expenseSubmissions.project_tag,
           amount: expenseSubmissions.amount,
           expense_date: expenseSubmissions.expense_date,
@@ -237,7 +225,7 @@ export async function GET(
         })
         .from(expenseSubmissions)
         .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-        .where(approvedExpenseInWindow(startStr, endStr))
+        .where(and(approvedExpenseInWindow(startStr, endStr), bucketFilter))
         .orderBy(desc(expenseEffectiveDate()))
         .limit(ROW_CAP);
       total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);

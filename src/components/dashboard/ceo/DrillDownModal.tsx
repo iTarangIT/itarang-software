@@ -5,7 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, FileText } from "lucide-react";
 import { Modal } from "@/components/leads/lead-v2-modals";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
-import { expenseDepartmentLabel } from "@/lib/expenses";
+import { expenseBucketLabel, expenseDepartmentLabel } from "@/lib/expenses";
+import { ExpenseBucketPanel } from "./ExpenseBucketPanel";
 
 export type DrillMetric =
   | "purchases"
@@ -89,6 +90,7 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
     { key: "invoice_number", label: "Invoice #", render: (r) => txt(r.invoice_number) },
     { key: "vendor", label: "Vendor", render: (r) => txt(r.vendor) },
     { key: "department", label: "Dept", render: (r) => expenseDepartmentLabel(r.department as string) },
+    { key: "bucket", label: "Bucket", render: (r) => expenseBucketLabel(r.bucket as string) },
     { key: "project_tag", label: "Project", render: (r) => txt(r.project_tag) },
     { key: "created_at", label: "Date Added", render: (r) => dateIN(r.created_at) },
     { key: "expense_date", label: "Invoice Date", render: (r) => dateIN(r.expense_date) },
@@ -143,9 +145,18 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
 };
 
 export function DrillDownModal({ metric, title, params, onClose }: DrillDownModalProps) {
-  const qs = params ? `?${params}` : "";
+  // E-218 — which bucket tile is filtering the list. Applied server-side
+  // rather than to the fetched rows because the list is capped at 500: a
+  // client-side filter of a truncated page would quietly show a subset of a
+  // bucket while the tile above it printed the true total.
+  const [bucket, setBucket] = React.useState<string | null>(null);
+  const rowParams = [params, bucket && `bucket=${encodeURIComponent(bucket)}`]
+    .filter(Boolean)
+    .join("&");
+  const qs = rowParams ? `?${rowParams}` : "";
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ["ceo-drill-down", metric, params ?? ""],
+    queryKey: ["ceo-drill-down", metric, rowParams],
     queryFn: async () => {
       const r = await fetch(`/api/dashboard/ceo/drill-down/${metric}${qs}`, {
         cache: "no-store",
@@ -159,6 +170,18 @@ export function DrillDownModal({ metric, title, params, onClose }: DrillDownModa
   const cols = COLUMNS[metric];
   const rows = data?.rows ?? [];
 
+  // The breakdown is keyed to the window only, so it does NOT reload when a
+  // tile is clicked — the tiles must keep showing the whole window's split,
+  // otherwise selecting one would leave it as the only bar on the chart.
+  const breakdown =
+    metric === "expenses" ? (
+      <ExpenseBucketPanel
+        params={params}
+        selected={bucket}
+        onSelect={setBucket}
+      />
+    ) : null;
+
   return (
     <Modal isOpen onClose={onClose} title={title} size="xl">
       {isLoading ? (
@@ -168,12 +191,21 @@ export function DrillDownModal({ metric, title, params, onClose }: DrillDownModa
       ) : error ? (
         <p className="text-sm text-rose-600 py-8 text-center">Couldn&apos;t load details.</p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-gray-400 italic py-8 text-center">No records in this period.</p>
+        <div className="space-y-4">
+          {breakdown}
+          <p className="text-sm text-gray-400 italic py-8 text-center">
+            {bucket
+              ? "No records in this bucket for the period."
+              : "No records in this period."}
+          </p>
+        </div>
       ) : (
         <div className="space-y-4">
+          {breakdown}
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-gray-500">
               {rows.length} record{rows.length === 1 ? "" : "s"}
+              {bucket && " · filtered"}
             </p>
             <p className="text-sm font-bold text-gray-900">
               Total: {formatINRExact(data?.total ?? 0)}

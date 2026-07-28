@@ -14,7 +14,14 @@ import {
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EXPENSE_DEPARTMENTS, expenseDepartmentLabel } from "@/lib/expenses";
+import {
+  DEFAULT_EXPENSE_BUCKET,
+  EXPENSE_BUCKETS,
+  EXPENSE_DEPARTMENTS,
+  expenseBucketColor,
+  expenseBucketLabel,
+  expenseDepartmentLabel,
+} from "@/lib/expenses";
 import { DriveFoldersPanel } from "./DriveFoldersPanel";
 import { NeedsAttentionPanel } from "./NeedsAttentionPanel";
 
@@ -36,6 +43,9 @@ interface RecordedExpense {
   amount: string;
   description: string | null;
   department: string | null;
+  bucket: string | null;
+  /** rule | ai | manual | default — shown so a reviewer knows what they are overriding. */
+  bucket_source: string | null;
   project_tag: string | null;
   invoice_number: string | null;
   file_name: string | null;
@@ -551,6 +561,7 @@ export function ExpenseTrackerView() {
                   <th className="py-2 font-semibold">Vendor</th>
                   <th className="py-2 font-semibold">Amount</th>
                   <th className="py-2 font-semibold">Department</th>
+                  <th className="py-2 font-semibold">Bucket</th>
                   <th className="py-2 font-semibold">Project</th>
                   <th className="py-2 font-semibold">File</th>
                   <th className="py-2 font-semibold">Bill</th>
@@ -633,6 +644,10 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [dept, setDept] = useState(row.department ?? EXPENSE_DEPARTMENTS[0].value);
+  // E-218 — falls back to the default bucket rather than the first one, so
+  // saving without touching the field cannot silently reclassify an
+  // unclassified row as "Tech".
+  const [bucket, setBucket] = useState(row.bucket ?? DEFAULT_EXPENSE_BUCKET);
   const [tag, setTag] = useState(row.project_tag ?? "");
 
   const saveMutation = useMutation({
@@ -640,7 +655,14 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
       const r = await fetch(`/api/admin/ai-expenses/${row.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ department: dept, project_tag: tag || null }),
+        // Sending `bucket` marks it bucket_source='manual' server-side, which
+        // is what protects it from the backfill — so only send it when the
+        // reviewer actually changed it.
+        body: JSON.stringify({
+          department: dept,
+          project_tag: tag || null,
+          ...(bucket !== row.bucket ? { bucket } : {}),
+        }),
       });
       const j = await r.json();
       if (!r.ok || !j.success) throw new Error(j?.error?.message || "Update failed");
@@ -679,6 +701,41 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
           </select>
         ) : (
           <span className="font-medium text-gray-700">{expenseDepartmentLabel(row.department)}</span>
+        )}
+      </td>
+      <td className="py-3 text-xs">
+        {editing ? (
+          <select
+            className="px-2 py-1 rounded-lg border border-gray-200 text-xs"
+            value={bucket}
+            onChange={(e) => setBucket(e.target.value)}
+          >
+            {EXPENSE_BUCKETS.map((b) => (
+              <option key={b.value} value={b.value}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1.5 font-medium text-gray-700"
+            title={
+              row.bucket_source
+                ? `Set by: ${row.bucket_source}`
+                : "Not classified yet — run the E-218 backfill"
+            }
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: expenseBucketColor(row.bucket) }}
+            />
+            {expenseBucketLabel(row.bucket)}
+            {row.bucket_source === "manual" && (
+              <span className="text-[9px] uppercase tracking-wider text-brand-600 font-bold">
+                fixed
+              </span>
+            )}
+          </span>
         )}
       </td>
       <td className="py-3 text-xs">
@@ -724,6 +781,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
               onClick={() => {
                 setEditing(false);
                 setDept(row.department ?? EXPENSE_DEPARTMENTS[0].value);
+                setBucket(row.bucket ?? DEFAULT_EXPENSE_BUCKET);
                 setTag(row.project_tag ?? "");
               }}
               className="text-gray-400 hover:text-gray-600"
@@ -736,7 +794,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
           <button
             onClick={() => setEditing(true)}
             className="text-gray-400 hover:text-brand-600 inline-flex items-center gap-1"
-            title="Edit department / tag"
+            title="Edit department / bucket / tag"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
