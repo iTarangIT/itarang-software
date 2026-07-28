@@ -3,16 +3,34 @@ import { expenseSubmissions } from "@/lib/db/schema";
 
 // Shared [start, end) date-window resolver for CEO dashboard drill-downs.
 //   ?month=YYYY-MM  → that calendar month
+//   ?year=YYYY      → that whole calendar year (Jan–Dec)
 //   ?period=fy      → financial year to date (India FY starts 1 April), open-ended
 //   default / mtd   → current calendar month
 // Returns local date strings (YYYY-MM-DD); endStr is null for the open-ended FY.
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+const monthLabel = (startStr: string) =>
+    new Date(`${startStr}T00:00:00`).toLocaleDateString("en-IN", {
+        month: "short",
+        year: "numeric",
+    });
+
+export interface ResolvedWindow {
+    startStr: string;
+    endStr: string | null;
+    /** Canonical echo of what was resolved: "mtd" | "fy" | "YYYY-MM" | "year-YYYY". */
+    period: string;
+    /** Human label for a card subtitle, e.g. "Jun 2026" or "Year 2026". */
+    label: string;
+}
+
 export function resolveWindow(
     month: string | null,
     period: string | null,
-): { startStr: string; endStr: string | null } {
+    year?: string | null,
+): ResolvedWindow {
     const now = new Date();
-    const pad2 = (n: number) => String(n).padStart(2, "0");
     const curYear = now.getFullYear();
     const curMonth = now.getMonth();
 
@@ -22,18 +40,79 @@ export function resolveWindow(
         const mo = Number(monthMatch[2]);
         const ey = mo === 12 ? y + 1 : y;
         const em = mo === 12 ? 1 : mo + 1;
-        return { startStr: `${y}-${pad2(mo)}-01`, endStr: `${ey}-${pad2(em)}-01` };
+        const startStr = `${y}-${pad2(mo)}-01`;
+        return {
+            startStr,
+            endStr: `${ey}-${pad2(em)}-01`,
+            period: month!,
+            label: monthLabel(startStr),
+        };
+    }
+    // Guarded so a malformed ?year= falls through to the default window rather
+    // than producing "NaN-01-01" and a query that matches nothing. Callers that
+    // owe the user a 400 instead should go through resolveWindowParams.
+    if (year && /^\d{4}$/.test(year)) {
+        const y = Number(year);
+        return {
+            startStr: `${y}-01-01`,
+            endStr: `${y + 1}-01-01`,
+            period: `year-${y}`,
+            label: `Year ${y}`,
+        };
     }
     if ((period || "mtd") === "fy") {
         const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
-        return { startStr: `${fyStartYear}-04-01`, endStr: null };
+        return {
+            startStr: `${fyStartYear}-04-01`,
+            endStr: null,
+            period: "fy",
+            label: `FY since 1 Apr ${fyStartYear}`,
+        };
     }
     const ey = curMonth === 11 ? curYear + 1 : curYear;
     const em = curMonth === 11 ? 1 : curMonth + 2;
+    const startStr = `${curYear}-${pad2(curMonth + 1)}-01`;
     return {
-        startStr: `${curYear}-${pad2(curMonth + 1)}-01`,
+        startStr,
         endStr: `${ey}-${pad2(em)}-01`,
+        period: "mtd",
+        label: monthLabel(startStr),
     };
+}
+
+/**
+ * `resolveWindow` with the input validation the CEO expense routes owe their
+ * callers. It exists because those routes answer a malformed `?month=2026-13`
+ * or `?year=abcd` with a 400 rather than quietly showing the current month —
+ * a silently wrong number on a finance dashboard is worse than an error.
+ *
+ * Returns a discriminated result instead of throwing so the route can map the
+ * failure to a 400; its outer catch is for genuine 500s.
+ */
+export function resolveWindowParams(
+    sp: URLSearchParams,
+):
+    | { ok: true; window: ResolvedWindow }
+    | { ok: false; error: string } {
+    const month = sp.get("month");
+    const year = sp.get("year");
+
+    if (month) {
+        const m = month.match(/^(\d{4})-(\d{2})$/);
+        const mo = m ? Number(m[2]) : NaN;
+        if (!m || mo < 1 || mo > 12) return { ok: false, error: "invalid month" };
+    }
+    // Only checked when `month` did not already win — matching the precedence
+    // in resolveWindow, so a request carrying both is not rejected for a stale
+    // year it will never use.
+    if (!month && year) {
+        const y = Number(year);
+        if (!/^\d{4}$/.test(year) || y < 2000 || y > 2100) {
+            return { ok: false, error: "invalid year" };
+        }
+    }
+
+    return { ok: true, window: resolveWindow(month, sp.get("period"), month ? null : year) };
 }
 
 /**

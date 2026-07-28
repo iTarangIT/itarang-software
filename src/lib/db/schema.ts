@@ -6909,6 +6909,13 @@ export const expenseSubmissions = pgTable(
     // the flag routes the row to a human, it does not withhold it.
     needs_attention: boolean("needs_attention").default(false).notNull(),
     attention_reason: text("attention_reason"),
+    // E-218 — coarse spend bucket (tech | rm | misc | others), the layer the
+    // CEO reads at a glance above `department`. NULL until the backfill runs;
+    // the dashboard renders those as "Unclassified". `bucket_source` records
+    // who decided it — rule | ai | manual | default — so the backfill can
+    // never overwrite a human correction.
+    bucket: varchar("bucket", { length: 24 }),
+    bucket_source: varchar("bucket_source", { length: 16 }),
     // E-217 — multi-currency. `amount` above is ALWAYS INR because every
     // report SUMs it; these record what the document actually said and the
     // arithmetic that connects the two.
@@ -6958,6 +6965,15 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsApprovedExpenseDateIdx: index(
       "expense_submissions_approved_expense_date_idx",
     ).on(table.expense_date),
+    // E-218 — bucket rollups on the CEO dashboard. Both carry partial
+    // predicates (WHERE status = 'approved' / WHERE bucket_source IS NOT NULL)
+    // that live in the migration only; declared plain here for drizzle.
+    expenseSubmissionsBucketDateIdx: index(
+      "expense_submissions_bucket_date_idx",
+    ).on(table.bucket, table.expense_date),
+    expenseSubmissionsBucketSourceIdx: index(
+      "expense_submissions_bucket_source_idx",
+    ).on(table.bucket_source),
   }),
 );
 

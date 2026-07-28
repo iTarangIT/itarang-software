@@ -20,7 +20,7 @@ import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
 import { extOf, safeSlug, fetchAsBuffer } from "@/lib/export/zip-helpers";
-import { expenseDepartmentLabel } from "@/lib/expenses";
+import { expenseBucketLabel, expenseDepartmentLabel } from "@/lib/expenses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,6 +68,7 @@ export async function GET(req: NextRequest) {
         vendor: expenseSubmissions.vendor,
         amount: expenseSubmissions.amount,
         department: expenseSubmissions.department,
+        bucket: expenseSubmissions.bucket,
         project_tag: expenseSubmissions.project_tag,
         description: expenseSubmissions.description,
         expense_date: expenseSubmissions.expense_date,
@@ -101,6 +102,7 @@ export async function GET(req: NextRequest) {
       { header: "Vendor", key: "vendor", width: 28 },
       { header: "Amount", key: "amount", width: 14 },
       { header: "Currency", key: "currency", width: 10 },
+      { header: "Bucket", key: "bucket", width: 16 },
       { header: "Department", key: "department", width: 16 },
       { header: "Project Tag", key: "project_tag", width: 18 },
       { header: "Description", key: "description", width: 40 },
@@ -134,6 +136,7 @@ export async function GET(req: NextRequest) {
         vendor: r.vendor ?? "",
         amount: Number(r.amount ?? 0),
         currency,
+        bucket: expenseBucketLabel(r.bucket),
         department: expenseDepartmentLabel(r.department),
         project_tag: r.project_tag ?? "",
         description: r.description ?? "",

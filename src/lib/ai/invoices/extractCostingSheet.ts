@@ -22,8 +22,13 @@
  */
 import { getOpenAI, INVOICE_MODEL } from "./client";
 import {
+  EXPENSE_BUCKETS,
+  EXPENSE_BUCKET_DESCRIPTIONS,
+  EXPENSE_BUCKET_VALUES,
   EXPENSE_DEPARTMENTS,
   EXPENSE_DEPARTMENT_VALUES,
+  isExpenseBucket,
+  type ExpenseBucket,
   type ExpenseDepartment,
 } from "@/lib/expenses";
 
@@ -35,6 +40,13 @@ export interface CostingSheetRow {
   department: ExpenseDepartment | null;
   project_tag: string | null;
   currency: string | null;
+  /**
+   * E-218 — read once for the whole sheet, not per row. A costing sheet is one
+   * kind of spend broken into lines, so asking per row would cost a hundred
+   * calls to answer the same question a hundred times. Per-row vendor rules can
+   * still override this in resolveBucket().
+   */
+  bucket: ExpenseBucket | null;
   /** Stable identity for dedup: `sheet:<name>:row:<1-based row number>`. */
   row_ref: string;
 }
@@ -114,6 +126,12 @@ const JSON_SCHEMA = {
         description:
           "Concise project tag (2-4 words, Title Case) describing what this sheet covers.",
       },
+      sheet_bucket: {
+        type: ["string", "null"],
+        enum: [...EXPENSE_BUCKET_VALUES, null],
+        description:
+          "Best-fit coarse spend bucket for the sheet as a whole.",
+      },
     },
     required: [
       "data_start_row",
@@ -125,6 +143,7 @@ const JSON_SCHEMA = {
       "currency",
       "sheet_department",
       "sheet_project_tag",
+      "sheet_bucket",
     ],
   },
 } as const;
@@ -139,10 +158,14 @@ interface SheetLayout {
   currency: string | null;
   sheet_department: ExpenseDepartment | null;
   sheet_project_tag: string | null;
+  sheet_bucket: ExpenseBucket | null;
 }
 
 function buildSystemPrompt(existingTags: string[]): string {
   const deptList = EXPENSE_DEPARTMENTS.map((d) => `${d.value} (${d.label})`).join(", ");
+  const bucketList = EXPENSE_BUCKETS.map(
+    (b) => `${b.value} (${b.label}) — ${EXPENSE_BUCKET_DESCRIPTIONS[b.value]}`,
+  ).join(" ");
   const tagHint =
     existingTags.length > 0
       ? `Existing project tags you should reuse when they match: ${existingTags.join(", ")}.`
@@ -153,6 +176,8 @@ function buildSystemPrompt(existingTags: string[]): string {
     "Column indexes refer to the arrays exactly as given: the first element is index 0.",
     "The amount column is the one holding the money value for each individual line — not a running total, not a quantity, not a unit rate if a line total also exists.",
     `Classify the sheet as a whole into exactly one department from: ${deptList}.`,
+    `Separately, classify the sheet as a whole into exactly one spend bucket from: ${bucketList}`,
+    "Department is whose budget the spend belongs to; bucket is what kind of spend it is. They are independent.",
     "Also assign a concise project tag (2-4 words, Title Case).",
     tagHint,
     "If the sheet has no column for a field, return null for that field. Do not guess a column you cannot see.",
@@ -319,6 +344,7 @@ export async function extractCostingSheet(
       department: rowDepartment ?? layout.sheet_department,
       project_tag: layout.sheet_project_tag,
       currency: layout.currency,
+      bucket: layout.sheet_bucket,
       // +1 for 1-based display, + start so the ref points at the real sheet row.
       row_ref: `sheet:${sheetName}:row:${start + i + 1}`,
     });
@@ -398,5 +424,6 @@ async function readLayout(preview: Cell[][], existingTags: string[]): Promise<Sh
       typeof parsed.sheet_project_tag === "string" && parsed.sheet_project_tag.trim()
         ? parsed.sheet_project_tag.trim()
         : null,
+    sheet_bucket: isExpenseBucket(parsed.sheet_bucket) ? parsed.sheet_bucket : null,
   };
 }

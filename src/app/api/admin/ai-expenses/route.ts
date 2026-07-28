@@ -13,7 +13,8 @@ import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
 import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
-import { EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import { EXPENSE_BUCKET_VALUES, EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import { resolveBucket } from "@/lib/expenses/resolveBucket";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +29,10 @@ const CreateSchema = z.object({
     .nullable(),
   description: z.string().trim().max(2000).optional().nullable(),
   department: z.enum(EXPENSE_DEPARTMENT_VALUES),
+  // E-218 — optional: when the reviewer picked a bucket it is taken as their
+  // decision, otherwise resolveBucket() derives one from the rules + whatever
+  // the extractor suggested in ai_raw.
+  bucket: z.enum(EXPENSE_BUCKET_VALUES).optional().nullable(),
   project_tag: z.string().trim().min(1).max(80).optional().nullable(),
   invoice_number: z.string().trim().max(120).optional().nullable(),
   file_name: z.string().trim().max(255).optional().nullable(),
@@ -63,6 +68,23 @@ export async function POST(req: NextRequest) {
     const now = new Date();
 
     const invoiceNumber = d.invoice_number?.trim() || null;
+
+    // E-218 — an explicit choice in the review form is a human decision and
+    // must survive the backfill; otherwise derive it the same way every other
+    // ingest path does.
+    const aiRaw = (d.ai_raw ?? null) as {
+      bucket?: string | null;
+      bucket_confidence?: number | null;
+    } | null;
+    const bucket = d.bucket
+      ? { bucket: d.bucket, source: "manual" as const }
+      : resolveBucket({
+          vendor: d.vendor,
+          description: d.description,
+          project_tag: d.project_tag,
+          aiBucket: aiRaw?.bucket,
+          aiConfidence: aiRaw?.bucket_confidence,
+        });
 
     // Dedup: skip an AI invoice whose number already exists (case-insensitive).
     if (invoiceNumber) {
@@ -107,6 +129,8 @@ export async function POST(req: NextRequest) {
           approved_at: now,
           department: d.department,
           project_tag: d.project_tag ?? null,
+          bucket: bucket.bucket,
+          bucket_source: bucket.source,
           vendor: d.vendor ?? null,
           expense_date: d.expense_date ?? null,
           source: "ai",
@@ -164,6 +188,10 @@ export async function GET(req: NextRequest) {
         description: expenseSubmissions.description,
         department: expenseSubmissions.department,
         project_tag: expenseSubmissions.project_tag,
+        // E-218 — the coarse spend bucket + who decided it, so the tracker can
+        // show it and let a reviewer correct it.
+        bucket: expenseSubmissions.bucket,
+        bucket_source: expenseSubmissions.bucket_source,
         invoice_number: expenseSubmissions.invoice_number,
         file_name: expenseSubmissions.file_name,
         expense_date: expenseSubmissions.expense_date,

@@ -3,7 +3,14 @@
 import React, { useMemo, useState } from "react";
 import { Receipt, FileText } from "lucide-react";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
-import { EXPENSE_DEPARTMENTS, expenseDepartmentLabel } from "@/lib/expenses";
+import {
+  EXPENSE_BUCKETS,
+  EXPENSE_DEPARTMENTS,
+  UNCLASSIFIED_BUCKET_KEY,
+  expenseBucketColor,
+  expenseBucketLabel,
+  expenseDepartmentLabel,
+} from "@/lib/expenses";
 
 interface LedgerRow {
   id: string;
@@ -11,6 +18,7 @@ interface LedgerRow {
   amount: string;
   description: string | null;
   department: string | null;
+  bucket: string | null;
   project_tag: string | null;
   expense_date: string | null;
   bill_url: string | null;
@@ -24,6 +32,7 @@ interface Props {
 
 export function ExpenseLedgerPanel({ rows = [] }: Props) {
   const [dept, setDept] = useState<string>("all");
+  const [bucket, setBucket] = useState<string>("all");
   const [project, setProject] = useState<string>("all");
 
   // Project options scoped to the selected department.
@@ -40,10 +49,14 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
       rows.filter((r) => {
         const d = r.department ?? "unassigned";
         if (dept !== "all" && d !== dept) return false;
+        // E-218 — a null bucket is a pre-backfill row, selectable as
+        // "Unclassified" so it can be found and fixed rather than hidden.
+        if (bucket !== "all" && (r.bucket ?? UNCLASSIFIED_BUCKET_KEY) !== bucket)
+          return false;
         if (project !== "all" && r.project_tag !== project) return false;
         return true;
       }),
-    [rows, dept, project],
+    [rows, dept, bucket, project],
   );
 
   const total = useMemo(
@@ -83,6 +96,19 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
           </select>
           <select
             className={selectCls}
+            value={bucket}
+            onChange={(e) => setBucket(e.target.value)}
+          >
+            <option value="all">All buckets</option>
+            {EXPENSE_BUCKETS.map((b) => (
+              <option key={b.value} value={b.value}>
+                {b.label}
+              </option>
+            ))}
+            <option value={UNCLASSIFIED_BUCKET_KEY}>Unclassified</option>
+          </select>
+          <select
+            className={selectCls}
             value={project}
             onChange={(e) => setProject(e.target.value)}
             disabled={projectOptions.length === 0}
@@ -108,6 +134,7 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                   <th className="py-2 font-semibold">Date</th>
                   <th className="py-2 font-semibold">Vendor</th>
                   <th className="py-2 font-semibold">Department</th>
+                  <th className="py-2 font-semibold">Bucket</th>
                   <th className="py-2 font-semibold">Project</th>
                   <th className="py-2 font-semibold">Added by</th>
                   <th className="py-2 font-semibold text-right">Amount</th>
@@ -133,6 +160,15 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                     <td className="py-3 text-xs text-gray-700">
                       {expenseDepartmentLabel(r.department)}
                     </td>
+                    <td className="py-3 text-xs text-gray-700">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: expenseBucketColor(r.bucket) }}
+                        />
+                        {expenseBucketLabel(r.bucket)}
+                      </span>
+                    </td>
                     <td className="py-3 text-xs text-gray-700">{r.project_tag || "—"}</td>
                     <td className="py-3 text-xs text-gray-500">{r.submitter_name || "—"}</td>
                     <td className="py-3 text-xs font-bold text-gray-900 text-right whitespace-nowrap">
@@ -157,8 +193,9 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-100">
-                  <td colSpan={5} className="py-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
-                    Total ({dept === "all" ? "all departments" : expenseDepartmentLabel(dept)})
+                  <td colSpan={6} className="py-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                    Total ({dept === "all" ? "all departments" : expenseDepartmentLabel(dept)}
+                    {bucket !== "all" && ` · ${expenseBucketLabel(bucket)}`})
                   </td>
                   <td
                     className="py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap"

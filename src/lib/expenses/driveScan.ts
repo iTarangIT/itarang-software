@@ -48,6 +48,7 @@ import {
   type ExpenseCandidate,
 } from "@/lib/expenses/validateExpense";
 import { convertToInr } from "@/lib/expenses/fx";
+import { resolveBucket } from "@/lib/expenses/resolveBucket";
 import { filesProxyPath, isS3Backend, putObject } from "@/lib/storage/s3";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -470,6 +471,8 @@ async function importInvoice(
     driveRowRef: null,
     fileName: file.name,
     aiRaw: extracted,
+    aiBucket: extracted.bucket,
+    aiBucketConfidence: extracted.bucket_confidence,
   });
 
   if (inserted === "duplicate") {
@@ -557,6 +560,9 @@ async function importSheet(
       driveRowRef: row.row_ref,
       fileName: file.name,
       aiRaw: row,
+      // Read once for the whole sheet — every line inherits it unless a
+      // per-row vendor rule says otherwise.
+      aiBucket: row.bucket,
     });
 
     if (inserted === "duplicate") continue; // dedup layer 3: file + row
@@ -623,8 +629,22 @@ async function insertExpense(args: {
   driveRowRef: string | null;
   fileName: string;
   aiRaw: unknown;
+  /** E-218 — what the extractor suggested; rules can still override it. */
+  aiBucket?: string | null;
+  aiBucketConfidence?: number | null;
 }): Promise<string | "duplicate"> {
   const now = new Date();
+
+  // E-218 — bucket the spend. Deterministic vendor/keyword rules win over the
+  // model so a known supplier cannot drift between buckets from one scan to
+  // the next, which would make the month-on-month comparison lie.
+  const bucket = resolveBucket({
+    vendor: args.value.vendor,
+    description: args.value.description,
+    project_tag: args.value.project_tag,
+    aiBucket: args.aiBucket,
+    aiConfidence: args.aiBucketConfidence,
+  });
 
   // E-217 — `amount` is the column every report SUMs, so it must always be
   // INR. What the document said is preserved separately, along with the rate
@@ -656,6 +676,8 @@ async function insertExpense(args: {
         approved_at: now,
         department: args.value.department,
         project_tag: args.value.project_tag,
+        bucket: bucket.bucket,
+        bucket_source: bucket.source,
         vendor: args.value.vendor,
         expense_date: args.value.expense_date,
         source: "ai",
