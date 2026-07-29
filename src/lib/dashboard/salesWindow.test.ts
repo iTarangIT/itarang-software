@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveWindow, resolveWindowParams } from "./salesWindow";
+import {
+    defaultGranularity,
+    resolveWindow,
+    resolveWindowParams,
+} from "./salesWindow";
 
 // E-218 consolidated four hand-copied window resolvers into this one. Every CEO
 // expense figure — the card, its drill-down, the bucket tiles and the trend —
@@ -95,6 +99,122 @@ describe("resolveWindow — default month-to-date", () => {
     });
 });
 
+// ── E-219: the CEO overview filter bar ──────────────────────────────────────
+// The bar offers MTD / YTD / FY / Inception / a custom range, and one window
+// drives four cards, a drill-down and a chart at once. The cases below pin the
+// three periods the bar added; MTD and FY are covered above.
+
+describe("resolveWindow — year to date", () => {
+    it("starts on 1 January of the current calendar year, open-ended", () => {
+        at("2026-07-28T10:00:00+05:30");
+        const w = resolveWindow(null, "ytd");
+        expect(w.startStr).toBe("2026-01-01");
+        expect(w.endStr).toBeNull();
+        expect(w.period).toBe("ytd");
+    });
+
+    // YTD and FY are offered as separate buttons, so they must not agree in
+    // Jan–Mar: YTD is still this calendar year while FY reaches back to April.
+    it("differs from FY in the Jan-March overlap", () => {
+        at("2026-02-10T10:00:00+05:30");
+        expect(resolveWindow(null, "ytd").startStr).toBe("2026-01-01");
+        expect(resolveWindow(null, "fy").startStr).toBe("2025-04-01");
+    });
+});
+
+describe("resolveWindow — inception", () => {
+    // A null start means "no lower bound" rather than some sentinel early date,
+    // so callers omit the predicate entirely instead of scanning from year zero.
+    it("has no lower bound at all", () => {
+        at("2026-07-28T10:00:00+05:30");
+        const w = resolveWindow(null, "inception");
+        expect(w.startStr).toBeNull();
+        expect(w.endStr).toBeNull();
+        expect(w.period).toBe("inception");
+    });
+});
+
+describe("resolveWindow — custom range", () => {
+    it("makes the end date inclusive by rolling it forward one day", () => {
+        const w = resolveWindow(null, null, null, { from: "2026-04-01", to: "2026-07-15" });
+        expect(w.startStr).toBe("2026-04-01");
+        expect(w.endStr).toBe("2026-07-16");
+        expect(w.period).toBe("range");
+    });
+
+    it("rolls a month-end date into the next month", () => {
+        const w = resolveWindow(null, null, null, { from: "2026-01-01", to: "2026-01-31" });
+        expect(w.endStr).toBe("2026-02-01");
+    });
+
+    // Reading a backwards range as empty would look exactly like a broken
+    // filter, so the ends are swapped to what the user plainly meant.
+    it("swaps ends given in the wrong order", () => {
+        const w = resolveWindow(null, null, null, { from: "2026-07-15", to: "2026-04-01" });
+        expect(w.startStr).toBe("2026-04-01");
+        expect(w.endStr).toBe("2026-07-16");
+    });
+
+    it("accepts a half-open range from one end alone", () => {
+        const openEnd = resolveWindow(null, null, null, { from: "2026-04-01", to: null });
+        expect(openEnd.startStr).toBe("2026-04-01");
+        expect(openEnd.endStr).toBeNull();
+
+        const openStart = resolveWindow(null, null, null, { from: null, to: "2026-04-30" });
+        expect(openStart.startStr).toBeNull();
+        expect(openStart.endStr).toBe("2026-05-01");
+    });
+
+    // The bar sends period=range alongside from/to; an explicit range must win
+    // over the keyword, or picking dates would silently show the wrong window.
+    it("wins over a period keyword", () => {
+        at("2026-07-28T10:00:00+05:30");
+        const w = resolveWindow(null, "fy", null, { from: "2026-06-01", to: "2026-06-30" });
+        expect(w.startStr).toBe("2026-06-01");
+        expect(w.endStr).toBe("2026-07-01");
+    });
+
+    it("is ignored when both ends are absent", () => {
+        at("2026-07-28T10:00:00+05:30");
+        const w = resolveWindow(null, "ytd", null, { from: null, to: null });
+        expect(w.period).toBe("ytd");
+    });
+});
+
+describe("defaultGranularity", () => {
+    it("buckets a month-to-date window by day", () => {
+        at("2026-07-28T10:00:00+05:30");
+        expect(defaultGranularity(resolveWindow(null, "mtd"))).toBe("day");
+    });
+
+    it("buckets an explicit calendar month by day", () => {
+        expect(defaultGranularity(resolveWindow("2026-06", null))).toBe("day");
+    });
+
+    it("buckets the long periods by month", () => {
+        at("2026-07-28T10:00:00+05:30");
+        expect(defaultGranularity(resolveWindow(null, "ytd"))).toBe("month");
+        expect(defaultGranularity(resolveWindow(null, "fy"))).toBe("month");
+        expect(defaultGranularity(resolveWindow(null, "inception"))).toBe("month");
+        expect(defaultGranularity(resolveWindow(null, null, "2025"))).toBe("month");
+    });
+
+    // A short custom range gets daily bars; a long one would draw hundreds of
+    // them, so it falls back to months at the two-month mark.
+    it("picks day or month by the span of a custom range", () => {
+        const short = resolveWindow(null, null, null, { from: "2026-06-01", to: "2026-06-30" });
+        expect(defaultGranularity(short)).toBe("day");
+
+        const long = resolveWindow(null, null, null, { from: "2026-01-01", to: "2026-06-30" });
+        expect(defaultGranularity(long)).toBe("month");
+    });
+
+    it("buckets an unbounded range by month", () => {
+        const openEnd = resolveWindow(null, null, null, { from: "2020-01-01", to: null });
+        expect(defaultGranularity(openEnd)).toBe("month");
+    });
+});
+
 describe("resolveWindowParams", () => {
     const sp = (q: string) => new URLSearchParams(q);
 
@@ -135,6 +255,38 @@ describe("resolveWindowParams", () => {
         if (r.ok) {
             expect(r.window.period).toBe("mtd");
             expect(r.window.startStr).toBe("2026-07-01");
+        }
+    });
+
+    it("reads a custom range off from/to", () => {
+        const r = resolveWindowParams(sp("period=range&from=2026-04-01&to=2026-07-15"));
+        expect(r.ok).toBe(true);
+        if (r.ok) {
+            expect(r.window.startStr).toBe("2026-04-01");
+            expect(r.window.endStr).toBe("2026-07-16");
+        }
+    });
+
+    // A silently-ignored bad date would show the current month under a range
+    // the user can see they picked — the one failure mode a finance filter
+    // must not have.
+    it("rejects a malformed range end", () => {
+        expect(resolveWindowParams(sp("from=2026-04-01&to=15-07-2026"))).toEqual({
+            ok: false,
+            error: "invalid date range",
+        });
+    });
+
+    it("rejects a date that does not exist", () => {
+        expect(resolveWindowParams(sp("from=2026-02-30")).ok).toBe(false);
+    });
+
+    it("accepts the inception period", () => {
+        const r = resolveWindowParams(sp("period=inception"));
+        expect(r.ok).toBe(true);
+        if (r.ok) {
+            expect(r.window.startStr).toBeNull();
+            expect(r.window.period).toBe("inception");
         }
     });
 });

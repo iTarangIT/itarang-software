@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { Receipt, FileText } from "lucide-react";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
+import { Pagination, usePagination } from "@/components/shared/Pagination";
 import {
   EXPENSE_BUCKETS,
   EXPENSE_DEPARTMENTS,
@@ -63,6 +64,10 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
     () => filtered.reduce((sum, r) => sum + Number(r.amount || 0), 0),
     [filtered],
   );
+
+  // E-219 — the ledger grew past the point where scrolling it was reasonable.
+  // usePagination clamps the page when a filter shrinks the list under it.
+  const paged = usePagination(filtered);
 
   const selectCls =
     "px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -142,7 +147,7 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r) => (
+                {paged.pageItems.map((r) => (
                   <tr key={r.id} className="border-b border-gray-50">
                     <td className="py-3 text-xs text-gray-600 whitespace-nowrap">
                       {r.expense_date
@@ -192,6 +197,8 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                 ))}
               </tbody>
               <tfoot>
+                {/* Totals every filtered row, not the page on screen — this is
+                    the ledger's bottom line and must not change as you page. */}
                 <tr className="border-t border-gray-100">
                   <td colSpan={6} className="py-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
                     Total ({dept === "all" ? "all departments" : expenseDepartmentLabel(dept)}
@@ -208,6 +215,15 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
               </tfoot>
             </table>
           </div>
+          <Pagination
+            page={paged.page}
+            pageCount={paged.pageCount}
+            onPageChange={paged.setPage}
+            total={paged.total}
+            from={paged.from}
+            to={paged.to}
+            noun="expenses"
+          />
         </>
       )}
     </div>
