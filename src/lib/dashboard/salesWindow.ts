@@ -2,13 +2,22 @@ import { and, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { expenseSubmissions } from "@/lib/db/schema";
 
 // Shared [start, end) date-window resolver for CEO dashboard drill-downs.
-//   ?month=YYYY-MM  → that calendar month
-//   ?year=YYYY      → that whole calendar year (Jan–Dec)
-//   ?period=fy      → financial year to date (India FY starts 1 April), open-ended
-//   default / mtd   → current calendar month
-// Returns local date strings (YYYY-MM-DD); endStr is null for the open-ended FY.
+//   ?month=YYYY-MM      → that calendar month
+//   ?year=YYYY          → that whole calendar year (Jan–Dec)
+//   ?from=&to=          → an explicit day range, `to` inclusive (E-219)
+//   ?period=fy          → financial year to date (India FY starts 1 April)
+//   ?period=ytd         → calendar year to date (E-219)
+//   ?period=inception   → everything ever recorded, no lower bound (E-219)
+//   default / mtd       → current calendar month
+// Returns local date strings (YYYY-MM-DD). `endStr` is null for the open-ended
+// periods; `startStr` is null only for `inception`.
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
+
+const MONTH_ABBR = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 const monthLabel = (startStr: string) =>
     new Date(`${startStr}T00:00:00`).toLocaleDateString("en-IN", {
@@ -16,10 +25,49 @@ const monthLabel = (startStr: string) =>
         year: "numeric",
     });
 
+/**
+ * "2026-04-01" → "1 Apr 2026". Built from a static table rather than
+ * `toLocaleDateString`, because a range label is the only on-screen proof of
+ * which days a figure covers — the server's timezone must not be able to shift
+ * it by a day.
+ */
+const dayLabel = (s: string) =>
+    `${Number(s.slice(8, 10))} ${MONTH_ABBR[Number(s.slice(5, 7)) - 1]} ${s.slice(0, 4)}`;
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * True only for a real calendar day. The round-trip through Date catches the
+ * dates that match the shape but do not exist — "2026-02-30" parses happily and
+ * silently becomes 2 March, which would widen a window past what was asked for.
+ */
+export function isValidDayString(value: string): boolean {
+    if (!DATE_RE.test(value)) return false;
+    const d = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+/** The day after `dateStr`, so a user-inclusive `to` becomes a half-open end. */
+function nextDay(dateStr: string): string {
+    const d = new Date(`${dateStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+}
+
+export interface DayRange {
+    from?: string | null;
+    /** Inclusive — the resolver rolls it forward to build a half-open window. */
+    to?: string | null;
+}
+
 export interface ResolvedWindow {
-    startStr: string;
+    /** Null means no lower bound at all (period=inception). */
+    startStr: string | null;
     endStr: string | null;
-    /** Canonical echo of what was resolved: "mtd" | "fy" | "YYYY-MM" | "year-YYYY". */
+    /**
+     * Canonical echo of what was resolved: "mtd" | "ytd" | "fy" | "inception" |
+     * "range" | "YYYY-MM" | "year-YYYY".
+     */
     period: string;
     /** Human label for a card subtitle, e.g. "Jun 2026" or "Year 2026". */
     label: string;
@@ -29,6 +77,7 @@ export function resolveWindow(
     month: string | null,
     period: string | null,
     year?: string | null,
+    range?: DayRange | null,
 ): ResolvedWindow {
     const now = new Date();
     const curYear = now.getFullYear();
@@ -60,6 +109,45 @@ export function resolveWindow(
             label: `Year ${y}`,
         };
     }
+    // An explicit range beats the period keyword: the filter bar sends
+    // `period=range` alongside the dates, and picking dates must never resolve
+    // to the period button that was highlighted a moment earlier.
+    let rawFrom = range?.from && isValidDayString(range.from) ? range.from : null;
+    let rawTo = range?.to && isValidDayString(range.to) ? range.to : null;
+    if (rawFrom && rawTo && rawFrom > rawTo) [rawFrom, rawTo] = [rawTo, rawFrom];
+    if (rawFrom || rawTo) {
+        const label = rawFrom && rawTo
+            ? `${dayLabel(rawFrom)} – ${dayLabel(rawTo)}`
+            : rawFrom
+                ? `${dayLabel(rawFrom)} onwards`
+                : `up to ${dayLabel(rawTo!)}`;
+        return {
+            startStr: rawFrom,
+            // `to` is what the user picked, so it has to be inside the window.
+            endStr: rawTo ? nextDay(rawTo) : null,
+            period: "range",
+            label,
+        };
+    }
+
+    if (period === "inception") {
+        return {
+            startStr: null,
+            endStr: null,
+            period: "inception",
+            label: "Since inception",
+        };
+    }
+
+    if (period === "ytd") {
+        return {
+            startStr: `${curYear}-01-01`,
+            endStr: null,
+            period: "ytd",
+            label: `YTD since 1 Jan ${curYear}`,
+        };
+    }
+
     if ((period || "mtd") === "fy") {
         const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
         return {
@@ -80,6 +168,28 @@ export function resolveWindow(
     };
 }
 
+export type TrendGranularity = "day" | "week" | "month";
+
+/**
+ * The bucket size a window should be charted at, when the viewer has not picked
+ * one. Drawing a financial year as daily bars gives ~365 slivers nobody can
+ * read; drawing a single month as monthly bars gives exactly one. So the
+ * default follows the span, and the chart's own Daily/Weekly/Monthly toggle
+ * stays available on top of it.
+ */
+export function defaultGranularity(w: ResolvedWindow): TrendGranularity {
+    if (w.period === "mtd" || /^\d{4}-\d{2}$/.test(w.period)) return "day";
+    if (w.period === "range") {
+        // An open-ended range could span years — months is the safe default.
+        if (!w.startStr || !w.endStr) return "month";
+        const days =
+            (Date.parse(`${w.endStr}T00:00:00Z`) - Date.parse(`${w.startStr}T00:00:00Z`)) /
+            86_400_000;
+        return days < 62 ? "day" : "month";
+    }
+    return "month";
+}
+
 /**
  * `resolveWindow` with the input validation the CEO expense routes owe their
  * callers. It exists because those routes answer a malformed `?month=2026-13`
@@ -96,6 +206,8 @@ export function resolveWindowParams(
     | { ok: false; error: string } {
     const month = sp.get("month");
     const year = sp.get("year");
+    const from = sp.get("from");
+    const to = sp.get("to");
 
     if (month) {
         const m = month.match(/^(\d{4})-(\d{2})$/);
@@ -111,8 +223,17 @@ export function resolveWindowParams(
             return { ok: false, error: "invalid year" };
         }
     }
+    // Rejected rather than dropped. A dropped end would fall back to the
+    // current month while the picker still shows the dates the CEO chose —
+    // a number captioned with a range it does not actually cover.
+    if ((from && !isValidDayString(from)) || (to && !isValidDayString(to))) {
+        return { ok: false, error: "invalid date range" };
+    }
 
-    return { ok: true, window: resolveWindow(month, sp.get("period"), month ? null : year) };
+    return {
+        ok: true,
+        window: resolveWindow(month, sp.get("period"), month ? null : year, { from, to }),
+    };
 }
 
 /**
@@ -160,14 +281,23 @@ export const expenseEffectiveDate = () =>
  *   and `expense_submissions_approved_at_idx` (E-105).
  *
  * Callers must keep `status = 'approved'` — it is part of both partial indexes.
+ *
+ * A null `startStr` means no lower bound (period=inception). With no bound at
+ * either end there is nothing left to date-filter on, so the predicate reduces
+ * to the status check — returning early rather than emitting an OR of two empty
+ * branches, which Drizzle would render as `AND ()`.
  */
-export function approvedExpenseInWindow(startStr: string, endStr: string | null) {
-    const byExpenseDate = [gte(expenseSubmissions.expense_date, startStr)];
+export function approvedExpenseInWindow(startStr: string | null, endStr: string | null) {
+    if (!startStr && !endStr) return eq(expenseSubmissions.status, "approved");
+
+    const byExpenseDate = [];
+    if (startStr) byExpenseDate.push(gte(expenseSubmissions.expense_date, startStr));
     if (endStr) byExpenseDate.push(lt(expenseSubmissions.expense_date, endStr));
 
     // Date literal vs timestamptz resolves at the session timezone, exactly as
     // the pre-E-216 queries did — the fallback path's behaviour is unchanged.
-    const byApprovedAt = [gte(expenseSubmissions.approved_at, sql`${startStr}::date`)];
+    const byApprovedAt = [];
+    if (startStr) byApprovedAt.push(gte(expenseSubmissions.approved_at, sql`${startStr}::date`));
     if (endStr) byApprovedAt.push(lt(expenseSubmissions.approved_at, sql`${endStr}::date`));
 
     return and(

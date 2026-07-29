@@ -7,7 +7,7 @@
  *  - GET:  list recorded AI expenses for the tracker table.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
@@ -15,9 +15,17 @@ import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { EXPENSE_BUCKET_VALUES, EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
 import { resolveBucket } from "@/lib/expenses/resolveBucket";
+import { resolveMonthRange } from "@/lib/expenses/monthRange";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * The table is a review surface, not a report — it pages by recency rather
+ * than streaming the whole ledger. The response says when it hit this, so the
+ * UI can tell the reviewer they are not looking at everything.
+ */
+const LIST_LIMIT = 200;
 
 const CreateSchema = z.object({
   vendor: z.string().trim().max(160).optional().nullable(),
@@ -180,6 +188,26 @@ export async function GET(req: NextRequest) {
     const conds = [eq(expenseSubmissions.source, "ai")];
     if (onlyAttention) conds.push(eq(expenseSubmissions.needs_attention, true));
 
+    // ?from=YYYY-MM&to=YYYY-MM — the tracker's month-range filter. Filtering
+    // here rather than in the browser is not a preference: the list is capped
+    // at LIST_LIMIT by recency, so a client-side filter would report an older
+    // month as empty simply because its rows were never fetched.
+    const parsed = resolveMonthRange(req.nextUrl.searchParams);
+    if (!parsed.ok) {
+      return NextResponse.json(
+        { success: false, error: { message: parsed.error } },
+        { status: 400 },
+      );
+    }
+    const range = parsed.range;
+
+    // COALESCE(expense_date, created_at::date) is the effective expense day —
+    // the same expression the ZIP export filters on, so the table and the
+    // Download button beside it can never disagree about a row's month.
+    const effectiveDate = sql`COALESCE(${expenseSubmissions.expense_date}, ${expenseSubmissions.created_at}::date)`;
+    if (range.startStr) conds.push(gte(effectiveDate, range.startStr));
+    if (range.endStr) conds.push(lt(effectiveDate, range.endStr));
+
     const rows = await db
       .select({
         id: expenseSubmissions.id,
@@ -212,10 +240,21 @@ export async function GET(req: NextRequest) {
       .from(expenseSubmissions)
       .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
       .where(and(...conds))
-      .orderBy(desc(expenseSubmissions.created_at))
-      .limit(200);
+      // By the date the money was spent, not the date someone happened to
+      // upload the PDF — otherwise the Date column reads unsorted, which is
+      // confusing next to a filter that works on exactly that date. created_at
+      // breaks ties so the order stays stable between requests.
+      .orderBy(desc(effectiveDate), desc(expenseSubmissions.created_at))
+      // One extra row is a probe: if it comes back, there is more behind it.
+      .limit(LIST_LIMIT + 1);
 
-    return NextResponse.json({ success: true, data: rows });
+    const capped = rows.length > LIST_LIMIT;
+
+    return NextResponse.json({
+      success: true,
+      data: capped ? rows.slice(0, LIST_LIMIT) : rows,
+      meta: { capped, limit: LIST_LIMIT, range: range.label },
+    });
   } catch (e: unknown) {
     if (isNextRedirectError(e)) throw e;
     return NextResponse.json(

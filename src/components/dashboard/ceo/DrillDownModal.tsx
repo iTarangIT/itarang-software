@@ -6,7 +6,12 @@ import { Loader2, FileText } from "lucide-react";
 import { Modal } from "@/components/leads/lead-v2-modals";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { expenseBucketLabel, expenseDepartmentLabel } from "@/lib/expenses";
-import { ExpenseBucketPanel } from "./ExpenseBucketPanel";
+import { Pagination, usePagination } from "@/components/shared/Pagination";
+import {
+  EMPTY_EXPENSE_FILTERS,
+  ExpenseBucketPanel,
+  type ExpenseFilters,
+} from "./ExpenseBucketPanel";
 
 export type DrillMetric =
   | "purchases"
@@ -145,12 +150,35 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
 };
 
 export function DrillDownModal({ metric, title, params, onClose }: DrillDownModalProps) {
-  // E-218 — which bucket tile is filtering the list. Applied server-side
-  // rather than to the fetched rows because the list is capped at 500: a
-  // client-side filter of a truncated page would quietly show a subset of a
-  // bucket while the tile above it printed the true total.
-  const [bucket, setBucket] = React.useState<string | null>(null);
-  const rowParams = [params, bucket && `bucket=${encodeURIComponent(bucket)}`]
+  // E-219 — the expenses drill-down's own filters. Held here rather than inside
+  // the panel because they narrow BOTH the breakdown above and the list below,
+  // and the two must never be describing different sets of rows.
+  //
+  // Every one of them is applied server-side. The list stops at ROW_CAP (500),
+  // so filtering the fetched rows on the client would show a subset of a
+  // department while the count beside the dropdown stated the true one.
+  const [filters, setFilters] = React.useState<ExpenseFilters>(EMPTY_EXPENSE_FILTERS);
+
+  // A month or a range picked in the panel REPLACES the window inherited from
+  // the page's filter bar. Both are the same kind of statement — which days
+  // this is about — so the more specific one wins outright rather than
+  // intersecting, which would silently return nothing whenever they disagree.
+  const windowParams = React.useMemo(() => {
+    if (filters.month) return `month=${filters.month}`;
+    if (filters.from || filters.to) {
+      const sp = new URLSearchParams({ period: "range" });
+      if (filters.from) sp.set("from", filters.from);
+      if (filters.to) sp.set("to", filters.to);
+      return sp.toString();
+    }
+    return params ?? "";
+  }, [filters.month, filters.from, filters.to, params]);
+
+  const rowParams = [
+    windowParams,
+    filters.bucket && `bucket=${encodeURIComponent(filters.bucket)}`,
+    filters.department && `department=${encodeURIComponent(filters.department)}`,
+  ]
     .filter(Boolean)
     .join("&");
   const qs = rowParams ? `?${rowParams}` : "";
@@ -168,19 +196,31 @@ export function DrillDownModal({ metric, title, params, onClose }: DrillDownModa
   });
 
   const cols = COLUMNS[metric];
-  const rows = data?.rows ?? [];
+  const rows = React.useMemo(() => data?.rows ?? [], [data]);
+  const paged = usePagination(rows);
 
-  // The breakdown is keyed to the window only, so it does NOT reload when a
-  // tile is clicked — the tiles must keep showing the whole window's split,
-  // otherwise selecting one would leave it as the only bar on the chart.
+  // Reset to page one whenever the filters change. Landing on page 4 of a
+  // freshly-filtered two-page list reads as an empty result.
+  React.useEffect(() => {
+    paged.setPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowParams]);
+
+  // The breakdown follows the window but NOT the department/bucket filters —
+  // it has to keep showing the whole window's split, or selecting a department
+  // would leave it as the only bar on the strip and the counts in the dropdown
+  // would all collapse to the one already chosen.
   const breakdown =
     metric === "expenses" ? (
       <ExpenseBucketPanel
-        params={params}
-        selected={bucket}
-        onSelect={setBucket}
+        params={windowParams}
+        filters={filters}
+        onFiltersChange={setFilters}
       />
     ) : null;
+
+  const filtered =
+    Boolean(filters.department) || Boolean(filters.bucket);
 
   return (
     <Modal isOpen onClose={onClose} title={title} size="xl">
@@ -194,26 +234,29 @@ export function DrillDownModal({ metric, title, params, onClose }: DrillDownModa
         <div className="space-y-4">
           {breakdown}
           <p className="text-sm text-gray-400 italic py-8 text-center">
-            {bucket
-              ? "No records in this bucket for the period."
+            {filtered
+              ? "No records match these filters for the period."
               : "No records in this period."}
           </p>
         </div>
       ) : (
         <div className="space-y-4">
           {breakdown}
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-gray-500">
-              {rows.length} record{rows.length === 1 ? "" : "s"}
-              {bucket && " · filtered"}
-            </p>
+          {/* The row count lives in the pagination caption below the table, so
+              it is stated once. What belongs here is the total — which covers
+              every matching row, not the page on screen, because a per-page
+              subtotal on a financial list invites reading it as the total. */}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-medium text-gray-500">
+              {filtered ? "Filtered" : ""}
+            </span>
             <p className="text-sm font-bold text-gray-900">
               Total: {formatINRExact(data?.total ?? 0)}
             </p>
           </div>
-          <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+          <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-white">
+              <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
                   {cols.map((c) => (
                     <th
@@ -226,8 +269,8 @@ export function DrillDownModal({ metric, title, params, onClose }: DrillDownModa
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, i) => (
-                  <tr key={i} className="border-b border-gray-50">
+                {paged.pageItems.map((row, i) => (
+                  <tr key={paged.from + i} className="border-b border-gray-50">
                     {cols.map((c) => (
                       <td
                         key={c.key}
@@ -243,6 +286,15 @@ export function DrillDownModal({ metric, title, params, onClose }: DrillDownModa
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={paged.page}
+            pageCount={paged.pageCount}
+            onPageChange={paged.setPage}
+            total={paged.total}
+            from={paged.from}
+            to={paged.to}
+            noun="records"
+          />
         </div>
       )}
     </Modal>

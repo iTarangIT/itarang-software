@@ -17,10 +17,15 @@ import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import {
   approvedExpenseInWindow,
   expenseEffectiveDate,
-  resolveWindow,
+  resolveWindowParams,
 } from "@/lib/dashboard/salesWindow";
 import { fetchInvoiceLineItems } from "@/lib/zoho/invoices";
-import { UNCLASSIFIED_BUCKET_KEY, isExpenseBucket } from "@/lib/expenses";
+import {
+  EXPENSE_DEPARTMENT_VALUES,
+  UNASSIGNED_DEPARTMENT_KEY,
+  UNCLASSIFIED_BUCKET_KEY,
+  isExpenseBucket,
+} from "@/lib/expenses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,18 +79,29 @@ export async function GET(
     // Resolve the [start, end) window as local date strings. Shared with the
     // Expenses card and the bucket panel — a private copy here is how a
     // drill-down starts disagreeing with the number that opened it.
-    const { startStr, endStr } = resolveWindow(
-      sp.get("month"),
-      sp.get("period"),
-      sp.get("year"),
-    );
+    //
+    // E-219 — via resolveWindowParams rather than resolveWindow, so the CEO
+    // filter bar's ?from=/&to= range reaches this list too. Opening a drill-down
+    // from a card filtered to a custom range used to silently answer with the
+    // current month: the same window has to mean the same days everywhere.
+    const resolved = resolveWindowParams(sp);
+    if (!resolved.ok) {
+      return NextResponse.json(
+        { success: false, error: { message: resolved.error } },
+        { status: 400 },
+      );
+    }
+    const { startStr, endStr } = resolved.window;
 
     let rows: Record<string, unknown>[] = [];
     let total = 0;
 
     if (metric === "purchases") {
       // inventory.oem_invoice_date is a timestamptz; compare against date strings.
-      const conds = [gte(inventory.oem_invoice_date, sql`${startStr}::date`)];
+      // Both bounds are optional — an unbounded window (period=inception) drops
+      // the predicate rather than scanning from an invented earliest date.
+      const conds = [];
+      if (startStr) conds.push(gte(inventory.oem_invoice_date, sql`${startStr}::date`));
       if (endStr) conds.push(lt(inventory.oem_invoice_date, sql`${endStr}::date`));
       rows = await db
         .select({
@@ -104,9 +120,9 @@ export async function GET(
       total = rows.reduce((s, r) => s + Number(r.final_amount || 0), 0);
     } else if (metric === "sales") {
       const conds = [
-        gte(zohoInvoices.invoice_date, startStr),
         sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
       ];
+      if (startStr) conds.push(gte(zohoInvoices.invoice_date, startStr));
       if (endStr) conds.push(lt(zohoInvoices.invoice_date, endStr));
       const invoiceRows = await db
         .select({
@@ -168,7 +184,8 @@ export async function GET(
       // show alongside the Zoho rows and count toward the total. Guarded: if the
       // table hasn't been migrated yet, skip rather than failing the drill-down.
       try {
-        const manualConds = [gte(manualDealerSales.sale_date, startStr)];
+        const manualConds = [];
+        if (startStr) manualConds.push(gte(manualDealerSales.sale_date, startStr));
         if (endStr) manualConds.push(lt(manualDealerSales.sale_date, endStr));
         const manualRows = await db
           .select()
@@ -199,15 +216,32 @@ export async function GET(
       // two drift, clicking the card opens a list whose rows do not add up to
       // the number that was clicked.
       //
-      // E-218 — ?bucket= narrows to one tile of the bucket panel. "unclassified"
-      // is the synthetic key for rows the backfill has not reached, so it maps
-      // to IS NULL rather than to a stored value.
+      // E-218 — ?bucket= narrows to one bucket. "unclassified" is the synthetic
+      // key for rows the backfill has not reached, so it maps to IS NULL rather
+      // than to a stored value.
       const bucketParam = sp.get("bucket");
       const bucketFilter =
         bucketParam === UNCLASSIFIED_BUCKET_KEY
           ? isNull(expenseSubmissions.bucket)
           : isExpenseBucket(bucketParam)
             ? eq(expenseSubmissions.bucket, bucketParam)
+            : undefined;
+
+      // E-219 — ?department= narrows the same list to one department, the same
+      // shape and for the same reason: applied here rather than to the fetched
+      // rows, because those stop at ROW_CAP and a client-side filter of a
+      // truncated page shows a subset of a department while the count beside
+      // the dropdown states the true one.
+      //
+      // An unrecognised value is ignored rather than 400'd — it can only come
+      // from a stale dropdown option, and answering the unfiltered window is
+      // more useful there than refusing the whole drill-down.
+      const deptParam = sp.get("department");
+      const deptFilter =
+        deptParam === UNASSIGNED_DEPARTMENT_KEY
+          ? isNull(expenseSubmissions.department)
+          : deptParam && EXPENSE_DEPARTMENT_VALUES.includes(deptParam as never)
+            ? eq(expenseSubmissions.department, deptParam)
             : undefined;
 
       rows = await db
@@ -225,7 +259,9 @@ export async function GET(
         })
         .from(expenseSubmissions)
         .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-        .where(and(approvedExpenseInWindow(startStr, endStr), bucketFilter))
+        .where(
+          and(approvedExpenseInWindow(startStr, endStr), bucketFilter, deptFilter),
+        )
         .orderBy(desc(expenseEffectiveDate()))
         .limit(ROW_CAP);
       total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);

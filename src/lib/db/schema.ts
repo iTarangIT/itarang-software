@@ -7238,6 +7238,10 @@ export const leadVisits = pgTable(
     visit_status: varchar("visit_status", { length: 30 }).notNull(),
     visit_outcome: varchar("visit_outcome", { length: 30 }),
     visit_remarks: text("visit_remarks"),
+    // E-220 — how the meeting happened: ground | calling | whatsapp. Free text
+    // (vocabulary in src/lib/admin/types.ts MEETING_MODES) per this family's
+    // convention; see the migration for why it is not a CHECK or an enum.
+    meeting_mode: varchar("meeting_mode", { length: 16 }).default("ground"),
     photos: jsonb().default([]),
     gps_check_in_lat: numeric("gps_check_in_lat", { precision: 10, scale: 6 }),
     gps_check_in_lng: numeric("gps_check_in_lng", { precision: 10, scale: 6 }),
@@ -7322,6 +7326,13 @@ export const dealerLeadCommercials = pgTable(
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+    // E-221 — CEO approval gate. Only quote_issue / quote_revision are written
+    // 'pending'; every other event type, and every pre-E-221 row, is
+    // 'approved'. Vocabulary in src/lib/leads/quoteApproval.ts.
+    approval_status: varchar("approval_status", { length: 16 }).default("approved"),
+    approved_by: text("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
   },
   (t) => ({
     leadVersionUniq: uniqueIndex(

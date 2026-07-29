@@ -28,8 +28,18 @@ export const EXPENSE_DEPARTMENT_VALUES = EXPENSE_DEPARTMENTS.map(
   (d) => d.value,
 ) as [ExpenseDepartment, ...ExpenseDepartment[]];
 
+/**
+ * Synthetic key for a NULL department, mirroring UNCLASSIFIED_BUCKET_KEY below.
+ *
+ * It exists so a row with no department is still *filterable*: the drill-down
+ * sends this value back and the route turns it into `department IS NULL`.
+ * Without a name for the empty case, those rows could only be reached by not
+ * filtering at all.
+ */
+export const UNASSIGNED_DEPARTMENT_KEY = "unassigned";
+
 export function expenseDepartmentLabel(value: string | null | undefined): string {
-  if (!value || value === "unassigned") return "Unassigned";
+  if (!value || value === UNASSIGNED_DEPARTMENT_KEY) return "Unassigned";
   return EXPENSE_DEPARTMENTS.find((d) => d.value === value)?.label ?? value;
 }
 
