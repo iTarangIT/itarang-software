@@ -137,25 +137,48 @@ export async function startDialerTickers() {
 // (/ceo/invoices) shows zeros. This in-process ticker keeps the table fresh in
 // the long-lived PM2 / `npm run start` process — full re-pull + upsert keyed on
 // zoho_invoice_id. On Vercel the cron entry owns this, so we short-circuit.
-export async function startZohoSyncTicker() {
-  // Skip on Vercel — let the cron handle it.
-  if (process.env.VERCEL === "1") return;
+// Why the Zoho ticker would refuse to start, or null if it will run.
+//
+// Deliberately kept in agreement with assertConfigured() in lib/zoho/client.ts:
+// the two USED to disagree about the org var. This guard demanded
+// ZOHO_ORGANIZATION_ID while the client accepts either that or the
+// comma-separated ZOHO_ORGANIZATION_IDS — so an env configured the multi-org
+// way (precisely what you write when fixing "we only see one org", and what the
+// prod runbook now tells you to add) disabled this ticker while every other
+// Zoho path still reported itself healthy.
+//
+// That failure mode is the expensive one: a sync that never RUNS looks exactly
+// like a sync that runs and finds nothing — a stale dashboard and no error
+// anywhere. Hence the reason string, which the caller logs verbatim.
+export function zohoTickerDisabledReason(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  // Skip on Vercel — the cron entry owns it there.
+  if (env.VERCEL === "1") return "running on Vercel — the cron entry owns this";
 
   // Explicit opt-out (e.g. inside the BullMQ worker, which also boots
   // instrumentation, to avoid two processes full-pulling in parallel).
-  if (process.env.ENABLE_ZOHO_SYNC === "0") return;
+  if (env.ENABLE_ZOHO_SYNC === "0") return "ENABLE_ZOHO_SYNC=0";
 
-  // No credentials → nothing to sync. Stay quiet rather than logging an
-  // auth error every hour on environments that don't use Zoho.
-  if (
-    !process.env.ZOHO_CLIENT_ID ||
-    !process.env.ZOHO_CLIENT_SECRET ||
-    !process.env.ZOHO_REFRESH_TOKEN ||
-    !process.env.ZOHO_ORGANIZATION_ID
-  ) {
-    console.log(
-      "[instrumentation:zoho-sync] Zoho credentials not configured — ticker disabled",
-    );
+  const missing = [
+    "ZOHO_CLIENT_ID",
+    "ZOHO_CLIENT_SECRET",
+    "ZOHO_REFRESH_TOKEN",
+  ].filter((k) => !env[k]);
+  if (!env.ZOHO_ORGANIZATION_ID && !env.ZOHO_ORGANIZATION_IDS) {
+    missing.push("ZOHO_ORGANIZATION_ID (or ZOHO_ORGANIZATION_IDS)");
+  }
+
+  return missing.length ? `missing ${missing.join(", ")}` : null;
+}
+
+export async function startZohoSyncTicker() {
+  const disabled = zohoTickerDisabledReason();
+  if (disabled) {
+    // Always say WHY. The old message claimed "credentials not configured" even
+    // when the real cause was an opt-out flag or a single missing var, which
+    // sent debugging at the token instead of at the env.
+    console.log(`[instrumentation:zoho-sync] ticker disabled — ${disabled}`);
     return;
   }
 
