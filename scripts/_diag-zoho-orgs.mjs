@@ -111,4 +111,24 @@ console.table([...byPrefix]);
 const state = await sql`SELECT * FROM zoho_sync_state WHERE id = 1`;
 console.log("-- zoho_sync_state --");
 console.log(state[0] ?? "(no row)");
+
+// Ages in plain minutes/hours. "Is the sync still ticking?" is the question the
+// raw timestamps above make you do arithmetic for, and getting it wrong sends
+// you hunting a data bug when the real fault is that nothing is running at all.
+const age = (t) => {
+  if (!t) return "never";
+  const mins = (Date.now() - new Date(t).getTime()) / 60000;
+  if (mins < 90) return `${mins.toFixed(0)}m ago`;
+  const hrs = mins / 60;
+  return hrs < 48 ? `${hrs.toFixed(1)}h ago` : `${(hrs / 24).toFixed(1)} days ago`;
+};
+console.log("\n-- AGES (hourly ticker => everything below should be <60m) --");
+console.log(`  zoho_sync_state.last_run_at : ${age(state[0]?.last_run_at)}   status=${state[0]?.last_status ?? "?"}`);
+for (const r of byOrg) {
+  console.log(`  org ${r.organization_id ?? "(NULL)"} last_synced : ${age(r.last_synced)}   rows=${r.n} latest_invoice=${r.last_date ?? "-"}`);
+}
+console.log(
+  "\n  last_run_at fresh but an org stale  -> that org's pull is failing (see last_error)\n" +
+  "  last_run_at ALSO stale              -> nothing is running: ticker dead or deploy never landed",
+);
 await sql.end();
