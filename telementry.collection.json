@@ -1,0 +1,114 @@
+{
+  "info": {
+    "name": "iTarang — Telemetry API",
+    "description": "IoT telemetry ingestion (POST /api/iot/ingest) + read endpoints. Set the collection variables below (Collection > Variables) before running.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "imei", "value": "354000123456789" },
+    { "key": "serial", "value": "BAT-TEST-1" },
+    { "key": "bypass_secret", "value": "test-bypass" },
+    { "key": "iot_device_token_secret", "value": "test-iot-secret-e046" },
+    { "key": "now_iso", "value": "" },
+    { "key": "device_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Ingest — test bypass (dev only)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// The route rejects packets whose timestamp is >5 min off server UTC.",
+              "// Stamp a fresh ISO timestamp on every send.",
+              "pm.collectionVariables.set('now_iso', new Date().toISOString());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Device-IMEI", "value": "{{imei}}" },
+          { "key": "x-nbfc-test-bypass", "value": "{{bypass_secret}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/iot/ingest",
+          "host": ["{{base_url}}"],
+          "path": ["api", "iot", "ingest"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"serialNumber\": \"{{serial}}\",\n  \"imeiId\": \"{{imei}}\",\n  \"timestamp\": \"{{now_iso}}\",\n  \"soc_percent\": 74,\n  \"soh_percent\": 91,\n  \"voltage_v\": 51.8,\n  \"current_a\": 12.4,\n  \"temperature_c\": 32.1,\n  \"charge_cycles\": 143,\n  \"gps\": { \"lat\": 25.4358, \"lng\": 81.8463, \"accuracy_m\": 15 },\n  \"daily_km\": 28.4,\n  \"idle_hours\": 6.2,\n  \"bms_status\": \"normal\",\n  \"charger_connected\": false\n}"
+        },
+        "description": "Requires NBFC_TEST_BYPASS=1 and NBFC_TEST_BYPASS_SECRET set on the server (disabled when NODE_ENV=production). No JWT needed."
+      }
+    },
+    {
+      "name": "Ingest — real device JWT",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Sign an HS256 JWT the way the route verifies it: iss = imei, signed with IOT_DEVICE_TOKEN_SECRET.",
+              "function b64url(str) {",
+              "  return CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(str))",
+              "    .replace(/=+$/,'').replace(/\\+/g,'-').replace(/\\//g,'_');",
+              "}",
+              "var imei = pm.collectionVariables.get('imei');",
+              "var secret = pm.collectionVariables.get('iot_device_token_secret');",
+              "var header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));",
+              "var payload = b64url(JSON.stringify({ iss: imei, iat: Math.floor(Date.now()/1000) }));",
+              "var sig = CryptoJS.HmacSHA256(header + '.' + payload, secret);",
+              "var sigB64 = CryptoJS.enc.Base64.stringify(sig)",
+              "  .replace(/=+$/,'').replace(/\\+/g,'-').replace(/\\//g,'_');",
+              "pm.collectionVariables.set('device_token', header + '.' + payload + '.' + sigB64);",
+              "pm.collectionVariables.set('now_iso', new Date().toISOString());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Device-IMEI", "value": "{{imei}}" },
+          { "key": "X-Device-Token", "value": "{{device_token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/iot/ingest",
+          "host": ["{{base_url}}"],
+          "path": ["api", "iot", "ingest"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"serialNumber\": \"{{serial}}\",\n  \"imeiId\": \"{{imei}}\",\n  \"timestamp\": \"{{now_iso}}\",\n  \"soc_percent\": 74,\n  \"soh_percent\": 91,\n  \"voltage_v\": 51.8,\n  \"current_a\": 12.4,\n  \"temperature_c\": 32.1,\n  \"charge_cycles\": 143,\n  \"gps\": { \"lat\": 25.4358, \"lng\": 81.8463, \"accuracy_m\": 15 },\n  \"daily_km\": 28.4,\n  \"idle_hours\": 6.2,\n  \"bms_status\": \"normal\",\n  \"charger_connected\": false\n}"
+        },
+        "description": "The iot_device_token_secret collection variable MUST match the server's IOT_DEVICE_TOKEN_SECRET, or you get 401 DEVICE_AUTH_FAILED."
+      }
+    },
+    {
+      "name": "Read — telemetry devices (session auth)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/telemetry/devices?limit=50&offset=0",
+          "host": ["{{base_url}}"],
+          "path": ["api", "telemetry", "devices"],
+          "query": [
+            { "key": "limit", "value": "50" },
+            { "key": "offset", "value": "0" }
+          ]
+        },
+        "description": "Session-authed via requireRole(['ceo','dealer']). Log in through the browser, copy the Supabase session cookie(s) into Postman's cookie jar for {{base_url}}, then send. Without a valid session you'll get 401/redirect."
+      }
+    }
+  ]
+}

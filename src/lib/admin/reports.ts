@@ -6,6 +6,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { LOST_REASON } from "@/lib/lifecycle/transitions";
 import { ONBOARDING_DROPOUT_REASONS } from "./types";
+import { isUndefinedColumn, roleLabel } from "./reportHelpers";
 import type {
     DashboardFilters,
     ReportResult,
@@ -303,6 +304,228 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
     };
 }
 
+// ─────────────────────────── E-220 CEO leads reports ───────────────────────
+
+/**
+ * Like dateRange(), but defaults to month-to-date instead of the last 30 days.
+ * "Meetings MTD" means the calendar month; a rolling 30 days would quietly
+ * include part of the previous month and never agree with a month-end figure.
+ * An explicit ?date_from/?date_to still wins.
+ */
+function monthToDate(col: string, f: DashboardFilters): SQL {
+    if (f.date_from || f.date_to) return dateRange(col, f);
+    return sql` AND ${sql.raw(col)} >= date_trunc('month', NOW())`;
+}
+
+
+/**
+ * Meetings (MTD) — one row per sales manager × city.
+ *
+ * The grain is deliberately both at once: a single table then answers "by
+ * sales manager" reading down, "by city" by sorting, and the CSV export lets
+ * either be pivoted — rather than shipping two reports that must agree.
+ *
+ * SOURCE IS `lead_visits`, NOT touchpoints. A meeting has scheduling, an
+ * outcome and a follow-up; an `inside_sales_call` touchpoint is an outreach
+ * call, which is a different event and belongs to the funnel report's
+ * "Connected" column. Counting calls as meetings would inflate this by 3×.
+ *
+ * FRESH vs REPEAT is per lead, by meeting order: a lead's first-ever meeting is
+ * fresh, every later one is a repeat. Deliberately ranked over ALL of the
+ * lead's meetings, not just those inside the window — otherwise the first
+ * meeting in the window would read as "fresh" no matter how many times that
+ * dealer had already been met.
+ */
+async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
+    const columns = [
+        { key: "manager", label: "Sales Manager" },
+        { key: "city", label: "City" },
+        { key: "meetings", label: "Meetings", numeric: true },
+        { key: "done", label: "Done", numeric: true },
+        { key: "fresh", label: "Fresh", numeric: true },
+        { key: "repeat", label: "Repeat", numeric: true },
+        { key: "ground", label: "Ground", numeric: true },
+        { key: "calling", label: "Calling", numeric: true },
+        { key: "whatsapp", label: "WhatsApp", numeric: true },
+    ];
+
+    // COALESCE on the mode so an environment without E-220 still groups; the
+    // catch below covers the case where the column is missing outright.
+    const build = (modeCol: SQL) => sql`
+        WITH ranked AS (
+            SELECT v.visit_id,
+                   v.asm_id,
+                   v.dealer_lead_id,
+                   v.visit_status,
+                   v.actual_visit_date,
+                   v.scheduled_date,
+                   ${modeCol} AS mode,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY v.dealer_lead_id
+                       ORDER BY COALESCE(v.actual_visit_date, v.scheduled_date, v.created_at::date)
+                                NULLS LAST, v.created_at
+                   ) AS meeting_seq
+            FROM lead_visits v
+        )
+        SELECT COALESCE(u.name, '(unknown)')                       AS manager,
+               COALESCE(NULLIF(TRIM(dl.city), ''), '(not captured)') AS city,
+               COUNT(*)::text                                       AS meetings,
+               COUNT(*) FILTER (WHERE r.visit_status = 'visited')::text AS done,
+               COUNT(*) FILTER (WHERE r.meeting_seq = 1)::text      AS fresh,
+               COUNT(*) FILTER (WHERE r.meeting_seq > 1)::text      AS repeat_count,
+               COUNT(*) FILTER (WHERE r.mode = 'ground')::text      AS ground,
+               COUNT(*) FILTER (WHERE r.mode = 'calling')::text     AS calling,
+               COUNT(*) FILTER (WHERE r.mode = 'whatsapp')::text    AS whatsapp
+        FROM ranked r
+        LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+        LEFT JOIN users u ON u.id::text = r.asm_id
+        WHERE TRUE ${monthToDate(
+            "COALESCE(r.actual_visit_date, r.scheduled_date)",
+            f,
+        )}
+        GROUP BY 1, 2
+        -- COUNT(*), not the "meetings" alias: that is cast to text for the
+        -- driver, and ordering by it would sort 9 above 10.
+        ORDER BY COUNT(*) DESC, manager, city
+    `;
+
+    type Row = {
+        manager: string;
+        city: string;
+        meetings: string;
+        done: string;
+        fresh: string;
+        repeat_count: string;
+        ground: string;
+        calling: string;
+        whatsapp: string;
+    };
+
+    let rows: Row[];
+    try {
+        rows = await db.execute<Row>(build(sql`COALESCE(v.meeting_mode, 'ground')`));
+    } catch (e) {
+        if (!isUndefinedColumn(e)) throw e;
+        // E-220 not applied here. Every meeting predates any other mode being
+        // recordable, so reporting them all as ground is exactly what the
+        // backfill would have written — the WhatsApp column reads zero because
+        // nothing has been captured, not because the report is broken.
+        console.warn("[reports/meetings_mtd] lead_visits.meeting_mode absent — E-220 not applied");
+        rows = await db.execute<Row>(build(sql`'ground'`));
+    }
+
+    return {
+        type: "meetings_mtd",
+        columns,
+        rows: rows.map((r) => ({
+            manager: r.manager,
+            city: r.city,
+            meetings: num(r.meetings),
+            done: num(r.done),
+            fresh: num(r.fresh),
+            repeat: num(r.repeat_count),
+            ground: num(r.ground),
+            calling: num(r.calling),
+            whatsapp: num(r.whatsapp),
+        })),
+    };
+}
+
+/**
+ * Funnel by Owner — one row per person who worked a lead, sales manager and
+ * inside sales alike, with the role shown so the two can be told apart.
+ *
+ * Grouped on `lead_touchpoints.performed_by` (who did the work) rather than
+ * `dealer_leads.assigned_to` (who owns the lead), because assigned_to is NULL
+ * on every row on db-1 — grouping by it would produce one "(unassigned)" line
+ * containing everything.
+ *
+ * A lead is counted once per person, at its CURRENT status, so the temperature
+ * columns partition the person's leads instead of double-counting a lead that
+ * moved cold → warm → hot.
+ */
+async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
+    const rows = await db.execute<{
+        person: string | null;
+        role: string | null;
+        touched: string;
+        connected: string;
+        hot: string;
+        warm: string;
+        cold: string;
+        converted: string;
+    }>(sql`
+        WITH worked AS (
+            -- One row per (person, lead): the lead's status is a property of
+            -- the lead, so it must not be counted once per touchpoint.
+            SELECT DISTINCT t.performed_by, t.dealer_lead_id
+            FROM lead_touchpoints t
+            WHERE t.performed_by IS NOT NULL
+              ${dateRange("t.performed_at", f)}
+        ),
+        connected AS (
+            -- "Connected" is a property of the outreach, not of the lead, so it
+            -- is counted from the touchpoints themselves.
+            SELECT DISTINCT t.performed_by, t.dealer_lead_id
+            FROM lead_touchpoints t
+            WHERE (t.call_status = 'connected' OR t.is_engaged IS TRUE)
+              ${dateRange("t.performed_at", f)}
+        )
+        SELECT COALESCE(u.name, '(unknown)') AS person,
+               u.role                        AS role,
+               COUNT(*)::text                AS touched,
+               COUNT(*) FILTER (
+                   WHERE EXISTS (SELECT 1 FROM connected c
+                                  WHERE c.performed_by = w.performed_by
+                                    AND c.dealer_lead_id = w.dealer_lead_id)
+               )::text AS connected,
+               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'hot')::text  AS hot,
+               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'warm')::text AS warm,
+               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'cold')::text AS cold,
+               COUNT(*) FILTER (
+                   WHERE lower(dl.current_status) IN ('qualified','ai_qualified','converted')
+               )::text AS converted
+        FROM worked w
+        LEFT JOIN dealer_leads dl ON dl.id = w.dealer_lead_id
+        LEFT JOIN users u ON u.id::text = w.performed_by
+        GROUP BY u.name, u.role
+        ORDER BY touched DESC, person
+    `);
+
+    return {
+        type: "funnel_by_owner",
+        columns: [
+            { key: "person", label: "Person" },
+            { key: "role", label: "Role" },
+            { key: "touched", label: "Leads Touched", numeric: true },
+            { key: "connected", label: "Connected", numeric: true },
+            { key: "hot", label: "Hot", numeric: true },
+            { key: "warm", label: "Warm", numeric: true },
+            { key: "cold", label: "Cold", numeric: true },
+            { key: "converted", label: "Converted", numeric: true },
+            { key: "conversion_rate", label: "Conversion %", numeric: true },
+        ],
+        rows: rows.map((r) => {
+            const touched = num(r.touched);
+            const conv = num(r.converted);
+            // Against leads touched, not against connected — the question is
+            // what share of the work turned into a dealer.
+            const rate = ratio(conv, touched);
+            return {
+                person: r.person ?? "(unknown)",
+                role: roleLabel(r.role),
+                touched,
+                connected: num(r.connected),
+                hot: num(r.hot),
+                warm: num(r.warm),
+                cold: num(r.cold),
+                converted: conv,
+                conversion_rate: rate != null ? Math.round(rate * 100) : null,
+            };
+        }),
+    };
+}
+
 export async function runReport(
     type: ReportType,
     f: DashboardFilters,
@@ -320,6 +543,10 @@ export async function runReport(
             return sourcePerformance(f);
         case "asm_handoff":
             return asmHandoff(f);
+        case "meetings_mtd":
+            return meetingsMtd(f);
+        case "funnel_by_owner":
+            return funnelByOwner(f);
     }
 }
 

@@ -7,16 +7,25 @@
  *  - GET:  list recorded AI expenses for the tracker table.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
 import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
-import { EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import { EXPENSE_BUCKET_VALUES, EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import { resolveBucket } from "@/lib/expenses/resolveBucket";
+import { resolveMonthRange } from "@/lib/expenses/monthRange";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * The table is a review surface, not a report — it pages by recency rather
+ * than streaming the whole ledger. The response says when it hit this, so the
+ * UI can tell the reviewer they are not looking at everything.
+ */
+const LIST_LIMIT = 200;
 
 const CreateSchema = z.object({
   vendor: z.string().trim().max(160).optional().nullable(),
@@ -28,6 +37,10 @@ const CreateSchema = z.object({
     .nullable(),
   description: z.string().trim().max(2000).optional().nullable(),
   department: z.enum(EXPENSE_DEPARTMENT_VALUES),
+  // E-218 — optional: when the reviewer picked a bucket it is taken as their
+  // decision, otherwise resolveBucket() derives one from the rules + whatever
+  // the extractor suggested in ai_raw.
+  bucket: z.enum(EXPENSE_BUCKET_VALUES).optional().nullable(),
   project_tag: z.string().trim().min(1).max(80).optional().nullable(),
   invoice_number: z.string().trim().max(120).optional().nullable(),
   file_name: z.string().trim().max(255).optional().nullable(),
@@ -63,6 +76,23 @@ export async function POST(req: NextRequest) {
     const now = new Date();
 
     const invoiceNumber = d.invoice_number?.trim() || null;
+
+    // E-218 — an explicit choice in the review form is a human decision and
+    // must survive the backfill; otherwise derive it the same way every other
+    // ingest path does.
+    const aiRaw = (d.ai_raw ?? null) as {
+      bucket?: string | null;
+      bucket_confidence?: number | null;
+    } | null;
+    const bucket = d.bucket
+      ? { bucket: d.bucket, source: "manual" as const }
+      : resolveBucket({
+          vendor: d.vendor,
+          description: d.description,
+          project_tag: d.project_tag,
+          aiBucket: aiRaw?.bucket,
+          aiConfidence: aiRaw?.bucket_confidence,
+        });
 
     // Dedup: skip an AI invoice whose number already exists (case-insensitive).
     if (invoiceNumber) {
@@ -107,6 +137,8 @@ export async function POST(req: NextRequest) {
           approved_at: now,
           department: d.department,
           project_tag: d.project_tag ?? null,
+          bucket: bucket.bucket,
+          bucket_source: bucket.source,
           vendor: d.vendor ?? null,
           expense_date: d.expense_date ?? null,
           source: "ai",
@@ -144,10 +176,37 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const guard = await requireApiAdmin();
     if (!guard.ok) return guard.response;
+
+    // E-216 — ?needs_attention=1 backs the needs-attention panel. Same route
+    // and same shape as the full tracker list, so the two cannot disagree
+    // about what a row looks like.
+    const onlyAttention = req.nextUrl.searchParams.get("needs_attention") === "1";
+    const conds = [eq(expenseSubmissions.source, "ai")];
+    if (onlyAttention) conds.push(eq(expenseSubmissions.needs_attention, true));
+
+    // ?from=YYYY-MM&to=YYYY-MM — the tracker's month-range filter. Filtering
+    // here rather than in the browser is not a preference: the list is capped
+    // at LIST_LIMIT by recency, so a client-side filter would report an older
+    // month as empty simply because its rows were never fetched.
+    const parsed = resolveMonthRange(req.nextUrl.searchParams);
+    if (!parsed.ok) {
+      return NextResponse.json(
+        { success: false, error: { message: parsed.error } },
+        { status: 400 },
+      );
+    }
+    const range = parsed.range;
+
+    // COALESCE(expense_date, created_at::date) is the effective expense day —
+    // the same expression the ZIP export filters on, so the table and the
+    // Download button beside it can never disagree about a row's month.
+    const effectiveDate = sql`COALESCE(${expenseSubmissions.expense_date}, ${expenseSubmissions.created_at}::date)`;
+    if (range.startStr) conds.push(gte(effectiveDate, range.startStr));
+    if (range.endStr) conds.push(lt(effectiveDate, range.endStr));
 
     const rows = await db
       .select({
@@ -157,20 +216,45 @@ export async function GET() {
         description: expenseSubmissions.description,
         department: expenseSubmissions.department,
         project_tag: expenseSubmissions.project_tag,
+        // E-218 — the coarse spend bucket + who decided it, so the tracker can
+        // show it and let a reviewer correct it.
+        bucket: expenseSubmissions.bucket,
+        bucket_source: expenseSubmissions.bucket_source,
         invoice_number: expenseSubmissions.invoice_number,
         file_name: expenseSubmissions.file_name,
         expense_date: expenseSubmissions.expense_date,
         bill_url: expenseSubmissions.bill_url,
         created_at: expenseSubmissions.created_at,
+        // E-216 — provenance + flag, so the tracker can mark which rows came
+        // from Drive and why any of them need a look.
+        drive_file_id: expenseSubmissions.drive_file_id,
+        needs_attention: expenseSubmissions.needs_attention,
+        attention_reason: expenseSubmissions.attention_reason,
+        // E-217 — `amount` above is INR; these say what the document said, so
+        // the tracker can show "$200 @ 86.4" rather than a bare rupee figure.
+        currency: expenseSubmissions.currency,
+        original_amount: expenseSubmissions.original_amount,
+        fx_rate: expenseSubmissions.fx_rate,
         submitter_name: users.name,
       })
       .from(expenseSubmissions)
       .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-      .where(eq(expenseSubmissions.source, "ai"))
-      .orderBy(desc(expenseSubmissions.created_at))
-      .limit(200);
+      .where(and(...conds))
+      // By the date the money was spent, not the date someone happened to
+      // upload the PDF — otherwise the Date column reads unsorted, which is
+      // confusing next to a filter that works on exactly that date. created_at
+      // breaks ties so the order stays stable between requests.
+      .orderBy(desc(effectiveDate), desc(expenseSubmissions.created_at))
+      // One extra row is a probe: if it comes back, there is more behind it.
+      .limit(LIST_LIMIT + 1);
 
-    return NextResponse.json({ success: true, data: rows });
+    const capped = rows.length > LIST_LIMIT;
+
+    return NextResponse.json({
+      success: true,
+      data: capped ? rows.slice(0, LIST_LIMIT) : rows,
+      meta: { capped, limit: LIST_LIMIT, range: range.label },
+    });
   } catch (e: unknown) {
     if (isNextRedirectError(e)) throw e;
     return NextResponse.json(

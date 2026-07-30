@@ -1,9 +1,14 @@
 /**
- * E-172 — GET /api/admin/ai-expenses/export?month=YYYY-MM
+ * E-172 — GET /api/admin/ai-expenses/export?from=YYYY-MM&to=YYYY-MM
  *
- * Admin-only. Streams a ZIP for the selected month containing:
- *   - expenses_{month}.xlsx   — one styled row per AI expense
+ * Admin-only. Streams a ZIP for the selected month range containing:
+ *   - expenses_{range}.xlsx   — one styled row per AI expense
  *   - invoices/               — each expense's stored bill (PDF/image)
+ *
+ * Either end may be omitted ("from Apr onwards", "up to Jul"); `month=YYYY-MM`
+ * is still accepted as shorthand for a single month. The range is resolved by
+ * the same helper the tracker's list route uses, so this ZIP always contains
+ * the rows the table was showing when Download was pressed.
  *
  * Bills are pulled from Supabase Storage (by stored path, with a public-URL
  * fetch fallback); a bill that can't be fetched is skipped with a warning row
@@ -20,7 +25,8 @@ import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
 import { extOf, safeSlug, fetchAsBuffer } from "@/lib/export/zip-helpers";
-import { expenseDepartmentLabel } from "@/lib/expenses";
+import { expenseBucketLabel, expenseDepartmentLabel } from "@/lib/expenses";
+import { resolveMonthRange } from "@/lib/expenses/monthRange";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,32 +39,30 @@ export async function GET(req: NextRequest) {
     const guard = await requireApiAdmin();
     if (!guard.ok) return guard.response;
 
-    const month = req.nextUrl.searchParams.get("month") || "";
-    const m = month.match(/^(\d{4})-(\d{2})$/);
-    if (!m) {
+    const parsed = resolveMonthRange(req.nextUrl.searchParams);
+    if (!parsed.ok) {
       return NextResponse.json(
-        { success: false, error: { message: "month must be YYYY-MM" } },
+        { success: false, error: { message: parsed.error } },
         { status: 400 },
       );
     }
-    const year = Number(m[1]);
-    const mon = Number(m[2]); // 1-indexed
-    if (mon < 1 || mon > 12) {
+    const { startStr, endStr, slug, label, bounded } = parsed.range;
+    // An unbounded export would zip every bill ever stored. The tracker keeps
+    // Download disabled until a range is picked; this is the backstop for a
+    // hand-typed URL.
+    if (!bounded) {
       return NextResponse.json(
-        { success: false, error: { message: "invalid month" } },
+        { success: false, error: { message: "Pick a month or a range to export." } },
         { status: 400 },
       );
     }
-    // Build [start, end) as local date strings (mirror the CEO route — never
-    // toISOString() a local midnight).
-    const pad2 = (n: number) => String(n).padStart(2, "0");
-    const startStr = `${year}-${pad2(mon)}-01`;
-    const endYear = mon === 12 ? year + 1 : year;
-    const endMon = mon === 12 ? 1 : mon + 1;
-    const endStr = `${endYear}-${pad2(endMon)}-01`;
 
     // COALESCE(expense_date, created_at::date) is the effective expense day.
     const effectiveDate = sql`COALESCE(${expenseSubmissions.expense_date}, ${expenseSubmissions.created_at}::date)`;
+
+    const conds = [eq(expenseSubmissions.source, "ai")];
+    if (startStr) conds.push(gte(effectiveDate, startStr));
+    if (endStr) conds.push(lt(effectiveDate, endStr));
 
     const rows = await db
       .select({
@@ -68,6 +72,7 @@ export async function GET(req: NextRequest) {
         vendor: expenseSubmissions.vendor,
         amount: expenseSubmissions.amount,
         department: expenseSubmissions.department,
+        bucket: expenseSubmissions.bucket,
         project_tag: expenseSubmissions.project_tag,
         description: expenseSubmissions.description,
         expense_date: expenseSubmissions.expense_date,
@@ -79,13 +84,7 @@ export async function GET(req: NextRequest) {
       })
       .from(expenseSubmissions)
       .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-      .where(
-        and(
-          eq(expenseSubmissions.source, "ai"),
-          gte(effectiveDate, startStr),
-          lt(effectiveDate, endStr),
-        ),
-      )
+      .where(and(...conds))
       .orderBy(desc(effectiveDate))
       .limit(MAX_ROWS + 1);
 
@@ -94,13 +93,16 @@ export async function GET(req: NextRequest) {
 
     // ---- Build the Excel workbook ----
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet(`Expenses ${month}`);
+    // `slug` is digits, dashes and underscores only, so it is always a legal
+    // sheet name and stays inside Excel's 31-character limit.
+    const ws = wb.addWorksheet(`Expenses ${slug}`);
     ws.columns = [
       { header: "Invoice #", key: "invoice_number", width: 20 },
       { header: "Date", key: "date", width: 14 },
       { header: "Vendor", key: "vendor", width: 28 },
       { header: "Amount", key: "amount", width: 14 },
       { header: "Currency", key: "currency", width: 10 },
+      { header: "Bucket", key: "bucket", width: 16 },
       { header: "Department", key: "department", width: 16 },
       { header: "Project Tag", key: "project_tag", width: 18 },
       { header: "Description", key: "description", width: 40 },
@@ -134,6 +136,7 @@ export async function GET(req: NextRequest) {
         vendor: r.vendor ?? "",
         amount: Number(r.amount ?? 0),
         currency,
+        bucket: expenseBucketLabel(r.bucket),
         department: expenseDepartmentLabel(r.department),
         project_tag: r.project_tag ?? "",
         description: r.description ?? "",
@@ -149,7 +152,7 @@ export async function GET(req: NextRequest) {
 
     // ---- Assemble the ZIP ----
     const zip = new JSZip();
-    zip.file(`expenses_${month}.xlsx`, xlsxBuffer);
+    zip.file(`expenses_${slug}.xlsx`, xlsxBuffer);
 
     const supabase = await createClient();
     const usedNames = new Set<string>();
@@ -193,13 +196,13 @@ export async function GET(req: NextRequest) {
     if (data.length === 0) {
       zip.file(
         "README.txt",
-        `No AI expenses recorded for ${month}.\nThe Excel sheet is included but contains only headers.\n`,
+        `No AI expenses recorded for ${label}.\nThe Excel sheet is included but contains only headers.\n`,
       );
     }
     if (capped) {
       zip.file(
         "README.txt",
-        `This export was capped at ${MAX_ROWS} rows for ${month}. Narrow the range to export the rest.\n`,
+        `This export was capped at ${MAX_ROWS} rows for ${label}. Narrow the range to export the rest.\n`,
       );
     }
     if (skippedBills.length > 0) {
@@ -215,7 +218,7 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="expenses_${month}.zip"`,
+        "Content-Disposition": `attachment; filename="expenses_${slug}.zip"`,
         "Cache-Control": "no-store",
       },
     });
