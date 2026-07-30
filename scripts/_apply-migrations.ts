@@ -39,22 +39,65 @@ const APPLY = args.includes("--apply");
 const PROD = args.includes("--prod");
 const FILES = args.filter((a) => !a.startsWith("--"));
 
-// Tables the four migrations ALTER (as opposed to create). A missing one here
-// is a hard failure, not a skip.
-const REQUIRED_TABLES = [
-  "users",
-  "expense_submissions",
-  "whatsapp_onboarding_sessions",
-  "dealer_onboarding_applications",
-];
+type Marker = { label: string; kind: "table" | "column" | "index"; name: string; column?: string };
 
-// Cheap "is this migration already applied?" probes — one telltale object each.
-const MARKERS: Array<{ label: string; kind: "table" | "column"; name: string; column?: string }> = [
-  { label: "E-214", kind: "table", name: "whatsapp_operators" },
-  { label: "E-216", kind: "table", name: "drive_expense_folders" },
-  { label: "E-217", kind: "table", name: "fx_rates" },
-  { label: "E-218", kind: "column", name: "expense_submissions", column: "bucket" },
-];
+// Per-file: the PRE-EXISTING tables it ALTERs (a missing one is a hard failure,
+// not a skip) and one telltale object that says "already applied".
+//
+// `requires` lists only tables the file expects to find ALREADY THERE. A table
+// created by an earlier file in the same run is not a prerequisite — the whole
+// list runs in one transaction, so E-218_security_resolution_chat can ALTER the
+// security_findings that E-215 creates a few statements earlier.
+const META: Record<string, { requires: string[]; marker: Marker }> = {
+  // expense / whatsapp family (main)
+  "E-214_whatsapp_onboarding_operators.sql": {
+    requires: ["users", "whatsapp_onboarding_sessions", "dealer_onboarding_applications"],
+    marker: { label: "E-214", kind: "table", name: "whatsapp_operators" },
+  },
+  "E-216_drive_expense_ingestion.sql": {
+    requires: ["expense_submissions"],
+    marker: { label: "E-216", kind: "table", name: "drive_expense_folders" },
+  },
+  "E-217_expense_currency_conversion.sql": {
+    requires: ["expense_submissions"],
+    marker: { label: "E-217", kind: "table", name: "fx_rates" },
+  },
+  "E-218_expense_buckets.sql": {
+    requires: ["expense_submissions"],
+    marker: { label: "E-218", kind: "column", name: "expense_submissions", column: "bucket" },
+  },
+  // security family (Rushikesh-claude) — self-contained: E-215 creates every base
+  // table the other four touch, and none of them reference an app table, so
+  // `requires` is empty for all five. Note these numbers COLLIDE with the expense
+  // family above; the key is the full filename, never the number (see
+  // drizzle/MIGRATION_CHECKLIST.md).
+  "E-215_security_scanner.sql": {
+    requires: [],
+    marker: { label: "E-215_security_scanner", kind: "table", name: "security_scan_runs" },
+  },
+  "E-216_security_events.sql": {
+    requires: [],
+    marker: { label: "E-216_security_events", kind: "table", name: "security_events" },
+  },
+  "E-217_security_event_types.sql": {
+    requires: [],
+    // No structural change beyond one index — the index IS the marker.
+    marker: { label: "E-217_security_event_types", kind: "index", name: "security_events_type_occurred_idx" },
+  },
+  "E-218_security_resolution_chat.sql": {
+    requires: [],
+    marker: { label: "E-218_security_resolution_chat", kind: "table", name: "security_finding_messages" },
+  },
+  "E-219_security_finding_actions.sql": {
+    requires: [],
+    marker: { label: "E-219_security_finding_actions", kind: "table", name: "security_finding_actions" },
+  },
+};
+
+const UNKNOWN = FILES.filter((f) => !META[path.basename(f)]).map((f) => path.basename(f));
+const SELECTED = FILES.map((f) => META[path.basename(f)]).filter(Boolean);
+const REQUIRED_TABLES = [...new Set(SELECTED.flatMap((m) => m.requires))];
+const MARKERS: Marker[] = SELECTED.map((m) => m.marker);
 
 function resolveUrl(): string {
   if (!PROD) {
@@ -89,6 +132,11 @@ async function main() {
   console.log(`host  : ${host}`);
   console.log(`mode  : ${APPLY ? "APPLY (COMMIT)" : "DRY RUN (BEGIN … ROLLBACK)"}`);
   console.log(`files : ${FILES.length}\n${FILES.map((f) => `        ${path.basename(f)}`).join("\n")}\n`);
+  if (UNKNOWN.length) {
+    // Not fatal — the file still runs. But it has no entry in META, so its
+    // prerequisites are unchecked and it gets no "already applied?" line.
+    console.log(`note  : no preflight metadata for ${UNKNOWN.join(", ")} — running unchecked\n`);
+  }
 
   // Every IF NOT EXISTS that no-ops raises a NOTICE. On a re-run that is dozens
   // of lines burying the one line that matters, so count them instead — a high
@@ -122,6 +170,10 @@ async function main() {
       if (m.kind === "table") {
         const r = await sql`SELECT 1 FROM information_schema.tables
                              WHERE table_schema='public' AND table_name=${m.name}`;
+        exists = r.length > 0;
+      } else if (m.kind === "index") {
+        const r = await sql`SELECT 1 FROM pg_indexes
+                             WHERE schemaname='public' AND indexname=${m.name}`;
         exists = r.length > 0;
       } else {
         const r = await sql`SELECT 1 FROM information_schema.columns

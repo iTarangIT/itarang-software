@@ -20,12 +20,16 @@ export function Header() {
     const pathname = usePathname() ?? '';
     const supabase = createClient();
     const { user } = useAuth();
-    // Mobile hamburger → opens the shared nav drawer. Shown on the dealer portal
-    // and on the shared /expenses pages (a common route any role can reach, where
-    // the user would otherwise be stranded with no way to open navigation).
+    // Mobile hamburger → opens the shared nav drawer. Shown on the dealer portal,
+    // on the shared /expenses pages (a common route any role can reach) and on
+    // the /it console — anywhere the user would otherwise be stranded on a phone
+    // with the desktop sidebar hidden and no way to open navigation.
     const openSidebar = useUIStore((s) => s.openSidebar);
     const openChangePassword = useUIStore((s) => s.openChangePassword);
-    const showMobileNav = pathname.startsWith('/dealer-portal') || pathname.startsWith('/expenses');
+    const showMobileNav =
+        pathname.startsWith('/dealer-portal') ||
+        pathname.startsWith('/expenses') ||
+        pathname.startsWith('/it');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
