@@ -2,6 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
+import { detectThreat, detectBodyThreat, type ThreatSignal } from "@/lib/security/detect";
+import { trackRequest, type RateSignal } from "@/lib/security/rate-watch";
+import { postSecurityEvent } from "@/lib/security/report-event";
 
 // Prevents browsers from serving stale HTML across deploys. Applied to HTML
 // responses only — _next/static assets are excluded by the matcher and keep
@@ -95,6 +98,101 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
 
+  // ── Live-attack detection (E-216). OPT-IN (SECURITY_DETECTION_ENABLED=1) and
+  // wrapped so it can never break routing. Runs before the /api early-return so
+  // API attacks are seen too. Only flagged requests pay the cost; benign traffic
+  // returns from detectThreat() in a few regex tests.
+  if (process.env.SECURITY_DETECTION_ENABLED === "1") {
+    try {
+      const ip =
+        (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
+        request.headers.get("x-real-ip") ||
+        null;
+
+      // Volumetric/behavioural counters (floods, enumeration, auth hammering).
+      // Called on EVERY request — benign traffic has to be counted for the rates
+      // to mean anything — and it is O(1) per call. Returns a signal only when a
+      // threshold trips AND the per-IP emit cooldown has elapsed.
+      const rateSignal: RateSignal | null = trackRequest({ ip, path, method: request.method });
+
+      let signal: ThreatSignal | RateSignal | null = detectThreat({
+        method: request.method,
+        path,
+        search: request.nextUrl.search,
+        userAgent: request.headers.get("user-agent") || "",
+        hasSession: !!user,
+        role: (user?.app_metadata as { role?: string } | undefined)?.role,
+        host: request.nextUrl.host,
+      });
+      // Body inspection (opt-in via SECURITY_INSPECT_BODY). Clone the request so
+      // the ORIGINAL body still reaches the route untouched. Bounded to text-ish
+      // bodies under 100 KB so this never stalls the hot path.
+      if (
+        !signal &&
+        process.env.SECURITY_INSPECT_BODY === "1" &&
+        (request.method === "POST" || request.method === "PUT" || request.method === "PATCH")
+      ) {
+        const ct = request.headers.get("content-type") || "";
+        const len = Number(request.headers.get("content-length") || "0");
+        if (/application\/json|x-www-form-urlencoded|text\//i.test(ct) && len > 0 && len <= 100_000) {
+          try {
+            signal = detectBodyThreat(await request.clone().text());
+          } catch {
+            /* unreadable body — skip */
+          }
+        }
+      }
+      // A payload signal is more specific and more actionable than a rate one,
+      // so it wins when both fire on the same request; the rate signal's
+      // cooldown is already spent, but the IP is identical in both events, so
+      // nothing actionable is lost.
+      if (!signal) signal = rateSignal;
+
+      if (signal) {
+        // A global safety valve: SECURITY_DETECTION_MODE=monitor downgrades
+        // every block to a log without a code change.
+        const action = process.env.SECURITY_DETECTION_MODE === "monitor" ? "logged" : signal.action;
+        await postSecurityEvent(request.nextUrl.origin, {
+          event_type: signal.event_type,
+          severity: signal.severity,
+          action,
+          ip,
+          actor_user_id: user?.id ?? null,
+          actor_role:
+            (user?.app_metadata as { role?: string } | undefined)?.role ??
+            (user?.user_metadata as { role?: string } | undefined)?.role ??
+            null,
+          method: request.method,
+          path,
+          query: request.nextUrl.search || null,
+          user_agent: request.headers.get("user-agent"),
+          matched_rule: signal.matched_rule,
+          evidence: signal.evidence,
+        });
+        if (action === "blocked") {
+          // A volumetric block is a rate limit, not a policy violation — 429 +
+          // Retry-After so well-behaved clients back off instead of retrying.
+          const isRate = signal.event_type === "rate_flood";
+          return finalize(
+            new NextResponse(
+              JSON.stringify({
+                error: isRate ? "Too many requests." : "Request blocked by security policy.",
+              }),
+              {
+                status: isRate ? 429 : 403,
+                headers: isRate
+                  ? { "content-type": "application/json", "retry-after": "60" }
+                  : { "content-type": "application/json" },
+              },
+            ),
+          );
+        }
+      }
+    } catch {
+      // Detection must never break the app.
+    }
+  }
+
   // API and asset requests only need the session-cookie refresh that
   // getUser() above already performed (see the matcher comment on why
   // /api/files/* must keep it). Role resolution below is page-navigation
@@ -120,6 +218,9 @@ export async function middleware(request: NextRequest) {
     sales_order_manager: "/sales-order-manager",
     dealer: "/dealer-portal",
     admin: "/admin",
+    // IT Dashboard — the security surface (scanner findings + live attacks),
+    // deliberately its own role/login rather than a section of /admin or /ceo.
+    it: "/it",
     nbfc_partner: "/nbfc",
     // E-195 — the scrap vendor's own portal. Adding it here also protects the
     // path: isProtectedRoute is derived from these values.

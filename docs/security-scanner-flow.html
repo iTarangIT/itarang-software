@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Security Scanner — End-to-End Flow</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#f5f7fa; --surface:#ffffff; --surface-2:#eef2f7; --code-bg:#0f172a; --code-ink:#e2e8f0;
+    --ink:#0f172a; --ink-2:#334155; --muted:#64748b; --border:#e2e8f0; --border-2:#dbe3ec;
+    --accent:#0d9488; --accent-ink:#0f766e; --accent-soft:#d5f5ef;
+    --crit:#dc2626; --high:#ea580c; --med:#d97706; --low:#0284c7; --info:#64748b;
+    --llm:#7c3aed; --llm-soft:#ede9fe;
+    --shadow:0 1px 2px rgba(15,23,42,.06), 0 8px 24px rgba(15,23,42,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0a0f1a; --surface:#111827; --surface-2:#0d1526; --code-bg:#0b1220; --code-ink:#dbeafe;
+      --ink:#e5edf7; --ink-2:#c2cfe0; --muted:#8ea1bd; --border:#23324a; --border-2:#1c2942;
+      --accent:#2dd4bf; --accent-ink:#5eead4; --accent-soft:rgba(45,212,191,.14);
+      --crit:#f87171; --high:#fb923c; --med:#fbbf24; --low:#38bdf8; --info:#94a3b8;
+      --llm:#a78bfa; --llm-soft:rgba(167,139,250,.16);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f7fa; --surface:#ffffff; --surface-2:#eef2f7; --code-bg:#0f172a; --code-ink:#e2e8f0;
+    --ink:#0f172a; --ink-2:#334155; --muted:#64748b; --border:#e2e8f0; --border-2:#dbe3ec;
+    --accent:#0d9488; --accent-ink:#0f766e; --accent-soft:#d5f5ef;
+    --crit:#dc2626; --high:#ea580c; --med:#d97706; --low:#0284c7; --info:#64748b;
+    --llm:#7c3aed; --llm-soft:#ede9fe;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0a0f1a; --surface:#111827; --surface-2:#0d1526; --code-bg:#0b1220; --code-ink:#dbeafe;
+    --ink:#e5edf7; --ink-2:#c2cfe0; --muted:#8ea1bd; --border:#23324a; --border-2:#1c2942;
+    --accent:#2dd4bf; --accent-ink:#5eead4; --accent-soft:rgba(45,212,191,.14);
+    --crit:#f87171; --high:#fb923c; --med:#fbbf24; --low:#38bdf8; --info:#94a3b8;
+    --llm:#a78bfa; --llm-soft:rgba(167,139,250,.16);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px; margin:0 auto; padding:clamp(20px,4vw,52px) clamp(16px,4vw,32px) 80px}
+  code,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+
+  /* ---- header ---- */
+  header{margin-bottom:40px}
+  .eyebrow{display:inline-flex; align-items:center; gap:8px; font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink);
+    background:var(--accent-soft); padding:5px 11px; border-radius:999px}
+  h1{font-size:clamp(1.7rem,4vw,2.5rem); line-height:1.15; margin:18px 0 10px; letter-spacing:-.02em; text-wrap:balance}
+  .lede{font-size:1.06rem; color:var(--ink-2); max-width:64ch; margin:0}
+  .lede b{color:var(--ink)}
+
+  /* ---- section ---- */
+  section{margin-top:52px}
+  .sec-head{display:flex; align-items:baseline; gap:12px; margin-bottom:6px}
+  .sec-num{font:600 13px/1 ui-monospace,monospace; color:var(--accent-ink); background:var(--accent-soft);
+    padding:6px 9px; border-radius:7px; flex:none}
+  h2{font-size:1.28rem; margin:0; letter-spacing:-.01em}
+  .sec-sub{color:var(--muted); font-size:.95rem; margin:2px 0 22px 46px}
+  @media(max-width:560px){.sec-sub{margin-left:0}}
+
+  /* ---- flow rail (section 1) ---- */
+  .rail{display:flex; flex-direction:column; gap:0; border:1px solid var(--border); border-radius:16px;
+    background:var(--surface); box-shadow:var(--shadow); overflow:hidden}
+  .lane{display:grid; grid-template-columns:150px 1fr; gap:0; border-bottom:1px solid var(--border)}
+  .lane:last-child{border-bottom:0}
+  .lane-tag{display:flex; flex-direction:column; justify-content:center; gap:4px; padding:16px 16px;
+    background:var(--surface-2); border-right:1px solid var(--border)}
+  .lane-tag .k{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  .lane-tag .n{font-weight:700; font-size:.98rem}
+  .lane-body{padding:16px 18px; display:flex; flex-direction:column; gap:8px}
+  .lane-body p{margin:0; color:var(--ink-2); font-size:.94rem}
+  .chips{display:flex; flex-wrap:wrap; gap:6px}
+  .fchip{font:500 12px/1.4 ui-monospace,monospace; background:var(--surface-2); color:var(--ink-2);
+    border:1px solid var(--border); padding:4px 8px; border-radius:6px}
+  .fchip.fn{color:var(--accent-ink); border-color:var(--accent-soft); background:var(--accent-soft)}
+  .fchip.llm{color:var(--llm); background:var(--llm-soft); border-color:transparent}
+  .arrow-row{display:flex; justify-content:center; padding:0}
+  @media(max-width:560px){
+    .lane{grid-template-columns:1fr}
+    .lane-tag{border-right:0; border-bottom:1px solid var(--border); flex-direction:row; align-items:center; gap:10px}
+  }
+
+  /* ---- generic card ---- */
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:20px 22px;
+    box-shadow:var(--shadow)}
+  .grid{display:grid; gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:720px){.g2,.g3{grid-template-columns:1fr}}
+
+  .stage h3{margin:0 0 4px; font-size:1.02rem; display:flex; align-items:center; gap:9px}
+  .stage .badge{font:700 11px/1 ui-monospace,monospace; color:#fff; background:var(--accent);
+    width:22px; height:22px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; flex:none}
+  .stage p{margin:6px 0 12px; color:var(--ink-2); font-size:.92rem}
+  .io{display:flex; flex-direction:column; gap:6px; font-size:.85rem}
+  .io .row{display:flex; gap:8px; align-items:baseline}
+  .io .lbl{font:600 10px/1.6 ui-monospace,monospace; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--muted); width:44px; flex:none}
+  .io .val{color:var(--ink-2)}
+  .path{font-family:ui-monospace,monospace; font-size:.8rem; color:var(--accent-ink); word-break:break-all}
+
+  /* ---- trace ---- */
+  .trace{counter-reset:step; display:flex; flex-direction:column; gap:0}
+  .step{display:grid; grid-template-columns:34px 1fr; gap:14px; padding:16px 0; border-bottom:1px dashed var(--border-2)}
+  .step:last-child{border-bottom:0}
+  .step::before{counter-increment:step; content:counter(step); font:700 13px/34px ui-monospace,monospace;
+    text-align:center; width:34px; height:34px; border-radius:9px; background:var(--surface-2); color:var(--accent-ink);
+    border:1px solid var(--border)}
+  .step .st-body{min-width:0}
+  .step h4{margin:2px 0 5px; font-size:.98rem}
+  .step p{margin:0 0 8px; color:var(--ink-2); font-size:.9rem}
+  pre{background:var(--code-bg); color:var(--code-ink); border-radius:10px; padding:13px 15px; margin:8px 0 0;
+    overflow-x:auto; font-family:ui-monospace,monospace; font-size:.8rem; line-height:1.55}
+  pre .c{color:#7d8ba3} pre .k{color:#7dd3fc} pre .s{color:#86efac} pre .r{color:#fca5a5} pre .p{color:#c4b5fd}
+
+  /* ---- severity ---- */
+  .sev{display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:.82rem}
+  .dot{width:9px; height:9px; border-radius:50%}
+  .s-crit{color:var(--crit)} .s-crit .dot{background:var(--crit)}
+  .s-med{color:var(--med)} .s-med .dot{background:var(--med)}
+  .s-low{color:var(--low)} .s-low .dot{background:var(--low)}
+
+  /* ---- table ---- */
+  .tbl-wrap{overflow-x:auto; border:1px solid var(--border); border-radius:12px}
+  table{border-collapse:collapse; width:100%; font-size:.85rem; min-width:520px}
+  th,td{text-align:left; padding:10px 13px; border-bottom:1px solid var(--border)}
+  thead th{background:var(--surface-2); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted)}
+  tbody tr:last-child td{border-bottom:0}
+  td code{font-size:.8rem; color:var(--accent-ink)}
+  .tbl-name{font-weight:700; font-family:ui-monospace,monospace; font-size:.82rem}
+
+  /* ---- callout ---- */
+  .rule{display:flex; gap:14px; align-items:flex-start; background:var(--llm-soft);
+    border:1px solid transparent; border-left:3px solid var(--llm); border-radius:10px; padding:16px 18px; margin-top:18px}
+  .rule .ic{font-size:1.3rem; line-height:1; flex:none}
+  .rule p{margin:0; font-size:.92rem; color:var(--ink-2)}
+  .rule b{color:var(--ink)}
+
+  .legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:16px; font-size:.82rem; color:var(--muted)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .swatch{width:12px; height:12px; border-radius:4px}
+
+  footer{margin-top:56px; padding-top:24px; border-top:1px solid var(--border); color:var(--muted); font-size:.85rem}
+  .down{display:block; text-align:center; color:var(--muted); font-size:20px; padding:2px 0}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow">🛡️ iTarang CRM · Security Scanner</span>
+    <h1>How the scanner finds a bug and turns it into a card</h1>
+    <p class="lede">A LangGraph agent drives a real browser through your CRM, <b>deterministic probes</b> attack each endpoint, findings are written to Postgres, and the dashboard reads them back. This traces the whole path — every file, function, and table — and shows exactly <b>where each card's data comes from</b>.</p>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--accent)"></span>your code / functions</span>
+      <span><span class="swatch" style="background:var(--llm)"></span>LangChain / LLM step</span>
+      <span><span class="dot" style="background:var(--crit)"></span>severity (set by probes, never the LLM)</span>
+    </div>
+  </header>
+
+  <!-- ================= 1. THE RAIL ================= -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>The 30-second version</h2></div>
+    <p class="sec-sub">Six lanes, top to bottom. Data starts as an HTTP request to your CRM and ends as a card on screen.</p>
+
+    <div class="rail">
+      <div class="lane">
+        <div class="lane-tag"><span class="k">Trigger</span><span class="n">Start a scan</span></div>
+        <div class="lane-body">
+          <p>Two ways in — both call the exact same engine function.</p>
+          <div class="chips">
+            <span class="fchip">npm run security:scan</span>
+            <span class="fchip">Run Scan button →</span>
+            <span class="fchip">POST /api/admin/security/scan/run</span>
+            <span class="fchip fn">runSecurityScan()</span>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-row"><span class="down">↓</span></div>
+      <div class="lane">
+        <div class="lane-tag"><span class="k">Engine</span><span class="n">Set up the run</span></div>
+        <div class="lane-body">
+          <p>Guard the target (prod is blocked), take the DB lock, log in each role with Playwright.</p>
+          <div class="chips">
+            <span class="fchip fn">resolveTarget()</span>
+            <span class="fchip fn">beginScan()</span>
+            <span class="fchip fn">launchBrowser()</span>
+            <span class="fchip fn">loginRoles()</span>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-row"><span class="down">↓</span></div>
+      <div class="lane">
+        <div class="lane-tag"><span class="k">Agent</span><span class="n">LangGraph pipeline</span></div>
+        <div class="lane-body">
+          <p>A 4-node graph. The LLM plans &amp; narrates; deterministic probes do the actual attacking and decide severity.</p>
+          <div class="chips">
+            <span class="fchip llm">plan_targets</span>
+            <span class="fchip fn">run_probes</span>
+            <span class="fchip llm">llm_triage</span>
+            <span class="fchip fn">write_findings</span>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-row"><span class="down">↓</span></div>
+      <div class="lane">
+        <div class="lane-tag"><span class="k">Probes</span><span class="n">The actual attacks</span></div>
+        <div class="lane-body">
+          <p>Each probe hits your real endpoints and returns findings <em>with severity attached</em>.</p>
+          <div class="chips">
+            <span class="fchip">exposure</span><span class="fchip">authz</span>
+            <span class="fchip">idor</span><span class="fchip">injection</span>
+            <span class="fchip">upload_headers</span>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-row"><span class="down">↓</span></div>
+      <div class="lane">
+        <div class="lane-tag"><span class="k">Store</span><span class="n">Postgres (E-215)</span></div>
+        <div class="lane-body">
+          <p>Findings are de-duplicated by fingerprint and upserted. Run stats are recorded.</p>
+          <div class="chips">
+            <span class="fchip">security_scan_runs</span>
+            <span class="fchip">security_checks</span>
+            <span class="fchip">security_findings</span>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-row"><span class="down">↓</span></div>
+      <div class="lane">
+        <div class="lane-tag"><span class="k">Read</span><span class="n">The dashboard</span></div>
+        <div class="lane-body">
+          <p>The page queries the same table and paints KPI tiles, finding cards, and the detail drawer.</p>
+          <div class="chips">
+            <span class="fchip">/admin/security</span>
+            <span class="fchip fn">load()</span>
+            <span class="fchip">SeverityStatCards</span>
+            <span class="fchip">FindingCard</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. STAGES ================= -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Stage by stage — the real files</h2></div>
+    <p class="sec-sub">Everything lives under <code>src/lib/security/</code> (the agent) and <code>src/app/(dashboard)/admin/security/</code> (the UI).</p>
+
+    <div class="grid g2">
+      <div class="card stage">
+        <h3><span class="badge">1</span> Trigger</h3>
+        <p>A CLI run or the “Run Scan” button. The button POSTs, takes the lock, then kicks the scan in the background with Next’s <code>after()</code> so the request returns instantly.</p>
+        <div class="io">
+          <div class="row"><span class="lbl">file</span><span class="val path">scripts/security-scan.ts · api/admin/security/scan/run/route.ts</span></div>
+          <div class="row"><span class="lbl">calls</span><span class="val"><code>runSecurityScan({ trigger })</code></span></div>
+        </div>
+      </div>
+
+      <div class="card stage">
+        <h3><span class="badge">2</span> Engine setup</h3>
+        <p>Resolves the target (refuses prod unless <code>SECURITY_ALLOW_PROD=1</code>), inserts a <code>running</code> row that <em>is</em> the single-flight lock, then logs each role in through the real <code>/login</code> page and saves its cookies.</p>
+        <div class="io">
+          <div class="row"><span class="lbl">file</span><span class="val path">engine.ts · target.ts · scan-run.ts · session.ts</span></div>
+          <div class="row"><span class="lbl">out</span><span class="val"><code>runId</code> + per-role browser sessions</span></div>
+        </div>
+      </div>
+
+      <div class="card stage">
+        <h3><span class="badge">3</span> LangGraph agent</h3>
+        <p>A compiled <code>StateGraph</code>. <span class="sev" style="color:var(--llm)"><b>plan_targets</b></span> asks GPT for extra API paths to test; <b>run_probes</b> runs every probe; <span class="sev" style="color:var(--llm)"><b>llm_triage</b></span> dedups &amp; writes plain-English remediation; <b>write_findings</b> persists.</p>
+        <div class="io">
+          <div class="row"><span class="lbl">file</span><span class="val path">agent/graph.ts · agent/tools.ts</span></div>
+          <div class="row"><span class="lbl">model</span><span class="val"><code>ChatOpenAI</code> (gpt-4o-mini) — optional</span></div>
+        </div>
+      </div>
+
+      <div class="card stage">
+        <h3><span class="badge">4</span> Probes attack</h3>
+        <p>Each probe fires real HTTP at your CRM — as nobody, and as a logged-in dealer — and returns <code>RawFinding[]</code>. <b>The probe sets the severity</b> from a fixed rule (e.g. PII in an unauth response → <span class="sev s-crit"><span class="dot"></span>critical</span>).</p>
+        <div class="io">
+          <div class="row"><span class="lbl">file</span><span class="val path">probes/{exposure,authz,idor,injection,upload_headers}.ts</span></div>
+          <div class="row"><span class="lbl">out</span><span class="val"><code>RawFinding{ severity, title, target_url, evidence… }</code></span></div>
+        </div>
+      </div>
+
+      <div class="card stage">
+        <h3><span class="badge">5</span> Persist</h3>
+        <p>Computes a <code>fingerprint</code> = sha256 of (check · method · path · title), then upserts into <code>security_findings</code>. The same bug found twice updates one row instead of piling up — that’s the de-dup you saw (8→7).</p>
+        <div class="io">
+          <div class="row"><span class="lbl">file</span><span class="val path">engine.ts → persistFindings()</span></div>
+          <div class="row"><span class="lbl">out</span><span class="val">rows in <code>security_findings</code> + counts on the run</span></div>
+        </div>
+      </div>
+
+      <div class="card stage">
+        <h3><span class="badge">6</span> Dashboard reads</h3>
+        <p>A Server Component queries the table (status <code>open</code>/<code>acknowledged</code>), groups by severity for the tiles, and hands the list to client cards. No API round-trip — direct Drizzle read on page load.</p>
+        <div class="io">
+          <div class="row"><span class="lbl">file</span><span class="val path">admin/security/page.tsx → load()</span></div>
+          <div class="row"><span class="lbl">out</span><span class="val">KPI tiles + finding cards + drawer</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3. TRACE ONE CARD ================= -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>Trace one real card, end to end</h2></div>
+    <p class="sec-sub">Following your actual <span class="sev s-crit"><span class="dot"></span>CRITICAL</span> finding at <code>/api/dealer-onboarding/list</code> from attack to pixel.</p>
+
+    <div class="card">
+      <div class="trace">
+        <div class="step"><div class="st-body">
+          <h4>The probe makes an unauthenticated request</h4>
+          <p><code>unauthDataProbe</code> (in <code>probes/exposure.ts</code>) walks a list of sensitive routes and GETs each one with <b>no session cookie</b>.</p>
+<pre><span class="c">// probes/exposure.ts</span>
+<span class="k">const</span> f = <span class="k">await</span> get(ctx.anon, baseUrl, <span class="s">"/api/dealer-onboarding/list"</span>);  <span class="c">// anon = no cookies</span></pre>
+        </div></div>
+
+        <div class="step"><div class="st-body">
+          <h4>The response comes back with data — and PII</h4>
+          <p>The endpoint returns <b>200 with rows</b>. <code>looksLikeData()</code> confirms it’s real data; <code>detectPii()</code> runs regexes for PAN / GST / IFSC / bank / phone.</p>
+<pre><span class="k">if</span> (!looksLikeData(f)) <span class="k">continue</span>;
+<span class="k">const</span> pii = detectPii(f.body);            <span class="c">// ["PAN","GSTIN","IFSC"…]</span>
+<span class="k">const</span> severity = pii.length ? <span class="r">"critical"</span> : <span class="s">"medium"</span>;   <span class="c">// ← the rule</span></pre>
+        </div></div>
+
+        <div class="step"><div class="st-body">
+          <h4>The probe emits a RawFinding — severity already decided</h4>
+          <p>No LLM involved in this decision. Severity is <span class="s-crit sev"><span class="dot"></span>critical</span> because PII was present in an unauthenticated response.</p>
+<pre>{ check_slug:<span class="s">"unauth-data-exposure"</span>, category:<span class="s">"exposure"</span>,
+  severity:<span class="r">"critical"</span>, confidence:<span class="s">"confirmed"</span>,
+  title:<span class="s">"Unauthenticated PII exposure at /api/dealer-onboarding/list"</span>,
+  target_url:<span class="s">"/api/dealer-onboarding/list"</span>, evidence:{ pii, status:200 } }</pre>
+        </div></div>
+
+        <div class="step"><div class="st-body">
+          <h4>LangGraph collects it, the LLM polishes wording only</h4>
+          <p><code>run_probes</code> gathers all findings; <code>llm_triage</code> may improve the remediation sentence, set <code>confidence</code>, and drop duplicates — but <b>it is forbidden from changing severity</b>.</p>
+        </div></div>
+
+        <div class="step"><div class="st-body">
+          <h4>write_findings upserts it into Postgres</h4>
+          <p><code>persistFindings()</code> fingerprints it and writes one row. Re-scan and it updates the same row (partial-unique on fingerprint while <code>status ≠ resolved</code>).</p>
+<pre><span class="c">// engine.ts</span>
+db.insert(securityFindings).values({ …finding, fingerprint })
+  .onConflictDoUpdate({ target: fingerprint, targetWhere: <span class="s">"status <> 'resolved'"</span> });</pre>
+        </div></div>
+
+        <div class="step"><div class="st-body">
+          <h4>The dashboard reads it back and renders the card</h4>
+          <p><code>load()</code> selects it (status is <code>open</code>), <code>FindingCard</code> paints the title + red severity dot, and clicking opens <code>FindingDrawer</code> with the evidence, reproduction and remediation.</p>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. STORAGE ================= -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>Where the data lives</h2></div>
+    <p class="sec-sub">Three tables, created by migration <code>drizzle/E-215_security_scanner.sql</code> — completely separate from the NBFC risk tables.</p>
+
+    <div class="grid g3">
+      <div class="card">
+        <div class="tbl-name">security_scan_runs</div>
+        <p style="color:var(--muted);font-size:.85rem;margin:6px 0 10px">One row per scan. Its <code>status='running'</code> row is the lock so two scans can’t collide.</p>
+        <div class="chips">
+          <span class="fchip">target_env</span><span class="fchip">status</span>
+          <span class="fchip">findings_critical…</span><span class="fchip">prompt_tokens</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tbl-name">security_checks</div>
+        <p style="color:var(--muted);font-size:.85rem;margin:6px 0 10px">Catalogue of every probe (seeded automatically from probe metadata).</p>
+        <div class="chips">
+          <span class="fchip">slug</span><span class="fchip">category</span>
+          <span class="fchip">owasp_ref</span><span class="fchip">mutating</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tbl-name">security_findings</div>
+        <p style="color:var(--muted);font-size:.85rem;margin:6px 0 10px"><b>The source of every card.</b> One row per de-duplicated vulnerability.</p>
+        <div class="chips">
+          <span class="fchip">severity</span><span class="fchip">title</span>
+          <span class="fchip">target_url</span><span class="fchip">evidence_json</span>
+          <span class="fchip">status</span><span class="fchip">fingerprint</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. LANGCHAIN ================= -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>Where the LangChain logic lives</h2></div>
+    <p class="sec-sub">Two files: <code>agent/graph.ts</code> (the LangGraph <code>StateGraph</code> + <code>ChatOpenAI</code>) and <code>agent/tools.ts</code> (the <code>tool()</code> definitions).</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Node</th><th>What it does</th><th>LLM?</th><th>Can it set severity?</th></tr></thead>
+        <tbody>
+          <tr><td><code>plan_targets</code></td><td>Looks at the dealer-onboarding page, asks GPT for extra <code>/api</code> paths worth probing</td><td><span class="sev" style="color:var(--llm)">yes</span></td><td>—</td></tr>
+          <tr><td><code>run_probes</code></td><td>Runs every deterministic probe against the CRM</td><td>no</td><td><b>yes — the rules do</b></td></tr>
+          <tr><td><code>llm_triage</code></td><td>Dedups near-duplicates, writes remediation text, sets confidence</td><td><span class="sev" style="color:var(--llm)">yes</span></td><td><b style="color:var(--crit)">no — forbidden</b></td></tr>
+          <tr><td><code>write_findings</code></td><td>Upserts the enriched findings into Postgres</td><td>no</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rule">
+      <span class="ic">🔒</span>
+      <p><b>The golden rule.</b> The language model plans and narrates, but <b>every severity and every finding comes from deterministic probe code</b>. If GPT is offline (no <code>OPENAI_API_KEY</code>), the scan still runs and still finds everything — you just lose the auto-written remediation prose. This is why the numbers you see are trustworthy, not hallucinated.</p>
+    </div>
+  </section>
+
+  <!-- ================= 6. CARDS ================= -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>How each card gets its numbers</h2></div>
+    <p class="sec-sub">Three surfaces on <code>/admin/security</code>, all fed by one query in <code>page.tsx → load()</code>.</p>
+
+    <div class="grid g3">
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:1rem">The 5 KPI tiles</h3>
+        <p style="color:var(--ink-2);font-size:.9rem;margin:0 0 10px">A <b>count</b> of active findings grouped by severity. <code>SeverityStatCards</code> receives a plain <code>counts</code> object.</p>
+        <p class="path">counts[severity]++ over the query result</p>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:1rem">Each finding card</h3>
+        <p style="color:var(--ink-2);font-size:.9rem;margin:0 0 10px"><b>One card = one row</b> in <code>security_findings</code>. The red/amber dot is <code>severity</code>; the text is <code>title</code> + <code>summary</code>.</p>
+        <p class="path">FindingCard finding={row}</p>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:1rem">The detail drawer</h3>
+        <p style="color:var(--ink-2);font-size:.9rem;margin:0 0 10px">Opens the full row — <code>evidence_json</code>, reproduction, remediation — plus triage buttons that PATCH the row’s <code>status</code>.</p>
+        <p class="path">PATCH /api/admin/security/findings/[id]</p>
+      </div>
+    </div>
+
+    <div class="rule" style="background:var(--accent-soft);border-left-color:var(--accent)">
+      <span class="ic">📄</span>
+      <p><b>The exports too.</b> Excel / PDF / Word all call <code>loadReportData()</code> — the same filtered query — so a downloaded report always matches exactly what’s on screen.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>The whole system in one line:</b> <code>runSecurityScan</code> → <code>StateGraph</code> (plan → probes → triage → write) → <code>security_findings</code> → <code>/admin/security</code>. Probes decide severity; the LLM only assists. Every card is a row; every row was proven by a real request to your own CRM.</p>
+  </footer>
+</div>
+</body>
+</html>
