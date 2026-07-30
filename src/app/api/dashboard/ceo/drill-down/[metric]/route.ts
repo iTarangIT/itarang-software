@@ -9,12 +9,23 @@
  *   ?period=mtd|fy  or  ?month=YYYY-MM   (inventory & outstanding ignore period)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { expenseSubmissions, inventory, manualDealerSales, users, zohoInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import {
+  approvedExpenseInWindow,
+  expenseEffectiveDate,
+  resolveWindowParams,
+} from "@/lib/dashboard/salesWindow";
 import { fetchInvoiceLineItems } from "@/lib/zoho/invoices";
+import {
+  EXPENSE_DEPARTMENT_VALUES,
+  UNASSIGNED_DEPARTMENT_KEY,
+  UNCLASSIFIED_BUCKET_KEY,
+  isExpenseBucket,
+} from "@/lib/expenses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,49 +75,33 @@ export async function GET(
     }
 
     const sp = req.nextUrl.searchParams;
-    const monthParam = sp.get("month");
-    const yearParam = sp.get("year");
-    const period = sp.get("period") || "mtd";
 
-    // Resolve the [start, end) window as local date strings.
-    const now = new Date();
-    const pad2 = (n: number) => String(n).padStart(2, "0");
-    const curYear = now.getFullYear();
-    const curMonth = now.getMonth();
-
-    let startStr: string;
-    let endStr: string | null = null;
-    const monthMatch = monthParam?.match(/^(\d{4})-(\d{2})$/);
-    const yearMatch = yearParam?.match(/^(\d{4})$/);
-    if (monthMatch) {
-      const y = Number(monthMatch[1]);
-      const mo = Number(monthMatch[2]);
-      startStr = `${y}-${pad2(mo)}-01`;
-      const ey = mo === 12 ? y + 1 : y;
-      const em = mo === 12 ? 1 : mo + 1;
-      endStr = `${ey}-${pad2(em)}-01`;
-    } else if (yearMatch) {
-      // Whole calendar year — total of all its months (Jan–Dec).
-      const y = Number(yearMatch[1]);
-      startStr = `${y}-01-01`;
-      endStr = `${y + 1}-01-01`;
-    } else if (period === "fy") {
-      const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
-      startStr = `${fyStartYear}-04-01`;
-      endStr = null;
-    } else {
-      startStr = `${curYear}-${pad2(curMonth + 1)}-01`;
-      const ey = curMonth === 11 ? curYear + 1 : curYear;
-      const em = curMonth === 11 ? 1 : curMonth + 2;
-      endStr = `${ey}-${pad2(em)}-01`;
+    // Resolve the [start, end) window as local date strings. Shared with the
+    // Expenses card and the bucket panel — a private copy here is how a
+    // drill-down starts disagreeing with the number that opened it.
+    //
+    // E-219 — via resolveWindowParams rather than resolveWindow, so the CEO
+    // filter bar's ?from=/&to= range reaches this list too. Opening a drill-down
+    // from a card filtered to a custom range used to silently answer with the
+    // current month: the same window has to mean the same days everywhere.
+    const resolved = resolveWindowParams(sp);
+    if (!resolved.ok) {
+      return NextResponse.json(
+        { success: false, error: { message: resolved.error } },
+        { status: 400 },
+      );
     }
+    const { startStr, endStr } = resolved.window;
 
     let rows: Record<string, unknown>[] = [];
     let total = 0;
 
     if (metric === "purchases") {
       // inventory.oem_invoice_date is a timestamptz; compare against date strings.
-      const conds = [gte(inventory.oem_invoice_date, sql`${startStr}::date`)];
+      // Both bounds are optional — an unbounded window (period=inception) drops
+      // the predicate rather than scanning from an invented earliest date.
+      const conds = [];
+      if (startStr) conds.push(gte(inventory.oem_invoice_date, sql`${startStr}::date`));
       if (endStr) conds.push(lt(inventory.oem_invoice_date, sql`${endStr}::date`));
       rows = await db
         .select({
@@ -125,9 +120,9 @@ export async function GET(
       total = rows.reduce((s, r) => s + Number(r.final_amount || 0), 0);
     } else if (metric === "sales") {
       const conds = [
-        gte(zohoInvoices.invoice_date, startStr),
         sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
       ];
+      if (startStr) conds.push(gte(zohoInvoices.invoice_date, startStr));
       if (endStr) conds.push(lt(zohoInvoices.invoice_date, endStr));
       const invoiceRows = await db
         .select({
@@ -189,7 +184,8 @@ export async function GET(
       // show alongside the Zoho rows and count toward the total. Guarded: if the
       // table hasn't been migrated yet, skip rather than failing the drill-down.
       try {
-        const manualConds = [gte(manualDealerSales.sale_date, startStr)];
+        const manualConds = [];
+        if (startStr) manualConds.push(gte(manualDealerSales.sale_date, startStr));
         if (endStr) manualConds.push(lt(manualDealerSales.sale_date, endStr));
         const manualRows = await db
           .select()
@@ -215,16 +211,45 @@ export async function GET(
         console.warn("[drill-down/sales] manual_dealer_sales unavailable:", errorMessage(e));
       }
     } else if (metric === "expenses") {
-      const conds = [
-        eq(expenseSubmissions.status, "approved"),
-        gte(expenseSubmissions.approved_at, sql`${startStr}::date`),
-      ];
-      if (endStr) conds.push(lt(expenseSubmissions.approved_at, sql`${endStr}::date`));
+      // E-216 — must match the Expenses card exactly: windowed on
+      // COALESCE(expense_date, approved_at::date), not approved_at. If these
+      // two drift, clicking the card opens a list whose rows do not add up to
+      // the number that was clicked.
+      //
+      // E-218 — ?bucket= narrows to one bucket. "unclassified" is the synthetic
+      // key for rows the backfill has not reached, so it maps to IS NULL rather
+      // than to a stored value.
+      const bucketParam = sp.get("bucket");
+      const bucketFilter =
+        bucketParam === UNCLASSIFIED_BUCKET_KEY
+          ? isNull(expenseSubmissions.bucket)
+          : isExpenseBucket(bucketParam)
+            ? eq(expenseSubmissions.bucket, bucketParam)
+            : undefined;
+
+      // E-219 — ?department= narrows the same list to one department, the same
+      // shape and for the same reason: applied here rather than to the fetched
+      // rows, because those stop at ROW_CAP and a client-side filter of a
+      // truncated page shows a subset of a department while the count beside
+      // the dropdown states the true one.
+      //
+      // An unrecognised value is ignored rather than 400'd — it can only come
+      // from a stale dropdown option, and answering the unfiltered window is
+      // more useful there than refusing the whole drill-down.
+      const deptParam = sp.get("department");
+      const deptFilter =
+        deptParam === UNASSIGNED_DEPARTMENT_KEY
+          ? isNull(expenseSubmissions.department)
+          : deptParam && EXPENSE_DEPARTMENT_VALUES.includes(deptParam as never)
+            ? eq(expenseSubmissions.department, deptParam)
+            : undefined;
+
       rows = await db
         .select({
           invoice_number: expenseSubmissions.invoice_number,
           vendor: expenseSubmissions.vendor,
           department: expenseSubmissions.department,
+          bucket: expenseSubmissions.bucket,
           project_tag: expenseSubmissions.project_tag,
           amount: expenseSubmissions.amount,
           expense_date: expenseSubmissions.expense_date,
@@ -234,8 +259,10 @@ export async function GET(
         })
         .from(expenseSubmissions)
         .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-        .where(and(...conds))
-        .orderBy(desc(expenseSubmissions.approved_at))
+        .where(
+          and(approvedExpenseInWindow(startStr, endStr), bucketFilter, deptFilter),
+        )
+        .orderBy(desc(expenseEffectiveDate()))
         .limit(ROW_CAP);
       total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
     } else if (metric === "inventory") {

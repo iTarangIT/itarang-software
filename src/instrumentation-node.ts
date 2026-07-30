@@ -137,25 +137,48 @@ export async function startDialerTickers() {
 // (/ceo/invoices) shows zeros. This in-process ticker keeps the table fresh in
 // the long-lived PM2 / `npm run start` process — full re-pull + upsert keyed on
 // zoho_invoice_id. On Vercel the cron entry owns this, so we short-circuit.
-export async function startZohoSyncTicker() {
-  // Skip on Vercel — let the cron handle it.
-  if (process.env.VERCEL === "1") return;
+// Why the Zoho ticker would refuse to start, or null if it will run.
+//
+// Deliberately kept in agreement with assertConfigured() in lib/zoho/client.ts:
+// the two USED to disagree about the org var. This guard demanded
+// ZOHO_ORGANIZATION_ID while the client accepts either that or the
+// comma-separated ZOHO_ORGANIZATION_IDS — so an env configured the multi-org
+// way (precisely what you write when fixing "we only see one org", and what the
+// prod runbook now tells you to add) disabled this ticker while every other
+// Zoho path still reported itself healthy.
+//
+// That failure mode is the expensive one: a sync that never RUNS looks exactly
+// like a sync that runs and finds nothing — a stale dashboard and no error
+// anywhere. Hence the reason string, which the caller logs verbatim.
+export function zohoTickerDisabledReason(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  // Skip on Vercel — the cron entry owns it there.
+  if (env.VERCEL === "1") return "running on Vercel — the cron entry owns this";
 
   // Explicit opt-out (e.g. inside the BullMQ worker, which also boots
   // instrumentation, to avoid two processes full-pulling in parallel).
-  if (process.env.ENABLE_ZOHO_SYNC === "0") return;
+  if (env.ENABLE_ZOHO_SYNC === "0") return "ENABLE_ZOHO_SYNC=0";
 
-  // No credentials → nothing to sync. Stay quiet rather than logging an
-  // auth error every hour on environments that don't use Zoho.
-  if (
-    !process.env.ZOHO_CLIENT_ID ||
-    !process.env.ZOHO_CLIENT_SECRET ||
-    !process.env.ZOHO_REFRESH_TOKEN ||
-    !process.env.ZOHO_ORGANIZATION_ID
-  ) {
-    console.log(
-      "[instrumentation:zoho-sync] Zoho credentials not configured — ticker disabled",
-    );
+  const missing = [
+    "ZOHO_CLIENT_ID",
+    "ZOHO_CLIENT_SECRET",
+    "ZOHO_REFRESH_TOKEN",
+  ].filter((k) => !env[k]);
+  if (!env.ZOHO_ORGANIZATION_ID && !env.ZOHO_ORGANIZATION_IDS) {
+    missing.push("ZOHO_ORGANIZATION_ID (or ZOHO_ORGANIZATION_IDS)");
+  }
+
+  return missing.length ? `missing ${missing.join(", ")}` : null;
+}
+
+export async function startZohoSyncTicker() {
+  const disabled = zohoTickerDisabledReason();
+  if (disabled) {
+    // Always say WHY. The old message claimed "credentials not configured" even
+    // when the real cause was an opt-out flag or a single missing var, which
+    // sent debugging at the token instead of at the env.
+    console.log(`[instrumentation:zoho-sync] ticker disabled — ${disabled}`);
     return;
   }
 
@@ -423,4 +446,92 @@ export async function startBuybackGatewayTicker() {
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] buyback-gateway poller (60s) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// E-216 — Google Drive expense scan.
+//
+// Mirrors /api/cron/drive-expenses. Same reasoning as the Zoho ticker above:
+// Vercel crons do not fire on the Hostinger PM2 boxes, so without this the
+// scanner would only ever run when somebody remembered to press "Scan now" —
+// which defeats the point of scanning a folder people drop invoices into.
+//
+// The work is deliberately capped per tick (DRIVE_EXPENSE_MAX_FILES_PER_RUN,
+// default 25). Each new file costs a download plus one GPT-4o call, so a first
+// scan of a folder holding two years of invoices must not try to finish in one
+// pass. It doesn't need to: "already processed" is a property of the file (its
+// md5 recorded in drive_expense_files), not of the run, so each tick simply
+// picks up where the last one stopped.
+// ---------------------------------------------------------------------------
+export async function startDriveExpenseTicker() {
+  // Skip on Vercel — the cron entry owns it there.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process double-scanning.
+  if (process.env.ENABLE_DRIVE_EXPENSE_SCAN === "0") return;
+
+  // No service-account credentials → nothing to scan. Say so once at boot
+  // rather than failing silently every six hours.
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+    console.log(
+      "[instrumentation:drive-expenses] Google service account not configured — ticker disabled",
+    );
+    return;
+  }
+
+  const SCAN_INTERVAL_MS =
+    Number(process.env.DRIVE_EXPENSE_SCAN_INTERVAL_MS || "") || 6 * 60 * 60_000;
+  const MAX_FILES = Number(process.env.DRIVE_EXPENSE_MAX_FILES_PER_RUN || "") || 25;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the
+      // googleapis graph is never pulled into the Edge compile.
+      const { runDriveScan } = await import("@/lib/expenses/driveScan");
+      const r = await runDriveScan({ triggeredBy: null, maxFiles: MAX_FILES });
+
+      // Log only when something actually happened — a quiet folder should not
+      // write a line every six hours forever.
+      if (r.status === "skipped") {
+        if (r.skipped_reason) {
+          console.log(`[instrumentation:drive-expenses] skipped — ${r.skipped_reason}`);
+        }
+      } else if (r.files_new > 0 || r.failed > 0 || r.status === "failed") {
+        console.log(
+          `[instrumentation:drive-expenses] status=${r.status} seen=${r.files_seen} ` +
+            `new=${r.files_new} imported=${r.imported} duplicate=${r.skipped_duplicate} ` +
+            `attention=${r.needs_attention} unsupported=${r.unsupported} failed=${r.failed} ` +
+            `durationMs=${r.duration_ms}`,
+        );
+      }
+      if (r.error) {
+        console.error(`[instrumentation:drive-expenses] run failed: ${r.error}`);
+      }
+    } catch (err) {
+      // runDriveScan records its own failure to drive_scan_runs; surface it.
+      console.error(
+        "[instrumentation:drive-expenses] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered behind dialer (5s), Zoho (20s), dispatch (35s), gateway (45s)
+  // and dedup (60s), so a cold boot doesn't fire six jobs at once.
+  const kickoff = setTimeout(tick, 90_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, SCAN_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] drive-expense-scan (${Math.round(
+      SCAN_INTERVAL_MS / 60_000,
+    )}m) started in-process`,
+  );
 }

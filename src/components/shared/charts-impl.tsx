@@ -10,15 +10,17 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
+    Legend,
     ResponsiveContainer,
     AreaChart,
-    Area
+    Area,
+    ComposedChart
 } from 'recharts';
 
 export interface MetricsChartProps {
     title: string;
     data: Record<string, unknown>[];
-    type?: 'line' | 'bar' | 'area';
+    type?: 'line' | 'bar' | 'area' | 'composed';
     dataKeys: string[];
     categoryKey: string;
     height?: number;
@@ -27,6 +29,18 @@ export interface MetricsChartProps {
     valueFormatter?: (n: number) => string;
     /** Optional controls rendered on the right of the card header (filters, toggles). */
     headerActions?: React.ReactNode;
+    /**
+     * `type="composed"` only. Keys drawn as a line rather than a bar — the rest
+     * of `dataKeys` stays a bar. Used for a derived series (E-219 plots revenue
+     * and expense as bars with realization as the line tracing the gap).
+     *
+     * Every series shares ONE y-axis, so only put a key here when it is in the
+     * same unit and scale as the bars. A second axis would let two unrelated
+     * scales be drawn as if comparable.
+     */
+    lineKeys?: string[];
+    /** Human labels for the legend and tooltip, keyed by data key. */
+    seriesLabels?: Record<string, string>;
 }
 
 function ChartHeader({ title, headerActions }: { title: string; headerActions?: React.ReactNode }) {
@@ -47,8 +61,15 @@ export function MetricsChart({
     height = 300,
     colors = ["#10b981", "#3b82f6", "#f59e0b", "#6366f1"],
     valueFormatter,
-    headerActions
+    headerActions,
+    lineKeys,
+    seriesLabels
 }: MetricsChartProps) {
+    // Colour is keyed to the series' position in `dataKeys`, which the caller
+    // fixes — so hiding or reordering a series never repaints the others.
+    const colorFor = (key: string) =>
+        colors[Math.max(0, dataKeys.indexOf(key)) % colors.length];
+    const labelFor = (key: string) => seriesLabels?.[key] ?? key;
     const tooltipFormatter = valueFormatter
         ? (value: number | string) => valueFormatter(Number(value))
         : undefined;
@@ -133,6 +154,70 @@ export function MetricsChart({
                                 />
                             ))}
                         </AreaChart>
+                    ) : type === 'composed' ? (
+                        // Bars and a line on ONE shared axis. Recharts would
+                        // happily take a second <YAxis yAxisId>, but two scales
+                        // drawn as one picture is the classic way to make
+                        // unrelated series look correlated — so there is only
+                        // ever the one axis here.
+                        <ComposedChart data={data} barGap={2}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                            <XAxis
+                                dataKey={categoryKey}
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                dy={10}
+                            />
+                            <YAxis
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                tickFormatter={yTickFormatter}
+                            />
+                            <Tooltip
+                                cursor={{ fill: '#f8fafc' }}
+                                formatter={tooltipFormatter}
+                                contentStyle={{
+                                    borderRadius: '12px',
+                                    border: 'none',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                                }}
+                            />
+                            {/* Named series, so identity is never carried by
+                                colour alone — which also covers the fills
+                                sitting under 3:1 against the card surface. */}
+                            <Legend
+                                verticalAlign="top"
+                                align="right"
+                                iconType="circle"
+                                iconSize={8}
+                                wrapperStyle={{ fontSize: 12, color: '#64748b', paddingBottom: 12 }}
+                            />
+                            {dataKeys
+                                .filter((key) => !lineKeys?.includes(key))
+                                .map((key) => (
+                                    <Bar
+                                        key={key}
+                                        dataKey={key}
+                                        name={labelFor(key)}
+                                        fill={colorFor(key)}
+                                        radius={[4, 4, 0, 0]}
+                                    />
+                                ))}
+                            {(lineKeys ?? []).map((key) => (
+                                <Line
+                                    key={key}
+                                    type="monotone"
+                                    dataKey={key}
+                                    name={labelFor(key)}
+                                    stroke={colorFor(key)}
+                                    strokeWidth={2}
+                                    dot={{ r: 4, fill: colorFor(key), strokeWidth: 2, stroke: '#fff' }}
+                                    activeDot={{ r: 6, strokeWidth: 0 }}
+                                />
+                            ))}
+                        </ComposedChart>
                     ) : type === 'bar' ? (
                         <BarChart data={data}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
