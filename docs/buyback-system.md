@@ -238,6 +238,8 @@ Admin UI: `src/app/(dashboard)/admin/buyback/` (`page` queue, `dashboard`, `[id]
 - Route lot to N vendors (masked quotation PDFs, opens threads, emails) — `.../requests/[id]/routing`
 - Record a vendor's counter/agree (hearsay) — `POST /api/admin/buyback/threads/[id]/record`
 - Onboard / list vendors — `/api/admin/buyback/vendors`; activate/suspend — `.../vendors/[entityId]/activate`
+- Vendor onboarding documents (E-222) — `POST .../vendors/uploads` returns a `document_id`, which `POST .../vendors` then claims. Keys stay server-derived: the browser never handles one
+- Re-send a vendor's generated password after a bounced email (E-222) — `POST .../vendors/[entityId]/credentials`. Onboarding lands the role `PENDING` and only flips it `ACTIVE` when that email is delivered, so this is the recovery path, not a vetting decision (that is `/activate`)
 
 **Fulfilment**
 - Issue dealer PO / record vendor PO — `.../requests/[id]/po/[leg]`

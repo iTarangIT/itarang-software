@@ -27,7 +27,15 @@ export type UploadKind =
   | "eway_bill"
   | "weighbridge_slip"
   | "vendor_po"
-  | "invoice_pdf";
+  | "invoice_pdf"
+  // --- E-222 vendor onboarding documents — attached to a VENDOR, and in fact
+  // to no entity at all at upload time (see vendorDocKeyFor). Uppercase
+  // because these values are also the `doc_type` written to
+  // scrap_vendor_documents, and one spelling beats a mapping. ---------------
+  | "GSTIN"
+  | "PAN"
+  | "UDYAM"
+  | "AGREEMENT";
 
 // An unconstrained content type would let these endpoints accept anything the
 // dealer liked, so each kind declares exactly what it accepts.
@@ -49,6 +57,12 @@ export const ALLOWED_UPLOAD_TYPES: Record<UploadKind, string[]> = {
   weighbridge_slip: [...IMAGE_TYPES, "application/pdf"],
   vendor_po: [...IMAGE_TYPES, "application/pdf"],
   invoice_pdf: [...IMAGE_TYPES, "application/pdf"],
+  // Statutory certificates. A vendor emails a PDF or photographs the paper —
+  // both are the document, so both are accepted.
+  GSTIN: [...IMAGE_TYPES, "application/pdf"],
+  PAN: [...IMAGE_TYPES, "application/pdf"],
+  UDYAM: [...IMAGE_TYPES, "application/pdf"],
+  AGREEMENT: [...IMAGE_TYPES, "application/pdf"],
 };
 
 export function assertUploadContentType(kind: UploadKind, contentType: string): void {
