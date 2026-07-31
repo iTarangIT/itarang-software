@@ -1,0 +1,1055 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iTarang — Security Risk: full end-to-end flow</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --panel:#ffffff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+    --blue:#2563eb; --blueBg:#eff6ff; --green:#059669; --greenBg:#ecfdf5;
+    --amber:#b45309; --amberBg:#fffbeb; --red:#b91c1c; --redBg:#fef2f2;
+    --purple:#7c3aed; --purpleBg:#f5f3ff; --slateBg:#f1f5f9; --teal:#0d9488; --tealBg:#f0fdfa;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0b1220; --panel:#111a2b; --ink:#e2e8f0; --muted:#94a3b8; --line:#1e293b;
+      --blueBg:#0e2038; --greenBg:#062a22; --amberBg:#2b1f06; --redBg:#2a0f0f;
+      --purpleBg:#1b1235; --slateBg:#16213a; --tealBg:#062a2a;
+      --blue:#60a5fa; --green:#34d399; --amber:#fbbf24; --red:#f87171; --purple:#a78bfa; --teal:#2dd4bf;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 20px 90px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.4px}
+  h2{font-size:21px;margin:44px 0 6px;padding-top:18px;border-top:1px solid var(--line);letter-spacing:-.2px}
+  h3{font-size:16px;margin:26px 0 8px}
+  p{margin:8px 0}
+  .lede{color:var(--muted);font-size:15px;max-width:820px}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:12.5px}
+  code{background:var(--slateBg);padding:1px 5px;border-radius:4px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+  .note{background:var(--amberBg);border-left:4px solid var(--amber);padding:12px 14px;border-radius:8px;margin:14px 0;font-size:14px}
+  .good{background:var(--greenBg);border-left:4px solid var(--green);padding:12px 14px;border-radius:8px;margin:14px 0;font-size:14px}
+  .bad{background:var(--redBg);border-left:4px solid var(--red);padding:12px 14px;border-radius:8px;margin:14px 0;font-size:14px}
+
+  /* diagram boxes */
+  .flow{margin:18px 0}
+  .box{background:var(--panel);border:1px solid var(--line);border-left:5px solid var(--blue);
+       border-radius:10px;padding:12px 14px;margin:0 auto;max-width:940px}
+  .box.b-green{border-left-color:var(--green)} .box.b-amber{border-left-color:var(--amber)}
+  .box.b-red{border-left-color:var(--red)} .box.b-purple{border-left-color:var(--purple)}
+  .box.b-teal{border-left-color:var(--teal)} .box.b-slate{border-left-color:var(--muted)}
+  .box .t{font-weight:700;font-size:14.5px;margin-bottom:2px}
+  .box .path{display:block;color:var(--blue);font-family:ui-monospace,Consolas,monospace;font-size:12px;margin:3px 0;word-break:break-all}
+  .box .fn{display:block;color:var(--purple);font-family:ui-monospace,Consolas,monospace;font-size:12px;margin:1px 0}
+  .box .d{color:var(--muted);font-size:13.5px;margin-top:5px}
+  .box .io{font-size:12.5px;margin-top:6px}
+  .io .in::before{content:"IN  ";color:var(--green);font-weight:700;font-family:monospace}
+  .io .out::before{content:"OUT ";color:var(--red);font-weight:700;font-family:monospace}
+  .io div{font-family:ui-monospace,Consolas,monospace;font-size:11.8px;color:var(--muted);margin:2px 0}
+  .arrow{text-align:center;color:var(--muted);font-size:22px;line-height:1;margin:7px 0}
+  .arrow small{display:block;font-size:12px;font-family:ui-monospace,Consolas,monospace;color:var(--muted);margin-top:2px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:12px 0}
+  .cols .box{max-width:none}
+
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--slateBg);font-weight:700;white-space:nowrap}
+  td.mono,th.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11.5px;font-weight:700}
+  .p-crit{background:var(--redBg);color:var(--red)} .p-high{background:var(--amberBg);color:var(--amber)}
+  .p-med{background:var(--amberBg);color:var(--amber)} .p-low{background:var(--blueBg);color:var(--blue)}
+  .p-db{background:var(--purpleBg);color:var(--purple)} .p-ai{background:var(--tealBg);color:var(--teal)}
+  ul{margin:8px 0 8px 20px;padding:0} li{margin:4px 0}
+  .toc a{color:var(--blue);text-decoration:none;display:block;padding:3px 0;font-size:14px}
+  .toc a:hover{text-decoration:underline}
+  .lane{border:1px dashed var(--line);border-radius:12px;padding:14px;margin:14px 0;background:var(--slateBg)}
+  .lane h4{margin:0 0 10px;font-size:13px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Security Risk — the whole thing, end to end</h1>
+<p class="lede">
+This page explains, in plain language, everything behind the <b>Security Risk</b> screen at
+<code>/it/security</code>: who starts a scan, what tool actually attacks the app, where LangChain and
+LangGraph sit, which functions run in which file, what kinds of threats can be found, which database
+tables are written, and how the fix-it chat writes real code back to disk.
+</p>
+<p class="lede">
+Every box below shows the <span class="mono" style="color:var(--blue)">file path</span> and the
+<span class="mono" style="color:var(--purple)">function()</span> inside it, plus what data goes
+<b>in</b> and what goes <b>out</b>.
+</p>
+
+<div class="card toc">
+  <b>Contents</b>
+  <a href="#big">1 &nbsp;The 10-second version</a>
+  <a href="#start">2 &nbsp;Part A — Starting a scan (3 entry points)</a>
+  <a href="#engine">3 &nbsp;Part B — The engine: guard → lock → login</a>
+  <a href="#graph">4 &nbsp;Part C — The LangGraph agent (4 nodes)</a>
+  <a href="#probes">5 &nbsp;Part D — The probes: every threat type it can find</a>
+  <a href="#persist">6 &nbsp;Part E — Saving findings into the database</a>
+  <a href="#ui">7 &nbsp;Part F — The screen you saw + Excel / PDF / Word</a>
+  <a href="#chat">8 &nbsp;Part G — AI resolution chat + auto-apply fix</a>
+  <a href="#live">9 &nbsp;Part H — Live Attacks (a different pipeline)</a>
+  <a href="#db">10 Database — all 6 tables, what writes them</a>
+  <a href="#ai">11 LangChain vs LangGraph — where and why</a>
+  <a href="#truth">12 Honest notes: dead code &amp; limits</a>
+</div>
+
+<!-- ============================================= -->
+<h2 id="big">1 · The 10-second version</h2>
+
+<div class="flow">
+  <div class="box b-slate">
+    <div class="t">A human (IT role) clicks <b>Run Scan</b>, or a developer runs <code>npm run security:scan</code></div>
+    <div class="d">Nothing scans on a schedule today. Somebody has to start it.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box">
+    <div class="t">A real Chromium browser logs into the CRM as 4 different roles</div>
+    <div class="d">Playwright — not a fake HTTP client. It types into the real /login form.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-teal">
+    <div class="t">A LangGraph agent runs 4 steps: plan → probe → triage → write</div>
+    <div class="d">The AI only <i>suggests extra URLs</i> and <i>tidies wording</i>. It never decides how dangerous something is.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-amber">
+    <div class="t">8 deterministic probes actually attack the app and decide severity</div>
+    <div class="d">Plain TypeScript + regex rules. This is what produces every card you saw on the screen.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-purple">
+    <div class="t">Findings are written to Postgres, deduped by a SHA-256 fingerprint</div>
+    <div class="d">Re-scanning updates the same row instead of creating duplicates.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-green">
+    <div class="t">/it/security reads those rows and paints the cards; you can chat with an AI to fix each one</div>
+  </div>
+</div>
+
+<div class="note">
+<b>The single most important rule in this whole system:</b> severity (Critical / High / Medium / Low)
+is <b>always</b> set by a hard-coded probe rule in TypeScript — never by the language model.
+The comment enforcing this is at <code class="mono">src/lib/security/agent/graph.ts:156</code>
+(“you MUST NOT change or invent severity”) and again at
+<code class="mono">src/lib/security/severity.ts:9</code>.
+</div>
+
+<!-- ============================================= -->
+<h2 id="start">2 · Part A — Starting a scan (3 entry points)</h2>
+
+<div class="cols">
+  <div class="box b-green">
+    <div class="t">① The button on the screen</div>
+    <span class="path">src/app/(dashboard)/it/security/_components/RunScanButton.tsx</span>
+    <div class="d">The grey “Scanning…” pill in your screenshot. It POSTs, then polls every few seconds.</div>
+    <div class="io">
+      <div class="out">POST /api/it/security/scan/run</div>
+      <div class="out">GET /api/it/security/scan/status (polling)</div>
+    </div>
+  </div>
+  <div class="box b-green">
+    <div class="t">② The API route (fires it in the background)</div>
+    <span class="path">src/app/api/it/security/scan/run/route.ts</span>
+    <span class="fn">POST()</span>
+    <div class="d">Checks role, checks the prod guard, checks Chromium exists, then uses Next's
+      <code>after()</code> so the HTTP response returns immediately while the scan keeps running.</div>
+    <div class="io">
+      <div class="in">requireSecurityAdmin() → role must be <b>it</b></div>
+      <div class="out">after(() ⇒ runSecurityScan({trigger:"manual"}))</div>
+      <div class="out">501 if Chromium missing → “use the CLI”</div>
+    </div>
+  </div>
+  <div class="box b-green">
+    <div class="t">③ The command line</div>
+    <span class="path">scripts/security-scan.ts</span>
+    <span class="fn">main()</span>
+    <div class="d"><code>npm run security:scan -- --target=sandbox --mode=aggressive</code>.
+      This is the primary way — it works anywhere Playwright is installed.</div>
+    <div class="io">
+      <div class="out">runSecurityScan({targetUrl, mode, trigger:"cli"})</div>
+    </div>
+  </div>
+</div>
+
+<h3>Who is allowed in</h3>
+<div class="box b-red">
+  <span class="path">src/lib/security/route-guard.ts</span>
+  <span class="fn">requireSecurityAdmin()</span>
+  <div class="d">
+    Every <code>/api/it/security/*</code> route calls this first. Only the <b>it</b> role passes —
+    admin and CEO were deliberately removed, because the findings contain live, working exploit
+    instructions and unauthenticated PII URLs. Middleware treats <code>/api/*</code> as public, so
+    each route <i>must</i> gate itself.
+  </div>
+  <div class="io">
+    <div class="in">Supabase session cookie → <code>supabase.auth.getUser()</code></div>
+    <div class="in">SELECT id, email, role, is_active FROM <b>users</b> (by id, else by email)</div>
+    <div class="out">{ok:true, user} · or 401 Unauthorized · or 403 Forbidden</div>
+  </div>
+</div>
+
+<!-- ============================================= -->
+<h2 id="engine">3 · Part B — The engine: guard → lock → login</h2>
+
+<p>All three entry points land in the same function.</p>
+
+<div class="flow">
+  <div class="box">
+    <div class="t">The engine</div>
+    <span class="path">src/lib/security/engine.ts</span>
+    <span class="fn">runSecurityScan(opts)</span>
+    <div class="d">The conductor. Everything below happens inside it, in this order.</div>
+  </div>
+
+  <div class="arrow">↓<small>step 1 — where am I allowed to attack?</small></div>
+
+  <div class="box b-red">
+    <div class="t">Target resolution + production guard</div>
+    <span class="path">src/lib/security/target.ts</span>
+    <span class="fn">resolveTarget(rawUrl) · resolveMode(rawMode)</span>
+    <div class="d">
+      Turns a URL into an environment label. <code>crm.itarang.com</code> is classified
+      <b>prod</b> and <b>throws</b> unless <code>SECURITY_ALLOW_PROD=1</code>. This scanner really
+      attacks things, so it must never point at production by accident.
+    </div>
+    <div class="io">
+      <div class="in">SECURITY_SCAN_BASE_URL (default http://localhost:3000)</div>
+      <div class="in">SECURITY_SCAN_MODE = safe | aggressive</div>
+      <div class="out">{ baseUrl, env: "local" | "sandbox" | "prod" }</div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<small>step 2 — claim the lock (first DB write)</small></div>
+
+  <div class="box b-purple">
+    <div class="t">Open a scan run &amp; take the single-flight lock</div>
+    <span class="path">src/lib/security/scan-run.ts</span>
+    <span class="fn">beginScan(input) → reapStaleRuns() → INSERT</span>
+    <div class="d">
+      The lock is a <b>partial unique index</b> in Postgres: <code>(target_env) WHERE status='running'</code>.
+      Two scans on the same environment can't both win — the loser gets a 23505 unique violation and
+      becomes a friendly <code>ScanInFlightError</code>. Runs stuck &gt; 30 min are marked failed first,
+      so a crashed process can't wedge the environment forever.
+    </div>
+    <div class="io">
+      <div class="out"><span class="pill p-db">DB</span> INSERT INTO <b>security_scan_runs</b>
+        (target_env, target_base_url, mode, triggered_by, actor_user_id, status='running')</div>
+      <div class="out">returns runId (uuid)</div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<small>step 3 — become 4 different users</small></div>
+
+  <div class="box b-amber">
+    <div class="t">Launch Chromium and log in as every role</div>
+    <span class="path">src/lib/security/session.ts</span>
+    <span class="fn">launchBrowser() · loginRoles(browser, baseUrl, roles, log)</span>
+    <div class="d">
+      A real headless Chromium goes to <code>/login</code>, waits for React to hydrate, fills
+      <code>input[name=email]</code> / <code>input[name=password]</code>, and force-clicks
+      <b>Sign in</b> (forced because the decorative rickshaw image sits over the button). It then
+      saves that role's cookies as a <code>storageState</code>. A role with no password is skipped —
+      one bad credential never aborts the scan.
+    </div>
+    <div class="io">
+      <div class="in">E2E_DEALER_EMAIL / _PASSWORD, E2E_CEO_*, E2E_SALES_HEAD_*, E2E_ADMIN_* (with seeded fallbacks)</div>
+      <div class="out">Map&lt;role → storageState&gt; for <b>dealer, ceo, sales_head, admin</b></div>
+      <div class="out">skipped[] = roles with no usable credential</div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<small>step 4 — build the shared toolbox every probe uses</small></div>
+
+  <div class="box b-teal">
+    <div class="t">The ProbeContext — the “context” every check reads from</div>
+    <span class="path">src/lib/security/probe-context.ts</span>
+    <span class="fn">interface ProbeContext · abs(baseUrl, path)</span>
+    <div class="d">This one object is handed to all 8 probes. It is literally the answer to
+      “which context is it reading”:</div>
+    <div class="io">
+      <div class="in">baseUrl, targetEnv, mode ("safe" | "aggressive")</div>
+      <div class="in">browser — the live Chromium</div>
+      <div class="in"><b>anon</b> — an HTTP client with NO cookies (this is what proves “no login needed”)</div>
+      <div class="in"><b>api</b> — Map&lt;role → HTTP client carrying that role's cookies&gt;</div>
+      <div class="in">storage — raw cookie state, log — the progress logger</div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<small>step 5 — hand control to the agent</small></div>
+
+  <div class="box b-teal">
+    <div class="t">Call the LangGraph agent</div>
+    <span class="path">src/lib/security/engine.ts:81</span>
+    <span class="fn">runSecurityGraph({ ctx, persist })</span>
+    <div class="d"><code>persist</code> is a callback the engine keeps ownership of — the agent can
+      only save findings <i>through</i> the engine's own <code>persistFindings()</code>.</div>
+  </div>
+
+  <div class="arrow">↓<small>step 6 — close the run</small></div>
+
+  <div class="box b-purple">
+    <div class="t">Complete or fail, then always clean up</div>
+    <span class="path">src/lib/security/scan-run.ts</span>
+    <span class="fn">completeScan(runId, summary) · failScan(runId, error)</span>
+    <div class="d">The <code>finally</code> block disposes every HTTP context and closes the browser,
+      whatever happened.</div>
+    <div class="io">
+      <div class="out"><span class="pill p-db">DB</span> UPDATE <b>security_scan_runs</b> SET status='completed',
+        finished_at, findings_critical/high/medium/low/info, surfaces_walked, prompt_tokens, completion_tokens</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================= -->
+<h2 id="graph">4 · Part C — The LangGraph agent (4 nodes)</h2>
+
+<div class="box b-teal">
+  <span class="path">src/lib/security/agent/graph.ts</span>
+  <span class="fn">buildGraph(deps) · runSecurityGraph(deps)</span>
+  <div class="d">
+    Built with <code>StateGraph</code> + <code>Annotation.Root</code> from
+    <code>@langchain/langgraph</code>. The wiring is fixed and linear:
+  </div>
+</div>
+
+<div class="lane">
+  <h4>The graph as declared in code (graph.ts:197-207)</h4>
+  <div class="mono" style="font-size:12.5px;line-height:2">
+    START → <b>plan_targets</b> → <b>run_probes</b> → <b>llm_triage</b> → <b>write_findings</b> → END
+  </div>
+</div>
+
+<h3>The shared state (graph.ts:38-45)</h3>
+<table>
+<tr><th>State key</th><th>Type</th><th>Reducer</th><th>Meaning</th></tr>
+<tr><td class="mono">extraTargets</td><td class="mono">string[]</td><td>replace</td><td>Extra <code>/api/...</code> paths the LLM suggested</td></tr>
+<tr><td class="mono">raw</td><td class="mono">RawFinding[]</td><td>replace</td><td>Findings straight out of the probes</td></tr>
+<tr><td class="mono">enriched</td><td class="mono">RawFinding[]</td><td>replace</td><td>After dedup / better wording</td></tr>
+<tr><td class="mono">summary</td><td class="mono">ScanSummary</td><td>replace</td><td>Final counts per severity</td></tr>
+<tr><td class="mono">promptTokens</td><td class="mono">number</td><td><b>a + b (adds up)</b></td><td>Token cost accumulated across both LLM nodes</td></tr>
+<tr><td class="mono">completionTokens</td><td class="mono">number</td><td><b>a + b (adds up)</b></td><td>Same, for output tokens</td></tr>
+</table>
+
+<h3>Node 1 — plan_targets <span class="pill p-ai">uses LangChain</span></h3>
+<div class="box b-teal">
+  <span class="path">src/lib/security/agent/graph.ts:63</span>
+  <span class="fn">planTargets()</span>
+  <div class="d">
+    Fetches the <b>dealer-onboarding</b> page (the tool's designated starting point), scrapes its
+    links and form actions, and asks the LLM: <i>“based on these, name up to 8 more API paths worth
+    testing for missing auth or IDOR.”</i> The answer is parsed with
+    <code>parsePathArray()</code>, which throws away anything that doesn't start with
+    <code>/api/</code> — so the model cannot make the scanner hit an arbitrary external host.
+  </div>
+  <div class="io">
+    <div class="in">navigateAndInspect(ctx, "/dealer-onboarding") — <span class="mono">src/lib/security/agent/tools.ts:17</span></div>
+    <div class="in">ChatOpenAI (<code>@langchain/openai</code>), model = SECURITY_OPENAI_MODEL ?? gpt-4o-mini, temperature 0.2</div>
+    <div class="out">extraTargets: string[] (max 8, must start with /api/)</div>
+    <div class="out">promptTokens / completionTokens from <code>res.usage_metadata</code></div>
+  </div>
+  <div class="note" style="margin:10px 0 0">
+    <b>No API key?</b> <code>makeModel()</code> returns <code>null</code>, the node logs
+    “no LLM — using curated surfaces only”, and the scan carries on with the hand-written route list.
+    Nothing breaks.
+  </div>
+</div>
+
+<div class="arrow">↓</div>
+
+<h3>Node 2 — run_probes <span class="pill p-high">no AI at all</span></h3>
+<div class="box b-amber">
+  <span class="path">src/lib/security/agent/graph.ts:94</span>
+  <span class="fn">runProbes(state) → probesForMode(ctx.mode) → probe.run(ctx)</span>
+  <div class="d">
+    This is the node that actually finds the vulnerabilities on your screen. It:
+    <ul>
+      <li>picks the probe list for the mode (<code>safe</code> drops every <code>mutating</code> probe);</li>
+      <li>upserts each probe's metadata into the <b>security_checks</b> catalogue via <code>seedCatalogue()</code>;</li>
+      <li>runs each probe in a <code>try/catch</code> — one broken probe never kills the scan;</li>
+      <li>then sweeps the LLM's <code>extraTargets</code> for unauthenticated data, tagging those
+          findings <code>evidence.discoveredBy = "agent"</code> and titling them
+          <i>“(agent-discovered)”</i> so you can tell them apart.</li>
+    </ul>
+  </div>
+  <div class="io">
+    <div class="out"><span class="pill p-db">DB</span> INSERT … ON CONFLICT (slug) DO UPDATE → <b>security_checks</b></div>
+    <div class="out">raw: RawFinding[] — with severity already decided</div>
+  </div>
+</div>
+
+<div class="arrow">↓</div>
+
+<h3>Node 3 — llm_triage <span class="pill p-ai">uses LangChain</span></h3>
+<div class="box b-teal">
+  <span class="path">src/lib/security/agent/graph.ts:143</span>
+  <span class="fn">llmTriage(state) → parseTriage(text)</span>
+  <div class="d">
+    Sends a <b>compacted</b> list (index, slug, title, url, 300-char summary — not the whole evidence
+    blob) and asks for JSON edits. The model is allowed to touch exactly four things:
+    <code>remediation</code>, <code>owasp_ref</code>, <code>cwe_ref</code>, <code>confidence</code>,
+    plus a <code>drop:true</code> flag for duplicates. Severity is <b>read from the probe, never from
+    the response</b> — see the comment on line 172. If the call fails, it returns the raw findings
+    unchanged.
+  </div>
+  <div class="io">
+    <div class="in">raw findings (compacted)</div>
+    <div class="out">enriched findings (deduped, better wording, OWASP/CWE tags)</div>
+    <div class="out">more token counts, added to the running total by the reducer</div>
+  </div>
+</div>
+
+<div class="arrow">↓</div>
+
+<h3>Node 4 — write_findings</h3>
+<div class="box b-purple">
+  <span class="path">src/lib/security/agent/graph.ts:192</span>
+  <span class="fn">writeFindings(state) → deps.persist(state.enriched)</span>
+  <div class="d">Calls back into the engine's <code>persistFindings()</code> (next section) and stores
+    the returned counts in state.</div>
+</div>
+
+<h3>Why LangGraph is worth it here</h3>
+<div class="card">
+  <ul>
+    <li><b>The order is guaranteed.</b> Planning must finish before probing (probing consumes
+      <code>extraTargets</code>); triage must finish before writing. The graph makes that a
+      structural fact, not a comment someone can break.</li>
+    <li><b>State is typed and merged for you.</b> <code>promptTokens</code> uses an adding reducer,
+      so two different nodes each spending tokens produce one correct total with zero plumbing.</li>
+    <li><b>Each step fails alone.</b> Every node catches its own errors and returns a safe partial
+      state, so a dead OpenAI key degrades the scan instead of aborting it.</li>
+    <li><b>Room to grow.</b> Adding a “re-verify a finding” node or a conditional
+      “only triage if raw.length &gt; 0” edge is a one-line change to the graph, not a rewrite of
+      the engine.</li>
+    <li><b>Same house pattern.</b> The NBFC risk engine uses the identical shape at
+      <code class="mono">src/lib/ai/langgraph/risk-hypothesis-graph.ts</code> — two features, one
+      mental model. They share <i>no</i> tables and <i>no</i> code.</li>
+  </ul>
+</div>
+
+<!-- ============================================= -->
+<h2 id="probes">5 · Part D — The probes: every threat type it can find</h2>
+
+<div class="box b-slate">
+  <div class="t">The registry</div>
+  <span class="path">src/lib/security/probes/index.ts</span>
+  <span class="fn">ALL_PROBES · probesForMode(mode)</span>
+  <div class="d"><b>8 probes total.</b> <code>safe</code> mode runs 7 (it filters out anything with
+    <code>mutating: true</code>); <code>aggressive</code> runs all 8.</div>
+</div>
+
+<h3>The full probe table</h3>
+<table>
+<tr><th>Probe slug</th><th>File · function</th><th>What it does</th><th>Severity rule</th><th>Mode</th></tr>
+<tr>
+  <td class="mono">unauth-data-exposure</td>
+  <td class="mono">probes/exposure.ts<br>unauthDataProbe.run()</td>
+  <td>GETs 7 curated data endpoints with <b>zero cookies</b>. If records come back, that's a finding.</td>
+  <td><span class="pill p-crit">critical</span> if PII regex hits ·<br><span class="pill p-high">high</span> if the route is marked pii ·<br><span class="pill p-med">medium</span> otherwise</td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">debug-endpoint-exposed</td>
+  <td class="mono">probes/exposure.ts<br>debugEndpointProbe.run()</td>
+  <td>Hits <code>/api/debug/*</code> and <code>/api/test-*</code>. Anything that isn't 404/401/403/redirect means the handler ran for a stranger.</td>
+  <td><span class="pill p-high">high</span> always</td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">cross-role-access</td>
+  <td class="mono">probes/authz.ts<br>crossRoleAccessProbe.run()</td>
+  <td>Uses the <b>dealer</b> session to open admin pages and admin APIs. A page returning 200 (instead of redirecting) or an API returning data = broken access control.</td>
+  <td><span class="pill p-high">high</span> always</td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">idor-object-reference</td>
+  <td class="mono">probes/idor.ts<br>idorProbe.run()</td>
+  <td>First harvests a <b>real</b> record UUID, then reads 7 ID-scoped routes (a) anonymously and (b) as a dealer who doesn't own the record.</td>
+  <td><span class="pill p-crit">critical</span> if PII in body ·<br><span class="pill p-high">high</span> otherwise<br><small>anon = confirmed, dealer = likely</small></td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">reflected-xss</td>
+  <td class="mono">probes/injection.ts<br>reflectedXssProbe.run()</td>
+  <td>Sends the marker <code>itxss7392"&gt;&lt;img src=x onerror=…&gt;</code> through query params and checks whether it comes back <b>unescaped</b>.</td>
+  <td><span class="pill p-high">high</span></td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">sql-error-leak</td>
+  <td class="mono">probes/injection.ts<br>sqlErrorProbe.run()</td>
+  <td>Sends <code>'"))--</code> and matches the response against a Postgres/Drizzle error regex.</td>
+  <td><span class="pill p-high">high</span> if HTTP ≥ 500 ·<br><span class="pill p-med">medium</span> otherwise</td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">security-response-headers</td>
+  <td class="mono">probes/upload_headers.ts<br>securityHeadersProbe.run()</td>
+  <td>Reads <code>/login</code> and audits CSP, X-Frame-Options, nosniff, Referrer-Policy, HSTS (HTTPS only), plus Secure/HttpOnly on every Set-Cookie.</td>
+  <td><span class="pill p-med">medium</span> for CSP / clickjacking / HSTS / missing Secure ·<br><span class="pill p-low">low</span> for nosniff / Referrer-Policy / HttpOnly</td>
+  <td>safe</td>
+</tr>
+<tr>
+  <td class="mono">upload-content-type-spoof</td>
+  <td class="mono">probes/upload_headers.ts<br>unsafeUploadProbe.run()</td>
+  <td>Uploads a file called <code>scan-probe.png</code> declared <code>image/png</code> whose bytes are HTML/JS, into folder <code>security-scan-throwaway</code>. If it's stored, the route trusts <code>file.type</code> and never sniffs magic bytes.</td>
+  <td><span class="pill p-high">high</span></td>
+  <td><b>aggressive only</b><br>(<code>mutating: true</code>)</td>
+</tr>
+</table>
+
+<h3>The surface catalogue — the exact URLs it walks</h3>
+<div class="box b-slate">
+  <span class="path">src/lib/security/crawl.ts</span>
+  <div class="d">These are hand-curated seeds. Routes that don't exist just 404 — probes only ever
+    report positives, so extra entries are harmless.</div>
+</div>
+<table>
+<tr><th>Constant</th><th>Used by</th><th>Contents</th></tr>
+<tr><td class="mono">SEED_PAGES</td><td>tools.ts</td><td class="mono">/dealer-onboarding · /vendor-onboarding · /dealer-portal · /dealer-portal/leads/new · /login</td></tr>
+<tr><td class="mono">SENSITIVE_UNAUTH_ROUTES</td><td>unauthDataProbe</td><td class="mono">/api/dealer-onboarding/list <b>(pii)</b> · /api/leads/summary · /api/leads/1/summary · /api/scraper-leads <b>(pii)</b> · /api/scraper-leads/converted <b>(pii)</b> · /api/pdi/inventory · /api/dealer-leads/regions/tree</td></tr>
+<tr><td class="mono">DEBUG_ROUTES</td><td>debugEndpointProbe</td><td class="mono">/api/debug/onboarding-db · /api/debug/storage · /api/debug/create-onboarding-tables · /api/debug/alter-onboarding-table · /api/test-aws · /api/test-email · /api/test-sheet</td></tr>
+<tr><td class="mono">ADMIN_SURFACES</td><td>crossRoleAccessProbe</td><td class="mono">/admin · /admin/dealer-verification · /admin/kyc-review · /ceo <i>(pages)</i> · /api/admin/nbfc/approvals/count · /api/admin/dealer-verifications/export <i>(apis)</i></td></tr>
+<tr><td class="mono">idScopedRoutes(id)</td><td>idorProbe</td><td class="mono">/api/dealer-onboarding/{id} · /api/kyc/{id}/documents · /api/kyc/{id}/verifications · /api/kyc/{id}/payment-method · /api/coborrower/{id} · /api/coborrower/{id}/documents · /api/leads/{id}/summary</td></tr>
+<tr><td class="mono">REFLECTED_PARAM_TARGETS</td><td>XSS + SQL probes</td><td class="mono">/api/search?q= · /dealer-portal/leads?q= · /login?redirect=</td></tr>
+</table>
+
+<div class="good">
+<b>This is exactly where the cards in your screenshot came from:</b><br>
+“Unauthenticated PII exposure at /api/scraper-leads/converted” → <code>unauthDataProbe</code> reading
+<code>SENSITIVE_UNAUTH_ROUTES[4]</code> with the anon client, PII regex matched → critical.<br>
+“IDOR: /api/coborrower/f9695e4c-… readable by anonymous” → <code>idorProbe</code> after
+<code>harvestId()</code> found that UUID.<br>
+“Dealer can access admin api: /api/admin/nbfc/approvals/count” → <code>crossRoleAccessProbe</code>
+using the dealer's cookies against <code>ADMIN_SURFACES[4]</code>.
+</div>
+
+<h3>The shared helpers every probe leans on</h3>
+<div class="cols">
+  <div class="box b-slate">
+    <span class="path">src/lib/security/probes/util.ts</span>
+    <span class="fn">rawGet(rc, url, opts)</span>
+    <div class="d">GET with <code>maxRedirects:0</code>, never throws on 4xx/5xx, and retries 3× with
+      backoff on ECONNREFUSED / socket hang up — because a cold Next dev server drops the first hit
+      while it compiles a route.</div>
+  </div>
+  <div class="box b-slate">
+    <span class="fn">looksLikeData(f)</span>
+    <div class="d">The “is this actually a leak?” test. Must be 2xx, and the body must not be
+      empty / <code>[]</code> / <code>{}</code> / <code>null</code>. Stops empty lists being reported.</div>
+  </div>
+  <div class="box b-slate">
+    <span class="fn">detectPii(body)</span>
+    <div class="d">Six Indian-PII regexes: <b>PAN</b>, <b>GSTIN</b>, <b>IFSC</b>, <b>Aadhaar</b>,
+      bank-account numbers, phone numbers. A hit here is what upgrades a finding to
+      <span class="pill p-crit">critical</span>.</div>
+  </div>
+  <div class="box b-slate">
+    <span class="fn">harvestId(ctx)</span>
+    <div class="d">Grabs a real UUID from <code>/api/dealer-onboarding/list</code>,
+      <code>/api/dealer-onboarding/my</code> or <code>/api/leads/summary</code> (dealer session first,
+      anon as fallback) so IDOR has a genuine object to ask for. No id → the IDOR probe skips itself.</div>
+  </div>
+</div>
+
+<!-- ============================================= -->
+<h2 id="persist">6 · Part E — Saving findings into the database</h2>
+
+<div class="box b-purple">
+  <span class="path">src/lib/security/engine.ts:111</span>
+  <span class="fn">persistFindings(runId, baseUrl, raw) · fingerprint(f, path)</span>
+  <div class="d">
+    Each finding gets a stable identity:
+    <code>sha256(check_slug | http_method | pathname | title).slice(0,64)</code>.
+    Duplicates inside one run are dropped in memory; across runs, the insert uses
+    <code>ON CONFLICT (fingerprint) WHERE status &lt;&gt; 'resolved' DO UPDATE</code>. So re-scanning
+    <b>refreshes</b> the existing card instead of stacking a new one — and critically, it
+    <b>never overwrites your triage status</b>. A resolved finding that comes back gets a new row.
+  </div>
+  <div class="io">
+    <div class="in">RawFinding[] from the graph</div>
+    <div class="out"><span class="pill p-db">DB</span> INSERT/UPDATE <b>security_findings</b>
+      (run_id, check_slug, category, severity, title, summary, target_url, http_method,
+       evidence_json, reproduction, remediation, owasp_ref, cwe_ref, confidence, fingerprint)</div>
+    <div class="out">ScanSummary { surfaces_walked, findings_total, findings_critical … }</div>
+  </div>
+</div>
+
+<!-- ============================================= -->
+<h2 id="ui">7 · Part F — The screen you saw + Excel / PDF / Word</h2>
+
+<div class="note">
+An important detail: the Security Risk page is a <b>React Server Component</b>. It queries Drizzle
+directly — it does <b>not</b> call its own API to fetch findings. The API routes exist for the
+<i>actions</i> (run, poll, triage, chat, export), not for the initial paint.
+</div>
+
+<div class="flow">
+  <div class="box b-green">
+    <div class="t">The page</div>
+    <span class="path">src/app/(dashboard)/it/security/page.tsx</span>
+    <span class="fn">SecurityDashboardPage({searchParams}) → load(sp)</span>
+    <div class="d">Gate: <code>requireAuth()</code>, then role must be <code>it</code>, else
+      <code>redirect("/")</code>. Shows active findings only (<code>open</code> +
+      <code>acknowledged</code>), sorted most-severe-first.</div>
+    <div class="io">
+      <div class="in"><span class="pill p-db">DB</span> SELECT * FROM <b>security_findings</b> WHERE status IN ('open','acknowledged') ORDER BY created_at DESC</div>
+      <div class="in"><span class="pill p-db">DB</span> SELECT … FROM <b>security_scan_runs</b> ORDER BY started_at DESC LIMIT 1 (the “target sandbox (safe)” line)</div>
+      <div class="in">getScanFreshness() → the “Scan running now…” / “Stale” badge</div>
+    </div>
+  </div>
+  <div class="arrow">↓ renders</div>
+  <div class="cols">
+    <div class="box b-green"><span class="path">_components/SeverityStatCards.tsx</span>
+      <div class="d">The 5 KPI tiles (3 / 4 / 4 / 1 / 0 in your screenshot). Counted over the full
+        active set, so filtering the grid doesn't change them.</div></div>
+    <div class="box b-green"><span class="path">_components/FilterBar.tsx</span>
+      <div class="d">Severity / category / status dropdowns — they write URL search params, the
+        server re-queries.</div></div>
+    <div class="box b-green"><span class="path">_components/SecurityFindings.tsx → FindingCard.tsx</span>
+      <div class="d">One card per finding: severity dot, category label, title, summary,
+        METHOD + target_url, CONFIRMED badge, OWASP + CWE chips.</div></div>
+    <div class="box b-green"><span class="path">_components/SecurityNavTabs.tsx</span>
+      <div class="d">Findings · History · Live Attacks.</div></div>
+  </div>
+</div>
+
+<h3>The supporting API routes</h3>
+<table>
+<tr><th>Endpoint</th><th>File</th><th>Reads</th><th>Writes</th></tr>
+<tr><td class="mono">POST /api/it/security/scan/run</td><td class="mono">scan/run/route.ts</td><td>users (guard)</td><td>starts the engine → all scan tables</td></tr>
+<tr><td class="mono">GET /api/it/security/scan/status</td><td class="mono">scan/status/route.ts</td><td>security_scan_runs</td><td>—</td></tr>
+<tr><td class="mono">PATCH /api/it/security/findings/[id]</td><td class="mono">findings/[id]/route.ts</td><td>security_findings</td><td>security_findings (status + resolution_*), security_finding_actions, security_finding_messages</td></tr>
+<tr><td class="mono">GET/POST …/findings/[id]/chat</td><td class="mono">findings/[id]/chat/route.ts</td><td>security_findings, security_finding_messages, <b>the source file on disk</b></td><td>security_finding_messages</td></tr>
+<tr><td class="mono">POST …/findings/[id]/resolve</td><td class="mono">findings/[id]/resolve/route.ts</td><td>security_finding_messages (latest proposed_fix), the source file</td><td><b>the source file</b>, security_findings, security_finding_actions, security_finding_messages</td></tr>
+<tr><td class="mono">GET …/report/export.xlsx</td><td class="mono">report/export.xlsx/route.ts — <b>ExcelJS</b></td><td>via loadReportData()</td><td>—</td></tr>
+<tr><td class="mono">GET …/report/pdf</td><td class="mono">report/pdf/route.ts</td><td>via loadReportData()</td><td>—</td></tr>
+<tr><td class="mono">GET …/report/docx</td><td class="mono">report/docx/route.ts — <b>docx</b></td><td>via loadReportData()</td><td>—</td></tr>
+<tr><td class="mono">GET …/events/count</td><td class="mono">events/count/route.ts</td><td>security_events</td><td>—</td></tr>
+<tr><td class="mono">PATCH …/events/[id]</td><td class="mono">events/[id]/route.ts</td><td>security_events</td><td>security_events.status</td></tr>
+<tr><td class="mono">POST /api/internal/security-events</td><td class="mono">internal/security-events/route.ts</td><td>security_events (burst count)</td><td>security_events + email/WhatsApp alert</td></tr>
+</table>
+
+<div class="box b-slate">
+  <div class="t">One loader powers all three exports</div>
+  <span class="path">src/lib/security/report-data.ts</span>
+  <span class="fn">loadReportData(filters) · filtersFromSearchParams(sp)</span>
+  <div class="d">It applies the <i>same</i> severity/category/status filters the screen is using, so the
+    downloaded file always matches what you were looking at.</div>
+</div>
+
+<!-- ============================================= -->
+<h2 id="chat">8 · Part G — AI resolution chat + auto-apply fix</h2>
+
+<p>Click a card → a drawer opens → you can argue with an AI that has <b>actually read the real source
+file</b> for that route, and then let it write the fix.</p>
+
+<div class="flow">
+  <div class="box b-green">
+    <span class="path">src/app/(dashboard)/it/security/_components/FindingDrawer.tsx → ResolutionChat.tsx</span>
+    <div class="d">The chat UI inside the finding drawer.</div>
+  </div>
+  <div class="arrow">↓ <small>POST /api/it/security/findings/[id]/chat</small></div>
+  <div class="box b-blue">
+    <span class="path">src/app/api/it/security/findings/[id]/chat/route.ts</span>
+    <span class="fn">POST()</span>
+    <div class="d">Node runtime, because it touches the filesystem. Zod-validates the message
+      (1–4000 chars), loads the finding + the whole chat history in parallel with the file lookup.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-amber">
+    <div class="t">Find the real file behind the URL</div>
+    <span class="path">src/lib/security/resolve/locate.ts</span>
+    <span class="fn">locateSourceForTarget(targetUrl) → resolveRouteFile(pathname) → isInsideRepoSrc(abs)</span>
+    <div class="d">
+      Walks <code>src/app/…</code> segment by segment. When a segment has no matching folder (a UUID,
+      say) it falls back to the single <code>[param]</code> folder at that level — so
+      <code>/api/coborrower/f9695e4c-…</code> resolves to
+      <code>src/app/api/coborrower/[leadId]/route.ts</code>. Reads at most 12,000 chars.
+      <b>Hard boundary:</b> it can only ever return a path inside repo <code>src/</code>.
+    </div>
+    <div class="io">
+      <div class="in">finding.target_url</div>
+      <div class="out">{ repoRelPath, absPath, content, truncated } — or <code>null</code></div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-teal">
+    <div class="t">The chat agent <span class="pill p-ai">LangChain</span></div>
+    <span class="path">src/lib/security/chat/resolve-agent.ts</span>
+    <span class="fn">runResolveTurn({finding, source, history, userMessage}) · systemPrompt() · parseProposedFix()</span>
+    <div class="d">
+      Plain <code>ChatOpenAI.invoke()</code> over a message array built from
+      <code>SystemMessage</code> / <code>HumanMessage</code> / <code>AIMessage</code>
+      (<code>@langchain/core/messages</code>), temperature 0.1. The system prompt embeds the finding,
+      its evidence JSON, and the <b>real file contents</b>, and tells the model the codebase's own
+      helpers (<code>requireLeadAccess</code>, <code>requireSalesHead</code>,
+      <code>getAuthenticatedAppUser</code>). When you say “apply it”, the model appends a block:
+      <div class="mono" style="margin-top:6px">===PROPOSED_FIX_START=== { file, search, replace, explanation } ===PROPOSED_FIX_END===</div>
+      <code>parseProposedFix()</code> strips it out of the visible reply and validates it.
+    </div>
+    <div class="io">
+      <div class="out"><span class="pill p-db">DB</span> INSERT 2 rows into <b>security_finding_messages</b> (your turn + the assistant turn, with <code>proposed_fix</code> jsonb)</div>
+    </div>
+  </div>
+  <div class="arrow">↓ <small>you press “Resolve &amp; Apply”</small></div>
+  <div class="box b-red">
+    <div class="t">Auto-apply — this writes live source code</div>
+    <span class="path">src/app/api/it/security/findings/[id]/resolve/route.ts</span>
+    <span class="fn">POST() · makeDiff()</span>
+    <div class="d">Six hard rails, in order:</div>
+    <ol style="margin:6px 0 0 20px;font-size:14px">
+      <li><b>Off by default</b> — without <code>SECURITY_AUTOFIX_ENABLED=1</code> it returns 409 + the diff for you to apply by hand.</li>
+      <li><b>The model's file path is not trusted</b> — the file is re-located server-side from <code>target_url</code>.</li>
+      <li>Must be inside <code>src/</code> and end in <code>.ts</code>/<code>.tsx</code>.</li>
+      <li>The <code>search</code> string must occur <b>exactly once</b>. Zero → 409 “code no longer matches”. Two+ → 409 “ambiguous”. It never guesses.</li>
+      <li>Writes a <code>.bak</code> backup, then the change, then <b>re-reads and verifies</b> it.</li>
+      <li>Any failure → the original content is written straight back. The app can't be left broken.</li>
+    </ol>
+    <div class="io">
+      <div class="out"><b>the .ts file on disk</b> + a <code>.bak</code> sibling</div>
+      <div class="out"><span class="pill p-db">DB</span> UPDATE <b>security_findings</b> SET status='resolved', resolution_method='auto_apply', resolution_report (diff, backup path, IP, user-agent, who, when)</div>
+      <div class="out"><span class="pill p-db">DB</span> INSERT <b>security_finding_actions</b> (append-only audit)</div>
+      <div class="out"><span class="pill p-db">DB</span> INSERT <b>security_finding_messages</b> role='system' (audit line in the transcript)</div>
+    </div>
+  </div>
+</div>
+
+<div class="box b-slate">
+  <div class="t">The audit trail behind the History tab</div>
+  <span class="path">src/lib/security/resolution-audit.ts</span>
+  <span class="fn">recordFindingAction(input) · requestOrigin(req) · ACTION_LABELS</span>
+  <div class="d">
+    Every triage action — acknowledged, resolved, false_positive, reopened, auto_apply — appends one
+    row with the actor <b>and</b> the IP it came from. IP extraction matches the attack detector
+    exactly (first hop of <code>x-forwarded-for</code>, else <code>x-real-ip</code>), so a
+    <i>resolution</i> IP and an <i>attack</i> IP are directly comparable. Reopening adds a row rather
+    than erasing history. Writes here are best-effort — an audit failure never fails your action.
+  </div>
+</div>
+
+<!-- ============================================= -->
+<h2 id="live">9 · Part H — Live Attacks (a completely separate pipeline)</h2>
+
+<div class="note">
+The scanner is <b>proactive</b> — it goes looking for open doors once, when you run it.
+Live Attacks is <b>reactive</b> — it watches real traffic all the time. Different code, different
+table, different tab. No LangChain or LangGraph anywhere in this half.
+</div>
+
+<div class="flow">
+  <div class="box b-slate">
+    <div class="t">Every single HTTP request</div>
+    <span class="path">src/middleware.ts:105</span>
+    <div class="d">Runs on the <b>Edge</b> runtime, before the <code>/api</code> early-return, so API
+      traffic is covered too. Entirely wrapped in <code>try/catch</code> — detection can never break
+      routing. Off unless <code>SECURITY_DETECTION_ENABLED=1</code>.</div>
+  </div>
+  <div class="arrow">↓ splits in two</div>
+  <div class="cols">
+    <div class="box b-amber">
+      <div class="t">Traffic shape (per IP, over time)</div>
+      <span class="path">src/lib/security/rate-watch.ts</span>
+      <span class="fn">trackRequest({ip, path, method})</span>
+      <div class="d">Called on <b>every</b> request — benign traffic has to be counted for the rates
+        to mean anything. In-memory Map, 60s window, capped at 20,000 IPs, one event per IP per
+        signal per 5 minutes so the detector can't become the DoS.</div>
+      <div class="io">
+        <div class="out">rate_flood (300 req/min) · path_enumeration (60 distinct paths/min) · auth_bruteforce (15 auth hits/min)</div>
+      </div>
+    </div>
+    <div class="box b-red">
+      <div class="t">Payload content (this one request)</div>
+      <span class="path">src/lib/security/detect.ts</span>
+      <span class="fn">detectThreat(input) · detectBodyThreat(text)</span>
+      <div class="d">Pure regex, Edge-safe, tuned for <b>very few false positives</b> — the blocking
+        rules only match payloads that essentially never appear in real CRM traffic. Body scanning is
+        separately opt-in via <code>SECURITY_INSPECT_BODY=1</code> and reads a
+        <code>request.clone()</code> so the route still gets its body.</div>
+    </div>
+  </div>
+  <div class="arrow">↓ <small>a payload signal beats a rate signal when both fire</small></div>
+  <div class="box b-blue">
+    <span class="path">src/lib/security/report-event.ts</span>
+    <span class="fn">postSecurityEvent(origin, payload)</span>
+    <div class="d">Edge can't reach Postgres, so it <code>fetch()</code>es a Node route with the
+      shared secret and a 2.5s timeout. No <code>SECURITY_INTERNAL_SECRET</code> → this is a no-op,
+      which is the real off-switch for the whole feature.</div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-purple">
+    <span class="path">src/app/api/internal/security-events/route.ts</span>
+    <span class="fn">POST() · sendCriticalAlert()</span>
+    <div class="d">Rejects unsigned posts (403). Counts events from the same IP in the last 5 minutes
+      — 10+ escalates this event to <b>critical</b>. Critical events email
+      <code>SECURITY_ALERT_EMAIL</code> and optionally WhatsApp, rate-limited to one per IP per
+      15 minutes, sent via <code>after()</code> so the ingest stays fast under a flood.</div>
+    <div class="io">
+      <div class="out"><span class="pill p-db">DB</span> INSERT <b>security_events</b></div>
+      <div class="out">sendEmail() — <span class="mono">src/lib/email/mailer.ts</span></div>
+      <div class="out">MetaWhatsAppAdapter.sendTemplate()/sendText() — <span class="mono">src/lib/whatsapp/meta.ts</span></div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="box b-green">
+    <span class="path">src/app/(dashboard)/it/security/live/page.tsx</span>
+    <div class="d">Reads the last 14 days (max 300 rows) from <b>security_events</b> straight from
+      Drizzle, plus SQL-side severity aggregates. <code>AutoRefresh.tsx</code> re-fetches on a timer.</div>
+  </div>
+</div>
+
+<h3>Every live-attack type it can catch</h3>
+<table>
+<tr><th>Event type</th><th>Severity</th><th>Blocked?</th><th>What triggers it</th></tr>
+<tr><td class="mono">jndi_injection</td><td><span class="pill p-crit">critical</span></td><td>blocked</td><td>Log4Shell <code>${jndi:…}</code> / <code>${env:…}</code> lookups</td></tr>
+<tr><td class="mono">sql_injection</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>union select</code>, <code>or 1=1</code>, <code>pg_sleep(</code>, <code>information_schema</code>, <code>xp_cmdshell</code></td></tr>
+<tr><td class="mono">xss</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>&lt;script</code>, <code>onerror=</code>, <code>javascript:</code>, <code>document.cookie</code></td></tr>
+<tr><td class="mono">path_traversal</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>../</code>, <code>%2e%2e%2f</code>, <code>/etc/passwd</code>, <code>boot.ini</code></td></tr>
+<tr><td class="mono">null_byte</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>%00</code>, <code>\x00</code>, a real NUL</td></tr>
+<tr><td class="mono">command_injection</td><td><span class="pill p-high">high</span></td><td>blocked</td><td>A shell metacharacter <i>followed by an actual command</i> — <code>; cat </code>, <code>| nc </code>, <code>$(whoami)</code>, <code>/bin/sh</code></td></tr>
+<tr><td class="mono">ssrf</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>169.254.169.254</code>, <code>metadata.google.internal</code>, loopback URLs, <code>gopher://</code>, <code>file:///</code></td></tr>
+<tr><td class="mono">lfi_rfi</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>php://filter</code>, <code>phar://</code>, <code>expect://</code> — meaningless to Next.js, so their presence <i>is</i> the signal</td></tr>
+<tr><td class="mono">nosql_injection</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>[$ne]</code>, <code>"$where":</code>, <code>$regex</code> operators</td></tr>
+<tr><td class="mono">crlf_injection</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>%0d%0a</code> in the raw URL (response splitting)</td></tr>
+<tr><td class="mono">proto_pollution</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>__proto__</code>, <code>constructor[prototype</code></td></tr>
+<tr><td class="mono">xxe</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>&lt;!ENTITY</code>, <code>&lt;!DOCTYPE … SYSTEM</code></td></tr>
+<tr><td class="mono">sensitive_file_probe</td><td><span class="pill p-high">high</span></td><td>blocked</td><td><code>.env</code>, <code>.git/</code>, <code>id_rsa</code>, <code>wp-admin</code>, <code>phpmyadmin</code>, <code>dump.sql</code></td></tr>
+<tr><td class="mono">scanner_ua</td><td><span class="pill p-high">high</span></td><td>blocked</td><td>User-Agent contains sqlmap, nikto, nmap, nuclei, acunetix, hydra…</td></tr>
+<tr><td class="mono">method_abuse</td><td><span class="pill p-med">medium</span></td><td>blocked</td><td>TRACE / TRACK / CONNECT</td></tr>
+<tr><td class="mono">sensitive_unauth</td><td><span class="pill p-med">medium</span></td><td>logged</td><td>No session on a PII endpoint</td></tr>
+<tr><td class="mono">open_redirect</td><td><span class="pill p-low">low</span></td><td>logged</td><td>A redirect param pointing off-host</td></tr>
+<tr><td class="mono">rate_flood</td><td><span class="pill p-high">high</span></td><td>logged¹</td><td>300 requests/min from one IP</td></tr>
+<tr><td class="mono">auth_bruteforce</td><td><span class="pill p-high">high</span></td><td>logged</td><td>15/min on /login, /forgot-password, /change-password, /api/auth/*</td></tr>
+<tr><td class="mono">path_enumeration</td><td><span class="pill p-med">medium</span></td><td>logged</td><td>60 distinct paths/min from one IP</td></tr>
+</table>
+<p style="font-size:13px;color:var(--muted)">¹ <code>SECURITY_RATE_BLOCK=1</code> makes it answer 429 + Retry-After instead. Off by default because
+a dealer's whole office behind one NAT IP is legitimately noisy. <code>SECURITY_DETECTION_MODE=monitor</code>
+downgrades every block to a log without a code change.</p>
+
+<!-- ============================================= -->
+<h2 id="db">10 · Database — all 6 tables</h2>
+
+<p>Yes, the database is deeply involved. Six tables, created by migrations
+<code>E-215</code> → <code>E-219</code>, mirrored in
+<code class="mono">src/lib/db/schema.ts:9052-9267</code>. This is on the app's AWS Postgres, and it
+shares <b>nothing</b> with the NBFC risk engine's <code>risk_hypotheses</code> / <code>risk_card_runs</code>.</p>
+
+<table>
+<tr><th>Table</th><th>Migration</th><th>One row =</th><th>Written by</th><th>Read by</th></tr>
+<tr>
+  <td class="mono"><b>security_scan_runs</b></td><td class="mono">E-215</td>
+  <td>One scan execution</td>
+  <td>beginScan / completeScan / failScan · <span class="mono">scan-run.ts</span></td>
+  <td>page.tsx header, scan/status, report-data</td>
+</tr>
+<tr>
+  <td class="mono"><b>security_checks</b></td><td class="mono">E-215</td>
+  <td>One probe type in the catalogue</td>
+  <td>seedCatalogue() · <span class="mono">agent/graph.ts:223</span> (upsert on slug)</td>
+  <td>reference only today</td>
+</tr>
+<tr>
+  <td class="mono"><b>security_findings</b></td><td class="mono">E-215<br>+218,+219 cols</td>
+  <td><b>One card on your screen</b></td>
+  <td>persistFindings() · findings/[id] PATCH · resolve POST</td>
+  <td>page.tsx, history, report-data, chat, resolve</td>
+</tr>
+<tr>
+  <td class="mono"><b>security_finding_messages</b></td><td class="mono">E-218</td>
+  <td>One chat turn (user / assistant / system)</td>
+  <td>chat POST · resolve POST · findings PATCH</td>
+  <td>chat GET → ResolutionChat.tsx</td>
+</tr>
+<tr>
+  <td class="mono"><b>security_finding_actions</b></td><td class="mono">E-219</td>
+  <td>One triage action + who + which IP (append-only)</td>
+  <td>recordFindingAction()</td>
+  <td>history/page.tsx → ResolutionHistory.tsx</td>
+</tr>
+<tr>
+  <td class="mono"><b>security_events</b></td><td class="mono">E-216<br>+217 index</td>
+  <td>One suspicious live request</td>
+  <td>POST /api/internal/security-events</td>
+  <td>live/page.tsx, events/count, events/[id]</td>
+</tr>
+</table>
+
+<h3>The three indexes that carry real logic</h3>
+<div class="cols">
+  <div class="box b-purple">
+    <div class="t">The scan lock</div>
+    <span class="fn">security_scan_runs_env_running_uidx</span>
+    <div class="d"><code>UNIQUE (target_env) WHERE status='running'</code> — the database itself
+      guarantees one live scan per environment. Not an app-level check that can race.</div>
+  </div>
+  <div class="box b-purple">
+    <div class="t">The dedup key</div>
+    <span class="fn">security_findings_open_fingerprint_uidx</span>
+    <div class="d"><code>UNIQUE (fingerprint) WHERE status &lt;&gt; 'resolved'</code> — the same
+      vulnerability found again updates one row; a <i>resolved</i> one that reappears becomes a new row.</div>
+  </div>
+  <div class="box b-purple">
+    <div class="t">The live-attack read path</div>
+    <span class="fn">security_events_type_occurred_idx</span>
+    <div class="d">Added in E-217 because the volumetric rules grow this table far faster than the
+      payload rules do.</div>
+  </div>
+</div>
+
+<h3>Key columns on <span class="mono">security_findings</span></h3>
+<table>
+<tr><th>Column</th><th>Meaning</th></tr>
+<tr><td class="mono">severity</td><td>critical | high | medium | low | info — <b>from the probe, never the LLM</b></td></tr>
+<tr><td class="mono">confidence</td><td>confirmed | likely | possible — the CONFIRMED badge on your cards</td></tr>
+<tr><td class="mono">status</td><td>open | acknowledged | resolved | false_positive</td></tr>
+<tr><td class="mono">evidence_json</td><td>Status code, matched PII types, body snippet, which role saw it, discoveredBy</td></tr>
+<tr><td class="mono">reproduction</td><td>The literal curl command to reproduce it</td></tr>
+<tr><td class="mono">fingerprint</td><td>sha256(slug|method|path|title) — the dedup identity</td></tr>
+<tr><td class="mono">resolution_report</td><td>jsonb: the diff, backup path, who applied it, from which IP, verified true/false</td></tr>
+<tr><td class="mono">resolved_ip / resolved_user_agent / resolved_by_email</td><td>E-219 denormalised copies so History renders without a join</td></tr>
+</table>
+
+<!-- ============================================= -->
+<h2 id="ai">11 · LangChain vs LangGraph — exactly where, and why</h2>
+
+<h3>Every AI import in the security feature</h3>
+<table>
+<tr><th>Package</th><th>What's imported</th><th>File · line</th><th>Used for</th></tr>
+<tr><td class="mono">@langchain/langgraph</td><td class="mono">StateGraph, Annotation, START, END</td><td class="mono">src/lib/security/agent/graph.ts:12</td><td>The 4-node scan pipeline</td></tr>
+<tr><td class="mono">@langchain/openai</td><td class="mono">ChatOpenAI</td><td class="mono">src/lib/security/agent/graph.ts:13</td><td>plan_targets + llm_triage</td></tr>
+<tr><td class="mono">@langchain/openai</td><td class="mono">ChatOpenAI</td><td class="mono">src/lib/security/chat/resolve-agent.ts:11</td><td>The per-finding fix chat</td></tr>
+<tr><td class="mono">@langchain/core/messages</td><td class="mono">SystemMessage, HumanMessage, AIMessage</td><td class="mono">src/lib/security/chat/resolve-agent.ts:12</td><td>Replaying chat history to the model</td></tr>
+<tr><td class="mono">@langchain/core/tools</td><td class="mono">tool()</td><td class="mono">src/lib/security/agent/tools.ts:10</td><td>Two tool definitions — <b>currently unused, see below</b></td></tr>
+<tr><td class="mono">zod</td><td class="mono">z</td><td class="mono">agent/tools.ts:11 · chat/route.ts:12</td><td>Tool schemas + request-body validation</td></tr>
+</table>
+
+<h3>Why <b>LangChain</b> here</h3>
+<ul>
+  <li><b>One model interface.</b> <code>ChatOpenAI</code> gives the same <code>.invoke()</code>
+    whether the input is a bare prompt string (planning/triage) or a full message array (chat).
+    Swapping the model is one env var: <code>SECURITY_OPENAI_MODEL</code>.</li>
+  <li><b>Token accounting for free.</b> <code>res.usage_metadata.input_tokens/output_tokens</code> is
+    what fills <code>prompt_tokens</code> / <code>completion_tokens</code> on the scan run — you can
+    see what a scan cost.</li>
+  <li><b>Message-type discipline.</b> <code>SystemMessage</code>/<code>HumanMessage</code>/<code>AIMessage</code>
+    let the chat route replay a stored transcript with correct roles without hand-rolling the payload.</li>
+  <li><b>It degrades to nothing.</b> Both <code>makeModel()</code> functions return <code>null</code>
+    when <code>OPENAI_API_KEY</code> is unset. The scanner still finds everything; the chat still
+    returns templated remediation text.</li>
+</ul>
+
+<h3>Why <b>LangGraph</b> here</h3>
+<ul>
+  <li><b>The pipeline is a state machine, so write it as one.</b> plan → probe → triage → write has
+    real ordering constraints; the graph encodes them.</li>
+  <li><b>The reducer solves the token-summing problem.</b> Two nodes both spend tokens; the
+    <code>(a,b) ⇒ a+b</code> reducer on <code>promptTokens</code> merges them automatically.</li>
+  <li><b>Isolation.</b> A node returning <code>{}</code> on failure keeps the run alive with a
+    well-defined state. That's how a missing API key turns into a degraded scan rather than a crash.</li>
+  <li><b>It's honest about who's in charge.</b> The LLM lives in exactly two nodes; the node that
+    determines severity has no model in it at all. That boundary is visible in the graph, which
+    matters a lot for a security tool.</li>
+</ul>
+
+<div class="bad">
+<b>What the AI is NOT allowed to do here</b>
+<ul style="margin-bottom:0">
+  <li>It cannot set or change severity (graph.ts:172 — “Severity is intentionally NOT read from the model”).</li>
+  <li>It cannot invent a finding — every finding object comes from a probe.</li>
+  <li>It cannot choose an arbitrary URL — <code>parsePathArray()</code> keeps only <code>/api/</code> paths.</li>
+  <li>It cannot choose which file gets patched — <code>resolve/route.ts</code> re-locates the file itself.</li>
+  <li>It cannot make a fuzzy edit — the replacement must match exactly once or it's refused.</li>
+</ul>
+</div>
+
+<!-- ============================================= -->
+<h2 id="truth">12 · Honest notes — dead code and real limits</h2>
+
+<div class="note">
+<b>1. The LangChain <code>tool()</code> definitions are currently unused.</b>
+<code class="mono">buildSecurityTools()</code> in <code>src/lib/security/agent/tools.ts:40</code>
+defines two proper LangChain tools (<code>inspectPage</code>, <code>listKnownSurfaces</code>) with zod
+schemas — but nothing calls it, and the model is never <code>bindTools()</code>-ed. The planner
+instead calls the plain function <code>navigateAndInspect()</code> directly and puts the result into
+the prompt text. So this is a <b>single-shot prompt</b>, not a tool-calling agent loop. The scaffolding
+is there for when someone wants the model to explore on its own.
+</div>
+
+<div class="note">
+<b>2. <code>security_findings.llm_model</code>, <code>prompt_tokens</code>, <code>completion_tokens</code>
+are never written per-finding.</b> The columns exist (E-215), but token counts are only rolled up onto
+<code>security_scan_runs</code>. <code>LLM_MODEL_NAME</code> is exported from graph.ts and never imported.
+</div>
+
+<div class="note">
+<b>3. <code>surfaces_walked</code> is an estimate</b> — it's the constant
+<code>CURATED_SURFACE_COUNT</code> (the four seed arrays added together, engine.ts:24), not a live
+count of what was actually hit.
+</div>
+
+<div class="note">
+<b>4. The in-app Run Scan button only works where Chromium can launch.</b> On Vercel serverless it
+returns 501 and tells you to use the CLI. On the Hostinger VPS it needs
+<code>npx playwright install chromium</code>.
+</div>
+
+<div class="note">
+<b>5. Live detection is off unless two env vars are set</b> —
+<code>SECURITY_DETECTION_ENABLED=1</code> <i>and</i> <code>SECURITY_INTERNAL_SECRET</code>. Without the
+secret, <code>postSecurityEvent()</code> silently no-ops and the ingest route 503s.
+</div>
+
+<h3>What this system genuinely cannot see</h3>
+<ul>
+  <li><b>Anything that bypasses the app.</b> Someone with leaked credentials hitting RDS on 5432, S3,
+    or Supabase with the service-role key never touches middleware. That needs CloudTrail and RDS logs.</li>
+  <li><b>A stolen session cookie.</b> It is a valid authenticated request and looks identical to real use.</li>
+  <li><b>Failed passwords.</b> Sign-in goes browser→Supabase directly, so wrong-password attempts are
+    invisible; <code>auth_bruteforce</code> only sees request <i>volume</i> on the auth routes.</li>
+  <li><b>Real DDoS mitigation.</b> <code>rate_flood</code> makes a flood <i>visible</i>; absorbing one
+    belongs upstream — Cloudflare in front of the domain, <code>limit_req</code> in nginx.</li>
+  <li><b>Business-logic abuse</b> by an authenticated user with a legitimate role.</li>
+</ul>
+
+<h3>Every environment variable in one place</h3>
+<table>
+<tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+<tr><td class="mono">SECURITY_SCAN_BASE_URL</td><td class="mono">http://localhost:3000</td><td>What gets scanned</td></tr>
+<tr><td class="mono">SECURITY_ALLOW_PROD</td><td>unset</td><td>Must be <code>1</code> to scan crm.itarang.com, else it throws</td></tr>
+<tr><td class="mono">SECURITY_SCAN_MODE</td><td class="mono">safe</td><td><code>aggressive</code> adds the mutating upload probe</td></tr>
+<tr><td class="mono">SECURITY_OPENAI_MODEL</td><td class="mono">gpt-4o-mini</td><td>Model for plan / triage / fix-chat</td></tr>
+<tr><td class="mono">OPENAI_API_KEY</td><td>unset</td><td>Absent → LLM nodes no-op, deterministic probes still run</td></tr>
+<tr><td class="mono">SECURITY_AUTOFIX_ENABLED</td><td>unset</td><td><code>1</code> lets Resolve write to disk; otherwise 409 + diff</td></tr>
+<tr><td class="mono">SECURITY_DETECTION_ENABLED</td><td>unset</td><td><code>1</code> turns on live attack detection</td></tr>
+<tr><td class="mono">SECURITY_INTERNAL_SECRET</td><td>unset</td><td>Required — shared secret between Edge middleware and the ingest route</td></tr>
+<tr><td class="mono">SECURITY_DETECTION_MODE</td><td class="mono">block</td><td><code>monitor</code> = log everything, block nothing</td></tr>
+<tr><td class="mono">SECURITY_INSPECT_BODY</td><td>unset</td><td><code>1</code> also scans POST/PUT/PATCH bodies ≤ 100 KB</td></tr>
+<tr><td class="mono">SECURITY_RATE_BLOCK</td><td>unset</td><td><code>1</code> → 429 on rate_flood instead of logging</td></tr>
+<tr><td class="mono">SECURITY_RATE_FLOOD_PER_MIN / _AUTH_ / _PATHS_</td><td class="mono">300 / 15 / 60</td><td>Volumetric thresholds</td></tr>
+<tr><td class="mono">SECURITY_ALERT_EMAIL</td><td class="mono">MAIL_FROM ?? it@itarang.com</td><td>Where critical live-attack alerts go</td></tr>
+<tr><td class="mono">SECURITY_ALERT_WHATSAPP[_TEMPLATE][_LANG]</td><td>unset</td><td>Optional WhatsApp alert on critical events</td></tr>
+<tr><td class="mono">E2E_&lt;ROLE&gt;_EMAIL / _PASSWORD</td><td>seeded fallbacks</td><td>Login credentials the scanner uses per role</td></tr>
+</table>
+
+<p style="margin-top:36px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:14px">
+Generated from the source in this repository — <code>src/lib/security/**</code>,
+<code>src/app/api/it/security/**</code>, <code>src/app/api/internal/security-events/**</code>,
+<code>src/app/(dashboard)/it/security/**</code>, <code>scripts/security-scan.ts</code>,
+<code>src/middleware.ts</code>, <code>src/lib/db/schema.ts:9052-9267</code>,
+migrations <code>E-215</code>…<code>E-219</code>.
+</p>
+
+</div>
+</body>
+</html>

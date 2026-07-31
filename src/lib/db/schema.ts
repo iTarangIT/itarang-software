@@ -9351,3 +9351,230 @@ export const passwordChangeOtps = pgTable(
     // as E-211/E-212).
   }),
 );
+
+// --- E-215: CRM SECURITY SCANNER (standalone agent) ---
+//
+// A NEW, self-contained security-testing agent: it drives Playwright through
+// the CRM (starting at dealer onboarding), actively probes for vulnerabilities,
+// and records findings. INDEPENDENT of the NBFC risk engine (risk_hypotheses /
+// risk_card_runs / the Python sandbox) — shares no tables, no code. Do not join
+// these to the risk_* family. See drizzle/E-215_security_scanner.sql.
+
+// One row per scan. The partial unique index (target_env) WHERE status='running'
+// is the single-flight lock (migration-only) — see src/lib/security/scan-run.ts.
+export const securityScanRuns = pgTable(
+  "security_scan_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    target_base_url: text("target_base_url").notNull(),
+    // 'local' | 'sandbox' | 'prod' — derived from the URL host.
+    target_env: varchar("target_env", { length: 16 }).notNull(),
+    // 'safe' | 'aggressive'. safe skips state-mutating probes.
+    mode: varchar({ length: 12 }).default("safe").notNull(),
+    // 'manual' | 'cron' | 'cli'
+    triggered_by: varchar("triggered_by", { length: 12 }).notNull(),
+    actor_user_id: uuid("actor_user_id"),
+    // 'running' | 'completed' | 'failed'
+    status: varchar({ length: 16 }).default("running").notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    surfaces_walked: integer("surfaces_walked").default(0).notNull(),
+    findings_total: integer("findings_total").default(0).notNull(),
+    findings_critical: integer("findings_critical").default(0).notNull(),
+    findings_high: integer("findings_high").default(0).notNull(),
+    findings_medium: integer("findings_medium").default(0).notNull(),
+    findings_low: integer("findings_low").default(0).notNull(),
+    findings_info: integer("findings_info").default(0).notNull(),
+    prompt_tokens: integer("prompt_tokens").default(0).notNull(),
+    completion_tokens: integer("completion_tokens").default(0).notNull(),
+    error: text("error"),
+  },
+  (t) => ({
+    startedIdx: index("security_scan_runs_started_idx").on(t.started_at),
+    // security_scan_runs_env_running_uidx is partial — migration-only.
+  }),
+);
+
+// Catalogue of checks the agent knows how to run, keyed by slug. Seeded by the
+// app on first run.
+export const securityChecks = pgTable(
+  "security_checks",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    slug: varchar({ length: 64 }).notNull(),
+    // 'authz' | 'exposure' | 'injection' | 'upload_headers'
+    category: varchar({ length: 24 }).notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    // critical | high | medium | low | info
+    default_severity: varchar("default_severity", { length: 12 }).default("medium").notNull(),
+    owasp_ref: varchar("owasp_ref", { length: 32 }),
+    cwe_ref: varchar("cwe_ref", { length: 16 }),
+    // Whether running this check mutates server state (skipped in safe mode).
+    mutating: boolean().default(false).notNull(),
+    retired_at: timestamp("retired_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    slugUidx: uniqueIndex("security_checks_slug_uidx").on(t.slug),
+  }),
+);
+
+// One row per vulnerability the scan surfaced. severity/confidence are set by
+// deterministic probe rules, never by the LLM. Open findings are deduped by
+// fingerprint (partial unique WHERE status <> 'resolved', migration-only).
+export const securityFindings = pgTable(
+  "security_findings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    run_id: uuid("run_id")
+      .notNull()
+      .references(() => securityScanRuns.id, { onDelete: "cascade" }),
+    check_slug: varchar("check_slug", { length: 64 }).notNull(),
+    category: varchar({ length: 24 }).notNull(),
+    // critical | high | medium | low | info
+    severity: varchar({ length: 12 }).notNull(),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    target_url: text("target_url").notNull(),
+    http_method: varchar("http_method", { length: 8 }),
+    evidence_json: jsonb("evidence_json"),
+    reproduction: text("reproduction"),
+    remediation: text("remediation"),
+    owasp_ref: varchar("owasp_ref", { length: 32 }),
+    cwe_ref: varchar("cwe_ref", { length: 16 }),
+    // 'confirmed' | 'likely' | 'possible'
+    confidence: varchar({ length: 10 }).default("possible").notNull(),
+    // 'open' | 'acknowledged' | 'resolved' | 'false_positive'
+    status: varchar({ length: 16 }).default("open").notNull(),
+    fingerprint: varchar({ length: 64 }).notNull(),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    llm_model: varchar("llm_model", { length: 64 }),
+    prompt_tokens: integer("prompt_tokens"),
+    completion_tokens: integer("completion_tokens"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-218: resolution bookkeeping — filled when a finding is resolved via the
+    // AI resolution chat (auto-apply) or the manual triage buttons.
+    resolution_summary: text("resolution_summary"),
+    resolution_report: jsonb("resolution_report"),
+    resolved_by: uuid("resolved_by"),
+    // 'auto_apply' | 'manual'
+    resolution_method: varchar("resolution_method", { length: 16 }),
+    // E-219: denormalised origin of the LATEST resolution, so the History tab
+    // renders "resolved by X from IP Y" without a join. The full append-only
+    // trail lives in security_finding_actions.
+    resolved_ip: varchar("resolved_ip", { length: 64 }),
+    resolved_user_agent: text("resolved_user_agent"),
+    resolved_by_email: text("resolved_by_email"),
+  },
+  (t) => ({
+    runIdx: index("security_findings_run_idx").on(t.run_id),
+    severityIdx: index("security_findings_severity_idx").on(t.severity),
+    statusIdx: index("security_findings_status_idx").on(t.status),
+    // security_findings_open_fingerprint_uidx is partial — migration-only.
+  }),
+);
+
+// E-218 — per-finding AI remediation chat. One row per turn (mirrors
+// conversation_messages). An assistant turn that proposes an applyable edit
+// carries proposed_fix = { file, search, replace, explanation }; the Resolve
+// step applies it to disk as a deterministic single-occurrence replacement.
+export const securityFindingMessages = pgTable(
+  "security_finding_messages",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    finding_id: uuid("finding_id")
+      .notNull()
+      .references(() => securityFindings.id, { onDelete: "cascade" }),
+    // 'user' | 'assistant' | 'system'
+    role: text().notNull(),
+    message: text().notNull(),
+    proposed_fix: jsonb("proposed_fix"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    findingIdx: index("security_finding_messages_finding_idx").on(t.finding_id, t.created_at),
+  }),
+);
+
+// E-219 — append-only triage/resolution audit trail per finding. One row per
+// action (acknowledged | resolved | false_positive | reopened | auto_apply) with
+// the actor AND the request origin it came from (ip/user_agent). A reopen adds a
+// row rather than erasing history, so the History tab can show the full story.
+export const securityFindingActions = pgTable(
+  "security_finding_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    finding_id: uuid("finding_id")
+      .notNull()
+      .references(() => securityFindings.id, { onDelete: "cascade" }),
+    // 'acknowledged' | 'resolved' | 'false_positive' | 'reopened' | 'auto_apply'
+    action: varchar({ length: 24 }).notNull(),
+    // 'auto_apply' | 'manual' | null
+    method: varchar({ length: 16 }),
+    actor_user_id: uuid("actor_user_id"),
+    actor_email: text("actor_email"),
+    actor_role: varchar("actor_role", { length: 32 }),
+    ip: varchar({ length: 64 }),
+    user_agent: text("user_agent"),
+    summary: text("summary"),
+    detail: jsonb("detail"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    findingIdx: index("security_finding_actions_finding_idx").on(t.finding_id, t.created_at),
+    actionIdx: index("security_finding_actions_action_idx").on(t.action, t.created_at),
+    ipIdx: index("security_finding_actions_ip_idx").on(t.ip),
+  }),
+);
+
+// --- E-216: LIVE-ATTACK EVENT LOG (runtime intrusion detection) ---
+//
+// Companion to E-215's scanner. One row per suspicious request caught in real
+// time by the detection layer in src/middleware.ts. Written via the Node route
+// POST /api/internal/security-events (Edge middleware can't reach Postgres).
+// See drizzle/E-216_security_events.sql.
+export const securityEvents = pgTable(
+  "security_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    occurred_at: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+    // Payload rules (src/lib/security/detect.ts):
+    //   'sql_injection' | 'xss' | 'path_traversal' | 'null_byte' | 'scanner_ua'
+    //   | 'sensitive_unauth' | 'command_injection' | 'ssrf' | 'lfi_rfi'
+    //   | 'jndi_injection' | 'nosql_injection' | 'crlf_injection'
+    //   | 'proto_pollution' | 'xxe' | 'open_redirect' | 'sensitive_file_probe'
+    //   | 'method_abuse'
+    // Volumetric rules (src/lib/security/rate-watch.ts):
+    //   'rate_flood' | 'path_enumeration' | 'auth_bruteforce'
+    // Legacy: 'burst'
+    event_type: varchar("event_type", { length: 32 }).notNull(),
+    // critical | high | medium | low | info
+    severity: varchar({ length: 12 }).notNull(),
+    // 'blocked' | 'logged'
+    action: varchar({ length: 12 }).default("logged").notNull(),
+    ip: varchar({ length: 64 }),
+    actor_user_id: uuid("actor_user_id"),
+    actor_role: varchar("actor_role", { length: 32 }),
+    method: varchar({ length: 8 }),
+    path: text("path").notNull(),
+    query: text("query"),
+    user_agent: text("user_agent"),
+    matched_rule: varchar("matched_rule", { length: 64 }),
+    evidence: jsonb("evidence"),
+    // 'new' | 'reviewed' | 'ignored'
+    status: varchar({ length: 16 }).default("new").notNull(),
+    alerted_at: timestamp("alerted_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    occurredIdx: index("security_events_occurred_idx").on(t.occurred_at),
+    severityIdx: index("security_events_severity_idx").on(t.severity),
+    ipOccurredIdx: index("security_events_ip_occurred_idx").on(t.ip, t.occurred_at),
+    statusIdx: index("security_events_status_idx").on(t.status),
+    // E-217 — the volumetric rules grow this table much faster, and the
+    // dashboard filters by attack type.
+    typeOccurredIdx: index("security_events_type_occurred_idx").on(t.event_type, t.occurred_at),
+  }),
+);
