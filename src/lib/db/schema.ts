@@ -8555,12 +8555,95 @@ export const scrapVendors = pgTable(
     payment_terms: text("payment_terms"),
     credit_limit: numeric("credit_limit", { precision: 14, scale: 2 }),
     active: boolean().default(true).notNull(),
+    // E-222 — captured by the admin onboarding form. The registered ADDRESS
+    // lives on `accounts` (address_line1/2, city, state, pincode already exist
+    // there); only these three are vendor-specific.
+    udyam_number: text("udyam_number"),
+    /**
+     * Reference on the MANUALLY signed vendor agreement (E-222). Deliberately
+     * NOT business_entity_roles.agreement_id, which is reserved for the Digio
+     * document id (M19): "we hold a scan" and "eSign completed" are different
+     * assurances, and one column would let the weaker satisfy a check written
+     * for the stronger.
+     */
+    agreement_ref: text("agreement_ref"),
+    agreement_signed_on: date("agreement_signed_on"),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     entityUnique: uniqueIndex("scrap_vendors_entity_unique").on(t.entity_id),
+  }),
+);
+
+/**
+ * E-222 — the documents captured at vendor onboarding: GSTIN certificate, PAN
+ * card, Udyam certificate (all three mandatory) and an optional manually
+ * signed agreement.
+ *
+ * `entity_id` IS NULLABLE ON PURPOSE. The files are picked before the vendor
+ * exists, so the upload route inserts an UNCLAIMED row and hands back its id;
+ * submitting the form claims it (entity_id + claimed_at). The alternative —
+ * letting the browser hand a storage key back at submit — would make a
+ * client-supplied string a storage path, which is exactly what
+ * src/lib/buyback/storage.ts refuses to allow.
+ *
+ * `doc_type` is free text (GSTIN | PAN | UDYAM | AGREEMENT), per this family's
+ * convention; the vocabulary lives in src/lib/buyback/vendor-docs.ts and is
+ * enforced by zod at the write path.
+ */
+export const scrapVendorDocuments = pgTable(
+  "scrap_vendor_documents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 }).references(() => accounts.id, {
+      onDelete: "cascade",
+    }),
+    doc_type: text("doc_type").notNull(),
+    s3_key: text("s3_key").notNull(),
+    file_name: text("file_name"),
+    content_type: text("content_type"),
+    uploaded_by: uuid("uploaded_by"),
+    claimed_at: timestamp("claimed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("scrap_vendor_documents_entity_idx").on(t.entity_id),
+    // The two partial indexes from E-222 (one current doc per type; unclaimed
+    // sweep) cannot be expressed here — Drizzle has no partial index. They
+    // live only in the migration.
+  }),
+);
+
+/**
+ * E-222 — the record of emailing a vendor their generated portal password.
+ * Modelled on nbfcPortalCredentials (E-002), including its most important
+ * property: NO PASSWORD COLUMN. The plaintext is emailed and never persisted.
+ *
+ * One row per dispatch ATTEMPT. A retry after a bounced email is the normal
+ * case this table exists to make visible, and overwriting the failed row would
+ * erase the only evidence the first send was tried. Latest by created_at is
+ * the current state.
+ */
+export const vendorPortalCredentials = pgTable(
+  "vendor_portal_credentials",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    supabase_user_id: uuid("supabase_user_id").notNull(),
+    /** pending | dispatched | credential_dispatch_failed */
+    dispatch_status: varchar("dispatch_status", { length: 32 }).notNull(),
+    /** The mailer's own sentence — shown to the admin beside the retry button. */
+    last_error: text("last_error"),
+    email_dispatched_at: timestamp("email_dispatched_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("vendor_portal_credentials_entity_idx").on(t.entity_id, t.created_at),
+    statusIdx: index("vendor_portal_credentials_status_idx").on(t.dispatch_status),
   }),
 );
 
