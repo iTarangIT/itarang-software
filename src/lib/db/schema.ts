@@ -9465,6 +9465,8 @@ export const securityEvents = pgTable(
     //   | 'method_abuse'
     // Volumetric rules (src/lib/security/rate-watch.ts):
     //   'rate_flood' | 'path_enumeration' | 'auth_bruteforce'
+    // Auto-block (src/lib/security/blocklist.ts):
+    //   'ip_blocked' — a request refused because its source IP is under a ban
     // Legacy: 'burst'
     event_type: varchar("event_type", { length: 32 }).notNull(),
     // critical | high | medium | low | info
@@ -9479,6 +9481,11 @@ export const securityEvents = pgTable(
     query: text("query"),
     user_agent: text("user_agent"),
     matched_rule: varchar("matched_rule", { length: 64 }),
+    // The rule's matched payload, plus request context under fixed keys:
+    //   net (source-IP provenance + proxy chain) | client (sender fingerprint)
+    //   | geo | request | flags | ban | body_sample | provenance (detector-raised
+    //   vs hand-POSTed — decides whether `ip` is observed or merely claimed).
+    // Written by src/middleware.ts via src/lib/security/fingerprint.ts.
     evidence: jsonb("evidence"),
     // 'new' | 'reviewed' | 'ignored'
     status: varchar({ length: 16 }).default("new").notNull(),
