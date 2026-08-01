@@ -1,7 +1,7 @@
 /**
  * The password iTarang mints for a portal account it creates on someone's
  * behalf — an NBFC partner at activation (E-002), an NBFC sub-user invite, a
- * scrap vendor onboarded by an admin (E-222).
+ * scrap vendor onboarded by an admin (E-223).
  *
  * Extracted because it was defined THREE times before this file existed, once
  * per consumer, byte-identical. A password generator silently drifting between

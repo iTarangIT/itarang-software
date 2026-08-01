@@ -1,6 +1,6 @@
 /**
  * POST /api/admin/buyback/vendors/:entityId/credentials — re-send a vendor
- * their generated portal password (E-222).
+ * their generated portal password (E-223).
  *
  * The recovery path for the only way admin onboarding can half-fail: the vendor
  * and their documents were written, but the credentials email bounced, so

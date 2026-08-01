@@ -4,7 +4,10 @@ import { type NextRequest, NextResponse } from "next/server";
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
 import { detectThreat, detectBodyThreat, type ThreatSignal } from "@/lib/security/detect";
 import { trackRequest, type RateSignal } from "@/lib/security/rate-watch";
-import { postSecurityEvent } from "@/lib/security/report-event";
+import { postSecurityEvent, SECURITY_INGEST_PATH } from "@/lib/security/report-event";
+import { clientIp } from "@/lib/security/client-ip";
+import { fingerprintRequest } from "@/lib/security/fingerprint";
+import { checkBlocked, recordStrike, shouldEmitBlockEvent } from "@/lib/security/blocklist";
 
 // Prevents browsers from serving stale HTML across deploys. Applied to HTML
 // responses only — _next/static assets are excluded by the matcher and keep
@@ -61,6 +64,75 @@ export async function middleware(request: NextRequest) {
   const finalize = (res: NextResponse): NextResponse =>
     isRscRequest ? res : addNoStoreHeaders(res);
 
+  // ── Ban gate (E-216). An IP that has already proven hostile is refused HERE,
+  // before the Supabase round-trip and before any route logic — the point of a
+  // ban is that a banned attacker costs us nothing. The detector further down
+  // only stops the ONE request whose payload matched a rule; this stops every
+  // request from a sender that already earned a ban, however it is dressed up.
+  // Only public source addresses are ever banned — see src/lib/security/blocklist.ts.
+  if (
+    process.env.SECURITY_DETECTION_ENABLED === "1" &&
+    request.nextUrl.pathname !== SECURITY_INGEST_PATH
+  ) {
+    try {
+      const bannedIp = clientIp(request.headers).ip;
+      const ban = checkBlocked(bannedIp);
+      if (ban) {
+        // Record it, but at most once per IP per cooldown — an attacker
+        // retrying 1000×/min must not write 1000 rows.
+        if (bannedIp && shouldEmitBlockEvent(bannedIp)) {
+          const fp = fingerprintRequest(request.headers, {
+            method: request.method,
+            path: request.nextUrl.pathname,
+            host: request.nextUrl.host,
+            search: request.nextUrl.search,
+            authenticated: false,
+          });
+          await postSecurityEvent(request.nextUrl.origin, {
+            event_type: "ip_blocked",
+            severity: "high",
+            action: "blocked",
+            ip: bannedIp,
+            actor_user_id: null,
+            actor_role: null,
+            method: request.method,
+            path: request.nextUrl.pathname,
+            query: request.nextUrl.search || null,
+            user_agent: request.headers.get("user-agent"),
+            matched_rule: "auto-block",
+            reporter: "middleware",
+            evidence: {
+              ban: {
+                reason: ban.reason,
+                blocked_until: new Date(ban.until).toISOString(),
+                strikes: ban.strikes,
+                previous_bans: Math.max(0, ban.bans - 1),
+                earned_by: ban.types,
+              },
+              net: fp.net,
+              client: fp.client,
+              geo: fp.geo,
+              request: fp.request,
+              flags: fp.flags,
+              note: "This IP is under an active auto-ban. Every request from it is refused until the ban expires; further refusals within the cooldown are not logged individually.",
+            },
+          });
+        }
+        return finalize(
+          new NextResponse(JSON.stringify({ error: "Request blocked by security policy." }), {
+            status: 403,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": String(Math.max(1, Math.ceil((ban.until - Date.now()) / 1000))),
+            },
+          }),
+        );
+      }
+    } catch {
+      // The ban gate must never break the app.
+    }
+  }
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -102,12 +174,28 @@ export async function middleware(request: NextRequest) {
   // wrapped so it can never break routing. Runs before the /api early-return so
   // API attacks are seen too. Only flagged requests pay the cost; benign traffic
   // returns from detectThreat() in a few regex tests.
-  if (process.env.SECURITY_DETECTION_ENABLED === "1") {
+  //
+  // The ingest route is exempt: its body carries the offending payload as
+  // `evidence`, so with SECURITY_INSPECT_BODY=1 inspecting it would re-detect
+  // the same attack, post another event, and recurse without bound. This never
+  // fired before only because reporting was silently broken (see ingestOrigin()
+  // in report-event.ts) — fixing that made the loop reachable.
+  if (process.env.SECURITY_DETECTION_ENABLED === "1" && path !== SECURITY_INGEST_PATH) {
     try {
-      const ip =
-        (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
-        request.headers.get("x-real-ip") ||
-        null;
+      // Who is sending this — real (proxy-written) IP, not the spoofable
+      // leftmost X-Forwarded-For entry; plus the client software, geo, and the
+      // behavioural tells that separate a script from a browser. All of it is
+      // attached to the event so a responder never has to guess at the sender.
+      const fp = fingerprintRequest(request.headers, {
+        method: request.method,
+        path,
+        host: request.nextUrl.host,
+        search: request.nextUrl.search,
+        authenticated: !!user,
+        userId: user?.id ?? null,
+        role: (user?.app_metadata as { role?: string } | undefined)?.role ?? null,
+      });
+      const ip = fp.ip;
 
       // Volumetric/behavioural counters (floods, enumeration, auth hammering).
       // Called on EVERY request — benign traffic has to be counted for the rates
@@ -127,6 +215,11 @@ export async function middleware(request: NextRequest) {
       // Body inspection (opt-in via SECURITY_INSPECT_BODY). Clone the request so
       // the ORIGINAL body still reaches the route untouched. Bounded to text-ish
       // bodies under 100 KB so this never stalls the hot path.
+      //
+      // `bodySample` is kept only when the body is what tripped a rule: for a
+      // POSTed payload the URL columns show nothing at all, so without it the
+      // event would name an attack with no visible attack in it.
+      let bodySample: string | null = null;
       if (
         !signal &&
         process.env.SECURITY_INSPECT_BODY === "1" &&
@@ -136,7 +229,12 @@ export async function middleware(request: NextRequest) {
         const len = Number(request.headers.get("content-length") || "0");
         if (/application\/json|x-www-form-urlencoded|text\//i.test(ct) && len > 0 && len <= 100_000) {
           try {
-            signal = detectBodyThreat(await request.clone().text());
+            const body = await request.clone().text();
+            signal = detectBodyThreat(body);
+            // Truncated hard: the body of an attack on a CRM can contain the
+            // customer PII the attacker was reaching for, and this row is read
+            // by IT staff. 1 KB is enough to see the payload in context.
+            if (signal) bodySample = body.slice(0, 1000);
           } catch {
             /* unreadable body — skip */
           }
@@ -152,6 +250,18 @@ export async function middleware(request: NextRequest) {
         // A global safety valve: SECURITY_DETECTION_MODE=monitor downgrades
         // every block to a log without a code change.
         const action = process.env.SECURITY_DETECTION_MODE === "monitor" ? "logged" : signal.action;
+
+        // Strike accounting. Only rules confident enough to block count — the
+        // soft signals (unauthenticated sensitive hit, off-host redirect param,
+        // a flood from a shared dealer NAT) fire on real traffic often enough
+        // that banning on them would lock out legitimate users. Crossing the
+        // threshold bans the IP, so its NEXT request is refused at the gate
+        // above regardless of what it contains.
+        const ban =
+          signal.action === "blocked" && process.env.SECURITY_DETECTION_MODE !== "monitor"
+            ? recordStrike(ip, signal.event_type, signal.severity)
+            : null;
+
         await postSecurityEvent(request.nextUrl.origin, {
           event_type: signal.event_type,
           severity: signal.severity,
@@ -167,7 +277,31 @@ export async function middleware(request: NextRequest) {
           query: request.nextUrl.search || null,
           user_agent: request.headers.get("user-agent"),
           matched_rule: signal.matched_rule,
-          evidence: signal.evidence,
+          reporter: "middleware",
+          // The rule's own evidence (the matched payload) plus everything the
+          // columns can't carry: who sent it, from where, with what software,
+          // and — when a ban was triggered — the ban that resulted.
+          evidence: {
+            ...signal.evidence,
+            ...(bodySample ? { body_sample: bodySample } : {}),
+            net: fp.net,
+            client: fp.client,
+            geo: fp.geo,
+            request: fp.request,
+            flags: fp.flags,
+            ...(ban
+              ? {
+                  ban: {
+                    reason: ban.reason,
+                    blocked_until: new Date(ban.until).toISOString(),
+                    strikes: ban.strikes,
+                    previous_bans: Math.max(0, ban.bans - 1),
+                    earned_by: ban.types,
+                    note: "This event tripped the auto-block threshold. Every further request from this IP is refused until the ban expires.",
+                  },
+                }
+              : {}),
+          },
         });
         if (action === "blocked") {
           // A volumetric block is a rate limit, not a policy violation — 429 +

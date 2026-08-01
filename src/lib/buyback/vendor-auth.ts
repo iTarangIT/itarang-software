@@ -2,7 +2,7 @@
  * Provisioning the Supabase auth user behind a scrap vendor login (E-195).
  *
  * Extracted from POST /api/vendor/register so the ADMIN onboarding path
- * (E-222) uses the same one. Two copies would diverge on the orphan-adoption
+ * (E-223) uses the same one. Two copies would diverge on the orphan-adoption
  * rule below, and that rule is the difference between a vendor who can sign in
  * and one who is permanently told their account is "inactive".
  *

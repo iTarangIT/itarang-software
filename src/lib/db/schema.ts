@@ -8555,12 +8555,12 @@ export const scrapVendors = pgTable(
     payment_terms: text("payment_terms"),
     credit_limit: numeric("credit_limit", { precision: 14, scale: 2 }),
     active: boolean().default(true).notNull(),
-    // E-222 — captured by the admin onboarding form. The registered ADDRESS
+    // E-223 — captured by the admin onboarding form. The registered ADDRESS
     // lives on `accounts` (address_line1/2, city, state, pincode already exist
     // there); only these three are vendor-specific.
     udyam_number: text("udyam_number"),
     /**
-     * Reference on the MANUALLY signed vendor agreement (E-222). Deliberately
+     * Reference on the MANUALLY signed vendor agreement (E-223). Deliberately
      * NOT business_entity_roles.agreement_id, which is reserved for the Digio
      * document id (M19): "we hold a scan" and "eSign completed" are different
      * assurances, and one column would let the weaker satisfy a check written
@@ -8578,7 +8578,7 @@ export const scrapVendors = pgTable(
 );
 
 /**
- * E-222 — the documents captured at vendor onboarding: GSTIN certificate, PAN
+ * E-223 — the documents captured at vendor onboarding: GSTIN certificate, PAN
  * card, Udyam certificate (all three mandatory) and an optional manually
  * signed agreement.
  *
@@ -8610,14 +8610,14 @@ export const scrapVendorDocuments = pgTable(
   },
   (t) => ({
     entityIdx: index("scrap_vendor_documents_entity_idx").on(t.entity_id),
-    // The two partial indexes from E-222 (one current doc per type; unclaimed
+    // The two partial indexes from E-223 (one current doc per type; unclaimed
     // sweep) cannot be expressed here — Drizzle has no partial index. They
     // live only in the migration.
   }),
 );
 
 /**
- * E-222 — the record of emailing a vendor their generated portal password.
+ * E-223 — the record of emailing a vendor their generated portal password.
  * Modelled on nbfcPortalCredentials (E-002), including its most important
  * property: NO PASSWORD COLUMN. The plaintext is emailed and never persisted.
  *
@@ -9548,6 +9548,8 @@ export const securityEvents = pgTable(
     //   | 'method_abuse'
     // Volumetric rules (src/lib/security/rate-watch.ts):
     //   'rate_flood' | 'path_enumeration' | 'auth_bruteforce'
+    // Auto-block (src/lib/security/blocklist.ts):
+    //   'ip_blocked' — a request refused because its source IP is under a ban
     // Legacy: 'burst'
     event_type: varchar("event_type", { length: 32 }).notNull(),
     // critical | high | medium | low | info
@@ -9562,6 +9564,11 @@ export const securityEvents = pgTable(
     query: text("query"),
     user_agent: text("user_agent"),
     matched_rule: varchar("matched_rule", { length: 64 }),
+    // The rule's matched payload, plus request context under fixed keys:
+    //   net (source-IP provenance + proxy chain) | client (sender fingerprint)
+    //   | geo | request | flags | ban | body_sample | provenance (detector-raised
+    //   vs hand-POSTed — decides whether `ip` is observed or merely claimed).
+    // Written by src/middleware.ts via src/lib/security/fingerprint.ts.
     evidence: jsonb("evidence"),
     // 'new' | 'reviewed' | 'ignored'
     status: varchar({ length: 16 }).default("new").notNull(),

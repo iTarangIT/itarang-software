@@ -1,6 +1,6 @@
 /**
  * POST /api/admin/buyback/vendors/uploads — attach a document to a scrap
- * vendor that does not exist yet (E-222).
+ * vendor that does not exist yet (E-223).
  *
  * THE PROBLEM THIS SOLVES. Every other buyback upload derives its key from a
  * request the caller already owns (evidenceKeyFor, uploadKeyFor). Vendor
@@ -24,7 +24,7 @@
  * route and the two evidence routes cannot drift on what a document may be.
  *
  * AuthN/Z: buyback admin only. An abandoned form leaves an unclaimed row, which
- * is identifiable (entity_id IS NULL, indexed by E-222) rather than an
+ * is identifiable (entity_id IS NULL, indexed by E-223) rather than an
  * untracked object in the bucket.
  */
 

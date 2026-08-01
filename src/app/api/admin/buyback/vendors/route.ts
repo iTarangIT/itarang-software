@@ -1,6 +1,6 @@
 /**
  * GET  /api/admin/buyback/vendors  — vendors that can be routed to
- * POST /api/admin/buyback/vendors  — onboard a scrap vendor (E-222)
+ * POST /api/admin/buyback/vendors  — onboard a scrap vendor (E-223)
  *
  * A vendor is not a new kind of entity. It is an `accounts` row — the CRM's
  * existing entity + KYC store — plus a `business_entity_roles` row saying that
@@ -10,7 +10,7 @@
  * but has no role would be invisible to routing, which is a confusing half-state
  * for an admin to land in.
  *
- * E-222 REPLACED THE M18-LITE VERSION OF THIS ROUTE. It used to take seven
+ * E-223 REPLACED THE M18-LITE VERSION OF THIS ROUTE. It used to take seven
  * fields and land the role ACTIVE with no login at all. It now backs a real
  * onboarding form: a registered address, three mandatory documents (GST
  * certificate, PAN card, Udyam certificate), an optional manually signed
@@ -56,7 +56,7 @@ export const runtime = "nodejs";
 export const GET = withErrorHandler(async (req: Request) => {
   await requireBuybackAdmin();
 
-  // `?status=pending` — vendors whose credentials email has not landed (E-222),
+  // `?status=pending` — vendors whose credentials email has not landed (E-223),
   // plus anyone still awaiting vetting. Default stays the routable list, so
   // every existing caller (the routing picker) is unchanged: it must never
   // offer an unvetted vendor, and a "helpful" widening here would leak dealers'
@@ -81,7 +81,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         onboarding_status: v.onboarding_status,
         registered_at: v.registered_at,
         has_login: v.has_login,
-        // E-222 — why they are pending, and whether a retry is the fix.
+        // E-223 — why they are pending, and whether a retry is the fix.
         credential_status: v.credential_status,
         credential_error: v.credential_error,
       })),

@@ -1,5 +1,5 @@
 /**
- * The documents a scrap vendor is onboarded with (E-222).
+ * The documents a scrap vendor is onboarded with (E-223).
  *
  * `scrap_vendor_documents.doc_type` is free text in the DB, per this schema
  * family's convention — this module is the vocabulary, and zod at the write
