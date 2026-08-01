@@ -81,6 +81,10 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "Cache-Control", value: "no-store, must-revalidate" },
           { key: "Pragma", value: "no-cache" },
+          // Stop full URLs (which can carry tokens/ids) leaking to third
+          // parties via Referer — the `upload_headers` security probe flags
+          // this when unset.
+          { key: "Referrer-Policy", value: "no-referrer" },
         ],
       },
     ];

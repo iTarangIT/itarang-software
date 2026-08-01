@@ -57,54 +57,12 @@ export const GET = withErrorHandler(
       const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
       const fyStartStr = `${fyStartYear}-04-01`;
 
-      // First day of the month 5 months back → 6-month trend window incl. current.
-      const sixMonthsAgoDate = new Date(
-        now.getFullYear(),
-        now.getMonth() - 5,
-        1,
-      );
-      const sixMonthsAgoStr = sixMonthsAgoDate.toISOString().slice(0, 10);
-
-      // Revenue-trend granularity (month | week | day). Drives both the
-      // date_trunc bucket and the to_char label below, plus the default lookback
-      // window: month → last 6 months, week → last 8 weeks, day → last 30 days.
-      // An explicit ?trendStart=YYYY-MM-DD&trendEnd=YYYY-MM-DD overrides the
-      // window so the CEO can compare a chosen calendar range.
-      const trendParams = new URL(req.url).searchParams;
-      const granRaw = (trendParams.get("trendGranularity") || "month").toLowerCase();
-      const trendGranularity = (["month", "week", "day"] as const).includes(
-        granRaw as "month" | "week" | "day",
-      )
-        ? (granRaw as "month" | "week" | "day")
-        : "month";
-      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-      const customStart = trendParams.get("trendStart");
-      const customEnd = trendParams.get("trendEnd");
-      let trendStartStr: string;
-      let trendEndStr: string | null = null;
-      // Year-qualified labels so a custom range spanning >1 year stays unambiguous.
-      let trendLabelFmt: string;
-      if (trendGranularity === "day") {
-        const d = new Date(curYear, curMonth, now.getDate() - 29);
-        trendStartStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-        trendLabelFmt = "DD Mon";
-      } else if (trendGranularity === "week") {
-        const d = new Date(curYear, curMonth, now.getDate() - 7 * 7);
-        trendStartStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-        trendLabelFmt = "DD Mon";
-      } else {
-        trendStartStr = sixMonthsAgoStr;
-        trendLabelFmt = "Mon YYYY";
-      }
-      if (customStart && dateRe.test(customStart)) {
-        trendStartStr = customStart;
-      }
-      if (customEnd && dateRe.test(customEnd)) {
-        // Make the end date inclusive: bucket up to and including customEnd.
-        const d = new Date(`${customEnd}T00:00:00`);
-        d.setDate(d.getDate() + 1);
-        trendEndStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-      }
+      // E-219 — the revenue trend (and the ?trendGranularity / ?trendStart /
+      // ?trendEnd plumbing that shaped its window) used to be computed here for
+      // the "Revenue Performance Trend" chart. That chart is gone: the CEO page
+      // now draws revenue against expense and realization from
+      // /api/dashboard/ceo/overview, which resolves its window through the
+      // shared resolver instead of a private copy. Nothing read the old series.
 
       // Revenue MTD — sum totals from synced Zoho invoices for current month,
       // excluding only void (drafts are counted as revenue per CEO request).
@@ -262,6 +220,8 @@ export const GET = withErrorHandler(
           amount: expenseSubmissions.amount,
           description: expenseSubmissions.description,
           department: expenseSubmissions.department,
+          // E-218 — the ledger shows and filters on the spend bucket.
+          bucket: expenseSubmissions.bucket,
           project_tag: expenseSubmissions.project_tag,
           expense_date: expenseSubmissions.expense_date,
           bill_url: expenseSubmissions.bill_url,
@@ -304,32 +264,6 @@ export const GET = withErrorHandler(
           active_value: sql<string>`COALESCE(SUM(${provisions.amount}) FILTER (WHERE ${provisions.status} NOT IN ('cancelled', 'completed')), 0)`,
         })
         .from(provisions);
-
-      // Revenue trend — totals bucketed by the requested granularity over the
-      // matching lookback window (excl. void/draft). The date_trunc unit is
-      // inlined as a literal (trendGranularity is whitelisted to month/week/day
-      // above) so the SAME expression text appears in SELECT, GROUP BY and ORDER
-      // BY — a bound param would emit different placeholders ($1 vs $5) and
-      // Postgres would reject invoice_date as "not grouped".
-      const truncBucket = sql.raw(
-        `date_trunc('${trendGranularity}', "zoho_invoices"."invoice_date")`,
-      );
-      const revenueTrendRowsQ = db
-        .select({
-          bucket: sql<string>`${truncBucket}`,
-          name: sql<string>`to_char(${truncBucket}, ${trendLabelFmt})`,
-          revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
-        })
-        .from(zohoInvoices)
-        .where(
-          and(
-            gte(zohoInvoices.invoice_date, trendStartStr),
-            ...(trendEndStr ? [lt(zohoInvoices.invoice_date, trendEndStr)] : []),
-            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft'))`,
-          ),
-        )
-        .groupBy(truncBucket)
-        .orderBy(truncBucket);
 
       // Top sales managers — ranked by qualified conversions on owned leads.
       const topManagerRowsQ = db
@@ -425,7 +359,6 @@ export const GET = withErrorHandler(
         [conversionResult],
         [conversionLastMonth],
         [procurementAgg],
-        revenueTrendRows,
         topManagerRows,
         inFlightAgreements,
         signerCounts,
@@ -446,7 +379,6 @@ export const GET = withErrorHandler(
         conversionResultQ,
         conversionLastMonthQ,
         procurementAggQ,
-        revenueTrendRowsQ,
         topManagerRowsQ,
         inFlightAgreementsP,
         signerCountsQ,
@@ -547,10 +479,6 @@ export const GET = withErrorHandler(
           pendingApprovals: Number(procurementAgg?.pending_approvals || 0),
           activeValue: Number(procurementAgg?.active_value || 0),
         },
-        revenueTrend: revenueTrendRows.map((r) => ({
-          name: r.name,
-          revenue: Number(r.revenue) / 100000, // ₹ lakhs for a readable axis
-        })),
         topSalesManagers,
         nbfcSigningQueue,
         lastUpdated: new Date().toISOString(),

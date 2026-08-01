@@ -14,7 +14,16 @@ import {
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EXPENSE_DEPARTMENTS, expenseDepartmentLabel } from "@/lib/expenses";
+import {
+  DEFAULT_EXPENSE_BUCKET,
+  EXPENSE_BUCKETS,
+  EXPENSE_DEPARTMENTS,
+  expenseBucketColor,
+  expenseBucketLabel,
+  expenseDepartmentLabel,
+} from "@/lib/expenses";
+import { monthLabel } from "@/lib/expenses/monthRange";
+import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { DriveFoldersPanel } from "./DriveFoldersPanel";
 import { NeedsAttentionPanel } from "./NeedsAttentionPanel";
 
@@ -36,6 +45,9 @@ interface RecordedExpense {
   amount: string;
   description: string | null;
   department: string | null;
+  bucket: string | null;
+  /** rule | ai | manual | default — shown so a reviewer knows what they are overriding. */
+  bucket_source: string | null;
   project_tag: string | null;
   invoice_number: string | null;
   file_name: string | null;
@@ -57,6 +69,8 @@ const inputCls =
   "w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-900 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 const labelCls =
   "block text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wider";
+const monthInputCls =
+  "px-2.5 py-2 rounded-xl border border-gray-200 text-xs font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 
 const BATCH_SIZE = 5;
 
@@ -64,11 +78,6 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
-}
-
-function monthKey(row: RecordedExpense): string {
-  const d = row.expense_date || row.created_at;
-  return d ? d.slice(0, 7) : "";
 }
 
 export function ExpenseTrackerView() {
@@ -99,8 +108,11 @@ export function ExpenseTrackerView() {
   const [bulkSummary, setBulkSummary] = useState<BulkSummary | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
-  // Month export selection
-  const [selectedMonth, setSelectedMonth] = useState<string>("all");
+  // Month range. Drives the table AND the download, so what you export is
+  // always what you are looking at. Either end may be left blank — "from" only
+  // reads as onwards, "to" only as up to, neither as all time.
+  const [fromMonth, setFromMonth] = useState<string>("");
+  const [toMonth, setToMonth] = useState<string>("");
 
   const singleFile = files.length === 1 ? files[0] : null;
 
@@ -118,28 +130,64 @@ export function ExpenseTrackerView() {
     },
   });
 
-  // Recorded AI expenses table
-  const { data: recorded = [], isLoading: recordedLoading } = useQuery({
-    queryKey: ["ai-expenses"],
+  const rangeQs = useMemo(() => {
+    const p = new URLSearchParams();
+    if (fromMonth) p.set("from", fromMonth);
+    if (toMonth) p.set("to", toMonth);
+    return p.toString();
+  }, [fromMonth, toMonth]);
+
+  const hasRange = Boolean(fromMonth || toMonth);
+
+  const rangeLabel = useMemo(() => {
+    if (fromMonth && toMonth) {
+      return fromMonth === toMonth
+        ? monthLabel(fromMonth)
+        : `${monthLabel(fromMonth)} – ${monthLabel(toMonth)}`;
+    }
+    if (fromMonth) return `${monthLabel(fromMonth)} onwards`;
+    if (toMonth) return `up to ${monthLabel(toMonth)}`;
+    return "all time";
+  }, [fromMonth, toMonth]);
+
+  // Recorded AI expenses table. The range is part of the key, so the server
+  // does the filtering — the list is capped by recency, and filtering these
+  // rows in the browser would report an older month as empty just because its
+  // rows fell off the end.
+  const {
+    data: listing,
+    isLoading: recordedLoading,
+    isFetching: recordedFetching,
+  } = useQuery({
+    queryKey: ["ai-expenses", "list", rangeQs],
     queryFn: async () => {
-      const r = await fetch("/api/admin/ai-expenses", { cache: "no-store" });
-      if (!r.ok) throw new Error("Failed to load expenses");
+      const r = await fetch(
+        `/api/admin/ai-expenses${rangeQs ? `?${rangeQs}` : ""}`,
+        { cache: "no-store" },
+      );
       const j = await r.json();
-      return (j.data || []) as RecordedExpense[];
+      if (!r.ok || !j.success) throw new Error(j?.error?.message || "Failed to load expenses");
+      return {
+        rows: (j.data || []) as RecordedExpense[],
+        capped: Boolean(j.meta?.capped),
+        limit: Number(j.meta?.limit ?? 0),
+      };
     },
+    // Keep the old rows on screen while a new range loads, so changing the
+    // filter never flashes an empty table.
+    placeholderData: (prev) => prev,
   });
 
-  // Distinct months present in the recorded data (desc), for the export selector.
-  const months = useMemo(() => {
-    const set = new Set<string>();
-    for (const row of recorded) {
-      const k = monthKey(row);
-      if (k) set.add(k);
-    }
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [recorded]);
+  const recorded = useMemo(() => listing?.rows ?? [], [listing]);
 
-  const monthHasRows = selectedMonth !== "all" && months.includes(selectedMonth);
+  const rangeTotal = useMemo(
+    () => recorded.reduce((sum, r) => sum + Number(r.amount || 0), 0),
+    [recorded],
+  );
+
+  // Downloading zips every bill in the range, so it stays off until there is
+  // both a range and something in it.
+  const canDownload = hasRange && recorded.length > 0;
 
   const extractMutation = useMutation({
     mutationFn: async () => {
@@ -287,9 +335,9 @@ export function ExpenseTrackerView() {
     setHasDraft(false);
   }
 
-  function downloadMonth() {
-    if (!monthHasRows) return;
-    window.location.href = `/api/admin/ai-expenses/export?month=${selectedMonth}`;
+  function downloadRange() {
+    if (!canDownload) return;
+    window.location.href = `/api/admin/ai-expenses/export?${rangeQs}`;
   }
 
   const isBulk = files.length > 1;
@@ -502,32 +550,67 @@ export function ExpenseTrackerView() {
       {/* Recorded expenses */}
       <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h2 className="text-sm font-semibold text-gray-900">Recorded AI Expenses</h2>
-          <div className="flex items-center gap-2">
-            <select
-              className="px-3 py-2 rounded-xl border border-gray-200 text-xs font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-            >
-              <option value="all">All months</option>
-              {months.map((mo) => (
-                <option key={mo} value={mo}>
-                  {new Date(`${mo}-01T00:00:00`).toLocaleDateString("en-IN", {
-                    month: "short",
-                    year: "numeric",
-                  })}
-                </option>
-              ))}
-            </select>
+          <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+            Recorded AI Expenses
+            {!recordedLoading && (
+              <span className="text-[11px] font-medium text-gray-400">
+                {recorded.length} {recorded.length === 1 ? "invoice" : "invoices"}
+                {recorded.length > 0 && (
+                  <span title={formatINRExact(rangeTotal)}> · {formatINRCompact(rangeTotal)}</span>
+                )}
+                {hasRange && ` · ${rangeLabel}`}
+              </span>
+            )}
+            {recordedFetching && !recordedLoading && (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-300" />
+            )}
+          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <input
+                type="month"
+                aria-label="From month"
+                className={monthInputCls}
+                value={fromMonth}
+                // Keeps the picker from offering an end before the start; the
+                // server swaps them anyway, this just avoids the dead state.
+                max={toMonth || undefined}
+                onChange={(e) => setFromMonth(e.target.value)}
+              />
+              <span className="text-[11px] font-medium text-gray-400">to</span>
+              <input
+                type="month"
+                aria-label="To month"
+                className={monthInputCls}
+                value={toMonth}
+                min={fromMonth || undefined}
+                onChange={(e) => setToMonth(e.target.value)}
+              />
+            </div>
+            {hasRange && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromMonth("");
+                  setToMonth("");
+                }}
+                className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 px-1"
+                title="Clear the range and show everything"
+              >
+                Clear
+              </button>
+            )}
             <Button
               type="button"
-              onClick={downloadMonth}
-              disabled={!monthHasRows}
+              onClick={downloadRange}
+              disabled={!canDownload}
               className="bg-brand-600 hover:bg-brand-700 text-white"
               title={
-                monthHasRows
-                  ? "Download Excel + invoice PDFs for the selected month"
-                  : "Pick a month with records to download"
+                canDownload
+                  ? `Download Excel + invoice PDFs for ${rangeLabel}`
+                  : hasRange
+                    ? "No records in this range to download"
+                    : "Pick a month or range to download"
               }
             >
               <Download className="w-4 h-4 mr-2" />
@@ -540,7 +623,11 @@ export function ExpenseTrackerView() {
             <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
           </div>
         ) : recorded.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No AI expenses recorded yet.</p>
+          <p className="text-xs text-gray-400 italic">
+            {hasRange
+              ? `No AI expenses in ${rangeLabel}.`
+              : "No AI expenses recorded yet."}
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -551,6 +638,7 @@ export function ExpenseTrackerView() {
                   <th className="py-2 font-semibold">Vendor</th>
                   <th className="py-2 font-semibold">Amount</th>
                   <th className="py-2 font-semibold">Department</th>
+                  <th className="py-2 font-semibold">Bucket</th>
                   <th className="py-2 font-semibold">Project</th>
                   <th className="py-2 font-semibold">File</th>
                   <th className="py-2 font-semibold">Bill</th>
@@ -563,6 +651,14 @@ export function ExpenseTrackerView() {
                 ))}
               </tbody>
             </table>
+            {listing?.capped && (
+              // Without this the count and total above read as the whole
+              // range, when they are only its most recent slice.
+              <p className="mt-3 text-[11px] font-medium text-amber-700">
+                Showing the {listing.limit} most recent records
+                {hasRange ? ` in ${rangeLabel}` : ""} — narrow the range to see the rest.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -633,6 +729,10 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [dept, setDept] = useState(row.department ?? EXPENSE_DEPARTMENTS[0].value);
+  // E-218 — falls back to the default bucket rather than the first one, so
+  // saving without touching the field cannot silently reclassify an
+  // unclassified row as "Tech".
+  const [bucket, setBucket] = useState(row.bucket ?? DEFAULT_EXPENSE_BUCKET);
   const [tag, setTag] = useState(row.project_tag ?? "");
 
   const saveMutation = useMutation({
@@ -640,7 +740,14 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
       const r = await fetch(`/api/admin/ai-expenses/${row.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ department: dept, project_tag: tag || null }),
+        // Sending `bucket` marks it bucket_source='manual' server-side, which
+        // is what protects it from the backfill — so only send it when the
+        // reviewer actually changed it.
+        body: JSON.stringify({
+          department: dept,
+          project_tag: tag || null,
+          ...(bucket !== row.bucket ? { bucket } : {}),
+        }),
       });
       const j = await r.json();
       if (!r.ok || !j.success) throw new Error(j?.error?.message || "Update failed");
@@ -679,6 +786,41 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
           </select>
         ) : (
           <span className="font-medium text-gray-700">{expenseDepartmentLabel(row.department)}</span>
+        )}
+      </td>
+      <td className="py-3 text-xs">
+        {editing ? (
+          <select
+            className="px-2 py-1 rounded-lg border border-gray-200 text-xs"
+            value={bucket}
+            onChange={(e) => setBucket(e.target.value)}
+          >
+            {EXPENSE_BUCKETS.map((b) => (
+              <option key={b.value} value={b.value}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1.5 font-medium text-gray-700"
+            title={
+              row.bucket_source
+                ? `Set by: ${row.bucket_source}`
+                : "Not classified yet — run the E-218 backfill"
+            }
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: expenseBucketColor(row.bucket) }}
+            />
+            {expenseBucketLabel(row.bucket)}
+            {row.bucket_source === "manual" && (
+              <span className="text-[9px] uppercase tracking-wider text-brand-600 font-bold">
+                fixed
+              </span>
+            )}
+          </span>
         )}
       </td>
       <td className="py-3 text-xs">
@@ -724,6 +866,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
               onClick={() => {
                 setEditing(false);
                 setDept(row.department ?? EXPENSE_DEPARTMENTS[0].value);
+                setBucket(row.bucket ?? DEFAULT_EXPENSE_BUCKET);
                 setTag(row.project_tag ?? "");
               }}
               className="text-gray-400 hover:text-gray-600"
@@ -736,7 +879,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
           <button
             onClick={() => setEditing(true)}
             className="text-gray-400 hover:text-brand-600 inline-flex items-center gap-1"
-            title="Edit department / tag"
+            title="Edit department / bucket / tag"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>

@@ -1,9 +1,23 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Receipt, FileText } from "lucide-react";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
-import { EXPENSE_DEPARTMENTS, expenseDepartmentLabel } from "@/lib/expenses";
+import { Pagination, usePagination } from "@/components/shared/Pagination";
+import {
+  SortableTh,
+  sortRows,
+  useTableSort,
+  type SortSpec,
+} from "@/components/shared/TableSort";
+import {
+  EXPENSE_BUCKETS,
+  EXPENSE_DEPARTMENTS,
+  UNCLASSIFIED_BUCKET_KEY,
+  expenseBucketColor,
+  expenseBucketLabel,
+  expenseDepartmentLabel,
+} from "@/lib/expenses";
 
 interface LedgerRow {
   id: string;
@@ -11,6 +25,7 @@ interface LedgerRow {
   amount: string;
   description: string | null;
   department: string | null;
+  bucket: string | null;
   project_tag: string | null;
   expense_date: string | null;
   bill_url: string | null;
@@ -22,8 +37,33 @@ interface Props {
   rows?: LedgerRow[];
 }
 
+/**
+ * E-224 — what each column sorts by.
+ *
+ * The Date column renders `expense_date` and falls back to `created_at`, so it
+ * has to sort by the same COALESCE. Ordering by the raw column would put every
+ * dateless row in one clump that reads nothing like what the cells show.
+ *
+ * Department and Bucket sort by their label, because the label is what is on
+ * screen — nobody is ordering by the string "ops".
+ */
+const LEDGER_SORT_SPECS: SortSpec<LedgerRow>[] = [
+  { key: "date", type: "date", value: (r) => r.expense_date ?? r.created_at },
+  { key: "vendor", type: "text" },
+  {
+    key: "department",
+    type: "text",
+    value: (r) => expenseDepartmentLabel(r.department),
+  },
+  { key: "bucket", type: "text", value: (r) => expenseBucketLabel(r.bucket) },
+  { key: "project_tag", type: "text" },
+  { key: "submitter_name", type: "text" },
+  { key: "amount", type: "number" },
+];
+
 export function ExpenseLedgerPanel({ rows = [] }: Props) {
   const [dept, setDept] = useState<string>("all");
+  const [bucket, setBucket] = useState<string>("all");
   const [project, setProject] = useState<string>("all");
 
   // Project options scoped to the selected department.
@@ -40,16 +80,37 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
       rows.filter((r) => {
         const d = r.department ?? "unassigned";
         if (dept !== "all" && d !== dept) return false;
+        // E-218 — a null bucket is a pre-backfill row, selectable as
+        // "Unclassified" so it can be found and fixed rather than hidden.
+        if (bucket !== "all" && (r.bucket ?? UNCLASSIFIED_BUCKET_KEY) !== bucket)
+          return false;
         if (project !== "all" && r.project_tag !== project) return false;
         return true;
       }),
-    [rows, dept, project],
+    [rows, dept, bucket, project],
   );
 
   const total = useMemo(
     () => filtered.reduce((sum, r) => sum + Number(r.amount || 0), 0),
     [filtered],
   );
+
+  // E-224 — click-to-sort headers. Sorted after filtering so the two compose:
+  // narrowing to one department and then ordering by amount asks a single
+  // question, not two that fight.
+  const { sort, toggle, comparator } = useTableSort<LedgerRow>(LEDGER_SORT_SPECS);
+  const sorted = useMemo(() => sortRows(filtered, comparator), [filtered, comparator]);
+
+  // E-219 — the ledger grew past the point where scrolling it was reasonable.
+  // usePagination clamps the page when a filter shrinks the list under it.
+  const paged = usePagination(sorted);
+
+  // Re-sorting reorders the whole list, so holding page 3 would show its middle
+  // with nothing indicating that the top had changed.
+  const { setPage } = paged;
+  useEffect(() => {
+    setPage(1);
+  }, [setPage, sort?.key, sort?.dir]);
 
   const selectCls =
     "px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -83,6 +144,19 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
           </select>
           <select
             className={selectCls}
+            value={bucket}
+            onChange={(e) => setBucket(e.target.value)}
+          >
+            <option value="all">All buckets</option>
+            {EXPENSE_BUCKETS.map((b) => (
+              <option key={b.value} value={b.value}>
+                {b.label}
+              </option>
+            ))}
+            <option value={UNCLASSIFIED_BUCKET_KEY}>Unclassified</option>
+          </select>
+          <select
+            className={selectCls}
             value={project}
             onChange={(e) => setProject(e.target.value)}
             disabled={projectOptions.length === 0}
@@ -105,17 +179,18 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
-                  <th className="py-2 font-semibold">Date</th>
-                  <th className="py-2 font-semibold">Vendor</th>
-                  <th className="py-2 font-semibold">Department</th>
-                  <th className="py-2 font-semibold">Project</th>
-                  <th className="py-2 font-semibold">Added by</th>
-                  <th className="py-2 font-semibold text-right">Amount</th>
-                  <th className="py-2 font-semibold text-right">Bill</th>
+                  <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Vendor" sortKey="vendor" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Department" sortKey="department" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Bucket" sortKey="bucket" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Project" sortKey="project_tag" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Added by" sortKey="submitter_name" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Amount" sortKey="amount" sort={sort} onToggle={toggle} align="right" className="!px-0" />
+                  <SortableTh label="Bill" sort={sort} onToggle={toggle} align="right" className="!px-0" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r) => (
+                {paged.pageItems.map((r) => (
                   <tr key={r.id} className="border-b border-gray-50">
                     <td className="py-3 text-xs text-gray-600 whitespace-nowrap">
                       {r.expense_date
@@ -132,6 +207,15 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                     </td>
                     <td className="py-3 text-xs text-gray-700">
                       {expenseDepartmentLabel(r.department)}
+                    </td>
+                    <td className="py-3 text-xs text-gray-700">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: expenseBucketColor(r.bucket) }}
+                        />
+                        {expenseBucketLabel(r.bucket)}
+                      </span>
                     </td>
                     <td className="py-3 text-xs text-gray-700">{r.project_tag || "—"}</td>
                     <td className="py-3 text-xs text-gray-500">{r.submitter_name || "—"}</td>
@@ -156,9 +240,12 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                 ))}
               </tbody>
               <tfoot>
+                {/* Totals every filtered row, not the page on screen — this is
+                    the ledger's bottom line and must not change as you page. */}
                 <tr className="border-t border-gray-100">
-                  <td colSpan={5} className="py-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
-                    Total ({dept === "all" ? "all departments" : expenseDepartmentLabel(dept)})
+                  <td colSpan={6} className="py-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                    Total ({dept === "all" ? "all departments" : expenseDepartmentLabel(dept)}
+                    {bucket !== "all" && ` · ${expenseBucketLabel(bucket)}`})
                   </td>
                   <td
                     className="py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap"
@@ -171,6 +258,15 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
               </tfoot>
             </table>
           </div>
+          <Pagination
+            page={paged.page}
+            pageCount={paged.pageCount}
+            onPageChange={paged.setPage}
+            total={paged.total}
+            from={paged.from}
+            to={paged.to}
+            noun="expenses"
+          />
         </>
       )}
     </div>

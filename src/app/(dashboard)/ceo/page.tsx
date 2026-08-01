@@ -2,22 +2,32 @@
 
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { KPICard } from "@/components/shared/kpi-card";
 import { MetricsChart } from "@/components/shared/charts";
 import { BusinessSnapshotPanel } from "@/components/dashboard/ceo/BusinessSnapshotPanel";
 import { ExpenseBreakdownPanel } from "@/components/dashboard/ceo/ExpenseBreakdownPanel";
 import { ExpenseLedgerPanel } from "@/components/dashboard/ceo/ExpenseLedgerPanel";
-import { RevenueMtdCard } from "@/components/dashboard/ceo/RevenueMtdCard";
-import { ExpensesMtdCard } from "@/components/dashboard/ceo/ExpensesMtdCard";
+import { PendingQuotationsPanel } from "@/components/dashboard/ceo/PendingQuotationsPanel";
+import {
+  CeoFilterBar,
+  ceoWindowParams,
+  DEFAULT_CEO_WINDOW,
+  type CeoWindow,
+} from "@/components/dashboard/ceo/CeoFilterBar";
+import {
+  BuybackCard,
+  LeadsCard,
+  RealizationCard,
+  type CeoOverviewData,
+} from "@/components/dashboard/ceo/CeoOverviewCards";
+import { GreenKmCard } from "@/components/dashboard/ceo/GreenKmCard";
+import { RealizationDrillDown } from "@/components/dashboard/ceo/RealizationDrillDown";
 import {
   DrillDownModal,
   type DrillMetric,
 } from "@/components/dashboard/ceo/DrillDownModal";
 import { DashboardSkeleton } from "@/components/dashboard/ceo/DashboardSkeleton";
-import { formatINRCompact, formatINRExact } from "@/lib/format";
+import { formatINRCompact } from "@/lib/format";
 import {
-  TrendingUp,
-  Package,
   AlertCircle,
   ArrowRight,
   UserCheck,
@@ -26,8 +36,6 @@ import {
   FileSignature,
   Clock,
   RefreshCw,
-  CalendarRange,
-  X,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -48,13 +56,19 @@ export default function CEODashboard() {
     title: string;
     params?: string;
   } | null>(null);
+  const [realizationOpen, setRealizationOpen] = React.useState(false);
 
-  const [trendGranularity, setTrendGranularity] = React.useState<
-    "month" | "week" | "day"
-  >("month");
-  // Optional calendar range to compare a chosen span; empty = default lookback.
-  const [trendStart, setTrendStart] = React.useState("");
-  const [trendEnd, setTrendEnd] = React.useState("");
+  // E-219 — one window for the whole page. The cards, the Realization
+  // drill-down and the chart all read it, so nothing on screen can be showing a
+  // different span from the control above it.
+  const [win, setWin] = React.useState<CeoWindow>(DEFAULT_CEO_WINDOW);
+  // Bucket size for the chart only. The window says how far back to look; this
+  // says how finely to slice it, and defaults to whatever suits the span.
+  const [granularity, setGranularity] = React.useState<
+    "day" | "week" | "month" | null
+  >(null);
+
+  const windowParams = ceoWindowParams(win);
 
   const {
     data: metrics,
@@ -63,15 +77,35 @@ export default function CEODashboard() {
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ["dashboard-metrics", "ceo", trendGranularity, trendStart, trendEnd],
+    queryKey: ["dashboard-metrics", "ceo"],
     queryFn: async () => {
-      const params = new URLSearchParams({ trendGranularity });
-      if (trendStart) params.set("trendStart", trendStart);
-      if (trendEnd) params.set("trendEnd", trendEnd);
-      const response = await fetch(`/api/dashboard/ceo?${params.toString()}`);
+      const response = await fetch(`/api/dashboard/ceo`);
       if (!response.ok) throw new Error("Failed to fetch dashboard metrics");
       const result = await response.json();
       return result.data; // API returns { data: ... }
+    },
+    refetchInterval: 60000,
+  });
+
+  const overviewParams = new URLSearchParams(windowParams);
+  if (granularity) overviewParams.set("granularity", granularity);
+
+  const {
+    data: overview,
+    isLoading: overviewLoading,
+    error: overviewError,
+  } = useQuery<CeoOverviewData>({
+    queryKey: ["ceo-overview", overviewParams.toString()],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/dashboard/ceo/overview?${overviewParams.toString()}`,
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error?.message || "Failed to load overview");
+      }
+      const json = await res.json();
+      return json.data as CeoOverviewData;
     },
     refetchInterval: 60000,
   });
@@ -112,8 +146,7 @@ export default function CEODashboard() {
         minute: "2-digit",
       })
     : null;
-  const leadsTotal = Number(m.leadsTotal ?? 0);
-  const leadsConverted = Number(m.leadsConverted ?? 0);
+  const windowLabel = overview?.label ?? "this period";
 
   return (
     <div className="space-y-8 pb-12">
@@ -144,135 +177,110 @@ export default function CEODashboard() {
         </div>
       </div>
 
-      {/* KPI Section */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-        <div data-testid="kpi-revenue-mtd">
-          <RevenueMtdCard
-            base={Number(m.revenue_mtd ?? m.revenue ?? 0)}
-            voidAmount={Number(m.revenue_void_mtd ?? 0)}
-            fyBase={Number(m.revenue_fytd ?? 0)}
-            fyVoidAmount={Number(m.revenue_void_fytd ?? 0)}
-            fyStartLabel={m.fyStartLabel}
-            change={
-              typeof m.revenueChange === "number" ? m.revenueChange : null
-            }
-          />
-        </div>
-        <KPICard
-          title="Outstanding Credits"
-          value={formatINRCompact(Number(m.outstandingCredits ?? 0))}
-          exactValue={formatINRExact(Number(m.outstandingCredits ?? 0))}
-          subtitle="Unpaid invoice balances"
-          icon={AlertCircle}
-          onClick={() =>
-            setDrill({ metric: "outstanding", title: "Outstanding Credits" })
-          }
+      {/* E-219 — the window control every figure below reads. */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <CeoFilterBar
+          value={win}
+          onChange={(next) => {
+            setWin(next);
+            // The new span picks its own bucket size; an override chosen for
+            // the previous window would otherwise persist onto one it suits
+            // badly (daily bars across a financial year).
+            setGranularity(null);
+          }}
         />
-        <ExpensesMtdCard
-          defaultMtd={Number(m.other_expenses_mtd ?? 0)}
-          onClick={(period) =>
-            setDrill({
-              metric: "expenses",
-              title: "Approved Expenses",
-              params: period,
-            })
-          }
-        />
-        <KPICard
-          title="Inventory Value"
-          value={formatINRCompact(Number(m.inventoryValue ?? 0))}
-          exactValue={formatINRExact(Number(m.inventoryValue ?? 0))}
-          subtitle="Total stock on hand"
-          icon={Package}
-          onClick={() =>
-            setDrill({ metric: "inventory", title: "Inventory on Hand" })
-          }
-        />
-        <KPICard
-          title="Lead Qualification Rate"
-          value={`${Number(m.conversionRate ?? 0).toFixed(1)}%`}
-          subtitle={
-            leadsTotal > 0
-              ? `${leadsConverted} of ${leadsTotal} leads this month`
-              : "No leads this month"
-          }
-          change={
-            typeof m.conversionChange === "number"
-              ? {
-                  value: Number(Math.abs(m.conversionChange).toFixed(1)),
-                  period: "vs last month",
-                  isPositive: m.conversionChange >= 0,
-                }
-              : undefined
-          }
-          icon={TrendingUp}
-        />
+        {overview && (
+          <span className="text-xs font-medium text-gray-400">
+            Showing {overview.label}
+          </span>
+        )}
       </div>
+
+      {/* KPI Section */}
+      {overviewError ? (
+        <div
+          data-testid="ceo-overview-error"
+          className="p-4 rounded-2xl bg-rose-50 border border-rose-100 text-sm text-rose-700"
+        >
+          Couldn&apos;t load the headline figures for this period:{" "}
+          {(overviewError as Error).message}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div data-testid="kpi-realization">
+            {overviewLoading || !overview ? (
+              <CardSkeleton />
+            ) : (
+              <RealizationCard
+                data={overview.realization}
+                windowLabel={windowLabel}
+                onClick={() => setRealizationOpen(true)}
+              />
+            )}
+          </div>
+          <div data-testid="kpi-leads">
+            {overviewLoading || !overview ? (
+              <CardSkeleton />
+            ) : (
+              <LeadsCard data={overview.leads} windowLabel={windowLabel} />
+            )}
+          </div>
+          <div data-testid="kpi-green-km">
+            <GreenKmCard window={win} />
+          </div>
+          <div data-testid="kpi-buyback">
+            {overviewLoading || !overview ? (
+              <CardSkeleton />
+            ) : (
+              <BuybackCard data={overview.buyback} windowLabel={windowLabel} />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Charts and Details Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         {/* Left rail: revenue trend + operational cards */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="h-[440px]">
+          {/* E-219 — replaced "Revenue Performance Trend". Revenue and expense
+              as bars, realization as the line tracing the gap between them, all
+              on one ₹ axis. */}
+          <div className="h-[460px]" data-testid="realization-trend-chart">
             <MetricsChart
-              title="Revenue Performance Trend"
-              data={m.revenueTrend || []}
-              dataKeys={["revenue"]}
+              title="Revenue, Expense & Realization"
+              data={overview?.chart ?? []}
+              dataKeys={["revenue", "expense", "realization"]}
+              lineKeys={["realization"]}
+              seriesLabels={{
+                revenue: "Revenue",
+                expense: "Expense",
+                realization: "Realization",
+              }}
               categoryKey="name"
-              type="bar"
-              height={300}
-              valueFormatter={(v) => `₹${Number(v).toFixed(1)}L`}
+              type="composed"
+              height={320}
+              valueFormatter={(v) => formatINRCompact(Number(v))}
               headerActions={
-                <div className="flex items-center gap-2 flex-wrap justify-end">
-                  <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 h-8">
-                    <CalendarRange className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                    <input
-                      type="date"
-                      value={trendStart}
-                      max={trendEnd || undefined}
-                      onChange={(e) => setTrendStart(e.target.value)}
-                      aria-label="Compare from"
-                      className="bg-transparent text-xs text-gray-600 outline-none w-[104px]"
-                    />
-                    <span className="text-gray-300">–</span>
-                    <input
-                      type="date"
-                      value={trendEnd}
-                      min={trendStart || undefined}
-                      onChange={(e) => setTrendEnd(e.target.value)}
-                      aria-label="Compare to"
-                      className="bg-transparent text-xs text-gray-600 outline-none w-[104px]"
-                    />
-                    {(trendStart || trendEnd) && (
-                      <button
-                        type="button"
-                        aria-label="Clear date range"
-                        onClick={() => {
-                          setTrendStart("");
-                          setTrendEnd("");
-                        }}
-                        className="ml-0.5 grid place-items-center h-5 w-5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
-                    {(["day", "week", "month"] as const).map((g) => (
+                <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
+                  {(["day", "week", "month"] as const).map((g) => {
+                    // Null granularity means "whatever the window implies", so
+                    // the button the server actually used is the one that lights up.
+                    const active = (granularity ?? overview?.granularity) === g;
+                    return (
                       <button
                         key={g}
                         type="button"
-                        onClick={() => setTrendGranularity(g)}
+                        onClick={() => setGranularity(g)}
                         className={`px-3 h-7 text-xs font-semibold rounded-md transition-colors ${
-                          trendGranularity === g
+                          active
                             ? "bg-white text-gray-900 shadow-sm"
                             : "text-gray-500 hover:text-gray-700"
                         }`}
                       >
                         {g === "day" ? "Daily" : g === "week" ? "Weekly" : "Monthly"}
                       </button>
-                    ))}
-                  </div>
+                    );
+                  })}
                 </div>
               }
             />
@@ -333,8 +341,12 @@ export default function CEODashboard() {
           <ExpenseLedgerPanel rows={m.ai_expenses || []} />
         </div>
 
-        {/* Right rail: financial snapshot + signing queue */}
+        {/* Right rail: quotation approvals + financial snapshot + signing queue */}
         <div className="space-y-6">
+          {/* E-221 — first in the rail because it blocks someone else's work:
+              a rep cannot send a quote until the CEO acts on it here. */}
+          <PendingQuotationsPanel />
+
           <div data-testid="business-snapshot-panel-wrapper">
             <BusinessSnapshotPanel
               purchasesMtd={Number(m.purchases_mtd ?? 0)}
@@ -421,6 +433,21 @@ export default function CEODashboard() {
         )}
       </div>
 
+      {realizationOpen && overview && (
+        <RealizationDrillDown
+          data={overview.realization}
+          windowLabel={windowLabel}
+          onOpenMetric={(metric, title) => {
+            // Hand off to the row-level list, carrying the SAME window — a
+            // drill-down that quietly reverted to this month would not add up
+            // to the figure that opened it.
+            setRealizationOpen(false);
+            setDrill({ metric, title, params: windowParams.toString() });
+          }}
+          onClose={() => setRealizationOpen(false)}
+        />
+      )}
+
       {drill && (
         <DrillDownModal
           metric={drill.metric}
@@ -429,6 +456,17 @@ export default function CEODashboard() {
           onClose={() => setDrill(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Placeholder with the card's footprint, so the row doesn't reflow on load. */
+function CardSkeleton() {
+  return (
+    <div className="p-6 rounded-2xl bg-white/80 border border-gray-100 shadow-sm animate-pulse">
+      <div className="h-4 w-24 bg-gray-100 rounded" />
+      <div className="h-8 w-32 bg-gray-100 rounded mt-3" />
+      <div className="h-3 w-40 bg-gray-50 rounded mt-3" />
     </div>
   );
 }

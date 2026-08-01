@@ -12,7 +12,7 @@ import { db } from "@/lib/db";
 import { expenseSubmissions } from "@/lib/db/schema";
 import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
-import { EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import { EXPENSE_BUCKET_VALUES, EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +20,10 @@ export const dynamic = "force-dynamic";
 const PatchSchema = z
   .object({
     department: z.enum(EXPENSE_DEPARTMENT_VALUES).optional(),
+    // E-218 — a bucket set here is a human's answer. It is recorded as
+    // bucket_source='manual', which is what stops the backfill script from
+    // ever overwriting it on a later run.
+    bucket: z.enum(EXPENSE_BUCKET_VALUES).optional(),
     project_tag: z.string().trim().max(80).nullable().optional(),
     vendor: z.string().trim().max(160).nullable().optional(),
     amount: z.coerce.number().positive().max(100_000_000).optional(),
@@ -66,6 +70,10 @@ export async function PATCH(
 
     const update: Record<string, unknown> = { updated_at: new Date() };
     if (d.department !== undefined) update.department = d.department;
+    if (d.bucket !== undefined) {
+      update.bucket = d.bucket;
+      update.bucket_source = "manual";
+    }
     if (d.project_tag !== undefined) update.project_tag = d.project_tag || null;
     if (d.vendor !== undefined) update.vendor = d.vendor || null;
     if (d.amount !== undefined) update.amount = d.amount.toFixed(2);

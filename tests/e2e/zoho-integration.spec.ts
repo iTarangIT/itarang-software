@@ -62,11 +62,14 @@ test.describe('Zoho integration', () => {
     await expect(page.getByRole('heading', { name: /sales invoices/i })).toBeVisible();
   });
 
-  test('CEO dashboard renders Revenue (MTD) tile and Business Snapshot panel [smoke]', async ({
+  // E-219 replaced the Revenue (MTD) tile with a Realization card; revenue is
+  // now one of the figures inside that card's drill-down rather than a tile of
+  // its own. The Business Snapshot panel below still carries the MTD numbers.
+  test('CEO dashboard renders Realization tile and Business Snapshot panel [smoke]', async ({
     page,
   }) => {
     await page.goto('/ceo');
-    const kpi = page.getByTestId('kpi-revenue-mtd');
+    const kpi = page.getByTestId('kpi-realization');
     await expect(kpi).toBeVisible({ timeout: 15_000 });
     await expect(kpi).toContainText(/₹/);
 
@@ -75,7 +78,19 @@ test.describe('Zoho integration', () => {
     await expect(page.getByTestId('tile-oem-purchases')).toBeVisible();
     await expect(page.getByTestId('tile-sales-to-dealer')).toBeVisible();
     await expect(page.getByTestId('tile-other-expenses')).toBeVisible();
-    await expect(page.getByTestId('net-mtd')).toBeVisible();
+    // E-224 removed the "Net · <period>" strip from this panel — Realization at
+    // the top of the page is the net figure now, and it is asserted above.
+    await expect(page.getByTestId('net-mtd')).toHaveCount(0);
+
+    // Opened last: the drill-down covers the page, and the shared Modal has no
+    // Escape handler to dismiss it with.
+    await kpi.click();
+    await expect(page.getByRole('heading', { name: /^Realization ·/ })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByText('Total Revenue')).toBeVisible();
+    await expect(page.getByText('Total Expense')).toBeVisible();
+    await expect(page.getByText('Outstanding Credits')).toBeVisible();
   });
 
   test('Business Snapshot tile values match /api/dashboard/ceo JSON', async ({ page }) => {

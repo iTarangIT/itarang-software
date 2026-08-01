@@ -44,6 +44,8 @@ import {
   FolderOpen,
   Wallet,
   Bell,
+  ShieldAlert,
+  Radar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -734,6 +736,43 @@ const roleNavigation: Record<string, any[]> = {
     BUYBACK_ADMIN_SECTION,
   ],
 
+  /**
+   * IT Dashboard — the security surface, split out of the admin and CEO navs so
+   * the vulnerability detail (live exploit reproductions, unauthenticated PII
+   * endpoints) sits behind its own login rather than every business one. The
+   * `it` role has no other pages by design.
+   */
+  it: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "it-dashboard",
+          label: "IT Dashboard",
+          icon: LayoutDashboard,
+          href: "/it",
+        },
+      ],
+    },
+    {
+      section: "SECURITY",
+      items: [
+        {
+          id: "it-security",
+          label: "Security Risk",
+          icon: ShieldAlert,
+          href: "/it/security",
+        },
+        {
+          id: "it-security-live",
+          label: "Live Attacks",
+          icon: Radar,
+          href: "/it/security/live",
+        },
+      ],
+    },
+  ],
+
   service_engineer: [
     {
       section: "OVERVIEW",
@@ -1398,6 +1437,7 @@ export function Sidebar() {
     if (pathname.startsWith("/sales-insight")) return "sales_insight";
     if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
     if (pathname.startsWith("/asm")) return "asm";
+    if (pathname.startsWith("/it")) return "it";
     return "user";
   })();
 
@@ -1440,7 +1480,9 @@ export function Sidebar() {
   //  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
   //    files a business expense for a CEO to approve; offering that to the firm
   //    we are selling scrap to is not a universal action, it is a wrong one.
-  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor"]);
+  //  · "it" — the IT console is a single-purpose security surface (scanner
+  //    findings + live attacks); expense filing is out of scope for it.
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it"]);
   let menuItems = NO_COMMON_ITEMS.has(inferredRole)
     ? filteredMenuItems
     : [...filteredMenuItems, ...COMMON_ITEMS];
@@ -1462,6 +1504,29 @@ export function Sidebar() {
       });
     return () => {
       cancelled = true;
+    };
+  }, [inferredRole]);
+
+  // Live-attack badge (E-216) — count of NEW security events, polled so the
+  // "Live Attacks" link lights up in near-real-time when the detector fires.
+  const [securityEventCount, setSecurityEventCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "it") return;
+    let cancelled = false;
+    const load = () =>
+      fetch("/api/it/security/events/count", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then((j) => {
+          if (!cancelled) setSecurityEventCount(Number(j.count ?? 0));
+        })
+        .catch(() => {
+          /* silent — badge stays absent on failure */
+        });
+    load();
+    const id = setInterval(load, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
     };
   }, [inferredRole]);
 
@@ -1540,6 +1605,16 @@ export function Sidebar() {
     }));
   }
 
+  if (securityEventCount && securityEventCount > 0) {
+    const badge = securityEventCount > 99 ? "99+" : securityEventCount;
+    menuItems = menuItems.map((group) => ({
+      ...group,
+      items: group.items.map((item: { id: string }) =>
+        item.id === "it-security-live" ? { ...item, badge } : item,
+      ),
+    }));
+  }
+
   // Total unread on the "Notifications" link (dealer / admin / vendor), and
   // Negotiation-category unread on the admin "Negotiations" link.
   if (totalUnread > 0 || negotiationUnread > 0) {
@@ -1565,7 +1640,9 @@ export function Sidebar() {
   // there on mobile with no way to open navigation). The desktop sidebar is
   // unchanged for every role.
   const showMobileDrawer =
-    pathname.startsWith("/dealer-portal") || pathname.startsWith("/expenses");
+    pathname.startsWith("/dealer-portal") ||
+    pathname.startsWith("/expenses") ||
+    pathname.startsWith("/it");
 
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
@@ -1584,8 +1661,9 @@ export function Sidebar() {
         />
       </div>
 
-      {/* Mobile drawer — phone-only (md:hidden), shown on dealer portal + shared
-          /expenses pages. Mirrors the NbfcPortalSidebar pattern: backdrop + left
+      {/* Mobile drawer — phone-only (md:hidden), shown on dealer portal, the
+          shared /expenses pages and the /it console. Mirrors the
+          NbfcPortalSidebar pattern: backdrop + left
           slide-in panel, driven by the shared uiStore and the header hamburger. */}
       {showMobileDrawer && (
         <div
@@ -1605,7 +1683,7 @@ export function Sidebar() {
           <aside
             role="dialog"
             aria-modal="true"
-            aria-label="Dealer portal navigation"
+            aria-label="Main navigation"
             className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
               sidebarOpen ? "translate-x-0" : "-translate-x-full"
             }`}
