@@ -17,8 +17,8 @@ import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
 import { extractInvoice } from "@/lib/ai/invoices/extractInvoice";
-import { EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
 import { resolveBucket } from "@/lib/expenses/resolveBucket";
+import { resolveDepartment } from "@/lib/expenses/departmentRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,10 +141,6 @@ export async function POST(req: NextRequest) {
           seenInBatch.add(key);
         }
 
-        const department = EXPENSE_DEPARTMENT_VALUES.includes(extracted.department as never)
-          ? (extracted.department as string)
-          : "ops";
-
         // E-218 — same resolver as the Drive scanner, so a bill hand-uploaded
         // here and the same bill picked up by a folder scan land in the same
         // bucket.
@@ -155,6 +151,18 @@ export async function POST(req: NextRequest) {
           aiBucket: extracted.bucket,
           aiConfidence: extracted.bucket_confidence,
         });
+
+        // E-224 — and the same for the department, which is why it is resolved
+        // AFTER the bucket: the rule that keeps raw material off the Tech budget
+        // is stated in terms of the bucket.
+        const department = resolveDepartment({
+          vendor: extracted.vendor,
+          description: extracted.description,
+          project_tag: extracted.project_tag,
+          bucket: bucket.bucket,
+          aiDepartment: extracted.department,
+          aiConfidence: extracted.department_confidence,
+        }).department;
 
         let inserted: { id: string } | undefined;
         try {

@@ -97,7 +97,11 @@ function buildSystemPrompt(): string {
     bucketList,
     "",
     "You are given rows that have ALREADY been read off their invoices — vendor, description, project tag, department and amount. Classify each one.",
-    'Department is whose budget the spend belongs to, and is NOT the answer: a battery order raised by the tech team is department "tech" but bucket "rm".',
+    // E-224 — the old wording here ("a battery order raised by the tech team is
+    // department tech but bucket rm") is gone: it taught the department half of
+    // the example as well as the bucket half, and put raw material on the Tech
+    // budget. The department a row already carries is context, not the answer.
+    'Department is whose budget the spend belongs to and is NOT the answer — a Trontek battery invoice is department "ops" but bucket "rm", and an AWS bill is department "tech" and bucket "tech".',
     "Return one result per input row, echoing its id exactly.",
     'Use null for bucket only when a row genuinely gives you nothing to go on — do not spread guesses across buckets to look balanced.',
   ].join("\n");

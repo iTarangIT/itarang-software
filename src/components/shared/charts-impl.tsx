@@ -14,8 +14,33 @@ import {
     ResponsiveContainer,
     AreaChart,
     Area,
-    ComposedChart
+    ComposedChart,
+    ReferenceLine
 } from 'recharts';
+
+/**
+ * E-224 — let a series go below the axis.
+ *
+ * A derived series can be negative (the CEO chart plots realization =
+ * revenue − expense, which is a loss in a bad month), but Recharts' default
+ * numeric domain floors at 0. The loss gets clamped onto the axis, so a
+ * ₹-4L month and a break-even month draw identically.
+ *
+ * `Math.min(0, dataMin)` rather than `'auto'` on the low end is deliberate:
+ * with `'auto'` an all-positive chart lifts its baseline off zero, and bar
+ * LENGTHS stop being proportional to their values — the classic way to make a
+ * small difference look like a large one. Zero stays the floor until something
+ * is genuinely below it.
+ */
+const NEGATIVE_AWARE_DOMAIN = [
+    (dataMin: number) => Math.min(0, dataMin),
+    'auto',
+] as [(dataMin: number) => number, 'auto'];
+
+/** Whether any plotted value is negative, i.e. whether a zero line is worth drawing. */
+function hasNegativeValue(data: Record<string, unknown>[], dataKeys: string[]): boolean {
+    return data.some((row) => dataKeys.some((key) => Number(row[key]) < 0));
+}
 
 export interface MetricsChartProps {
     title: string;
@@ -76,6 +101,10 @@ export function MetricsChart({
     const yTickFormatter = valueFormatter
         ? (value: number) => valueFormatter(Number(value))
         : undefined;
+    // Only drawn when something actually crosses. The axis line itself is
+    // hidden (axisLine={false}), so without this a negative series would dip
+    // below a boundary the reader cannot see.
+    const showZeroLine = Array.isArray(data) && hasNegativeValue(data, dataKeys);
     const [mounted, setMounted] = React.useState(false);
 
     React.useEffect(() => {
@@ -133,6 +162,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 formatter={tooltipFormatter}
@@ -142,6 +172,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {dataKeys.map((key, i) => (
                                 <Area
                                     key={key}
@@ -174,6 +205,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 cursor={{ fill: '#f8fafc' }}
@@ -184,6 +216,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {/* Named series, so identity is never carried by
                                 colour alone — which also covers the fills
                                 sitting under 3:1 against the card surface. */}
@@ -233,6 +266,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 cursor={{ fill: '#f8fafc' }}
@@ -243,6 +277,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {dataKeys.map((key, i) => (
                                 <Bar
                                     key={key}
@@ -268,6 +303,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 formatter={tooltipFormatter}
@@ -277,6 +313,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {dataKeys.map((key, i) => (
                                 <Line
                                     key={key}
