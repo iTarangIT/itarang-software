@@ -1,0 +1,1106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Risk Security Agent — Function-wise Architecture Map</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#fff; --ink:#12151c; --muted:#5b6474; --line:#e2e5ec;
+    --accent:#1f6feb; --accent-soft:#eaf1fe;
+    --crit:#b3261e; --high:#c2410c; --med:#a16207; --low:#0369a1; --info:#4b5563;
+    --read:#0d7c4d; --read-bg:#e6f6ee; --write:#a8321f; --write-bg:#fceceb;
+    --code:#f1f3f7;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0e1116; --panel:#161b22; --ink:#e6edf3; --muted:#9198a1; --line:#2a313c;
+      --accent:#58a6ff; --accent-soft:#12243d;
+      --crit:#ff7b72; --high:#ffa657; --med:#e3b341; --low:#79c0ff; --info:#9198a1;
+      --read:#56d364; --read-bg:#0f2b1a; --write:#ff7b72; --write-bg:#33110f;
+      --code:#1c222b;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:26px}
+  h1{font-size:27px;margin:0 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:14px;margin:0}
+  .tagrow{margin-top:14px;display:flex;flex-wrap:wrap;gap:7px}
+  .tag{font:600 11px/1 var(--mono);letter-spacing:.03em;padding:5px 9px;border-radius:5px;
+    background:var(--accent-soft);color:var(--accent);border:1px solid transparent}
+  h2{font-size:20px;margin:44px 0 6px;letter-spacing:-.01em;scroll-margin-top:16px}
+  h2 .num{color:var(--muted);font:600 14px/1 var(--mono);margin-right:8px}
+  h3{font-size:15.5px;margin:26px 0 8px;letter-spacing:-.005em}
+  h3 code{font-size:14px}
+  p{margin:8px 0}
+  .lede{color:var(--muted);font-size:14px;margin:2px 0 14px}
+  code{font-family:var(--mono);font-size:12.6px;background:var(--code);
+    padding:1.5px 5px;border-radius:4px;white-space:nowrap}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;
+    padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.4px;line-height:1.55}
+  pre code{background:none;padding:0;white-space:pre}
+  a{color:var(--accent)}
+
+  /* nav */
+  nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin-bottom:8px}
+  nav.toc ol{margin:0;padding-left:20px;columns:2;column-gap:30px;font-size:13.5px}
+  nav.toc li{margin:3px 0;break-inside:avoid}
+  @media(max-width:640px){nav.toc ol{columns:1}}
+
+  /* tables */
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:9px;background:var(--panel);margin:12px 0}
+  table{border-collapse:collapse;width:100%;font-size:13px;min-width:820px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--code);font-weight:650;font-size:11.5px;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--muted);white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td code{white-space:normal}
+  .fn{font-family:var(--mono);font-size:12.4px;font-weight:600;color:var(--accent);white-space:nowrap}
+  .none{color:var(--muted);font-style:italic}
+  .what{display:block;margin-top:5px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:12.2px;font-weight:400;line-height:1.45;color:var(--muted);white-space:normal;max-width:34ch}
+  td:first-child .what{border-left:2px solid var(--line);padding-left:8px}
+
+  /* pills */
+  .r,.w{font-family:var(--mono);font-size:11.4px;font-weight:600;padding:2px 6px;
+    border-radius:4px;display:inline-block;margin:1px 2px 1px 0;white-space:nowrap}
+  .r{background:var(--read-bg);color:var(--read)}
+  .w{background:var(--write-bg);color:var(--write)}
+
+  .sev{font:700 10.5px/1 var(--mono);padding:3px 6px;border-radius:4px;color:#fff;letter-spacing:.03em}
+  .s-crit{background:var(--crit)} .s-high{background:var(--high)} .s-med{background:var(--med)}
+  .s-low{background:var(--low)} .s-info{background:var(--info)}
+
+  .method{font:700 10.5px/1 var(--mono);padding:3px 6px;border-radius:4px;
+    background:var(--accent-soft);color:var(--accent)}
+
+  /* callouts */
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);
+    padding:11px 15px;border-radius:0 7px 7px 0;margin:14px 0;font-size:13.5px}
+  .warn{border-left:3px solid var(--high);background:var(--write-bg);
+    padding:11px 15px;border-radius:0 7px 7px 0;margin:14px 0;font-size:13.5px}
+  .note strong,.warn strong{font-weight:650}
+
+  /* pipeline cards */
+  .pipes{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;margin:18px 0}
+  .pipe{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 17px}
+  .pipe h4{margin:0 0 4px;font-size:14px;letter-spacing:-.005em}
+  .pipe .k{font:700 10.5px/1 var(--mono);color:var(--accent);letter-spacing:.06em;display:block;margin-bottom:7px}
+  .pipe p{margin:5px 0;font-size:13px;color:var(--muted)}
+  .pipe .tbl{margin-top:9px;font-family:var(--mono);font-size:11.4px;color:var(--muted)}
+
+  .legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:12.5px;
+    color:var(--muted);margin:10px 0 2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Risk Security Agent — Function-wise Architecture Map</h1>
+  <p class="sub">Every function in the iTarang security subsystem: what it takes in, what it hands back,
+     which tables it reads, which tables it writes, and who calls it.</p>
+  <div class="tagrow">
+    <span class="tag">src/lib/security</span>
+    <span class="tag">11 API ROUTES</span>
+    <span class="tag">6 DB TABLES</span>
+    <span class="tag">E-215 → E-219</span>
+    <span class="tag">3 UI PAGES</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#overview">The three pipelines</a></li>
+    <li><a href="#flow">End-to-end flow diagram</a></li>
+    <li><a href="#entry">Entry points (how a scan starts)</a></li>
+    <li><a href="#a-target">Pipeline A · target &amp; mode resolution</a></li>
+    <li><a href="#a-run">Pipeline A · run lifecycle &amp; lock</a></li>
+    <li><a href="#a-session">Pipeline A · browser &amp; login</a></li>
+    <li><a href="#a-engine">Pipeline A · the engine</a></li>
+    <li><a href="#a-graph">Pipeline A · LangGraph (4 nodes)</a></li>
+    <li><a href="#a-probes">Pipeline A · the probes</a></li>
+    <li><a href="#a-crawl">Pipeline A · target catalogues</a></li>
+    <li><a href="#b-detect">Pipeline B · live-attack detection</a></li>
+    <li><a href="#b-ingest">Pipeline B · the ingest route</a></li>
+    <li><a href="#c-chat">Pipeline C · AI resolution chat</a></li>
+    <li><a href="#c-apply">Pipeline C · auto-apply fix</a></li>
+    <li><a href="#c-audit">Pipeline C · triage &amp; audit trail</a></li>
+    <li><a href="#support">Shared / support functions</a></li>
+    <li><a href="#routes">API route index</a></li>
+    <li><a href="#tables">Database tables (6)</a></li>
+    <li><a href="#ui">UI pages &amp; exports</a></li>
+    <li><a href="#dead">Dead code &amp; known limits</a></li>
+    <li><a href="#env">Environment variables</a></li>
+  </ol>
+</nav>
+
+<div class="legend">
+  <span><span class="r">reads table</span> = SELECT</span>
+  <span><span class="w">writes table</span> = INSERT / UPDATE</span>
+  <span class="none">— = no database access</span>
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="overview"><span class="num">01</span>The three pipelines</h2>
+<p class="lede">The subsystem is three independent pipelines that share a database and a dashboard,
+   but no runtime code path. Understanding which one you're in is the whole game.</p>
+
+<div class="pipes">
+  <div class="pipe">
+    <span class="k">PIPELINE A — PROACTIVE</span>
+    <h4>Security Scanner</h4>
+    <p>Drives a real Playwright browser through the CRM as several logged-in roles, actively probes
+       for vulnerabilities, and records findings. Runs on demand (CLI / button), not continuously.</p>
+    <div class="tbl">security_scan_runs · security_checks · security_findings</div>
+  </div>
+  <div class="pipe">
+    <span class="k">PIPELINE B — REACTIVE</span>
+    <h4>Live-Attack Detector</h4>
+    <p>A WAF-style layer inside <code>middleware.ts</code> that inspects <em>every</em> real request,
+       blocks high-confidence attacks and logs them. Always on (once opted in).</p>
+    <div class="tbl">security_events</div>
+  </div>
+  <div class="pipe">
+    <span class="k">PIPELINE C — REMEDIATION</span>
+    <h4>AI Resolution + Auto-Apply</h4>
+    <p>Per-finding chat with an agent that has read the real source file, then a deterministic
+       single-occurrence patch written to disk with backup + rollback.</p>
+    <div class="tbl">security_finding_messages · security_finding_actions · security_findings</div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Not the NBFC risk engine.</strong> This document covers the <strong>IT Security agent</strong> only.
+  A second, unrelated agent exists — the <strong>NBFC Risk agent</strong> (<code>src/lib/risk/</code>,
+  <code>src/lib/ai/langgraph/risk-hypothesis-graph.ts</code>, tables <code>risk_hypotheses</code> /
+  <code>risk_card_runs</code> / <code>risk_runs</code>, UI <code>/nbfc/risk</code>, Python sandbox on
+  <code>127.0.0.1:8091</code>). They share <em>no tables and no code</em> — only house style. Both the E-215
+  migration header and <code>schema.ts:9271</code> say it outright: <em>"Do not join these tables to the
+  <code>risk_*</code> family."</em> Different severity ladders too — security uses
+  <code>critical…info</code>, NBFC risk uses <code>high|warn|ok|inconclusive|error</code>.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="flow"><span class="num">02</span>End-to-end flow diagram</h2>
+
+<pre><code>PIPELINE A — SCANNER (on demand)
+════════════════════════════════════════════════════════════════════════════
+
+  npm run security:scan          POST /api/it/security/scan/run       [cron]
+  scripts/security-scan.ts        (Run Scan button, role 'it')          │
+  trigger='cli'                   trigger='manual' — detached in        │
+                                  after(); responds immediately         │
+          └──────────────────────────────┴──────────────────────────────┘
+                                         ▼
+                            runSecurityScan(opts)        ── src/lib/security/engine.ts
+                                         │
+     ┌───────────────────────────────────┼──────────────────────────────┐
+     ▼                                   ▼                              ▼
+ resolveTarget(url)               beginScan(input)              launchBrowser()
+ resolveMode(mode)                 ▼ INSERT                     loginRoles(...)
+  target.ts                    security_scan_runs                  session.ts
+  ├ prod hard-guard            (status='running',                  ▼ Playwright
+  └ local|sandbox|prod          single-flight LOCK)          storageState per role
+                                                                     │
+                                         ┌───────────────────────────┘
+                                         ▼
+                              ProbeContext { baseUrl, mode, browser,
+                                             anon, api:Map&lt;role,ctx&gt;, log }
+                                         │
+                                         ▼
+                          runSecurityGraph(deps)   ── agent/graph.ts  (LangGraph)
+                                         │
+      START ─▶ plan_targets ─▶ run_probes ─▶ llm_triage ─▶ write_findings ─▶ END
+                    │              │              │               │
+              LLM proposes    8 probes run   LLM refines      persist(findings)
+              extra paths     ▼ INSERT       text ONLY            │
+              (no DB)     security_checks    (never severity)     ▼
+                          via seedCatalogue                 persistFindings()
+                                                            ▼ UPSERT on fingerprint
+                                                          security_findings
+                                         │
+                                         ▼
+                              completeScan(runId, summary)   ── failScan() on throw
+                                         ▼ UPDATE
+                                 security_scan_runs
+
+
+PIPELINE B — LIVE ATTACK DETECTION (every request)
+════════════════════════════════════════════════════════════════════════════
+
+  any HTTP request ──▶ src/middleware.ts        [gate: SECURITY_DETECTION_ENABLED=1]
+                            │
+              ┌─────────────┴──────────────┐
+              ▼                            ▼
+      trackRequest(input)           detectThreat(input)      detectBodyThreat(body)
+      rate-watch.ts                 detect.ts                [SECURITY_INSPECT_BODY=1]
+      per-IP counters               regex payload rules      body clone ≤100 KB
+      in-memory, no DB              17 threat types
+      rate_flood /                  ▼
+      path_enumeration /            a payload signal WINS over a volumetric one
+      auth_bruteforce               │
+              └─────────────┬───────┘
+                            ▼
+                    block (403 / 429)  +  postSecurityEvent(origin, payload)
+                                            report-event.ts, fire-and-forget
+                                            X-Security-Secret header
+                                            │
+                                            ▼
+                          POST /api/internal/security-events   (Node runtime —
+                            │                                   Edge can't reach PG)
+                            ├─ SELECT security_events  (burst check → escalate critical,
+                            │                           alert rate-limit 1/IP/15min)
+                            ├─ INSERT security_events
+                            └─ sendCriticalAlert() → email + optional WhatsApp
+
+
+PIPELINE C — AI RESOLUTION + AUTO-APPLY (per finding)
+════════════════════════════════════════════════════════════════════════════
+
+  /it/security  ▸  FindingDrawer  ▸  ResolutionChat
+        │
+        ├─ GET  /api/it/security/findings/[id]/chat
+        │        └─ SELECT security_finding_messages           (replay thread)
+        │
+        ├─ POST /api/it/security/findings/[id]/chat
+        │        ├─ SELECT security_findings                   (the vulnerability)
+        │        ├─ locateSourceForTarget(target_url)          resolve/locate.ts
+        │        │     target_url → /api/... → src/app/api/**/route.ts → file text
+        │        ├─ runResolveTurn({...})                      chat/resolve-agent.ts
+        │        │     ChatOpenAI gpt-4o-mini → reply + optional
+        │        │     ===PROPOSED_FIX_START=== {file,search,replace,explanation}
+        │        └─ INSERT security_finding_messages           (user turn + assistant turn)
+        │
+        └─ POST /api/it/security/findings/[id]/resolve   [SECURITY_AUTOFIX_ENABLED=1]
+                 ├─ SELECT security_findings + security_finding_messages
+                 ├─ RE-LOCATE the file server-side  (model's path is NOT trusted)
+                 ├─ guard: inside repo src/ · .ts|.tsx only
+                 ├─ guard: `search` must occur EXACTLY ONCE  → else 409
+                 ├─ .bak backup → write → verify → rollback on any failure
+                 ├─ UPDATE security_findings  status='resolved', resolution_report,
+                 │                            resolved_by/_ip/_user_agent/_by_email
+                 ├─ INSERT security_finding_messages   (outcome note)
+                 └─ INSERT security_finding_actions    via recordFindingAction()
+</code></pre>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="entry"><span class="num">03</span>Entry points — how a scan starts</h2>
+
+<div class="scroll"><table>
+<thead><tr><th>Entry point</th><th>Trigger value</th><th>Input</th><th>Output</th><th>Notes</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>npm run security:scan</code><br><span class="none">scripts/security-scan.ts</span></td>
+  <td><code>cli</code></td>
+  <td>CLI flags <code>--target=sandbox</code>, <code>--url=…</code>, <code>--mode=aggressive</code>; <code>.env.local</code> via <code>--env-file</code></td>
+  <td>stdout log + exit code</td>
+  <td>Primary path. Needs Chromium installed.</td>
+</tr>
+<tr>
+  <td><span class="method">POST</span> <code>/api/it/security/scan/run</code></td>
+  <td><code>manual</code></td>
+  <td>No body. Session cookie → <code>requireSecurityAdmin()</code></td>
+  <td><code>{ ok:true, started:true, env }</code> <strong>immediately</strong>, or <span class="sev s-high">501</span> if Chromium is unavailable</td>
+  <td><strong>Detached.</strong> The scan runs inside Next's <code>after()</code> hook after the response is sent; the dashboard polls <code>/scan/status</code> for progress. A background failure is logged, not returned.</td>
+</tr>
+<tr>
+  <td>Scheduled run <span class="none">— does not exist</span></td>
+  <td><code>cron</code></td>
+  <td class="none">—</td>
+  <td class="none">—</td>
+  <td><strong>There is no security cron.</strong> <code>security_scan_runs.triggered_by</code> accepts <code>'cron'</code> but nothing writes it — <code>vercel.json</code> has no security entry and <code>src/app/api/cron/</code> has no security route. Scans are manual only.</td>
+</tr>
+</tbody></table></div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-target"><span class="num">04</span>Pipeline A · target &amp; mode resolution</h2>
+<h3><code>src/lib/security/target.ts</code></h3>
+
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th><th>Called by</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">resolveTarget(rawUrl?)<span class="what">Works out which site to scan, and refuses to touch production unless you explicitly allow it.</span></td>
+  <td><code>rawUrl?: string</code><br>fallback env <code>SECURITY_SCAN_BASE_URL</code> (default <code>http://localhost:3000</code>)</td>
+  <td><code>ResolvedTarget { baseUrl, env }</code><br><code>env</code> = <code>'local'|'sandbox'|'prod'</code>, derived from the URL host</td>
+  <td class="none">—</td><td class="none">—</td>
+  <td><code>runSecurityScan()</code></td>
+</tr>
+<tr>
+  <td class="fn">resolveMode(rawMode?)<span class="what">Decides whether this scan is read-only or is allowed to poke things that change data.</span></td>
+  <td><code>rawMode?: string</code><br>fallback env <code>SECURITY_SCAN_MODE</code></td>
+  <td><code>ScanMode</code> = <code>'safe'</code> (default) <code>|'aggressive'</code></td>
+  <td class="none">—</td><td class="none">—</td>
+  <td><code>runSecurityScan()</code></td>
+</tr>
+</tbody></table></div>
+
+<div class="warn">
+  <strong>Prod guard lives here.</strong> <code>resolveTarget()</code> refuses a <code>crm.itarang.com</code>
+  target unless <code>SECURITY_ALLOW_PROD=1</code>. <code>safe</code> mode additionally skips every
+  state-mutating probe — that filter is applied later by <code>probesForMode()</code>.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-run"><span class="num">05</span>Pipeline A · run lifecycle &amp; the single-flight lock</h2>
+<h3><code>src/lib/security/scan-run.ts</code></h3>
+
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th><th>Called by</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">beginScan(input)<span class="what">Opens a new scan record and claims the lock, so two scans can't run against the same environment at once.</span></td>
+  <td><code>BeginScanInput { targetEnv, targetBaseUrl, mode, trigger, actorUserId }</code></td>
+  <td><code>Promise&lt;string&gt;</code> — the new <code>run_id</code>; <strong>throws <code>ScanInFlightError(env, startedAt)</code></strong> on a pg <code>23505</code></td>
+  <td><span class="r">security_scan_runs</span> (only to read <code>started_at</code> of the blocking run)</td>
+  <td><span class="w">security_scan_runs</span> INSERT <code>status='running'</code>; also calls <code>reapStaleRuns()</code> first</td>
+  <td><code>runSecurityScan()</code></td>
+</tr>
+<tr>
+  <td class="fn">completeScan(runId, summary)<span class="what">Closes the scan record and writes the final finding counts onto it.</span></td>
+  <td><code>runId: string</code>, <code>ScanSummary { surfaces_walked, findings_total, findings_critical…info, prompt_tokens, completion_tokens }</code></td>
+  <td><code>Promise&lt;void&gt;</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_scan_runs</span> UPDATE <code>status='completed'</code>, <code>finished_at</code>, all counters, token usage</td>
+  <td><code>runSecurityScan()</code></td>
+</tr>
+<tr>
+  <td class="fn">reapStaleRuns(env) <span class="none">private</span><span class="what">Releases the lock left behind by a scan that died without cleaning up after itself.</span></td>
+  <td><code>env: TargetEnv</code></td>
+  <td><code>Promise&lt;void&gt;</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_scan_runs</span> UPDATE → <code>status='failed'</code>, <code>error='Scan exceeded 30 minutes and was presumed dead.'</code> for rows <code>status='running' AND started_at &lt; now-30min</code></td>
+  <td><code>beginScan()</code> — <strong>this is what releases a lock left behind by a crashed scan</strong></td>
+</tr>
+<tr>
+  <td class="fn">failScan(runId, error)<span class="what">Marks the scan as failed and stores the error message that killed it.</span></td>
+  <td><code>runId: string</code>, <code>error: unknown</code></td>
+  <td><code>Promise&lt;void&gt;</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_scan_runs</span> UPDATE <code>status='failed'</code>, <code>error</code>, <code>finished_at</code></td>
+  <td><code>runSecurityScan()</code> catch block</td>
+</tr>
+<tr>
+  <td class="fn">getScanFreshness(env?)<span class="what">Tells the dashboard when the last scan ran and whether one is running right now.</span></td>
+  <td><code>env?: TargetEnv</code></td>
+  <td><code>ScanFreshness { last_run_at, status, is_stale, in_flight }</code> — <code>is_stale</code> after <code>STALE_AFTER_HOURS = 168</code> (7 days)</td>
+  <td><span class="r">security_scan_runs</span></td>
+  <td class="none">—</td>
+  <td><code>GET /api/it/security/scan/status</code>, <code>/it/security</code> page</td>
+</tr>
+</tbody></table></div>
+
+<div class="note">
+  <strong>The lock is a database constraint, not application code.</strong>
+  <code>security_scan_runs_env_running_uidx</code> is a <em>partial</em> unique index on
+  <code>(target_env) WHERE status = 'running'</code> — declared in
+  <code>drizzle/E-215_security_scanner.sql</code> only, not in <code>schema.ts</code>.
+  A second concurrent scan against the same environment fails the INSERT in <code>beginScan()</code>, which
+  converts the pg <code>23505</code> into a <code>ScanInFlightError</code> → the run route answers
+  <span class="sev s-med">409</span> <code>"A scan is already running."</code>
+  A crashed scan would hold the lock forever, so <code>beginScan()</code> calls <code>reapStaleRuns()</code>
+  first — anything <code>running</code> for more than <code>RUN_TIMEOUT_MINUTES = 30</code> is marked failed.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-session"><span class="num">06</span>Pipeline A · browser &amp; role login</h2>
+<h3><code>src/lib/security/session.ts</code></h3>
+
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th><th>Called by</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">launchBrowser()<span class="what">Starts a headless Chrome browser for the probes to drive.</span></td>
+  <td class="none">—</td>
+  <td><code>Promise&lt;Browser&gt;</code> — Playwright Chromium</td>
+  <td class="none">—</td><td class="none">—</td>
+  <td><code>runSecurityScan()</code></td>
+</tr>
+<tr>
+  <td class="fn">loginRoles(browser, baseUrl, roles?, log?)<span class="what">Logs into the CRM as each test user and keeps their cookies so probes can act as those roles.</span></td>
+  <td><code>Browser</code>, <code>baseUrl: string</code>, <code>roles?: ScanRole[]</code>;<br>
+      credentials from <code>E2E_&lt;ROLE&gt;_EMAIL</code> / <code>E2E_&lt;ROLE&gt;_PASSWORD</code>,
+      falling back to seeded sandbox users (dealer / ceo / sales_head / admin)</td>
+  <td><code>{ sessions: Map&lt;role, StorageState&gt;, skipped: Array&lt;{role, reason}&gt; }</code></td>
+  <td class="none">— <span style="color:var(--muted)">(logs in through the real UI → Supabase Auth, not the app DB)</span></td>
+  <td class="none">—</td>
+  <td><code>runSecurityScan()</code></td>
+</tr>
+</tbody></table></div>
+<p class="lede">A role with no password configured is <em>skipped</em>, not failed — the scan proceeds with
+   whatever sessions it got, and the skipped list is returned in <code>RunScanResult</code>.</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-engine"><span class="num">07</span>Pipeline A · the engine</h2>
+<h3><code>src/lib/security/engine.ts</code></h3>
+
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th><th>Called by</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">runSecurityScan(opts)<span class="what">The conductor — sets everything up, runs the steps in order, and always closes the browser afterwards.</span></td>
+  <td><code>RunScanOptions { targetUrl?, mode?, trigger, actorUserId?, roles?, log? }</code></td>
+  <td><code>RunScanResult { runId, summary, skippedRoles }</code></td>
+  <td class="none">— <span style="color:var(--muted)">(delegates)</span></td>
+  <td class="none">— <span style="color:var(--muted)">(delegates)</span></td>
+  <td>CLI · <code>POST /scan/run</code></td>
+</tr>
+<tr>
+  <td class="fn">fingerprint(f, path) <span class="none">private</span><span class="what">Builds a stable ID for a finding so the same bug isn't recorded twice across scans.</span></td>
+  <td><code>RawFinding</code>, <code>path: string</code></td>
+  <td><code>string</code> — <code>sha256(check_slug|http_method|path|title)</code>, first 64 chars</td>
+  <td class="none">—</td><td class="none">—</td>
+  <td><code>persistFindings()</code></td>
+</tr>
+<tr>
+  <td class="fn">persistFindings(runId, baseUrl, raw) <span class="none">private</span><span class="what">Saves the findings to the database, refreshing existing rows instead of piling up duplicates.</span></td>
+  <td><code>runId</code>, <code>baseUrl</code>, <code>raw: RawFinding[]</code></td>
+  <td><code>Promise&lt;ScanSummary&gt;</code> — per-severity counts + <code>surfaces_walked</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_findings</span> INSERT … ON CONFLICT <code>(fingerprint) WHERE status &lt;&gt; 'resolved'</code> DO UPDATE</td>
+  <td>passed to the graph as <code>deps.persist</code></td>
+</tr>
+</tbody></table></div>
+
+<p><strong>The orchestration order inside <code>runSecurityScan()</code>:</strong></p>
+<pre><code>resolveTarget(opts.targetUrl)  →  { baseUrl, env }
+resolveMode(opts.mode)         →  mode
+beginScan({...})               →  runId          ── acquires the env lock
+launchBrowser()                →  browser
+loginRoles(browser, baseUrl)   →  sessions, skipped
+playwrightRequest.newContext() →  anon  (no cookies)  +  one ctx per role
+build ProbeContext             →  { baseUrl, targetEnv, mode, browser, anon, api, storage, log }
+runSecurityGraph({ ctx, persist })
+completeScan(runId, summary)                       ── or failScan(runId, e) on throw
+finally: dispose every APIRequestContext, close the browser</code></pre>
+
+<div class="note">
+  <strong>Deduplication is two-layered.</strong> Within one run, a <code>Set</code> of fingerprints
+  drops repeats before the INSERT. Across runs, the partial unique index upserts the existing row —
+  refreshing <code>severity</code>, <code>summary</code>, <code>evidence_json</code> and <code>run_id</code>,
+  but deliberately <em>never</em> touching the human triage <code>status</code>. A resolved finding that
+  reappears creates a brand-new row, because the index excludes <code>status='resolved'</code>.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-graph"><span class="num">08</span>Pipeline A · the LangGraph agent (4 nodes)</h2>
+<h3><code>src/lib/security/agent/graph.ts</code></h3>
+
+<pre><code>START ─▶ plan_targets ─▶ run_probes ─▶ llm_triage ─▶ write_findings ─▶ END</code></pre>
+<p class="lede">A linear graph — no conditional edges, no cycles. Every LLM step degrades to a no-op when
+   <code>OPENAI_API_KEY</code> is absent, so the deterministic probes still run and still persist.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Node / function</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th><th>LLM?</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">makeModel()<span class="what">Creates the OpenAI client, or returns nothing if no API key is configured.</span></td>
+  <td>env <code>SECURITY_OPENAI_MODEL</code> (default <code>gpt-4o-mini</code>), <code>OPENAI_API_KEY</code></td>
+  <td><code>ChatOpenAI | null</code></td>
+  <td class="none">—</td><td class="none">—</td><td>—</td>
+</tr>
+<tr>
+  <td class="fn">planTargets() <span class="none">node 1</span><span class="what">Asks the AI to suggest extra URLs worth probing, on top of the built-in list.</span></td>
+  <td>curated catalogues from <code>crawl.ts</code></td>
+  <td><code>Partial&lt;State&gt; { plannedPaths: string[] }</code></td>
+  <td class="none">—</td><td class="none">—</td>
+  <td>yes — proposes <em>extra</em> paths to probe</td>
+</tr>
+<tr>
+  <td class="fn">runProbes(state) <span class="none">node 2</span><span class="what">Runs all the actual security tests and collects their raw findings.</span></td>
+  <td><code>state.plannedPaths</code> + <code>ProbeContext</code></td>
+  <td><code>Partial&lt;State&gt; { raw: RawFinding[] }</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_checks</span> via <code>seedCatalogue()</code> (upsert by <code>slug</code>)</td>
+  <td>no — fully deterministic</td>
+</tr>
+<tr>
+  <td class="fn">llmTriage(state) <span class="none">node 3</span><span class="what">Asks the AI to improve the wording and the fix advice on each finding.</span></td>
+  <td><code>state.raw</code></td>
+  <td><code>Partial&lt;State&gt; { enriched }</code> — the model may only set <code>remediation</code>, <code>owasp_ref</code>, <code>cwe_ref</code>, <code>confidence</code>, or <code>drop:true</code>. On any failure it returns <code>state.raw</code> untouched.</td>
+  <td class="none">—</td><td class="none">—</td>
+  <td>yes — enrichment &amp; drop <strong>only</strong></td>
+</tr>
+<tr>
+  <td class="fn">writeFindings(state) <span class="none">node 4</span><span class="what">Hands the finished findings over to be saved.</span></td>
+  <td>triaged findings</td>
+  <td><code>Partial&lt;State&gt; { summary: ScanSummary }</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_findings</span> via <code>deps.persist()</code> → <code>persistFindings()</code></td>
+  <td>no</td>
+</tr>
+<tr>
+  <td class="fn">runSecurityGraph(deps)<span class="what">Runs the four steps in order and reports the totals back to the engine.</span></td>
+  <td><code>GraphDeps { ctx: ProbeContext, persist: (f) =&gt; Promise&lt;ScanSummary&gt; }</code></td>
+  <td><code>GraphResult { summary, promptTokens, completionTokens }</code></td>
+  <td class="none">—</td><td class="none">—</td><td>—</td>
+</tr>
+<tr>
+  <td class="fn">seedCatalogue(probes)<span class="what">Makes sure the list of known checks in the database matches the checks in the code.</span></td>
+  <td><code>Probe[]</code> — their static <code>ProbeMeta</code></td>
+  <td><code>Promise&lt;void&gt;</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_checks</span> (idempotent upsert on <code>security_checks_slug_uidx</code>)</td>
+  <td>no</td>
+</tr>
+<tr>
+  <td class="fn">parsePathArray(text)<span class="what">Pulls a clean list of URL paths out of the AI's free-text reply.</span></td>
+  <td>raw LLM text</td>
+  <td><code>string[]</code></td>
+  <td class="none">—</td><td class="none">—</td><td>parser</td>
+</tr>
+<tr>
+  <td class="fn">parseTriage(text)<span class="what">Pulls the AI's per-finding edits out of its free-text reply.</span></td>
+  <td>raw LLM text</td>
+  <td><code>Map&lt;number, TriageEdit&gt;</code> — index → field edits</td>
+  <td class="none">—</td><td class="none">—</td><td>parser</td>
+</tr>
+<tr>
+  <td class="fn">emptySummary()<span class="what">Returns an all-zeros result, used when there is nothing to report.</span></td>
+  <td class="none">—</td>
+  <td><code>ScanSummary</code> with all counters at 0</td>
+  <td class="none">—</td><td class="none">—</td><td>—</td>
+</tr>
+</tbody></table></div>
+
+<div class="warn">
+  <strong>Severity is never LLM-decided.</strong> <code>llmTriage</code> may set <code>remediation</code>,
+  <code>owasp_ref</code>, <code>cwe_ref</code> and <code>confidence</code>, and may <code>drop</code> a finding —
+  but <strong><code>severity</code> is read straight from the probe</strong>, never from the model, so the same
+  vulnerability always ranks the same regardless of model output. Both LLM nodes accumulate token usage through
+  <em>adding</em> state reducers (<code>promptTokens</code>, <code>completionTokens</code>); that total is what
+  lands on the run row.
+</div>
+
+<h3><code>src/lib/security/agent/tools.ts</code></h3>
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>DB</th></tr></thead>
+<tbody>
+<tr><td class="fn">navigateAndInspect(ctx, path)<span class="what">Opens a page in the real browser and notes every link and form on it.</span></td><td><code>ProbeContext</code>, path</td><td>Real page navigation; scrapes links + form actions. <strong>This is what <code>planTargets</code> actually uses.</strong></td><td class="none">—</td></tr>
+<tr><td class="fn">buildSecurityTools(ctx)<span class="what">Defines AI tools that nothing ever calls — this is dead code.</span></td><td><code>ProbeContext</code></td><td>Defines two LangChain <code>tool()</code>s (<code>inspectPage</code>, <code>listKnownSurfaces</code>) with zod schemas — <strong><span style="color:var(--write)">DEAD CODE</span></strong>: nothing calls it and the model is never <code>bindTools()</code>-ed.</td><td class="none">—</td></tr>
+</tbody></table></div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-probes"><span class="num">09</span>Pipeline A · the probes</h2>
+<p class="lede">Every probe implements one interface — <code>run(ctx: ProbeContext) → Promise&lt;RawFinding[]&gt;</code>.
+   None of them touch the database; they return findings and the engine persists.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Probe</th><th>File</th><th>Category</th><th>What it feeds on (input)</th><th>Finding + severity rule (deterministic)</th><th>Mutating</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">crossRoleAccessProbe<span class="what">Checks whether a dealer login can open admin-only pages it shouldn't see.</span></td><td><code>probes/authz.ts</code></td><td>authz</td>
+  <td><code>ADMIN_SURFACES</code> + a low-privilege role's <code>api</code> context (dealer)</td>
+  <td>Dealer session reaching an admin-only surface</td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">idorProbe<span class="what">Checks whether you can read somebody else's record just by changing the ID in the URL.</span></td><td><code>probes/idor.ts</code></td><td>authz</td>
+  <td><code>harvestId(ctx)</code> → <code>idScopedRoutes(id)</code> (KYC / co-borrower / onboarding)</td>
+  <td><span class="sev s-crit">CRITICAL</span> if PII in body, else <span class="sev s-high">HIGH</span>. Confidence: anon = <code>confirmed</code>, dealer = <code>likely</code>. <code>harvestId</code> returning null makes the probe self-skip.</td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">unauthDataProbe<span class="what">Checks whether private customer data comes back with no login at all.</span></td><td><code>probes/exposure.ts</code></td><td>exposure</td>
+  <td><code>SENSITIVE_UNAUTH_ROUTES</code> hit with the <code>anon</code> context</td>
+  <td><span class="sev s-crit">CRITICAL</span> if <code>detectPii()</code> hits · <span class="sev s-high">HIGH</span> if the route is flagged <code>.pii</code> · else <span class="sev s-med">MEDIUM</span></td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">debugEndpointProbe<span class="what">Checks whether developer and test endpoints are still reachable in a deployed environment.</span></td><td><code>probes/exposure.ts</code></td><td>exposure</td>
+  <td><code>DEBUG_ROUTES</code> — <code>/api/debug/*</code>, <code>/api/test-*</code></td>
+  <td>Debug/test endpoint reachable in a deployed env</td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">reflectedXssProbe<span class="what">Checks whether text you put in the URL gets echoed back into the page without escaping.</span></td><td><code>probes/injection.ts</code></td><td>injection</td>
+  <td><code>REFLECTED_PARAM_TARGETS</code> — marker payload per query param</td>
+  <td>Unescaped parameter reflected into the response body</td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">sqlErrorProbe<span class="what">Checks whether malformed input makes the server leak raw database error messages.</span></td><td><code>probes/injection.ts</code></td><td>injection</td>
+  <td>Malformed values on the same targets</td>
+  <td>Raw SQL / driver error text leaking to the client — <span class="sev s-high">HIGH</span> if HTTP ≥ 500, else <span class="sev s-med">MEDIUM</span></td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">securityHeadersProbe<span class="what">Checks the response headers and cookie flags that browsers rely on to protect users.</span></td><td><code>probes/upload_headers.ts</code></td><td>upload_headers</td>
+  <td>Response headers on seed pages</td>
+  <td><span class="sev s-med">MEDIUM</span> for CSP / clickjacking / HSTS / missing <code>Secure</code>; <span class="sev s-low">LOW</span> for nosniff / Referrer-Policy / <code>HttpOnly</code></td><td>no</td>
+</tr>
+<tr>
+  <td class="fn">unsafeUploadProbe<span class="what">Checks whether the server accepts a file that lies about what type it is.</span></td><td><code>probes/upload_headers.ts</code></td><td>upload_headers</td>
+  <td>Upload endpoints, spoofed <code>Content-Type</code></td>
+  <td>Server accepts a file whose declared type doesn't match its bytes</td>
+  <td><span class="sev s-high">YES</span> — <code>aggressive</code> only</td>
+</tr>
+</tbody></table></div>
+
+<h3>Probe registry &amp; helpers</h3>
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td class="fn">ALL_PROBES<span class="what">The full list of tests the scanner knows how to run.</span></td><td class="none">—</td><td><code>Probe[]</code></td><td>The 8 probes above, in run order (<code>probes/index.ts</code>).</td></tr>
+<tr><td class="fn">probesForMode(mode)<span class="what">Drops the tests that change data when the scan is running in safe mode.</span></td><td><code>'safe'|'aggressive'</code></td><td><code>Probe[]</code></td><td><strong>The safe-mode gate</strong> — filters out every probe with <code>mutating: true</code>. In practice: <strong>safe = 7 probes, aggressive = 8</strong> (only <code>unsafeUploadProbe</code> mutates).</td></tr>
+<tr><td class="fn">rawGet(...)<span class="what">Makes one HTTP request without following redirects or throwing on error responses.</span></td><td>request ctx + path</td><td><code>Fetched</code> (status, headers, body)</td><td>Low-level fetch, no interpretation (<code>probes/util.ts</code>).</td></tr>
+<tr><td class="fn">get(...)<span class="what">A friendlier wrapper around rawGet.</span></td><td>request ctx + path</td><td><code>Fetched</code></td><td>Convenience wrapper over <code>rawGet</code>.</td></tr>
+<tr><td class="fn">looksLikeData(f)<span class="what">Decides whether a response is real data or just a login or error page.</span></td><td><code>Fetched</code></td><td><code>boolean</code></td><td>Is this a real data payload rather than an HTML error/login page?</td></tr>
+<tr><td class="fn">detectPii(body)<span class="what">Scans a response body for Aadhaar, PAN, GSTIN, IFSC, bank account and phone numbers.</span></td><td>response body string</td><td><code>string[]</code> — PII kinds found</td><td>Aadhaar / PAN / phone / email pattern matching; drives exposure severity.</td></tr>
+<tr><td class="fn">harvestId(ctx)<span class="what">Grabs one real record ID to use as bait for the IDOR test.</span></td><td><code>ProbeContext</code></td><td><code>Promise&lt;string|null&gt;</code></td><td>Pulls one real record ID from an authenticated session to seed the IDOR probe.</td></tr>
+<tr><td class="fn">abs(baseUrl, path)<span class="what">Turns a relative path into a full URL.</span></td><td>base + possibly-relative path</td><td>absolute URL string</td><td><code>probe-context.ts</code>; used before fingerprinting.</td></tr>
+</tbody></table></div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="a-crawl"><span class="num">10</span>Pipeline A · target catalogues</h2>
+<h3><code>src/lib/security/crawl.ts</code></h3>
+<p class="lede">Static, hand-curated attack surface. These constants are the scanner's map of the CRM —
+   the LLM's <code>plan_targets</code> node adds to them but never replaces them.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Export</th><th>Type</th><th>Consumed by</th></tr></thead>
+<tbody>
+<tr><td class="fn">SEED_PAGES<span class="what">The handful of pages the scanner starts from.</span></td><td><code>string[]</code></td><td>header probe, crawl start (dealer onboarding entry)</td></tr>
+<tr><td class="fn">SENSITIVE_UNAUTH_ROUTES<span class="what">Endpoints that should never answer without a login — the exposure test's target list.</span></td><td><code>UnauthTarget[]</code></td><td><code>unauthDataProbe</code></td></tr>
+<tr><td class="fn">DEBUG_ROUTES<span class="what">Developer and test endpoints that should not exist in a deployed environment.</span></td><td><code>string[]</code></td><td><code>debugEndpointProbe</code></td></tr>
+<tr><td class="fn">ADMIN_SURFACES<span class="what">Admin-only pages and APIs used to test cross-role access.</span></td><td><code>AdminSurface[]</code></td><td><code>crossRoleAccessProbe</code></td></tr>
+<tr><td class="fn">REFLECTED_PARAM_TARGETS<span class="what">URL parameters that get echoed back, used to test for XSS and SQL error leaks.</span></td><td><code>ReflectTarget[]</code></td><td><code>reflectedXssProbe</code>, <code>sqlErrorProbe</code></td></tr>
+<tr><td class="fn">idScopedRoutes(id)<span class="what">Builds the list of per-record URLs to try the IDOR test against.</span></td><td><code>(id: string) =&gt; string[]</code></td><td><code>idorProbe</code></td></tr>
+</tbody></table></div>
+<p class="lede">The sum of the four array lengths is <code>CURATED_SURFACE_COUNT</code> in <code>engine.ts</code> —
+   7 + 7 + 6 + 3 = <strong>23</strong> — reported as <code>surfaces_walked</code> on the run row.
+   It is a <em>compile-time constant, not a live count</em>: agent-discovered extra targets don't increment it.</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="b-detect"><span class="num">11</span>Pipeline B · live-attack detection</h2>
+<p class="lede">Runs inside <code>src/middleware.ts</code> on the Edge runtime, <em>before</em> the
+   <code>/api</code> early-return, so API traffic is covered too. Entirely gated on
+   <code>SECURITY_DETECTION_ENABLED=1</code>.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>File</th><th>Input</th><th>Output</th><th>DB</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">trackRequest(input)<span class="what">Counts requests per IP and flags floods, brute-force attempts and path scanning.</span></td><td><code>rate-watch.ts</code></td>
+  <td><code>RateInput { ip, path, method }</code></td>
+  <td><code>RateSignal | null</code> — <code>rate_flood</code> | <code>path_enumeration</code> | <code>auth_bruteforce</code></td>
+  <td class="none">— in-memory per-IP counters</td>
+</tr>
+<tr>
+  <td class="fn">detectThreat(input)<span class="what">Inspects a single request's URL and headers for known attack patterns.</span></td><td><code>detect.ts</code></td>
+  <td><code>DetectInput { method, path, query, userAgent, hasSession, … }</code></td>
+  <td><code>ThreatSignal { type, severity, action, matchedRule, evidence } | null</code></td>
+  <td class="none">— pure regex</td>
+</tr>
+<tr>
+  <td class="fn">detectBodyThreat(body)<span class="what">Same idea as detectThreat, but looks inside the POST body instead of the URL.</span></td><td><code>detect.ts</code></td>
+  <td>request body string (JSON / form / text, ≤ 100 KB, from a <em>clone</em>)</td>
+  <td><code>ThreatSignal | null</code> — narrower rule set than the URL path</td>
+  <td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">postSecurityEvent(origin, payload)<span class="what">Fires the alert over to the Node route that can actually write to the database.</span></td><td><code>report-event.ts</code></td>
+  <td><code>origin: string</code>, <code>SecurityEventPayload</code></td>
+  <td><code>Promise&lt;void&gt;</code> — fire-and-forget</td>
+  <td class="none">— posts to the Node ingest route</td>
+</tr>
+<tr>
+  <td class="fn">__resetRateWatch()<span class="what">Clears the in-memory counters — used by tests only.</span></td><td><code>rate-watch.ts</code></td>
+  <td class="none">—</td><td><code>void</code></td><td class="none">— test helper</td>
+</tr>
+</tbody></table></div>
+
+<h3>The event taxonomy — what each rule emits</h3>
+<div class="scroll"><table>
+<thead><tr><th>event_type</th><th>Rule source</th><th>Severity</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td><code>jndi_injection</code> <span class="none">Log4Shell <code>${jndi:…}</code></span></td><td>detect.ts</td><td><span class="sev s-crit">CRITICAL</span></td><td>blocked</td></tr>
+<tr><td><code>sql_injection</code>, <code>xss</code>, <code>path_traversal</code>, <code>null_byte</code>, <code>command_injection</code>, <code>ssrf</code>, <code>lfi_rfi</code>, <code>nosql_injection</code>, <code>crlf_injection</code>, <code>proto_pollution</code>, <code>xxe</code>, <code>sensitive_file_probe</code></td><td>detect.ts</td><td><span class="sev s-high">HIGH</span></td><td>blocked</td></tr>
+<tr><td><code>scanner_ua</code> <span class="none">sqlmap, nikto, nuclei…</span></td><td>detect.ts</td><td><span class="sev s-high">HIGH</span></td><td>blocked</td></tr>
+<tr><td><code>method_abuse</code> <span class="none">TRACE / TRACK / CONNECT</span></td><td>detect.ts</td><td><span class="sev s-med">MEDIUM</span></td><td>blocked</td></tr>
+<tr><td><code>sensitive_unauth</code></td><td>detect.ts</td><td><span class="sev s-med">MEDIUM</span></td><td>logged</td></tr>
+<tr><td><code>open_redirect</code></td><td>detect.ts</td><td><span class="sev s-low">LOW</span></td><td>logged</td></tr>
+<tr><td><code>rate_flood</code> <span class="none">300 req/min/IP</span></td><td>rate-watch.ts</td><td><span class="sev s-high">HIGH</span></td><td>logged — 429 only if <code>SECURITY_RATE_BLOCK=1</code></td></tr>
+<tr><td><code>auth_bruteforce</code> <span class="none">15/min on auth surfaces</span></td><td>rate-watch.ts</td><td><span class="sev s-high">HIGH</span></td><td>logged</td></tr>
+<tr><td><code>path_enumeration</code> <span class="none">60 distinct paths/min</span></td><td>rate-watch.ts</td><td><span class="sev s-med">MEDIUM</span></td><td>logged</td></tr>
+</tbody></table></div>
+
+<div class="note">
+  <strong>One event per signal per IP per 5 minutes.</strong> A flood is thousands of requests; writing a row
+  each would make the detector the DoS. The observed counts ride along in <code>evidence</code> instead —
+  so a 350-request flood test produces exactly <em>one</em> <code>rate_flood</code> row with
+  <code>evidence.requests = 350</code>. When both a payload rule and a volumetric rule fire on the same
+  request, <strong>the payload signal wins</strong>.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="b-ingest"><span class="num">12</span>Pipeline B · the ingest route</h2>
+<h3><span class="method">POST</span> <code>/api/internal/security-events</code></h3>
+<p class="lede">Middleware runs on Edge and cannot open a Postgres connection — this Node route is the
+   only writer of <code>security_events</code>.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Step</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td>Auth</td><td>Shared-secret header from <code>SECURITY_INTERNAL_SECRET</code>. Unsigned posts are rejected. <strong>Detection does nothing until this is set.</strong></td></tr>
+<tr><td>Input</td><td><code>SecurityEventPayload { event_type, severity, action, ip, actor_user_id, actor_role, method, path, query, user_agent, matched_rule, evidence }</code></td></tr>
+<tr><td>Reads</td><td><span class="r">security_events</span> — recent-window burst check (escalate repeat offenders to <code>critical</code>) and the alert rate-limit (1 per source IP per 15 min)</td></tr>
+<tr><td>Writes</td><td><span class="w">security_events</span> INSERT, <code>status='new'</code></td></tr>
+<tr><td>Side effect</td><td><code>sendCriticalAlert()</code> → <code>sendEmail</code> to <code>SECURITY_ALERT_EMAIL</code>, plus optional WhatsApp via <code>SECURITY_ALERT_WHATSAPP</code> + template</td></tr>
+<tr><td>Constants</td><td><code>BURST_THRESHOLD = 10</code> · <code>BURST_WINDOW_MIN = 5</code> · <code>ALERT_COOLDOWN_MIN = 15</code></td></tr>
+<tr><td>Output</td><td><span class="method">202</span> <code>{ ok:true, id, severity, alerted }</code>. Also <code>503</code> if <code>SECURITY_INTERNAL_SECRET</code> is unset, <code>403</code> on a bad secret, <code>400</code> on bad JSON.</td></tr>
+</tbody></table></div>
+
+<h3>Reading the events back</h3>
+<div class="scroll"><table>
+<thead><tr><th>Route</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th></tr></thead>
+<tbody>
+<tr><td><span class="method">GET</span> <code>/api/it/security/events/count</code></td><td>session</td><td>unreviewed-event badge count</td><td><span class="r">security_events</span></td><td class="none">—</td></tr>
+<tr><td><span class="method">PATCH</span> <code>/api/it/security/events/[id]</code></td><td><code>{ status: 'reviewed' | 'ignored' }</code></td><td><code>{ ok }</code></td><td class="none">—</td><td><span class="w">security_events</span> UPDATE <code>status</code></td></tr>
+</tbody></table></div>
+
+<p><strong>Out-of-band verification:</strong> <code>node scripts/verify-security-events.mjs [limit]</code>
+   reads <code>DATABASE_URL</code> straight from <code>.env.local</code> and prints the last N rows of
+   <code>security_events</code> — independent of the UI, useful to confirm a run of
+   <code>scripts/attack-sandbox.sh</code> actually landed.</p>
+
+<div class="warn">
+  <strong>Which database did it write to?</strong> <code>verify-security-events.mjs</code> shows the DB your
+  <em>local</em> app points at. A deployed sandbox writes to whichever DB <em>its</em> env points at — if you
+  attacked <code>sandbox.itarang.com</code> and see nothing locally, the two are on different databases.
+  Use the Live Attacks page on the sandbox instead.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="c-chat"><span class="num">13</span>Pipeline C · AI resolution chat</h2>
+
+<h3>File location — <code>src/lib/security/resolve/locate.ts</code></h3>
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td class="fn">isInsideRepoSrc(abs)<span class="what">Safety check that a file path hasn't escaped the src/ folder.</span></td><td>absolute path</td><td><code>boolean</code></td><td>Path-escape guard — refuses anything outside repo <code>src/</code>.</td></tr>
+<tr><td class="fn">resolveRouteFile(pathname)<span class="what">Turns a URL into the route.ts file on disk that serves it.</span></td><td>URL pathname, e.g. <code>/api/dealer-onboarding/list</code></td><td><code>Promise&lt;string|null&gt;</code> — absolute file path</td><td>Maps a URL to its <code>src/app/**/route.ts</code>.</td></tr>
+<tr><td class="fn">locateSourceForTarget(targetUrl)<span class="what">Finds and reads the real source file behind a vulnerable URL.</span></td><td><code>securityFindings.target_url</code></td><td><code>Promise&lt;LocatedSource|null&gt;</code> — <code>{ file, content }</code></td><td>The agent's eyes: reads the <em>real</em> source of the vulnerable route.</td></tr>
+</tbody></table></div>
+
+<h3>The turn — <code>src/lib/security/chat/resolve-agent.ts</code></h3>
+<div class="scroll"><table>
+<thead><tr><th>Export</th><th>Input</th><th>Output</th><th>Model</th></tr></thead>
+<tbody>
+<tr><td class="fn">FIX_START / FIX_END<span class="what">The markers the AI wraps a proposed code edit in, so the parser can find it.</span></td><td class="none">—</td><td><code>===PROPOSED_FIX_START===</code> / <code>===PROPOSED_FIX_END===</code></td><td>sentinels the parser looks for</td></tr>
+<tr><td class="fn">runResolveTurn(input)<span class="what">One chat turn — the AI reads the real code and may propose an exact edit to it.</span></td>
+    <td>finding row + prior messages + located source file content + the user's new message</td>
+    <td><code>{ reply, proposedFix? }</code> where <code>proposedFix = { file, search, replace, explanation }</code></td>
+    <td><code>ChatOpenAI</code>, <code>SECURITY_OPENAI_MODEL</code> (default <code>gpt-4o-mini</code>)</td></tr>
+</tbody></table></div>
+
+<h3>Chat routes</h3>
+<div class="scroll"><table>
+<thead><tr><th>Route</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="method">GET</span> <code>/api/it/security/findings/[id]/chat</code></td>
+  <td><code>id</code> path param</td><td>full message thread</td>
+  <td><span class="r">security_finding_messages</span></td><td class="none">—</td>
+</tr>
+<tr>
+  <td><span class="method">POST</span> <code>/api/it/security/findings/[id]/chat</code></td>
+  <td><code>{ message: string }</code></td>
+  <td><code>{ reply, proposedFix? }</code></td>
+  <td><span class="r">security_findings</span> <span class="r">security_finding_messages</span></td>
+  <td><span class="w">security_finding_messages</span> INSERT ×2 (user turn, assistant turn with <code>proposed_fix</code> jsonb)</td>
+</tr>
+</tbody></table></div>
+<p class="lede">Without <code>OPENAI_API_KEY</code> the chat returns templated remediation text and never proposes
+   an applyable fix.</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="c-apply"><span class="num">14</span>Pipeline C · auto-apply fix</h2>
+<h3><span class="method">POST</span> <code>/api/it/security/findings/[id]/resolve</code></h3>
+<p class="lede">This route <strong>writes live source code to disk</strong>. It is off unless
+   <code>SECURITY_AUTOFIX_ENABLED=1</code>; with it off, Resolve returns the diff (<code>409</code>) to apply by hand.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Stage</th><th>What happens</th><th>Failure mode</th></tr></thead>
+<tbody>
+<tr><td>1 · Load</td><td><span class="r">security_findings</span> + <span class="r">security_finding_messages</span> → latest <code>proposed_fix</code></td><td>404 if no fix proposed</td></tr>
+<tr><td>2 · Re-locate</td><td><code>locateSourceForTarget(finding.target_url)</code> — server-side, from the finding. <strong>The model's suggested path is never trusted.</strong></td><td>409 if null (e.g. standalone prod build has no sources)</td></tr>
+<tr><td>3 · Path guard</td><td>Must be inside repo <code>src/</code>; must be <code>.ts</code> or <code>.tsx</code></td><td>refuse</td></tr>
+<tr><td>3.5 · Kill switch</td><td><code>SECURITY_AUTOFIX_ENABLED !== "1"</code> → return the unified diff, applying nothing. <strong>This check runs before the file is even located.</strong></td><td>409 + <code>diff</code></td></tr>
+<tr><td>4 · Match guard</td><td><code>occurrences = original.split(fix.search).length - 1</code> must be <strong>exactly 1</strong></td><td>409 <em>"no longer matches"</em> on 0; 409 <em>"ambiguous"</em> on &gt;1. Never guesses.</td></tr>
+<tr><td>5 · Apply</td><td><code>.bak</code> backup → write → re-read and verify</td><td>any failure ⇒ <strong>rollback</strong>, file unchanged</td></tr>
+<tr><td>6 · Record</td><td><span class="w">security_findings</span> UPDATE <code>status='resolved'</code>, <code>resolved_at</code>, <code>resolution_summary</code>, <code>resolution_report</code> (jsonb), <code>resolution_method='auto_apply'</code>, <code>resolved_by</code>, <code>resolved_ip</code>, <code>resolved_user_agent</code>, <code>resolved_by_email</code></td><td>—</td></tr>
+<tr><td>7 · Trail</td><td><span class="w">security_finding_messages</span> INSERT (outcome note) &nbsp;+&nbsp; <span class="w">security_finding_actions</span> INSERT via <code>recordFindingAction()</code></td><td>—</td></tr>
+</tbody></table></div>
+
+<div class="warn">
+  <strong>Commit resolved diffs promptly.</strong> Auto-apply edits the working tree directly, so the change
+  only gets reviewed if it reaches git. On a standalone production build there are no source files at all —
+  <code>locateSourceForTarget</code> returns <code>null</code> and Resolve refuses; the chat still produces a
+  diff for a developer to commit.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="c-audit"><span class="num">15</span>Pipeline C · manual triage &amp; the audit trail</h2>
+
+<h3><span class="method">PATCH</span> <code>/api/it/security/findings/[id]</code></h3>
+<div class="scroll"><table>
+<thead><tr><th>Aspect</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td>Input</td><td><code>{ status: 'acknowledged' | 'resolved' | 'false_positive' | 'open' }</code> (+ optional note)</td></tr>
+<tr><td>Reads</td><td><span class="r">security_findings</span> (current state, to detect a reopen)</td></tr>
+<tr><td>Writes</td><td><span class="w">security_findings</span> UPDATE <code>status</code>, <code>acknowledged_at</code>, <code>resolved_at</code>, <code>resolution_method='manual'</code>, denormalised <code>resolved_*</code> origin columns<br>
+       <span class="w">security_finding_messages</span> INSERT (system note)<br>
+       <span class="w">security_finding_actions</span> INSERT (append-only)</td></tr>
+<tr><td>Output</td><td>updated finding row</td></tr>
+</tbody></table></div>
+
+<h3><code>src/lib/security/resolution-audit.ts</code></h3>
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">requestOrigin(req)<span class="what">Pulls the caller's IP address and browser out of the request headers.</span></td><td><code>Request</code></td>
+  <td><code>RequestOrigin { ip, userAgent }</code> — from forwarded headers</td>
+  <td class="none">—</td><td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">recordFindingAction(input)<span class="what">Writes one line to the permanent who-did-what-when log.</span></td>
+  <td><code>{ findingId, action, method, actorUserId, actorEmail, actorRole, ip, userAgent, summary, detail }</code><br>
+      <code>action</code> ∈ <code>acknowledged | resolved | false_positive | reopened | auto_apply</code></td>
+  <td><code>Promise&lt;void&gt;</code></td>
+  <td class="none">—</td>
+  <td><span class="w">security_finding_actions</span> INSERT</td>
+</tr>
+</tbody></table></div>
+
+<div class="note">
+  <strong>Two records of the same truth, on purpose.</strong> <code>security_finding_actions</code> is the
+  append-only trail — a reopen adds a row rather than erasing history. The <code>resolved_ip</code> /
+  <code>resolved_user_agent</code> / <code>resolved_by_email</code> columns on <code>security_findings</code>
+  (added by E-219) are a <em>denormalised copy of the latest resolution only</em>, so the History tab can
+  render "resolved by X from IP Y" without a join.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="support"><span class="num">16</span>Shared / support functions</h2>
+
+<div class="scroll"><table>
+<thead><tr><th>Function</th><th>File</th><th>Input</th><th>Output</th><th>Reads</th><th>Writes</th></tr></thead>
+<tbody>
+<tr>
+  <td class="fn">requireSecurityAdmin()<span class="what">Blocks anyone who isn't a logged-in, active user with the 'it' role.</span></td><td><code>route-guard.ts</code></td>
+  <td>Supabase session cookie → <code>supabase.auth.getUser()</code></td>
+  <td><code>{ok:true,user}</code> · <code>401 Unauthorized</code> · <code>403 Forbidden</code></td>
+  <td><span class="r">users</span> — by <code>id</code>, falling back to <code>email</code>. Must be <code>is_active</code> <strong>and</strong> role ∈ <code>SECURITY_ADMIN_ROLES = {"it"}</code></td><td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">loadReportData(filters)<span class="what">Gathers the findings and run info that every export format shares.</span></td><td><code>report-data.ts</code></td>
+  <td><code>ReportFilters</code> — severity / status / category / run</td>
+  <td><code>ReportData { findings: ReportFinding[], run, counts }</code></td>
+  <td><span class="r">security_findings</span> <span class="r">security_scan_runs</span></td><td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">filtersFromSearchParams(sp)<span class="what">Reads the filter choices out of the URL query string.</span></td><td><code>report-data.ts</code></td>
+  <td><code>URLSearchParams</code></td><td><code>ReportFilters</code></td>
+  <td class="none">—</td><td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">severityRank(s)<span class="what">Gives each severity a number so findings can be sorted.</span></td><td><code>severity.ts</code></td><td><code>Severity</code></td><td><code>number</code></td><td class="none">—</td><td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">compareSeverity(a, b)<span class="what">Sort helper — puts critical first and info last.</span></td><td><code>severity.ts</code></td><td>two <code>Severity</code></td><td><code>number</code> — sort comparator</td><td class="none">—</td><td class="none">—</td>
+</tr>
+<tr>
+  <td class="fn">isSeverity(x)<span class="what">Checks that a string is actually one of the five valid severities.</span></td><td><code>severity.ts</code></td><td><code>unknown</code></td><td><code>x is Severity</code> type guard</td><td class="none">—</td><td class="none">—</td>
+</tr>
+</tbody></table></div>
+
+<h3>Core shared types — <code>src/lib/security/types.ts</code></h3>
+<pre><code>SecurityCategory = 'authz' | 'exposure' | 'injection' | 'upload_headers'
+ScanMode         = 'safe' | 'aggressive'
+TargetEnv        = 'local' | 'sandbox' | 'prod'
+Confidence       = 'confirmed' | 'likely' | 'possible'
+Severity         = 'critical' | 'high' | 'medium' | 'low' | 'info'
+
+RawFinding {                          // what a probe emits
+  check_slug, category, severity, title, summary,
+  target_url,                         // may be RELATIVE — engine absolutises it
+  http_method?, evidence?, reproduction?, remediation?,
+  owasp_ref?, cwe_ref?, confidence
+}
+
+ProbeMeta  { slug, category, title, description,
+             default_severity, mutating, owasp_ref?, cwe_ref? }   // seeds security_checks
+
+ProbeContext { baseUrl, targetEnv, mode, browser,
+               anon,       // APIRequestContext with NO cookies
+               api,        // Map&lt;role, APIRequestContext&gt;  authenticated
+               storage,    // Map&lt;role, StorageState&gt;       for real browser pages
+               log }</code></pre>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="routes"><span class="num">17</span>API route index</h2>
+
+<div class="scroll"><table>
+<thead><tr><th>Method</th><th>Route</th><th>Reads</th><th>Writes</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><span class="method">POST</span></td><td><code>/api/it/security/scan/run</code></td><td class="none">—</td><td><span class="w">security_scan_runs</span> <span class="w">security_checks</span> <span class="w">security_findings</span></td><td>Start a detached scan via <code>after()</code>; responds immediately</td></tr>
+<tr><td><span class="method">GET</span></td><td><code>/api/it/security/scan/status</code></td><td><span class="r">security_scan_runs</span></td><td class="none">—</td><td>Latest run + freshness</td></tr>
+<tr><td><span class="method">PATCH</span></td><td><code>/api/it/security/findings/[id]</code></td><td><span class="r">security_findings</span></td><td><span class="w">security_findings</span> <span class="w">security_finding_messages</span> <span class="w">security_finding_actions</span></td><td>Manual triage</td></tr>
+<tr><td><span class="method">GET</span></td><td><code>/api/it/security/findings/[id]/chat</code></td><td><span class="r">security_finding_messages</span></td><td class="none">—</td><td>Replay the thread</td></tr>
+<tr><td><span class="method">POST</span></td><td><code>/api/it/security/findings/[id]/chat</code></td><td><span class="r">security_findings</span> <span class="r">security_finding_messages</span></td><td><span class="w">security_finding_messages</span></td><td>One AI turn (+ optional proposed fix)</td></tr>
+<tr><td><span class="method">POST</span></td><td><code>/api/it/security/findings/[id]/resolve</code></td><td><span class="r">security_findings</span> <span class="r">security_finding_messages</span></td><td><span class="w">security_findings</span> <span class="w">security_finding_messages</span> <span class="w">security_finding_actions</span></td><td>Apply the fix to disk + resolve</td></tr>
+<tr><td><span class="method">GET</span></td><td><code>/api/it/security/events/count</code></td><td><span class="r">security_events</span></td><td class="none">—</td><td>Live-attack badge count</td></tr>
+<tr><td><span class="method">PATCH</span></td><td><code>/api/it/security/events/[id]</code></td><td class="none">—</td><td><span class="w">security_events</span></td><td>Mark reviewed / ignored</td></tr>
+<tr><td><span class="method">POST</span></td><td><code>/api/internal/security-events</code></td><td><span class="r">security_events</span></td><td><span class="w">security_events</span></td><td>Middleware ingest (shared secret)</td></tr>
+<tr><td><span class="method">GET</span></td><td><code>/api/it/security/report/export.xlsx</code></td><td><span class="r">security_findings</span> <span class="r">security_scan_runs</span></td><td class="none">—</td><td>Excel export</td></tr>
+<tr><td><span class="method">GET</span></td><td><code>/api/it/security/report/pdf</code></td><td><span class="r">security_findings</span> <span class="r">security_scan_runs</span></td><td class="none">—</td><td>PDF export</td></tr>
+<tr><td><span class="method">GET</span></td><td><code>/api/it/security/report/docx</code></td><td><span class="r">security_findings</span> <span class="r">security_scan_runs</span></td><td class="none">—</td><td>Word export</td></tr>
+</tbody></table></div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="tables"><span class="num">18</span>Database tables (6)</h2>
+<p class="lede">All in <code>src/lib/db/schema.ts</code> (lines ~9282–9500). Migrations
+   <code>E-215</code> → <code>E-219</code>.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Table</th><th>Migration</th><th>Written by</th><th>Read by</th><th>Grain</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>security_scan_runs</code></td><td>E-215</td>
+  <td><code>beginScan</code> · <code>completeScan</code> · <code>failScan</code></td>
+  <td><code>getScanFreshness</code> · <code>loadReportData</code> · status route · <code>/it</code> home</td>
+  <td>one row per scan</td>
+</tr>
+<tr>
+  <td><code>security_checks</code></td><td>E-215</td>
+  <td><code>seedCatalogue</code> (upsert by <code>slug</code>)</td>
+  <td>dashboard catalogue view</td>
+  <td>one row per known check</td>
+</tr>
+<tr>
+  <td><code>security_findings</code></td><td>E-215 (+E-218 resolution, +E-219 origin)</td>
+  <td><code>persistFindings</code> · PATCH triage · POST resolve</td>
+  <td><code>loadReportData</code> · chat · resolve · exports</td>
+  <td>one row per vulnerability, deduped by <code>fingerprint</code></td>
+</tr>
+<tr>
+  <td><code>security_events</code></td><td>E-216 (+E-217 types &amp; index)</td>
+  <td><code>POST /api/internal/security-events</code> <em>only</em></td>
+  <td>Live Attacks page · events/count · <code>verify-security-events.mjs</code></td>
+  <td>one row per detected attack (per-IP 5-min cooldown)</td>
+</tr>
+<tr>
+  <td><code>security_finding_messages</code></td><td>E-218</td>
+  <td>chat POST · resolve POST · PATCH triage</td>
+  <td>chat GET</td>
+  <td>one row per conversation turn</td>
+</tr>
+<tr>
+  <td><code>security_finding_actions</code></td><td>E-219</td>
+  <td><code>recordFindingAction</code></td>
+  <td>History tab</td>
+  <td>append-only, one row per triage action</td>
+</tr>
+</tbody></table></div>
+
+<h3>Key columns worth knowing</h3>
+<div class="scroll"><table>
+<thead><tr><th>Column</th><th>Table</th><th>Why it matters</th></tr></thead>
+<tbody>
+<tr><td><code>fingerprint</code></td><td>security_findings</td><td><code>sha256(check_slug|method|path|title)[:64]</code> — the dedup identity. Partial unique index applies only <code>WHERE status &lt;&gt; 'resolved'</code>.</td></tr>
+<tr><td><code>status</code></td><td>security_findings</td><td><code>open | acknowledged | resolved | false_positive</code>. A re-scan upsert deliberately does <strong>not</strong> reset it.</td></tr>
+<tr><td><code>evidence_json</code></td><td>security_findings</td><td>Probe's raw proof (response snippet, matched pattern, PII kinds found).</td></tr>
+<tr><td><code>resolution_report</code></td><td>security_findings</td><td>jsonb record of exactly what the auto-apply changed.</td></tr>
+<tr><td><code>proposed_fix</code></td><td>security_finding_messages</td><td><code>{ file, search, replace, explanation }</code> — the applyable edit.</td></tr>
+<tr><td><code>evidence</code></td><td>security_events</td><td>Carries the real request counts for volumetric rules (the cooldown suppresses the extra rows).</td></tr>
+<tr><td><code>action</code></td><td>security_events</td><td><code>blocked | logged</code> — <code>SECURITY_DETECTION_MODE=monitor</code> downgrades every <code>blocked</code> to <code>logged</code>.</td></tr>
+</tbody></table></div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="ui"><span class="num">19</span>UI pages &amp; exports</h2>
+<div class="scroll"><table>
+<thead><tr><th>Page</th><th>Shows</th><th>Backed by</th></tr></thead>
+<tbody>
+<tr><td><code>/it</code></td><td>IT dashboard home — open-findings aggregate + 7-day event count + scan freshness</td><td><code>security_findings</code>, <code>security_events</code>, <code>security_scan_runs</code></td></tr>
+<tr><td><code>/it/security</code></td><td>Findings dashboard, Run Scan button, <code>FindingDrawer</code> → <code>ResolutionChat</code></td><td><code>security_findings</code>, <code>security_scan_runs</code></td></tr>
+<tr><td><code>/it/security/live</code></td><td>Live Attacks feed, filter by attack type, mark reviewed/ignored</td><td><code>security_events</code></td></tr>
+<tr><td><code>/it/security/history</code></td><td>Resolution history — who resolved what, from which IP</td><td><code>security_finding_actions</code> + denormalised <code>resolved_*</code></td></tr>
+</tbody></table></div>
+<p class="lede">All four are <strong>React Server Components that query Drizzle directly</strong> — they do not call their
+   own API for the first paint. Each is <code>export const dynamic = "force-dynamic"</code> and gates with
+   <code>requireAuth()</code> then a role check, matching the API guard: <strong>role <code>it</code> only</strong>
+   (<code>middleware.ts</code> maps <code>it → /it</code>). Exports (Excel / PDF / Word) all funnel through
+   <code>loadReportData(filters)</code>, so they show exactly what the filtered dashboard shows —
+   note it defaults to <code>ACTIVE_STATUSES = ['open','acknowledged']</code> and does the severity/category
+   filtering in JS, not SQL.</p>
+
+<h2 id="dead"><span class="num">19b</span>Dead code &amp; known limits</h2>
+<p class="lede">Verified against source — worth knowing before you go looking for a bug that isn't there.</p>
+<div class="scroll"><table>
+<thead><tr><th>Thing</th><th>Reality</th></tr></thead>
+<tbody>
+<tr><td><code>buildSecurityTools()</code> <span class="none">agent/tools.ts</span></td><td>Two tool definitions, never called. The planner is a <strong>single-shot prompt</strong>, not a tool-calling loop.</td></tr>
+<tr><td><code>LLM_MODEL_NAME</code> <span class="none">agent/graph.ts</span></td><td>Exported, never imported anywhere.</td></tr>
+<tr><td><code>security_findings.llm_model</code>, <code>.prompt_tokens</code>, <code>.completion_tokens</code></td><td>Columns exist and are <strong>never written</strong>. Token usage is only recorded at run level on <code>security_scan_runs</code>.</td></tr>
+<tr><td><code>surfaces_walked</code></td><td>Always the constant <strong>23</strong>, never a live count.</td></tr>
+<tr><td>No security cron</td><td><code>triggered_by='cron'</code> is schema-legal but nothing writes it.</td></tr>
+<tr><td>Rate-watch state</td><td><strong>In-memory, per-process.</strong> Under PM2 cluster mode the effective threshold is roughly <em>threshold × workers</em>. It also ignores its own reporter path so the detector never counts itself.</td></tr>
+<tr><td>Live detection off-switch</td><td>Needs <strong>both</strong> <code>SECURITY_DETECTION_ENABLED=1</code> <em>and</em> <code>SECURITY_INTERNAL_SECRET</code>. <code>postSecurityEvent()</code> returns immediately without the secret — that's the real kill switch.</td></tr>
+</tbody></table></div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="env"><span class="num">20</span>Environment variables</h2>
+
+<h3>Pipeline A — scanner</h3>
+<div class="scroll"><table>
+<thead><tr><th>Var</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>SECURITY_SCAN_BASE_URL</code></td><td><code>http://localhost:3000</code></td><td>Scan target</td></tr>
+<tr><td><code>SECURITY_ALLOW_PROD</code></td><td><span class="none">unset</span></td><td>Must be <code>1</code> to scan <code>crm.itarang.com</code>; otherwise refused</td></tr>
+<tr><td><code>SECURITY_SCAN_MODE</code></td><td><code>safe</code></td><td><code>aggressive</code> also runs state-mutating probes</td></tr>
+<tr><td><code>SECURITY_OPENAI_MODEL</code></td><td><code>gpt-4o-mini</code></td><td>Planning / triage / resolution chat model</td></tr>
+<tr><td><code>OPENAI_API_KEY</code></td><td><span class="none">existing</span></td><td>Optional — without it, probes still run and persist</td></tr>
+<tr><td><code>E2E_&lt;ROLE&gt;_EMAIL/_PASSWORD</code></td><td>seeded sandbox users</td><td>Login credentials per role; a role with no password is skipped</td></tr>
+</tbody></table></div>
+
+<h3>Pipeline B — live detection <span class="none">(off by default)</span></h3>
+<div class="scroll"><table>
+<thead><tr><th>Var</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>SECURITY_DETECTION_ENABLED</code></td><td><span class="none">off</span></td><td><code>1</code> turns the whole layer on</td></tr>
+<tr><td><code>SECURITY_INTERNAL_SECRET</code></td><td><span class="none">required</span></td><td>Shared secret middleware ↔ ingest. <strong>Detection does nothing until set.</strong></td></tr>
+<tr><td><code>SECURITY_DETECTION_MODE</code></td><td><code>block</code></td><td><code>monitor</code> logs everything, blocks nothing (safety valve)</td></tr>
+<tr><td><code>SECURITY_INSPECT_BODY</code></td><td><span class="none">off</span></td><td><code>1</code> also scans POST/PUT/PATCH bodies (≤100 KB, narrower rules)</td></tr>
+<tr><td><code>SECURITY_RATE_BLOCK</code></td><td><span class="none">off</span></td><td><code>1</code> answers <code>rate_flood</code> with 429 + Retry-After instead of only logging</td></tr>
+<tr><td><code>SECURITY_RATE_FLOOD_PER_MIN</code></td><td><code>300</code></td><td>Requests/min/IP before <code>rate_flood</code></td></tr>
+<tr><td><code>SECURITY_RATE_AUTH_PER_MIN</code></td><td><code>15</code></td><td>Auth-surface requests/min before <code>auth_bruteforce</code></td></tr>
+<tr><td><code>SECURITY_RATE_PATHS_PER_MIN</code></td><td><code>60</code></td><td>Distinct paths/min before <code>path_enumeration</code></td></tr>
+<tr><td><code>SECURITY_ALERT_EMAIL</code></td><td><code>MAIL_FROM</code> / <code>it@itarang.com</code></td><td>Critical-event alert recipient</td></tr>
+<tr><td><code>SECURITY_ALERT_WHATSAPP</code></td><td><span class="none">off</span></td><td>E.164 number for WhatsApp alerts (<code>_TEMPLATE</code> strongly recommended)</td></tr>
+</tbody></table></div>
+
+<h3>Pipeline C — auto-apply</h3>
+<div class="scroll"><table>
+<thead><tr><th>Var</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>SECURITY_AUTOFIX_ENABLED</code></td><td><span class="none">off</span></td><td><code>1</code> lets Resolve write the fix to disk. With it off, Resolve returns the diff (409) to apply by hand.</td></tr>
+</tbody></table></div>
+
+<div class="warn">
+  <strong>What this system does NOT catch.</strong> Anything that bypasses the app entirely — direct RDS on 5432,
+  S3, Razorpay's API, Supabase with the service-role key — never touches middleware and produces zero events.
+  A stolen session cookie is a <em>valid</em> authenticated request and is indistinguishable from real use.
+  Failed passwords are invisible (sign-in goes browser → Supabase directly, so <code>auth_bruteforce</code> only
+  sees request <em>volume</em>). And <code>rate_flood</code> makes a flood visible but does not mitigate it —
+  volumetric defence belongs upstream in Cloudflare and nginx <code>limit_req</code>.
+</div>
+
+<p style="margin-top:44px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px">
+  Source of truth: <code>src/lib/security/README.md</code>, <code>src/lib/db/schema.ts</code>,
+  <code>drizzle/E-215…E-219</code>. Narrative companion: <code>docs/security-risk-end-to-end.html</code>.
+</p>
+
+</div>
+</body>
+</html>
