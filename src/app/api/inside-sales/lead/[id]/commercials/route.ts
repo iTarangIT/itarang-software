@@ -12,6 +12,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
+import { initialApprovalStatus } from "@/lib/leads/quoteApproval";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
@@ -93,6 +94,12 @@ export const POST = withErrorHandler(
                     product_lines: body.product_lines ?? [],
                     notes: body.notes ?? null,
                     created_by: user.id,
+                    // E-221 — quote_issue / quote_revision land pending and
+                    // wait for the CEO; every other event type is born
+                    // approved. The row is still is_current, so the rep sees
+                    // their quote on the lead immediately — it just carries a
+                    // "pending approval" badge and must not go to the dealer.
+                    approval_status: initialApprovalStatus(body.event_type),
                 })
                 .returning({ commercial_id: dealerLeadCommercials.commercial_id });
 
@@ -110,17 +117,29 @@ export const POST = withErrorHandler(
         });
 
         // Paired touchpoint (BRD §0.10 — quote events auto-log a touchpoint).
+        //
+        // E-221 — this is 'quote_submitted', NOT 'quote_sent'. Nothing has been
+        // sent: the quote is now waiting on the CEO and the dealer sees nothing
+        // until it is approved. The approval route writes 'quote_sent' at the
+        // moment the quote is actually released. Logging a send here would put
+        // a send that never happened into the lead history and into the
+        // Funnel-by-Owner report, which reads these rows.
+        //
+        // The rep's work is still recorded the instant they do it — preparing a
+        // quote is real activity, it just isn't a send.
         if (body.event_type === "quote_issue" || body.event_type === "quote_revision") {
             // Surface the deal total (product roll-up = final_price) on the
             // touchpoint so the history log shows the value at a glance.
             const total = body.final_price ?? body.price_quoted;
             await writeTouchpoint({
                 dealerLeadId: id,
-                touchpointType: "quote_sent",
+                touchpointType: "quote_submitted",
                 performedBy: user.id,
-                remarks: `Quote ${body.event_type === "quote_issue" ? "issued" : "revised"}${
+                remarks: `Quote ${
+                    body.event_type === "quote_issue" ? "issued" : "revised"
+                }${
                     total != null ? ` — ₹${total.toLocaleString("en-IN")}` : ""
-                }`,
+                } — awaiting CEO approval`,
                 attachments: body.quote_document_url
                     ? [{ url: body.quote_document_url, type: "quote" }]
                     : [],

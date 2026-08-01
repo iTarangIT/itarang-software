@@ -1,0 +1,203 @@
+/**
+ * E-221 — POST /api/dashboard/ceo/quotations/:commercialId/decision
+ *
+ * The CEO's approve / reject on a pending lead quotation.
+ *
+ * APPROVE
+ *   Stamps the decision and writes the `quote_sent` touchpoint — this is the
+ *   moment the quote is actually released to the dealer, so it is the moment
+ *   the send is recorded. The issuing route writes `quote_submitted` instead,
+ *   precisely so nothing claims a send before this point.
+ *
+ * REJECT
+ *   Marks the version rejected and moves `is_current` back to the newest
+ *   APPROVED version below it. A rejected version must never be current again,
+ *   and neither must a still-pending one — otherwise rejecting v3 would
+ *   silently promote an unapproved v2 to live. If nothing qualifies (the lead's
+ *   very first quote was rejected) the lead is left with no current
+ *   commercials, which is the truth rather than an invented one.
+ *
+ * The whole decision runs in one transaction with the row locked FOR UPDATE:
+ * two CEOs clicking at once must not both pass the pending check.
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { sql } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "@/lib/db";
+import { requireAuth } from "@/lib/auth-utils";
+import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { rollbackTarget, type CommercialVersion } from "@/lib/leads/quoteApproval";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const ALLOWED_ROLES = new Set(["ceo", "admin"]);
+
+const BodySchema = z
+  .object({
+    decision: z.enum(["approve", "reject"]),
+    // Required on reject: a refusal with no stated reason leaves the rep
+    // nothing to act on and no record of why the number was refused.
+    reason: z.string().trim().min(1).max(2000).optional(),
+  })
+  .refine((b) => b.decision !== "reject" || !!b.reason, {
+    message: "A rejection reason is required.",
+    path: ["reason"],
+  });
+
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ commercialId: string }> },
+) {
+  try {
+    const user = await requireAuth();
+    if (!ALLOWED_ROLES.has((user.role || "").toLowerCase())) {
+      return NextResponse.json(
+        { success: false, error: { message: "FORBIDDEN" } },
+        { status: 403 },
+      );
+    }
+
+    const { commercialId } = await ctx.params;
+    const body = BodySchema.parse(await req.json());
+
+    const outcome = await db.transaction(async (tx) => {
+      const locked = await tx.execute<{
+        commercial_id: string;
+        dealer_lead_id: string;
+        version_no: number;
+        approval_status: string | null;
+        price_quoted: string | null;
+        final_price: string | null;
+        quote_document_url: string | null;
+      }>(sql`
+        SELECT commercial_id, dealer_lead_id, version_no, approval_status,
+               price_quoted, final_price, quote_document_url
+          FROM dealer_lead_commercials
+         WHERE commercial_id = ${commercialId}
+         FOR UPDATE
+      `);
+      const row = locked[0];
+      if (!row) return { status: 404 as const, message: "Quotation not found." };
+      if (row.approval_status !== "pending") {
+        // Already decided — by another CEO, or a double-click.
+        return {
+          status: 409 as const,
+          message: `This quotation is already ${row.approval_status}.`,
+        };
+      }
+
+      const now = new Date();
+
+      if (body.decision === "approve") {
+        await tx.execute(sql`
+          UPDATE dealer_lead_commercials
+             SET approval_status = 'approved',
+                 approved_by = ${user.id},
+                 approved_at = ${now},
+                 updated_at = NOW()
+           WHERE commercial_id = ${commercialId}
+        `);
+        return {
+          status: 200 as const,
+          decision: "approved" as const,
+          leadId: row.dealer_lead_id,
+          value: Number(row.final_price ?? row.price_quoted ?? 0),
+          quoteUrl: row.quote_document_url,
+        };
+      }
+
+      // ── reject ────────────────────────────────────────────────────────────
+      await tx.execute(sql`
+        UPDATE dealer_lead_commercials
+           SET approval_status = 'rejected',
+               approved_by = ${user.id},
+               approved_at = ${now},
+               rejection_reason = ${body.reason ?? null},
+               is_current = false,
+               updated_at = NOW()
+         WHERE commercial_id = ${commercialId}
+      `);
+
+      const siblings = await tx.execute<CommercialVersion>(sql`
+        SELECT commercial_id, version_no, approval_status
+          FROM dealer_lead_commercials
+         WHERE dealer_lead_id = ${row.dealer_lead_id}
+      `);
+      const target = rollbackTarget([...siblings], row.version_no);
+
+      if (target) {
+        await tx.execute(sql`
+          UPDATE dealer_lead_commercials
+             SET is_current = true, updated_at = NOW()
+           WHERE commercial_id = ${target.commercial_id}
+        `);
+      }
+
+      return {
+        status: 200 as const,
+        decision: "rejected" as const,
+        leadId: row.dealer_lead_id,
+        value: Number(row.final_price ?? row.price_quoted ?? 0),
+        restoredVersion: target?.version_no ?? null,
+      };
+    });
+
+    if (outcome.status !== 200) {
+      return NextResponse.json(
+        { success: false, error: { message: outcome.message } },
+        { status: outcome.status },
+      );
+    }
+
+    // Touchpoints are written AFTER the transaction commits. They are a history
+    // note, not part of the decision — a failure to log one must not roll back
+    // an approval the CEO has already made.
+    const money =
+      outcome.value > 0 ? ` — ₹${outcome.value.toLocaleString("en-IN")}` : "";
+    if (outcome.decision === "approved") {
+      await writeTouchpoint({
+        dealerLeadId: outcome.leadId,
+        touchpointType: "quote_sent",
+        performedBy: user.id,
+        remarks: `Quote approved by CEO and released${money}`,
+        attachments: outcome.quoteUrl
+          ? [{ url: outcome.quoteUrl, type: "quote" }]
+          : [],
+      });
+    } else {
+      await writeTouchpoint({
+        dealerLeadId: outcome.leadId,
+        touchpointType: "quote_rejected",
+        performedBy: user.id,
+        remarks:
+          `Quote rejected by CEO${money} — ${body.reason}` +
+          (outcome.restoredVersion
+            ? ` (restored v${outcome.restoredVersion})`
+            : " (lead left with no current quote)"),
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        decision: outcome.decision,
+        restoredVersion:
+          outcome.decision === "rejected" ? outcome.restoredVersion : undefined,
+      },
+    });
+  } catch (e: unknown) {
+    if (isNextRedirectError(e)) throw e;
+    if (e instanceof z.ZodError) {
+      return NextResponse.json(
+        { success: false, error: { message: e.issues[0]?.message ?? "Invalid body" } },
+        { status: 400 },
+      );
+    }
+    return NextResponse.json(
+      { success: false, error: { message: errorMessage(e) } },
+      { status: 500 },
+    );
+  }
+}

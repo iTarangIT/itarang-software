@@ -10,15 +10,42 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
+    Legend,
     ResponsiveContainer,
     AreaChart,
-    Area
+    Area,
+    ComposedChart,
+    ReferenceLine
 } from 'recharts';
+
+/**
+ * E-224 — let a series go below the axis.
+ *
+ * A derived series can be negative (the CEO chart plots realization =
+ * revenue − expense, which is a loss in a bad month), but Recharts' default
+ * numeric domain floors at 0. The loss gets clamped onto the axis, so a
+ * ₹-4L month and a break-even month draw identically.
+ *
+ * `Math.min(0, dataMin)` rather than `'auto'` on the low end is deliberate:
+ * with `'auto'` an all-positive chart lifts its baseline off zero, and bar
+ * LENGTHS stop being proportional to their values — the classic way to make a
+ * small difference look like a large one. Zero stays the floor until something
+ * is genuinely below it.
+ */
+const NEGATIVE_AWARE_DOMAIN = [
+    (dataMin: number) => Math.min(0, dataMin),
+    'auto',
+] as [(dataMin: number) => number, 'auto'];
+
+/** Whether any plotted value is negative, i.e. whether a zero line is worth drawing. */
+function hasNegativeValue(data: Record<string, unknown>[], dataKeys: string[]): boolean {
+    return data.some((row) => dataKeys.some((key) => Number(row[key]) < 0));
+}
 
 export interface MetricsChartProps {
     title: string;
     data: Record<string, unknown>[];
-    type?: 'line' | 'bar' | 'area';
+    type?: 'line' | 'bar' | 'area' | 'composed';
     dataKeys: string[];
     categoryKey: string;
     height?: number;
@@ -27,6 +54,18 @@ export interface MetricsChartProps {
     valueFormatter?: (n: number) => string;
     /** Optional controls rendered on the right of the card header (filters, toggles). */
     headerActions?: React.ReactNode;
+    /**
+     * `type="composed"` only. Keys drawn as a line rather than a bar — the rest
+     * of `dataKeys` stays a bar. Used for a derived series (E-219 plots revenue
+     * and expense as bars with realization as the line tracing the gap).
+     *
+     * Every series shares ONE y-axis, so only put a key here when it is in the
+     * same unit and scale as the bars. A second axis would let two unrelated
+     * scales be drawn as if comparable.
+     */
+    lineKeys?: string[];
+    /** Human labels for the legend and tooltip, keyed by data key. */
+    seriesLabels?: Record<string, string>;
 }
 
 function ChartHeader({ title, headerActions }: { title: string; headerActions?: React.ReactNode }) {
@@ -47,14 +86,25 @@ export function MetricsChart({
     height = 300,
     colors = ["#10b981", "#3b82f6", "#f59e0b", "#6366f1"],
     valueFormatter,
-    headerActions
+    headerActions,
+    lineKeys,
+    seriesLabels
 }: MetricsChartProps) {
+    // Colour is keyed to the series' position in `dataKeys`, which the caller
+    // fixes — so hiding or reordering a series never repaints the others.
+    const colorFor = (key: string) =>
+        colors[Math.max(0, dataKeys.indexOf(key)) % colors.length];
+    const labelFor = (key: string) => seriesLabels?.[key] ?? key;
     const tooltipFormatter = valueFormatter
         ? (value: number | string) => valueFormatter(Number(value))
         : undefined;
     const yTickFormatter = valueFormatter
         ? (value: number) => valueFormatter(Number(value))
         : undefined;
+    // Only drawn when something actually crosses. The axis line itself is
+    // hidden (axisLine={false}), so without this a negative series would dip
+    // below a boundary the reader cannot see.
+    const showZeroLine = Array.isArray(data) && hasNegativeValue(data, dataKeys);
     const [mounted, setMounted] = React.useState(false);
 
     React.useEffect(() => {
@@ -112,6 +162,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 formatter={tooltipFormatter}
@@ -121,6 +172,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {dataKeys.map((key, i) => (
                                 <Area
                                     key={key}
@@ -133,6 +185,72 @@ export function MetricsChart({
                                 />
                             ))}
                         </AreaChart>
+                    ) : type === 'composed' ? (
+                        // Bars and a line on ONE shared axis. Recharts would
+                        // happily take a second <YAxis yAxisId>, but two scales
+                        // drawn as one picture is the classic way to make
+                        // unrelated series look correlated — so there is only
+                        // ever the one axis here.
+                        <ComposedChart data={data} barGap={2}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                            <XAxis
+                                dataKey={categoryKey}
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                dy={10}
+                            />
+                            <YAxis
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
+                            />
+                            <Tooltip
+                                cursor={{ fill: '#f8fafc' }}
+                                formatter={tooltipFormatter}
+                                contentStyle={{
+                                    borderRadius: '12px',
+                                    border: 'none',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                                }}
+                            />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
+                            {/* Named series, so identity is never carried by
+                                colour alone — which also covers the fills
+                                sitting under 3:1 against the card surface. */}
+                            <Legend
+                                verticalAlign="top"
+                                align="right"
+                                iconType="circle"
+                                iconSize={8}
+                                wrapperStyle={{ fontSize: 12, color: '#64748b', paddingBottom: 12 }}
+                            />
+                            {dataKeys
+                                .filter((key) => !lineKeys?.includes(key))
+                                .map((key) => (
+                                    <Bar
+                                        key={key}
+                                        dataKey={key}
+                                        name={labelFor(key)}
+                                        fill={colorFor(key)}
+                                        radius={[4, 4, 0, 0]}
+                                    />
+                                ))}
+                            {(lineKeys ?? []).map((key) => (
+                                <Line
+                                    key={key}
+                                    type="monotone"
+                                    dataKey={key}
+                                    name={labelFor(key)}
+                                    stroke={colorFor(key)}
+                                    strokeWidth={2}
+                                    dot={{ r: 4, fill: colorFor(key), strokeWidth: 2, stroke: '#fff' }}
+                                    activeDot={{ r: 6, strokeWidth: 0 }}
+                                />
+                            ))}
+                        </ComposedChart>
                     ) : type === 'bar' ? (
                         <BarChart data={data}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
@@ -148,6 +266,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 cursor={{ fill: '#f8fafc' }}
@@ -158,6 +277,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {dataKeys.map((key, i) => (
                                 <Bar
                                     key={key}
@@ -183,6 +303,7 @@ export function MetricsChart({
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
                                 tickFormatter={yTickFormatter}
+                                domain={NEGATIVE_AWARE_DOMAIN}
                             />
                             <Tooltip
                                 formatter={tooltipFormatter}
@@ -192,6 +313,7 @@ export function MetricsChart({
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
                                 }}
                             />
+                            {showZeroLine && <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />}
                             {dataKeys.map((key, i) => (
                                 <Line
                                     key={key}

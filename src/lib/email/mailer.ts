@@ -38,8 +38,34 @@ export interface SendMailOptions {
   attachments?: MailAttachment[];
 }
 
+/**
+ * What a send reports back.
+ *
+ * `messageId` is the only field every provider has. The rest are nodemailer's
+ * per-recipient SMTP result and are absent on AgentMail (a stateless HTTP API
+ * with no envelope-level accept/reject) — hence optional.
+ *
+ * THEY ARE HERE BECAUSE THEY WERE ALREADY BEING READ. Three call sites
+ * (sendNbfcWelcomeEmail, sendDealerWelcomeEmail, sendVendorWelcomeEmail) guard
+ * on `info.rejected.length > 0` to turn a refused recipient into a thrown
+ * error. The SMTP adapter below used to narrow its return to `{ messageId }`,
+ * so `rejected` was `undefined` at runtime and every one of those guards was
+ * dead: a credentials email the server accepted but refused to deliver looked
+ * exactly like a success. Passing the fields through is what makes those
+ * guards real.
+ */
+export interface SendMailResult {
+  messageId: string;
+  /** SMTP only — recipients the server took. */
+  accepted?: Array<string | { address: string }>;
+  /** SMTP only — recipients the server refused. A non-empty array is a failure. */
+  rejected?: Array<string | { address: string }>;
+  response?: string;
+  envelope?: unknown;
+}
+
 export interface Mailer {
-  sendMail(opts: SendMailOptions): Promise<{ messageId: string }>;
+  sendMail(opts: SendMailOptions): Promise<SendMailResult>;
   verify(): Promise<true>;
 }
 
@@ -146,7 +172,16 @@ function smtpMailer(): Mailer {
     async sendMail(opts) {
       // nodemailer's attachment field is `contentType`, matching our shape.
       const info = await transporter.sendMail(opts as nodemailer.SendMailOptions);
-      return { messageId: info.messageId };
+      // Pass the per-recipient result through — see SendMailResult for why
+      // narrowing this to `{ messageId }` silently disabled every caller's
+      // rejected-recipient check.
+      return {
+        messageId: info.messageId,
+        accepted: info.accepted,
+        rejected: info.rejected,
+        response: info.response,
+        envelope: info.envelope,
+      };
     },
     async verify() {
       if (!smtpVerified) {
@@ -175,6 +210,6 @@ export function getMailer(): Mailer {
 }
 
 /** Convenience one-shot send used where a full transporter handle isn't needed. */
-export async function sendEmail(opts: SendMailOptions): Promise<{ messageId: string }> {
+export async function sendEmail(opts: SendMailOptions): Promise<SendMailResult> {
   return getMailer().sendMail(opts);
 }

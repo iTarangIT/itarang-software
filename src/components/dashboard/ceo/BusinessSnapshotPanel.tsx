@@ -5,8 +5,6 @@ import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import {
-  TrendingDown,
-  TrendingUp,
   Receipt,
   ArrowRight,
   ShoppingBag,
@@ -14,8 +12,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatINRCompact } from "@/lib/format";
+import { Pagination, usePagination } from "@/components/shared/Pagination";
 import { ManualSalesUpload } from "./ManualSalesUpload";
 import { MonthCalendar } from "./MonthCalendar";
+
+/** Rows per page in the two recent lists — they are a glance, not a ledger. */
+const RECENT_PAGE_SIZE = 5;
 
 interface RecentInvoice {
   id: string;
@@ -76,6 +78,13 @@ export function BusinessSnapshotPanel({
   const [selection, setSelection] = useState<Selection>({ kind: "mtd" });
   const filterRef = useRef<HTMLDivElement>(null);
 
+  // E-219 — both recent lists are paged five at a time. They sit in a narrow
+  // column beside the snapshot tiles, so they get the compact control (a
+  // "2 / 5" counter instead of page buttons) rather than wrapping onto a
+  // second line.
+  const pagedInvoices = usePagination(recentInvoices, RECENT_PAGE_SIZE);
+  const pagedExpenses = usePagination(recentExpenses, RECENT_PAGE_SIZE);
+
   // Close the popover on outside-click / Escape.
   useEffect(() => {
     if (!open) return;
@@ -122,7 +131,6 @@ export function BusinessSnapshotPanel({
   const otherExpenses = isDefault
     ? otherExpensesMtd
     : data?.otherExpenses ?? otherExpensesMtd;
-  const netMtd = sales - purchases - otherExpenses;
 
   const monthLabel =
     selection.kind === "month"
@@ -240,24 +248,10 @@ export function BusinessSnapshotPanel({
         />
       </div>
 
-      <div data-testid="net-mtd" className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
-          Net · {label}
-        </span>
-        <span
-          data-testid="net-mtd-value"
-          className={`text-base font-bold flex items-center gap-1 ${
-            netMtd >= 0 ? "text-emerald-700" : "text-rose-700"
-          }`}
-        >
-          {netMtd >= 0 ? (
-            <TrendingUp className="w-4 h-4" />
-          ) : (
-            <TrendingDown className="w-4 h-4" />
-          )}
-          {formatINR(Math.abs(netMtd))}
-        </span>
-      </div>
+      {/* E-224 — the "Net · <period>" strip was removed here. Realization
+          (revenue − expense) is the headline KPI at the top of the page and is
+          the figure the CEO acts on; a second, differently-derived net beneath
+          the snapshot tiles invited the two being read as the same number. */}
 
       <div className="mt-5 grid grid-cols-1 gap-4">
         <div>
@@ -267,8 +261,9 @@ export function BusinessSnapshotPanel({
           {recentInvoices.length === 0 ? (
             <p data-testid="recent-invoices-empty" className="text-[11px] text-gray-400 italic">No invoices synced yet.</p>
           ) : (
+            <>
             <ul data-testid="recent-invoices-list" className="divide-y divide-gray-50">
-              {recentInvoices.map((inv) => (
+              {pagedInvoices.pageItems.map((inv) => (
                 <li
                   key={inv.id}
                   className="py-2 flex items-center justify-between text-[12px]"
@@ -287,6 +282,17 @@ export function BusinessSnapshotPanel({
                 </li>
               ))}
             </ul>
+            <Pagination
+              page={pagedInvoices.page}
+              pageCount={pagedInvoices.pageCount}
+              onPageChange={pagedInvoices.setPage}
+              total={pagedInvoices.total}
+              from={pagedInvoices.from}
+              to={pagedInvoices.to}
+              noun="invoices"
+              compact
+            />
+            </>
           )}
         </div>
 
@@ -298,8 +304,9 @@ export function BusinessSnapshotPanel({
           {recentExpenses.length === 0 ? (
             <p data-testid="recent-expenses-empty" className="text-[11px] text-gray-400 italic">No approved expenses yet.</p>
           ) : (
+            <>
             <ul data-testid="recent-expenses-list" className="divide-y divide-gray-50">
-              {recentExpenses.map((exp) => (
+              {pagedExpenses.pageItems.map((exp) => (
                 <li
                   key={exp.id}
                   className="py-2 flex items-center justify-between text-[12px]"
@@ -318,6 +325,17 @@ export function BusinessSnapshotPanel({
                 </li>
               ))}
             </ul>
+            <Pagination
+              page={pagedExpenses.page}
+              pageCount={pagedExpenses.pageCount}
+              onPageChange={pagedExpenses.setPage}
+              total={pagedExpenses.total}
+              from={pagedExpenses.from}
+              to={pagedExpenses.to}
+              noun="expenses"
+              compact
+            />
+            </>
           )}
         </div>
       </div>

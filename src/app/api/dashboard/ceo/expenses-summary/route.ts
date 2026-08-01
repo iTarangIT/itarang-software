@@ -21,7 +21,10 @@ import { db } from "@/lib/db";
 import { expenseSubmissions } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
-import { approvedExpenseInWindow } from "@/lib/dashboard/salesWindow";
+import {
+  approvedExpenseInWindow,
+  resolveWindowParams,
+} from "@/lib/dashboard/salesWindow";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,70 +41,14 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const sp = req.nextUrl.searchParams;
-    const monthParam = sp.get("month");
-    const yearParam = sp.get("year");
-    const period = sp.get("period") || "mtd";
-
-    const now = new Date();
-    const pad2 = (n: number) => String(n).padStart(2, "0");
-    const curYear = now.getFullYear();
-    const curMonth = now.getMonth(); // 0-indexed
-
-    let startStr: string;
-    let endStr: string | null = null;
-    let label: string;
-    let resolvedPeriod: string;
-
-    const monthMatch = monthParam?.match(/^(\d{4})-(\d{2})$/);
-    if (monthMatch) {
-      const y = Number(monthMatch[1]);
-      const mo = Number(monthMatch[2]); // 1-indexed
-      if (mo < 1 || mo > 12) {
-        return NextResponse.json(
-          { success: false, error: { message: "invalid month" } },
-          { status: 400 },
-        );
-      }
-      startStr = `${y}-${pad2(mo)}-01`;
-      const ey = mo === 12 ? y + 1 : y;
-      const em = mo === 12 ? 1 : mo + 1;
-      endStr = `${ey}-${pad2(em)}-01`;
-      resolvedPeriod = monthParam!;
-      label = new Date(`${startStr}T00:00:00`).toLocaleDateString("en-IN", {
-        month: "short",
-        year: "numeric",
-      });
-    } else if (yearParam) {
-      // Whole calendar year — total of all its months (Jan–Dec).
-      const y = Number(yearParam);
-      if (!/^\d{4}$/.test(yearParam) || y < 2000 || y > 2100) {
-        return NextResponse.json(
-          { success: false, error: { message: "invalid year" } },
-          { status: 400 },
-        );
-      }
-      startStr = `${y}-01-01`;
-      endStr = `${y + 1}-01-01`;
-      resolvedPeriod = `year-${y}`;
-      label = `Year ${y}`;
-    } else if (period === "fy") {
-      const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
-      startStr = `${fyStartYear}-04-01`;
-      endStr = null;
-      resolvedPeriod = "fy";
-      label = `FY since 1 Apr ${fyStartYear}`;
-    } else {
-      startStr = `${curYear}-${pad2(curMonth + 1)}-01`;
-      const ey = curMonth === 11 ? curYear + 1 : curYear;
-      const em = curMonth === 11 ? 1 : curMonth + 2;
-      endStr = `${ey}-${pad2(em)}-01`;
-      resolvedPeriod = "mtd";
-      label = new Date(`${startStr}T00:00:00`).toLocaleDateString("en-IN", {
-        month: "short",
-        year: "numeric",
-      });
+    const resolved = resolveWindowParams(req.nextUrl.searchParams);
+    if (!resolved.ok) {
+      return NextResponse.json(
+        { success: false, error: { message: resolved.error } },
+        { status: 400 },
+      );
     }
+    const { startStr, endStr, period, label } = resolved.window;
 
     // E-216 — windowed on the invoice's own date, not approved_at (= import
     // time). A bill dated March counts in March however late it was scanned.
@@ -116,7 +63,7 @@ export async function GET(req: NextRequest) {
       success: true,
       data: {
         total: Number(agg?.total || 0),
-        period: resolvedPeriod,
+        period,
         label,
       },
     });

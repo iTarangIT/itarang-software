@@ -168,6 +168,16 @@ export interface PendingVendorRow extends VendorRow {
   registered_at: Date | null;
   /** Whether a login exists for this vendor (self-registration always makes one). */
   has_login: boolean;
+  /**
+   * E-223 — the latest credentials dispatch attempt: `dispatched`,
+   * `credential_dispatch_failed`, `pending`, or null if none was ever made.
+   * This is what distinguishes the two populations sharing this list: a vendor
+   * an admin onboarded whose email bounced (retryable) from one who is simply
+   * unvetted.
+   */
+  credential_status: string | null;
+  /** The mailer's own sentence on the failed attempt, shown beside the retry. */
+  credential_error: string | null;
 }
 
 /**
@@ -181,6 +191,13 @@ export interface PendingVendorRow extends VendorRow {
  *
  * Deliberately shows gstin/pan: this list is where a human decides whether the
  * firm is real, and those are what they check.
+ *
+ * E-223 gave this list a second, more common population: a vendor an ADMIN
+ * onboarded whose credentials email bounced. They are PENDING for a mechanical
+ * reason, not a judgement, so the latest vendor_portal_credentials attempt is
+ * joined in — without it the screen cannot tell "nobody has vetted this firm"
+ * apart from "this firm never got their password", and those need different
+ * buttons.
  */
 export async function listPendingVendors(): Promise<PendingVendorRow[]> {
   const rows = await db.execute(sql`
@@ -192,13 +209,25 @@ export async function listPendingVendors(): Promise<PendingVendorRow[]> {
       a.city, a.state, a.gstin, a.pan,
       a.onboarding_status,
       sv.created_at AS registered_at,
-      EXISTS (SELECT 1 FROM users u WHERE u.vendor_entity_id = sv.entity_id) AS has_login
+      EXISTS (SELECT 1 FROM users u WHERE u.vendor_entity_id = sv.entity_id) AS has_login,
+      -- LATERAL, not a plain LEFT JOIN: vendor_portal_credentials holds one row
+      -- per dispatch ATTEMPT, so a join would multiply the vendor by its retry
+      -- history. Only the most recent attempt is the current state.
+      cred.dispatch_status AS credential_status,
+      cred.last_error      AS credential_error
     FROM scrap_vendors sv
     JOIN accounts a ON a.id = sv.entity_id
     JOIN business_entity_roles ber
       ON ber.entity_id = sv.entity_id
      AND ber.role = 'SCRAP_VENDOR'
      AND ber.status = 'PENDING'
+    LEFT JOIN LATERAL (
+      SELECT vpc.dispatch_status, vpc.last_error
+        FROM vendor_portal_credentials vpc
+       WHERE vpc.entity_id = sv.entity_id
+       ORDER BY vpc.created_at DESC
+       LIMIT 1
+    ) cred ON TRUE
     ORDER BY sv.created_at DESC
   `);
 
@@ -206,6 +235,8 @@ export async function listPendingVendors(): Promise<PendingVendorRow[]> {
     ...r,
     regions: r.regions ?? [],
     has_login: Boolean(r.has_login),
+    credential_status: r.credential_status ?? null,
+    credential_error: r.credential_error ?? null,
   }));
 }
 

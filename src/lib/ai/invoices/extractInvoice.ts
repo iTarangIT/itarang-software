@@ -1,8 +1,13 @@
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import { getOpenAI, INVOICE_MODEL } from "./client";
 import {
+  EXPENSE_BUCKETS,
+  EXPENSE_BUCKET_DESCRIPTIONS,
+  EXPENSE_BUCKET_VALUES,
   EXPENSE_DEPARTMENTS,
   EXPENSE_DEPARTMENT_VALUES,
+  isExpenseBucket,
+  type ExpenseBucket,
   type ExpenseDepartment,
 } from "@/lib/expenses";
 
@@ -16,6 +21,11 @@ export interface ExtractedInvoice {
   project_tag: string | null;
   department_confidence: number | null; // 0..1
   invoice_number: string | null; // the document's own bill/invoice reference
+  // E-218 — the coarse spend bucket. Asked for in the SAME call that already
+  // reads the document, so classification costs nothing extra. Only used when
+  // no deterministic rule matched the vendor — see resolveBucket().
+  bucket: ExpenseBucket | null;
+  bucket_confidence: number | null; // 0..1
 }
 
 export interface ExtractInvoiceOptions {
@@ -71,7 +81,18 @@ const JSON_SCHEMA = {
         description:
           "The invoice/bill number exactly as printed on the document (its own reference, NOT a PO/order number)",
       },
+      bucket: {
+        type: ["string", "null"],
+        enum: [...EXPENSE_BUCKET_VALUES, null],
+        description: "Best-fit coarse spend bucket for this expense",
+      },
+      bucket_confidence: {
+        type: ["number", "null"],
+        description: "Confidence in the bucket classification, 0 to 1",
+      },
     },
+    // The schema is strict:true, so every property must be listed here —
+    // "required" means "always present in the output", not "must be non-null".
     required: [
       "vendor",
       "amount",
@@ -82,12 +103,17 @@ const JSON_SCHEMA = {
       "project_tag",
       "department_confidence",
       "invoice_number",
+      "bucket",
+      "bucket_confidence",
     ],
   },
 } as const;
 
 function buildSystemPrompt(existingTags: string[]): string {
   const deptList = EXPENSE_DEPARTMENTS.map((d) => `${d.value} (${d.label})`).join(", ");
+  const bucketList = EXPENSE_BUCKETS.map(
+    (b) => `${b.value} (${b.label}) — ${EXPENSE_BUCKET_DESCRIPTIONS[b.value]}`,
+  ).join(" ");
   const tagHint =
     existingTags.length > 0
       ? `Existing project tags you should reuse when they match: ${existingTags.join(", ")}.`
@@ -97,6 +123,14 @@ function buildSystemPrompt(existingTags: string[]): string {
     "Return vendor, total amount (number only), currency, invoice date (yyyy-mm-dd), and a short description.",
     "Capture the invoice/bill number exactly as printed — the document's own reference number, not a purchase-order (PO) number.",
     `Classify the expense into exactly one department from: ${deptList}.`,
+    `Separately, classify it into exactly one spend bucket from: ${bucketList}`,
+    "Department is whose budget the spend belongs to; bucket is what kind of spend it is.",
+    // E-224 — this used to read "a battery order raised by the tech team is
+    // department tech but bucket rm", which put every component invoice on the
+    // Tech budget and made the CEO's by-department breakdown wrong.
+    "The tech department covers software, SaaS, cloud, hosting, IT hardware and developer tooling ONLY.",
+    "Raw material and components — cells, batteries, chargers, wiring, motors, controllers — are bought by production and belong to the ops department, never to tech, however they were requested.",
+    "Example: a Trontek battery invoice is department ops and bucket rm. An AWS bill is department tech and bucket tech. A Canva subscription bought by marketing is department marketing and bucket tech.",
     "Also assign a concise project tag (2-4 words, Title Case) for project-level monitoring.",
     tagHint,
     "If a field is genuinely not present, return null for it. Do not guess amounts.",
@@ -192,5 +226,11 @@ export async function extractInvoice(
       typeof parsed.invoice_number === "string" && parsed.invoice_number.trim()
         ? parsed.invoice_number.trim()
         : null,
+    // Same whitelist guard as `department` above: a value outside the taxonomy
+    // becomes null and resolveBucket() falls back, rather than writing a bucket
+    // no tile knows how to show.
+    bucket: isExpenseBucket(parsed.bucket) ? parsed.bucket : null,
+    bucket_confidence:
+      typeof parsed.bucket_confidence === "number" ? parsed.bucket_confidence : null,
   };
 }

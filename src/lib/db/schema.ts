@@ -6909,6 +6909,13 @@ export const expenseSubmissions = pgTable(
     // the flag routes the row to a human, it does not withhold it.
     needs_attention: boolean("needs_attention").default(false).notNull(),
     attention_reason: text("attention_reason"),
+    // E-218 — coarse spend bucket (tech | rm | misc | others), the layer the
+    // CEO reads at a glance above `department`. NULL until the backfill runs;
+    // the dashboard renders those as "Unclassified". `bucket_source` records
+    // who decided it — rule | ai | manual | default — so the backfill can
+    // never overwrite a human correction.
+    bucket: varchar("bucket", { length: 24 }),
+    bucket_source: varchar("bucket_source", { length: 16 }),
     // E-217 — multi-currency. `amount` above is ALWAYS INR because every
     // report SUMs it; these record what the document actually said and the
     // arithmetic that connects the two.
@@ -6958,6 +6965,15 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsApprovedExpenseDateIdx: index(
       "expense_submissions_approved_expense_date_idx",
     ).on(table.expense_date),
+    // E-218 — bucket rollups on the CEO dashboard. Both carry partial
+    // predicates (WHERE status = 'approved' / WHERE bucket_source IS NOT NULL)
+    // that live in the migration only; declared plain here for drizzle.
+    expenseSubmissionsBucketDateIdx: index(
+      "expense_submissions_bucket_date_idx",
+    ).on(table.bucket, table.expense_date),
+    expenseSubmissionsBucketSourceIdx: index(
+      "expense_submissions_bucket_source_idx",
+    ).on(table.bucket_source),
   }),
 );
 
@@ -7222,6 +7238,10 @@ export const leadVisits = pgTable(
     visit_status: varchar("visit_status", { length: 30 }).notNull(),
     visit_outcome: varchar("visit_outcome", { length: 30 }),
     visit_remarks: text("visit_remarks"),
+    // E-220 — how the meeting happened: ground | calling | whatsapp. Free text
+    // (vocabulary in src/lib/admin/types.ts MEETING_MODES) per this family's
+    // convention; see the migration for why it is not a CHECK or an enum.
+    meeting_mode: varchar("meeting_mode", { length: 16 }).default("ground"),
     photos: jsonb().default([]),
     gps_check_in_lat: numeric("gps_check_in_lat", { precision: 10, scale: 6 }),
     gps_check_in_lng: numeric("gps_check_in_lng", { precision: 10, scale: 6 }),
@@ -7306,6 +7326,13 @@ export const dealerLeadCommercials = pgTable(
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+    // E-221 — CEO approval gate. Only quote_issue / quote_revision are written
+    // 'pending'; every other event type, and every pre-E-221 row, is
+    // 'approved'. Vocabulary in src/lib/leads/quoteApproval.ts.
+    approval_status: varchar("approval_status", { length: 16 }).default("approved"),
+    approved_by: text("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
   },
   (t) => ({
     leadVersionUniq: uniqueIndex(
@@ -8528,12 +8555,95 @@ export const scrapVendors = pgTable(
     payment_terms: text("payment_terms"),
     credit_limit: numeric("credit_limit", { precision: 14, scale: 2 }),
     active: boolean().default(true).notNull(),
+    // E-223 — captured by the admin onboarding form. The registered ADDRESS
+    // lives on `accounts` (address_line1/2, city, state, pincode already exist
+    // there); only these three are vendor-specific.
+    udyam_number: text("udyam_number"),
+    /**
+     * Reference on the MANUALLY signed vendor agreement (E-223). Deliberately
+     * NOT business_entity_roles.agreement_id, which is reserved for the Digio
+     * document id (M19): "we hold a scan" and "eSign completed" are different
+     * assurances, and one column would let the weaker satisfy a check written
+     * for the stronger.
+     */
+    agreement_ref: text("agreement_ref"),
+    agreement_signed_on: date("agreement_signed_on"),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     entityUnique: uniqueIndex("scrap_vendors_entity_unique").on(t.entity_id),
+  }),
+);
+
+/**
+ * E-223 — the documents captured at vendor onboarding: GSTIN certificate, PAN
+ * card, Udyam certificate (all three mandatory) and an optional manually
+ * signed agreement.
+ *
+ * `entity_id` IS NULLABLE ON PURPOSE. The files are picked before the vendor
+ * exists, so the upload route inserts an UNCLAIMED row and hands back its id;
+ * submitting the form claims it (entity_id + claimed_at). The alternative —
+ * letting the browser hand a storage key back at submit — would make a
+ * client-supplied string a storage path, which is exactly what
+ * src/lib/buyback/storage.ts refuses to allow.
+ *
+ * `doc_type` is free text (GSTIN | PAN | UDYAM | AGREEMENT), per this family's
+ * convention; the vocabulary lives in src/lib/buyback/vendor-docs.ts and is
+ * enforced by zod at the write path.
+ */
+export const scrapVendorDocuments = pgTable(
+  "scrap_vendor_documents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 }).references(() => accounts.id, {
+      onDelete: "cascade",
+    }),
+    doc_type: text("doc_type").notNull(),
+    s3_key: text("s3_key").notNull(),
+    file_name: text("file_name"),
+    content_type: text("content_type"),
+    uploaded_by: uuid("uploaded_by"),
+    claimed_at: timestamp("claimed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("scrap_vendor_documents_entity_idx").on(t.entity_id),
+    // The two partial indexes from E-223 (one current doc per type; unclaimed
+    // sweep) cannot be expressed here — Drizzle has no partial index. They
+    // live only in the migration.
+  }),
+);
+
+/**
+ * E-223 — the record of emailing a vendor their generated portal password.
+ * Modelled on nbfcPortalCredentials (E-002), including its most important
+ * property: NO PASSWORD COLUMN. The plaintext is emailed and never persisted.
+ *
+ * One row per dispatch ATTEMPT. A retry after a bounced email is the normal
+ * case this table exists to make visible, and overwriting the failed row would
+ * erase the only evidence the first send was tried. Latest by created_at is
+ * the current state.
+ */
+export const vendorPortalCredentials = pgTable(
+  "vendor_portal_credentials",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    supabase_user_id: uuid("supabase_user_id").notNull(),
+    /** pending | dispatched | credential_dispatch_failed */
+    dispatch_status: varchar("dispatch_status", { length: 32 }).notNull(),
+    /** The mailer's own sentence — shown to the admin beside the retry button. */
+    last_error: text("last_error"),
+    email_dispatched_at: timestamp("email_dispatched_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("vendor_portal_credentials_entity_idx").on(t.entity_id, t.created_at),
+    statusIdx: index("vendor_portal_credentials_status_idx").on(t.dispatch_status),
   }),
 );
 
@@ -9239,5 +9349,239 @@ export const passwordChangeOtps = pgTable(
     // password_change_otps_open_idx and _verified_idx are partial —
     // migration-only, drizzle's builder has no partial-index syntax (same note
     // as E-211/E-212).
+  }),
+);
+
+// --- E-215: CRM SECURITY SCANNER (standalone agent) ---
+//
+// A NEW, self-contained security-testing agent: it drives Playwright through
+// the CRM (starting at dealer onboarding), actively probes for vulnerabilities,
+// and records findings. INDEPENDENT of the NBFC risk engine (risk_hypotheses /
+// risk_card_runs / the Python sandbox) — shares no tables, no code. Do not join
+// these to the risk_* family. See drizzle/E-215_security_scanner.sql.
+
+// One row per scan. The partial unique index (target_env) WHERE status='running'
+// is the single-flight lock (migration-only) — see src/lib/security/scan-run.ts.
+export const securityScanRuns = pgTable(
+  "security_scan_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    target_base_url: text("target_base_url").notNull(),
+    // 'local' | 'sandbox' | 'prod' — derived from the URL host.
+    target_env: varchar("target_env", { length: 16 }).notNull(),
+    // 'safe' | 'aggressive'. safe skips state-mutating probes.
+    mode: varchar({ length: 12 }).default("safe").notNull(),
+    // 'manual' | 'cron' | 'cli'
+    triggered_by: varchar("triggered_by", { length: 12 }).notNull(),
+    actor_user_id: uuid("actor_user_id"),
+    // 'running' | 'completed' | 'failed'
+    status: varchar({ length: 16 }).default("running").notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    surfaces_walked: integer("surfaces_walked").default(0).notNull(),
+    findings_total: integer("findings_total").default(0).notNull(),
+    findings_critical: integer("findings_critical").default(0).notNull(),
+    findings_high: integer("findings_high").default(0).notNull(),
+    findings_medium: integer("findings_medium").default(0).notNull(),
+    findings_low: integer("findings_low").default(0).notNull(),
+    findings_info: integer("findings_info").default(0).notNull(),
+    prompt_tokens: integer("prompt_tokens").default(0).notNull(),
+    completion_tokens: integer("completion_tokens").default(0).notNull(),
+    error: text("error"),
+  },
+  (t) => ({
+    startedIdx: index("security_scan_runs_started_idx").on(t.started_at),
+    // security_scan_runs_env_running_uidx is partial — migration-only.
+  }),
+);
+
+// Catalogue of checks the agent knows how to run, keyed by slug. Seeded by the
+// app on first run.
+export const securityChecks = pgTable(
+  "security_checks",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    slug: varchar({ length: 64 }).notNull(),
+    // 'authz' | 'exposure' | 'injection' | 'upload_headers'
+    category: varchar({ length: 24 }).notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    // critical | high | medium | low | info
+    default_severity: varchar("default_severity", { length: 12 }).default("medium").notNull(),
+    owasp_ref: varchar("owasp_ref", { length: 32 }),
+    cwe_ref: varchar("cwe_ref", { length: 16 }),
+    // Whether running this check mutates server state (skipped in safe mode).
+    mutating: boolean().default(false).notNull(),
+    retired_at: timestamp("retired_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    slugUidx: uniqueIndex("security_checks_slug_uidx").on(t.slug),
+  }),
+);
+
+// One row per vulnerability the scan surfaced. severity/confidence are set by
+// deterministic probe rules, never by the LLM. Open findings are deduped by
+// fingerprint (partial unique WHERE status <> 'resolved', migration-only).
+export const securityFindings = pgTable(
+  "security_findings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    run_id: uuid("run_id")
+      .notNull()
+      .references(() => securityScanRuns.id, { onDelete: "cascade" }),
+    check_slug: varchar("check_slug", { length: 64 }).notNull(),
+    category: varchar({ length: 24 }).notNull(),
+    // critical | high | medium | low | info
+    severity: varchar({ length: 12 }).notNull(),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    target_url: text("target_url").notNull(),
+    http_method: varchar("http_method", { length: 8 }),
+    evidence_json: jsonb("evidence_json"),
+    reproduction: text("reproduction"),
+    remediation: text("remediation"),
+    owasp_ref: varchar("owasp_ref", { length: 32 }),
+    cwe_ref: varchar("cwe_ref", { length: 16 }),
+    // 'confirmed' | 'likely' | 'possible'
+    confidence: varchar({ length: 10 }).default("possible").notNull(),
+    // 'open' | 'acknowledged' | 'resolved' | 'false_positive'
+    status: varchar({ length: 16 }).default("open").notNull(),
+    fingerprint: varchar({ length: 64 }).notNull(),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    llm_model: varchar("llm_model", { length: 64 }),
+    prompt_tokens: integer("prompt_tokens"),
+    completion_tokens: integer("completion_tokens"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-218: resolution bookkeeping — filled when a finding is resolved via the
+    // AI resolution chat (auto-apply) or the manual triage buttons.
+    resolution_summary: text("resolution_summary"),
+    resolution_report: jsonb("resolution_report"),
+    resolved_by: uuid("resolved_by"),
+    // 'auto_apply' | 'manual'
+    resolution_method: varchar("resolution_method", { length: 16 }),
+    // E-219: denormalised origin of the LATEST resolution, so the History tab
+    // renders "resolved by X from IP Y" without a join. The full append-only
+    // trail lives in security_finding_actions.
+    resolved_ip: varchar("resolved_ip", { length: 64 }),
+    resolved_user_agent: text("resolved_user_agent"),
+    resolved_by_email: text("resolved_by_email"),
+  },
+  (t) => ({
+    runIdx: index("security_findings_run_idx").on(t.run_id),
+    severityIdx: index("security_findings_severity_idx").on(t.severity),
+    statusIdx: index("security_findings_status_idx").on(t.status),
+    // security_findings_open_fingerprint_uidx is partial — migration-only.
+  }),
+);
+
+// E-218 — per-finding AI remediation chat. One row per turn (mirrors
+// conversation_messages). An assistant turn that proposes an applyable edit
+// carries proposed_fix = { file, search, replace, explanation }; the Resolve
+// step applies it to disk as a deterministic single-occurrence replacement.
+export const securityFindingMessages = pgTable(
+  "security_finding_messages",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    finding_id: uuid("finding_id")
+      .notNull()
+      .references(() => securityFindings.id, { onDelete: "cascade" }),
+    // 'user' | 'assistant' | 'system'
+    role: text().notNull(),
+    message: text().notNull(),
+    proposed_fix: jsonb("proposed_fix"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    findingIdx: index("security_finding_messages_finding_idx").on(t.finding_id, t.created_at),
+  }),
+);
+
+// E-219 — append-only triage/resolution audit trail per finding. One row per
+// action (acknowledged | resolved | false_positive | reopened | auto_apply) with
+// the actor AND the request origin it came from (ip/user_agent). A reopen adds a
+// row rather than erasing history, so the History tab can show the full story.
+export const securityFindingActions = pgTable(
+  "security_finding_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    finding_id: uuid("finding_id")
+      .notNull()
+      .references(() => securityFindings.id, { onDelete: "cascade" }),
+    // 'acknowledged' | 'resolved' | 'false_positive' | 'reopened' | 'auto_apply'
+    action: varchar({ length: 24 }).notNull(),
+    // 'auto_apply' | 'manual' | null
+    method: varchar({ length: 16 }),
+    actor_user_id: uuid("actor_user_id"),
+    actor_email: text("actor_email"),
+    actor_role: varchar("actor_role", { length: 32 }),
+    ip: varchar({ length: 64 }),
+    user_agent: text("user_agent"),
+    summary: text("summary"),
+    detail: jsonb("detail"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    findingIdx: index("security_finding_actions_finding_idx").on(t.finding_id, t.created_at),
+    actionIdx: index("security_finding_actions_action_idx").on(t.action, t.created_at),
+    ipIdx: index("security_finding_actions_ip_idx").on(t.ip),
+  }),
+);
+
+// --- E-216: LIVE-ATTACK EVENT LOG (runtime intrusion detection) ---
+//
+// Companion to E-215's scanner. One row per suspicious request caught in real
+// time by the detection layer in src/middleware.ts. Written via the Node route
+// POST /api/internal/security-events (Edge middleware can't reach Postgres).
+// See drizzle/E-216_security_events.sql.
+export const securityEvents = pgTable(
+  "security_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    occurred_at: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+    // Payload rules (src/lib/security/detect.ts):
+    //   'sql_injection' | 'xss' | 'path_traversal' | 'null_byte' | 'scanner_ua'
+    //   | 'sensitive_unauth' | 'command_injection' | 'ssrf' | 'lfi_rfi'
+    //   | 'jndi_injection' | 'nosql_injection' | 'crlf_injection'
+    //   | 'proto_pollution' | 'xxe' | 'open_redirect' | 'sensitive_file_probe'
+    //   | 'method_abuse'
+    // Volumetric rules (src/lib/security/rate-watch.ts):
+    //   'rate_flood' | 'path_enumeration' | 'auth_bruteforce'
+    // Auto-block (src/lib/security/blocklist.ts):
+    //   'ip_blocked' — a request refused because its source IP is under a ban
+    // Legacy: 'burst'
+    event_type: varchar("event_type", { length: 32 }).notNull(),
+    // critical | high | medium | low | info
+    severity: varchar({ length: 12 }).notNull(),
+    // 'blocked' | 'logged'
+    action: varchar({ length: 12 }).default("logged").notNull(),
+    ip: varchar({ length: 64 }),
+    actor_user_id: uuid("actor_user_id"),
+    actor_role: varchar("actor_role", { length: 32 }),
+    method: varchar({ length: 8 }),
+    path: text("path").notNull(),
+    query: text("query"),
+    user_agent: text("user_agent"),
+    matched_rule: varchar("matched_rule", { length: 64 }),
+    // The rule's matched payload, plus request context under fixed keys:
+    //   net (source-IP provenance + proxy chain) | client (sender fingerprint)
+    //   | geo | request | flags | ban | body_sample | provenance (detector-raised
+    //   vs hand-POSTed — decides whether `ip` is observed or merely claimed).
+    // Written by src/middleware.ts via src/lib/security/fingerprint.ts.
+    evidence: jsonb("evidence"),
+    // 'new' | 'reviewed' | 'ignored'
+    status: varchar({ length: 16 }).default("new").notNull(),
+    alerted_at: timestamp("alerted_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    occurredIdx: index("security_events_occurred_idx").on(t.occurred_at),
+    severityIdx: index("security_events_severity_idx").on(t.severity),
+    ipOccurredIdx: index("security_events_ip_occurred_idx").on(t.ip, t.occurred_at),
+    statusIdx: index("security_events_status_idx").on(t.status),
+    // E-217 — the volumetric rules grow this table much faster, and the
+    // dashboard filters by attack type.
+    typeOccurredIdx: index("security_events_type_occurred_idx").on(t.event_type, t.occurred_at),
   }),
 );
