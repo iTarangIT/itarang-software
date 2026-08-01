@@ -124,7 +124,13 @@ function buildSystemPrompt(existingTags: string[]): string {
     "Capture the invoice/bill number exactly as printed — the document's own reference number, not a purchase-order (PO) number.",
     `Classify the expense into exactly one department from: ${deptList}.`,
     `Separately, classify it into exactly one spend bucket from: ${bucketList}`,
-    "Department is whose budget the spend belongs to; bucket is what kind of spend it is. They are independent — a battery order raised by the tech team is department tech but bucket rm.",
+    "Department is whose budget the spend belongs to; bucket is what kind of spend it is.",
+    // E-224 — this used to read "a battery order raised by the tech team is
+    // department tech but bucket rm", which put every component invoice on the
+    // Tech budget and made the CEO's by-department breakdown wrong.
+    "The tech department covers software, SaaS, cloud, hosting, IT hardware and developer tooling ONLY.",
+    "Raw material and components — cells, batteries, chargers, wiring, motors, controllers — are bought by production and belong to the ops department, never to tech, however they were requested.",
+    "Example: a Trontek battery invoice is department ops and bucket rm. An AWS bill is department tech and bucket tech. A Canva subscription bought by marketing is department marketing and bucket tech.",
     "Also assign a concise project tag (2-4 words, Title Case) for project-level monitoring.",
     tagHint,
     "If a field is genuinely not present, return null for it. Do not guess amounts.",

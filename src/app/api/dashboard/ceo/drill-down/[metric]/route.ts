@@ -95,6 +95,12 @@ export async function GET(
 
     let rows: Record<string, unknown>[] = [];
     let total = 0;
+    // E-224 — did ROW_CAP actually bite? The client sorts the rows it was given,
+    // so a truncated list re-sorted ascending would show the smallest of the
+    // most recent 500 while reading as the smallest of the period. Counted on
+    // the DB result, not on `rows`, because the sales branch expands one invoice
+    // into several rows and its length says nothing about the cap.
+    let capped = false;
 
     if (metric === "purchases") {
       // inventory.oem_invoice_date is a timestamptz; compare against date strings.
@@ -117,6 +123,7 @@ export async function GET(
         .where(and(...conds))
         .orderBy(desc(inventory.oem_invoice_date))
         .limit(ROW_CAP);
+      capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.final_amount || 0), 0);
     } else if (metric === "sales") {
       const conds = [
@@ -138,6 +145,7 @@ export async function GET(
         .where(and(...conds))
         .orderBy(desc(zohoInvoices.invoice_date))
         .limit(ROW_CAP);
+      capped = invoiceRows.length >= ROW_CAP;
       // Total reconciles with the card: sum of INVOICE totals (not line items).
       total = invoiceRows.reduce((s, r) => s + Number(r.total || 0), 0);
 
@@ -193,6 +201,7 @@ export async function GET(
           .where(and(...manualConds))
           .orderBy(desc(manualDealerSales.sale_date))
           .limit(ROW_CAP);
+        if (manualRows.length >= ROW_CAP) capped = true;
         const manualMapped = manualRows.map((m) => ({
           _first: true,
           zoho_invoice_id: null,
@@ -264,6 +273,7 @@ export async function GET(
         )
         .orderBy(desc(expenseEffectiveDate()))
         .limit(ROW_CAP);
+      capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
     } else if (metric === "inventory") {
       rows = await db
@@ -277,6 +287,7 @@ export async function GET(
         .from(inventory)
         .orderBy(desc(inventory.final_amount))
         .limit(ROW_CAP);
+      capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.final_amount || 0), 0);
     } else if (metric === "outstanding") {
       rows = await db
@@ -298,12 +309,13 @@ export async function GET(
         )
         .orderBy(desc(zohoInvoices.balance))
         .limit(ROW_CAP);
+      capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.balance || 0), 0);
     }
 
     return NextResponse.json({
       success: true,
-      data: { metric, total, rows },
+      data: { metric, total, rows, capped, cap: ROW_CAP },
     });
   } catch (e: unknown) {
     if (isNextRedirectError(e)) throw e;
