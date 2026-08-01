@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Admin scrap-vendor onboarding (E-222).
+ * Admin scrap-vendor onboarding (E-223).
  *
  * Replaces the seven-field "+ Add vendor" modal on /admin/buyback/vendors. What
  * it adds is not just more boxes: a registered address, the three statutory

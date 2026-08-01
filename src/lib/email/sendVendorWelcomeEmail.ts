@@ -1,6 +1,6 @@
 /**
  * The credentials email a scrap vendor gets when an admin onboards them
- * (E-222). Structural twin of sendNbfcWelcomeEmail — same mailer, same
+ * (E-223). Structural twin of sendNbfcWelcomeEmail — same mailer, same
  * escaping, same plaintext-password-in-the-body compromise (there is no vendor
  * portal invite-link flow to hand them instead) and the same hard rule that a
  * rejected recipient THROWS rather than being logged and swallowed: the caller

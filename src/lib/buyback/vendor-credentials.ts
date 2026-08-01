@@ -1,5 +1,5 @@
 /**
- * Issuing a scrap vendor their portal login (E-222).
+ * Issuing a scrap vendor their portal login (E-223).
  *
  * THE ONE WRITER. Both the create route (POST /api/admin/buyback/vendors) and
  * the retry route (POST .../vendors/:entityId/credentials) call this and

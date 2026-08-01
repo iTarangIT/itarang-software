@@ -28,7 +28,7 @@ export type UploadKind =
   | "weighbridge_slip"
   | "vendor_po"
   | "invoice_pdf"
-  // --- E-222 vendor onboarding documents — attached to a VENDOR, and in fact
+  // --- E-223 vendor onboarding documents — attached to a VENDOR, and in fact
   // to no entity at all at upload time (see vendorDocKeyFor). Uppercase
   // because these values are also the `doc_type` written to
   // scrap_vendor_documents, and one spelling beats a mapping. ---------------

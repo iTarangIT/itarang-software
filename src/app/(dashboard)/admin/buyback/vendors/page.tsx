@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Scrap vendors (M09 / M18-lite → E-222), on the shared buyback UI kit
+ * Scrap vendors (M09 / M18-lite → E-223), on the shared buyback UI kit
  * (design handoff, iTarang Portal.dc.html `scrVendors`, lines 958-966).
  *
- * "+ Add vendor" used to open an inline seven-field modal. E-222 replaced it
+ * "+ Add vendor" used to open an inline seven-field modal. E-223 replaced it
  * with a real onboarding page (/admin/buyback/vendors/new) that also captures
  * an address, the three statutory documents, and — the reason the modal had to
  * go — a portal login whose password iTarang generates and emails.
@@ -12,7 +12,7 @@
  * TWO LISTS, AND WHY THE SECOND ONE MATTERS. The main grid is
  * `listRoutableVendors` — an ACTIVE SCRAP_VENDOR role, which is M18's AC
  * ("unonboarded vendor unselectable for routing") expressed as a join. Above it
- * sits the PENDING list, which before E-222 was unreachable from any screen.
+ * sits the PENDING list, which before E-223 was unreachable from any screen.
  * It has to be reachable now: onboarding flips a vendor ACTIVE only when their
  * credentials email actually leaves, so a bounced email leaves a real vendor,
  * with real documents, who cannot be routed and whom nobody can see. That is a

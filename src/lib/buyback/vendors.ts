@@ -169,7 +169,7 @@ export interface PendingVendorRow extends VendorRow {
   /** Whether a login exists for this vendor (self-registration always makes one). */
   has_login: boolean;
   /**
-   * E-222 — the latest credentials dispatch attempt: `dispatched`,
+   * E-223 — the latest credentials dispatch attempt: `dispatched`,
    * `credential_dispatch_failed`, `pending`, or null if none was ever made.
    * This is what distinguishes the two populations sharing this list: a vendor
    * an admin onboarded whose email bounced (retryable) from one who is simply
@@ -192,7 +192,7 @@ export interface PendingVendorRow extends VendorRow {
  * Deliberately shows gstin/pan: this list is where a human decides whether the
  * firm is real, and those are what they check.
  *
- * E-222 gave this list a second, more common population: a vendor an ADMIN
+ * E-223 gave this list a second, more common population: a vendor an ADMIN
  * onboarded whose credentials email bounced. They are PENDING for a mechanical
  * reason, not a judgement, so the latest vendor_portal_credentials attempt is
  * joined in — without it the screen cannot tell "nobody has vetted this firm"
