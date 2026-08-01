@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { securityEvents } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email/mailer";
 import { MetaWhatsAppAdapter } from "@/lib/whatsapp/meta";
+import { clientIp } from "@/lib/security/client-ip";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,34 @@ export async function POST(req: Request) {
   const ip = str(body.ip);
   const now = Date.now();
 
+  // ── Provenance: is this `ip` OBSERVED or merely CLAIMED? ──────────────────
+  // The middleware resolves the source address from the proxy-written headers
+  // of a real request and marks itself with `reporter: "middleware"`. Anything
+  // else reached this route by someone POSTing JSON to it with the shared
+  // secret — a manual test — and its `ip` field is whatever that person typed.
+  // Both used to land in the table looking identical, which is how a row can
+  // show a source IP of "1.2.3.4" that no request ever came from.
+  //
+  // We do not reject those posts (they are the only way to exercise the UI
+  // without staging a real attack); we label them, and the console renders the
+  // label loudly so a hand-typed address is never read as forensic evidence.
+  const reporter = str(body.reporter);
+  const observed = clientIp(req.headers).ip;
+  const selfReported = reporter === "middleware";
+  const provenance: Record<string, unknown> = selfReported
+    ? {
+        reporter: "middleware",
+        ip_verified: true,
+        note: "Raised by the request detector. The source IP was read from the proxy-written headers of the real request.",
+      }
+    : {
+        reporter: "manual-api-post",
+        ip_verified: false,
+        ip_claimed: ip,
+        ip_observed_at_ingest: observed,
+        note: "Synthetic event: POSTed directly to the internal ingest API rather than raised by a real request. The source IP is whatever the poster supplied — it is not evidence of anything.",
+      };
+
   // Burst escalation: many events from one IP in a short window.
   let severity = str(body.severity) || "low";
   let burstCount = 0;
@@ -53,6 +82,7 @@ export async function POST(req: Request) {
   }
 
   const evidence = (body.evidence && typeof body.evidence === "object" ? body.evidence : {}) as Record<string, unknown>;
+  evidence.provenance = provenance;
   if (burstCount >= BURST_THRESHOLD) evidence.burst = { count: burstCount, window_min: BURST_WINDOW_MIN };
 
   // Decide whether this event should alert, respecting the per-IP cooldown.
