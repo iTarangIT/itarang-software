@@ -7,6 +7,8 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 
+import { holidayCalendar } from "@/lib/db/schema";
+
 const READ_ROLES = [
     "inside_sales_rep",
     "asm",
@@ -20,7 +22,7 @@ const READ_ROLES = [
 export const GET = withErrorHandler(async () => {
     await requireRole(READ_ROLES);
     const rows = await db.execute<{ holiday_date: string }>(sql`
-        SELECT holiday_date::text AS holiday_date FROM holiday_calendar WHERE is_active = TRUE
+        SELECT holiday_date::text AS holiday_date FROM ${holidayCalendar} WHERE is_active = TRUE
     `);
     return successResponse({ dates: rows.map((r) => r.holiday_date) });
 });

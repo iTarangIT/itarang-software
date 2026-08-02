@@ -5,7 +5,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { leadEscalations } from "@/lib/db/schema";
+import { leadEscalations, dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
@@ -53,7 +53,7 @@ export const POST = withErrorHandler(
         await assertOwner(id, user.id);
 
         const stateRows = await db.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
+            SELECT lead_status FROM ${dealerLeads} WHERE id = ${id} LIMIT 1
         `);
         const status = stateRows[0]?.lead_status as LeadStatus | null;
         if (!status) return errorResponse("Lead not found", 404);
@@ -78,7 +78,7 @@ export const POST = withErrorHandler(
         const escalationId = inserted[0]?.escalation_id ?? null;
 
         await db.execute(sql`
-            UPDATE dealer_leads
+            UPDATE ${dealerLeads}
             SET escalation_status = 'pending_review',
                 escalation_count = COALESCE(escalation_count, 0) + 1,
                 last_escalation_id = ${escalationId},

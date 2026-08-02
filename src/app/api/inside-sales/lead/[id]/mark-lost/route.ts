@@ -16,6 +16,8 @@ import {
 } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
+import { dealerLeads } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
 // BRD §0.13 closing_role audit:
@@ -62,7 +64,7 @@ export const POST = withErrorHandler(
         }
 
         const stateRows = await db.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
+            SELECT lead_status FROM ${dealerLeads} WHERE id = ${id} LIMIT 1
         `);
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
         if (!fromStatus) return errorResponse("Lead not found", 404);
@@ -76,7 +78,7 @@ export const POST = withErrorHandler(
         // BRD §0.7 side effect: business_closed permanently excludes from AI dialer.
         if (body.lost_reason === "business_closed") {
             await db.execute(sql`
-                UPDATE dealer_leads SET ai_recall_status = 'excluded', updated_at = NOW() WHERE id = ${id}
+                UPDATE ${dealerLeads} SET ai_recall_status = 'excluded', updated_at = NOW() WHERE id = ${id}
             `);
         }
 

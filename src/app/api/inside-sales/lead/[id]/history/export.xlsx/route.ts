@@ -15,6 +15,8 @@ import { db } from "@/lib/db";
 import { withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 
+import { dealerLeads, users, leadTouchpoints, dealerLeadStatusHistory } from "@/lib/db/schema";
+
 const READ_ROLES = [
     "inside_sales_rep",
     "asm",
@@ -89,7 +91,7 @@ export const GET = withErrorHandler(
 
         const [leadRows, touchpoints, statusHistory] = await Promise.all([
             db.execute<{ dealer_name: string | null; phone: string | null }>(sql`
-                SELECT dealer_name, phone FROM dealer_leads WHERE id = ${id} LIMIT 1
+                SELECT dealer_name, phone FROM ${dealerLeads} WHERE id = ${id} LIMIT 1
             `),
             db.execute<TouchpointRow>(sql`
                 SELECT
@@ -102,8 +104,8 @@ export const GET = withErrorHandler(
                     t.remarks,
                     t.next_action,
                     t.next_action_at::text AS next_action_at
-                FROM lead_touchpoints t
-                LEFT JOIN users u ON u.id::text = t.performed_by
+                FROM ${leadTouchpoints} t
+                LEFT JOIN ${users} u ON u.id::text = t.performed_by
                 WHERE t.dealer_lead_id = ${id}
                 ORDER BY t.performed_at DESC
             `),
@@ -115,8 +117,8 @@ export const GET = withErrorHandler(
                     h.changed_at::text AS changed_at,
                     h.to_lost_reason,
                     h.reason_notes
-                FROM dealer_lead_status_history h
-                LEFT JOIN users u ON u.id::text = h.changed_by
+                FROM ${dealerLeadStatusHistory} h
+                LEFT JOIN ${users} u ON u.id::text = h.changed_by
                 WHERE h.dealer_lead_id = ${id}
                 ORDER BY h.changed_at DESC
             `),

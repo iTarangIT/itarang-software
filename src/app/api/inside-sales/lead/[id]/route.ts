@@ -14,6 +14,8 @@ import type {
     LeadDetailTouchpoint,
 } from "@/lib/inside-sales/types";
 
+import { users, dealerOnboardingApplications, dealerLeads, dealerLeadCommercials, leadTouchpoints, dealerLeadStatusHistory } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 const READ_ROLES = [
@@ -82,12 +84,12 @@ export const GET = withErrorHandler(
                 dl.dealer_onboarding_application_id,
                 app.onboarding_status AS onboarding_status,
                 app.created_at AS onboarding_created_at
-            FROM dealer_leads dl
-            LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
-            LEFT JOIN users originator ON originator.id::text = dl.originator_id
-            LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
-            LEFT JOIN users asm ON asm.id::text = dl.asm_id
-            LEFT JOIN dealer_onboarding_applications app ON app.id = dl.dealer_onboarding_application_id
+            FROM ${dealerLeads} dl
+            LEFT JOIN ${users} owner ON owner.id::text = dl.current_owner_id
+            LEFT JOIN ${users} originator ON originator.id::text = dl.originator_id
+            LEFT JOIN ${users} closer ON closer.id::text = dl.closing_owner_id
+            LEFT JOIN ${users} asm ON asm.id::text = dl.asm_id
+            LEFT JOIN ${dealerOnboardingApplications} app ON app.id = dl.dealer_onboarding_application_id
             WHERE dl.id = ${id}
             LIMIT 1
         `);
@@ -103,7 +105,7 @@ export const GET = withErrorHandler(
                     final_price::text, payment_method, deal_notes,
                     COALESCE(product_lines, '[]'::jsonb) AS product_lines, notes,
                     created_by, created_at, withdrawn_at
-                FROM dealer_lead_commercials
+                FROM ${dealerLeadCommercials}
                 WHERE dealer_lead_id = ${id}
                 ORDER BY version_no DESC
             `),
@@ -114,8 +116,8 @@ export const GET = withErrorHandler(
                     t.performed_at, t.call_status, t.call_duration_sec, t.is_engaged,
                     t.remarks, COALESCE(t.attachments, '[]'::jsonb) AS attachments,
                     t.next_action, t.next_action_at
-                FROM lead_touchpoints t
-                LEFT JOIN users u ON u.id::text = t.performed_by
+                FROM ${leadTouchpoints} t
+                LEFT JOIN ${users} u ON u.id::text = t.performed_by
                 WHERE t.dealer_lead_id = ${id}
                 ORDER BY t.performed_at DESC
                 LIMIT 100
@@ -126,8 +128,8 @@ export const GET = withErrorHandler(
                     h.from_lost_reason, h.to_lost_reason,
                     h.changed_by, u.name AS changed_by_name,
                     h.changed_at, h.reason_notes
-                FROM dealer_lead_status_history h
-                LEFT JOIN users u ON u.id::text = h.changed_by
+                FROM ${dealerLeadStatusHistory} h
+                LEFT JOIN ${users} u ON u.id::text = h.changed_by
                 WHERE h.dealer_lead_id = ${id}
                 ORDER BY h.changed_at DESC
                 LIMIT 100

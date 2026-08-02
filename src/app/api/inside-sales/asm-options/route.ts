@@ -11,6 +11,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import type { AsmOption } from "@/lib/inside-sales/types";
 
+import { users, asmTerritories } from "@/lib/db/schema";
+
 const READ_ROLES = [
     "inside_sales_rep",
     "admin",
@@ -47,7 +49,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             u.name,
             u.email,
             EXISTS (
-                SELECT 1 FROM asm_territories t
+                SELECT 1 FROM ${asmTerritories} t
                 WHERE t.asm_id = u.id::text
                   AND (${parsed.state ?? null}::text IS NULL OR t.state = ${parsed.state ?? null})
                   AND (
@@ -58,7 +60,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
                   AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
                   AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
             ) AS in_territory
-        FROM users u
+        FROM ${users} u
         WHERE LOWER(u.role) = 'asm' AND u.is_active = TRUE
         ORDER BY u.name ASC
     `);

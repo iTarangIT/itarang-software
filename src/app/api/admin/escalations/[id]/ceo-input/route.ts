@@ -14,6 +14,8 @@ import {
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 
+import { leadEscalations } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["ceo"];
 
 const BodySchema = z.discriminatedUnion("action", [
@@ -45,7 +47,7 @@ export const POST = withErrorHandler(
             dealer_lead_id: string;
             status: string;
         }>(sql`
-            SELECT dealer_lead_id, status FROM lead_escalations
+            SELECT dealer_lead_id, status FROM ${leadEscalations}
             WHERE escalation_id = ${id} LIMIT 1
         `);
         const esc = escRows[0];
@@ -59,7 +61,7 @@ export const POST = withErrorHandler(
 
         if (body.action === "comment") {
             await db.execute(sql`
-                UPDATE lead_escalations
+                UPDATE ${leadEscalations}
                 SET ceo_comment = ${body.text}, updated_at = NOW()
                 WHERE escalation_id = ${id}
             `);
@@ -72,7 +74,7 @@ export const POST = withErrorHandler(
         } else {
             const composed = `${RECO_LABEL[body.recommendation]} — ${body.text}`;
             await db.execute(sql`
-                UPDATE lead_escalations SET
+                UPDATE ${leadEscalations} SET
                     ceo_recommendation = ${composed},
                     ceo_recommended_at = NOW(),
                     updated_at = NOW()

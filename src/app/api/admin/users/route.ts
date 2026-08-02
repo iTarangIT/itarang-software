@@ -8,6 +8,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import type { UserOption } from "@/lib/admin/types";
 
+import { users } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 const READ_ROLES = ["admin", "sales_head", "ceo"];
@@ -26,7 +28,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
 
     const rows = await db.execute<UserOption>(sql`
         SELECT u.id::text AS user_id, u.name, u.email, u.role
-        FROM users u
+        FROM ${users} u
         WHERE LOWER(u.role) IN (${sql.join(
             roles.map((r) => sql`${r}`),
             sql`, `,

@@ -12,7 +12,7 @@
 
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { db } from "@/lib/db";
-import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
+import { aiCallLogs, dealerLeads, dialerCampaigns, assignmentConfig } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { updateLeadAfterCall } from "../storage/leadStore";
@@ -489,7 +489,7 @@ async function maybeReactivateOnRecall(
     lead_status: string | null;
     ai_recall_status: string | null;
   }>(sql`
-    SELECT lead_status, ai_recall_status FROM dealer_leads
+    SELECT lead_status, ai_recall_status FROM ${dealerLeads}
     WHERE id = ${leadId} LIMIT 1
   `);
   const r = rows[0];
@@ -502,7 +502,7 @@ async function maybeReactivateOnRecall(
   }
 
   const cfg = await db.execute<{ t: number | null }>(sql`
-    SELECT intent_score_threshold AS t FROM assignment_config
+    SELECT intent_score_threshold AS t FROM ${assignmentConfig}
     ORDER BY created_at ASC LIMIT 1
   `);
   const threshold = Number(cfg[0]?.t ?? 60);
@@ -515,7 +515,7 @@ async function maybeReactivateOnRecall(
     notes: `AI re-engagement scored ${score}/100 (threshold ${threshold}) — reactivating.`,
   });
   await db.execute(sql`
-    UPDATE dealer_leads SET ai_recall_status = 'qualified', updated_at = NOW()
+    UPDATE ${dealerLeads} SET ai_recall_status = 'qualified', updated_at = NOW()
     WHERE id = ${leadId}
   `);
 }

@@ -15,6 +15,8 @@ import { sql, type SQL } from "drizzle-orm";
 import type { ConvertedFilters } from "./types";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
+import { leads, dealerLeads } from "@/lib/db/schema";
+
 export type BuiltQueries = {
     rowsSql: SQL;
     countSql: SQL;
@@ -72,7 +74,7 @@ function unionBase(filters: ConvertedFilters): SQL {
                     ''
                 )::int                                                             AS intent_score,
                 dl.id                                                              AS raw_ref
-            FROM dealer_leads dl
+            FROM ${dealerLeads} dl
             WHERE dl.follow_up_history IS NOT NULL
               AND jsonb_array_length(dl.follow_up_history) > 0
               AND COALESCE(
@@ -93,7 +95,7 @@ function unionBase(filters: ConvertedFilters): SQL {
                 COALESCE(l.converted_at, l.updated_at)                             AS converted_at,
                 l.intent_score                                                     AS intent_score,
                 l.id                                                               AS raw_ref
-            FROM leads l
+            FROM ${leads} l
             WHERE l.converted_deal_id IS NOT NULL
         ),
         unioned AS (
@@ -178,8 +180,8 @@ export function buildConvertedQuery(filters: ConvertedFilters): BuiltQueries {
     // score) plus total leads (regardless of converted_deal_id).
     const totalLeadsSql = sql`
         SELECT (
-            (SELECT COUNT(*) FROM dealer_leads) +
-            (SELECT COUNT(*) FROM leads)
+            (SELECT COUNT(*) FROM ${dealerLeads}) +
+            (SELECT COUNT(*) FROM ${leads})
         )::int AS count
     `;
 

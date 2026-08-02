@@ -62,14 +62,14 @@ async function claimNextPending(campaignId: string): Promise<{
   const rows = await db.execute<{ id: string; lead_id: string }>(sql`
     WITH next_row AS (
       SELECT id
-      FROM dialer_campaign_leads
+      FROM ${dialerCampaignLeads}
       WHERE campaign_id = ${campaignId}
         AND status = 'pending'
       ORDER BY queue_position ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    UPDATE dialer_campaign_leads
+    UPDATE ${dialerCampaignLeads}
     SET status = 'calling',
         started_at = NOW()
     WHERE id IN (SELECT id FROM next_row)

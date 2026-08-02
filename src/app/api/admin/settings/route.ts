@@ -12,6 +12,8 @@ import type {
     TerritoryRow,
 } from "@/lib/admin/types";
 
+import { users, assignmentConfig, holidayCalendar, asmTerritories } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 const DEFAULT_WORKING_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat"];
@@ -32,8 +34,8 @@ export const GET = withErrorHandler(async () => {
         SELECT ac.config_id, ac.intent_score_threshold, ac.working_hours_start,
                ac.working_hours_end, ac.working_days, ac.updated_by,
                u.name AS updated_by_name, ac.updated_at
-        FROM assignment_config ac
-        LEFT JOIN users u ON u.id::text = ac.updated_by
+        FROM ${assignmentConfig} ac
+        LEFT JOIN ${users} u ON u.id::text = ac.updated_by
         ORDER BY ac.created_at ASC
         LIMIT 1
     `);
@@ -65,15 +67,15 @@ export const GET = withErrorHandler(async () => {
     const holidays = await db.execute<HolidayRow>(sql`
         SELECT holiday_id, holiday_date::text AS holiday_date,
                holiday_name, is_active
-        FROM holiday_calendar
+        FROM ${holidayCalendar}
         ORDER BY holiday_date DESC
     `);
 
     const territories = await db.execute<TerritoryRow>(sql`
         SELECT t.territory_id, t.asm_id, u.name AS asm_name, t.state, t.city,
                t.active_from::text AS active_from, t.active_to::text AS active_to
-        FROM asm_territories t
-        LEFT JOIN users u ON u.id::text = t.asm_id
+        FROM ${asmTerritories} t
+        LEFT JOIN ${users} u ON u.id::text = t.asm_id
         ORDER BY t.state ASC, t.city ASC NULLS FIRST
     `);
 

@@ -7,6 +7,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import type { UploadBatchSummary } from "@/lib/admin/types";
 
+import { users, uploadBatches } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 export const GET = withErrorHandler(async () => {
@@ -18,8 +20,8 @@ export const GET = withErrorHandler(async () => {
                b.errored_rows, b.duplicate_rows, b.routing_to_ai,
                b.source_label, b.status, b.rollback_window_until,
                b.rolled_back_at, b.created_at
-        FROM upload_batches b
-        LEFT JOIN users u ON u.id::text = b.uploaded_by
+        FROM ${uploadBatches} b
+        LEFT JOIN ${users} u ON u.id::text = b.uploaded_by
         ORDER BY b.created_at DESC
         LIMIT 30
     `);

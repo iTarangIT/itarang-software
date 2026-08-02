@@ -7,6 +7,8 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 
+import { assignmentConfig } from "@/lib/db/schema";
+
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const BodySchema = z.object({
@@ -24,12 +26,12 @@ export const PUT = withErrorHandler(async (req: Request) => {
     const days = JSON.stringify(b.working_days);
 
     const existing = await db.execute<{ config_id: string }>(sql`
-        SELECT config_id FROM assignment_config ORDER BY created_at ASC LIMIT 1
+        SELECT config_id FROM ${assignmentConfig} ORDER BY created_at ASC LIMIT 1
     `);
 
     if (existing[0]) {
         await db.execute(sql`
-            UPDATE assignment_config SET
+            UPDATE ${assignmentConfig} SET
                 intent_score_threshold = ${b.intent_score_threshold},
                 working_hours_start = ${b.working_hours_start},
                 working_hours_end = ${b.working_hours_end},
@@ -40,7 +42,7 @@ export const PUT = withErrorHandler(async (req: Request) => {
         `);
     } else {
         await db.execute(sql`
-            INSERT INTO assignment_config
+            INSERT INTO ${assignmentConfig}
                 (intent_score_threshold, working_hours_start, working_hours_end,
                  working_days, updated_by)
             VALUES (${b.intent_score_threshold}, ${b.working_hours_start},

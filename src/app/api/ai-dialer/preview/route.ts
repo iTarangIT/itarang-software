@@ -24,7 +24,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { regionGroups } from "@/lib/db/schema";
+import { regionGroups, dealerLeads, states, cities, cityAliases } from "@/lib/db/schema";
 import { inArray, sql } from "drizzle-orm";
 import { AI_DIALABLE_SQL } from "@/lib/ai-dialer/exclusionFilter";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
@@ -133,11 +133,11 @@ export async function POST(req: NextRequest) {
           c.name AS canon_city,
           COALESCE(s_from_city.name, s_direct.name) AS canon_state,
           dl.city AS raw_city
-        FROM dealer_leads dl
-        LEFT JOIN city_aliases ca ON ca.alias_lower = LOWER(TRIM(dl.city))
-        LEFT JOIN cities c ON c.id = ca.city_id
-        LEFT JOIN states s_from_city ON s_from_city.code = c.state_code
-        LEFT JOIN states s_direct ON LOWER(s_direct.name) = LOWER(TRIM(dl.state))
+        FROM ${dealerLeads} dl
+        LEFT JOIN ${cityAliases} ca ON ca.alias_lower = LOWER(TRIM(dl.city))
+        LEFT JOIN ${cities} c ON c.id = ca.city_id
+        LEFT JOIN ${states} s_from_city ON s_from_city.code = c.state_code
+        LEFT JOIN ${states} s_direct ON LOWER(s_direct.name) = LOWER(TRIM(dl.state))
         WHERE dl.phone IS NOT NULL AND dl.phone <> ''
           -- BRD §0.2 — never queue a lead Inside Sales / ASM are working.
           AND ${AI_DIALABLE_SQL}

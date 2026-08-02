@@ -7,6 +7,8 @@ import { db } from "@/lib/db";
 import type { QueueRow, QueueTab } from "./types";
 import { OPEN_STATUSES, TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 
+import { users, dealerLeads } from "@/lib/db/schema";
+
 const OPEN_LIST = sql.raw(
     OPEN_STATUSES.map((s) => `'${s}'`).join(", "),
 );
@@ -94,8 +96,8 @@ export async function fetchQueueRows({
             dl.assigned_at,
             dl.created_at,
             dl.updated_at
-        FROM dealer_leads dl
-        LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
+        FROM ${dealerLeads} dl
+        LEFT JOIN ${users} owner ON owner.id::text = dl.current_owner_id
         WHERE ${where} ${search}
         ${order}
         LIMIT ${limit} OFFSET ${offset}
@@ -114,7 +116,7 @@ export async function countQueueRows({
         ? sql` AND (dl.dealer_name ILIKE ${"%" + q + "%"} OR dl.phone ILIKE ${"%" + q + "%"} OR dl.shop_name ILIKE ${"%" + q + "%"})`
         : sql``;
     const rows = await db.execute<{ c: string }>(sql`
-        SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
+        SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl WHERE ${where} ${search}
     `);
     return Number(rows[0]?.c ?? 0);
 }
@@ -128,11 +130,11 @@ export async function fetchAllTabCounts(userId: string): Promise<Record<QueueTab
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_open", userId)}) AS my_open,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("follow_ups", userId)}) AS follow_ups,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("unassigned", userId)}) AS unassigned,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("team", userId)}) AS team,
-            (SELECT COUNT(*)::text FROM dealer_leads dl WHERE ${tabFilter("my_closed", userId)}) AS my_closed
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl WHERE ${tabFilter("my_open", userId)}) AS my_open,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl WHERE ${tabFilter("follow_ups", userId)}) AS follow_ups,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl WHERE ${tabFilter("unassigned", userId)}) AS unassigned,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl WHERE ${tabFilter("team", userId)}) AS team,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl WHERE ${tabFilter("my_closed", userId)}) AS my_closed
     `);
     const r = rows[0]!;
     return {

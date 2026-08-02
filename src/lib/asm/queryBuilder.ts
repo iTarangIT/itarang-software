@@ -7,6 +7,8 @@ import { db } from "@/lib/db";
 import type { AsmQueueRow, AsmQueueTab } from "./types";
 import { TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 
+import { asmTerritories, leadVisits, users, dealerLeads } from "@/lib/db/schema";
+
 const TERMINAL_LIST = sql.raw(
     TERMINAL_STATUSES.map((s) => `'${s}'`).join(", "),
 );
@@ -36,7 +38,7 @@ function tabFilter(tab: AsmQueueTab, asmId: string) {
             // way the lead must be active and not terminal.
             return sql`(
                 EXISTS (
-                    SELECT 1 FROM asm_territories t
+                    SELECT 1 FROM ${asmTerritories} t
                     WHERE t.asm_id = ${asmId}
                       AND t.state = dl.state
                       AND (t.city IS NULL OR t.city = dl.city)
@@ -70,7 +72,7 @@ function tabOrder(tab: AsmQueueTab) {
 const LATEST_VISIT_JOIN = sql`
     LEFT JOIN LATERAL (
         SELECT visit_status, visit_outcome, scheduled_date, actual_visit_date
-        FROM lead_visits
+        FROM ${leadVisits}
         WHERE dealer_lead_id = dl.id
         ORDER BY COALESCE(actual_visit_date, scheduled_date, created_at) DESC
         LIMIT 1
@@ -113,10 +115,10 @@ export async function fetchAsmQueueRows({
             lv.scheduled_date::text AS scheduled_date,
             lv.actual_visit_date::text AS actual_visit_date,
             dl.closed_at
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         ${LATEST_VISIT_JOIN}
-        LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
-        LEFT JOIN users asm ON asm.id::text = dl.asm_id
+        LEFT JOIN ${users} owner ON owner.id::text = dl.current_owner_id
+        LEFT JOIN ${users} asm ON asm.id::text = dl.asm_id
         WHERE ${where} ${search}
         ${order}
         LIMIT ${limit} OFFSET ${offset}
@@ -134,7 +136,7 @@ export async function countAsmQueueRows({
         ? sql` AND (dl.dealer_name ILIKE ${"%" + q + "%"} OR dl.phone ILIKE ${"%" + q + "%"} OR dl.shop_name ILIKE ${"%" + q + "%"})`
         : sql``;
     const rows = await db.execute<{ c: string }>(sql`
-        SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
+        SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
     return Number(rows[0]?.c ?? 0);
 }
@@ -147,10 +149,10 @@ export async function fetchAllAsmTabCounts(asmId: string): Promise<Record<AsmQue
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId)}) AS my_visits,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId)}) AS today,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)}) AS territory,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId)}) AS my_closed
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId)}) AS my_visits,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId)}) AS today,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)}) AS territory,
+            (SELECT COUNT(*)::text FROM ${dealerLeads} dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId)}) AS my_closed
     `);
     const r = rows[0]!;
     return {

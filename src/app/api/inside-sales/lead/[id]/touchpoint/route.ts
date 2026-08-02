@@ -16,6 +16,8 @@ import {
 } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
+import { dealerLeads, leadTouchpoints, dealerLeadCommercials } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
 const BodySchema = z.object({
@@ -55,10 +57,10 @@ export const POST = withErrorHandler(
         }>(sql`
             SELECT
                 dl.lead_status,
-                (SELECT COUNT(*)::text FROM lead_touchpoints t WHERE t.dealer_lead_id = dl.id AND t.is_engaged = true) AS engaged_count,
-                (SELECT final_price::text FROM dealer_lead_commercials c WHERE c.dealer_lead_id = dl.id AND c.is_current = true LIMIT 1) AS final_price,
-                EXISTS (SELECT 1 FROM dealer_lead_commercials c WHERE c.dealer_lead_id = dl.id) AS commercials_exists
-            FROM dealer_leads dl WHERE dl.id = ${id} LIMIT 1
+                (SELECT COUNT(*)::text FROM ${leadTouchpoints} t WHERE t.dealer_lead_id = dl.id AND t.is_engaged = true) AS engaged_count,
+                (SELECT final_price::text FROM ${dealerLeadCommercials} c WHERE c.dealer_lead_id = dl.id AND c.is_current = true LIMIT 1) AS final_price,
+                EXISTS (SELECT 1 FROM ${dealerLeadCommercials} c WHERE c.dealer_lead_id = dl.id) AS commercials_exists
+            FROM ${dealerLeads} dl WHERE dl.id = ${id} LIMIT 1
         `);
         const state = rows[0];
         if (!state) return errorResponse("Lead not found", 404);
@@ -121,7 +123,7 @@ export const POST = withErrorHandler(
         // Caller wants to set / clear next_follow_up_at (BRD §0.5 form field).
         if (body.follow_up_at !== undefined) {
             await db.execute(sql`
-                UPDATE dealer_leads
+                UPDATE ${dealerLeads}
                 SET next_follow_up_at = ${body.follow_up_at ?? null},
                     updated_at = NOW()
                 WHERE id = ${id}

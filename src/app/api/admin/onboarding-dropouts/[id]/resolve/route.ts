@@ -16,6 +16,8 @@ import {
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 
+import { dealerLeads, users, dealerLeadStatusHistory, leadTouchpoints } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["admin", "sales_head"];
 
 const BodySchema = z.object({
@@ -35,7 +37,7 @@ export const POST = withErrorHandler(
             lead_status: string | null;
             originator_id: string | null;
         }>(sql`
-            SELECT lead_status, originator_id FROM dealer_leads
+            SELECT lead_status, originator_id FROM ${dealerLeads}
             WHERE id = ${id} LIMIT 1
         `);
         const lead = leadRows[0];
@@ -50,7 +52,7 @@ export const POST = withErrorHandler(
         if (body.action === "keep_converted") {
             // Stays won; record the dropout reason for tracking only.
             await db.execute(sql`
-                UPDATE dealer_leads SET
+                UPDATE ${dealerLeads} SET
                     onboarding_dropout_reason = ${body.onboarding_dropout_reason},
                     onboarding_dropout_notes = ${body.onboarding_dropout_notes},
                     updated_at = NOW()
@@ -78,7 +80,7 @@ export const POST = withErrorHandler(
                 },
             });
             await db.execute(sql`
-                UPDATE dealer_leads SET
+                UPDATE ${dealerLeads} SET
                     onboarding_dropout_reason = ${body.onboarding_dropout_reason},
                     onboarding_dropout_notes = ${body.onboarding_dropout_notes},
                     updated_at = NOW()
@@ -92,7 +94,7 @@ export const POST = withErrorHandler(
                     id: string;
                     is_active: boolean | null;
                 }>(sql`
-                    SELECT id::text AS id, is_active FROM users
+                    SELECT id::text AS id, is_active FROM ${users}
                     WHERE id::text = ${lead.originator_id} LIMIT 1
                 `);
                 if (owners[0] && owners[0].is_active !== false) {
@@ -105,7 +107,7 @@ export const POST = withErrorHandler(
 
             await db.transaction(async (tx) => {
                 await tx.execute(sql`
-                    UPDATE dealer_leads SET
+                    UPDATE ${dealerLeads} SET
                         lead_status = ${newStatus},
                         closed_at = NULL,
                         closing_owner_id = NULL,
@@ -118,14 +120,14 @@ export const POST = withErrorHandler(
                     WHERE id = ${id}
                 `);
                 await tx.execute(sql`
-                    INSERT INTO dealer_lead_status_history
+                    INSERT INTO ${dealerLeadStatusHistory}
                         (dealer_lead_id, from_status, to_status, changed_by,
                          changed_at, reason_notes)
                     VALUES (${id}, 'Converted', ${newStatus}, ${user.id}, NOW(),
                         ${body.onboarding_dropout_notes})
                 `);
                 await tx.execute(sql`
-                    INSERT INTO lead_touchpoints
+                    INSERT INTO ${leadTouchpoints}
                         (dealer_lead_id, touchpoint_type, performed_by,
                          performed_at, remarks, sync_method)
                     VALUES (${id}, 'onboarding_dropout_action', ${user.id}, NOW(),

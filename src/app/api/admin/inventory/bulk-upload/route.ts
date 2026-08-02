@@ -853,7 +853,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
       try {
         await tx.execute(sql`
-          insert into inventory_upload_reports
+          insert into ${inventoryUploadReports}
             (id, dealer_id, asset_type, uploaded_by, uploaded_at, total_rows, inserted_rows,
              skipped_rows, errors_json, inserted_inventory_ids, source)
           values

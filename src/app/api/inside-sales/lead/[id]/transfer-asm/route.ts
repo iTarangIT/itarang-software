@@ -6,7 +6,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { leadVisits } from "@/lib/db/schema";
+import { leadVisits, dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
@@ -42,7 +42,7 @@ export const POST = withErrorHandler(
         await assertOwner(id, user.id);
 
         const stateRows = await db.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
+            SELECT lead_status FROM ${dealerLeads} WHERE id = ${id} LIMIT 1
         `);
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
         if (!fromStatus) return errorResponse("Lead not found", 404);
@@ -53,7 +53,7 @@ export const POST = withErrorHandler(
 
         await db.transaction(async (tx) => {
             await tx.execute(sql`
-                UPDATE dealer_leads
+                UPDATE ${dealerLeads}
                 SET pre_transfer_status = lead_status,
                     current_owner_id = ${body.asm_id},
                     asm_id = ${body.asm_id},

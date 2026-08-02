@@ -9,6 +9,8 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
+import { dealerLeads } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["inside_sales_rep", "admin"];
 
 export const POST = withErrorHandler(
@@ -23,7 +25,7 @@ export const POST = withErrorHandler(
             current_owner_id: string | null;
         }>(sql`
             SELECT lead_status, originator_id, current_owner_id
-            FROM dealer_leads WHERE id = ${id} LIMIT 1
+            FROM ${dealerLeads} WHERE id = ${id} LIMIT 1
         `);
         const row = rows[0];
         if (!row) return errorResponse("Lead not found", 404);
@@ -43,7 +45,7 @@ export const POST = withErrorHandler(
         }
 
         await db.execute(sql`
-            UPDATE dealer_leads
+            UPDATE ${dealerLeads}
             SET current_owner_id = ${user.id},
                 originator_id = COALESCE(originator_id, ${user.id}),
                 assigned_at = NOW(),

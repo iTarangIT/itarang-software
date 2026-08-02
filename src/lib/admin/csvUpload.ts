@@ -20,6 +20,8 @@ import {
     type UploadValidationResult,
 } from "./types";
 
+import { users, dealerLeads, cities, cityAliases } from "@/lib/db/schema";
+
 export const MAX_UPLOAD_ROWS = 5000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -207,7 +209,7 @@ export async function validateUpload(
     if (assigneeNames.length > 0) {
         const userRows = (await db.execute<AssigneeUser>(sql`
             SELECT id::text AS id, name, role
-            FROM users
+            FROM ${users}
             WHERE is_active = TRUE
               AND lower(role) IN ('inside_sales_rep', 'asm')
               AND lower(name) IN ${assigneeNames}
@@ -233,7 +235,7 @@ export async function validateUpload(
         validPhones.length > 0
             ? ((await db.execute<ExistingLead>(sql`
                   SELECT id, phone, lead_status, city, state
-                  FROM dealer_leads
+                  FROM ${dealerLeads}
                   WHERE phone IN ${validPhones}
               `)) as unknown as ExistingLead[])
             : [];
@@ -255,8 +257,8 @@ export async function validateUpload(
                 name: string;
             }>(sql`
                 SELECT ca.alias_lower, c.name
-                FROM city_aliases ca
-                JOIN cities c ON c.id = ca.city_id
+                FROM ${cityAliases} ca
+                JOIN ${cities} c ON c.id = ca.city_id
                 WHERE ca.alias_lower IN ${cityInputs}
             `)) as unknown as { alias_lower: string; name: string }[];
             for (const a of aliasRows) cityCanon.set(a.alias_lower, a.name);

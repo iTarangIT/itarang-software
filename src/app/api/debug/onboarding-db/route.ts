@@ -7,7 +7,7 @@ export async function GET() {
     const result = await db.execute(sql`
       select column_name, data_type
       from information_schema.columns
-      where table_name = 'dealer_onboarding_applications'
+      where table_name = ${(process.env.TABLE_PREFIX ?? "") + "dealer_onboarding_applications"}
       order by ordinal_position
     `);
 

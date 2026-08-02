@@ -1,5 +1,5 @@
 import {
-  pgTable,
+  pgTableCreator,
   pgEnum,
   text,
   timestamp,
@@ -24,6 +24,15 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { relations, sql } from "drizzle-orm";
+
+// Environment-driven physical table-name prefix. The orkivanta sandbox lane
+// sets TABLE_PREFIX=sandbox_ so its tables live alongside unprefixed
+// production tables in the same database; every other deployment leaves it
+// unset and gets the exact table names this file has always produced.
+// pgEnum names are NOT prefixed — enums are shared DB-level objects with
+// identical definitions across lanes.
+const TABLE_PREFIX = process.env.TABLE_PREFIX ?? "";
+const pgTable = pgTableCreator((name) => `${TABLE_PREFIX}${name}`);
 
 // Postgres bytea column backed by Node Buffer. Used for binary blobs like
 // the DigiLocker eAadhaar PDF.

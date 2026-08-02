@@ -14,6 +14,8 @@ import { sql } from "drizzle-orm";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import EmiTrackerClient, { type EmiLoanRow } from "./_components/EmiTrackerClient";
 
+import { leads, loanSanctions, enachMandates, nbfcLoans, emiSchedules, emiPaymentAttempts } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 function num(v: unknown): number {
@@ -44,9 +46,9 @@ export default async function EmiTrackerPage() {
       agg.next_due                  AS next_due,
       agg.last_paid                 AS last_paid,
       m.mandate_status              AS mandate_status
-    FROM nbfc_loans nl
-    JOIN loan_sanctions ls ON ls.id = nl.loan_application_id
-    LEFT JOIN leads l ON l.id = ls.lead_id
+    FROM ${nbfcLoans} nl
+    JOIN ${loanSanctions} ls ON ls.id = nl.loan_application_id
+    LEFT JOIN ${leads} l ON l.id = ls.lead_id
     LEFT JOIN LATERAL (
       SELECT
         count(*)::int AS total,
@@ -54,10 +56,10 @@ export default async function EmiTrackerPage() {
         count(*) FILTER (WHERE status IN ('overdue','missed'))::int AS overdue_count,
         min(due_date) FILTER (WHERE status IN ('scheduled','overdue','missed')) AS next_due,
         max(paid_at) AS last_paid
-      FROM emi_schedules es WHERE es.loan_sanction_id = nl.loan_application_id
+      FROM ${emiSchedules} es WHERE es.loan_sanction_id = nl.loan_application_id
     ) agg ON true
     LEFT JOIN LATERAL (
-      SELECT status AS mandate_status FROM enach_mandates em
+      SELECT status AS mandate_status FROM ${enachMandates} em
       WHERE em.lead_id = ls.lead_id AND em.tenant_id = nl.tenant_id
       ORDER BY CASE WHEN status = 'registered' THEN 0 ELSE 1 END, em.updated_at DESC
       LIMIT 1
@@ -109,13 +111,13 @@ export default async function EmiTrackerPage() {
       count(*) FILTER (WHERE es.status IN ('overdue','missed'))::int AS overdue,
       count(*) FILTER (WHERE es.status IN ('paid','paid_late'))::int AS paid_total,
       count(*)::int AS all_total
-    FROM emi_schedules es
-    JOIN nbfc_loans nl ON nl.loan_application_id = es.loan_sanction_id
+    FROM ${emiSchedules} es
+    JOIN ${nbfcLoans} nl ON nl.loan_application_id = es.loan_sanction_id
     WHERE nl.tenant_id = ${tenant.id} AND nl.is_active = true
   `);
   const collectedResult = await db.execute(sql`
     SELECT COALESCE(sum(amount_paise), 0)::bigint AS collected_paise
-    FROM emi_payment_attempts
+    FROM ${emiPaymentAttempts}
     WHERE tenant_id = ${tenant.id}
       AND status IN ('succeeded','simulated')
       AND COALESCE(collected_at, created_at) >= date_trunc('month', now())

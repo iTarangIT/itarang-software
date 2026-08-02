@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { auditLogs } from "@/lib/db/schema";
+import { auditLogs, dealerLeads, dealerLeadCommercials } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
@@ -51,8 +51,8 @@ export const POST = withErrorHandler(
             SELECT
                 dl.lead_status,
                 dl.asm_id,
-                (SELECT final_price::text FROM dealer_lead_commercials c WHERE c.dealer_lead_id = dl.id AND c.is_current = true LIMIT 1) AS final_price
-            FROM dealer_leads dl WHERE dl.id = ${id} LIMIT 1
+                (SELECT final_price::text FROM ${dealerLeadCommercials} c WHERE c.dealer_lead_id = dl.id AND c.is_current = true LIMIT 1) AS final_price
+            FROM ${dealerLeads} dl WHERE dl.id = ${id} LIMIT 1
         `);
         const state = rows[0];
         if (!state) return errorResponse("Lead not found", 404);

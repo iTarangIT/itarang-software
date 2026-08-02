@@ -12,6 +12,8 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 
+import { users, asmTerritories } from "@/lib/db/schema";
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const BodySchema = z.object({
@@ -27,7 +29,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     const b = BodySchema.parse(await req.json());
 
     const asm = await db.execute<{ id: string; role: string | null }>(sql`
-        SELECT id::text AS id, role FROM users WHERE id::text = ${b.asm_id} LIMIT 1
+        SELECT id::text AS id, role FROM ${users} WHERE id::text = ${b.asm_id} LIMIT 1
     `);
     if (!asm[0]) return errorResponse("ASM user not found.", 404);
     if ((asm[0].role ?? "").toLowerCase() !== "asm") {
@@ -35,7 +37,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
 
     await db.execute(sql`
-        INSERT INTO asm_territories (asm_id, state, city, active_from, active_to)
+        INSERT INTO ${asmTerritories} (asm_id, state, city, active_from, active_to)
         VALUES (${b.asm_id}, ${b.state}, ${b.city ?? null},
             ${b.active_from ?? null}, ${b.active_to ?? null})
     `);
