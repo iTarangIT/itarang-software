@@ -10,6 +10,8 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 
+import { uploadBatches, dealerLeads } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 export const POST = withErrorHandler(
@@ -24,7 +26,7 @@ export const POST = withErrorHandler(
             rollback_window_until: string | null;
         }>(sql`
             SELECT status, rolled_back_at, rollback_window_until
-            FROM upload_batches WHERE batch_id = ${batchId} LIMIT 1
+            FROM ${uploadBatches} WHERE batch_id = ${batchId} LIMIT 1
         `);
         const batch = rows[0];
         if (!batch) return errorResponse("Batch not found.", 404);
@@ -42,12 +44,12 @@ export const POST = withErrorHandler(
         }
 
         await db.execute(sql`
-            UPDATE dealer_leads
+            UPDATE ${dealerLeads}
             SET is_active = FALSE, deleted_at = NOW(), updated_at = NOW()
             WHERE upload_batch_id = ${batchId}
         `);
         await db.execute(sql`
-            UPDATE upload_batches SET
+            UPDATE ${uploadBatches} SET
                 status = 'rolled_back',
                 rolled_back_at = NOW(),
                 rolled_back_by = ${user.id},

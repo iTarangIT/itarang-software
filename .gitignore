@@ -55,7 +55,8 @@ next-env.d.ts
 # secrets
 /secrets/
 sandbox.env
-keys/vps.env
+keys/*
+!keys/readme.md
 node_modules
 
 # claude code — local per-developer settings stay out of git, but

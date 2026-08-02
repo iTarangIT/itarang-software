@@ -23,6 +23,8 @@ import {
   nbfcLoans,
   nbfcRiskRules,
   productSelections,
+  borrowerRiskScores,
+  emiSchedules,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import LeadsTable, { type LeadRow } from "./_components/LeadsTable";
@@ -258,7 +260,7 @@ export default async function NbfcLeadsPage({
   // computed score yet.
   const cdsRows = (await db.execute(sql`
     SELECT DISTINCT ON (loan_sanction_id) loan_sanction_id::text AS loan_sanction_id, cds_score::float AS cds_score
-    FROM borrower_risk_scores
+    FROM ${borrowerRiskScores}
     WHERE tenant_id = ${tenant.id}
     ORDER BY loan_sanction_id, computed_at DESC
   `)) as unknown as Array<{
@@ -277,8 +279,8 @@ export default async function NbfcLeadsPage({
     SELECT es.loan_sanction_id AS loan_sanction_id,
            MAX(es.days_overdue) FILTER (WHERE es.status IN ('overdue', 'missed'))::int AS overdue_days,
            MIN(es.due_date) FILTER (WHERE es.status = 'scheduled' AND es.due_date >= CURRENT_DATE)::text AS next_emi_date
-    FROM emi_schedules es
-    JOIN loan_sanctions ls ON ls.id = es.loan_sanction_id
+    FROM ${emiSchedules} es
+    JOIN ${loanSanctions} ls ON ls.id = es.loan_sanction_id
     WHERE ls.nbfc_id = ${tenant.id}
     GROUP BY es.loan_sanction_id
   `)) as unknown as Array<{

@@ -19,6 +19,7 @@ import {
   nbfcPortalCredentials,
   nbfcTenants,
   users,
+  nbfcUsers,
 } from "@/lib/db/schema";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { enqueueNbfcPortalCredentialsJob } from "@/lib/queue/jobs/sendNbfcPortalCredentialsJob";
@@ -249,10 +250,10 @@ export async function activateNbfc(
     });
 
   await db.execute(sql`
-    INSERT INTO nbfc_users (user_id, tenant_id, role)
+    INSERT INTO ${nbfcUsers} (user_id, tenant_id, role)
     SELECT ${supabaseUserId}::uuid, ${tenantId}::uuid, 'admin'
     WHERE NOT EXISTS (
-      SELECT 1 FROM nbfc_users
+      SELECT 1 FROM ${nbfcUsers}
       WHERE user_id = ${supabaseUserId}::uuid AND tenant_id = ${tenantId}::uuid
     )
   `);

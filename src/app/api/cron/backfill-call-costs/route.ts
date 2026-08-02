@@ -22,6 +22,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 
+import { aiCallLogs, dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
+
 export const maxDuration = 60;
 
 const BATCH_LIMIT = 100;
@@ -68,20 +70,20 @@ export async function GET(req: Request) {
             dcl.status        AS status,
             dcl.completed_at  AS completed_at,
             dcl.started_at    AS started_at
-          FROM dialer_campaign_leads dcl
-          INNER JOIN dialer_campaigns dc ON dc.id = dcl.campaign_id
+          FROM ${dialerCampaignLeads} dcl
+          INNER JOIN ${dialerCampaigns} dc ON dc.id = dcl.campaign_id
           WHERE dcl.bolna_call_id IS NOT NULL
             AND dcl.status IN ('completed', 'failed')
             AND dcl.completed_at IS NOT NULL
             AND dcl.completed_at > now() - interval '30 days'
             AND NOT EXISTS (
-              SELECT 1 FROM ai_call_logs acl
+              SELECT 1 FROM ${aiCallLogs} acl
               WHERE acl.call_id = dcl.bolna_call_id
             )
           LIMIT ${BATCH_LIMIT}
         ),
         inserted AS (
-          INSERT INTO ai_call_logs (
+          INSERT INTO ${aiCallLogs} (
             id, call_id, lead_id, provider, status, phone_number,
             started_at, ended_at
           )
@@ -116,7 +118,7 @@ export async function GET(req: Request) {
     }>(
       sql`
         SELECT call_id, provider
-        FROM ai_call_logs
+        FROM ${aiCallLogs}
         WHERE cost_fetched_at IS NULL
           AND call_id IS NOT NULL
           AND ended_at IS NOT NULL

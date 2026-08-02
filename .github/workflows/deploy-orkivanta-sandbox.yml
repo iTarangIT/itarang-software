@@ -1,0 +1,962 @@
+name: Deploy Orkivanta Sandbox to VPS
+
+# Two-stage runner-build architecture.
+#
+# Stage A — `build` job on `ubuntu-latest`: checks out, restores caches,
+# runs `next build`, packs `.next/standalone/` (plus static + public copied
+# in) into a tarball, uploads it as an artifact. No VPS contact.
+#
+# Stage B — `deploy` job (`needs: build`): downloads the artifact, SCPs it
+# to the VPS into `releases/<sha>/`, extracts, atomically swaps the
+# `current` symlink, reloads pm2, runs health + served-asset checks.
+#
+# Stage C — failure handler inside the `deploy` job: rolls back by
+# symlink-swap to the previous release. No rebuild on the VPS, ever.
+#
+# Migration: see `scripts/orkivanta-bootstrap.sh` for the one-time VPS prep
+# the user must run before merging this workflow for the first time.
+
+on:
+  push:
+    branches:
+      - sandbox
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-orkivanta-sandbox
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /home/orkivanta-sandbox/htdocs/sandbox.orkivanta.com
+  LOG_DIR: /home/orkivanta-sandbox/deploy-logs
+  HEALTH_URL: http://127.0.0.1:3004/api/health
+  SANDBOX_PORT: "3004"
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # Stage A — runner-side build. No VPS contact.
+  # ────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Slack notify start
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          MSG=$(printf '%s' "${{ github.event.head_commit.message }}" | head -c 200 | sed 's/"/\\"/g')
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\":rocket: *Orkivanta sandbox deploy started* \`${{ github.sha }}\`\nby ${{ github.actor }} — \`${MSG}\`\n${{ github.event.head_commit.url }}\"}" \
+            "$SLACK_WEBHOOK_URL" || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # actions/setup-node's built-in npm cache is keyed on package-lock
+          # and stores ~/.npm; we layer our own explicit cache step below for
+          # the same path, but setup-node's hook makes `npm ci` write the
+          # cache in a format the next run can restore.
+          cache: npm
+
+      - name: Cache Next.js webpack incremental cache
+        uses: actions/cache@v4
+        with:
+          # The build cache lives at `.next/cache/webpack/`. Keying on the
+          # lock file + next.config means the cache invalidates when any
+          # of those change. Including github.sha in the key forces a NEW
+          # cache entry on every build; restore-keys falls back to any
+          # cache from the same dep set, then any cache at all.
+          path: .next/cache/webpack
+          key: orkivanta-nextcache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            orkivanta-nextcache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'next.config.ts') }}-
+            orkivanta-nextcache-${{ runner.os }}-
+
+      - name: Write .env from ORKIVANTA_ENV_FILE_B64
+        env:
+          ENV_B64: ${{ secrets.ORKIVANTA_ENV_FILE_B64 }}
+        run: |
+          umask 077
+          # tr -d '\r' strips CRLFs in case the secret was pasted from a
+          # Windows editor. `next build` reads this to inline NEXT_PUBLIC_*.
+          printf '%s' "$ENV_B64" | base64 -d | tr -d '\r' > .env
+          chmod 600 .env
+          echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
+
+      - name: Install npm deps
+        run: |
+          time npm ci --no-audit --no-fund
+
+      - name: Build (next build --webpack)
+        run: |
+          export CI=1
+          export NEXT_TELEMETRY_DISABLED=1
+          # Runner has ~7 GB; keep the 4 GB cap for parity with the prod
+          # build, in case any peak allocation pattern is config-sensitive.
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export GITHUB_SHA=$(git rev-parse HEAD)
+          echo "Node: $(node -v)  npm: $(npm -v)"
+          echo "Free mem before build:"; free -m || true
+          time npm run build
+          echo "Free mem after build:"; free -m || true
+
+      - name: Stage standalone bundle
+        run: |
+          # Next.js standalone output excludes static + public by design.
+          # Copy them into the standalone tree so server.js can serve assets.
+          rm -rf .next/standalone/.next/static .next/standalone/public
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+          echo "standalone tree top-level:"
+          ls -la .next/standalone | head -20
+
+      - name: Verify native binaries made it into the standalone trace
+        run: |
+          # sharp is the only native dep in this repo. In sharp 0.34+ the
+          # binary lives in a SPLIT package — node_modules/@img/sharp-<plat>/
+          # — not in node_modules/sharp/ itself. Just check for any .node
+          # file anywhere under the standalone node_modules tree; if there's
+          # at least one, native bindings made it through.
+          NODE_BINS=$(find .next/standalone/node_modules -name '*.node' 2>/dev/null || true)
+          if [ -z "$NODE_BINS" ]; then
+            echo "❌ no .node binaries anywhere in standalone tree — VPS would fail at require()"
+            echo "--- standalone node_modules top level ---"
+            ls -la .next/standalone/node_modules/ 2>/dev/null | head -40
+            echo "--- @img/ contents (if any) ---"
+            ls -la .next/standalone/node_modules/@img/ 2>/dev/null || echo "(no @img dir)"
+            exit 1
+          fi
+          echo "Native binaries in standalone tree:"
+          echo "$NODE_BINS"
+          echo ""
+          echo "--- file(1) on each ---"
+          echo "$NODE_BINS" | while read -r b; do file "$b" 2>/dev/null || true; done
+
+      - name: Verify chunk manifest (runner tree)
+        run: |
+          node scripts/verify-chunk-manifest.js
+
+      - name: Chunk count sanity
+        run: |
+          CHUNK_COUNT=$(find .next/standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
+          if [ "$CHUNK_COUNT" -lt 5 ]; then
+            echo "❌ standalone chunks dir has only $CHUNK_COUNT files — staging failed"
+            exit 1
+          fi
+          echo "standalone has $CHUNK_COUNT chunk files"
+
+      - name: Pack standalone tarball
+        id: pack
+        run: |
+          # Pack the CONTENTS of standalone/ (note the trailing `.`), not
+          # the wrapper dir. On the VPS we extract into a pre-created
+          # `releases/<sha>/standalone/` so paths land correctly.
+          tar --owner=0 --group=0 -C .next/standalone -czf build.tar.gz .
+          BYTES=$(stat -c%s build.tar.gz)
+          SHA="${{ github.sha }}"
+          BUILD_ID=$(cat .next/BUILD_ID)
+          LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+          FILES=$(tar -tzf build.tar.gz | wc -l)
+          cat > build.meta.json <<META
+          {
+            "sha": "$SHA",
+            "build_id": "$BUILD_ID",
+            "lock_hash": "$LOCK_HASH",
+            "tarball_bytes": $BYTES,
+            "file_count": $FILES,
+            "node_version": "$(node -v)"
+          }
+          META
+          echo "Tarball: $(du -h build.tar.gz | cut -f1), $FILES files"
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "lock_hash=$LOCK_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-build-${{ github.sha }}
+          # ecosystem.orkivanta.config.js MUST ship in the artifact: the deploy
+          # job uses it to overwrite the VPS-side copy. Before this change,
+          # the VPS held whatever ecosystem file was on its last `git pull`,
+          # which silently drifted from main — and on 2026-05-28 caused pm2
+          # to keep launching `.next/standalone/server.js` (the pre-arch
+          # path) even after main switched to `current/server.js`. The
+          # symptom was a orkivanta-web restart loop with MODULE_NOT_FOUND.
+          path: |
+            build.tar.gz
+            build.meta.json
+            ecosystem.orkivanta.config.js
+            scripts/sandbox-system-setup.sh
+          retention-days: 7
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────
+  # Stage B — ship & swap. SSH-only. No build commands on VPS.
+  # ────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy (SSH)
+    runs-on: ubuntu-latest
+    needs: build
+    # 15m was too tight — the SSH steps + 60s health-check window plus the
+    # always-run failure-collector left no headroom. A timeout-killed run
+    # also skips `if: failure()` handlers, so we got zero post-mortem logs.
+    timeout-minutes: 25
+    outputs:
+      prev_sha: ${{ steps.capture-prev.outputs.prev_sha }}
+    steps:
+      # ────────────────────────────────────────────────────────────────
+      # Preflight — wait until the VPS SSH port answers before any
+      # appleboy/ssh-action step runs. appleboy/ssh-action has no native
+      # retry, so a transient `dial tcp ... i/o timeout` (VPS rebooting /
+      # brief network blip) would otherwise fail the whole deploy on the
+      # first SSH step. This retry-with-backoff loop absorbs that; on a
+      # persistent failure it emits a clear error (VPS down / firewall)
+      # instead of a cryptic per-step dial timeout.
+      # ────────────────────────────────────────────────────────────────
+      - name: Wait for VPS SSH to be reachable
+        run: |
+          for i in $(seq 1 8); do
+            if nc -z -w 10 "$HOST" "$PORT"; then
+              echo "VPS SSH reachable on attempt $i"; exit 0
+            fi
+            echo "attempt $i: $HOST:$PORT not reachable, retrying in 20s"; sleep 20
+          done
+          echo "::error::VPS SSH $HOST:$PORT unreachable after 8 attempts (~3.5 min) — VPS down or firewall blocking the runner"
+          exit 1
+        env:
+          HOST: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          PORT: ${{ secrets.ORKIVANTA_VPS_PORT }}
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sandbox-build-${{ github.sha }}
+
+      # ────────────────────────────────────────────────────────────────
+      # B.1 — capture previous `current` target so rollback knows where
+      # to point back to. Stored on the VPS at a known path so any
+      # subsequent SSH step can read it.
+      # ────────────────────────────────────────────────────────────────
+      - name: Capture previous release pointer
+        id: capture-prev
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            PREV_TARGET=$(readlink current 2>/dev/null || echo "")
+            PREV_SHA=$(printf '%s' "$PREV_TARGET" | sed -E 's|releases/([^/]+)/.*|\1|')
+            echo "PREV_TARGET=$PREV_TARGET"
+            echo "PREV_SHA=$PREV_SHA"
+            echo "$PREV_SHA" > /tmp/orkivanta-sandbox-prev-sha
+            echo "$PREV_TARGET" > /tmp/orkivanta-sandbox-prev-target
+            # Marker for Stage C to know whether the symlink was swapped.
+            rm -f /tmp/orkivanta-sandbox-swap-done
+
+      # ────────────────────────────────────────────────────────────────
+      # B.2 — bootstrap. Idempotent: creates releases/, shared/, moves
+      # .env to shared/, makes logs a symlink. Safe to re-run on every
+      # deploy.
+      # ────────────────────────────────────────────────────────────────
+      - name: Bootstrap release layout
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            set -eo pipefail
+            mkdir -p "$LOG_DIR"
+            cd "$APP_DIR"
+            mkdir -p releases shared/logs
+            # Canonicalise .env into shared/ if not already there.
+            if [ ! -f shared/.env ] && [ -f .env ]; then
+              cp .env shared/.env
+              chmod 600 shared/.env
+              echo "Migrated .env -> shared/.env"
+            fi
+            # Replace logs/ with a symlink to shared/logs/ so pm2 file paths
+            # survive across releases. Move existing log files first.
+            if [ -d logs ] && [ ! -L logs ]; then
+              mv logs/* shared/logs/ 2>/dev/null || true
+              rmdir logs 2>/dev/null || true
+              ln -sfn shared/logs logs
+              echo "Converted logs/ to symlink"
+            fi
+            ls -la shared logs releases | head -20
+
+      # ────────────────────────────────────────────────────────────────
+      # B.2b — ship the provisioning script. The sandbox box never runs
+      # `git pull` under this arch, so without this it would execute whatever
+      # stale scripts/sandbox-system-setup.sh was last manually pulled — the
+      # same drift class that bit ecosystem.orkivanta.config.js. SCP the current
+      # copy (it ships in the build artifact) so B.3 runs the right version.
+      # ────────────────────────────────────────────────────────────────
+      - name: Ship provisioning script to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          source: "scripts/sandbox-system-setup.sh"
+          target: "${{ env.APP_DIR }}/"
+          overwrite: true
+          timeout: 2m
+
+      # ────────────────────────────────────────────────────────────────
+      # B.3 — Provision headless Chromium: the GTK/NSS libs AND the
+      # google-chrome-stable binary that PUPPETEER_EXECUTABLE_PATH points at.
+      # Runs every deploy: the script self-skips apt when everything is already
+      # present, then runs a launch preflight. The preflight is the whole point
+      # — it makes a missing/broken browser fail THIS deploy loudly (B.3 runs
+      # before the release is swapped, so the old release keeps serving)
+      # instead of surfacing as "Failed to launch the browser process ...
+      # ENOENT" the first time a user clicks a PDF button. script_stop:true so
+      # a non-zero preflight aborts the deploy.
+      # ────────────────────────────────────────────────────────────────
+      - name: Provision Chromium (libs + browser) and preflight
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 10m
+          script_stop: true
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            # B.2b SCPs the script in; tolerate either landing path.
+            SETUP=scripts/sandbox-system-setup.sh
+            [ -f "$SETUP" ] || SETUP=sandbox-system-setup.sh
+            chmod +x "$SETUP"
+            time ./"$SETUP"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.4 — create release dir on the VPS so SCP has a target.
+      # ────────────────────────────────────────────────────────────────
+      - name: Create release directory
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            mkdir -p "releases/${{ github.sha }}/standalone"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.5 — ship the build to the VPS via rsync delta upload.
+      #
+      # Replaces a full-tarball SCP that re-sent the ENTIRE standalone tree
+      # (≈ all of node_modules) over the slow shared-VPS link on every deploy
+      # and started timing out at ~8 min (run 26676914904). rsync with
+      # --link-dest=current uses the live release as a basis: byte-identical
+      # files (node_modules barely changes between deploys) are hardlinked on
+      # the VPS and never cross the network, so only genuinely-changed files
+      # transfer — seconds instead of minutes. Hardlinking also stops each
+      # kept release from duplicating node_modules, which matters on the
+      # disk-constrained 8 GB box.
+      #
+      # --checksum is required: every build runs a fresh `npm ci`, so
+      # node_modules mtimes differ each time even when contents are identical
+      # — an mtime quick-check would re-send everything. We compare by content
+      # instead. The `current` symlink still points at the live (previous)
+      # release here; the swap happens later (B.7). First-ever deploy:
+      # `current` is absent and rsync simply copies everything.
+      # ────────────────────────────────────────────────────────────────
+      - name: Rsync build to VPS (delta upload)
+        # Step-level cap (not job-level): a job timeout-kill skips the
+        # if:failure() rollback/log steps; a step timeout fails cleanly and
+        # lets them run. Delta uploads are seconds-to-low-minutes; 12m is slack.
+        timeout-minutes: 12
+        env:
+          SSH_KEY: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          HOST: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          VPS_USER: ${{ secrets.ORKIVANTA_VPS_USER }}
+          PORT: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          DEST: ${{ env.APP_DIR }}/releases/${{ github.sha }}/standalone/
+        run: |
+          set -eo pipefail
+          umask 077
+          # rsync needs the real file tree (the artifact ships a tarball).
+          mkdir -p release_tree
+          tar -xzf build.tar.gz -C release_tree
+          echo "Unpacked $(find release_tree -type f | wc -l) files for rsync"
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/sandbox_key
+          chmod 600 ~/.ssh/sandbox_key
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          # Kept from the native-scp fix (1fceb25): keepalives tear a dead
+          # socket down in ~60s. ssh (rsync's transport) uses -p (lowercase).
+          SSH_CMD="ssh -i $HOME/.ssh/sandbox_key -p $PORT \
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=accept-new"
+
+          # -rlptDz = -a minus owner/group (the deploy user can't chown), plus
+          # compression for the changed text chunks. --link-dest resolves on
+          # the VPS against the still-live `current` release. rsync is
+          # idempotent, so a retry just resumes where it stalled.
+          for attempt in 1 2 3; do
+            echo "Rsync attempt $attempt…"
+            if rsync -rlptDz --checksum --delete \
+                --link-dest="$APP_DIR/current/" \
+                -e "$SSH_CMD" \
+                release_tree/ \
+                "$VPS_USER@$HOST:$DEST"; then
+              echo "rsync delta upload succeeded on attempt $attempt"; exit 0
+            fi
+            echo "attempt $attempt failed; retrying in $((attempt * 10))s"; sleep $((attempt * 10))
+          done
+          echo "::error::rsync of build failed after 3 attempts"; exit 1
+
+      # ────────────────────────────────────────────────────────────────
+      # B.6 — validate the rsync'd release, wire .env symlink.
+      # ────────────────────────────────────────────────────────────────
+      - name: Validate release
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR/releases/${{ github.sha }}"
+            # Files arrived already-unpacked via rsync (B.5) — nothing to extract.
+
+            # Assertions
+            [ -f standalone/server.js ] || { echo "❌ standalone/server.js missing"; exit 1; }
+            [ -f standalone/.next/BUILD_ID ] || { echo "❌ standalone/.next/BUILD_ID missing"; exit 1; }
+            CHUNKS=$(find standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
+            if [ "$CHUNKS" -lt 5 ]; then
+              echo "❌ chunk count $CHUNKS < 5 — rsync upload was incomplete"
+              exit 1
+            fi
+            echo "Release has $CHUNKS chunks, BUILD_ID=$(cat standalone/.next/BUILD_ID)"
+
+            # Wire .env into the release. The relative path resolves to
+            # $APP_DIR/shared/.env when read from inside standalone/.
+            ln -sfn ../../../shared/.env standalone/.env
+
+            # Verify the SHIPPED tree (defends against transfer corruption
+            # that the runner-side check wouldn't catch).
+            cd standalone
+            node "$APP_DIR/scripts/verify-chunk-manifest.js"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.6b — pre-flight: shared/.env must exist with DATABASE_URL.
+      # Without it, src/lib/db/index.ts throws at module load and pm2
+      # silently restart-loops for ~3 minutes before going errored. We
+      # learnt this the hard way in run 26577303733 — a fresh VPS missing
+      # shared/.env turned into a 15m timeout with zero post-mortem logs.
+      # Check it explicitly so the failure is loud and instant.
+      # ────────────────────────────────────────────────────────────────
+      - name: Pre-flight shared/.env check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 1m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            if [ ! -s "$APP_DIR/shared/.env" ]; then
+              echo "❌ $APP_DIR/shared/.env is missing or empty."
+              echo "   current/.env is a symlink to this file; standalone server.js"
+              echo "   loads it via Next.js loadEnvConfig. Without it, app throws"
+              echo "   'DATABASE_URL is not set' at module load and never binds 3004."
+              echo "   Fix: SSH to the VPS and run scripts/orkivanta-bootstrap.sh (one-time)."
+              exit 1
+            fi
+            if ! grep -q '^DATABASE_URL=' "$APP_DIR/shared/.env"; then
+              echo "❌ $APP_DIR/shared/.env exists but has no DATABASE_URL= line."
+              exit 1
+            fi
+            echo "✓ shared/.env present ($(wc -l < $APP_DIR/shared/.env) lines, DATABASE_URL set)"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.6c — ship ecosystem.orkivanta.config.js to the VPS root so pm2
+      # always launches from the version that matches main, not whatever
+      # was on the last manual `git pull`. The VPS doesn't run git pull
+      # under this arch, so without this step the pm2 config silently
+      # drifts behind. On 2026-05-28 the VPS had the pre-arch-change
+      # `args: ".next/standalone/server.js"` while main had
+      # `args: "current/server.js"` — pm2 restart-looped with
+      # MODULE_NOT_FOUND.
+      #
+      # The hash-guard step (B.9) already picks up script/args changes
+      # and forces pm2 delete+start, so a new config takes effect
+      # immediately.
+      # ────────────────────────────────────────────────────────────────
+      # Same native-scp pattern as "SCP tarball to VPS" above (see that
+      # step's comment). Reuses the key file written there — same runner,
+      # same job — but re-writes it defensively in case step ordering changes.
+      - name: Ship ecosystem.orkivanta.config.js to VPS
+        timeout-minutes: 5
+        env:
+          SSH_KEY: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          HOST: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          VPS_USER: ${{ secrets.ORKIVANTA_VPS_USER }}
+          PORT: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          TARGET: ${{ env.APP_DIR }}/
+        run: |
+          set -eo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          if [ ! -f ~/.ssh/sandbox_key ]; then
+            printf '%s\n' "$SSH_KEY" > ~/.ssh/sandbox_key
+            chmod 600 ~/.ssh/sandbox_key
+          fi
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          SSH_OPTS="-i $HOME/.ssh/sandbox_key -P $PORT \
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=accept-new"
+          for attempt in 1 2 3; do
+            echo "Upload attempt $attempt…"
+            if scp $SSH_OPTS ecosystem.orkivanta.config.js "$VPS_USER@$HOST:$TARGET"; then
+              echo "Upload succeeded on attempt $attempt"; exit 0
+            fi
+            echo "attempt $attempt failed; retrying in $((attempt * 10))s"; sleep $((attempt * 10))
+          done
+          echo "::error::scp of ecosystem.orkivanta.config.js failed after 3 attempts"; exit 1
+
+      # Sanity check: confirm the file we just shipped actually has the
+      # current/server.js args — defense in depth against an SCP that
+      # silently writes the wrong thing.
+      - name: Verify shipped ecosystem.orkivanta.config.js args
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 1m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            if ! grep -q 'args: "current/server.js"' "$APP_DIR/ecosystem.orkivanta.config.js"; then
+              echo "❌ ecosystem.orkivanta.config.js on VPS is missing args: \"current/server.js\""
+              echo "--- current args lines ---"
+              grep -n 'args:' "$APP_DIR/ecosystem.orkivanta.config.js" || true
+              exit 1
+            fi
+            echo "✓ ecosystem.orkivanta.config.js args is current/server.js"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.7 — worker deps refresh (conditional). The orkivanta-worker pm2
+      # app runs `tsx` on raw src/, so node_modules at the repo root must
+      # match the lock file. Skip when nothing changed.
+      # ────────────────────────────────────────────────────────────────
+      - name: Refresh worker dependencies (conditional)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 10m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR"
+            CURRENT_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            # Fall back to the old workflow's hash file on the first deploy
+            # under the new workflow so we don't re-run npm ci unnecessarily.
+            LAST_HASH=$(cat shared/.last-lock-hash 2>/dev/null \
+              || cat .last-npm-install-hash 2>/dev/null \
+              || echo "")
+            if [ "$CURRENT_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
+              echo "package-lock.json unchanged ($CURRENT_HASH) — skipping npm ci"
+              # Ensure shared/.last-lock-hash exists going forward.
+              echo "$CURRENT_HASH" > shared/.last-lock-hash
+              exit 0
+            fi
+            echo "Lock changed (was $LAST_HASH, now $CURRENT_HASH) — refreshing worker deps"
+            time npm ci --no-audit --no-fund --include=dev
+            echo "$CURRENT_HASH" > shared/.last-lock-hash
+
+      # ────────────────────────────────────────────────────────────────
+      # B.8 — atomic symlink swap. Single rename(2). After this point a
+      # failure means Stage C rollback must symlink back to PREV.
+      # ────────────────────────────────────────────────────────────────
+      - name: Atomic symlink swap
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            ln -sfn "releases/${{ github.sha }}/standalone" current.new
+            mv -T current.new current
+            touch /tmp/orkivanta-sandbox-swap-done
+            echo "current -> $(readlink current)"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.9 — pm2 reload web. Graceful restart via the ecosystem config's
+      # 8s kill_timeout. Worker is conditionally reloaded after.
+      # ────────────────────────────────────────────────────────────────
+      - name: Reload pm2 (web + conditional worker)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,SANDBOX_PORT
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR"
+
+            # Detect whether the pm2 daemon's IN-MEMORY config for orkivanta-web
+            # still matches what's on disk. `pm2 reload` re-execs the process
+            # using the CACHED config from when it was originally started — it
+            # does NOT re-read ecosystem.orkivanta.config.js. So any change to
+            # script/args/env in the ecosystem config requires delete+start,
+            # not reload. Without this guard, the first deploy under the new
+            # workflow would silently keep running with the old args
+            # (`.next/standalone/server.js`) and never pick up `current/...`.
+            DESIRED_HASH=$(node -e "const c=require('./ecosystem.orkivanta.config.js'); const w=c.apps.find(a=>a.name==='orkivanta-web'); console.log(JSON.stringify({script:w.script,args:w.args,env:w.env,cwd:w.cwd}))" | sha256sum | cut -d' ' -f1)
+            RUNNING_HASH=$(cat shared/.pm2-web-config-hash 2>/dev/null || echo "")
+            echo "DESIRED_HASH=$DESIRED_HASH"
+            echo "RUNNING_HASH=$RUNNING_HASH"
+
+            if pm2 describe orkivanta-web >/dev/null 2>&1 && [ "$DESIRED_HASH" = "$RUNNING_HASH" ]; then
+              # In-memory config matches disk — safe to reload.
+              if ! pm2 reload orkivanta-web --update-env; then
+                echo "pm2 reload failed — falling back to delete+start"
+                pm2 delete orkivanta-web 2>/dev/null || true
+                fuser -k "${SANDBOX_PORT}/tcp" 2>/dev/null || true
+                sleep 2
+                pm2 start ecosystem.orkivanta.config.js --only orkivanta-web
+              fi
+            else
+              # Either pm2 has no orkivanta-web yet, or the ecosystem config
+              # changed since last deploy — must delete+start to pick it up.
+              echo "Forcing delete+start (config changed or first-ever deploy)"
+              pm2 delete orkivanta-web 2>/dev/null || true
+              fuser -k "${SANDBOX_PORT}/tcp" 2>/dev/null || true
+              sleep 2
+              pm2 start ecosystem.orkivanta.config.js --only orkivanta-web
+            fi
+            echo "$DESIRED_HASH" > shared/.pm2-web-config-hash
+
+            # Worker: reload only if deps changed OR src/lib/queue/** changed
+            # in this commit. Today's per-deploy delete+start was disrupting
+            # in-flight BullMQ jobs.
+            PREV_SHA=$(cat /tmp/orkivanta-sandbox-prev-sha 2>/dev/null || echo "")
+            WORKER_RESTART="no"
+            if [ ! -f shared/.last-lock-hash ] || [ -f /tmp/itarang-worker-deps-changed ]; then
+              WORKER_RESTART="deps"
+            fi
+            if [ -n "$PREV_SHA" ] && git diff --name-only "$PREV_SHA..${{ github.sha }}" 2>/dev/null | grep -q '^src/lib/queue/'; then
+              WORKER_RESTART="src"
+            fi
+            if ! pm2 describe orkivanta-worker >/dev/null 2>&1; then
+              WORKER_RESTART="missing"
+            fi
+
+            case "$WORKER_RESTART" in
+              no)
+                echo "Worker unchanged — leaving running"
+                ;;
+              *)
+                echo "Worker restart reason: $WORKER_RESTART"
+                if pm2 describe orkivanta-worker >/dev/null 2>&1; then
+                  pm2 reload orkivanta-worker --update-env || pm2 restart orkivanta-worker
+                else
+                  pm2 start ecosystem.orkivanta.config.js --only orkivanta-worker
+                fi
+                ;;
+            esac
+            pm2 save
+            pm2 ls
+
+            # Fail loudly before the 60s health-check window if pm2 didn't
+            # actually bring orkivanta-web online. Saves us 60s of curl=000
+            # polling and surfaces the crash logs in this step's output
+            # (instead of relying on the failure-collector at the very end).
+            STATUS=$(pm2 jlist | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='orkivanta-web'); console.log(w?w.pm2_env.status:'missing')")
+            echo "orkivanta-web pm2 status: $STATUS"
+            if [ "$STATUS" != "online" ]; then
+              echo "❌ orkivanta-web is '$STATUS' — dumping recent stderr and aborting"
+              pm2 logs orkivanta-web --lines 120 --nostream --err || true
+              exit 1
+            fi
+
+      # ────────────────────────────────────────────────────────────────
+      # B.10 — health check. 180-second 1Hz poll, gates rollback.
+      # Bumped from 60s after observing Next.js 16 standalone takes ~40s
+      # to reach "Ready" on this VPS, plus DB cold-connect can push the
+      # first-200 well past 60s. 180s gives ~3x headroom; the pm2 status
+      # guard above (B.9) is what catches the actual restart-loop case.
+      # ────────────────────────────────────────────────────────────────
+      - name: Health check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,HEALTH_URL
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            HTTP=000
+            for i in $(seq 1 180); do
+              sleep 1
+              # `|| true` is required: under `set -e`, an assignment from a
+              # failing command substitution aborts the whole script — so the
+              # first time curl exits non-zero (timeout/refused while the app
+              # is still booting) the retry loop would die instead of retrying.
+              # We use `|| true` rather than `|| echo 000` because curl already
+              # writes "000" via -w on connection failure; `|| echo` would
+              # concatenate to "000000". The guard below covers the empty case.
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || true)
+              [ -z "$HTTP" ] && HTTP=000
+              if [ $((i % 10)) -eq 0 ] || [ "$HTTP" = "200" ]; then
+                echo "  t=${i}s http=$HTTP"
+              fi
+              if [ "$HTTP" = "200" ]; then
+                echo "HTTP 200 after ${i}s"
+                break
+              fi
+            done
+            if [ "$HTTP" != "200" ]; then
+              echo "❌ $HEALTH_URL returned $HTTP after 180s"
+              pm2 ls || true
+              pm2 logs orkivanta-web --lines 80 --nostream || true
+              exit 1
+            fi
+            echo "--- /api/health body ---"
+            curl -s "$HEALTH_URL" | head -c 800
+            echo ""
+
+      # ────────────────────────────────────────────────────────────────
+      # B.11 — served-asset verification. HEAD-checks every chunk the
+      # running app references in served HTML. Catches the
+      # NOT-ON-DISK-chunk failure mode that /api/health doesn't see.
+      # ────────────────────────────────────────────────────────────────
+      - name: Verify served assets
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,SANDBOX_PORT
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR"
+            PORT="$SANDBOX_PORT" node scripts/verify-served-assets.js
+
+      # ────────────────────────────────────────────────────────────────
+      # B.12 — green deploy bookkeeping: update `previous` symlink (only
+      # now that health + served-asset checks have passed) and prune old
+      # releases to the last 5.
+      # ────────────────────────────────────────────────────────────────
+      - name: Update `previous` symlink + prune releases
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            PREV_SHA=$(cat /tmp/orkivanta-sandbox-prev-sha 2>/dev/null || echo "")
+            if [ -n "$PREV_SHA" ] && [ -d "releases/$PREV_SHA/standalone" ]; then
+              ln -sfn "releases/$PREV_SHA/standalone" previous.new
+              mv -T previous.new previous
+              echo "previous -> $(readlink previous)"
+            else
+              echo "No prior release to point `previous` at (first deploy under new workflow)"
+            fi
+            # Keep the last 5 release directories.
+            ls -1td releases/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
+            echo "Releases retained:"
+            ls -1t releases/ | head -10
+
+      # ────────────────────────────────────────────────────────────────
+      # Stage C — failure handlers. Run only on deploy failure.
+      # ────────────────────────────────────────────────────────────────
+      - name: Collect failure logs from VPS
+        # Also run on cancellation (job-level timeout shows up as `cancelled`,
+        # not `failure`) — that's the failure mode that left run 26577303733
+        # with zero post-mortem logs.
+        if: failure() || cancelled()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            exec 2>&1
+            echo ">>> readlink current/previous:"
+            (cd "$APP_DIR" && readlink current 2>/dev/null; readlink previous 2>/dev/null) || true
+            echo ""
+            echo ">>> releases on disk:"
+            ls -lt "$APP_DIR/releases/" 2>/dev/null | head -10 || echo "(no releases dir)"
+            echo ""
+            echo ">>> pm2 status:"
+            pm2 ls || true
+            echo ""
+            echo ">>> orkivanta-web (last 100 lines):"
+            pm2 logs orkivanta-web --lines 100 --nostream || true
+            echo ""
+            echo ">>> orkivanta-worker (last 50 lines):"
+            pm2 logs orkivanta-worker --lines 50 --nostream || true
+            echo ""
+            echo ">>> Disk free:"; df -h "$APP_DIR" || true
+            echo ">>> Memory:"; free -m || true
+
+      - name: Rollback (symlink swap only — no rebuild)
+        if: failure() || cancelled()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORKIVANTA_VPS_HOST }}
+          username: ${{ secrets.ORKIVANTA_VPS_USER }}
+          port: ${{ secrets.ORKIVANTA_VPS_PORT }}
+          key: ${{ secrets.ORKIVANTA_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR,SANDBOX_PORT,HEALTH_URL
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR"
+
+            PREV_TARGET=$(cat /tmp/orkivanta-sandbox-prev-target 2>/dev/null || echo "")
+            PREV_SHA=$(cat /tmp/orkivanta-sandbox-prev-sha 2>/dev/null || echo "")
+            SWAP_DONE=0
+            [ -f /tmp/orkivanta-sandbox-swap-done ] && SWAP_DONE=1
+
+            echo "PREV_TARGET=$PREV_TARGET"
+            echo "PREV_SHA=$PREV_SHA"
+            echo "SWAP_DONE=$SWAP_DONE"
+
+            if [ "$SWAP_DONE" = "0" ]; then
+              echo "Failure occurred BEFORE symlink swap — nothing to roll back."
+              # Clean up the half-shipped release to save disk.
+              rm -rf "releases/${{ github.sha }}" 2>/dev/null || true
+              # Sanity-curl the still-running app.
+              curl -s -o /dev/null -m 5 -w "Pre-swap rollback: existing app HTTP %{http_code}\n" "$HEALTH_URL" || echo "(curl failed)"
+              exit 0
+            fi
+
+            if [ -z "$PREV_TARGET" ] || [ ! -d "$PREV_TARGET" ]; then
+              echo "❌ No usable PREV_TARGET — cannot symlink back. Manual intervention needed."
+              echo "Available releases:"
+              ls -1t releases/ 2>/dev/null | head -10
+              exit 1
+            fi
+
+            echo "Rolling current symlink back to $PREV_TARGET"
+            ln -sfn "$PREV_TARGET" current.new
+            mv -T current.new current
+
+            pm2 reload orkivanta-web --update-env || pm2 restart orkivanta-web
+
+            # Quick health probe of the rolled-back app.
+            HTTP=000
+            for i in $(seq 1 30); do
+              sleep 1
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || echo 000)
+              if [ "$HTTP" = "200" ]; then
+                echo "Rollback healthy after ${i}s"
+                break
+              fi
+            done
+            if [ "$HTTP" != "200" ]; then
+              echo "❌ Rollback target ALSO failed health check (HTTP $HTTP). Manual intervention required."
+              exit 1
+            fi
+
+      - name: Slack notify result
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            ICON=":white_check_mark:"
+            STATUS="*succeeded*"
+          else
+            ICON=":x:"
+            STATUS="*FAILED*"
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"${ICON} Sandbox deploy ${STATUS} \`${{ github.sha }}\`\nLogs: ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL" || true

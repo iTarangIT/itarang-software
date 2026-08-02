@@ -23,6 +23,8 @@ import {
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
 
+import { users, dealerLeads } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -52,8 +54,8 @@ export const POST = withErrorHandler(async (req: Request) => {
             SELECT dl.phone, dl.dealer_name, dl.city, dl.state, dl.lead_status,
                    dl.interest_level, dl.final_intent_score, dl.source,
                    ow.name AS owner_name, dl.created_at
-            FROM dealer_leads dl
-            LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
+            FROM ${dealerLeads} dl
+            LEFT JOIN ${users} ow ON ow.id::text = dl.current_owner_id
             WHERE dl.id IN ${ids}
             ORDER BY dl.created_at DESC
         `);
@@ -86,7 +88,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         id: string;
         lead_status: string | null;
     }>(sql`
-        SELECT id, lead_status FROM dealer_leads WHERE id IN ${ids}
+        SELECT id, lead_status FROM ${dealerLeads} WHERE id IN ${ids}
     `)) as unknown as { id: string; lead_status: string | null }[];
 
     let affected = 0;
@@ -101,7 +103,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             is_active: boolean | null;
             role: string | null;
         }>(sql`
-            SELECT id::text AS id, is_active, role FROM users
+            SELECT id::text AS id, is_active, role FROM ${users}
             WHERE id::text = ${body.target_user_id} LIMIT 1
         `);
         if (!targets[0]) return errorResponse("Target user not found.", 404);
@@ -145,7 +147,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 if (fromStatus === "Transferred_to_ASM") {
                     // Already an ASM lead — just swap which ASM owns it.
                     await db.execute(sql`
-                        UPDATE dealer_leads
+                        UPDATE ${dealerLeads}
                         SET current_owner_id = ${body.target_user_id},
                             asm_id = ${body.target_user_id},
                             assigned_at = NOW(), updated_at = NOW()
@@ -165,7 +167,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     // lead (NULL / legacy status) — admin override flip to
                     // Transferred_to_ASM so it lands on the ASM's queue.
                     await db.execute(sql`
-                        UPDATE dealer_leads
+                        UPDATE ${dealerLeads}
                         SET pre_transfer_status = lead_status,
                             current_owner_id = ${body.target_user_id},
                             asm_id = ${body.target_user_id},
@@ -210,7 +212,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                         : { ok: true as const };
                 if (transition.ok) {
                     await db.execute(sql`
-                        UPDATE dealer_leads
+                        UPDATE ${dealerLeads}
                         SET current_owner_id = ${body.target_user_id},
                             originator_id = COALESCE(originator_id, ${body.target_user_id}),
                             assigned_at = NOW(), updated_at = NOW()
@@ -234,7 +236,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             // ── Default: plain ownership swap (other roles, terminal leads,
             // or any case where the role-specific status flip was skipped).
             await db.execute(sql`
-                UPDATE dealer_leads
+                UPDATE ${dealerLeads}
                 SET current_owner_id = ${body.target_user_id},
                     assigned_at = NOW(), updated_at = NOW()
                 WHERE id = ${lead.id}
@@ -280,7 +282,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 continue;
             }
             await db.execute(sql`
-                UPDATE dealer_leads
+                UPDATE ${dealerLeads}
                 SET ai_recall_status = 'awaiting_re_dial', updated_at = NOW()
                 WHERE id = ${lead.id}
             `);

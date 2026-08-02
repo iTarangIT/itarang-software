@@ -7,7 +7,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { dealerLeadCommercials } from "@/lib/db/schema";
+import { dealerLeadCommercials, dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
@@ -62,12 +62,12 @@ export const POST = withErrorHandler(
 
         const newRow = await db.transaction(async (tx) => {
             const maxRows = await tx.execute<{ max_v: number | null }>(sql`
-                SELECT MAX(version_no) AS max_v FROM dealer_lead_commercials WHERE dealer_lead_id = ${id}
+                SELECT MAX(version_no) AS max_v FROM ${dealerLeadCommercials} WHERE dealer_lead_id = ${id}
             `);
             const nextVersion = Number(maxRows[0]?.max_v ?? 0) + 1;
 
             await tx.execute(sql`
-                UPDATE dealer_lead_commercials
+                UPDATE ${dealerLeadCommercials}
                 SET is_current = false, updated_at = NOW()
                 WHERE dealer_lead_id = ${id} AND is_current = true
             `);
@@ -99,7 +99,7 @@ export const POST = withErrorHandler(
             // BRD §0.10: dealer_leads.brochure_sent_at = first brochure_share ever; never overwritten.
             if (body.event_type === "brochure_share") {
                 await tx.execute(sql`
-                    UPDATE dealer_leads
+                    UPDATE ${dealerLeads}
                     SET brochure_sent_at = COALESCE(brochure_sent_at, ${performedAt}),
                         updated_at = NOW()
                     WHERE id = ${id}

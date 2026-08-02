@@ -10,6 +10,8 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 
+import { users, notifications } from "@/lib/db/schema";
+
 export async function notifyRoles(
     roles: string[],
     n: {
@@ -24,13 +26,13 @@ export async function notifyRoles(
     if (lower.length === 0) return;
 
     await db.execute(sql`
-        INSERT INTO notifications
+        INSERT INTO ${notifications}
             (id, user_id, type, title, message, data, lead_id, read, created_at)
         SELECT
             gen_random_uuid()::text, u.id, ${n.type}, ${n.title}, ${n.message},
             ${JSON.stringify(n.data ?? {})}::jsonb, ${n.leadId ?? null},
             false, NOW()
-        FROM users u
+        FROM ${users} u
         WHERE LOWER(u.role) IN ${lower} AND u.is_active = TRUE
     `);
 }
@@ -50,7 +52,7 @@ export async function notifyUser(
     if (!userId) return;
 
     await db.execute(sql`
-        INSERT INTO notifications
+        INSERT INTO ${notifications}
             (id, user_id, type, title, message, data, lead_id, read, created_at)
         VALUES (
             gen_random_uuid()::text, ${userId}::uuid, ${n.type}, ${n.title}, ${n.message},

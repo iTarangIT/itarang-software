@@ -30,7 +30,9 @@ export async function GET() {
     try {
         const postgres = (await import('postgres')).default;
         const sql = postgres(dbUrl!, { ssl: 'require', prepare: false, connect_timeout: 5 });
-        const result = await sql`SELECT count(*) as cnt FROM users`;
+        // sql(<string>) is postgres.js's identifier helper — applies the lane's
+        // table prefix (e.g. sandbox_users) without string-concatenating SQL.
+        const result = await sql`SELECT count(*) as cnt FROM ${sql((process.env.TABLE_PREFIX ?? "") + "users")}`;
         checks.DB_CONNECTION = 'OK';
         checks.DB_USER_COUNT = result[0]?.cnt;
         await sql.end();

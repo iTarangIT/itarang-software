@@ -13,6 +13,8 @@ import type {
     ReportType,
 } from "./types";
 
+import { users, leadTouchpoints, dealerLeads, leadEscalations } from "@/lib/db/schema";
+
 // Date-range fragment on a chosen column. Defaults to the last 30 days when no
 // range is supplied. date_to is treated as an inclusive calendar day.
 function dateRange(col: string, f: DashboardFilters): SQL {
@@ -46,8 +48,8 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
             COUNT(*) FILTER (WHERE t.call_status = 'connected')::text AS connected_calls,
             COUNT(*) FILTER (WHERE t.touchpoint_type = 'status_change_note')::text AS status_changes,
             COUNT(DISTINCT t.dealer_lead_id)::text AS leads_worked
-        FROM lead_touchpoints t
-        LEFT JOIN users u ON u.id::text = t.performed_by
+        FROM ${leadTouchpoints} t
+        LEFT JOIN ${users} u ON u.id::text = t.performed_by
         WHERE t.performed_by IS NOT NULL ${dateRange("t.performed_at", f)}
         GROUP BY t.performed_at::date, u.name
         ORDER BY day DESC, rep_name ASC
@@ -77,12 +79,12 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
 async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f)}
         GROUP BY dl.lead_status
     `);
     const neverAssigned = await db.execute<{ c: string }>(sql`
-        SELECT COUNT(*)::text AS c FROM dealer_leads dl
+        SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
         WHERE dl.is_active IS NOT FALSE AND dl.lead_status = 'New_Unassigned'
           AND dl.assigned_at IS NULL ${dateRange("dl.created_at", f)}
     `);
@@ -118,7 +120,7 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
 async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
     const lostRows = await db.execute<{ lost_reason: string | null; c: string }>(sql`
         SELECT dl.lost_reason, COUNT(*)::text AS c
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         WHERE dl.lead_status = 'Lost' ${dateRange("dl.closed_at", f)}
         GROUP BY dl.lost_reason
     `);
@@ -127,7 +129,7 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
         c: string;
     }>(sql`
         SELECT dl.onboarding_dropout_reason, COUNT(*)::text AS c
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         WHERE dl.onboarding_dropout_reason IS NOT NULL ${dateRange("dl.closed_at", f)}
         GROUP BY dl.onboarding_dropout_reason
     `);
@@ -182,7 +184,7 @@ async function aiScoreAccuracy(f: DashboardFilters): Promise<ReportResult> {
                     WHEN dl.final_intent_score <= 80 THEN '61-80'
                     ELSE '81-100'
                 END AS bucket
-            FROM dealer_leads dl
+            FROM ${dealerLeads} dl
             WHERE dl.lead_status IN ('Converted', 'Lost') ${dateRange("dl.closed_at", f)}
         ) s
         GROUP BY bucket
@@ -223,7 +225,7 @@ async function sourcePerformance(f: DashboardFilters): Promise<ReportResult> {
         SELECT COALESCE(dl.source, '(unknown)') AS source,
                COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS converted,
                COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost'))::text AS closed
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         WHERE dl.lead_status IN ('Converted', 'Lost') ${dateRange("dl.closed_at", f)}
         GROUP BY COALESCE(dl.source, '(unknown)')
         ORDER BY closed DESC
@@ -267,11 +269,11 @@ async function asmHandoff(f: DashboardFilters): Promise<ReportResult> {
             COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost'))::text AS closed,
             ROUND(AVG(EXTRACT(EPOCH FROM (dl.closed_at - t.performed_at)) / 86400)
                   FILTER (WHERE dl.closed_at IS NOT NULL)::numeric, 1)::text AS avg_days_to_close,
-            SUM((SELECT COUNT(*) FROM lead_escalations e
+            SUM((SELECT COUNT(*) FROM ${leadEscalations} e
                  WHERE e.dealer_lead_id = dl.id))::text AS escalations
-        FROM lead_touchpoints t
-        JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
-        LEFT JOIN users u ON u.id::text = dl.asm_id
+        FROM ${leadTouchpoints} t
+        JOIN ${dealerLeads} dl ON dl.id = t.dealer_lead_id
+        LEFT JOIN ${users} u ON u.id::text = dl.asm_id
         WHERE t.touchpoint_type = 'asm_transfer' ${dateRange("t.performed_at", f)}
         GROUP BY u.name
         ORDER BY handoffs DESC

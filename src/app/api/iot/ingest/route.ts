@@ -320,7 +320,7 @@ export async function POST(req: NextRequest) {
       MAX(idle_hours)::numeric(6,2)         AS total_idle_hours,
       COUNT(*)                              AS packets_received,
       SUM(CASE WHEN bms_status IN ('fault','warning') THEN 1 ELSE 0 END) AS bms_faults
-    FROM telemetry_events
+    FROM ${telemetryEvents}
     WHERE serial_number = ${data.serialNumber}
       AND device_time >= ${summaryDate}::date
       AND device_time <  (${summaryDate}::date + INTERVAL '1 day')

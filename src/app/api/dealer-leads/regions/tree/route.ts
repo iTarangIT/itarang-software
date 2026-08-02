@@ -26,6 +26,8 @@ import { db } from "@/lib/db";
 import { withErrorHandler, successResponse } from "@/lib/api-utils";
 import { sql } from "drizzle-orm";
 
+import { dealerLeads, states, cities, cityAliases } from "@/lib/db/schema";
+
 export const UNKNOWN_STATE = "Unknown";
 export const UNKNOWN_CITY = "Unknown";
 
@@ -58,11 +60,11 @@ export const GET = withErrorHandler(async () => {
         -- "Bengaluru" always lands under Karnataka even if dl.state was
         -- corrupted. Fall back to a direct dl.state alias match.
         COALESCE(s_from_city.name, s_direct.name) AS canon_state
-      FROM dealer_leads dl
-      LEFT JOIN city_aliases ca ON ca.alias_lower = LOWER(TRIM(dl.city))
-      LEFT JOIN cities c ON c.id = ca.city_id
-      LEFT JOIN states s_from_city ON s_from_city.code = c.state_code
-      LEFT JOIN states s_direct ON LOWER(s_direct.name) = LOWER(TRIM(dl.state))
+      FROM ${dealerLeads} dl
+      LEFT JOIN ${cityAliases} ca ON ca.alias_lower = LOWER(TRIM(dl.city))
+      LEFT JOIN ${cities} c ON c.id = ca.city_id
+      LEFT JOIN ${states} s_from_city ON s_from_city.code = c.state_code
+      LEFT JOIN ${states} s_direct ON LOWER(s_direct.name) = LOWER(TRIM(dl.state))
       WHERE dl.phone IS NOT NULL AND dl.phone <> ''
     )
     SELECT

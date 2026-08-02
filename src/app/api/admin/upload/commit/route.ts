@@ -26,6 +26,8 @@ import { reactivateLead } from "@/lib/leads/reactivation";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { UploadBatchSummary } from "@/lib/admin/types";
 
+import { uploadBatches, dealerLeads, leadTouchpoints, duplicateMergeRequests } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -55,7 +57,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     // Create the batch row.
     const batchRows = await db.execute<{ batch_id: string }>(sql`
-        INSERT INTO upload_batches
+        INSERT INTO ${uploadBatches}
             (uploaded_by, file_name, total_rows, valid_rows, errored_rows,
              duplicate_rows, routing_to_ai, source_label, status)
         VALUES (${user.id}, ${b.file_name}, ${result.total_rows},
@@ -101,7 +103,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             const rowInterest = owner ? "warm" : interest;
 
             await db.execute(sql`
-                INSERT INTO dealer_leads
+                INSERT INTO ${dealerLeads}
                     (id, phone, dealer_name, city, state, language, segments,
                      preliminary_payment_intent, source, upload_batch_id,
                      lead_status, ai_recall_status, interest_level,
@@ -128,7 +130,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
             if (p.prior_call_notes) {
                 await db.execute(sql`
-                    INSERT INTO lead_touchpoints
+                    INSERT INTO ${leadTouchpoints}
                         (dealer_lead_id, touchpoint_type, performed_by,
                          performed_at, remarks, sync_method)
                     VALUES (${id}, 'status_change_note', ${user.id}, NOW(),
@@ -145,7 +147,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             });
             if (p.prior_call_notes) {
                 await db.execute(sql`
-                    INSERT INTO lead_touchpoints
+                    INSERT INTO ${leadTouchpoints}
                         (dealer_lead_id, touchpoint_type, performed_by,
                          performed_at, remarks, sync_method)
                     VALUES (${row.duplicate_lead_id}, 'status_change_note',
@@ -157,7 +159,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         } else if (row.status === "duplicate_skip" && row.duplicate_lead_id) {
             if (p.prior_call_notes) {
                 await db.execute(sql`
-                    INSERT INTO lead_touchpoints
+                    INSERT INTO ${leadTouchpoints}
                         (dealer_lead_id, touchpoint_type, performed_by,
                          performed_at, remarks, sync_method)
                     VALUES (${row.duplicate_lead_id}, 'status_change_note',
@@ -168,7 +170,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
         } else if (row.status === "address_mismatch" && row.duplicate_lead_id) {
             await db.execute(sql`
-                INSERT INTO duplicate_merge_requests
+                INSERT INTO ${duplicateMergeRequests}
                     (request_type, source_lead_id, target_lead_id, requested_by,
                      request_notes, status)
                 VALUES ('address_mismatch_upload', NULL, ${row.duplicate_lead_id},
@@ -180,7 +182,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
 
     await db.execute(sql`
-        UPDATE upload_batches SET
+        UPDATE ${uploadBatches} SET
             status = 'processed',
             rollback_window_until = NOW() + INTERVAL '24 hours',
             updated_at = NOW()
@@ -192,7 +194,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                total_rows, valid_rows, errored_rows, duplicate_rows,
                routing_to_ai, source_label, status, rollback_window_until,
                rolled_back_at, created_at
-        FROM upload_batches WHERE batch_id = ${batchId}
+        FROM ${uploadBatches} WHERE batch_id = ${batchId}
     `);
 
     return successResponse(summaryRows[0]);

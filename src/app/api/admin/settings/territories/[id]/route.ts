@@ -11,6 +11,8 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 
+import { asmTerritories } from "@/lib/db/schema";
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const BodySchema = z.object({
@@ -28,7 +30,7 @@ export const PATCH = withErrorHandler(
         const b = BodySchema.parse(await req.json());
 
         const res = await db.execute(sql`
-            UPDATE asm_territories SET
+            UPDATE ${asmTerritories} SET
                 state = ${b.state},
                 city = ${b.city ?? null},
                 active_from = ${b.active_from ?? null},
@@ -50,7 +52,7 @@ export const DELETE = withErrorHandler(
         if (!id) return errorResponse("Territory id required.", 400);
 
         const res = await db.execute(sql`
-            DELETE FROM asm_territories WHERE territory_id = ${id}
+            DELETE FROM ${asmTerritories} WHERE territory_id = ${id}
             RETURNING territory_id
         `);
         if (res.length === 0) return errorResponse("Territory not found.", 404);

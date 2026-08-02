@@ -16,6 +16,8 @@ import type {
     LeadDetailTouchpoint,
 } from "@/lib/inside-sales/types";
 
+import { users, dealerLeads, leadEscalations, leadTouchpoints, dealerLeadStatusHistory, duplicateMergeRequests, dealerOnboardingApplications } from "@/lib/db/schema";
+
 type PageArgs = { page: number; limit: number; q?: string | null };
 
 // ────────────────────────────── Escalations ───────────────────────────────
@@ -61,10 +63,10 @@ export async function fetchEscalationQueue(
             (e.ceo_comment IS NOT NULL OR e.ceo_recommendation IS NOT NULL) AS has_ceo_input,
             dl.current_owner_id,
             ow.name AS current_owner_name
-        FROM lead_escalations e
-        JOIN dealer_leads dl ON dl.id = e.dealer_lead_id
-        LEFT JOIN users ru ON ru.id::text = e.raised_by
-        LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
+        FROM ${leadEscalations} e
+        JOIN ${dealerLeads} dl ON dl.id = e.dealer_lead_id
+        LEFT JOIN ${users} ru ON ru.id::text = e.raised_by
+        LEFT JOIN ${users} ow ON ow.id::text = dl.current_owner_id
         WHERE ${where}
         ORDER BY ${URGENCY_RANK} ASC, e.raised_at ASC
         LIMIT ${limit} OFFSET ${offset}
@@ -72,8 +74,8 @@ export async function fetchEscalationQueue(
 
     const countRows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c
-        FROM lead_escalations e
-        JOIN dealer_leads dl ON dl.id = e.dealer_lead_id
+        FROM ${leadEscalations} e
+        JOIN ${dealerLeads} dl ON dl.id = e.dealer_lead_id
         WHERE ${where}
     `);
 
@@ -106,9 +108,9 @@ export async function fetchEscalationThread(
             e.resolved_at,
             e.resolution_action,
             e.resolution_notes
-        FROM lead_escalations e
-        LEFT JOIN users ru ON ru.id::text = e.raised_by
-        LEFT JOIN users rv ON rv.id::text = e.resolved_by
+        FROM ${leadEscalations} e
+        LEFT JOIN ${users} ru ON ru.id::text = e.raised_by
+        LEFT JOIN ${users} rv ON rv.id::text = e.resolved_by
         WHERE e.escalation_id = ${escalationId}
         LIMIT 1
     `);
@@ -125,8 +127,8 @@ export async function fetchEscalationThread(
             dl.lead_status,
             dl.current_owner_id,
             ow.name AS current_owner_name
-        FROM dealer_leads dl
-        LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
+        FROM ${dealerLeads} dl
+        LEFT JOIN ${users} ow ON ow.id::text = dl.current_owner_id
         WHERE dl.id = ${escalation.dealer_lead_id}
         LIMIT 1
     `);
@@ -145,8 +147,8 @@ export async function fetchEscalationThread(
             t.attachments,
             t.next_action,
             t.next_action_at
-        FROM lead_touchpoints t
-        LEFT JOIN users u ON u.id::text = t.performed_by
+        FROM ${leadTouchpoints} t
+        LEFT JOIN ${users} u ON u.id::text = t.performed_by
         WHERE t.dealer_lead_id = ${escalation.dealer_lead_id}
         ORDER BY t.performed_at DESC
         LIMIT 100
@@ -163,8 +165,8 @@ export async function fetchEscalationThread(
             u.name AS changed_by_name,
             h.changed_at,
             h.reason_notes
-        FROM dealer_lead_status_history h
-        LEFT JOIN users u ON u.id::text = h.changed_by
+        FROM ${dealerLeadStatusHistory} h
+        LEFT JOIN ${users} u ON u.id::text = h.changed_by
         WHERE h.dealer_lead_id = ${escalation.dealer_lead_id}
         ORDER BY h.changed_at DESC
     `);
@@ -219,10 +221,10 @@ export async function fetchMergeRequests(
             m.admin_resolution_notes,
             m.resolved_at,
             m.created_at
-        FROM duplicate_merge_requests m
-        LEFT JOIN dealer_leads tl ON tl.id = m.target_lead_id
-        LEFT JOIN dealer_leads sl ON sl.id = m.source_lead_id
-        LEFT JOIN users ru ON ru.id::text = m.requested_by
+        FROM ${duplicateMergeRequests} m
+        LEFT JOIN ${dealerLeads} tl ON tl.id = m.target_lead_id
+        LEFT JOIN ${dealerLeads} sl ON sl.id = m.source_lead_id
+        LEFT JOIN ${users} ru ON ru.id::text = m.requested_by
         WHERE ${where}
         ORDER BY m.created_at DESC
         LIMIT ${limit} OFFSET ${offset}
@@ -230,8 +232,8 @@ export async function fetchMergeRequests(
 
     const countRows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c
-        FROM duplicate_merge_requests m
-        LEFT JOIN dealer_leads tl ON tl.id = m.target_lead_id
+        FROM ${duplicateMergeRequests} m
+        LEFT JOIN ${dealerLeads} tl ON tl.id = m.target_lead_id
         WHERE ${where}
     `);
 
@@ -265,8 +267,8 @@ export const DROPOUT_WHERE = sql`
 export async function countOnboardingDropouts(): Promise<number> {
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c
-        FROM dealer_leads dl
-        JOIN dealer_onboarding_applications oa
+        FROM ${dealerLeads} dl
+        JOIN ${dealerOnboardingApplications} oa
             ON oa.id = dl.dealer_onboarding_application_id
         WHERE ${DROPOUT_WHERE}
     `);
@@ -301,10 +303,10 @@ export async function fetchOnboardingDropouts({
             END AS dropout_kind,
             dl.current_owner_id,
             ow.name AS current_owner_name
-        FROM dealer_leads dl
-        JOIN dealer_onboarding_applications oa
+        FROM ${dealerLeads} dl
+        JOIN ${dealerOnboardingApplications} oa
             ON oa.id = dl.dealer_onboarding_application_id
-        LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
+        LEFT JOIN ${users} ow ON ow.id::text = dl.current_owner_id
         WHERE ${DROPOUT_WHERE}${search}
         ORDER BY dl.closed_at ASC NULLS LAST
         LIMIT ${limit} OFFSET ${offset}
@@ -312,8 +314,8 @@ export async function fetchOnboardingDropouts({
 
     const countRows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c
-        FROM dealer_leads dl
-        JOIN dealer_onboarding_applications oa
+        FROM ${dealerLeads} dl
+        JOIN ${dealerOnboardingApplications} oa
             ON oa.id = dl.dealer_onboarding_application_id
         WHERE ${DROPOUT_WHERE}${search}
     `);

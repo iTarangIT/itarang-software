@@ -17,6 +17,8 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 
+import { dealerLeads, dealerLeadCommercials, dealerOnboardingApplications } from "@/lib/db/schema";
+
 type ConvertedLeadRow = {
     dealer_name: string | null;
     shop_name: string | null;
@@ -80,8 +82,8 @@ export async function createOnboardingApplicationForConvertedLead(
             c.deal_notes        AS c_deal_notes,
             c.notes             AS c_notes,
             c.quote_document_url AS c_quote_url
-        FROM dealer_leads dl
-        LEFT JOIN dealer_lead_commercials c
+        FROM ${dealerLeads} dl
+        LEFT JOIN ${dealerLeadCommercials} c
             ON c.dealer_lead_id = dl.id AND c.is_current = true
         WHERE dl.id = ${leadId}
         LIMIT 1
@@ -108,7 +110,7 @@ export async function createOnboardingApplicationForConvertedLead(
     });
 
     const inserted = (await executor.execute<{ id: string }>(sql`
-        INSERT INTO dealer_onboarding_applications (
+        INSERT INTO ${dealerOnboardingApplications} (
             company_name, onboarding_status,
             originating_dealer_lead_id, sponsoring_asm_id, owner_id,
             contact_name, contact_phone, contact_email,
@@ -149,7 +151,7 @@ export async function createOnboardingApplicationForConvertedLead(
     // caller (audit log / banner / notifications) still gets a valid id.
     if (!applicationId) {
         const existing = (await executor.execute<{ id: string }>(sql`
-            SELECT id FROM dealer_onboarding_applications
+            SELECT id FROM ${dealerOnboardingApplications}
             WHERE originating_dealer_lead_id = ${leadId}
             LIMIT 1
         `)) as unknown as { id: string }[];
@@ -159,7 +161,7 @@ export async function createOnboardingApplicationForConvertedLead(
     if (applicationId) {
         // Back-reference so the Lead Detail can show "Onboarding initiated".
         await executor.execute(sql`
-            UPDATE dealer_leads
+            UPDATE ${dealerLeads}
             SET dealer_onboarding_application_id = ${applicationId},
                 updated_at = NOW()
             WHERE id = ${leadId}

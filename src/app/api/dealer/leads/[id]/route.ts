@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs, kycDocuments, kycVerifications, consentRecords, productCategories, products, leadProducts } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, kycDocuments, kycVerifications, consentRecords, productCategories, products, leadProducts, deals, approvals, coBorrowerDocuments, coBorrowers, adminKycReviews, otherDocumentRequests, loanOffers, loanApplications, loanFiles, facilitationPayments, leadAssignments, assignmentChangeLogs, bolnaCalls, aiCallLogs, callRecords, deployedAssets, couponCodes, couponAuditLog, scrapedDealerLeads } from "@/lib/db/schema";
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { eq, and, sql } from 'drizzle-orm';
@@ -254,35 +254,35 @@ export const DELETE = withErrorHandler(async (req: Request, { params }: { params
             // approvals reference deals via (entity_type, entity_id) — clear those first,
             // since the approvals table has no lead_id column.
             await tx.execute(sql`
-                DELETE FROM approvals
+                DELETE FROM ${approvals}
                 WHERE entity_type = 'deal'
-                  AND entity_id IN (SELECT id FROM deals WHERE lead_id = ${id})
+                  AND entity_id IN (SELECT id FROM ${deals} WHERE lead_id = ${id})
             `);
 
-            await tx.execute(sql`DELETE FROM kyc_documents WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM kyc_verifications WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM consent_records WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM personal_details WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM lead_products WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM co_borrower_documents WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM co_borrowers WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM admin_kyc_reviews WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM other_document_requests WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM loan_offers WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM loan_applications WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM loan_files WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM facilitation_payments WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM lead_assignments WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM assignment_change_logs WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM deals WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM bolna_calls WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM ai_call_logs WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM call_records WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM deployed_assets WHERE lead_id = ${id}`);
-            await tx.execute(sql`UPDATE coupon_codes SET reserved_for_lead_id = NULL WHERE reserved_for_lead_id = ${id}`);
-            await tx.execute(sql`UPDATE coupon_codes SET used_by_lead_id = NULL WHERE used_by_lead_id = ${id}`);
-            await tx.execute(sql`UPDATE coupon_audit_log SET lead_id = NULL WHERE lead_id = ${id}`);
-            await tx.execute(sql`UPDATE scraped_dealer_leads SET converted_lead_id = NULL WHERE converted_lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${kycDocuments} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${kycVerifications} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${consentRecords} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${personalDetails} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${leadProducts} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${coBorrowerDocuments} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${coBorrowers} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${adminKycReviews} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${otherDocumentRequests} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${loanOffers} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${loanApplications} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${loanFiles} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${facilitationPayments} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${leadAssignments} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${assignmentChangeLogs} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${deals} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${bolnaCalls} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${aiCallLogs} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${callRecords} WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ${deployedAssets} WHERE lead_id = ${id}`);
+            await tx.execute(sql`UPDATE ${couponCodes} SET reserved_for_lead_id = NULL WHERE reserved_for_lead_id = ${id}`);
+            await tx.execute(sql`UPDATE ${couponCodes} SET used_by_lead_id = NULL WHERE used_by_lead_id = ${id}`);
+            await tx.execute(sql`UPDATE ${couponAuditLog} SET lead_id = NULL WHERE lead_id = ${id}`);
+            await tx.execute(sql`UPDATE ${scrapedDealerLeads} SET converted_lead_id = NULL WHERE converted_lead_id = ${id}`);
 
             await tx.insert(auditLogs).values({
                 id: `AUDIT-${Date.now()}`,

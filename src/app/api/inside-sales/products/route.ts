@@ -13,6 +13,8 @@ import type {
     ProductMasterResponse,
 } from "@/lib/inside-sales/types";
 
+import { productMasterBatteries, productMasterChargers, productMasterParaphernalia } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 const READ_ROLES = ["inside_sales_rep", "asm", "admin"];
@@ -30,7 +32,7 @@ export const GET = withErrorHandler(async () => {
         }>(sql`
             SELECT id::text AS id, model_id, model_name,
                    voltage_v::text AS voltage_v, capacity_ah::text AS capacity_ah
-            FROM product_master_batteries
+            FROM ${productMasterBatteries}
             WHERE status = 'active'
             ORDER BY model_name ASC
         `),
@@ -43,7 +45,7 @@ export const GET = withErrorHandler(async () => {
         }>(sql`
             SELECT id::text AS id, model_id, model_name,
                    base_price::text AS base_price, charging_type
-            FROM product_master_chargers
+            FROM ${productMasterChargers}
             WHERE status = 'active'
             ORDER BY model_name ASC
         `),
@@ -54,7 +56,7 @@ export const GET = withErrorHandler(async () => {
             max_qty_per_lead: number | null;
         }>(sql`
             SELECT id::text AS id, item_type_code, display_label, max_qty_per_lead
-            FROM product_master_paraphernalia
+            FROM ${productMasterParaphernalia}
             WHERE status = 'active'
             ORDER BY display_label ASC
         `),

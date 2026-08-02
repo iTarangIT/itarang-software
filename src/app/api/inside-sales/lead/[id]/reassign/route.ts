@@ -10,6 +10,8 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
 
+import { users, dealerLeads } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
 const BodySchema = z.object({
@@ -32,7 +34,7 @@ export const POST = withErrorHandler(
         }
 
         const targets = await db.execute<{ id: string; role: string | null; is_active: boolean | null }>(sql`
-            SELECT id::text AS id, role, is_active FROM users WHERE id::text = ${body.target_user_id} LIMIT 1
+            SELECT id::text AS id, role, is_active FROM ${users} WHERE id::text = ${body.target_user_id} LIMIT 1
         `);
         const target = targets[0];
         if (!target) return errorResponse("Target user not found.", 404);
@@ -41,7 +43,7 @@ export const POST = withErrorHandler(
         }
 
         await db.execute(sql`
-            UPDATE dealer_leads
+            UPDATE ${dealerLeads}
             SET current_owner_id = ${body.target_user_id},
                 assigned_at = NOW(),
                 updated_at = NOW()

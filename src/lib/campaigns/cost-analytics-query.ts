@@ -18,6 +18,8 @@
 
 import { sql, type SQL } from "drizzle-orm";
 
+import { aiCallLogs, dialerCampaigns, dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
+
 export type CostAnalyticsFilters = {
   from_date: string | null;
   to_date: string | null;
@@ -74,7 +76,7 @@ export function buildSummarySql(f: CostAnalyticsFilters): SQL {
       COUNT(*)::int as total_calls,
       COALESCE(SUM(acl.call_duration), 0)::bigint as total_duration_secs,
       COUNT(acl.total_cost_cents)::int as calls_with_cost
-    FROM ai_call_logs acl
+    FROM ${aiCallLogs} acl
     WHERE ${whereClauseAcl(f)}
   `;
 }
@@ -85,7 +87,7 @@ export function buildTrendSql(f: CostAnalyticsFilters): SQL {
       DATE_TRUNC('day', acl.ended_at AT TIME ZONE 'Asia/Kolkata')::date as date,
       COALESCE(SUM(acl.total_cost_cents), 0)::bigint as cost_cents,
       COUNT(*)::int as calls
-    FROM ai_call_logs acl
+    FROM ${aiCallLogs} acl
     WHERE ${whereClauseAcl(f)}
     GROUP BY DATE_TRUNC('day', acl.ended_at AT TIME ZONE 'Asia/Kolkata')
     ORDER BY date ASC
@@ -100,7 +102,7 @@ export function buildComponentBreakdownSql(f: CostAnalyticsFilters): SQL {
       COALESCE(SUM(acl.stt_cost_cents), 0)::bigint as stt,
       COALESCE(SUM(acl.telephony_cost_cents), 0)::bigint as telephony,
       COALESCE(SUM(acl.platform_cost_cents), 0)::bigint as platform
-    FROM ai_call_logs acl
+    FROM ${aiCallLogs} acl
     WHERE ${whereClauseAcl(f)}
   `;
 }
@@ -112,7 +114,7 @@ export function buildProviderSplitSql(f: CostAnalyticsFilters): SQL {
       COALESCE(SUM(acl.total_cost_cents), 0)::bigint as cost_cents,
       COUNT(*)::int as calls,
       COALESCE(SUM(acl.call_duration), 0)::bigint as duration_secs
-    FROM ai_call_logs acl
+    FROM ${aiCallLogs} acl
     WHERE ${whereClauseAcl(f)}
     GROUP BY acl.provider
     ORDER BY cost_cents DESC
@@ -131,9 +133,9 @@ export function buildTopCampaignsSql(f: CostAnalyticsFilters): SQL {
       COALESCE(SUM(acl.total_cost_cents), 0)::bigint as total_cost_cents,
       COUNT(acl.call_id)::int as cost_calls,
       COALESCE(SUM(acl.call_duration), 0)::bigint as total_duration_secs
-    FROM dialer_campaigns dc
-    INNER JOIN dialer_campaign_leads dcl ON dcl.campaign_id = dc.id
-    INNER JOIN ai_call_logs acl ON acl.call_id = dcl.bolna_call_id
+    FROM ${dialerCampaigns} dc
+    INNER JOIN ${dialerCampaignLeads} dcl ON dcl.campaign_id = dc.id
+    INNER JOIN ${aiCallLogs} acl ON acl.call_id = dcl.bolna_call_id
     WHERE ${whereClauseDcl(f)}
     GROUP BY dc.id, dc.name, dc.provider, dc.calls_made, dc.total_leads, dc.started_at
     ORDER BY total_cost_cents DESC
@@ -162,9 +164,9 @@ export function buildCallDetailSql(f: CostAnalyticsFilters): SQL {
       acl.cost_fetched_at as cost_fetched_at,
       dl.shop_name as shop_name,
       dl.phone as phone
-    FROM dialer_campaign_leads dcl
-    INNER JOIN ai_call_logs acl ON acl.call_id = dcl.bolna_call_id
-    LEFT JOIN dealer_leads dl ON dl.id = acl.lead_id
+    FROM ${dialerCampaignLeads} dcl
+    INNER JOIN ${aiCallLogs} acl ON acl.call_id = dcl.bolna_call_id
+    LEFT JOIN ${dealerLeads} dl ON dl.id = acl.lead_id
     WHERE ${whereClauseDcl(f)}
     ORDER BY acl.ended_at DESC NULLS LAST
     LIMIT ${f.limit} OFFSET ${offset}
@@ -174,8 +176,8 @@ export function buildCallDetailSql(f: CostAnalyticsFilters): SQL {
 export function buildCallDetailCountSql(f: CostAnalyticsFilters): SQL {
   return sql`
     SELECT COUNT(*)::int as count
-    FROM dialer_campaign_leads dcl
-    INNER JOIN ai_call_logs acl ON acl.call_id = dcl.bolna_call_id
+    FROM ${dialerCampaignLeads} dcl
+    INNER JOIN ${aiCallLogs} acl ON acl.call_id = dcl.bolna_call_id
     WHERE ${whereClauseDcl(f)}
   `;
 }

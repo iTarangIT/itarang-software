@@ -20,6 +20,8 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 
+import { dealerLeads, users, dealerLeadStatusHistory, leadTouchpoints } from "@/lib/db/schema";
+
 export type ReactivationTrigger = "admin" | "upload" | "ai_dialer";
 
 const TRIGGER_TOUCHPOINT: Record<ReactivationTrigger, string> = {
@@ -48,7 +50,7 @@ export async function reactivateLead(opts: {
             originator_id: string | null;
         }>(sql`
             SELECT lead_status, lost_reason, originator_id
-            FROM dealer_leads WHERE id = ${leadId} LIMIT 1
+            FROM ${dealerLeads} WHERE id = ${leadId} LIMIT 1
         `);
         const lead = leadRows[0];
         if (!lead) throw new Error("Lead not found.");
@@ -60,7 +62,7 @@ export async function reactivateLead(opts: {
         let newOwnerId: string | null = null;
         if (lead.originator_id) {
             const owners = await tx.execute<{ id: string; is_active: boolean | null }>(sql`
-                SELECT id::text AS id, is_active FROM users
+                SELECT id::text AS id, is_active FROM ${users}
                 WHERE id::text = ${lead.originator_id} LIMIT 1
             `);
             if (owners[0] && owners[0].is_active !== false) {
@@ -72,7 +74,7 @@ export async function reactivateLead(opts: {
             : "New_Unassigned";
 
         await tx.execute(sql`
-            UPDATE dealer_leads SET
+            UPDATE ${dealerLeads} SET
                 lead_status = ${newStatus},
                 lost_reason = NULL,
                 previous_lost_reason = ${lead.lost_reason},
@@ -87,7 +89,7 @@ export async function reactivateLead(opts: {
 
         // Status-history audit — every reactivation event recorded (BRD §0.9).
         await tx.execute(sql`
-            INSERT INTO dealer_lead_status_history
+            INSERT INTO ${dealerLeadStatusHistory}
                 (dealer_lead_id, from_status, to_status, from_lost_reason,
                  changed_by, changed_at, reason_notes)
             VALUES (${leadId}, 'Lost', ${newStatus}, ${lead.lost_reason},
@@ -97,7 +99,7 @@ export async function reactivateLead(opts: {
 
         // reactivated_via_* touchpoint — keeps the unified history complete.
         await tx.execute(sql`
-            INSERT INTO lead_touchpoints
+            INSERT INTO ${leadTouchpoints}
                 (dealer_lead_id, touchpoint_type, performed_by, performed_at,
                  remarks, sync_method)
             VALUES (${leadId}, ${TRIGGER_TOUCHPOINT[trigger]}, ${performedBy},

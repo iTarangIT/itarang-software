@@ -13,5 +13,11 @@ export default defineConfig({
     url: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
   },
-  tablesFilter: ["!pg_stat_*"],
+  // When TABLE_PREFIX is set (orkivanta sandbox lane: TABLE_PREFIX=sandbox_),
+  // scope drizzle-kit to ONLY the prefixed tables so `db:push` is physically
+  // unable to propose drops/alters on the unprefixed production tables that
+  // share the same database.
+  tablesFilter: process.env.TABLE_PREFIX
+    ? [`${process.env.TABLE_PREFIX}*`]
+    : ["!pg_stat_*"],
 });

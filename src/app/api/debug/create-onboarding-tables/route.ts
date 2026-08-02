@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import { sql } from "drizzle-orm";
 
+import { dealerOnboardingApplications } from "@/lib/db/schema";
+
 export async function GET() {
   try {
     await db.execute(sql`
-      ALTER TABLE dealer_onboarding_applications
+      ALTER TABLE ${dealerOnboardingApplications}
       ADD COLUMN IF NOT EXISTS owner_name text,
       ADD COLUMN IF NOT EXISTS owner_phone text,
       ADD COLUMN IF NOT EXISTS owner_landline varchar(20),

@@ -16,6 +16,8 @@ import {
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 
+import { leadEscalations, users, dealerLeads } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["admin", "sales_head"];
 
 const BodySchema = z
@@ -49,7 +51,7 @@ export const POST = withErrorHandler(
             dealer_lead_id: string;
             status: string;
         }>(sql`
-            SELECT dealer_lead_id, status FROM lead_escalations
+            SELECT dealer_lead_id, status FROM ${leadEscalations}
             WHERE escalation_id = ${id} LIMIT 1
         `);
         const esc = escRows[0];
@@ -64,7 +66,7 @@ export const POST = withErrorHandler(
                 id: string;
                 is_active: boolean | null;
             }>(sql`
-                SELECT id::text AS id, is_active FROM users
+                SELECT id::text AS id, is_active FROM ${users}
                 WHERE id::text = ${body.target_user_id} LIMIT 1
             `);
             const target = targets[0];
@@ -73,7 +75,7 @@ export const POST = withErrorHandler(
                 return errorResponse("Target user is inactive.", 400);
             }
             await db.execute(sql`
-                UPDATE dealer_leads
+                UPDATE ${dealerLeads}
                 SET current_owner_id = ${body.target_user_id},
                     assigned_at = NOW(),
                     updated_at = NOW()
@@ -83,7 +85,7 @@ export const POST = withErrorHandler(
 
         // Mark the escalation resolved.
         await db.execute(sql`
-            UPDATE lead_escalations SET
+            UPDATE ${leadEscalations} SET
                 status = 'resolved',
                 resolved_by = ${user.id},
                 resolved_at = NOW(),
@@ -96,10 +98,10 @@ export const POST = withErrorHandler(
         // Clear the lead's escalation flag — unless another pending escalation
         // still exists for the same lead.
         await db.execute(sql`
-            UPDATE dealer_leads SET
+            UPDATE ${dealerLeads} SET
                 escalation_status = CASE
                     WHEN EXISTS (
-                        SELECT 1 FROM lead_escalations
+                        SELECT 1 FROM ${leadEscalations}
                         WHERE dealer_lead_id = ${esc.dealer_lead_id}
                           AND status = 'pending_review'
                     ) THEN 'pending_review'

@@ -7,6 +7,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 
+import { leadVisits, users, dealerLeads } from "@/lib/db/schema";
+
 export type LeadsInfoRow = {
     id: string;
     dealer_name: string | null;
@@ -55,7 +57,7 @@ export type LeadsInfoFacets = {
 const LATEST_VISIT_JOIN = sql`
     LEFT JOIN LATERAL (
         SELECT visit_status, visit_outcome
-        FROM lead_visits
+        FROM ${leadVisits}
         WHERE dealer_lead_id = dl.id
         ORDER BY COALESCE(actual_visit_date, scheduled_date, created_at) DESC
         LIMIT 1
@@ -112,10 +114,10 @@ export async function fetchLeadsInfoRows(
             dl.created_at,
             lv.visit_status,
             lv.visit_outcome
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         ${LATEST_VISIT_JOIN}
-        LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
-        LEFT JOIN users asm ON asm.id::text = dl.asm_id
+        LEFT JOIN ${users} owner ON owner.id::text = dl.current_owner_id
+        LEFT JOIN ${users} asm ON asm.id::text = dl.asm_id
         WHERE ${where}
         ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
         LIMIT ${limit} OFFSET ${offset}
@@ -126,7 +128,7 @@ export async function fetchLeadsInfoRows(
 export async function countLeadsInfoRows(f: LeadsInfoFilters): Promise<number> {
     const where = buildWhere(f);
     const rows = await db.execute<{ c: string }>(sql`
-        SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where}
+        SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl WHERE ${where}
     `);
     return Number(rows[0]?.c ?? 0);
 }
@@ -136,20 +138,20 @@ export async function countLeadsInfoRows(f: LeadsInfoFilters): Promise<number> {
 export async function fetchLeadsInfoFacets(): Promise<LeadsInfoFacets> {
     const owners = await db.execute<{ id: string; name: string | null; role: string | null }>(sql`
         SELECT DISTINCT u.id::text AS id, u.name, u.role
-        FROM users u
-        JOIN dealer_leads dl ON dl.current_owner_id = u.id::text
+        FROM ${users} u
+        JOIN ${dealerLeads} dl ON dl.current_owner_id = u.id::text
         WHERE dl.is_active IS NOT FALSE
         ORDER BY u.name NULLS LAST
     `);
     const asms = await db.execute<{ id: string; name: string | null }>(sql`
         SELECT DISTINCT u.id::text AS id, u.name
-        FROM users u
-        JOIN dealer_leads dl ON dl.asm_id = u.id::text
+        FROM ${users} u
+        JOIN ${dealerLeads} dl ON dl.asm_id = u.id::text
         WHERE dl.is_active IS NOT FALSE
         ORDER BY u.name NULLS LAST
     `);
     const sources = await db.execute<{ source: string }>(sql`
-        SELECT DISTINCT source FROM dealer_leads
+        SELECT DISTINCT source FROM ${dealerLeads}
         WHERE is_active IS NOT FALSE AND source IS NOT NULL
         ORDER BY source
     `);

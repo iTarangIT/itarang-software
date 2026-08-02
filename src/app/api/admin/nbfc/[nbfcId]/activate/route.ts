@@ -477,10 +477,10 @@ async function activateNbfc(
   // CHECK set, so seeding it made the row un-updatable (any later UPDATE re-runs
   // the NOT VALID constraint on the new row and fails).
   await db.execute(sql`
-    INSERT INTO nbfc_users (user_id, tenant_id, role)
+    INSERT INTO ${nbfcUsers} (user_id, tenant_id, role)
     SELECT ${supabaseUserId}::uuid, ${tenantId}::uuid, 'nbfc_admin'
     WHERE NOT EXISTS (
-      SELECT 1 FROM nbfc_users
+      SELECT 1 FROM ${nbfcUsers}
       WHERE user_id = ${supabaseUserId}::uuid AND tenant_id = ${tenantId}::uuid
     )
   `);

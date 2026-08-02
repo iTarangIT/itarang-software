@@ -19,6 +19,8 @@ import {
     PHONE_COLLISION_ACTIONS,
 } from "@/lib/admin/types";
 
+import { duplicateMergeRequests, dealerLeads } from "@/lib/db/schema";
+
 const MUTATE_ROLES = ["admin", "sales_head"];
 
 const BodySchema = z.object({
@@ -52,7 +54,7 @@ export const POST = withErrorHandler(
             status: string;
         }>(sql`
             SELECT request_type, target_lead_id, status
-            FROM duplicate_merge_requests WHERE id = ${id} LIMIT 1
+            FROM ${duplicateMergeRequests} WHERE id = ${id} LIMIT 1
         `);
         const mr = reqRows[0];
         if (!mr) return errorResponse("Merge request not found.", 404);
@@ -77,7 +79,7 @@ export const POST = withErrorHandler(
         if (body.resolution_action === "same_dealer_relocated") {
             // Append the current address to address_history, then update it.
             const leadRows = await db.execute<{ location: string | null }>(sql`
-                SELECT location FROM dealer_leads WHERE id = ${mr.target_lead_id} LIMIT 1
+                SELECT location FROM ${dealerLeads} WHERE id = ${mr.target_lead_id} LIMIT 1
             `);
             const oldAddress = leadRows[0]?.location ?? null;
             const historyEntry = JSON.stringify([
@@ -89,7 +91,7 @@ export const POST = withErrorHandler(
                 },
             ]);
             await db.execute(sql`
-                UPDATE dealer_leads SET
+                UPDATE ${dealerLeads} SET
                     address_history = COALESCE(address_history, '[]'::jsonb) || ${historyEntry}::jsonb,
                     location = ${body.new_address ?? sql`location`},
                     updated_at = NOW()
@@ -104,7 +106,7 @@ export const POST = withErrorHandler(
         } else if (body.resolution_action === "different_branch_same_owner") {
             // V1 keeps the row; admin records a branch note for future tracking.
             await db.execute(sql`
-                UPDATE dealer_leads SET
+                UPDATE ${dealerLeads} SET
                     address_notes = CONCAT_WS(E'\n',
                         NULLIF(address_notes, ''), ${body.admin_resolution_notes}),
                     updated_at = NOW()
@@ -113,7 +115,7 @@ export const POST = withErrorHandler(
         }
 
         await db.execute(sql`
-            UPDATE duplicate_merge_requests SET
+            UPDATE ${duplicateMergeRequests} SET
                 status = ${newStatus},
                 resolution_action = ${body.resolution_action},
                 admin_resolution_notes = ${body.admin_resolution_notes},

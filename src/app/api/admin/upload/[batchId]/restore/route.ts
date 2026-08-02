@@ -10,6 +10,8 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 
+import { uploadBatches, dealerLeads } from "@/lib/db/schema";
+
 export const dynamic = "force-dynamic";
 
 export const POST = withErrorHandler(
@@ -19,7 +21,7 @@ export const POST = withErrorHandler(
         if (!batchId) return errorResponse("Batch id required.", 400);
 
         const rows = await db.execute<{ rolled_back_at: string | null }>(sql`
-            SELECT rolled_back_at FROM upload_batches
+            SELECT rolled_back_at FROM ${uploadBatches}
             WHERE batch_id = ${batchId} LIMIT 1
         `);
         const batch = rows[0];
@@ -29,12 +31,12 @@ export const POST = withErrorHandler(
         }
 
         await db.execute(sql`
-            UPDATE dealer_leads
+            UPDATE ${dealerLeads}
             SET is_active = TRUE, deleted_at = NULL, updated_at = NOW()
             WHERE upload_batch_id = ${batchId}
         `);
         await db.execute(sql`
-            UPDATE upload_batches SET
+            UPDATE ${uploadBatches} SET
                 status = 'processed',
                 rolled_back_at = NULL,
                 rolled_back_by = NULL,

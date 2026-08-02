@@ -11,6 +11,8 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 
+import { holidayCalendar } from "@/lib/db/schema";
+
 const BodySchema = z.object({ is_active: z.boolean() });
 
 export const PATCH = withErrorHandler(
@@ -21,7 +23,7 @@ export const PATCH = withErrorHandler(
         const b = BodySchema.parse(await req.json());
 
         const res = await db.execute(sql`
-            UPDATE holiday_calendar
+            UPDATE ${holidayCalendar}
             SET is_active = ${b.is_active}, updated_at = NOW()
             WHERE holiday_id = ${id}
             RETURNING holiday_id

@@ -26,6 +26,8 @@ import type {
 import { ALERT_PANELS } from "./types";
 import { countOnboardingDropouts } from "./listQueries";
 
+import { dealerLeads, leadTouchpoints, leadEscalations, dealerOnboardingApplications, dealerLeadStatusHistory, users, userPreferences, duplicateMergeRequests, asmTerritories } from "@/lib/db/schema";
+
 const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
 
 // Working days (Mon–Sat) elapsed since a timestamp expression, as a SQL scalar.
@@ -71,20 +73,20 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                 pending_escalations: string;
             }>(sql`
                 SELECT
-                    (SELECT COUNT(*) FROM dealer_leads dl
+                    (SELECT COUNT(*) FROM ${dealerLeads} dl
                        WHERE dl.lead_status = 'New_Unassigned'
                          AND dl.is_active IS NOT FALSE ${lf}) AS unassigned_queue,
-                    (SELECT COUNT(DISTINCT t.dealer_lead_id) FROM lead_touchpoints t
+                    (SELECT COUNT(DISTINCT t.dealer_lead_id) FROM ${leadTouchpoints} t
                        WHERE t.performed_at::date = CURRENT_DATE) AS leads_worked_today,
-                    (SELECT COUNT(*) FROM lead_escalations
+                    (SELECT COUNT(*) FROM ${leadEscalations}
                        WHERE status = 'pending_review') AS pending_escalations
             `),
             db.execute<{ hrs: string | null }>(sql`
                 SELECT AVG(EXTRACT(EPOCH FROM (ft.first_touch - dl.assigned_at)) / 3600) AS hrs
-                FROM dealer_leads dl
+                FROM ${dealerLeads} dl
                 JOIN LATERAL (
                     SELECT MIN(t.performed_at) AS first_touch
-                    FROM lead_touchpoints t
+                    FROM ${leadTouchpoints} t
                     WHERE t.dealer_lead_id = dl.id
                       AND t.touchpoint_type = 'inside_sales_call'
                       AND t.call_status = 'connected'
@@ -97,8 +99,8 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
             convRate(30, lf),
             db.execute<{ c: string }>(sql`
                 SELECT COUNT(*)::text AS c
-                FROM dealer_leads dl
-                JOIN dealer_onboarding_applications oa
+                FROM ${dealerLeads} dl
+                JOIN ${dealerOnboardingApplications} oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status = 'Converted'
                   AND COALESCE(oa.last_action_at, oa.updated_at)
@@ -106,10 +108,10 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
             `),
             db.execute<{ c: string }>(sql`
                 SELECT COUNT(*)::text AS c
-                FROM dealer_lead_status_history h
+                FROM ${dealerLeadStatusHistory} h
                 WHERE h.changed_at >= NOW() - INTERVAL '30 days'
                   AND NOT EXISTS (
-                    SELECT 1 FROM lead_touchpoints t
+                    SELECT 1 FROM ${leadTouchpoints} t
                     WHERE t.dealer_lead_id = h.dealer_lead_id
                       AND t.performed_at BETWEEN h.changed_at - INTERVAL '1 hour'
                                              AND h.changed_at + INTERVAL '1 hour'
@@ -137,7 +139,7 @@ async function convRate(days: number, lf: SQL): Promise<number | null> {
         SELECT
             COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS conv,
             COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted', 'Lost'))::text AS closed
-        FROM dealer_leads dl
+        FROM ${dealerLeads} dl
         WHERE dl.closed_at >= NOW() - (${String(days)} || ' days')::interval ${lf}
     `);
     const conv = Number(rows[0]?.conv ?? 0);
@@ -164,27 +166,27 @@ export async function fetchTeamPerformance(
             u.id::text AS user_id,
             u.name AS user_name,
             u.role,
-            (SELECT COUNT(*) FROM dealer_leads dl
+            (SELECT COUNT(*) FROM ${dealerLeads} dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${OPEN_LIST})
                  AND dl.is_active IS NOT FALSE ${tf}) AS open_leads,
-            (SELECT COUNT(*) FROM lead_touchpoints t
+            (SELECT COUNT(*) FROM ${leadTouchpoints} t
                WHERE t.performed_by = u.id::text
                  AND t.performed_at::date = CURRENT_DATE) AS touchpoints_today,
-            (SELECT COUNT(*) FROM lead_touchpoints t
+            (SELECT COUNT(*) FROM ${leadTouchpoints} t
                WHERE t.performed_by = u.id::text
                  AND t.performed_at >= NOW() - INTERVAL '7 days') AS touchpoints_week,
             (SELECT ROUND(
                 COUNT(*)::numeric
                 / NULLIF(COUNT(DISTINCT t.dealer_lead_id), 0), 2)
-               FROM lead_touchpoints t
+               FROM ${leadTouchpoints} t
                WHERE t.performed_by = u.id::text) AS avg_touchpoints_per_lead,
             (SELECT ROUND(AVG(
                 EXTRACT(EPOCH FROM (ft.first_touch - dl.assigned_at)) / 3600)::numeric, 1)
-               FROM dealer_leads dl
+               FROM ${dealerLeads} dl
                JOIN LATERAL (
                    SELECT MIN(t.performed_at) AS first_touch
-                   FROM lead_touchpoints t
+                   FROM ${leadTouchpoints} t
                    WHERE t.dealer_lead_id = dl.id
                      AND t.touchpoint_type = 'inside_sales_call'
                      AND t.call_status = 'connected'
@@ -195,23 +197,23 @@ export async function fetchTeamPerformance(
             (SELECT ROUND(
                 COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::numeric
                 / NULLIF(COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost')), 0), 3)
-               FROM dealer_leads dl
+               FROM ${dealerLeads} dl
                WHERE dl.closing_owner_id = u.id::text
                  AND dl.closed_at >= NOW() - INTERVAL '30 days') AS conversion_rate_30d,
-            (SELECT COUNT(*) FROM dealer_leads dl
+            (SELECT COUNT(*) FROM ${dealerLeads} dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${OPEN_LIST})
                  AND dl.is_active IS NOT FALSE
                  AND ${workingDaysSince(LAST_TOUCH)} > 5) AS stale_leads,
-            (SELECT COUNT(*) FROM dealer_leads dl
+            (SELECT COUNT(*) FROM ${dealerLeads} dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${OPEN_LIST})
                  AND dl.is_active IS NOT FALSE
                  AND ${workingDaysSince(LAST_TOUCH)} > 10) AS critical_stale,
-            (SELECT up.pref_value->>'status' FROM user_preferences up
+            (SELECT up.pref_value->>'status' FROM ${userPreferences} up
                WHERE up.user_id = u.id::text
                  AND up.pref_key = 'ooo_status') AS ooo_status
-        FROM users u
+        FROM ${users} u
         WHERE u.role IN ('inside_sales_rep', 'asm')
           AND u.is_active IS NOT FALSE
         ORDER BY critical_stale DESC, stale_leads DESC, u.name ASC
@@ -244,24 +246,24 @@ export async function fetchTeamPerformance(
 function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
     switch (key) {
         case "no_touch_5d":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
                 WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
                   AND ${workingDaysSince(LAST_TOUCH)} > 5 ${lf}`;
         case "no_touch_10d":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
                 WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
                   AND ${workingDaysSince(LAST_TOUCH)} > 10 ${lf}`;
         case "awaiting_decision_14d":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
                 WHERE dl.lead_status = 'Awaiting_Customer_Decision'
                   AND dl.is_active IS NOT FALSE
                   AND ${workingDaysSince(LAST_TOUCH)} > 14 ${lf}`;
         case "pending_escalations":
-            return sql`SELECT COUNT(*)::text AS c FROM lead_escalations
+            return sql`SELECT COUNT(*)::text AS c FROM ${leadEscalations}
                 WHERE status = 'pending_review'`;
         case "onboarding_dropouts":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                JOIN dealer_onboarding_applications oa
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
+                JOIN ${dealerOnboardingApplications} oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status = 'Converted' AND dl.is_active IS NOT FALSE
                   AND dl.onboarding_dropout_reason IS NULL
@@ -269,33 +271,33 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
                        OR (oa.onboarding_status IN ('draft','submitted','correction_requested')
                            AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'))`;
         case "stale_converted":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
-                JOIN dealer_onboarding_applications oa
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
+                JOIN ${dealerOnboardingApplications} oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status = 'Converted'
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}`;
         case "onboarding_stalled":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_onboarding_applications oa
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerOnboardingApplications} oa
                 WHERE oa.onboarding_status IN ('draft','submitted','correction_requested')
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'`;
         case "asm_no_activity":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
                 WHERE dl.lead_status = 'Transferred_to_ASM' AND dl.asm_id IS NOT NULL
                   AND dl.assigned_at < NOW() - INTERVAL '1 day'
-                  AND NOT EXISTS (SELECT 1 FROM lead_touchpoints t
+                  AND NOT EXISTS (SELECT 1 FROM ${leadTouchpoints} t
                       WHERE t.dealer_lead_id = dl.id
                         AND t.performed_by = dl.asm_id
                         AND t.performed_at >= dl.assigned_at) ${lf}`;
         case "address_mismatch":
-            return sql`SELECT COUNT(*)::text AS c FROM duplicate_merge_requests
+            return sql`SELECT COUNT(*)::text AS c FROM ${duplicateMergeRequests}
                 WHERE status = 'pending' AND request_type LIKE 'address_mismatch%'`;
         case "duplicate_merge_requests":
-            return sql`SELECT COUNT(*)::text AS c FROM duplicate_merge_requests
+            return sql`SELECT COUNT(*)::text AS c FROM ${duplicateMergeRequests}
                 WHERE status = 'pending' AND request_type = 'phone_collision_manual_edit'`;
         case "out_of_territory_handoffs":
-            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+            return sql`SELECT COUNT(*)::text AS c FROM ${dealerLeads} dl
                 WHERE dl.lead_status = 'Transferred_to_ASM' AND dl.asm_id IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM asm_territories at
+                  AND NOT EXISTS (SELECT 1 FROM ${asmTerritories} at
                       WHERE at.asm_id = dl.asm_id
                         AND at.state ILIKE dl.state
                         AND (at.city IS NULL OR at.city ILIKE dl.city)
@@ -333,7 +335,7 @@ export async function fetchAlertPanel(
                    CONCAT_WS(', ', dl.city, dl.state) AS secondary,
                    ${meta} AS meta,
                    CONCAT('/inside-sales/lead/', dl.id) AS href
-            FROM dealer_leads dl
+            FROM ${dealerLeads} dl
             WHERE ${where}
             ORDER BY ${order}
             LIMIT ${limit}
@@ -361,7 +363,7 @@ export async function fetchAlertPanel(
             const rows = await leadPanel(
                 sql`dl.lead_status = 'Transferred_to_ASM' AND dl.asm_id IS NOT NULL
                     AND dl.assigned_at < NOW() - INTERVAL '1 day'
-                    AND NOT EXISTS (SELECT 1 FROM lead_touchpoints t
+                    AND NOT EXISTS (SELECT 1 FROM ${leadTouchpoints} t
                         WHERE t.dealer_lead_id = dl.id AND t.performed_by = dl.asm_id
                           AND t.performed_at >= dl.assigned_at) ${lf}`,
                 sql`CONCAT('handed off ', TO_CHAR(dl.assigned_at, 'DD Mon'))`,
@@ -372,7 +374,7 @@ export async function fetchAlertPanel(
         case "out_of_territory_handoffs": {
             const rows = await leadPanel(
                 sql`dl.lead_status = 'Transferred_to_ASM' AND dl.asm_id IS NOT NULL
-                    AND NOT EXISTS (SELECT 1 FROM asm_territories at
+                    AND NOT EXISTS (SELECT 1 FROM ${asmTerritories} at
                         WHERE at.asm_id = dl.asm_id AND at.state ILIKE dl.state
                           AND (at.city IS NULL OR at.city ILIKE dl.city)
                           AND (at.active_from IS NULL OR at.active_from <= CURRENT_DATE)
@@ -390,8 +392,8 @@ export async function fetchAlertPanel(
                        CONCAT('onboarding idle since ',
                            TO_CHAR(COALESCE(oa.last_action_at, oa.updated_at), 'DD Mon')) AS meta,
                        CONCAT('/inside-sales/lead/', dl.id) AS href
-                FROM dealer_leads dl
-                JOIN dealer_onboarding_applications oa
+                FROM ${dealerLeads} dl
+                JOIN ${dealerOnboardingApplications} oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status = 'Converted'
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '3 days' ${lf}
@@ -407,8 +409,8 @@ export async function fetchAlertPanel(
                        CONCAT_WS(', ', dl.city, dl.state) AS secondary,
                        oa.onboarding_status AS meta,
                        '/admin/onboarding-dropouts' AS href
-                FROM dealer_leads dl
-                JOIN dealer_onboarding_applications oa
+                FROM ${dealerLeads} dl
+                JOIN ${dealerOnboardingApplications} oa
                     ON oa.id = dl.dealer_onboarding_application_id
                 WHERE dl.lead_status = 'Converted' AND dl.is_active IS NOT FALSE
                   AND dl.onboarding_dropout_reason IS NULL
@@ -428,7 +430,7 @@ export async function fetchAlertPanel(
                        CONCAT(oa.onboarding_status, ' — idle since ',
                            TO_CHAR(COALESCE(oa.last_action_at, oa.updated_at), 'DD Mon')) AS meta,
                        '/admin/onboarding-dropouts' AS href
-                FROM dealer_onboarding_applications oa
+                FROM ${dealerOnboardingApplications} oa
                 WHERE oa.onboarding_status IN ('draft','submitted','correction_requested')
                   AND COALESCE(oa.last_action_at, oa.updated_at) < NOW() - INTERVAL '30 days'
                 ORDER BY COALESCE(oa.last_action_at, oa.updated_at) ASC
@@ -443,8 +445,8 @@ export async function fetchAlertPanel(
                        e.escalation_reason AS secondary,
                        UPPER(e.urgency) AS meta,
                        CONCAT('/admin/escalations/', e.escalation_id) AS href
-                FROM lead_escalations e
-                JOIN dealer_leads dl ON dl.id = e.dealer_lead_id
+                FROM ${leadEscalations} e
+                JOIN ${dealerLeads} dl ON dl.id = e.dealer_lead_id
                 WHERE e.status = 'pending_review'
                 ORDER BY CASE e.urgency WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
                          e.raised_at ASC
@@ -464,8 +466,8 @@ export async function fetchAlertPanel(
                        tl.phone AS secondary,
                        m.request_type AS meta,
                        '/admin/merge-requests' AS href
-                FROM duplicate_merge_requests m
-                LEFT JOIN dealer_leads tl ON tl.id = m.target_lead_id
+                FROM ${duplicateMergeRequests} m
+                LEFT JOIN ${dealerLeads} tl ON tl.id = m.target_lead_id
                 WHERE m.status = 'pending' AND ${typeFilter}
                 ORDER BY m.created_at ASC
                 LIMIT ${limit}
