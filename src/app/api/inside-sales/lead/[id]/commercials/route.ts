@@ -140,9 +140,14 @@ export const POST = withErrorHandler(
 
             // BRD §0.10: dealer_leads.brochure_sent_at = first brochure_share ever; never overwritten.
             if (body.event_type === "brochure_share") {
+                // ISO string, not the Date — a raw sql`` template goes through
+                // postgres.js `unsafe()`, which has no column type to serialise
+                // against and throws on a Date object. (The query builder above
+                // takes `performedAt` directly and is fine; only raw templates
+                // need this.)
                 await tx.execute(sql`
                     UPDATE dealer_leads
-                    SET brochure_sent_at = COALESCE(brochure_sent_at, ${performedAt}),
+                    SET brochure_sent_at = COALESCE(brochure_sent_at, ${performedAt.toISOString()}),
                         updated_at = NOW()
                     WHERE id = ${id}
                 `);

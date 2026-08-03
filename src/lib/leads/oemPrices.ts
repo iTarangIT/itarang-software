@@ -11,7 +11,7 @@
  * `oem_reference_prices_live_uniq`.
  */
 
-import { and, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { oemReferencePrices } from "@/lib/db/schema";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
@@ -158,29 +158,43 @@ export interface SetOemPriceInput {
  */
 export async function setOemPrice(input: SetOemPriceInput): Promise<string> {
     return db.transaction(async (tx) => {
+        // One instant for both statements, so the closed row's effective_to and
+        // the new row's effective_from meet exactly — no gap, no overlap.
         const now = new Date();
 
-        await tx.execute(sql`
-            UPDATE oem_reference_prices
-               SET effective_to = ${now}
-             WHERE asset_type = ${input.asset_type}
-               AND product_id = ${input.product_id}
-               AND effective_to IS NULL
-        `);
+        // Query builder rather than a raw sql`` template, deliberately: Drizzle
+        // runs raw templates through postgres.js `unsafe()`, which serialises
+        // parameters with no column type and throws ERR_INVALID_ARG_TYPE on a
+        // Date object. The builder knows the column is timestamptz and encodes
+        // it correctly, so this whole class of bug cannot reach here.
+        await tx
+            .update(oemReferencePrices)
+            .set({ effective_to: now })
+            .where(
+                and(
+                    eq(oemReferencePrices.asset_type, input.asset_type),
+                    eq(oemReferencePrices.product_id, input.product_id),
+                    isNull(oemReferencePrices.effective_to),
+                ),
+            );
 
-        const inserted = await tx.execute<{ price_id: string }>(sql`
-            INSERT INTO oem_reference_prices
-                (asset_type, product_id, model_id, product_name, oem_price,
-                 effective_from, note, created_by)
-            VALUES
-                (${input.asset_type}, ${input.product_id}, ${input.model_id},
-                 ${input.product_name}, ${String(input.oem_price)}, ${now},
-                 ${input.note}, ${input.created_by})
-            RETURNING price_id::text AS price_id
-        `);
+        const inserted = await tx
+            .insert(oemReferencePrices)
+            .values({
+                asset_type: input.asset_type,
+                product_id: input.product_id,
+                model_id: input.model_id,
+                product_name: input.product_name,
+                // numeric columns take a string in Drizzle — passing a JS number
+                // would lose precision on the way in.
+                oem_price: String(input.oem_price),
+                effective_from: now,
+                note: input.note,
+                created_by: input.created_by,
+            })
+            .returning({ price_id: oemReferencePrices.price_id });
 
-        const row = (inserted as unknown as Record<string, unknown>[])[0];
-        return String(row?.price_id ?? "");
+        return String(inserted[0]?.price_id ?? "");
     });
 }
 
