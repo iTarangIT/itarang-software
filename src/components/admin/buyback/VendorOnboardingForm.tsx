@@ -18,6 +18,23 @@
  * objects cannot be serialized, so a restored draft would come back with three
  * empty upload slots and a submit button that refuses to explain itself.
  *
+ * VALIDATION IS PER FIELD, AND IT IS OURS. The browser's own bubbles say
+ * "Please match the requested format", one at a time; the server's zod says
+ * "Too small: expected string to have >=2 characters". Neither names the box or
+ * the fix. So every rule the route enforces is mirrored into VALIDATORS below —
+ * checked on blur, re-checked on each keystroke once a field has gone red, and
+ * re-run across the whole form on submit. A failure is a red border, a red
+ * tint, and the sentence directly under that control; the first offender is
+ * scrolled to and focused. Server refusals are mapped back onto the same
+ * fields, so a rejected GSTIN reddens the GSTIN box instead of only appearing
+ * in a banner at the bottom of a long form.
+ *
+ * WHAT THEY COLLECT IS NOT ASKED HERE. Chemistry, collection states, payment
+ * terms and credit limit were a "Commercials" section on this form; they are
+ * routing preferences, not onboarding facts, and every one of them is editable
+ * on the vendor record afterwards. Onboarding is now identity + address +
+ * paperwork. The route still accepts all four and defaults them to empty.
+ *
  * THE ENDING IS TWO OUTCOMES, NOT ONE. Creating the vendor and delivering their
  * password are separate things that fail separately, so the result card says
  * which happened. A bounced email leaves a real vendor who is not routable, and
@@ -28,7 +45,6 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import VendorDocUpload, { type VendorDocValue } from "./VendorDocUpload";
-import { CHEMISTRIES } from "@/lib/buyback/line-spec";
 import { VENDOR_DOC_LABELS } from "@/lib/buyback/vendor-docs";
 
 /** Server zod paths → the label on this form, so an error names a box. */
@@ -45,35 +61,151 @@ const FIELD_LABELS: Record<string, string> = {
   city: "City",
   state: "State",
   pincode: "Pincode",
-  payment_terms: "Payment terms",
-  credit_limit: "Credit limit",
   agreement_ref: "Agreement reference",
   agreement_signed_on: "Agreement signed on",
 };
 
-const GSTIN_PATTERN = "[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}";
-const PAN_PATTERN = "[A-Z]{5}[0-9]{4}[A-Z]{1}";
+// Deliberately the same expressions the route parses with, not looser ones — a
+// field that goes green here and red on the server is worse than no check.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/;
+const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/;
+const UDYAM_RE = /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/;
+const PINCODE_RE = /^\d{6}$/;
 
 const EMPTY = {
   name: "",
   contact_name: "",
+  contact_email: "",
+  contact_phone: "",
   gstin: "",
   pan: "",
   udyam_number: "",
-  contact_email: "",
-  contact_phone: "",
   address_line1: "",
   address_line2: "",
   city: "",
   state: "",
   pincode: "",
-  payment_terms: "",
-  credit_limit: "",
   agreement_ref: "",
   agreement_signed_on: "",
 };
 
 type FormState = typeof EMPTY;
+type FieldName = keyof FormState;
+
+const REQUIRED_DOCS = ["GSTIN", "PAN", "UDYAM"] as const;
+
+/** Error keys in the order they appear on screen — drives "first offender". */
+const ERROR_ORDER: string[] = [
+  "name",
+  "contact_name",
+  "contact_email",
+  "contact_phone",
+  "gstin",
+  "pan",
+  "udyam_number",
+  "address_line1",
+  "address_line2",
+  "city",
+  "state",
+  "pincode",
+  ...REQUIRED_DOCS.map((d) => `doc-${d}`),
+  "agreement_ref",
+  "agreement_signed_on",
+];
+
+/**
+ * One rule per field, returning the sentence to print under it. Written as
+ * instructions ("Enter the GSTIN — we invoice against it") rather than
+ * diagnoses ("invalid format"), because the person filling this in is an admin
+ * copying off a certificate, not the author of the schema.
+ */
+const VALIDATORS: Record<FieldName, (raw: string) => string | null> = {
+  name: (v) => {
+    const s = v.trim();
+    if (!s) return "Enter the registered business name.";
+    if (s.length < 2) return "That is too short to be a business name.";
+    if (s.length > 200) return "Keep the business name under 200 characters.";
+    return null;
+  },
+  contact_name: (v) => {
+    const s = v.trim();
+    if (!s) return "Enter the person we will be dealing with.";
+    if (s.length < 2) return "Enter their full name.";
+    if (s.length > 120) return "Keep the name under 120 characters.";
+    return null;
+  },
+  contact_email: (v) => {
+    const s = v.trim();
+    if (!s) return "Enter their email — it is the login ID we send the password to.";
+    if (!EMAIL_RE.test(s)) return "That does not look like an email address.";
+    if (s.length > 255) return "That email is too long.";
+    return null;
+  },
+  contact_phone: (v) => {
+    const s = v.trim();
+    if (!s) return null; // Optional.
+    if (s.replace(/\D/g, "").length < 8) return "A phone number needs at least 8 digits.";
+    if (s.length > 20) return "That is too long for a phone number.";
+    return null;
+  },
+  gstin: (v) => {
+    const s = v.trim().toUpperCase();
+    if (!s) return "Enter the GSTIN — we invoice against it.";
+    if (s.length !== 15) return `A GSTIN is 15 characters; this one has ${s.length}.`;
+    if (!GSTIN_RE.test(s)) return "That is not a valid GSTIN. It should look like 27AABCB1518L1ZS.";
+    return null;
+  },
+  pan: (v) => {
+    const s = v.trim().toUpperCase();
+    if (!s) return "Enter the PAN exactly as printed on the card.";
+    if (s.length !== 10) return `A PAN is 10 characters; this one has ${s.length}.`;
+    if (!PAN_RE.test(s)) return "That is not a valid PAN. It should look like AABCB1518L.";
+    return null;
+  },
+  udyam_number: (v) => {
+    const s = v.trim().toUpperCase();
+    if (!s) return null; // Optional — the certificate itself is what we require.
+    if (!UDYAM_RE.test(s))
+      return "A Udyam number looks like UDYAM-MH-26-0012345. Leave it blank if you do not have it to hand.";
+    return null;
+  },
+  address_line1: (v) => {
+    const s = v.trim();
+    if (!s) return "Enter the registered address.";
+    if (s.length > 255) return "Split this across the two address lines.";
+    return null;
+  },
+  address_line2: (v) =>
+    v.trim().length > 255 ? "Keep this line under 255 characters." : null,
+  city: (v) => {
+    const s = v.trim();
+    if (!s) return "Enter the city.";
+    if (s.length > 120) return "Keep the city under 120 characters.";
+    return null;
+  },
+  state: (v) => (v.trim() ? null : "Select the state the firm is registered in."),
+  pincode: (v) => {
+    const s = v.trim();
+    if (!s) return "Enter the 6-digit pincode.";
+    if (!PINCODE_RE.test(s)) return `A pincode is exactly 6 digits; this one has ${s.length}.`;
+    return null;
+  },
+  agreement_ref: (v) =>
+    v.trim().length > 120 ? "Keep the reference under 120 characters." : null,
+  agreement_signed_on: (v) => {
+    if (!v) return null; // Optional.
+    const d = new Date(`${v}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return "That is not a valid date.";
+    if (d.getTime() > Date.now()) return "An agreement cannot have been signed in the future.";
+    return null;
+  },
+};
+
+/** Red border + tint that survives focus, so a bad field stays bad-looking. */
+const INVALID_CLS =
+  "border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] " +
+  "focus:border-[color:var(--color-danger)] focus:ring-[color:var(--color-danger)]/20";
 
 interface CreatedVendor {
   entity_id: string;
@@ -101,8 +233,6 @@ function upperCaseInPlace(e: React.ChangeEvent<HTMLInputElement>): string {
 
 export default function VendorOnboardingForm() {
   const [form, setForm] = useState<FormState>(EMPTY);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [regions, setRegions] = useState<string[]>([]);
   const [docs, setDocs] = useState<Record<string, VendorDocValue | null>>({
     GSTIN: null,
     PAN: null,
@@ -110,6 +240,7 @@ export default function VendorOnboardingForm() {
     AGREEMENT: null,
   });
 
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [stateOptions, setStateOptions] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,48 +268,91 @@ export default function VendorOnboardingForm() {
     };
   }, []);
 
-  const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
+  /* ------------------------------------------------------------------ */
+  /*  Field-level validation                                             */
+  /* ------------------------------------------------------------------ */
 
-  const setUpper = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const next = upperCaseInPlace(e);
-    setForm((f) => ({ ...f, [k]: next }));
+  const setFieldError = (name: string, msg: string | null) =>
+    setFieldErrors((prev) => {
+      if (!msg && !prev[name]) return prev;
+      const next = { ...prev };
+      if (msg) next[name] = msg;
+      else delete next[name];
+      return next;
+    });
+
+  /**
+   * Nothing goes red while it is still being typed — a required field would
+   * scream at the first keystroke. It goes red on blur, and from then on it
+   * re-checks live so the red clears the moment the value becomes valid.
+   */
+  const change = (k: FieldName) => (value: string) => {
+    setForm((f) => ({ ...f, [k]: value }));
+    if (fieldErrors[k]) setFieldError(k, VALIDATORS[k](value));
   };
 
-  const toggle = (list: string[], value: string) =>
-    list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
+  const blur = (k: FieldName) => () => setFieldError(k, VALIDATORS[k](form[k]));
 
-  const requiredDocsAttached = Boolean(docs.GSTIN && docs.PAN && docs.UDYAM);
+  /** Base props shared by every text control — name, value, error wiring. */
+  const bind = (k: FieldName, extraCls = "") => ({
+    name: k,
+    value: form[k],
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+      change(k)(e.target.value),
+    onBlur: blur(k),
+    "aria-invalid": fieldErrors[k] ? (true as const) : undefined,
+    "aria-describedby": `${k}-msg`,
+    className: `input-itarang ${extraCls} ${fieldErrors[k] ? INVALID_CLS : ""}`.trim(),
+  });
+
+  const attachDoc = (kind: string) => (v: VendorDocValue) => {
+    setDocs((d) => ({ ...d, [kind]: v }));
+    setFieldError(`doc-${kind}`, null);
+  };
+
+  function focusFirstError(errors: Record<string, string>) {
+    const first = ERROR_ORDER.find((k) => errors[k]);
+    if (!first) return;
+    const control = formRef.current?.elements.namedItem(first);
+    const el = (control instanceof HTMLElement ? control : null) ?? document.getElementById(first);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Defer focus so the scroll animation isn't interrupted.
+    setTimeout(() => (el as HTMLElement).focus({ preventScroll: true }), 250);
+  }
+
+  /** Every rule, every field — what submit runs. */
+  function validateAll(): Record<string, string> {
+    const errors: Record<string, string> = {};
+    for (const k of Object.keys(EMPTY) as FieldName[]) {
+      const msg = VALIDATORS[k](form[k]);
+      if (msg) errors[k] = msg;
+    }
+    for (const kind of REQUIRED_DOCS) {
+      if (!docs[kind]) errors[`doc-${kind}`] = `Attach the ${VENDOR_DOC_LABELS[kind]}.`;
+    }
+    return errors;
+  }
+
+  const requiredDocsAttached = REQUIRED_DOCS.every((k) => docs[k]);
 
   const submit = async () => {
     setError(null);
 
-    // Let the browser's own constraint validation speak first — but report ALL
-    // of it, not just the first field. Native reportValidity() stops at one,
-    // which turns a six-mistake form into six round trips.
-    const el = formRef.current;
-    if (el && !el.checkValidity()) {
-      const invalid = Array.from(
-        el.querySelectorAll<HTMLInputElement>(":invalid"),
-      ).filter((i) => i.name);
-      const names = invalid.map((i) => FIELD_LABELS[i.name] ?? i.name);
+    const errors = validateAll();
+    const count = Object.keys(errors).length;
+    if (count > 0) {
+      setFieldErrors(errors);
       setError(
-        names.length === 1
-          ? `${names[0]} is missing or not in the expected format.`
-          : `Check these fields: ${names.join(", ")}.`,
+        count === 1
+          ? "One field still needs attention — it is highlighted below."
+          : `${count} fields still need attention — they are highlighted below.`,
       );
-      invalid[0]?.focus();
-      invalid[0]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      focusFirstError(errors);
       return;
     }
 
-    if (!requiredDocsAttached) {
-      setError(
-        "The GST certificate, PAN card and Udyam certificate are all required before a vendor can be created.",
-      );
-      return;
-    }
-
+    setFieldErrors({});
     setSubmitting(true);
 
     const res = await fetch("/api/admin/buyback/vendors", {
@@ -189,7 +363,7 @@ export default function VendorOnboardingForm() {
         contact_name: form.contact_name.trim(),
         gstin: form.gstin.trim().toUpperCase(),
         pan: form.pan.trim().toUpperCase(),
-        udyam_number: form.udyam_number.trim() || undefined,
+        udyam_number: form.udyam_number.trim().toUpperCase() || undefined,
         contact_email: form.contact_email.trim(),
         contact_phone: form.contact_phone.trim() || undefined,
         address_line1: form.address_line1.trim(),
@@ -197,10 +371,6 @@ export default function VendorOnboardingForm() {
         city: form.city.trim(),
         state: form.state.trim(),
         pincode: form.pincode.trim(),
-        categories,
-        regions,
-        payment_terms: form.payment_terms.trim() || undefined,
-        credit_limit: form.credit_limit.trim() ? Number(form.credit_limit) : undefined,
         agreement_ref: form.agreement_ref.trim() || undefined,
         agreement_signed_on: form.agreement_signed_on || undefined,
         document_ids: {
@@ -216,15 +386,33 @@ export default function VendorOnboardingForm() {
     setSubmitting(false);
 
     if (!json?.success) {
-      // Zod refusals arrive per-field in `details` as { path, message }. The
-      // message alone ("Too small: expected string to have >=2 characters") is
-      // useless without the field.
-      const issue = json?.error?.details?.[0] as { path?: string; message?: string } | undefined;
-      const label = issue?.path ? (FIELD_LABELS[issue.path] ?? issue.path) : null;
+      // Zod refusals arrive per-field in `details` as { path, message }. Push
+      // every one of them back onto its own box — a banner saying "Too small:
+      // expected string to have >=2 characters" at the bottom of a form this
+      // long is a scavenger hunt.
+      const details = (json?.error?.details ?? []) as Array<{ path?: string; message?: string }>;
+      const mapped: Record<string, string> = {};
+      for (const d of details) {
+        if (d.path && d.path in EMPTY && d.message) mapped[d.path] = d.message;
+      }
+
+      const message: string =
+        json?.error?.message ??
+        details[0]?.message ??
+        "The vendor could not be created.";
+
+      // A duplicate GSTIN is a 409 with no zod detail, but it is still a
+      // statement about one specific box.
+      if (!Object.keys(mapped).length && /gstin/i.test(message)) mapped.gstin = message;
+
+      setFieldErrors(mapped);
+      if (Object.keys(mapped).length) focusFirstError(mapped);
+
+      const label = details[0]?.path ? FIELD_LABELS[details[0].path] : null;
       setError(
-        (issue?.message && (label ? `${label}: ${issue.message}` : issue.message)) ??
-          json?.error?.message ??
-          "The vendor could not be created.",
+        details[0]?.message && label
+          ? `${label}: ${details[0].message}`
+          : message,
       );
       return;
     }
@@ -343,8 +531,8 @@ export default function VendorOnboardingForm() {
             onClick={() => {
               setCreated(null);
               setForm(EMPTY);
-              setCategories([]);
-              setRegions([]);
+              setFieldErrors({});
+              setError(null);
               setDocs({ GSTIN: null, PAN: null, UDYAM: null, AGREEMENT: null });
             }}
             className="btn-ghost"
@@ -375,46 +563,28 @@ export default function VendorOnboardingForm() {
         title="Who they are"
         helper="The contact email is their login ID. iTarang generates the password and emails it — you never have to set or share one."
       >
-        <Field label="Business name *">
-          <input
-            name="name"
-            required
-            minLength={2}
-            value={form.name}
-            onChange={set("name")}
-            placeholder="AmpFusion Recyclers Pvt Ltd"
-            className="input-itarang"
-          />
+        <Field name="name" label="Business name" required error={fieldErrors.name}>
+          <input {...bind("name")} maxLength={200} placeholder="AmpFusion Recyclers Pvt Ltd" />
         </Field>
-        <Field label="Contact person *">
-          <input
-            name="contact_name"
-            required
-            minLength={2}
-            value={form.contact_name}
-            onChange={set("contact_name")}
-            className="input-itarang"
-          />
+        <Field name="contact_name" label="Contact person" required error={fieldErrors.contact_name}>
+          <input {...bind("contact_name")} maxLength={120} />
         </Field>
-        <Field label="Contact email *" hint="Their login ID, and where quotations go.">
+        <Field
+          name="contact_email"
+          label="Contact email"
+          required
+          hint="Their login ID, and where quotations go."
+          error={fieldErrors.contact_email}
+        >
           <input
-            name="contact_email"
+            {...bind("contact_email")}
             type="email"
-            required
-            value={form.contact_email}
-            onChange={set("contact_email")}
+            maxLength={255}
             placeholder="buy@ampfusion.in"
-            className="input-itarang"
           />
         </Field>
-        <Field label="Phone">
-          <input
-            name="contact_phone"
-            value={form.contact_phone}
-            onChange={set("contact_phone")}
-            inputMode="tel"
-            className="input-itarang"
-          />
+        <Field name="contact_phone" label="Phone" error={fieldErrors.contact_phone}>
+          <input {...bind("contact_phone")} inputMode="tel" maxLength={20} />
         </Field>
       </Section>
 
@@ -423,78 +593,68 @@ export default function VendorOnboardingForm() {
         title="Registration"
         helper="We invoice against the GSTIN, so it has to be right before we can sell to them."
       >
-        <Field label="GSTIN *" hint="15 characters, e.g. 27AABCB1518L1ZS">
+        <Field
+          name="gstin"
+          label="GSTIN"
+          required
+          hint="15 characters, e.g. 27AABCB1518L1ZS"
+          error={fieldErrors.gstin}
+        >
           <input
-            name="gstin"
-            required
+            {...bind("gstin", "font-mono uppercase")}
             maxLength={15}
-            pattern={GSTIN_PATTERN}
-            value={form.gstin}
-            onChange={setUpper("gstin")}
             placeholder="27AABCB1518L1ZS"
-            className="input-itarang font-mono uppercase"
+            onChange={(e) => change("gstin")(upperCaseInPlace(e))}
           />
         </Field>
-        <Field label="PAN *" hint="10 characters, e.g. AABCB1518L">
+        <Field
+          name="pan"
+          label="PAN"
+          required
+          hint="10 characters, e.g. AABCB1518L"
+          error={fieldErrors.pan}
+        >
           <input
-            name="pan"
-            required
+            {...bind("pan", "font-mono uppercase")}
             maxLength={10}
-            pattern={PAN_PATTERN}
-            value={form.pan}
-            onChange={setUpper("pan")}
             placeholder="AABCB1518L"
-            className="input-itarang font-mono uppercase"
+            onChange={(e) => change("pan")(upperCaseInPlace(e))}
           />
         </Field>
-        <Field label="Udyam number" hint="Optional — the certificate itself is required below.">
+        <Field
+          name="udyam_number"
+          label="Udyam number"
+          hint="Optional — the certificate itself is required below."
+          error={fieldErrors.udyam_number}
+        >
           <input
-            name="udyam_number"
+            {...bind("udyam_number", "font-mono uppercase")}
             maxLength={30}
-            value={form.udyam_number}
-            onChange={setUpper("udyam_number")}
             placeholder="UDYAM-MH-26-0012345"
-            className="input-itarang font-mono uppercase"
+            onChange={(e) => change("udyam_number")(upperCaseInPlace(e))}
           />
         </Field>
       </Section>
 
       <Section eyebrow="Registered address" title="Where the firm is">
-        <Field label="Address line 1 *" full>
-          <input
-            name="address_line1"
-            required
-            value={form.address_line1}
-            onChange={set("address_line1")}
-            className="input-itarang"
-          />
+        <Field
+          name="address_line1"
+          label="Address line 1"
+          required
+          full
+          error={fieldErrors.address_line1}
+        >
+          <input {...bind("address_line1")} maxLength={255} />
         </Field>
-        <Field label="Address line 2" full>
-          <input
-            name="address_line2"
-            value={form.address_line2}
-            onChange={set("address_line2")}
-            className="input-itarang"
-          />
+        <Field name="address_line2" label="Address line 2" full error={fieldErrors.address_line2}>
+          <input {...bind("address_line2")} maxLength={255} />
         </Field>
-        <Field label="City *">
-          <input
-            name="city"
-            required
-            value={form.city}
-            onChange={set("city")}
-            className="input-itarang"
-          />
+        <Field name="city" label="City" required error={fieldErrors.city}>
+          <input {...bind("city")} maxLength={120} />
         </Field>
-        <Field label="State *">
+        <Field name="state" label="State" required error={fieldErrors.state}>
           {stateOptions.length > 0 ? (
-            <select
-              name="state"
-              required
-              value={form.state}
-              onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
-              className="input-itarang"
-            >
+            <select {...bind("state")}>
               <option value="">Select a state…</option>
               {stateOptions.map((s) => (
                 <option key={s} value={s}>
@@ -503,27 +663,15 @@ export default function VendorOnboardingForm() {
               ))}
             </select>
           ) : (
-            <input
-              name="state"
-              required
-              value={form.state}
-              onChange={set("state")}
-              className="input-itarang"
-            />
+            <input {...bind("state")} maxLength={120} />
           )}
         </Field>
-        <Field label="Pincode *">
+        <Field name="pincode" label="Pincode" required error={fieldErrors.pincode}>
           <input
-            name="pincode"
-            required
+            {...bind("pincode", "font-mono")}
             inputMode="numeric"
-            pattern="\d{6}"
             maxLength={6}
-            value={form.pincode}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "") }))
-            }
-            className="input-itarang font-mono"
+            onChange={(e) => change("pincode")(e.target.value.replace(/\D/g, ""))}
           />
         </Field>
       </Section>
@@ -533,27 +681,17 @@ export default function VendorOnboardingForm() {
         title="Compliance"
         helper="All three are required. They are stored privately and are what an auditor is shown."
       >
-        <VendorDocUpload
-          kind="GSTIN"
-          label={VENDOR_DOC_LABELS.GSTIN}
-          required
-          value={docs.GSTIN}
-          onChange={(v) => setDocs((d) => ({ ...d, GSTIN: v }))}
-        />
-        <VendorDocUpload
-          kind="PAN"
-          label={VENDOR_DOC_LABELS.PAN}
-          required
-          value={docs.PAN}
-          onChange={(v) => setDocs((d) => ({ ...d, PAN: v }))}
-        />
-        <VendorDocUpload
-          kind="UDYAM"
-          label={VENDOR_DOC_LABELS.UDYAM}
-          required
-          value={docs.UDYAM}
-          onChange={(v) => setDocs((d) => ({ ...d, UDYAM: v }))}
-        />
+        {REQUIRED_DOCS.map((kind) => (
+          <VendorDocUpload
+            key={kind}
+            kind={kind}
+            label={VENDOR_DOC_LABELS[kind]}
+            required
+            value={docs[kind]}
+            error={fieldErrors[`doc-${kind}`]}
+            onChange={attachDoc(kind)}
+          />
+        ))}
       </Section>
 
       <Section
@@ -565,112 +703,17 @@ export default function VendorOnboardingForm() {
           kind="AGREEMENT"
           label={VENDOR_DOC_LABELS.AGREEMENT}
           value={docs.AGREEMENT}
-          onChange={(v) => setDocs((d) => ({ ...d, AGREEMENT: v }))}
+          onChange={attachDoc("AGREEMENT")}
         />
-        <Field label="Agreement reference">
-          <input
-            name="agreement_ref"
-            value={form.agreement_ref}
-            onChange={set("agreement_ref")}
-            placeholder="ITG/VND/2026/014"
-            className="input-itarang"
-          />
+        <Field name="agreement_ref" label="Agreement reference" error={fieldErrors.agreement_ref}>
+          <input {...bind("agreement_ref")} maxLength={120} placeholder="ITG/VND/2026/014" />
         </Field>
-        <Field label="Signed on">
-          <input
-            name="agreement_signed_on"
-            type="date"
-            value={form.agreement_signed_on}
-            onChange={set("agreement_signed_on")}
-            className="input-itarang"
-          />
-        </Field>
-      </Section>
-
-      <Section
-        eyebrow="Commercials"
-        title="What they collect"
-        helper="Used to decide which lots to send them. All of it can be changed later."
-      >
-        <Field label="Chemistry">
-          <div className="flex flex-wrap gap-2 pt-1">
-            {CHEMISTRIES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setCategories((cs) => toggle(cs, c))}
-                aria-pressed={categories.includes(c)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  categories.includes(c)
-                    ? "border-transparent bg-[color:var(--color-brand-navy)] text-white"
-                    : "border-[color:var(--color-border)] bg-white text-[color:var(--color-ink-muted)] hover:border-[color:var(--color-brand-sky)]"
-                }`}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-        </Field>
-
         <Field
-          label="States they collect from"
-          full
-          hint="Drives which deals they are offered. Leave empty to consider them for any state."
+          name="agreement_signed_on"
+          label="Signed on"
+          error={fieldErrors.agreement_signed_on}
         >
-          {stateOptions.length > 0 ? (
-            <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto rounded-lg border border-[color:var(--color-border)] bg-white p-3">
-              {stateOptions.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setRegions((rs) => toggle(rs, s))}
-                  aria-pressed={regions.includes(s)}
-                  className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                    regions.includes(s)
-                      ? "border-transparent bg-[color:var(--color-brand-sky)] text-white"
-                      : "border-[color:var(--color-border)] bg-white text-[color:var(--color-ink-muted)] hover:border-[color:var(--color-brand-sky)]"
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <input
-              value={regions.join(", ")}
-              onChange={(e) =>
-                setRegions(
-                  e.target.value
-                    .split(",")
-                    .map((r) => r.trim())
-                    .filter(Boolean),
-                )
-              }
-              placeholder="Maharashtra, Gujarat"
-              className="input-itarang"
-            />
-          )}
-        </Field>
-
-        <Field label="Payment terms">
-          <input
-            name="payment_terms"
-            value={form.payment_terms}
-            onChange={set("payment_terms")}
-            placeholder="Net 15"
-            className="input-itarang"
-          />
-        </Field>
-        <Field label="Credit limit (₹)">
-          <input
-            name="credit_limit"
-            inputMode="decimal"
-            value={form.credit_limit}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, credit_limit: e.target.value.replace(/[^\d.]/g, "") }))
-            }
-            className="input-itarang font-mono"
-          />
+          <input {...bind("agreement_signed_on")} type="date" />
         </Field>
       </Section>
 
@@ -733,22 +776,52 @@ function Section({
   );
 }
 
+/**
+ * The error replaces the hint rather than stacking under it — two lines of
+ * small print, one grey and one red, is where people stop reading. The id is
+ * what the control's aria-describedby points at, so a screen reader announces
+ * the failure with the field instead of leaving it as decoration.
+ */
 function Field({
+  name,
   label,
   hint,
   full,
+  required,
+  error,
   children,
 }: {
+  name: string;
   label: string;
   hint?: string;
   full?: boolean;
+  required?: boolean;
+  error?: string | null;
   children: React.ReactNode;
 }) {
   return (
     <label className={`flex flex-col gap-1.5 ${full ? "md:col-span-3" : ""}`}>
-      <span className="text-xs font-semibold text-[color:var(--color-ink)]">{label}</span>
+      <span className="text-xs font-semibold text-[color:var(--color-ink)]">
+        {label}
+        {required && <span style={{ color: "var(--color-danger)" }}> *</span>}
+      </span>
       {children}
-      {hint && <span className="text-[11px] text-[color:var(--color-ink-muted)]">{hint}</span>}
+      {error ? (
+        <span
+          id={`${name}-msg`}
+          role="alert"
+          className="text-[11px] font-medium"
+          style={{ color: "var(--color-danger)" }}
+        >
+          {error}
+        </span>
+      ) : (
+        hint && (
+          <span id={`${name}-msg`} className="text-[11px] text-[color:var(--color-ink-muted)]">
+            {hint}
+          </span>
+        )
+      )}
     </label>
   );
 }
