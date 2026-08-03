@@ -4,6 +4,8 @@ import { db } from '@/lib/db';
 import { serviceTickets, users } from '@/lib/db/schema';
 import { eq, and, or, ilike, sql } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
+import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
+import { resolveDealerTypeByCode } from '@/lib/dealer/dealer-type-runtime';
 
 export async function GET(req: NextRequest) {
     try {
@@ -74,6 +76,21 @@ export async function POST(req: NextRequest) {
         const profile = await resolveDealerProfile(supabase, user, 'id,email,role,dealer_id');
         if (!profile) {
             return NextResponse.json({ success: false, error: 'Access denied' }, { status: 403 });
+        }
+
+        // E-202 — a service ticket is raised against a battery this dealer
+        // SOLD. A scrap dealer sells nothing, so this is not a module they
+        // have; their portal shows no Service Management. Guarded server-side
+        // too, so the hidden menu is presentation rather than the only barrier.
+        if (!capabilitiesFor(await resolveDealerTypeByCode(profile.dealer_id)).newBattery) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: 'DEALER_TYPE_NOT_PERMITTED',
+                    message: 'Service tickets are not available for scrap dealers.',
+                },
+                { status: 403 }
+            );
         }
 
         const body = await req.json();
