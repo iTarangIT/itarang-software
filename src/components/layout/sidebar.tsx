@@ -46,6 +46,7 @@ import {
   Bell,
   ShieldAlert,
   Radar,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -295,6 +296,15 @@ const roleNavigation: Record<string, any[]> = {
           label: "Expense Approvals",
           icon: ClipboardCheck,
           href: "/ceo/expenses",
+        },
+        // E-226 — the reference prices that decide which quotations
+        // auto-approve. Lives under the CEO because setting them IS the
+        // approval decision, made once per product instead of once per quote.
+        {
+          id: "oem-prices",
+          label: "OEM Price List",
+          icon: Tag,
+          href: "/ceo/oem-prices",
         },
       ],
     },
