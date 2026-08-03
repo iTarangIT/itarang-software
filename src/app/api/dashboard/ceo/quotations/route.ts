@@ -8,6 +8,13 @@
  * it has waited — the four things needed to decide without opening the lead.
  * The quote document, when one was attached, comes along so it can be read
  * before approving.
+ *
+ * E-226 — and now WHY it is here. Since auto-approval releases everything at or
+ * above the OEM reference price, a quote reaching this queue always failed a
+ * specific check, so the queue carries that check's verdict: which lines are
+ * short, by how much, and against which reference price. Without it the CEO is
+ * asked to approve a number with no stated benchmark, which is the decision the
+ * price book was built to inform.
  */
 import { NextResponse } from "next/server";
 import { asc, eq, sql } from "drizzle-orm";
@@ -15,6 +22,7 @@ import { db } from "@/lib/db";
 import { dealerLeadCommercials, dealerLeads, users } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import { linesNeedingAttention, type OemEvaluation } from "@/lib/leads/oemPricing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +31,34 @@ const ALLOWED_ROLES = new Set(["ceo", "admin"]);
 
 /** Enough to work through a queue; beyond this the panel is the wrong tool. */
 const CAP = 100;
+
+/**
+ * The price check, trimmed to what the panel renders.
+ *
+ * Returns null for a quote raised before E-226, and for one whose evaluation is
+ * not the shape we expect. The panel then shows the row exactly as it did
+ * before — a queue that refuses to render a legacy row would be worse than one
+ * that renders it without the new detail.
+ */
+function summariseEvaluation(raw: unknown) {
+  if (!raw || typeof raw !== "object") return null;
+  const e = raw as Partial<OemEvaluation>;
+  if (!Array.isArray(e.lines) || typeof e.reason !== "string") return null;
+  return {
+    reason: e.reason,
+    shortfall_total: Number(e.shortfall_total ?? 0),
+    lines_flagged: linesNeedingAttention(e as OemEvaluation),
+    lines: e.lines.map((l) => ({
+      product_name: l.product_name,
+      asset_type: l.asset_type,
+      quantity: l.quantity,
+      quoted_unit_price: l.quoted_unit_price,
+      oem_price: l.oem_price,
+      delta: l.delta,
+      status: l.status,
+    })),
+  };
+}
 
 export async function GET() {
   try {
@@ -44,6 +80,7 @@ export async function GET() {
         final_price: dealerLeadCommercials.final_price,
         quote_document_url: dealerLeadCommercials.quote_document_url,
         product_lines: dealerLeadCommercials.product_lines,
+        oem_evaluation: dealerLeadCommercials.oem_evaluation,
         created_at: dealerLeadCommercials.created_at,
         raised_by: users.name,
         dealer_name: dealerLeads.dealer_name,
@@ -83,6 +120,7 @@ export async function GET() {
           value: Number(r.final_price ?? r.price_quoted ?? 0),
           quote_document_url: r.quote_document_url,
           line_count: Array.isArray(r.product_lines) ? r.product_lines.length : 0,
+          oem: summariseEvaluation(r.oem_evaluation),
           raised_by: r.raised_by ?? "(unknown)",
           dealer_name: r.dealer_name ?? "(unnamed lead)",
           city: r.city,

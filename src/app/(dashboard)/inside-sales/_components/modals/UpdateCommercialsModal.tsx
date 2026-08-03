@@ -193,7 +193,17 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to update commercials");
-            toast.success(`Commercials v${(currentCommercials?.version_no ?? 0) + 1} saved.`);
+            // E-226 — a quote either went to the dealer just now or is waiting
+            // on the CEO, and which one it is changes what the rep does next.
+            // Saying only "saved" leaves them to guess.
+            const version = `v${(currentCommercials?.version_no ?? 0) + 1}`;
+            if (json?.data?.auto_approved) {
+                toast.success(`Commercials ${version} saved — quote auto-approved and sent.`);
+            } else if (json?.data?.approval_status === "pending") {
+                toast.success(`Commercials ${version} saved — awaiting CEO approval.`);
+            } else {
+                toast.success(`Commercials ${version} saved.`);
+            }
             onSuccess();
         } catch (err) {
             toast.error((err as Error).message);

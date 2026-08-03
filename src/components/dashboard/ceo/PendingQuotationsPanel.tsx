@@ -11,14 +11,37 @@
  * Rejection demands a reason inline rather than firing on click. A refusal with
  * no stated reason leaves the rep nothing to act on, and the number they were
  * refused is the one they will otherwise send again.
+ *
+ * E-226 — every quote here failed the OEM reference-price check, so every row
+ * states which check it failed and, where money is involved, what the
+ * concession is worth. The per-line breakdown expands rather than showing by
+ * default: the summary is enough to decide most rows, and the queue is worked
+ * front to back.
  */
 
 import React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Loader2, ScrollText } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Loader2, ScrollText } from "lucide-react";
 import Link from "next/link";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
+
+interface OemLine {
+  product_name: string;
+  asset_type: string;
+  quantity: number;
+  quoted_unit_price: number | null;
+  oem_price: number | null;
+  delta: number | null;
+  status: "at_or_above" | "below" | "no_reference" | "unpriced";
+}
+
+interface OemSummary {
+  reason: string;
+  shortfall_total: number;
+  lines_flagged: number;
+  lines: OemLine[];
+}
 
 interface PendingQuotation {
   commercial_id: string;
@@ -28,6 +51,8 @@ interface PendingQuotation {
   value: number;
   quote_document_url: string | null;
   line_count: number;
+  /** null for quotes raised before E-226, which were gated unconditionally. */
+  oem: OemSummary | null;
   raised_by: string;
   dealer_name: string;
   city: string | null;
@@ -52,11 +77,93 @@ function waitedFor(iso: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/**
+ * Why this quote is in the queue, in one line.
+ *
+ * Leads with the money where there is money — a shortfall is the thing being
+ * decided; a data gap is a different problem that happens to land in the same
+ * queue, and conflating them would make the CEO read every row the same way.
+ */
+function oemCause(oem: OemSummary): string {
+  const n = oem.lines_flagged;
+  const lines = `${n} line${n === 1 ? "" : "s"}`;
+  switch (oem.reason) {
+    case "below_reference":
+      return `${lines} below OEM reference · ${formatINRExact(
+        oem.shortfall_total,
+      )} short`;
+    case "missing_reference":
+      return `${lines} have no OEM reference price on file`;
+    case "unpriced_line":
+      return `${lines} left unpriced`;
+    case "no_product_lines":
+      return "No product lines — nothing to check against the price book";
+    default:
+      return "Needs manual approval";
+  }
+}
+
+const LINE_STATUS_LABEL: Record<OemLine["status"], string> = {
+  at_or_above: "OK",
+  below: "below",
+  no_reference: "no reference",
+  unpriced: "unpriced",
+};
+
+function OemBreakdown({ oem }: { oem: OemSummary }) {
+  if (oem.lines.length === 0) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-gray-100 bg-gray-50/60 overflow-x-auto">
+      <table className="w-full text-[11px] tabular-nums">
+        <thead>
+          <tr className="text-left text-gray-500">
+            <th className="font-medium px-2 py-1.5">Product</th>
+            <th className="font-medium px-2 py-1.5 text-right">Qty</th>
+            <th className="font-medium px-2 py-1.5 text-right">Quoted</th>
+            <th className="font-medium px-2 py-1.5 text-right">OEM ref</th>
+            <th className="font-medium px-2 py-1.5 text-right">Delta</th>
+          </tr>
+        </thead>
+        <tbody>
+          {oem.lines.map((l, i) => {
+            const ok = l.status === "at_or_above";
+            return (
+              <tr key={`${l.product_name}-${i}`} className="border-t border-gray-100">
+                <td className="px-2 py-1.5 text-gray-700">
+                  {l.product_name}
+                  <span className="text-gray-400"> · {l.asset_type}</span>
+                </td>
+                <td className="px-2 py-1.5 text-right text-gray-600">{l.quantity}</td>
+                <td className="px-2 py-1.5 text-right text-gray-700">
+                  {l.quoted_unit_price != null ? formatINRExact(l.quoted_unit_price) : "—"}
+                </td>
+                <td className="px-2 py-1.5 text-right text-gray-700">
+                  {l.oem_price != null ? formatINRExact(l.oem_price) : "—"}
+                </td>
+                <td
+                  className={`px-2 py-1.5 text-right font-semibold ${
+                    ok ? "text-emerald-600" : "text-rose-600"
+                  }`}
+                >
+                  {l.delta != null
+                    ? `${l.delta >= 0 ? "+" : "−"}${formatINRExact(Math.abs(l.delta))}`
+                    : LINE_STATUS_LABEL[l.status]}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function PendingQuotationsPanel() {
   const qc = useQueryClient();
   const [rejecting, setRejecting] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const [expanded, setExpanded] = React.useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery<QueueResponse>({
     queryKey: ["ceo-pending-quotations"],
@@ -177,6 +284,32 @@ export function PendingQuotationsPanel() {
                   </p>
                 </div>
               </div>
+
+              {q.oem && (
+                <div className="mt-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpanded(expanded === q.commercial_id ? null : q.commercial_id)
+                    }
+                    disabled={q.oem.lines.length === 0}
+                    className={`inline-flex items-center gap-1 text-[11px] font-medium rounded-md px-1.5 py-0.5 -ml-1.5 ${
+                      q.oem.reason === "below_reference"
+                        ? "text-rose-700"
+                        : "text-amber-700"
+                    } ${q.oem.lines.length > 0 ? "hover:bg-gray-50" : "cursor-default"}`}
+                  >
+                    {q.oem.lines.length > 0 &&
+                      (expanded === q.commercial_id ? (
+                        <ChevronDown className="w-3 h-3" />
+                      ) : (
+                        <ChevronRight className="w-3 h-3" />
+                      ))}
+                    {oemCause(q.oem)}
+                  </button>
+                  {expanded === q.commercial_id && <OemBreakdown oem={q.oem} />}
+                </div>
+              )}
 
               <div className="flex items-center gap-2 mt-2 flex-wrap">
                 {q.quote_document_url && (
