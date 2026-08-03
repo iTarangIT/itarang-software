@@ -11,6 +11,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { normalizeAgreementStatus } from "@/lib/agreement/status";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -34,20 +35,25 @@ function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
 }
 
 /**
- * Manual agreement completion.
+ * Manual agreement upload. Serves two distinct cases:
  *
- * For finance-enabled dealers whose Digio signing was completed out-of-band
- * (e.g. an iTarang signatory's invite link expired and they signed from the
- * Digio dashboard instead), the local agreement_status never flips to
- * "completed", which hard-blocks approval. This endpoint lets an admin upload
- * the final signed-agreement PDF and audit-trail PDF by hand, caches both in
- * Supabase at the canonical paths the rest of the app reads from, and marks the
- * agreement completed — unblocking the Approve & Activate flow.
+ * 1. RESCUE (the original purpose) — a finance-enabled NEW-battery dealer whose
+ *    Digio signing completed out-of-band (an iTarang signatory's invite link
+ *    expired and they signed from the Digio dashboard instead), so the local
+ *    agreement_status never flipped to "completed" and approval is hard-blocked.
  *
- * The download routes (download-signed-agreement, audit-trail) prefer the
- * stored storage_path/url, and ensureDealer*Url() short-circuit on the url
- * columns, so the uploaded files flow straight through to the download buttons
- * and the welcome-email attachments — Digio is never re-queried.
+ * 2. PRIMARY PATH (E-225) — scrap and new+scrap dealers, who have no Digio
+ *    agreement at all. They sign on paper and this is the ONLY way their
+ *    executed agreement reaches the system.
+ *
+ * The two differ in what may be demanded of the upload, and the gates below are
+ * relaxed for case 2 accordingly: no Digio document has to pre-exist, finance
+ * need not be enabled (a scrap dealer normally has it off), and there is no
+ * audit trail because nothing machine-generated one. What case 2 adds instead
+ * is the paper's own provenance — a reference number and the date signed.
+ *
+ * Both cases write the same canonical storage paths, so the download routes and
+ * ensureDealer*Url() resolve the uploaded copy and Digio is never re-queried.
  */
 export async function POST(req: NextRequest, context: RouteContext) {
   const auth = await requireSalesHead();
@@ -75,7 +81,14 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (!application.finance_enabled) {
+    // E-225 — is this dealer type's agreement signed on paper by design?
+    const isManualMode = usesManualAgreement(application.dealer_type);
+
+    // Finance gate applies to e-sign dealers only. For a scrap / new+scrap
+    // dealer the agreement is not a FINANCE agreement, and their finance flag
+    // is normally off — refusing here would leave them with no way at all to
+    // record an executed agreement.
+    if (!isManualMode && !application.finance_enabled) {
       return NextResponse.json(
         {
           success: false,
@@ -87,15 +100,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     // ─── initiated-but-not-completed gate ─────────────────────────────────
-    // Manual upload bypasses the Digio "completed" gate. It's the fallback for
-    // agreements whose completion can't be synced from Digio — an expired signer
-    // link, signing finished out-of-band on the Digio dashboard, or a document
-    // created in a different Digio environment that 404s here. We require only
-    // that an agreement was actually INITIATED (so there's a real document to
-    // complete) and isn't already completed. (finance_enabled + not-rejected are
-    // checked above.) The upload is admin-only and recorded as a
+    // For an E-SIGN dealer this upload is a rescue, so we require that an
+    // agreement was actually INITIATED — there must be a real Digio document
+    // being completed, otherwise "manual completion" is just an unaudited way
+    // to fabricate one.
+    //
+    // For a MANUAL-mode dealer the same check would be unsatisfiable: they
+    // never go to Digio (initiate-agreement refuses them), so
+    // provider_document_id is null forever and this is the primary path, not a
+    // fallback. Either way the write is admin-only and lands a
     // "manual_completion" event for traceability.
-    if (!application.provider_document_id) {
+    if (!isManualMode && !application.provider_document_id) {
       return NextResponse.json(
         {
           success: false,
@@ -127,9 +142,27 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     const signedFile = form.get("signedAgreement");
-    const auditFile = form.get("auditTrail");
+    const rawAuditFile = form.get("auditTrail");
 
-    if (!(signedFile instanceof File) || !(auditFile instanceof File)) {
+    // The audit trail is a Digio artefact — a machine-generated record of who
+    // signed from which IP and when. A paper agreement has no such thing, so it
+    // is required for e-sign rescues and optional for manual-mode dealers.
+    // Demanding one would only teach admins to upload the agreement twice.
+    // An empty File is what a browser sends for an untouched file input.
+    const auditFile =
+      rawAuditFile instanceof File && rawAuditFile.size > 0 ? rawAuditFile : null;
+    const hasAuditFile = auditFile !== null;
+
+    if (!(signedFile instanceof File)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "The signed agreement PDF ('signedAgreement') is required.",
+        },
+        { status: 400 }
+      );
+    }
+    if (!isManualMode && !hasAuditFile) {
       return NextResponse.json(
         {
           success: false,
@@ -141,7 +174,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     const signedBuffer = await signedFile.arrayBuffer();
-    const auditBuffer = await auditFile.arrayBuffer();
+    const auditBuffer = auditFile ? await auditFile.arrayBuffer() : null;
 
     if (!isValidPdfBuffer(signedBuffer)) {
       return NextResponse.json(
@@ -149,12 +182,31 @@ export async function POST(req: NextRequest, context: RouteContext) {
         { status: 400 }
       );
     }
-    if (!isValidPdfBuffer(auditBuffer)) {
+    if (auditBuffer && !isValidPdfBuffer(auditBuffer)) {
       return NextResponse.json(
         { success: false, message: "Audit trail file is not a valid PDF." },
         { status: 400 }
       );
     }
+
+    // ─── paper provenance (manual mode) ───────────────────────────────────
+    // Kept OUT of provider_document_id — see E-225: "we hold a scan" and "eSign
+    // completed" are different assurances and must not share a column.
+    const agreementRef = String(form.get("agreementRef") ?? "").trim() || null;
+    const rawSignedOn = String(form.get("agreementSignedOn") ?? "").trim();
+
+    // A `date` column, so an ISO yyyy-mm-dd string. Reject anything else rather
+    // than letting Postgres coerce a typo into a real-looking date.
+    if (rawSignedOn && !/^\d{4}-\d{2}-\d{2}$/.test(rawSignedOn)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Signed-on date must be in YYYY-MM-DD format.",
+        },
+        { status: 400 }
+      );
+    }
+    const agreementSignedOn = rawSignedOn || null;
 
     // ─── upload to storage ────────────────────────────────────────────────
     const bucketName = "dealer-documents";
@@ -169,9 +221,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     if (isS3Backend) {
       await putObject(bucketName, signedPath, Buffer.from(signedBuffer), "application/pdf");
-      await putObject(bucketName, auditPath, Buffer.from(auditBuffer), "application/pdf");
       signedAgreementUrl = filesProxyPath(bucketName, signedPath);
-      auditTrailUrl = filesProxyPath(bucketName, auditPath);
+      if (auditBuffer) {
+        await putObject(bucketName, auditPath, Buffer.from(auditBuffer), "application/pdf");
+        auditTrailUrl = filesProxyPath(bucketName, auditPath);
+      }
     } else {
       const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
       const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -189,10 +243,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
           contentType: "application/pdf",
           upsert: true,
         }),
-        supabase.storage.from(bucketName).upload(auditPath, auditBuffer, {
-          contentType: "application/pdf",
-          upsert: true,
-        }),
+        auditBuffer
+          ? supabase.storage.from(bucketName).upload(auditPath, auditBuffer, {
+              contentType: "application/pdf",
+              upsert: true,
+            })
+          : Promise.resolve({ error: null } as const),
       ]);
 
       if (signedUpload.error || auditUpload.error) {
@@ -209,9 +265,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
       signedAgreementUrl = supabase.storage
         .from(bucketName)
         .getPublicUrl(signedPath).data?.publicUrl;
-      auditTrailUrl = supabase.storage
-        .from(bucketName)
-        .getPublicUrl(auditPath).data?.publicUrl;
+      if (auditBuffer) {
+        auditTrailUrl = supabase.storage
+          .from(bucketName)
+          .getPublicUrl(auditPath).data?.publicUrl;
+      }
     }
 
     // ─── flip agreement to completed (mirrors refresh-agreement) ──────────
@@ -232,9 +290,22 @@ export async function POST(req: NextRequest, context: RouteContext) {
         signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
         signed_agreement_storage_path: signedPath,
         audit_trail_url: auditTrailUrl || application.audit_trail_url,
-        audit_trail_storage_path: auditPath,
+        // Only claim an audit trail when one was actually stored — otherwise a
+        // manual-mode row would advertise a path the download route then 404s on.
+        ...(auditBuffer ? { audit_trail_storage_path: auditPath } : {}),
+        // E-225 — record HOW this was executed, and the paper's own provenance.
+        // Written for e-sign rescues too: the completion genuinely was manual,
+        // and agreement_mode is the only column that can say so without
+        // overloading agreement_status.
+        agreement_mode: isManualMode ? "manual" : application.agreement_mode ?? "esign",
+        ...(agreementRef ? { agreement_ref: agreementRef } : {}),
+        ...(agreementSignedOn ? { agreement_signed_on: agreementSignedOn } : {}),
         agreement_completed_at: application.agreement_completed_at || now,
-        signed_at: application.signed_at || now,
+        // Prefer the date written on the paper over "when an admin got round to
+        // uploading it" — signed_at is what the rest of the app displays.
+        signed_at:
+          application.signed_at ||
+          (agreementSignedOn ? new Date(`${agreementSignedOn}T00:00:00Z`) : now),
         agreement_failure_reason: null,
         last_action_timestamp: now,
         updated_at: now,
@@ -255,7 +326,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
           source: "admin_manual_upload",
           actorEmail,
           signedAgreementFile: signedFile.name,
-          auditTrailFile: auditFile.name,
+          auditTrailFile: auditFile?.name ?? null,
+          // E-225 — distinguishes "this dealer type always signs on paper" from
+          // "a Digio e-sign that had to be finished by hand".
+          agreementMode: isManualMode ? "manual" : "esign",
+          dealerType: application.dealer_type ?? null,
+          agreementRef,
+          agreementSignedOn,
         },
       });
     } catch (eventErr) {
@@ -264,9 +341,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     return NextResponse.json({
       success: true,
-      message:
-        "Signed agreement and audit trail saved. Agreement marked completed — you can now approve the dealer.",
+      message: isManualMode
+        ? "Signed agreement saved. Agreement marked completed — you can now approve the dealer."
+        : "Signed agreement and audit trail saved. Agreement marked completed — you can now approve the dealer.",
       agreementStatus: "completed",
+      agreementMode: isManualMode ? "manual" : "esign",
       signedAgreementUrl,
       auditTrailUrl,
     });

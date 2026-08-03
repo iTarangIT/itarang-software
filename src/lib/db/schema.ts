@@ -2807,6 +2807,14 @@ export const dealerOnboardingApplications = pgTable(
     signed_agreement_storage_path: text("signed_agreement_storage_path"),
     audit_trail_storage_path: text("audit_trail_storage_path"),
     agreement_status: varchar("agreement_status", { length: 50 }).default('not_generated'),
+    // E-225 — HOW the agreement is executed, orthogonal to agreement_status
+    // (which says WHETHER it is done). 'esign' = Digio, new-battery dealers;
+    // 'manual' = admin uploads a signed scan, scrap / new+scrap dealers.
+    // agreement_ref is the reference on the paper — never a Digio document id,
+    // that stays provider_document_id (cf. E-223 scrap_vendors.agreement_ref).
+    agreement_mode: varchar("agreement_mode", { length: 16 }),
+    agreement_ref: text("agreement_ref"),
+    agreement_signed_on: date("agreement_signed_on"),
     provider_raw_response: jsonb("provider_raw_response"),
     signed_agreement_url: text("signed_agreement_url"),
     audit_trail_url: text("audit_trail_url"),

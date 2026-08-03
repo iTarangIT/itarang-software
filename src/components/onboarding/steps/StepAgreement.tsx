@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Clock3, CheckCircle2, Info, AlertCircle, Plus, X } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 
 type SigningMethod =
   | ""
@@ -226,7 +227,14 @@ export default function StepAgreement() {
 
   const errorCount = Object.keys(errors).length;
 
+  // This step captures DIGIO signer configuration — signing methods, signer
+  // order, e-sign parties. E-225 routes scrap / new+scrap dealers to a manually
+  // signed paper agreement instead, so none of it applies to them; showing the
+  // step would ask for signer emails nobody will ever send anything to.
+  // onboardingStore's nextStep/prevStep skip 4↔6 on the same condition, so this
+  // is a safety net rather than the primary mechanism.
   if (financeEnabled !== "yes") return null;
+  if (usesManualAgreement(company.dealerType)) return null;
 
   return (
     <div className="space-y-6">

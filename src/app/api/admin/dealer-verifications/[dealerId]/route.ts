@@ -17,6 +17,10 @@ import {
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
+import {
+  agreementModeFor,
+  usesManualAgreement,
+} from "@/lib/dealer/dealer-capabilities";
 
 const AddressRoleEnum = z.enum(["billing", "dispatch", "other"]);
 const GstAddressSchema = z.object({
@@ -431,10 +435,18 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         // "missing documents" alert in Section 2 of the review page.
         missingDocuments,
 
-        agreement: row.finance_enabled
+        // E-225 — manual-mode dealers (scrap / new+scrap) need this block even
+        // with finance off: their agreement is not a finance agreement, and
+        // gating on finance_enabled would leave the review page with nothing to
+        // show for the paper copy they actually signed.
+        agreement: row.finance_enabled || usesManualAgreement(row.dealer_type)
           ? {
               agreementId: row.provider_document_id || null,
               status: row.agreement_status || "not_generated",
+              // How it was executed, and the paper's own provenance.
+              mode: row.agreement_mode || agreementModeFor(row.dealer_type),
+              agreementRef: row.agreement_ref || null,
+              agreementSignedOn: row.agreement_signed_on || null,
               copyUrl: row.provider_signing_url || null,
               signedAgreementUrl: row.signed_agreement_url || null,
               requestId: row.request_id || null,

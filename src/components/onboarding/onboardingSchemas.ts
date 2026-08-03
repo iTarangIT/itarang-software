@@ -1,4 +1,31 @@
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { DealerOnboardingState } from "./onboardingTypes";
+
+/**
+ * Does this application skip Step 5 (Dealer Agreement)?
+ *
+ * Two independent reasons, and they must be evaluated in ONE place: the store's
+ * nextStep/prevStep and validateStep below all branch on it, and a wizard where
+ * "next" skips a step that "back" then lands on — or that validation still
+ * demands fields for — is a trap.
+ *
+ *  · Finance off — Step 5 is the FINANCE agreement setup. Long-standing rule.
+ *  · Manual agreement (E-225) — scrap / new+scrap dealers sign on paper. The
+ *    step only collects Digio signer configuration, so there is nothing for them
+ *    to fill in; an admin uploads the signed copy after review.
+ *
+ * Lives here rather than in onboardingStore because the store already imports
+ * this module — putting it the other way round would be a cycle.
+ */
+export function skipsAgreementStep(state: {
+  finance: { enableFinance: string };
+  company: { dealerType?: string };
+}): boolean {
+  return (
+    state.finance.enableFinance === "no" ||
+    usesManualAgreement(state.company.dealerType)
+  );
+}
 
 const GST_REGEX =
   /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
@@ -412,7 +439,10 @@ export function validateStep(
     }
   }
 
-  if (state.step === 5 && state.finance.enableFinance === "yes") {
+  // Step 5 is only validated when it is actually SHOWN — skipsAgreementStep is
+  // the same predicate nextStep/prevStep use, so a skipped step can never
+  // demand fields the dealer was never given a chance to fill in.
+  if (state.step === 5 && !skipsAgreementStep(state)) {
     if (!state.agreement.dateOfSigning.trim()) {
       errors.dateOfSigning = "Date of signing is required";
     }
