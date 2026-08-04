@@ -12,6 +12,11 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
+    classifyAgainstExisting,
+    loadExistingByPhone,
+    normalizePhone,
+} from "@/lib/leads/dedupe";
+import {
     UPLOAD_SEGMENTS,
     type UploadHeaderReport,
     type UploadInsertPayload,
@@ -160,18 +165,10 @@ export function parseCsv(text: string): UploadParsedRow[] {
 
 // ── Phone normalisation ────────────────────────────────────────────────────
 
-// BRD §0.2/§0.4 — store as +91XXXXXXXXXX (E.164), 10 digits after the prefix.
-export function normalizePhone(raw: string): string | null {
-    const digits = (raw ?? "").replace(/\D/g, "");
-    let ten: string | null = null;
-    if (digits.length === 10) ten = digits;
-    else if (digits.length === 12 && digits.startsWith("91"))
-        ten = digits.slice(2);
-    else if (digits.length === 11 && digits.startsWith("0"))
-        ten = digits.slice(1);
-    if (!ten || !/^[6-9]\d{9}$/.test(ten)) return null;
-    return `+91${ten}`;
-}
+// Moved to src/lib/leads/dedupe.ts (E-224) so the bulk wizard, the /leads
+// Import button, the single-lead form and NeoDove inbound all share ONE
+// implementation. Re-exported because several call sites import it from here.
+export { normalizePhone };
 
 function parseSegments(raw: string | undefined): string[] {
     if (!raw) return [];
@@ -221,23 +218,9 @@ export async function validateUpload(
         }
     }
 
-    // Existing dealer_leads matching any uploaded phone.
-    type ExistingLead = {
-        id: string;
-        phone: string;
-        lead_status: string | null;
-        city: string | null;
-        state: string | null;
-    };
-    const existing =
-        validPhones.length > 0
-            ? ((await db.execute<ExistingLead>(sql`
-                  SELECT id, phone, lead_status, city, state
-                  FROM dealer_leads
-                  WHERE phone IN ${validPhones}
-              `)) as unknown as ExistingLead[])
-            : [];
-    const existingByPhone = new Map(existing.map((e) => [e.phone, e]));
+    // Existing dealer_leads matching any uploaded phone — one query for the
+    // whole sheet (see loadExistingByPhone).
+    const existingByPhone = await loadExistingByPhone(validPhones);
 
     // City-alias suggestions (E-108). A miss is fine — free text is accepted.
     const cityInputs = [
@@ -352,23 +335,13 @@ export async function validateUpload(
             assigned_owner_role: assignedOwner?.role ?? null,
         };
 
-        // Dedupe against existing dealer_leads (BRD §0.4).
-        const match = phone ? existingByPhone.get(phone) : undefined;
-        let status: UploadRowResult["status"] = "valid";
-        let duplicateLeadId: string | null = null;
-        if (match) {
-            duplicateLeadId = match.id;
-            if (match.lead_status === "Lost") {
-                status = "reactivate";
-            } else if (
-                match.city &&
-                match.city.trim().toLowerCase() !== city.toLowerCase()
-            ) {
-                status = "address_mismatch";
-            } else {
-                status = "duplicate_skip";
-            }
-        }
+        // Dedupe against existing dealer_leads (BRD §0.4) — shared engine, so
+        // this sheet is classified exactly as a NeoDove inbound lead or a
+        // single-lead form submission with the same phone would be.
+        const { outcome: status, duplicateLeadId } = classifyAgainstExisting(
+            city,
+            phone ? existingByPhone.get(phone) : undefined,
+        );
 
         return {
             row_number: r.row_number,
