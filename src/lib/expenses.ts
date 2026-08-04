@@ -7,9 +7,13 @@
  *
  * `EXPENSE_BUCKETS` (E-218) is the coarser layer above it: four groupings the
  * CEO reads at a glance. Department answers "whose budget is this?"; bucket
- * answers "what kind of spend is this?" — a Trontek battery order and an AWS
- * bill can both sit under Tech as a department while being RM Purchase and
- * Tech spend respectively.
+ * answers "what kind of spend is this?" — a Canva subscription bought by
+ * marketing is department Marketing and bucket Tech.
+ *
+ * E-224 — the two are independent but not unconstrained. Raw material is
+ * production's spend, so `bucket = 'rm'` implies `department = 'ops'`, never
+ * 'tech'. See lib/expenses/departmentRules.ts; the earlier example here said
+ * the opposite and was what put ₹38L of battery orders on the Tech budget.
  */
 
 export const EXPENSE_DEPARTMENTS = [

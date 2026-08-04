@@ -31,6 +31,18 @@ describe("bucketFromRules — vendor rules", () => {
         expect(bucketFromRules({ vendor: "Anthropic PBC" })?.rule).toBe("vendor:anthropic");
     });
 
+    // E-224 — the one place order in VENDOR_BUCKET_RULES matters. The generic
+    // "electronics" fragment is a deliberate catch-all for unnamed component
+    // suppliers, but it was also swallowing consumer-electronics retailers: a
+    // Samsung mobile phone and two Dawntech televisions were bucketed `rm`, and
+    // E-224's department rule would then have moved them off the Tech budget.
+    it("lets a named retailer beat the generic 'electronics' catch-all", () => {
+        expect(bucketFromRules({ vendor: "Samsung India Electronics Pvt. Ltd." })?.bucket).toBe("tech");
+        expect(bucketFromRules({ vendor: "DAWNTECH ELECTRONICS PRIVATE LIMITED" })?.bucket).toBe("tech");
+        // …while the catch-all still does its job for everyone else.
+        expect(bucketFromRules({ vendor: "Some New Electronics Co" })?.bucket).toBe("rm");
+    });
+
     it("returns null when nothing is known about the row", () => {
         expect(bucketFromRules({})).toBeNull();
         expect(bucketFromRules({ vendor: "Some Unknown Supplier" })).toBeNull();

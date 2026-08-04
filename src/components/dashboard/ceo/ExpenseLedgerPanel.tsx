@@ -1,9 +1,15 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Receipt, FileText } from "lucide-react";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
+import {
+  SortableTh,
+  sortRows,
+  useTableSort,
+  type SortSpec,
+} from "@/components/shared/TableSort";
 import {
   EXPENSE_BUCKETS,
   EXPENSE_DEPARTMENTS,
@@ -30,6 +36,30 @@ interface LedgerRow {
 interface Props {
   rows?: LedgerRow[];
 }
+
+/**
+ * E-224 — what each column sorts by.
+ *
+ * The Date column renders `expense_date` and falls back to `created_at`, so it
+ * has to sort by the same COALESCE. Ordering by the raw column would put every
+ * dateless row in one clump that reads nothing like what the cells show.
+ *
+ * Department and Bucket sort by their label, because the label is what is on
+ * screen — nobody is ordering by the string "ops".
+ */
+const LEDGER_SORT_SPECS: SortSpec<LedgerRow>[] = [
+  { key: "date", type: "date", value: (r) => r.expense_date ?? r.created_at },
+  { key: "vendor", type: "text" },
+  {
+    key: "department",
+    type: "text",
+    value: (r) => expenseDepartmentLabel(r.department),
+  },
+  { key: "bucket", type: "text", value: (r) => expenseBucketLabel(r.bucket) },
+  { key: "project_tag", type: "text" },
+  { key: "submitter_name", type: "text" },
+  { key: "amount", type: "number" },
+];
 
 export function ExpenseLedgerPanel({ rows = [] }: Props) {
   const [dept, setDept] = useState<string>("all");
@@ -65,9 +95,22 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
     [filtered],
   );
 
+  // E-224 — click-to-sort headers. Sorted after filtering so the two compose:
+  // narrowing to one department and then ordering by amount asks a single
+  // question, not two that fight.
+  const { sort, toggle, comparator } = useTableSort<LedgerRow>(LEDGER_SORT_SPECS);
+  const sorted = useMemo(() => sortRows(filtered, comparator), [filtered, comparator]);
+
   // E-219 — the ledger grew past the point where scrolling it was reasonable.
   // usePagination clamps the page when a filter shrinks the list under it.
-  const paged = usePagination(filtered);
+  const paged = usePagination(sorted);
+
+  // Re-sorting reorders the whole list, so holding page 3 would show its middle
+  // with nothing indicating that the top had changed.
+  const { setPage } = paged;
+  useEffect(() => {
+    setPage(1);
+  }, [setPage, sort?.key, sort?.dir]);
 
   const selectCls =
     "px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -136,14 +179,14 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
-                  <th className="py-2 font-semibold">Date</th>
-                  <th className="py-2 font-semibold">Vendor</th>
-                  <th className="py-2 font-semibold">Department</th>
-                  <th className="py-2 font-semibold">Bucket</th>
-                  <th className="py-2 font-semibold">Project</th>
-                  <th className="py-2 font-semibold">Added by</th>
-                  <th className="py-2 font-semibold text-right">Amount</th>
-                  <th className="py-2 font-semibold text-right">Bill</th>
+                  <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Vendor" sortKey="vendor" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Department" sortKey="department" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Bucket" sortKey="bucket" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Project" sortKey="project_tag" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Added by" sortKey="submitter_name" sort={sort} onToggle={toggle} className="!px-0" />
+                  <SortableTh label="Amount" sortKey="amount" sort={sort} onToggle={toggle} align="right" className="!px-0" />
+                  <SortableTh label="Bill" sort={sort} onToggle={toggle} align="right" className="!px-0" />
                 </tr>
               </thead>
               <tbody>

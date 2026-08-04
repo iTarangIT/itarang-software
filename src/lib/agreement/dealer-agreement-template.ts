@@ -164,18 +164,26 @@ function titleCase(value?: string) {
 
 export type DealerAgreementType = "new" | "scrap" | "both";
 
-// Resolve which agreement template to render for a dealer type (E-202). Today
-// every type uses the same base template — there are no separate scrap/both
-// templates yet — so all cases fall through to buildTarangDealerAgreementHtml.
-// When those templates exist, return a different builder from the matching case;
-// this is the ONLY place that needs to change.
+// Resolve which agreement template to render for a dealer type (E-202).
+//
+// In practice only 'new' ever reaches here. E-225 settled how the other two
+// types are handled: scrap and new+scrap dealers sign on PAPER and an admin
+// uploads the scan, so initiate-agreement refuses them before any HTML is
+// built (agreementModeFor() in lib/dealer/dealer-capabilities.ts is the gate).
+// There is no scrap template to write, and rendering the new-battery finance
+// agreement for them would put the wrong contract in front of the dealer —
+// which is exactly why the earlier "scaffold a placeholder" plan was dropped.
+//
+// The cases are kept rather than deleted so a caller that bypasses the gate
+// still gets a valid document instead of undefined, and so this stays the ONE
+// place to change if a real scrap template is ever drafted.
 export function resolveDealerAgreementHtml(
   dealerType: string | null | undefined,
   data: AgreementTemplateInput,
 ): string {
   switch (dealerType) {
-    case "scrap": // TODO: buildScrapDealerAgreementHtml(data) when a template exists
-    case "both": // TODO: buildCombinedDealerAgreementHtml(data) when a template exists
+    case "scrap": // manual upload (E-225) — never generated
+    case "both": // manual upload (E-225) — never generated
     case "new":
     default:
       return buildTarangDealerAgreementHtml(data);

@@ -19,6 +19,8 @@ import {
 } from "@/lib/onboarding/agreement-defaults";
 import { resolveAccountType } from "@/lib/onboarding/account-type";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import { getAdapter } from "@/lib/whatsapp";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
@@ -304,6 +306,23 @@ export async function POST(
       return NextResponse.json(
         { success: false, message: "Application not found" },
         { status: 404 }
+      );
+    }
+
+    // E-225 — scrap and new+scrap dealers sign on paper. There is no scrap
+    // agreement template to generate, and sending them through Digio would
+    // e-sign the NEW-battery finance agreement, i.e. bind them to the wrong
+    // contract. Checked before finance_enabled because a scrap dealer usually
+    // has finance off, and "finance not enabled" would be a misleading reason.
+    if (usesManualAgreement(application.dealer_type)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            `${dealerTypeLabel(application.dealer_type)} agreements are signed manually — ` +
+            "upload the signed copy instead of initiating an e-sign.",
+        },
+        { status: 400 }
       );
     }
 
@@ -650,8 +669,9 @@ export async function POST(
         suppressSignerEmails: false,
       },
       applicationId: dealerId,
-      // Dealer business type (new | scrap | both) — selects the agreement
-      // template in create-agreement (E-202). Same template for all three today.
+      // Dealer business type — selects the agreement template in
+      // create-agreement (E-202). Always 'new' in practice: the manual-mode
+      // guard above turns scrap / both away before we get here (E-225).
       dealerType: application.dealer_type ?? null,
       // Persist the unsigned PDF only for WhatsApp dealers — we send it as a
       // WhatsApp document below. Web dealers don't need the extra storage.
