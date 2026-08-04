@@ -46,12 +46,30 @@ import {
   Bell,
   ShieldAlert,
   Radar,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
 import { useBuybackNotificationSummary } from "@/hooks/useBuybackNotificationSummary";
 import { useNavActivity } from "@/hooks/useNavActivity";
+import {
+  normalizeDealerType,
+  type DealerTypeValue,
+} from "@/lib/dealer/dealer-type";
+import { capabilitiesFor } from "@/lib/dealer/dealer-capabilities";
+
+/** Loan entries, hidden when the dealer's finance enablement is off. */
+const FINANCE_GATED_ITEM_IDS = new Set(["loans", "loan-mgmt"]);
+/** Section headings gated by dealer type (E-202). */
+const BUYBACK_SECTION = "BATTERY BUYBACK";
+const NEW_BATTERY_SECTIONS = new Set(["SALES", "OPERATIONS"]);
+/**
+ * A scrap dealer's /dealer-portal IS the buyback dashboard, so the "Buyback
+ * Dashboard" item would be a second link to the page "Dashboard" already
+ * points at.
+ */
+const REDUNDANT_FOR_SCRAP_ITEM_IDS = new Set(["buyback"]);
 
 /**
  * peakAmp Battery Buyback — the iTarang-staff side.
@@ -278,6 +296,15 @@ const roleNavigation: Record<string, any[]> = {
           label: "Expense Approvals",
           icon: ClipboardCheck,
           href: "/ceo/expenses",
+        },
+        // E-226 — the reference prices that decide which quotations
+        // auto-approve. Lives under the CEO because setting them IS the
+        // approval decision, made once per product instead of once per quote.
+        {
+          id: "oem-prices",
+          label: "OEM Price List",
+          icon: Tag,
+          href: "/ceo/oem-prices",
         },
       ],
     },
@@ -1441,12 +1468,13 @@ export function Sidebar() {
     return "user";
   })();
 
-  const rawMenuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
-
   // For the dealer role, loan-related entries must hide when the dealer's
   // onboarding application has financeEnabled=false. Source the flag from
   // /api/dealer/stats (already the authoritative finance-enabled endpoint).
+  // The SAME response carries dealerType (E-202), which gates whole sections
+  // below — one request, two gates, so they can never disagree.
   const [dealerFinanceEnabled, setDealerFinanceEnabled] = useState<boolean | null>(null);
+  const [dealerType, setDealerType] = useState<DealerTypeValue>("new");
 
   useEffect(() => {
     if (inferredRole !== "dealer") return;
@@ -1457,6 +1485,10 @@ export function Sidebar() {
         if (cancelled) return;
         const flag = json?.data?.dealer?.financeEnabled;
         setDealerFinanceEnabled(typeof flag === "boolean" ? flag : false);
+        // `dealer` is null when no onboarding application is found. Default to
+        // 'new' — the safe direction: a dealer we can't classify keeps the
+        // portal they have today rather than losing every menu.
+        setDealerType(normalizeDealerType(json?.data?.dealer?.dealerType) ?? "new");
       })
       .catch(() => {
         if (!cancelled) setDealerFinanceEnabled(false);
@@ -1466,14 +1498,41 @@ export function Sidebar() {
     };
   }, [inferredRole]);
 
-  const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
-  const filteredMenuItems =
-    inferredRole === "dealer" && dealerFinanceEnabled === false
-      ? rawMenuItems.map((group: any) => ({
-          ...group,
-          items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
-        }))
-      : rawMenuItems;
+  // E-202 / E-225 — which modules this dealer type has at all.
+  //  · new   → no buyback (they don't sell old batteries back to us)
+  //  · scrap → ONLY buyback (no leads, loans, assets, orders, inventory…)
+  //  · both  → everything, i.e. exactly today's menu
+  const dealerCaps = capabilitiesFor(dealerType);
+
+  const filteredMenuItems = useMemo(() => {
+    // Resolved inside the memo, not read from an outer `||` expression: that
+    // would be a new array identity on every render and defeat the memo.
+    const rawMenuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
+    if (inferredRole !== "dealer") return rawMenuItems;
+
+    const caps = capabilitiesFor(dealerType);
+
+    return rawMenuItems
+      .filter((group: any) => {
+        if (!caps.buyback && group.section === BUYBACK_SECTION) return false;
+        if (!caps.newBattery && NEW_BATTERY_SECTIONS.has(group.section)) return false;
+        return true;
+      })
+      .map((group: any) => ({
+        ...group,
+        items: group.items.filter((item: any) => {
+          // Both filters apply together — a scrap dealer must not regain
+          // "Loan Processing" just because the finance filter is the one that
+          // would normally drop it.
+          if (dealerFinanceEnabled === false && FINANCE_GATED_ITEM_IDS.has(item.id)) return false;
+          if (!caps.newBattery && REDUNDANT_FOR_SCRAP_ITEM_IDS.has(item.id)) return false;
+          return true;
+        }),
+      }))
+      // A section whose every item was filtered out would otherwise render as a
+      // bare heading with nothing under it.
+      .filter((group: any) => group.items.length > 0);
+  }, [inferredRole, dealerFinanceEnabled, dealerType]);
 
   // Universal nav items (e.g. Submit Expense) appended to every role except:
   //  · "user" — the unauthenticated path-inferred fallback view;
@@ -1556,14 +1615,18 @@ export function Sidebar() {
   // (same query key → one request) and updates live, so a mark-read anywhere
   // decrements these. Gated to roles that actually have a buyback surface so a
   // finance/service login never fires the request.
-  const isBuybackRole = [
-    "dealer",
-    "scrap_vendor",
-    "admin",
-    "ceo",
-    "business_head",
-    "sales_head",
-  ].includes(inferredRole);
+  const isBuybackRole =
+    [
+      "dealer",
+      "scrap_vendor",
+      "admin",
+      "ceo",
+      "business_head",
+      "sales_head",
+    ].includes(inferredRole) &&
+    // A NEW-battery dealer has no buyback surface at all (E-202), so polling
+    // their unread counts is a request whose answer can only ever be zero.
+    (inferredRole !== "dealer" || dealerCaps.buyback);
   const notifSummary = useBuybackNotificationSummary(isBuybackRole);
   const totalUnread = notifSummary.unread.total;
   const negotiationUnread = notifSummary.unread.byCategory.Negotiation ?? 0;

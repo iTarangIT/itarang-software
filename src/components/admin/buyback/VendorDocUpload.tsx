@@ -32,6 +32,7 @@ export default function VendorDocUpload({
   required = false,
   value,
   onChange,
+  error: validationError,
   disabled = false,
 }: {
   kind: VendorDocType;
@@ -39,11 +40,17 @@ export default function VendorDocUpload({
   required?: boolean;
   value: VendorDocValue | null;
   onChange: (v: VendorDocValue) => void;
+  /** Set by the form when submit found this required slot empty. */
+  error?: string | null;
   disabled?: boolean;
 }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // The upload's own failure wins: it is the more recent, more specific thing
+  // that just happened to this slot.
+  const shownError = error ?? validationError ?? null;
 
   const pick = async (file: File) => {
     setUploading(true);
@@ -79,7 +86,9 @@ export default function VendorDocUpload({
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
+    // id + tabIndex so the form's focusFirstError can scroll to and focus an
+    // un-attached required document the same way it does a text field.
+    <div id={`doc-${kind}`} tabIndex={-1} className="flex flex-col gap-1.5 outline-none">
       <span className="text-xs font-semibold text-[color:var(--color-ink)]">
         {label}
         {required && <span style={{ color: "var(--color-danger)" }}> *</span>}
@@ -134,19 +143,38 @@ export default function VendorDocUpload({
         <button
           type="button"
           disabled={disabled}
+          aria-describedby={`doc-${kind}-msg`}
           onClick={() => inputRef.current?.click()}
-          className="flex w-full items-center rounded-lg border border-dashed border-[color:var(--color-border)] bg-white px-3 py-2.5 text-left text-sm text-[color:var(--color-ink-muted)] hover:border-[color:var(--color-brand-sky)] hover:text-[color:var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full items-center rounded-lg border border-dashed px-3 py-2.5 text-left text-sm hover:border-[color:var(--color-brand-sky)] hover:text-[color:var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+          style={
+            shownError
+              ? {
+                  borderColor: "var(--color-danger)",
+                  backgroundColor: "var(--color-danger-bg)",
+                  color: "var(--color-danger)",
+                }
+              : {
+                  borderColor: "var(--color-border)",
+                  backgroundColor: "#fff",
+                  color: "var(--color-ink-muted)",
+                }
+          }
         >
           ⇧ Upload {label}
         </button>
       )}
 
-      {error ? (
-        <span role="alert" className="text-[11px] font-medium" style={{ color: "var(--color-danger)" }}>
-          {error}
+      {shownError ? (
+        <span
+          id={`doc-${kind}-msg`}
+          role="alert"
+          className="text-[11px] font-medium"
+          style={{ color: "var(--color-danger)" }}
+        >
+          {shownError}
         </span>
       ) : (
-        <span className="text-[11px] text-[color:var(--color-ink-muted)]">
+        <span id={`doc-${kind}-msg`} className="text-[11px] text-[color:var(--color-ink-muted)]">
           PDF or image, up to 15 MB
         </span>
       )}

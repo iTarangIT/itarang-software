@@ -25,7 +25,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/auth-utils";
-import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import { isNextRedirectError } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { rollbackTarget, type CommercialVersion } from "@/lib/leads/quoteApproval";
 
@@ -88,14 +88,22 @@ export async function POST(
         };
       }
 
-      const now = new Date();
+      // ISO string, NOT the Date object. Drizzle runs a raw sql`` template
+      // through postgres.js `unsafe()`, which serialises parameters with no
+      // column-type information and throws ERR_INVALID_ARG_TYPE ("Received an
+      // instance of Date") on a Date. The query builder infers the type and
+      // would be fine; `tx.execute` is not. This broke BOTH buttons on this
+      // route — every approve and every reject 500'd — and the failure was
+      // invisible because errorMessage() returns only Drizzle's wrapper
+      // message and drops the `cause` that names the real error.
+      const nowIso = new Date().toISOString();
 
       if (body.decision === "approve") {
         await tx.execute(sql`
           UPDATE dealer_lead_commercials
              SET approval_status = 'approved',
                  approved_by = ${user.id},
-                 approved_at = ${now},
+                 approved_at = ${nowIso},
                  updated_at = NOW()
            WHERE commercial_id = ${commercialId}
         `);
@@ -113,7 +121,7 @@ export async function POST(
         UPDATE dealer_lead_commercials
            SET approval_status = 'rejected',
                approved_by = ${user.id},
-               approved_at = ${now},
+               approved_at = ${nowIso},
                rejection_reason = ${body.reason ?? null},
                is_current = false,
                updated_at = NOW()
@@ -195,8 +203,24 @@ export async function POST(
         { status: 400 },
       );
     }
+    // Log the WHOLE chain, then tell the CEO something they can act on.
+    //
+    // errorMessage() returns only `e.message`, and for a DrizzleQueryError that
+    // is the SQL text plus every bound parameter — which is how a failed
+    // decision came to render raw SQL, a user id and a commercial id inside the
+    // approvals panel, while the actual cause (in `e.cause`) was dropped. The
+    // useful half went nowhere and the half that leaked was the half that
+    // should not have.
+    console.error("[ceo/quotations/decision] failed", {
+      commercialId: (await ctx.params).commercialId,
+      message: e instanceof Error ? e.message : String(e),
+      cause: e instanceof Error && e.cause instanceof Error ? e.cause.message : undefined,
+    });
     return NextResponse.json(
-      { success: false, error: { message: errorMessage(e) } },
+      {
+        success: false,
+        error: { message: "Couldn't record that decision. Please try again." },
+      },
       { status: 500 },
     );
   }

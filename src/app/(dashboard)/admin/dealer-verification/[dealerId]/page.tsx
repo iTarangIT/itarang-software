@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import RequestCorrectionDialog from "@/components/admin/dealer-verification/RequestCorrectionDialog";
 import DealerTypeBadge from "@/components/admin/dealer-verification/DealerTypeBadge";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import CorrectionResponsePanel, {
   type CorrectionRound,
 } from "@/components/admin/dealer-verification/CorrectionResponsePanel";
@@ -89,6 +90,12 @@ type AgreementData = {
   signerName?: string | null;
   signerEmail?: string | null;
   status?: string | null;
+  // E-225 — 'esign' (Digio) | 'manual' (admin-uploaded paper copy), plus the
+  // paper's own provenance. agreementRef is never a Digio document id: that
+  // stays agreementId.
+  mode?: string | null;
+  agreementRef?: string | null;
+  agreementSignedOn?: string | null;
   copyUrl?: string | null;
   signedAgreementUrl?: string | null;
   agreementName?: string | null;
@@ -154,7 +161,8 @@ type DealerReviewData = {
   cinNumber?: string;
   companyType?: string;
   // E-202 — 'new' | 'scrap' | 'both'. Read-only here; the dealer picks it at
-  // onboarding Step 1 and it selects the agreement template.
+  // onboarding Step 1. It decides whether the agreement is e-signed via Digio
+  // ('new') or uploaded as a signed paper copy ('scrap' / 'both', E-225).
   dealerType?: string | null;
   ownerName?: string;
   ownerPhone?: string;
@@ -571,8 +579,32 @@ function StatusBadge({ value }: { value?: string | null }) {
   );
 }
 
-function AgreementBadge({ value }: { value?: string | null }) {
+function AgreementBadge({
+  value,
+  // E-225 — a manually uploaded (paper) agreement reaches the same terminal
+  // `completed` status as an e-signed one, which is correct: it IS done. But
+  // "Completed" alone reads as "e-signed" to an admin scanning the page, so the
+  // label says which assurance is actually on file. Status and mode are
+  // separate columns for exactly this reason; the badge is where they meet.
+  manual = false,
+}: { value?: string | null; manual?: boolean }) {
   const status = (value || "").toLowerCase();
+  const isSigned = status === "completed" || status === "signed";
+
+  if (manual) {
+    return (
+      <span
+        className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${
+          isSigned
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : "border-amber-200 bg-amber-50 text-amber-700"
+        }`}
+      >
+        {isSigned ? "Signed (manual upload)" : "Awaiting signed copy"}
+      </span>
+    );
+  }
+
   const classes =
     status === "completed" || status === "signed"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -744,6 +776,7 @@ function ActionCard({
   remarks, setRemarks, submitting,
   onApprove, onCorrection, onReject, onBack,
   financeEnabled, agreementStatus,
+  isManualAgreement, hasSignedAgreement,
   duplicate,
   onboardingStatus,
   branchAck, setBranchAck,
@@ -757,13 +790,22 @@ function ActionCard({
   onBack: () => void;
   financeEnabled?: boolean;
   agreementStatus?: string | null;
+  /** E-225 — scrap / new+scrap: agreement is an uploaded paper copy. */
+  isManualAgreement?: boolean;
+  hasSignedAgreement?: boolean;
   duplicate?: DuplicateCheckResult | null;
   onboardingStatus?: string;
   branchAck: boolean;
   setBranchAck: (value: boolean) => void;
 }) {
+  // E-225 — mirrors the server: the agreement gate is an E-SIGN gate. A
+  // manual-mode dealer can be approved without one; the warning below makes
+  // that a visible choice rather than a silent omission.
   const financeGateBlock =
-    !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
+    !!financeEnabled &&
+    !isManualAgreement &&
+    (agreementStatus || "").toLowerCase() !== "completed";
+  const manualAgreementWarning = !!isManualAgreement && !hasSignedAgreement;
   const duplicateBlock =
     duplicate?.conflict === "duplicate" ||
     duplicate?.conflict === "pan-mismatch";
@@ -841,6 +883,24 @@ function ActionCard({
             <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
             <p className="text-sm text-amber-800">
               Approval is blocked until the finance agreement reaches completed status.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* E-225 — a WARNING, not a block. This dealer type signs on paper, so
+          the system cannot tell "not signed yet" from "signed but not scanned
+          in". The admin can approve anyway; making that decision visible is the
+          point. */}
+      {manualAgreementWarning && (
+        <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50 p-4">
+          <div className="flex items-start gap-3">
+            <CircleAlert className="mt-0.5 h-4 w-4 text-orange-600" />
+            <p className="text-sm text-orange-800">
+              <span className="font-semibold">No signed agreement on file.</span>{" "}
+              This dealer type signs a paper agreement, which has not been uploaded
+              yet. You can still approve — upload it in Section&nbsp;3 when it is
+              available.
             </p>
           </div>
         </div>
@@ -1020,6 +1080,9 @@ export default function DealerReviewPage() {
   // trail by hand when Digio signing was completed out-of-band.
   const [manualSignedFile, setManualSignedFile] = useState<File | null>(null);
   const [manualAuditFile, setManualAuditFile]   = useState<File | null>(null);
+  // E-225 — provenance of a manually signed (paper) agreement.
+  const [manualAgreementRef, setManualAgreementRef] = useState("");
+  const [manualSignedOn, setManualSignedOn]         = useState("");
   const [manualUploading, setManualUploading]   = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null);
   const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false);
@@ -1346,11 +1409,20 @@ export default function DealerReviewPage() {
 
   const isAgreementCompleted = normalizedAgreementStatus === "completed";
 
+  // E-225 — scrap / new+scrap dealers sign on paper: no Digio, no signer table,
+  // no audit trail. The whole agreement panel changes shape for them, so this
+  // one flag drives every branch below rather than each check re-deriving it.
+  const isManualAgreement = usesManualAgreement(data?.dealerType);
+
   const verificationChecklist = useMemo(() => ({
     companyReady:   !!(data?.companyName && data?.gstNumber && data?.panNumber && data?.companyType),
     documentsReady: (data?.documents?.length || 0) > 0,
     bankReady:      !!(data?.bankName && data?.accountNumber && data?.beneficiaryName && data?.ifscCode),
-    agreementReady: data?.financeEnabled
+    // A manual-mode dealer is never blocked on their agreement (they can be
+    // approved without one — the panel warns instead), so the checklist follows
+    // the same rule the approve route does rather than showing a red item the
+    // admin has no way to clear.
+    agreementReady: data?.financeEnabled && !usesManualAgreement(data?.dealerType)
       ? (agreementStatusForUi || "").toLowerCase() === "completed"
       : true,
   }), [data, agreementStatusForUi]);
@@ -1521,7 +1593,13 @@ export default function DealerReviewPage() {
   };
 
   const handleManualUpload = async () => {
-    if (!manualSignedFile || !manualAuditFile) {
+    if (!manualSignedFile) {
+      toast.error("Select the signed agreement PDF.");
+      return;
+    }
+    // The audit trail is a Digio artefact. A paper agreement has none, so it is
+    // only demanded when this upload is rescuing a stalled e-sign.
+    if (!isManualAgreement && !manualAuditFile) {
       toast.error("Select both the signed agreement PDF and the audit trail PDF.");
       return;
     }
@@ -1529,7 +1607,9 @@ export default function DealerReviewPage() {
     try {
       const fd = new FormData();
       fd.append("signedAgreement", manualSignedFile);
-      fd.append("auditTrail", manualAuditFile);
+      if (manualAuditFile) fd.append("auditTrail", manualAuditFile);
+      if (manualAgreementRef.trim()) fd.append("agreementRef", manualAgreementRef.trim());
+      if (manualSignedOn) fd.append("agreementSignedOn", manualSignedOn);
 
       const res = await fetch(
         `/api/admin/dealer-verifications/${dealerId}/upload-signed-agreement`,
@@ -1544,6 +1624,8 @@ export default function DealerReviewPage() {
       toast.success(json.message || "Agreement marked completed.");
       setManualSignedFile(null);
       setManualAuditFile(null);
+      setManualAgreementRef("");
+      setManualSignedOn("");
       await reloadDealer();
     } catch (err: any) {
       toast.error(err?.message || "Something went wrong while uploading documents");
@@ -2263,23 +2345,59 @@ export default function DealerReviewPage() {
             )}
           </SectionCard>
 
-          {/* ── Section 3 — Agreement Verification (unchanged) ── */}
-          {data.financeEnabled === true && (
+          {/* ── Section 3 — Agreement Verification ──
+              Finance-enabled dealers see it because their agreement IS the
+              finance agreement. Manual-mode dealers (scrap / new+scrap, E-225)
+              see it regardless: their finance flag is normally off, and gating
+              on it would leave the admin no way to record the paper agreement
+              they actually signed. */}
+          {(data.financeEnabled === true || isManualAgreement) && (
             <SectionCard
               title="Section 3 — Agreement Verification"
-              subtitle="Review agreement execution state for finance-enabled dealer onboarding."
+              subtitle={
+                isManualAgreement
+                  ? "This dealer type signs on paper — upload the signed agreement here."
+                  : "Review agreement execution state for finance-enabled dealer onboarding."
+              }
               icon={<Landmark className="h-5 w-5" />}
             >
+              {isManualAgreement && (
+                <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <DealerTypeBadge value={data.dealerType} />
+                  <p className="text-xs text-slate-600">
+                    e-Sign is not available for this dealer type — there is no
+                    digital agreement template for scrap trading. iTarang and the
+                    dealer sign a paper agreement, and it is recorded here.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <InfoField label="Agreement ID" value={tracking?.agreementId || data.agreement?.agreementId || undefined} />
+                {isManualAgreement ? (
+                  <InfoField label="Agreement Reference" value={data.agreement?.agreementRef || undefined} />
+                ) : (
+                  <InfoField label="Agreement ID" value={tracking?.agreementId || data.agreement?.agreementId || undefined} />
+                )}
                 <div className="rounded-2xl bg-slate-50 px-4 py-4">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Agreement Status</p>
-                  <div className="mt-2"><AgreementBadge value={agreementStatusForUi || undefined} /></div>
+                  <div className="mt-2">
+                    <AgreementBadge value={agreementStatusForUi || undefined} manual={isManualAgreement} />
+                  </div>
                 </div>
-                <InfoField label="Primary Signer Name"  value={primarySigner.name  || undefined} />
-                <InfoField label="Primary Signer Email" value={primarySigner.email || undefined} />
+                {isManualAgreement ? (
+                  <InfoField label="Signed On" value={data.agreement?.agreementSignedOn || undefined} />
+                ) : (
+                  <>
+                    <InfoField label="Primary Signer Name"  value={primarySigner.name  || undefined} />
+                    <InfoField label="Primary Signer Email" value={primarySigner.email || undefined} />
+                  </>
+                )}
               </div>
 
+              {/* Language selects the language the agreement PDF is GENERATED
+                  in. Nothing is generated in manual mode — the paper already
+                  exists — so the control would be inert. */}
+              {!isManualAgreement && (
               <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="mb-1 flex items-center gap-2">
                   <Languages className="h-4 w-4 text-slate-500" />
@@ -2306,6 +2424,7 @@ export default function DealerReviewPage() {
                   ))}
                 </select>
               </div>
+              )}
 
               <div className="mt-5 flex flex-wrap gap-3">
                 {(signedAgreementReady || tracking?.signedAgreementUrl) && (
@@ -2314,12 +2433,15 @@ export default function DealerReviewPage() {
                     <Download className="h-4 w-4" /> Download Signed Agreement
                   </button>
                 )}
-                <button onClick={handleAuditTrailDownload}
-                  disabled={auditTrailLoading || isRejected || !isAgreementCompleted}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                  <FileText className="h-4 w-4" />
-                  {auditTrailLoading ? "Downloading Audit Trail…" : "Download Audit Trail"}
-                </button>
+                {/* An audit trail is a Digio artefact — a paper agreement has none. */}
+                {!isManualAgreement && (
+                  <button onClick={handleAuditTrailDownload}
+                    disabled={auditTrailLoading || isRejected || !isAgreementCompleted}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                    <FileText className="h-4 w-4" />
+                    {auditTrailLoading ? "Downloading Audit Trail…" : "Download Audit Trail"}
+                  </button>
+                )}
               </div>
 
               {/* Manual agreement completion — for agreements whose completion
@@ -2328,19 +2450,32 @@ export default function DealerReviewPage() {
                   created in a different Digio environment that 404s here. Shown
                   for any initiated-but-not-completed agreement. Upload the final
                   PDFs to mark it completed and unblock approval. */}
-              {hasInitiatedAgreement && !isAgreementCompleted && !isRejected && (
+              {(isManualAgreement || hasInitiatedAgreement) && !isAgreementCompleted && !isRejected && (
                 <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
                   <div className="flex items-start gap-3">
                     <UploadCloud className="mt-0.5 h-5 w-5 text-amber-600" />
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-amber-900">
-                        Agreement completed outside iTarang?
+                        {isManualAgreement
+                          ? "Upload the signed agreement"
+                          : "Agreement completed outside iTarang?"}
                       </p>
                       <p className="mt-1 text-xs text-amber-800">
-                        If all parties signed on the Digio dashboard (e.g. a signer&apos;s link
-                        expired here), upload the final <strong>signed agreement</strong> and
-                        <strong> audit trail</strong> PDFs. This stores both documents and marks
-                        the agreement <strong>completed</strong> so the dealer can be approved.
+                        {isManualAgreement ? (
+                          <>
+                            Upload the <strong>signed agreement</strong> PDF once both parties have
+                            signed the paper copy. This stores the document and marks the agreement{" "}
+                            <strong>completed</strong>. The reference number and signing date are
+                            optional but make the executed agreement traceable later.
+                          </>
+                        ) : (
+                          <>
+                            If all parties signed on the Digio dashboard (e.g. a signer&apos;s link
+                            expired here), upload the final <strong>signed agreement</strong> and
+                            <strong> audit trail</strong> PDFs. This stores both documents and marks
+                            the agreement <strong>completed</strong> so the dealer can be approved.
+                          </>
+                        )}
                       </p>
 
                       <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -2358,29 +2493,69 @@ export default function DealerReviewPage() {
                             <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualSignedFile.name}</p>
                           )}
                         </div>
-                        <div>
-                          <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
-                            Audit Trail (PDF)
-                          </label>
-                          <input
-                            type="file"
-                            accept="application/pdf,.pdf"
-                            onChange={(e) => setManualAuditFile(e.target.files?.[0] || null)}
-                            className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
-                          />
-                          {manualAuditFile && (
-                            <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualAuditFile.name}</p>
-                          )}
-                        </div>
+
+                        {/* Digio produces the audit trail; a paper agreement has
+                            none, so manual mode swaps it for the paper's own
+                            provenance. */}
+                        {isManualAgreement ? (
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                              <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                                Reference No.
+                              </label>
+                              <input
+                                type="text"
+                                value={manualAgreementRef}
+                                onChange={(e) => setManualAgreementRef(e.target.value)}
+                                placeholder="e.g. ITR/SCRAP/2026/014"
+                                className="mt-2 h-10 w-full rounded-xl border border-amber-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                                Signed On
+                              </label>
+                              <input
+                                type="date"
+                                value={manualSignedOn}
+                                onChange={(e) => setManualSignedOn(e.target.value)}
+                                className="mt-2 h-10 w-full rounded-xl border border-amber-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                              Audit Trail (PDF)
+                            </label>
+                            <input
+                              type="file"
+                              accept="application/pdf,.pdf"
+                              onChange={(e) => setManualAuditFile(e.target.files?.[0] || null)}
+                              className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
+                            />
+                            {manualAuditFile && (
+                              <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualAuditFile.name}</p>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <button
                         onClick={handleManualUpload}
-                        disabled={manualUploading || !manualSignedFile || !manualAuditFile}
+                        disabled={
+                          manualUploading ||
+                          !manualSignedFile ||
+                          (!isManualAgreement && !manualAuditFile)
+                        }
                         className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <UploadCloud className="h-4 w-4" />
-                        {manualUploading ? "Saving…" : "Save & Mark Completed"}
+                        {manualUploading
+                          ? "Saving…"
+                          : isManualAgreement
+                            ? "Save Agreement"
+                            : "Save & Mark Completed"}
                       </button>
                     </div>
                   </div>
@@ -2518,6 +2693,11 @@ export default function DealerReviewPage() {
                 </div>
               )}
 
+              {/* Every control here drives Digio. In manual mode there is no
+                  Digio document to initiate, refresh or re-initiate — the
+                  server refuses all three (E-225) — so showing them would only
+                  offer the admin buttons that 400. */}
+              {!isManualAgreement && (
               <div className="mt-5 flex flex-wrap gap-3">
                 {!hasInitiatedAgreement && (
                   <button onClick={() => handleAgreementAction("initiate")}
@@ -2552,8 +2732,11 @@ export default function DealerReviewPage() {
                   </button>
                 )}
               </div>
+              )}
 
-              {/* Tracking table */}
+              {/* Tracking table — signer-by-signer Digio progress. A paper
+                  agreement has no signer rows to track. */}
+              {!isManualAgreement && (
               <div className="mt-8 rounded-[24px] border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
                   <div>
@@ -2626,14 +2809,20 @@ export default function DealerReviewPage() {
                   </table>
                 </div>
               </div>
+              )}
 
-              {/* Timeline */}
+              {/* Timeline — kept in manual mode: the manual_completion event is
+                  the audit record of who uploaded the paper agreement and when. */}
               <div className="mt-6 rounded-[24px] border border-slate-200 bg-slate-50 p-5">
                 <div className="flex items-center gap-3">
                   <div className="rounded-2xl bg-white p-3 text-slate-700 shadow-sm"><Clock3 className="h-5 w-5" /></div>
                   <div>
                     <h3 className="text-lg font-semibold text-slate-900">Agreement Activity Timeline</h3>
-                    <p className="mt-1 text-sm text-slate-500">Latest Digio agreement events and signer progress history.</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {isManualAgreement
+                        ? "Record of the manually signed agreement being uploaded."
+                        : "Latest Digio agreement events and signer progress history."}
+                    </p>
                   </div>
                 </div>
                 <div className="mt-5 space-y-3">
@@ -2687,6 +2876,8 @@ export default function DealerReviewPage() {
           onBack={() => router.push("/admin/dealer-verification")}
           financeEnabled={data.financeEnabled}
           agreementStatus={agreementStatusForUi}
+          isManualAgreement={isManualAgreement}
+          hasSignedAgreement={isAgreementCompleted || !!data.agreement?.signedAgreementUrl}
           duplicate={duplicate}
           onboardingStatus={data.onboardingStatus}
           branchAck={branchAck}
