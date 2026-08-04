@@ -21,6 +21,8 @@ import { and, eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
 import { buybackRequests } from "@/lib/db/schema";
+import { capabilitiesFor } from "@/lib/dealer/dealer-capabilities";
+import { resolveDealerTypeForUser } from "@/lib/dealer/dealer-type-runtime";
 import { ForbiddenError, NotFoundError } from "./errors";
 import { BUYBACK_ADMIN_ROLES } from "./roles";
 import type { ActorRole } from "./state-machine";
@@ -60,13 +62,35 @@ export interface BuybackActor {
   entityId: string | null;
 }
 
-/** The caller must be a dealer, and must belong to an entity. */
+/**
+ * The caller must be a dealer, must belong to an entity, and must be a dealer
+ * TYPE that trades in old batteries.
+ *
+ * This function is the first statement of every one of the ~21 dealer buyback
+ * routes, which makes it the single choke point for the E-202 capability gate.
+ * Putting the check here rather than in each route is what guarantees the
+ * server refusal matches what the sidebar shows: a NEW-battery dealer sees no
+ * buyback menu, and typing the URL gets them a 403 rather than a working page
+ * the UI merely declined to link to. The header above says the same thing about
+ * BUYBACK_ADMIN_ROLES — "a link a role can see but not open is worse than no
+ * link at all"; this is the inverse, and just as important.
+ *
+ * Cost is one indexed lookup on dealers.dealer_id (UNIQUE) for an approved
+ * dealer — see resolveDealerTypeForUser.
+ */
 export async function requireDealer(): Promise<BuybackActor> {
   const user = await requireRole(["dealer"]);
 
   if (!user.dealer_id) {
     // A dealer login with no entity cannot own anything.
     throw new ForbiddenError("Your login is not linked to a dealer account.");
+  }
+
+  const dealerType = await resolveDealerTypeForUser(user);
+  if (!capabilitiesFor(dealerType).buyback) {
+    throw new ForbiddenError(
+      "Battery buyback is only available to scrap and new+scrap dealers.",
+    );
   }
 
   return { id: user.id, role: "dealer", entityId: user.dealer_id };

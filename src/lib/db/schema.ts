@@ -172,6 +172,43 @@ export const productMasterParaphernalia = pgTable(
   }),
 );
 
+// E-226 — the OEM reference price book. Append-only: a revision closes the live
+// row (effective_to = now()) and inserts a new one, so history survives for
+// audit. Exactly one live row per (asset_type, product_id), enforced in SQL by
+// the partial unique index oem_reference_prices_live_uniq — partial indexes are
+// not expressible here, so it lives only in the migration.
+//
+// product_id is TEXT, not uuid, on purpose: it joins to
+// dealer_lead_commercials.product_lines[].product_id, which the picker emits as
+// product_master_*.id::text. No FK — the parent is one of three tables chosen
+// by asset_type.
+export const oemReferencePrices = pgTable(
+  "oem_reference_prices",
+  {
+    price_id: uuid("price_id").primaryKey().defaultRandom(),
+    asset_type: varchar("asset_type", { length: 30 }).notNull(),
+    product_id: text("product_id").notNull(),
+    model_id: varchar("model_id", { length: 100 }),
+    product_name: varchar("product_name", { length: 200 }),
+    oem_price: numeric("oem_price", { precision: 14, scale: 2 }).notNull(),
+    effective_from: timestamp("effective_from", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    effective_to: timestamp("effective_to", { withTimezone: true }),
+    note: text(),
+    created_by: text("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    oemPriceProductIdx: index("oem_reference_prices_product_idx").on(
+      table.product_id,
+      table.effective_from,
+    ),
+  }),
+);
+
 export const oems = pgTable("oems", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   business_entity_name: text("business_entity_name").notNull(),
@@ -2807,6 +2844,14 @@ export const dealerOnboardingApplications = pgTable(
     signed_agreement_storage_path: text("signed_agreement_storage_path"),
     audit_trail_storage_path: text("audit_trail_storage_path"),
     agreement_status: varchar("agreement_status", { length: 50 }).default('not_generated'),
+    // E-225 — HOW the agreement is executed, orthogonal to agreement_status
+    // (which says WHETHER it is done). 'esign' = Digio, new-battery dealers;
+    // 'manual' = admin uploads a signed scan, scrap / new+scrap dealers.
+    // agreement_ref is the reference on the paper — never a Digio document id,
+    // that stays provider_document_id (cf. E-223 scrap_vendors.agreement_ref).
+    agreement_mode: varchar("agreement_mode", { length: 16 }),
+    agreement_ref: text("agreement_ref"),
+    agreement_signed_on: date("agreement_signed_on"),
     provider_raw_response: jsonb("provider_raw_response"),
     signed_agreement_url: text("signed_agreement_url"),
     audit_trail_url: text("audit_trail_url"),
@@ -7333,6 +7378,12 @@ export const dealerLeadCommercials = pgTable(
     approved_by: text("approved_by"),
     approved_at: timestamp("approved_at", { withTimezone: true }),
     rejection_reason: text("rejection_reason"),
+    // E-226 — how that status was reached, and the price check behind it.
+    // 'auto' | 'manual'; NULL on pre-E-226 rows and on ungated events.
+    // oem_evaluation snapshots the OEM prices used (incl. their price_id), so a
+    // quote stays auditable after the price book moves on.
+    approval_mode: varchar("approval_mode", { length: 16 }),
+    oem_evaluation: jsonb("oem_evaluation"),
   },
   (t) => ({
     leadVersionUniq: uniqueIndex(
