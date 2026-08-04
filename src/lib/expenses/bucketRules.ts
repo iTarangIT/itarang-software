@@ -34,12 +34,22 @@ export interface BucketRuleMatch {
  * Vendor name fragments → bucket. Matched as a substring of the normalised
  * vendor name, so "Trontek Electronics Limited" and "TRONTEK" both hit.
  *
- * Order within the array does not matter — the fragments are disjoint. If two
- * ever overlap, the first listed wins.
+ * First match wins. Most fragments are disjoint so their order is irrelevant,
+ * with ONE exception, called out below: the generic "electronics" catch-all is
+ * broad enough to swallow consumer-electronics retailers, so the vendors it gets
+ * wrong are listed ahead of it.
  */
 export const VENDOR_BUCKET_RULES: ReadonlyArray<
   readonly [fragment: string, bucket: ExpenseBucket]
 > = [
+  // --- ORDER-DEPENDENT: these must precede the "electronics" fragment below ---
+  // E-224 — "electronics" was catching retailers as raw material: a ₹24,999
+  // Samsung mobile phone and two Dawntech televisions were bucketed `rm`, and
+  // E-224's department rule would then have filed them under Operations. They
+  // are IT hardware, which is what the tech bucket is for.
+  ["samsung", "tech"],
+  ["dawntech", "tech"],
+
   // --- Raw material / components ---
   ["trontek", "rm"],
   ["ecostar", "rm"],
@@ -52,6 +62,8 @@ export const VENDOR_BUCKET_RULES: ReadonlyArray<
   ["okaya", "rm"],
   ["lohum", "rm"],
   ["battery", "rm"],
+  // Broad on purpose — it is the safety net for the next unnamed component
+  // supplier called "X Electronics". See the order-dependent block at the top.
   ["electronics", "rm"],
 
   // --- Tech / SaaS / cloud ---

@@ -78,7 +78,9 @@ test.describe('Zoho integration', () => {
     await expect(page.getByTestId('tile-oem-purchases')).toBeVisible();
     await expect(page.getByTestId('tile-sales-to-dealer')).toBeVisible();
     await expect(page.getByTestId('tile-other-expenses')).toBeVisible();
-    await expect(page.getByTestId('net-mtd')).toBeVisible();
+    // E-224 removed the "Net · <period>" strip from this panel — Realization at
+    // the top of the page is the net figure now, and it is asserted above.
+    await expect(page.getByTestId('net-mtd')).toHaveCount(0);
 
     // Opened last: the drill-down covers the page, and the shared Modal has no
     // Escape handler to dismiss it with.

@@ -8,7 +8,10 @@ import type {
   DealerOnboardingState,
   UploadFileItem,
 } from "@/components/onboarding/onboardingTypes";
-import { validateStep } from "@/components/onboarding/onboardingSchemas";
+import {
+  skipsAgreementStep,
+  validateStep,
+} from "@/components/onboarding/onboardingSchemas";
 
 const makeUploadItem = (label: string): UploadFileItem => ({
   id: crypto.randomUUID(),
@@ -470,7 +473,7 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
       return false;
     }
 
-    if (current.step === 4 && current.finance.enableFinance === "no") {
+    if (current.step === 4 && skipsAgreementStep(current)) {
       set({
         step: 6,
         errors: {},
@@ -492,7 +495,7 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
 
   prevStep: () =>
     set((state) => {
-      if (state.step === 6 && state.finance.enableFinance === "no") {
+      if (state.step === 6 && skipsAgreementStep(state)) {
         return { step: 4, errors: {} };
       }
 

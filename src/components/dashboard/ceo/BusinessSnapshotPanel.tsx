@@ -5,8 +5,6 @@ import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import {
-  TrendingDown,
-  TrendingUp,
   Receipt,
   ArrowRight,
   ShoppingBag,
@@ -133,7 +131,6 @@ export function BusinessSnapshotPanel({
   const otherExpenses = isDefault
     ? otherExpensesMtd
     : data?.otherExpenses ?? otherExpensesMtd;
-  const netMtd = sales - purchases - otherExpenses;
 
   const monthLabel =
     selection.kind === "month"
@@ -251,24 +248,10 @@ export function BusinessSnapshotPanel({
         />
       </div>
 
-      <div data-testid="net-mtd" className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
-          Net · {label}
-        </span>
-        <span
-          data-testid="net-mtd-value"
-          className={`text-base font-bold flex items-center gap-1 ${
-            netMtd >= 0 ? "text-emerald-700" : "text-rose-700"
-          }`}
-        >
-          {netMtd >= 0 ? (
-            <TrendingUp className="w-4 h-4" />
-          ) : (
-            <TrendingDown className="w-4 h-4" />
-          )}
-          {formatINR(Math.abs(netMtd))}
-        </span>
-      </div>
+      {/* E-224 — the "Net · <period>" strip was removed here. Realization
+          (revenue − expense) is the headline KPI at the top of the page and is
+          the figure the CEO acts on; a second, differently-derived net beneath
+          the snapshot tiles invited the two being read as the same number. */}
 
       <div className="mt-5 grid grid-cols-1 gap-4">
         <div>

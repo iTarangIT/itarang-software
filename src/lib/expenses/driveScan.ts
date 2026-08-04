@@ -49,6 +49,7 @@ import {
 } from "@/lib/expenses/validateExpense";
 import { convertToInr } from "@/lib/expenses/fx";
 import { resolveBucket } from "@/lib/expenses/resolveBucket";
+import { resolveDepartment } from "@/lib/expenses/departmentRules";
 import { filesProxyPath, isS3Backend, putObject } from "@/lib/storage/s3";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -646,6 +647,22 @@ async function insertExpense(args: {
     aiConfidence: args.aiBucketConfidence,
   });
 
+  // E-224 — and then the department, in that order: the rule that keeps raw
+  // material off the Tech budget is stated in terms of the bucket, so the bucket
+  // has to be decided first.
+  //
+  // `args.value.department` has already been through validateExpense, so it is a
+  // whitelisted value with the "ops" fallback applied. Passing it as the model's
+  // answer means a rule can still override it — which is the whole point — while
+  // an unmatched row keeps exactly what it had.
+  const department = resolveDepartment({
+    vendor: args.value.vendor,
+    description: args.value.description,
+    project_tag: args.value.project_tag,
+    bucket: bucket.bucket,
+    aiDepartment: args.value.department,
+  }).department;
+
   // E-217 — `amount` is the column every report SUMs, so it must always be
   // INR. What the document said is preserved separately, along with the rate
   // that connects them.
@@ -674,7 +691,7 @@ async function insertExpense(args: {
         status: "approved",
         approved_by: args.submitterId,
         approved_at: now,
-        department: args.value.department,
+        department,
         project_tag: args.value.project_tag,
         bucket: bucket.bucket,
         bucket_source: bucket.source,

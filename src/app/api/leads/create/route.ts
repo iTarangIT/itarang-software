@@ -5,6 +5,7 @@ import { leads, personalDetails, auditLogs, accounts, leadProducts } from '@/lib
 import { successResponse, errorResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
+import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { notifyLeadCreated } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
 import { z } from 'zod';
@@ -37,7 +38,7 @@ async function generateLeadReference() {
 // Returns a structured 403 response with a stable string error code so the
 // dealer-portal UI can localise messages without parsing message text.
 function gateError(
-    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED',
+    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED' | 'DEALER_TYPE_NOT_PERMITTED',
     message: string,
     extra: Record<string, unknown> = {}
 ) {
@@ -78,6 +79,7 @@ async function checkDealerStatusGate(
             id: dealers.id,
             onboarding_status: dealers.onboarding_status,
             finance_enabled: dealers.finance_enabled,
+            dealer_type: dealers.dealer_type,
         })
         .from(dealers)
         .where(eq(dealers.dealer_id, dealerCode))
@@ -98,6 +100,19 @@ async function checkDealerStatusGate(
             'DEALER_NOT_ACTIVE',
             `Your dealer account is not yet active. Current status: ${dealer.onboarding_status}.`,
             { currentStatus: dealer.onboarding_status }
+        );
+    }
+
+    // E-202 — a SCRAP dealer trades only in old batteries. Lead capture is the
+    // front of the new-battery sales funnel, so it is not a module they have;
+    // their portal shows no "Lead Management" at all. Enforced here as well as
+    // in the UI so the menu being hidden is a presentation detail, not the only
+    // thing standing between a scrap login and a lead it should never own.
+    if (!capabilitiesFor(dealer.dealer_type).newBattery) {
+        return gateError(
+            'DEALER_TYPE_NOT_PERMITTED',
+            'Lead creation is not available for scrap dealers. Your account is set up for battery buyback.',
+            { dealerType: dealer.dealer_type }
         );
     }
 

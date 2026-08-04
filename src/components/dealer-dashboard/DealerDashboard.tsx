@@ -14,7 +14,6 @@ import {
   ChevronRight,
   BadgeCheck,
   Building2,
-  Clock3,
   ShieldCheck,
   LifeBuoy,
   Lock,
@@ -24,6 +23,14 @@ import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import ProcessLoanCard from './ProcessLoanCard';
+import {
+  DealerAccountStatusBanner,
+  DealerIdentityCard,
+  DealerOnboardingStatusCard,
+} from './shared/DealerProfileCards';
+import { fetchDealerStats } from './useDealerStats';
+import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
+import { dealerTypeLabel } from '@/lib/dealer/dealer-type';
 
 type DealerApiData = {
   id: string | null;
@@ -35,6 +42,8 @@ type DealerApiData = {
   approvedAt: string | null;
   submittedAt: string | null;
   financeEnabled: boolean;
+  /** E-202 — 'new' | 'scrap' | 'both'. Decides which modules this dealer has. */
+  dealerType: string | null;
   isApproved: boolean;
 };
 
@@ -284,22 +293,13 @@ export default function DealerDashboard() {
   }, []);
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const res = await fetch('/api/dealer/stats', { cache: 'no-store' });
-        const json: { success?: boolean; data?: DealerStatsResponse } = await res.json();
-
-        if (json.success && json.data) {
-          setStats(json.data);
-        }
-      } catch (error) {
-        console.error('Failed to load stats', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStats();
+    // Shares the request /dealer-portal already made to decide that THIS
+    // dashboard is the right one for the dealer's type — see useDealerStats.
+    fetchDealerStats()
+      .then((data) => {
+        if (data) setStats(data);
+      })
+      .finally(() => setLoading(false));
 
     // Fetch coupon stats
     fetch('/api/dealer/coupons/summary', { cache: 'no-store' })
@@ -376,6 +376,10 @@ export default function DealerDashboard() {
           : 'No';
 
   const isFinanceEnabled = financeEnabledValue === 'Yes';
+  // E-202 — which modules this dealer type has. Only `buyback` is consulted
+  // here: this component is never rendered for a scrap dealer (dealer-portal's
+  // page routes them to ScrapDealerDashboard), so `newBattery` is always true.
+  const capabilities = capabilitiesFor(dealer?.dealerType);
   const financeOnlyMetricTitles = new Set([
     'Delayed Payment',
     'On-time Payment',
@@ -497,154 +501,27 @@ export default function DealerDashboard() {
         </p>
       </div>
 
-      {!isApproved && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 rounded-xl bg-amber-100 p-2">
-              <Clock3 className="h-5 w-5 text-amber-700" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-amber-900">
-                Account under review
-              </h2>
-              <p className="mt-1 text-sm text-amber-800">
-                Your onboarding has been submitted successfully. Once iTarang approves your
-                documents and activates your dealer account, your full dealer dashboard will be unlocked.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isApproved && (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 rounded-xl bg-emerald-100 p-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-700" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-emerald-900">
-                Account active
-              </h2>
-              <p className="mt-1 text-sm text-emerald-800">
-                Your dealer workspace is fully enabled. You can now manage leads, loan workflows,
-                orders, inventory, and support operations from this dashboard.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      <DealerAccountStatusBanner
+        isApproved={isApproved}
+        activeMessage="Your dealer workspace is fully enabled. You can now manage leads, loan workflows, orders, inventory, and support operations from this dashboard."
+      />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm lg:col-span-2">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-[#1F5C8F]">
-                Dealer Identity
-              </p>
-              <h2 className="mt-2 text-xl font-bold text-[#173F63]">
-                {currentDealerName}
-              </h2>
-              <p className="mt-2 text-sm text-gray-500">
-                This dealer profile reflects the latest approved onboarding status from iTarang.
-              </p>
-            </div>
+        <DealerIdentityCard
+          dealerName={currentDealerName}
+          dealerId={currentDealerId}
+          companyType={currentCompanyType}
+          gstNumber={currentGst}
+          dealerTypeLabel={dealerTypeLabel(dealer?.dealerType, "")}
+        />
 
-            <div className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-[#1F5C8F] sm:flex">
-              <BadgeCheck className="h-6 w-6" />
-            </div>
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Dealer Name</p>
-              <p className="mt-2 text-base font-semibold text-gray-900">
-                {currentDealerName}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-blue-700">Dealer ID</p>
-              <p className="mt-2 inline-flex rounded-full border border-blue-200 bg-white px-3 py-1 text-sm font-bold text-[#1F5C8F]">
-                {currentDealerId}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Company Type</p>
-              <p className="mt-2 text-base font-semibold text-gray-900">
-                {currentCompanyType}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">GST Number</p>
-              <p className="mt-2 text-base font-semibold text-gray-900">
-                {currentGst}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
-              <Building2 className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-gray-900">Onboarding Status</h3>
-              <p className="text-sm text-gray-500">Application snapshot</p>
-            </div>
-          </div>
-
-          <div className="mt-6 space-y-4">
-            <div
-              className={`rounded-xl border px-4 py-3 ${
-                isApproved
-                  ? 'border-emerald-100 bg-emerald-50'
-                  : 'border-amber-100 bg-amber-50'
-              }`}
-            >
-              <p
-                className={`text-xs uppercase tracking-wide ${
-                  isApproved ? 'text-emerald-700' : 'text-amber-700'
-                }`}
-              >
-                Current Status
-              </p>
-              <p
-                className={`mt-1 text-sm font-semibold ${
-                  isApproved ? 'text-emerald-800' : 'text-amber-800'
-                }`}
-              >
-                {approvalStatusLabel}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Finance Enabled</p>
-              <p className="mt-1 text-sm font-semibold text-gray-900">
-                {financeEnabledValue}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Submitted At</p>
-              <p className="mt-1 text-sm font-semibold text-gray-900">
-                {submittedAtValue ? new Date(submittedAtValue).toLocaleString() : 'Not available'}
-              </p>
-            </div>
-
-            {dealer?.approvedAt && (
-              <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-wide text-gray-500">Approved At</p>
-                <p className="mt-1 text-sm font-semibold text-gray-900">
-                  {new Date(dealer.approvedAt).toLocaleString()}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
+        <DealerOnboardingStatusCard
+          isApproved={isApproved}
+          statusLabel={approvalStatusLabel}
+          financeEnabledValue={financeEnabledValue}
+          submittedAt={submittedAtValue}
+          approvedAt={dealer?.approvedAt}
+        />
       </div>
 
       {/* ─── Coupon Credits Widget ──────────────────────────────────────── */}
@@ -702,11 +579,17 @@ export default function DealerDashboard() {
             description="Asset registration will unlock after your dealer account is activated."
           />
 
-          <LockedActionCard
-            icon={<Recycle className="h-6 w-6" />}
-            title="Battery Buyback"
-            description="Selling old batteries to iTarang will unlock after dealer verification is completed."
-          />
+          {/* E-202 — a NEW-battery dealer does not sell old batteries back to
+              iTarang, so this is not a locked capability for them, it is not
+              their capability at all. Showing it greyed out advertises a module
+              they will never get. */}
+          {capabilities.buyback && (
+            <LockedActionCard
+              icon={<Recycle className="h-6 w-6" />}
+              title="Battery Buyback"
+              description="Selling old batteries to iTarang will unlock after dealer verification is completed."
+            />
+          )}
 
           <SupportCard />
         </div>
@@ -750,21 +633,24 @@ export default function DealerDashboard() {
 
             {/* The peakAmp buyback portal's entry point in the main CRM flow —
                 dealers reach it from here (or the sidebar), never a separate
-                login or URL they have to remember. */}
-            <Link
-              href="/dealer-portal/buyback"
-              className="group relative rounded-2xl border border-gray-100 bg-white p-6 shadow-card transition-transform hover:-translate-y-1 hover:shadow-lg"
-            >
-              <div className="flex min-h-[140px] flex-col justify-between">
-                <div className="w-fit rounded-xl bg-green-50 p-3 text-green-600">
-                  <Recycle className="h-6 w-6" />
+                login or URL they have to remember. Only for dealer types that
+                actually trade in old batteries (E-202): 'scrap' and 'both'. */}
+            {capabilities.buyback && (
+              <Link
+                href="/dealer-portal/buyback"
+                className="group relative rounded-2xl border border-gray-100 bg-white p-6 shadow-card transition-transform hover:-translate-y-1 hover:shadow-lg"
+              >
+                <div className="flex min-h-[140px] flex-col justify-between">
+                  <div className="w-fit rounded-xl bg-green-50 p-3 text-green-600">
+                    <Recycle className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="mb-1 text-xl font-bold text-gray-900">Battery Buyback</h3>
+                    <p className="text-sm text-gray-500">Sell old batteries to iTarang</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="mb-1 text-xl font-bold text-gray-900">Battery Buyback</h3>
-                  <p className="text-sm text-gray-500">Sell old batteries to iTarang</p>
-                </div>
-              </div>
-            </Link>
+              </Link>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

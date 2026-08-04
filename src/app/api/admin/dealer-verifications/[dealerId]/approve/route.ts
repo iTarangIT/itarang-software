@@ -14,6 +14,7 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import {
   maskPhone,
   sendDealerWelcomeWhatsApp,
@@ -203,7 +204,26 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (application.finance_enabled && !devBypassAgreement) {
+    // E-225 — this gate is an E-SIGN gate, and two of its three conditions are
+    // unsatisfiable for a manual-mode dealer: `provider_document_id` only ever
+    // exists for a Digio document, and scrap / new+scrap dealers never reach
+    // Digio. Applying it to them would make approval impossible rather than
+    // conditional.
+    //
+    // Per the product decision, a missing paper agreement WARNS rather than
+    // blocks (the same treatment E-223 gives the scrap-vendor agreement): the
+    // review page shows "no signed agreement on file" on the approve action,
+    // and the admin decides. Approving without one is a deliberate,
+    // attributable choice, not an oversight the system failed to catch.
+    //
+    // The gate is unchanged for 'new' dealers — a finance-enabled new-battery
+    // dealer still cannot be approved without a completed, e-signed agreement.
+    const agreementGateApplies =
+      application.finance_enabled &&
+      !devBypassAgreement &&
+      !usesManualAgreement(application.dealer_type);
+
+    if (agreementGateApplies) {
       if (
         application.agreement_status !== "completed" ||
         application.review_status !== "agreement_completed" ||
@@ -319,16 +339,26 @@ export async function POST(req: NextRequest, context: RouteContext) {
     let signedAgreementUrl: string | null = null;
     let auditTrailUrl: string | null = null;
 
-    if (application.finance_enabled && !devBypassAgreement) {
+    // E-225 — manual-mode dealers are included in the FETCH (an uploaded paper
+    // agreement should still reach the welcome email) but excluded from the
+    // hard block below, per the same warn-don't-block decision as the status
+    // gate above. A scrap dealer with finance off gets here too, which is the
+    // point: their agreement is not a finance agreement.
+    const isManualAgreement = usesManualAgreement(application.dealer_type);
+
+    if ((application.finance_enabled || isManualAgreement) && !devBypassAgreement) {
       const [signedUrl, auditUrl] = await Promise.all([
         ensureDealerSignedAgreementUrl(application).catch((err) => {
           console.error("ENSURE SIGNED AGREEMENT ERROR:", err);
           return null;
         }),
-        ensureDealerAuditTrailUrl(application).catch((err) => {
-          console.error("ENSURE AUDIT TRAIL ERROR:", err);
-          return null;
-        }),
+        // Digio-only artefact; a paper agreement has none, so don't go asking.
+        isManualAgreement
+          ? Promise.resolve(null)
+          : ensureDealerAuditTrailUrl(application).catch((err) => {
+              console.error("ENSURE AUDIT TRAIL ERROR:", err);
+              return null;
+            }),
       ]);
 
       const [signedBuf, auditBuf] = await Promise.all([
@@ -346,7 +376,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
       // status is "completed"). A missing audit trail must NOT block dealer
       // activation — it's attached when available and silently omitted
       // otherwise (downloadPdfBuffer already returns null gracefully).
-      if (!signedBuf) {
+      //
+      // A MANUAL-mode dealer is exempt: there may legitimately be no signed
+      // copy yet, and the decision is the admin's to make (the review page
+      // warns). Their welcome email simply goes out without the attachment
+      // rather than approval failing.
+      if (!signedBuf && !isManualAgreement) {
         console.warn("APPROVE BLOCKED — signed agreement PDF not ready", {
           applicationId: application.id,
           hasSignedUrl: Boolean(signedUrl),
