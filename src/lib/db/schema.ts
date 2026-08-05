@@ -3333,6 +3333,30 @@ export const dealerLeads = pgTable("dealer_leads", {
   // Soft delete (BRD §0.13)
   is_active: boolean("is_active").default(true),
   deleted_at: timestamp("deleted_at", { withTimezone: true }),
+  // E-224 adds two more columns here — `neodove_synced_at` and
+  // `neodove_sync_status` — that are DELIBERATELY NOT MIRRORED in this object.
+  //
+  // The usual rule is to mirror every migration here so types match the DB.
+  // These two are the exception, because of how this table is read: ~20 call
+  // sites do a bare `db.select().from(dealerLeads)` (the /leads list, the edit
+  // page, both call schedulers, the CEO and role dashboards, the DigiLocker
+  // callback, sales-insight, the converted-leads download). Drizzle expands a
+  // bare select into an explicit column list, so naming a column here makes
+  // EVERY one of those queries hard-fail with "column does not exist" until the
+  // migration is hand-applied — and this repo has no migration runner, applies
+  // by hand per environment, and has a documented history of migrations
+  // silently not landing (the E-145 drift). Mirroring them traded a
+  // write-only convenience column for a whole-app outage on any environment
+  // that hadn't run E-224 yet. That is exactly what happened on database-1.
+  //
+  // They are written exclusively through raw `sql` UPDATEs in
+  // src/lib/neodove/* and the NeoDove routes, all of which are unreachable
+  // unless NEODOVE_ENABLED is set — so the coupling stays contained to the
+  // feature that needs it. Same treatment as `duplicate_merge_requests`, which
+  // is likewise absent here and written via raw SQL.
+  //
+  // If a future change needs to READ them through Drizzle, add them here AND
+  // make E-224 a hard prerequisite in the deploy notes.
 });
 
 // Org-wide saved region groups for the AI dialer modal. `regions` is a
@@ -7248,6 +7272,16 @@ export const leadTouchpoints = pgTable(
     external_system: varchar("external_system", { length: 50 }),
     external_event_id: text("external_event_id"),
     sync_method: varchar("sync_method", { length: 30 }).default("manual"),
+    // E-226 added lead_touchpoints.recording_url and .external_agent_name and
+    // they are DELIBERATELY ABSENT HERE. This is the one table in the family
+    // written through Drizzle (db.insert below in touchpoints/write.ts), and
+    // Drizzle names every column of the table object in its INSERT — so listing
+    // them would break every touchpoint write (calls, status changes,
+    // escalations, reactivations) on any DB without E-226 applied, which today
+    // includes prod. They are written by a best-effort raw UPDATE in
+    // src/lib/neodove/inbound.ts after the transaction commits, and read via
+    // `to_jsonb(t) ->> '...'`. Same treatment, same reason, as E-224's two
+    // dealer_leads columns.
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -9634,5 +9668,134 @@ export const securityEvents = pgTable(
     // E-217 — the volumetric rules grow this table much faster, and the
     // dashboard filters by attack type.
     typeOccurredIdx: index("security_events_type_occurred_idx").on(t.event_type, t.occurred_at),
+  }),
+);
+
+// ── E-224: NeoDove ⇄ iTarang two-way lead sync ─────────────────────────────
+//
+// NeoDove has no read API. Its whole programmable surface is a per-campaign
+// "Custom Integration" endpoint we POST leads to (the URL *is* the credential —
+// no key or header auth exists) plus Workflows → Send Webhook firing back at us
+// on lead created / call connected / call not connected. Nothing can be queried.
+//
+// Deliberately NOT folded into dialer_campaigns: that table drives the AI voice
+// dialer (advanceCampaign claims rows FOR UPDATE SKIP LOCKED and places real
+// Bolna calls; /api/cron/ai-dialer sweeps for status='running'). A NeoDove row
+// parked there would eventually be robot-dialled against an audience meant for
+// human agents. The two are UNIONed at the API layer instead.
+//
+// See drizzle/E-224_neodove_integration.sql.
+
+export const neodoveCampaigns = pgTable(
+  "neodove_campaigns",
+  {
+    id: text().primaryKey().notNull(),
+    name: text().notNull(),
+    // The campaign's name in the NeoDove UI. Free text because NeoDove exposes
+    // no campaign id over any API — this is the only human-checkable link.
+    neodove_campaign_name: text("neodove_campaign_name"),
+    // NAME of the env var holding the Custom Integration URL, never the URL.
+    // That URL is the only credential NeoDove issues, so a DB read must not
+    // confer write access to their system.
+    push_endpoint_ref: text("push_endpoint_ref"),
+    update_endpoint_ref: text("update_endpoint_ref"),
+    // Same RegionSelection shape the AI-dialer start modal already emits, so
+    // the existing audience builder is reused unchanged.
+    audience_filter: jsonb("audience_filter"),
+    // E-225: human-recorded mirror of the campaign's settings INSIDE NeoDove
+    // (pipeline, managing user, agents, lead distribution). DESCRIPTIVE ONLY —
+    // NeoDove has neither a campaign-creation nor a read API, so this can only
+    // ever be what somebody observed in their UI. Writing it changes nothing on
+    // their side, and the form says so on every field.
+    // Safe to mirror here despite E-225 possibly being unapplied: every access
+    // to this table is raw `sql`, so no bare db.select().from() can break.
+    mirror_config: jsonb("mirror_config"),
+    // E-226: marks the ONE campaign the per-lead "Call now" action pushes into.
+    // A partial unique index (not expressible here) enforces the "at most one"
+    // half. NeoDove has no dial API — what makes such a lead urgent is the
+    // NeoDove-side lead distribution on that campaign, not anything we send.
+    // Safe to mirror despite E-226 possibly being unapplied for the same reason
+    // mirror_config is: every access to this table is raw `sql`.
+    is_priority_dial: boolean("is_priority_dial").default(false).notNull(),
+    // draft | pushing | active | paused | completed
+    status: varchar({ length: 20 }).default("draft").notNull(),
+    total_pushed: integer("total_pushed").default(0).notNull(),
+    push_failed: integer("push_failed").default(0).notNull(),
+    dispositions_received: integer("dispositions_received").default(0).notNull(),
+    created_by: uuid("created_by"),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    statusIdx: index("neodove_campaigns_status_idx").on(t.status, t.created_at),
+    createdByIdx: index("neodove_campaigns_created_by_idx").on(t.created_by, t.created_at),
+  }),
+);
+
+// One row per (lead, campaign). A lead can legitimately sit in several NeoDove
+// campaigns over time, so this cannot be columns on dealer_leads without
+// collapsing to the most recent push and destroying the per-campaign counters.
+// dealer_lead_id is a soft FK, matching the dialer_campaign_leads precedent.
+export const neodoveLeadLinks = pgTable(
+  "neodove_lead_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom().notNull(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    neodove_campaign_id: text("neodove_campaign_id")
+      .notNull()
+      .references(() => neodoveCampaigns.id, { onDelete: "cascade" }),
+    // NeoDove's own lead id, IF its create response returns one — unknown until
+    // the contract is probed. When absent the inbound handler falls back to
+    // matching on normalised phone.
+    neodove_lead_id: text("neodove_lead_id"),
+    // pending | pushed | failed | skipped_dedup | skipped_excluded
+    push_status: varchar("push_status", { length: 24 }).default("pending").notNull(),
+    push_error: text("push_error"),
+    pushed_at: timestamp("pushed_at", { withTimezone: true }),
+    last_event_at: timestamp("last_event_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    campaignStatusIdx: index("neodove_lead_links_campaign_status_idx").on(
+      t.neodove_campaign_id,
+      t.push_status,
+    ),
+    leadIdx: index("neodove_lead_links_lead_idx").on(t.dealer_lead_id, t.last_event_at),
+  }),
+);
+
+// Append-only ledger, both directions. NOT a debug log: because NeoDove cannot
+// be queried, a dropped webhook is unrecoverable — this table is what a NeoDove
+// CSV export is diffed against to find and backfill the gap.
+// The partial unique index on external_event_id (inbound only) is the
+// idempotency guard; see the migration.
+export const neodoveSyncEvents = pgTable(
+  "neodove_sync_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom().notNull(),
+    // 'outbound' (we pushed) | 'inbound' (NeoDove called us)
+    direction: varchar({ length: 10 }).notNull(),
+    event_type: varchar("event_type", { length: 50 }),
+    neodove_campaign_id: text("neodove_campaign_id"),
+    dealer_lead_id: text("dealer_lead_id"),
+    // NeoDove's event id. Idempotency key for inbound deliveries, and the value
+    // written to lead_touchpoints.external_event_id — whose own partial unique
+    // index (E-113) is the second, independent line of defence against replay.
+    external_event_id: text("external_event_id"),
+    http_status: integer("http_status"),
+    request_payload: jsonb("request_payload"),
+    response_payload: jsonb("response_payload"),
+    error: text("error"),
+    attempts: integer("attempts").default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    campaignIdx: index("neodove_sync_events_campaign_idx").on(
+      t.neodove_campaign_id,
+      t.created_at,
+    ),
+    leadIdx: index("neodove_sync_events_lead_idx").on(t.dealer_lead_id, t.created_at),
   }),
 );

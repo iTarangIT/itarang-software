@@ -6,7 +6,14 @@ import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
 import { redirect } from "next/navigation";
 import { LeadDetailClient } from "@/components/leads/lead-detail-client";
-import { normalizeCalls } from "@/lib/leads/normalizeCalls";
+import {
+  isExternalCallTouchpoint,
+  normalizeCalls,
+} from "@/lib/leads/normalizeCalls";
+import {
+  TouchpointTimeline,
+  type LeadTouchpoint,
+} from "@/components/leads/touchpoint-timeline";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +55,77 @@ export default async function LeadDetailPage({ params }: any) {
     .orderBy(desc(sql`COALESCE(${aiCallLogs.started_at}, ${aiCallLogs.created_at})`));
 
   const history = (lead.follow_up_history as any[]) ?? [];
-  const calls = normalizeCalls(logs, history);
+  // normalizeCalls is called AFTER the touchpoint query below, because external
+  // (NeoDove) calls are a third source for it — see the note there.
+
+  // Human/vendor touch history. Separate store from ai_call_logs on purpose:
+  // ai_call_logs is what the DIALER did, lead_touchpoints is what the BUSINESS
+  // did — inside-sales calls, WhatsApp, and every NeoDove disposition arriving
+  // on the webhook. Until this query existed the page rendered none of it.
+  //
+  // Raw sql rather than the Drizzle object because performed_by is text while
+  // users.id is uuid; the ::text cast on the join side matches the established
+  // pattern in src/lib/admin/listQueries.ts.
+  //
+  // Wrapped because a missing relation fails a statement at PARSE time, taking
+  // the whole page with it — the same class of failure that took the Campaigns
+  // tab down when neodove_campaigns was named in a CTE on a DB without E-224.
+  // lead_touchpoints (E-113) should exist everywhere, but this section is a
+  // read-only display: degrading it to "no entries" is always better than a
+  // 500 on the lead page.
+  let touchpoints: LeadTouchpoint[] = [];
+  try {
+    touchpoints = await db.execute<LeadTouchpoint>(sql`
+    SELECT t.touchpoint_id::text AS touchpoint_id,
+           t.touchpoint_type,
+           u.name AS performed_by_name,
+           -- Emitted as an explicit UTC ISO string rather than a Date so the
+           -- value crossing the server/client boundary has one unambiguous
+           -- shape for new Date() to parse.
+           to_char(t.performed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS performed_at,
+           t.call_status,
+           t.call_duration_sec,
+           t.is_engaged,
+           t.remarks,
+           t.external_system,
+           t.sync_method,
+           -- E-226, read through to_jsonb for the same reason the whole query
+           -- is wrapped in a try: naming a column that does not exist fails at
+           -- PARSE time, so a direct t.recording_url would blank the ENTIRE
+           -- timeline on any DB without E-226 rather than just omitting the
+           -- recording. The jsonb lookup resolves at runtime and yields NULL.
+           to_jsonb(t) ->> 'recording_url' AS recording_url,
+           to_jsonb(t) ->> 'external_agent_name' AS external_agent_name
+      FROM lead_touchpoints t
+      LEFT JOIN users u ON u.id::text = t.performed_by
+     WHERE t.dealer_lead_id = ${id}
+     ORDER BY t.performed_at DESC
+     LIMIT 200
+  `);
+  } catch (err) {
+    console.error("[leads/[id]] touchpoint history unavailable:", err);
+  }
+
+  // A call made in NeoDove is a call. It lands in lead_touchpoints (never in
+  // ai_call_logs — that table is what OUR dialer did, and the dialer cron sweeps
+  // it), so Call History / Total Calls / Latest Status could not see it: the page
+  // rendered "No calls made yet" directly above an Activity timeline entry
+  // describing the call, which reads as the integration being broken.
+  //
+  // Reuses the rows already fetched above rather than issuing a second query.
+  const externalCalls = touchpoints
+    .filter((t) => isExternalCallTouchpoint(t))
+    .map((t) => ({
+      id: t.touchpoint_id,
+      touchpoint_type: t.touchpoint_type,
+      call_status: t.call_status,
+      external_system: t.external_system,
+      external_agent_name: t.external_agent_name,
+      recording_url: t.recording_url,
+      remarks: t.remarks,
+      created_at: t.performed_at,
+    }));
+  const calls = normalizeCalls(logs, history, externalCalls);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -93,6 +170,10 @@ export default async function LeadDetailPage({ params }: any) {
         </div>
 
         <LeadDetailClient calls={calls} lead={lead} />
+
+        <div className="mt-6">
+          <TouchpointTimeline touchpoints={touchpoints} />
+        </div>
       </div>
     </div>
   );

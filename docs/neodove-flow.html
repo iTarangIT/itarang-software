@@ -1,0 +1,480 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}img,svg{max-width:100%}</style>
+</head>
+<body>
+<title>NeoDove Integration — End-to-End Flow</title>
+
+<style>
+  :root {
+    --paper: #E9ECF0;
+    --board: #FBFCFD;
+    --card: #FFFFFF;
+    --ink: #14181E;
+    --ink-2: #4C5665;
+    --rule: #C3CCD9;
+    --out: #24409B;
+    --in: #0B6B62;
+    --warn: #9C3A1E;
+    --display: Constantia, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --body: Corbel, "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", Consolas, "SFMono-Regular", ui-monospace, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0F1319;
+      --board: #161B23;
+      --card: #1B212A;
+      --ink: #E4E9F0;
+      --ink-2: #98A3B3;
+      --rule: #303A49;
+      --out: #8CA1FF;
+      --in: #46C2AE;
+      --warn: #E9906F;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0F1319;
+    --board: #161B23;
+    --card: #1B212A;
+    --ink: #E4E9F0;
+    --ink-2: #98A3B3;
+    --rule: #303A49;
+    --out: #8CA1FF;
+    --in: #46C2AE;
+    --warn: #E9906F;
+  }
+
+  :root[data-theme="light"] {
+    --paper: #E9ECF0;
+    --board: #FBFCFD;
+    --card: #FFFFFF;
+    --ink: #14181E;
+    --ink-2: #4C5665;
+    --rule: #C3CCD9;
+    --out: #24409B;
+    --in: #0B6B62;
+    --warn: #9C3A1E;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    line-height: 1.5;
+    padding: 32px 24px 64px;
+  }
+
+  .sheet {
+    max-width: 1560px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* — title block, set like the corner block of an engineering drawing — */
+  .titleblock {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px 40px;
+    align-items: end;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 14px;
+  }
+
+  .titleblock h1 {
+    font-family: var(--display);
+    font-size: clamp(28px, 4vw, 46px);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    text-wrap: balance;
+  }
+
+  .titleblock p {
+    color: var(--ink-2);
+    font-size: 15px;
+    max-width: 62ch;
+    margin-top: 8px;
+  }
+
+  .stamp {
+    display: flex;
+    gap: 28px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .stamp span { display: block; }
+  .stamp b { display: block; color: var(--ink); font-weight: 600; letter-spacing: 0.04em; }
+
+  figure {
+    background: var(--board);
+    border: 1px solid var(--rule);
+    padding: 8px;
+    overflow-x: auto;
+  }
+
+  figure svg {
+    display: block;
+    min-width: 1180px;
+    width: 100%;
+    height: auto;
+  }
+
+  figcaption {
+    margin-top: 10px;
+    padding: 0 6px;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+
+  /* — svg type scale — */
+  .h  { font: 600 12.5px var(--body); fill: var(--ink); }
+  .n  { font: 10.5px var(--body); fill: var(--ink); }
+  .nn { font: 10px var(--body); fill: var(--ink-2); }
+  .m  { font: 10px var(--mono); fill: var(--ink); }
+  .mm { font: 9.5px var(--mono); fill: var(--ink-2); }
+  .w  { font: 600 10px var(--body); fill: var(--warn); }
+  .lbl { font: 9.5px var(--body); fill: var(--ink-2); letter-spacing: 0.05em; }
+  .eyebrow { font: 600 11px var(--body); fill: var(--ink); letter-spacing: 0.14em; text-transform: uppercase; }
+  .band-h { font: 600 11px var(--mono); fill: var(--ink-2); letter-spacing: 0.06em; }
+
+  .card { fill: var(--card); stroke: var(--rule); stroke-width: 1; }
+  .ext  { fill: none; stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 5 4; }
+  .band { fill: var(--card); stroke: var(--rule); stroke-width: 1; }
+  .tab-out { fill: var(--out); }
+  .tab-in  { fill: var(--in); }
+
+  .flow-out { stroke: var(--out); stroke-width: 1.6; fill: none; }
+  .flow-in  { stroke: var(--in); stroke-width: 1.6; fill: none; }
+  .flow-db  { stroke: var(--ink-2); stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+
+  /* — key — */
+  .key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+    border-top: 1px solid var(--rule);
+    padding: 12px 2px 0;
+  }
+
+  .key div { display: flex; align-items: center; gap: 8px; }
+  .key svg { flex: none; }
+</style>
+
+<div class="sheet">
+
+  <header class="titleblock">
+    <div>
+      <h1>NeoDove ⇄ iTarang, end to end</h1>
+      <p>Every hop of the two-way telecalling sync: which button an operator presses, which route it hits, which
+        function does the work, what lands in Postgres, and how a dropped delivery is recovered.</p>
+    </div>
+    <div class="stamp">
+      <span>Migrations<b>E-224 / 225 / 226</b></span>
+      <span>Webhook<b>POST /api/neodove/webhook</b></span>
+      <span>Drawn<b>2026-08-04</b></span>
+    </div>
+  </header>
+
+  <figure>
+    <svg viewBox="0 0 1484 1060" role="img"
+         aria-label="End-to-end NeoDove flow. Outbound: operator actions in the leads UI call POST routes under /api/neodove, which resolve an audience, apply the exclusion guard, map each lead with dealerLeadToNeodove and POST it via pushLead to the campaign's Custom Integration endpoint. NeoDove telecallers dial and dispose. Inbound: NeoDove's Send Webhook workflow POSTs to /api/neodove/webhook, which verifies a bearer token, parses the event, claims an idempotency row, acks 200 and processes in after(); handleNeodoveEvent dispatches to lead-created, disposition and lead-deleted handlers, which resolve the lead and write a touchpoint. Postgres tables sit between the two directions.">
+
+      <defs>
+        <marker id="ah-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--out)" />
+        </marker>
+        <marker id="ah-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--in)" />
+        </marker>
+        <marker id="ah-db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-2)" />
+        </marker>
+      </defs>
+
+      <!-- ══ BAND 1 · OUTBOUND ══ -->
+      <rect x="40" y="139" width="4" height="14" class="tab-out" />
+      <text x="54" y="151" class="eyebrow">1 — Outbound · iTarang pushes the lead</text>
+
+      <!-- A1 operator action -->
+      <rect x="40" y="170" width="220" height="240" class="card" rx="2" />
+      <rect x="40" y="170" width="220" height="3" class="tab-out" />
+      <text x="54" y="196" class="h">1 · Operator action</text>
+      <text x="54" y="222" class="n">Leads list → Send to NeoDove</text>
+      <text x="54" y="241" class="mm">send-to-neodove-modal.tsx</text>
+      <text x="54" y="260" class="n">Campaign → Push audience</text>
+      <text x="54" y="279" class="mm">neodove-push-panel.tsx</text>
+      <text x="54" y="298" class="n">Setup, once per campaign</text>
+      <text x="54" y="317" class="mm">GET/POST /api/neodove/campaigns</text>
+      <text x="54" y="336" class="mm">PATCH …/campaigns/[id]</text>
+      <text x="54" y="355" class="mm">GET …/endpoints</text>
+
+      <!-- A2 api route -->
+      <rect x="336" y="170" width="220" height="240" class="card" rx="2" />
+      <rect x="336" y="170" width="220" height="3" class="tab-out" />
+      <text x="350" y="196" class="h">2 · API route</text>
+      <text x="350" y="222" class="m">POST /api/neodove/…</text>
+      <text x="350" y="241" class="m">  campaigns/[id]/preview</text>
+      <text x="350" y="260" class="m">  campaigns/[id]/push</text>
+      <text x="350" y="279" class="m">  leads/push-batch</text>
+      <text x="350" y="298" class="m">  leads/[id]/push</text>
+      <text x="350" y="317" class="m">  leads/[id]/dial</text>
+      <text x="350" y="341" class="nn">Gate on every one:</text>
+      <text x="350" y="360" class="mm">requireRole(NEODOVE_ADMIN_ROLES)</text>
+      <text x="350" y="379" class="mm">getNeodoveConfig().enabled</text>
+      <text x="350" y="398" class="nn">otherwise 409 / 403</text>
+
+      <!-- A3 choose + guard -->
+      <rect x="632" y="170" width="220" height="240" class="card" rx="2" />
+      <rect x="632" y="170" width="220" height="3" class="tab-out" />
+      <text x="646" y="196" class="h">3 · Choose + guard</text>
+      <text x="646" y="222" class="m">resolveAudience()</text>
+      <text x="646" y="241" class="nn">filter → ids, server-side only</text>
+      <text x="646" y="260" class="m">isAiDialable()</text>
+      <text x="646" y="279" class="nn">BRD §0.2 · skips a lead someone</text>
+      <text x="646" y="298" class="nn">here is working (force overrides)</text>
+      <text x="646" y="317" class="m">INSERT neodove_lead_links</text>
+      <text x="646" y="336" class="nn">push_status='pending' is itself</text>
+      <text x="646" y="355" class="nn">the double-click guard</text>
+      <text x="646" y="374" class="m">after() → drainCampaign()</text>
+      <text x="646" y="393" class="nn">5 at a time · 250 ms pacing</text>
+
+      <!-- A4 map + send -->
+      <rect x="928" y="170" width="220" height="240" class="card" rx="2" />
+      <rect x="928" y="170" width="220" height="3" class="tab-out" />
+      <text x="942" y="196" class="h">4 · Map + send</text>
+      <text x="942" y="222" class="m">dealerLeadToNeodove()</text>
+      <text x="942" y="241" class="nn">mobile · name · itarang_* fields</text>
+      <text x="942" y="260" class="m">resolveEndpoint(endpoint_ref)</text>
+      <text x="942" y="279" class="nn">env var name → URL. The URL is</text>
+      <text x="942" y="298" class="nn">the credential, never in the DB</text>
+      <text x="942" y="317" class="m">pushLead()</text>
+      <text x="942" y="336" class="nn">3 tries · 15 s · retries 5xx + 429</text>
+      <text x="942" y="355" class="m">logSyncEvent()</text>
+      <text x="942" y="374" class="nn">every attempt, win or lose</text>
+      <text x="942" y="393" class="w">200 OK ≠ lead created</text>
+
+      <!-- A5 neodove -->
+      <rect x="1224" y="170" width="220" height="240" class="ext" rx="2" />
+      <text x="1238" y="196" class="h">NeoDove · not ours</text>
+      <text x="1238" y="222" class="n">Custom Integration endpoint,</text>
+      <text x="1238" y="241" class="n">one per campaign</text>
+      <text x="1238" y="260" class="n">Lead lands in the campaign;</text>
+      <text x="1238" y="279" class="n">a telecaller dials it and sets</text>
+      <text x="1238" y="298" class="n">stage, disposition, tag, remark</text>
+      <text x="1238" y="326" class="w">No read API</text>
+      <text x="1238" y="345" class="w">No dial API</text>
+      <text x="1238" y="364" class="w">No assignee parameter</text>
+      <text x="1238" y="390" class="mm">docs/neodove-contract.md</text>
+
+      <!-- outbound connectors -->
+      <line x1="264" y1="290" x2="330" y2="290" class="flow-out" marker-end="url(#ah-out)" />
+      <text x="297" y="282" class="lbl" text-anchor="middle">opens</text>
+      <line x1="560" y1="290" x2="626" y2="290" class="flow-out" marker-end="url(#ah-out)" />
+      <text x="593" y="282" class="lbl" text-anchor="middle">resolve</text>
+      <line x1="856" y1="290" x2="922" y2="290" class="flow-out" marker-end="url(#ah-out)" />
+      <text x="889" y="282" class="lbl" text-anchor="middle">per lead</text>
+      <line x1="1152" y1="290" x2="1218" y2="290" class="flow-out" marker-end="url(#ah-out)" />
+      <text x="1185" y="282" class="lbl" text-anchor="middle">HTTPS</text>
+
+      <!-- writes down into the store -->
+      <line x1="742" y1="414" x2="742" y2="474" class="flow-db" marker-end="url(#ah-db)" />
+      <text x="752" y="452" class="lbl">seeds links</text>
+      <line x1="1038" y1="414" x2="1038" y2="474" class="flow-db" marker-end="url(#ah-db)" />
+      <text x="1048" y="452" class="lbl">ledger + counters</text>
+
+      <!-- the turnaround -->
+      <line x1="1334" y1="414" x2="1334" y2="744" class="flow-in" marker-end="url(#ah-in)" />
+      <text x="1324" y="556" class="lbl" text-anchor="end">the call happens</text>
+      <text x="1324" y="572" class="lbl" text-anchor="end">inside NeoDove</text>
+
+      <!-- ══ BAND 2 · STORE ══ -->
+      <rect x="40" y="449" width="4" height="14" class="tab-in" />
+      <text x="54" y="461" class="eyebrow">System of record · both directions meet here</text>
+
+      <rect x="40" y="480" width="1108" height="200" class="band" rx="2" />
+      <text x="54" y="506" class="band-h">POSTGRES (database-1) — ADDED BY E-224, E-225, E-226</text>
+
+      <text x="54" y="546" class="m">neodove_campaigns</text>
+      <text x="54" y="566" class="nn">mirror of their config</text>
+      <text x="54" y="582" class="nn">total_pushed · push_failed</text>
+      <text x="54" y="598" class="nn">dispositions_received</text>
+      <text x="54" y="614" class="nn">is_priority_dial (E-226)</text>
+
+      <text x="234" y="546" class="m">neodove_lead_links</text>
+      <text x="234" y="566" class="nn">lead ⇄ campaign join</text>
+      <text x="234" y="582" class="nn">push_status · pushed_at</text>
+      <text x="234" y="598" class="nn">neodove_lead_id</text>
+      <text x="234" y="614" class="nn">unique (lead, campaign)</text>
+
+      <text x="414" y="546" class="m">neodove_sync_events</text>
+      <text x="414" y="566" class="nn">every call in and out</text>
+      <text x="414" y="582" class="nn">raw request + response</text>
+      <text x="414" y="598" class="nn">external_event_id unique</text>
+      <text x="414" y="614" class="nn">error = the replay queue</text>
+
+      <text x="594" y="546" class="m">dealer_leads</text>
+      <text x="594" y="566" class="nn">source='neodove'</text>
+      <text x="594" y="582" class="nn">neodove_sync_status</text>
+      <text x="594" y="598" class="nn">neodove_synced_at</text>
+      <text x="594" y="614" class="nn">phone unique on raw text</text>
+
+      <text x="774" y="546" class="m">lead_touchpoints</text>
+      <text x="774" y="566" class="nn">inside_sales_call rows</text>
+      <text x="774" y="582" class="nn">external_event_id uniq (E-113)</text>
+      <text x="774" y="598" class="nn">recording_url (E-226)</text>
+      <text x="774" y="614" class="nn">external_agent_name</text>
+
+      <text x="954" y="546" class="m">duplicate_merge_…</text>
+      <text x="954" y="566" class="nn">raised when the phone</text>
+      <text x="954" y="582" class="nn">matches but the address</text>
+      <text x="954" y="598" class="nn">does not — a human</text>
+      <text x="954" y="614" class="nn">decides, not the sync</text>
+
+      <!-- inbound writes up into the store -->
+      <line x1="1038" y1="744" x2="1038" y2="686" class="flow-db" marker-end="url(#ah-db)" />
+      <text x="1048" y="722" class="lbl">claims event id</text>
+      <line x1="446" y1="744" x2="446" y2="686" class="flow-db" marker-end="url(#ah-db)" />
+      <text x="456" y="722" class="lbl">touchpoint + lead</text>
+      <line x1="150" y1="686" x2="150" y2="744" class="flow-db" marker-end="url(#ah-db)" />
+      <text x="160" y="722" class="lbl">reads</text>
+
+      <!-- ══ BAND 3 · INBOUND ══ -->
+      <rect x="40" y="719" width="4" height="14" class="tab-in" />
+      <text x="54" y="731" class="eyebrow">2 — Inbound · NeoDove reports what happened</text>
+
+      <!-- B1 what the team sees -->
+      <rect x="40" y="750" width="220" height="280" class="card" rx="2" />
+      <rect x="40" y="750" width="220" height="3" class="tab-in" />
+      <text x="54" y="776" class="h">9 · What the team sees</text>
+      <text x="54" y="802" class="n">Call on the lead timeline</text>
+      <text x="54" y="820" class="mm">touchpoint-timeline.tsx</text>
+      <text x="54" y="838" class="n">Campaigns tab (AI + NeoDove)</text>
+      <text x="54" y="856" class="mm">GET /api/campaigns/unified</text>
+      <text x="54" y="874" class="n">Sync activity ledger</text>
+      <text x="54" y="892" class="mm">GET /api/neodove/activity</text>
+      <text x="54" y="910" class="n">Campaign detail + counters</text>
+      <text x="54" y="928" class="mm">GET …/campaigns/[id]</text>
+      <text x="54" y="952" class="nn">Recording player and the</text>
+      <text x="54" y="970" class="nn">agent's name sit on the call</text>
+      <text x="54" y="988" class="nn">row itself; lead status moves</text>
+      <text x="54" y="1006" class="nn">only if the stage maps to one</text>
+
+      <!-- B2 resolve + write -->
+      <rect x="336" y="750" width="220" height="280" class="card" rx="2" />
+      <rect x="336" y="750" width="220" height="3" class="tab-in" />
+      <text x="350" y="776" class="h">8 · Resolve + write</text>
+      <text x="350" y="802" class="m">resolveInboundLead()</text>
+      <text x="350" y="820" class="nn">1 itarang_lead_id, round-tripped</text>
+      <text x="350" y="838" class="nn">2 neodove_lead_links</text>
+      <text x="350" y="856" class="nn">3 phone — last 10 digits, not =</text>
+      <text x="350" y="874" class="m">ensureDealerLead()</text>
+      <text x="350" y="892" class="nn">classifyAgainstExisting() →</text>
+      <text x="350" y="910" class="nn">create · reactivate · merge req</text>
+      <text x="350" y="928" class="m">leadStatusFor + canTransition</text>
+      <text x="350" y="946" class="nn">illegal move → note, not a status</text>
+      <text x="350" y="964" class="m">writeTouchpoint()</text>
+      <text x="350" y="982" class="nn">external_event_id = guard #2</text>
+      <text x="350" y="1000" class="m">attachCallEvidence()</text>
+      <text x="350" y="1018" class="nn">recording url + agent name</text>
+
+      <!-- B3 dispatch -->
+      <rect x="632" y="750" width="220" height="280" class="card" rx="2" />
+      <rect x="632" y="750" width="220" height="3" class="tab-in" />
+      <text x="646" y="776" class="h">7 · Dispatch</text>
+      <text x="646" y="802" class="m">handleNeodoveEvent()</text>
+      <text x="646" y="820" class="nn">one switch, three handlers</text>
+      <text x="646" y="844" class="m">handleLeadCreated()</text>
+      <text x="646" y="862" class="nn">a lead born in NeoDove, deduped</text>
+      <text x="646" y="880" class="nn">exactly like a typed-in one</text>
+      <text x="646" y="904" class="m">handleDisposition()</text>
+      <text x="646" y="922" class="nn">disposed · connected ·</text>
+      <text x="646" y="940" class="nn">not connected. Creates the lead</text>
+      <text x="646" y="958" class="nn">if the number is new here</text>
+      <text x="646" y="982" class="m">handleLeadDeleted()</text>
+      <text x="646" y="1000" class="w">flags for review, never deletes</text>
+      <text x="646" y="1018" class="nn">unrecognised → lead_disposed</text>
+
+      <!-- B4 webhook route -->
+      <rect x="928" y="750" width="220" height="280" class="card" rx="2" />
+      <rect x="928" y="750" width="220" height="3" class="tab-in" />
+      <text x="942" y="776" class="h">6 · Webhook route</text>
+      <text x="942" y="802" class="m">POST /api/neodove/webhook</text>
+      <text x="942" y="820" class="mm">GET = connectivity check</text>
+      <text x="942" y="844" class="m">verifyNeodoveWebhook()</text>
+      <text x="942" y="862" class="nn">bearer token, timing-safe → 401</text>
+      <text x="942" y="886" class="m">parseInboundEvent()</text>
+      <text x="942" y="904" class="nn">the only place their field names</text>
+      <text x="942" y="922" class="nn">exist; unparseable is stored,</text>
+      <text x="942" y="940" class="nn">still acked, never retried</text>
+      <text x="942" y="964" class="m">INSERT … ON CONFLICT</text>
+      <text x="942" y="982" class="nn">idempotency guard #1 →</text>
+      <text x="942" y="1000" class="nn">duplicate_ignored</text>
+      <text x="942" y="1018" class="m">200, then after(handler)</text>
+
+      <!-- B5 neodove workflow -->
+      <rect x="1224" y="750" width="220" height="280" class="ext" rx="2" />
+      <text x="1238" y="776" class="h">5 · NeoDove workflow</text>
+      <text x="1238" y="802" class="n">Workflows → Send Webhook,</text>
+      <text x="1238" y="820" class="n">method POST, custom header:</text>
+      <text x="1238" y="840" class="m">Authorization: Bearer</text>
+      <text x="1238" y="858" class="mm">&lt;NEODOVE_WEBHOOK_SECRET&gt;</text>
+      <text x="1238" y="882" class="nn">Events seen live:</text>
+      <text x="1238" y="900" class="mm">event_name=LEAD_CREATE</text>
+      <text x="1238" y="918" class="mm">event_name=LEAD_DISPOSE</text>
+      <text x="1238" y="936" class="mm">LEAD_DELETE · call flags</text>
+      <text x="1238" y="960" class="nn">Our custom fields come back</text>
+      <text x="1238" y="978" class="nn">nested, not as flat keys:</text>
+      <text x="1238" y="996" class="mm">other_properties[].properties</text>
+      <text x="1238" y="1018" class="nn">No event id — one is synthesised</text>
+
+      <!-- inbound connectors, right to left -->
+      <line x1="1218" y1="890" x2="1152" y2="890" class="flow-in" marker-end="url(#ah-in)" />
+      <text x="1185" y="882" class="lbl" text-anchor="middle">POST</text>
+      <line x1="922" y1="890" x2="856" y2="890" class="flow-in" marker-end="url(#ah-in)" />
+      <text x="889" y="882" class="lbl" text-anchor="middle">after()</text>
+      <line x1="626" y1="890" x2="560" y2="890" class="flow-in" marker-end="url(#ah-in)" />
+      <text x="593" y="882" class="lbl" text-anchor="middle">switch</text>
+      <line x1="330" y1="890" x2="264" y2="890" class="flow-in" marker-end="url(#ah-in)" />
+      <text x="297" y="882" class="lbl" text-anchor="middle">renders</text>
+
+    </svg>
+  </figure>
+
+  <div class="key">
+    <div>
+      <svg width="34" height="10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" class="flow-out" marker-end="url(#ah-out)" /></svg>
+      Outbound HTTP hop
+    </div>
+    <div>
+      <svg width="34" height="10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" class="flow-in" marker-end="url(#ah-in)" /></svg>
+      Inbound HTTP hop
+    </div>
+    <div>
+      <svg width="34" height="10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" class="flow-db" marker-end="url(#ah-db)" /></svg>
+      Database read or write
+    </div>
+    <div>
+      <svg width="34" height="14" aria-hidden="true"><rect x="1" y="1" width="30" height="12" class="ext" /></svg>
+      System we do not control
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
+

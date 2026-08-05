@@ -146,6 +146,53 @@ const BUYBACK_ADMIN_SECTION = {
   ],
 };
 
+/**
+ * E-224 — NeoDove, the external telecalling vendor the business runs its
+ * calling in. Shown to exactly the roles NEODOVE_ADMIN_ROLES lets through
+ * (src/lib/neodove/roles.ts: admin, sales_head, business_head, ceo,
+ * sales_manager) — pushing the prospect pool to an outside vendor consumes
+ * their plan quota, so it is not an individual-rep capability.
+ *
+ * One shared const rather than five copies, for the same reason
+ * BUYBACK_ADMIN_SECTION is: a link a role can see but not open is worse than
+ * no link, and five hand-maintained copies guarantee that drift eventually.
+ *
+ * Its own section rather than items inside LEAD MANAGEMENT because this
+ * integration has a failure mode nothing else there has — NeoDove cannot be
+ * queried, so a dropped webhook is silent and unrecoverable. Sync Activity and
+ * Reconcile exist only to make that visible, and they are useless if you have
+ * to go hunting for them.
+ */
+const NEODOVE_SECTION = {
+  section: "NEODOVE",
+  items: [
+    {
+      id: "neodove-campaigns",
+      label: "Campaigns",
+      icon: Megaphone,
+      href: "/leads/neodove-campaigns",
+      // Deliberately NOT `exact`. getActiveItemId is longest-match-wins, so
+      // /activity and /reconcile already beat this item on their own pages
+      // (their paths are longer), while campaign DETAIL routes —
+      // /leads/neodove-campaigns/NDC-… — match only this one and correctly keep
+      // Campaigns lit. Marking it exact would black the sidebar out on every
+      // detail page, which is precisely the U5 bug documented further down.
+    },
+    {
+      id: "neodove-activity",
+      label: "Sync Activity",
+      icon: History,
+      href: "/leads/neodove-campaigns/activity",
+    },
+    {
+      id: "neodove-reconcile",
+      label: "Reconcile",
+      icon: Upload,
+      href: "/leads/neodove-campaigns/reconcile",
+    },
+  ],
+};
+
 // Items appended to every role's sidebar — universal actions any logged-in
 // user can take (currently: submit a business expense → CEO approves).
 const COMMON_ITEMS = [
@@ -308,6 +355,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
@@ -523,6 +571,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
@@ -552,6 +601,7 @@ const roleNavigation: Record<string, any[]> = {
       ],
     },
     // Dealer Prospecting section removed — scraped leads now live inside /leads as a tab
+    NEODOVE_SECTION,
   ],
 
   inventory_manager: [
@@ -674,6 +724,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    NEODOVE_SECTION,
     {
       section: "REVIEW",
       items: [
@@ -871,6 +922,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
