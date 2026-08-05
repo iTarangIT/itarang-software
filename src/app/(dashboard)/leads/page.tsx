@@ -26,8 +26,11 @@ import {
   FileSpreadsheet,
   Loader2,
   ChevronDown,
+  Send,
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
+import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
+import { SendToNeodoveModal } from "@/components/leads/send-to-neodove-modal";
 import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
@@ -45,6 +48,7 @@ import {
 import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
 import { CampaignsTable } from "@/components/leads/campaigns-table";
 import { CostAnalyticsView } from "@/components/leads/cost-analytics-view";
+import { AddLeadModal } from "@/components/leads/add-lead-modal";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
@@ -61,6 +65,19 @@ const COST_ANALYTICS_ROLES = new Set([
   "finance_controller",
   "admin",
 ]);
+
+// Roles allowed to hand leads to NeoDove. Mirrors NEODOVE_ADMIN_ROLES in
+// src/lib/neodove/roles.ts — kept as a literal rather than imported because
+// that module is only reached from server routes, and pulling it into a client
+// bundle to read five strings is not worth the coupling.
+const NEODOVE_ROLES = new Set([
+  "admin",
+  "sales_head",
+  "business_head",
+  "ceo",
+  "sales_manager",
+]);
+
 type DialerPhase = "idle" | "calling" | "countdown";
 type UploadStatus = "idle" | "parsing" | "uploading" | "done" | "error";
 
@@ -228,20 +245,25 @@ function buildDialerQueue(leads: any[]): any[] {
 
 // ─── CSV Parser ───────────────────────────────────────────────
 
-function parseCSV(text: string): Record<string, string>[] {
-  const lines = text.trim().split("\n");
-  if (lines.length < 2) return [];
-  const headers = lines[0]
-    .split(",")
-    .map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
-  return lines.slice(1).map((line) => {
-    const values = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => {
-      row[h] = values[i] ?? "";
-    });
-    return row;
+// Uses papaparse (already a dependency, used by the AI-dialer list importer).
+//
+// This replaced a hand-rolled `split(",")` parser that had no quoted-field
+// support. Any address containing a comma — "Shop 4, MG Road" — shifted every
+// subsequent column left by one, so the phone column silently became a fragment
+// of the address and the row was either rejected as invalid or, worse, imported
+// against the wrong dealer. Quoted fields, embedded newlines and escaped quotes
+// are all handled correctly now.
+//
+// Server-side parsing lives in src/lib/admin/csvUpload.ts (parseCsvGrid); it
+// can't be reused here because that module imports the DB client.
+async function parseCSV(text: string): Promise<Record<string, string>[]> {
+  const Papa = (await import("papaparse")).default;
+  const { data } = Papa.parse<Record<string, string>>(text.trim(), {
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: (h) => h.trim().toLowerCase(),
   });
+  return data;
 }
 function normalizeRow(row: Record<string, string>) {
   // Build a lowercase-keyed version of the row for case-insensitive matching
@@ -314,6 +336,11 @@ function UploadModal({
   const [result, setResult] = useState<{
     inserted: number;
     skipped: number;
+    reactivated?: number;
+    duplicate_skipped?: number;
+    address_mismatch?: number;
+    invalid_phone?: number;
+    failed?: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -326,7 +353,7 @@ function UploadModal({
       let rows: Record<string, string>[] = [];
       if (f.name.endsWith(".csv")) {
         const text = await f.text();
-        rows = parseCSV(text);
+        rows = await parseCSV(text);
       } else {
         const XLSX = await import("xlsx");
         const buffer = await f.arrayBuffer();
@@ -367,7 +394,15 @@ function UploadModal({
         setStatus("error");
         return;
       }
-      setResult({ inserted: data.inserted, skipped: data.skipped });
+      setResult({
+        inserted: data.inserted,
+        skipped: data.skipped,
+        reactivated: data.reactivated,
+        duplicate_skipped: data.duplicate_skipped,
+        address_mismatch: data.address_mismatch,
+        invalid_phone: data.invalid_phone,
+        failed: data.failed,
+      });
       setStatus("done");
       delete (window as any).__uploadRows;
     } catch (e: any) {
@@ -408,13 +443,42 @@ function UploadModal({
                 <span className="text-emerald-600 font-medium">
                   {result.inserted} leads added
                 </span>
-                {result.skipped > 0 && (
-                  <span className="text-gray-400">
-                    {" "}
-                    · {result.skipped} skipped (duplicate phone)
-                  </span>
-                )}
               </p>
+              {/* The four dedup outcomes, itemised. The old modal collapsed all
+                  of these into "skipped (duplicate phone)", which was wrong on
+                  three counts: reactivated leads aren't skipped, address
+                  mismatches are queued for a human rather than dropped, and an
+                  unparseable phone isn't a duplicate at all. */}
+              <div className="mt-3 space-y-1 text-xs">
+                {!!result.reactivated && (
+                  <p className="text-blue-600">
+                    {result.reactivated} previously-lost{" "}
+                    {result.reactivated === 1 ? "lead" : "leads"} reactivated
+                  </p>
+                )}
+                {!!result.duplicate_skipped && (
+                  <p className="text-gray-400">
+                    {result.duplicate_skipped} already in the system — skipped
+                  </p>
+                )}
+                {!!result.address_mismatch && (
+                  <p className="text-amber-600">
+                    {result.address_mismatch} matched an existing lead at a
+                    different address — sent to the admin merge queue
+                  </p>
+                )}
+                {!!result.invalid_phone && (
+                  <p className="text-gray-400">
+                    {result.invalid_phone} skipped — not a valid 10-digit Indian
+                    mobile
+                  </p>
+                )}
+                {!!result.failed && (
+                  <p className="text-rose-600">
+                    {result.failed} failed — see server logs
+                  </p>
+                )}
+              </div>
               <button
                 onClick={() => {
                   onSuccess();
@@ -984,6 +1048,10 @@ export default function LeadsUnifiedPage() {
   // leaves canSeeCostAnalytics=false so we never accidentally show a tab
   // to an unauthorized user (the API would block them anyway).
   const [canSeeCostAnalytics, setCanSeeCostAnalytics] = useState(false);
+  // Same single profile fetch also decides whether the NeoDove hand-off
+  // controls render. Defaults to false so a failed fetch hides an action the
+  // API would refuse anyway.
+  const [canSendToNeodove, setCanSendToNeodove] = useState(false);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/user/profile")
@@ -993,6 +1061,9 @@ export default function LeadsUnifiedPage() {
         const role = json?.data?.role as string | undefined;
         if (role && COST_ANALYTICS_ROLES.has(role)) {
           setCanSeeCostAnalytics(true);
+        }
+        if (role && NEODOVE_ROLES.has(role)) {
+          setCanSendToNeodove(true);
         }
       })
       .catch(() => {
@@ -1005,6 +1076,7 @@ export default function LeadsUnifiedPage() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
   const [showUpload, setShowUpload] = useState(false);
+  const [showAddLead, setShowAddLead] = useState(false);
 
   const [leads, setLeads] = useState<any[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
@@ -1024,6 +1096,27 @@ export default function LeadsUnifiedPage() {
   // all-time (default). Both ends inclusive; sent to /api/dealer-leads.
   const [leadsFrom, setLeadsFrom] = useState("");
   const [leadsTo, setLeadsTo] = useState("");
+
+  // Bulk NeoDove hand-off. Selection is scoped to the leads currently on
+  // screen and cleared whenever the visible set changes — carrying a hidden
+  // selection across pages or filters would mean sending leads the operator
+  // can no longer see, and a NeoDove push cannot be undone.
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [showBulkNeodove, setShowBulkNeodove] = useState(false);
+  useEffect(() => {
+    setSelectedLeadIds(new Set());
+  }, [leadsPage, search, leadsFrom, leadsTo, tab]);
+
+  const toggleLeadSelected = (id: string) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const [convertedLeads, setConvertedLeads] = useState<any[]>([]);
   const [convertedTotal, setConvertedTotal] = useState(0);
@@ -1487,6 +1580,13 @@ export default function LeadsUnifiedPage() {
         />
       )}
 
+      {showAddLead && (
+        <AddLeadModal
+          onClose={() => setShowAddLead(false)}
+          onSuccess={() => fetchLeads(1, search)}
+        />
+      )}
+
       <DialerStartModal
         isOpen={dialerModalOpen}
         onClose={() => setDialerModalOpen(false)}
@@ -1536,6 +1636,18 @@ export default function LeadsUnifiedPage() {
               className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm"
             >
               <Upload className="w-4 h-4" /> Import
+            </button>
+          )}
+          {/* Single-lead entry into the PROSPECT pool (dealer_leads) — the
+              table this tab shows. Distinct from "New Lead" on the right, which
+              opens the 5-step loan-application wizard against `leads`. */}
+          {tab === "leads" && (
+            <button
+              onClick={() => setShowAddLead(true)}
+              title="Add one dealer prospect to the calling pool"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm"
+            >
+              <Plus className="w-4 h-4" /> Add Lead
             </button>
           )}
           {/* ── Download button shown only on Converted tab ── */}
@@ -1717,10 +1829,65 @@ export default function LeadsUnifiedPage() {
               </div>
             </div>
           )}
+          {/* Bulk hand-off bar. Only rendered when something is ticked, so it
+              never competes for attention with the normal list. */}
+          {canSendToNeodove && selectedLeadIds.size > 0 && (
+            <div className="mb-3 flex items-center justify-between gap-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
+              <p className="text-sm text-sky-900">
+                <strong>{selectedLeadIds.size}</strong> lead
+                {selectedLeadIds.size === 1 ? "" : "s"} selected on this page
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setSelectedLeadIds(new Set())}
+                  className="px-3 py-1.5 text-xs font-medium text-sky-900 rounded-lg hover:bg-sky-100 transition-all"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={() => setShowBulkNeodove(true)}
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 transition-all"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  Send {selectedLeadIds.size} to NeoDove
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showBulkNeodove && (
+            <SendToNeodoveModal
+              leadIds={[...selectedLeadIds]}
+              label={`${selectedLeadIds.size} lead${selectedLeadIds.size === 1 ? "" : "s"}`}
+              onClose={() => setShowBulkNeodove(false)}
+              onSent={() => setSelectedLeadIds(new Set())}
+            />
+          )}
+
           {leadsLoading ? (
             <LoadingSkeleton />
           ) : (
             <>
+              {canSendToNeodove && leads.length > 0 && (
+                <label className="mb-2 flex w-fit items-center gap-2 text-xs text-gray-500 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={
+                      leads.length > 0 &&
+                      leads.every((l) => selectedLeadIds.has(l.id))
+                    }
+                    onChange={(e) =>
+                      setSelectedLeadIds(
+                        e.target.checked
+                          ? new Set(leads.map((l) => l.id as string))
+                          : new Set(),
+                      )
+                    }
+                    className="w-4 h-4 rounded border-gray-300 accent-gray-900 cursor-pointer"
+                  />
+                  Select all {leads.length} on this page
+                </label>
+              )}
               <div className="space-y-2">
                 {leads.map((lead) => {
                   const statusCfg = getStatusConfig(lead.current_status);
@@ -1760,6 +1927,15 @@ export default function LeadsUnifiedPage() {
                     >
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3 min-w-0 flex-1">
+                          {canSendToNeodove && (
+                            <input
+                              type="checkbox"
+                              checked={selectedLeadIds.has(lead.id)}
+                              onChange={() => toggleLeadSelected(lead.id)}
+                              aria-label={`Select ${lead.shop_name || "lead"}`}
+                              className="w-4 h-4 shrink-0 rounded border-gray-300 accent-gray-900 cursor-pointer"
+                            />
+                          )}
                           <div
                             className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isBeingCalled ? "bg-emerald-50" : isUpNext ? "bg-amber-50" : "bg-gray-100"}`}
                           >
@@ -1864,6 +2040,31 @@ export default function LeadsUnifiedPage() {
                             provider="elevenlabs"
                             onCallStart={startCallingLead}
                           />
+                          {/* "Call now" (the priority-dial hand-off) was removed
+                              from this row on request. The component and
+                              POST /api/neodove/leads/[id]/dial are intact, as is
+                              neodove_campaigns.is_priority_dial — only this
+                              call site is gone, so re-adding it is one JSX block.
+                              "NeoDove" below stays: it chooses a campaign and
+                              hands the lead over as part of that campaign's
+                              audience. */}
+                          {canSendToNeodove && (
+                            <SendToNeodoveButton
+                              leadId={lead.id}
+                              leadName={
+                                lead.shop_name ||
+                                lead.dealer_name ||
+                                "this lead"
+                              }
+                              disabled={isDisabled || !lead.phone}
+                              syncStatus={lead.neodove_sync_status}
+                              onSent={() =>
+                                fetchLeads(leadsPage, search, leadsFrom, leadsTo, {
+                                  silent: true,
+                                })
+                              }
+                            />
+                          )}
                           <Link href={`/leads/${lead.id}`}>
                             <button className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">
                               View

@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
-import { and, desc, ilike, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, ilike, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import {
@@ -9,6 +9,11 @@ import {
   inferStateFromCity,
 } from "@/lib/scraper-enrichment";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
+import {
+  classifyAgainstExisting,
+  loadExistingByPhone,
+  normalizePhone,
+} from "@/lib/leads/dedupe";
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,21 +39,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check for duplicate phone
-    const existing = await db
-      .select({ id: dealerLeads.id })
-      .from(dealerLeads)
-      .where(sql`${dealerLeads.phone} = ${phone}`)
-      .limit(1);
-
-    if (existing.length > 0) {
+    // E-224 — normalise BEFORE storing or comparing. This route used to write
+    // whatever the caller typed and dedupe on the raw string, so "98765 43210"
+    // and "+919876543210" were two different dealers to it: the duplicate check
+    // passed, the row inserted, and that lead could never again be matched by
+    // any importer (all of which normalise). Same engine as the bulk wizard,
+    // the /leads Import button and NeoDove inbound.
+    const normalizedPhone = normalizePhone(String(phone));
+    if (!normalizedPhone) {
       return NextResponse.json(
-        { success: false, error: "A lead with this phone number already exists (duplicate)" },
-        { status: 409 },
+        {
+          success: false,
+          error: "Enter a valid 10-digit Indian mobile number.",
+        },
+        { status: 400 },
       );
     }
-
-    const id = `DL-${Date.now()}-${nanoid(8)}`;
 
     // Normalize the structured region. If the caller only sent `location`,
     // treat it as a city string so the region selector still sees the row.
@@ -59,10 +65,39 @@ export async function POST(req: NextRequest) {
       inferStateFromCity(canonicalCity) ??
       null;
 
+    const existing = await loadExistingByPhone([normalizedPhone]);
+    const { outcome, duplicateLeadId } = classifyAgainstExisting(
+      canonicalCity ?? "",
+      existing.get(normalizedPhone),
+    );
+
+    if (outcome !== "valid") {
+      // A phone match is reported, never silently resolved. The four outcomes
+      // mean different things to the operator and each needs a different next
+      // action, so the classification is handed back rather than flattened
+      // into one "duplicate" message.
+      return NextResponse.json(
+        {
+          success: false,
+          outcome,
+          duplicateLeadId,
+          error:
+            outcome === "reactivate"
+              ? "This dealer already exists and is marked Lost. Reactivate the existing lead instead of creating a new one."
+              : outcome === "address_mismatch"
+                ? "This phone belongs to an existing lead registered in a different city. Raise a merge request from the admin queue."
+                : "A lead with this phone number already exists.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const id = `DL-${Date.now()}-${nanoid(8)}`;
+
     await db.insert(dealerLeads).values({
       id,
       dealer_name,
-      phone,
+      phone: normalizedPhone,
       shop_name: shop_name || null,
       location: location || canonicalCity,
       state: canonicalState,
@@ -81,7 +116,7 @@ export async function POST(req: NextRequest) {
     await recordLeadCapture({
       leadType: "dealer",
       name: dealer_name,
-      phone,
+      phone: normalizedPhone,
       sourceChannel: "web",
       sourceTable: "dealer_leads",
       sourceId: id,
@@ -176,9 +211,44 @@ export async function GET(req: NextRequest) {
         .where(where),
     ]);
 
+    // NeoDove sync state for the rows on this page, so the per-row button can
+    // render "Sent" after a reload instead of resetting to "NeoDove".
+    //
+    // Read in a SEPARATE statement that is allowed to fail, and with
+    // `neodove_sync_status` named only in the projection. The column is
+    // deliberately absent from schema.ts (E-224): naming it on the object
+    // would expand every bare `db.select().from(dealerLeads)` in the codebase
+    // into an explicit column list and hard-fail ~20 call sites on any DB
+    // without the migration. A missing column fails at PARSE time, so this
+    // cannot be folded into the main query either — it would take the whole
+    // leads list down. Caught and degraded to "nothing is synced", which is
+    // the same shape as the truth on a DB where the integration isn't live.
+    const neodoveStatus: Record<string, string> = {};
+    const pageIds = rows.map((l) => l.id).filter(Boolean) as string[];
+    if (pageIds.length) {
+      try {
+        const synced = await db
+          .select({
+            id: dealerLeads.id,
+            status: sql<string | null>`neodove_sync_status`,
+          })
+          .from(dealerLeads)
+          .where(inArray(dealerLeads.id, pageIds));
+        for (const r of synced) {
+          if (r.status) neodoveStatus[r.id] = r.status;
+        }
+      } catch {
+        // E-224 not applied here — leave the map empty.
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      leads: rows.map((l) => ({ ...l, _source: "dealer" })),
+      leads: rows.map((l) => ({
+        ...l,
+        _source: "dealer",
+        neodove_sync_status: neodoveStatus[l.id] ?? null,
+      })),
       total: Number(countResult[0].count),
       stats: {
         hot: Number(statsResult[0]?.hot ?? 0),

@@ -117,7 +117,10 @@ function resultLabel(c: CallItem): string {
 function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
   const [summary, setSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [source, setSource] = useState<"saved" | "generated">("generated");
+  // "none" = a factual statement about why there is no summary, not a summary.
+  // Without it the badge below labelled that sentence "AI generated", which is
+  // both untrue and undermines the badge everywhere it IS true.
+  const [source, setSource] = useState<"saved" | "generated" | "none">("generated");
 
   const transcriptCount = calls.filter((c) => c.transcript).length;
 
@@ -134,7 +137,36 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
       .join("\n\n");
 
     if (!transcripts) {
-      setSummary("No transcripts available to generate a summary.");
+      // Distinguish "nobody has called" from "calls happened but the system that
+      // made them does not give us transcripts". The old single message said
+      // neither, so a lead with real NeoDove calls on it read as untouched — the
+      // same failure as Call History showing 0. External calls carry a
+      // disposition and an agent instead of a transcript, and saying so points
+      // the reader at the Call History below rather than at a dead end.
+      const external = calls.filter((c) => c.source === "touchpoint");
+      setSource("none");
+      if (external.length) {
+        const agents = [
+          ...new Set(external.map((c) => c.external_agent_name).filter(Boolean)),
+        ];
+        const vendors = [
+          ...new Set(external.map((c) => c.provider).filter(Boolean)),
+        ];
+        setSummary(
+          `${external.length} call${external.length === 1 ? "" : "s"} logged in ` +
+            `${vendors.join(" / ") || "an external system"}` +
+            `${agents.length ? ` by ${agents.join(", ")}` : ""}. ` +
+            `No transcript is available — ${vendors.join(" / ") || "that system"} ` +
+            `sends a disposition, not a recording or a transcript, so there is ` +
+            `nothing to summarise. See Call History below for each outcome.`,
+        );
+        return;
+      }
+      setSummary(
+        calls.length
+          ? "Calls were made but none produced a transcript, so there is nothing to summarise."
+          : "No calls have been made on this lead yet.",
+      );
       return;
     }
 
@@ -173,7 +205,7 @@ function OverallSummary({ calls, lead }: { calls: CallItem[]; lead: any }) {
           <FileText className="w-3.5 h-3.5 text-slate-600" />
         </div>
         <h3 className="text-sm font-semibold text-gray-800">Overall Summary</h3>
-        {!loading && summary && (
+        {!loading && summary && source !== "none" && (
           <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
             {source === "saved" ? "saved" : "AI generated"}
           </span>
@@ -281,7 +313,16 @@ function CallCard({ item }: { item: CallItem }) {
                 <span className="text-[10px] uppercase tracking-wide text-gray-400">{item.provider}</span>
               )}
             </div>
-            <p className="text-xs text-gray-400">{formatDate(item.when)}</p>
+            <p className="text-xs text-gray-400">
+              {formatDate(item.when)}
+              {/* Who dialled, when it was not us. An external call with no
+                  attribution is indistinguishable from one of ours, and the
+                  whole point of external_agent_name (E-226) is that "which
+                  telecaller made this call" is answerable. */}
+              {item.external_agent_name && (
+                <span> · by {item.external_agent_name}</span>
+              )}
+            </p>
           </div>
         </div>
 
