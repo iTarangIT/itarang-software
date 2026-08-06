@@ -23,11 +23,16 @@ export async function register() {
       startBuybackDispatchTicker,
       startBuybackDedupTicker,
       startBuybackGatewayTicker,
+      startOpsMonitorTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
     await startBuybackDispatchTicker();
     await startBuybackDedupTicker();
     await startBuybackGatewayTicker();
+    // Ops Console collector runner (E-210). Last, and its own kickoff is
+    // staggered 75s out, so a cold boot finishes wiring the app before the
+    // monitoring starts querying the database it monitors.
+    await startOpsMonitorTicker();
   }
 }

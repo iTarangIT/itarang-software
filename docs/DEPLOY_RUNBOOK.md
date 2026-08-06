@@ -62,6 +62,26 @@ In repo `iTarangIT/itarang-software` → **Settings → Secrets and variables �
 |---|---|
 | `SLACK_WEBHOOK_URL` | (optional) https://hooks.slack.com/services/... — silenced if not set |
 
+## Ops Console env vars (E-210)
+
+The Ops Console host agent pushes metrics to `/api/operations/ingest/host`. Two
+vars gate it, and they live in the app's env, not in a GitHub secret of their own:
+
+| Var | Value | Notes |
+|---|---|---|
+| `OPS_INGEST_SECRET` | long random string | the agent's bearer token; compared with `timingSafeEqual` |
+| `OPS_INGEST_HOSTS` | `prod,sandbox,iot` | allowlist; a host not listed here gets a 403 |
+| `ENABLE_OPS_MONITOR` | `0` to disable | optional — turns off the 60s collector ticker on this process |
+
+> **Prod:** `shared/.env` is rewritten from `PROD_ENV_FILE_B64` on every deploy.
+> Add both vars to the box **and** re-base64 `.env.production` into that secret,
+> or they vanish on the next deploy and ingest starts answering 503.
+>
+> **Sandbox:** `shared/.env` is seeded once and edited on the box. Changing the
+> GitHub env secret does **not** propagate — edit it on the box.
+
+Agent install is per-box and manual: see `ops-agent/README.md`.
+
 ## SSH key setup (one-time, per env)
 
 On the VPS as the relevant user:

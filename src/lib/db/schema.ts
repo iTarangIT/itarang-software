@@ -8852,3 +8852,206 @@ export const bankStatementRows = pgTable(
     refIdx: index("bank_statement_rows_ref_idx").on(t.txn_ref),
   }),
 );
+
+// --- OPS CONSOLE (E-210) ---
+//
+// The monitoring spine behind /operations. Mirrors
+// drizzle/E-210_ops_monitoring.sql — that file is the source of truth; these
+// declarations exist so type-checking matches the DB.
+//
+// The partial unique indexes below are load-bearing concurrency control, not
+// decoration:
+//   · ops_collector_runs (collector_id) WHERE status='running'  — single-flight lock
+//   · ops_alerts (metric_key, source) WHERE resolved_at IS NULL — alert dedup
+
+export const opsMetricSamples = pgTable(
+  "ops_metric_samples",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // Stable, dot-namespaced, e.g. "host.prod.disk_used_pct". Matches a
+    // MetricDef.key in src/lib/operations/registry.ts.
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    // "host:prod" | "rds:crm" | "vendor:elevenlabs" | …
+    source: varchar({ length: 80 }).notNull(),
+    captured_at: timestamp("captured_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // numeric throughout: money is INR paise, bytes are bytes, percents 0-100.
+    value_num: numeric("value_num", { precision: 20, scale: 4 }),
+    value_text: text("value_text"),
+    meta: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    keyCapturedIdx: index("ops_metric_samples_key_captured_idx").on(
+      table.metric_key,
+      table.captured_at,
+    ),
+    capturedIdx: index("ops_metric_samples_captured_idx").on(table.captured_at),
+  }),
+);
+
+export const opsDailySnapshots = pgTable(
+  "ops_daily_snapshots",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    snapshot_date: date("snapshot_date").notNull(),
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    source: varchar({ length: 80 }).notNull(),
+    // Representative value for the day (last sample); min/max/avg describe the
+    // spread, so a disk that spiked at 03:00 and settled is still visible.
+    value_num: numeric("value_num", { precision: 20, scale: 4 }),
+    value_min: numeric("value_min", { precision: 20, scale: 4 }),
+    value_max: numeric("value_max", { precision: 20, scale: 4 }),
+    value_avg: numeric("value_avg", { precision: 20, scale: 4 }),
+    sample_count: integer("sample_count").default(0).notNull(),
+    meta: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // What makes runDailySnapshot() re-runnable for the same date.
+    dateKeySourceUniq: uniqueIndex(
+      "ops_daily_snapshots_date_key_source_uniq",
+    ).on(table.snapshot_date, table.metric_key, table.source),
+    keyDateIdx: index("ops_daily_snapshots_key_date_idx").on(
+      table.metric_key,
+      table.snapshot_date,
+    ),
+  }),
+);
+
+export const opsCollectorRuns = pgTable(
+  "ops_collector_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    collector_id: varchar("collector_id", { length: 80 }).notNull(),
+    // 'ticker' | 'manual'. NOT named "trigger" — reserved word in Postgres.
+    triggered_by: varchar("triggered_by", { length: 16 }).notNull(),
+    actor_user_id: uuid("actor_user_id"),
+    status: varchar({ length: 16 }).default("running").notNull(), // running|completed|failed
+    started_at: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    duration_ms: integer("duration_ms"),
+    samples_written: integer("samples_written").default(0).notNull(),
+    error: text(),
+  },
+  (table) => ({
+    // THE LOCK. At most one running row per collector — see E-210 and
+    // src/lib/operations/runner.ts, which catches the 23505 this raises.
+    oneActiveIdx: uniqueIndex("ops_collector_runs_one_active_idx")
+      .on(table.collector_id)
+      .where(sql`status = 'running'`),
+    collectorStartedIdx: index("ops_collector_runs_collector_started_idx").on(
+      table.collector_id,
+      table.started_at,
+    ),
+    startedIdx: index("ops_collector_runs_started_idx").on(table.started_at),
+  }),
+);
+
+export const opsLogEvents = pgTable(
+  "ops_log_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    host: varchar({ length: 32 }).notNull(), // prod | sandbox | iot
+    service: varchar({ length: 120 }).notNull(), // pm2 process name, or 'nginx'
+    level: varchar({ length: 16 }).notNull(), // error | warn | info
+    message: text().notNull(), // truncated to 2000 chars at ingest
+    logged_at: timestamp("logged_at", { withTimezone: true }).notNull(),
+    // Hash of service + level + normalised message, so the UI groups repeats.
+    fingerprint: varchar({ length: 64 }).notNull(),
+    meta: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    loggedIdx: index("ops_log_events_logged_idx").on(table.logged_at),
+    levelLoggedIdx: index("ops_log_events_level_logged_idx").on(
+      table.level,
+      table.logged_at,
+    ),
+    fingerprintIdx: index("ops_log_events_fingerprint_idx").on(
+      table.fingerprint,
+    ),
+    hostLoggedIdx: index("ops_log_events_host_logged_idx").on(
+      table.host,
+      table.logged_at,
+    ),
+  }),
+);
+
+export const opsAlertRules = pgTable(
+  "ops_alert_rules",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    // '*' = any source, so one rule covers prod/sandbox/iot.
+    source: varchar({ length: 80 }).default("*").notNull(),
+    // 'gt' = breach when value > threshold (lower_is_better metrics);
+    // 'lt' = breach when value < threshold (higher_is_better metrics).
+    comparator: varchar({ length: 4 }).default("gt").notNull(),
+    warn_threshold: numeric("warn_threshold", { precision: 20, scale: 4 }),
+    crit_threshold: numeric("crit_threshold", { precision: 20, scale: 4 }),
+    enabled: boolean().default(true).notNull(),
+    cooldown_minutes: integer("cooldown_minutes").default(60).notNull(),
+    notify_channels: jsonb("notify_channels")
+      .default(sql`'["inapp"]'::jsonb`)
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    keySourceUniq: uniqueIndex("ops_alert_rules_key_source_uniq").on(
+      table.metric_key,
+      table.source,
+    ),
+  }),
+);
+
+export const opsAlerts = pgTable(
+  "ops_alerts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    rule_id: uuid("rule_id"),
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    source: varchar({ length: 80 }).notNull(),
+    severity: varchar({ length: 8 }).notNull(), // warn | crit
+    value_num: numeric("value_num", { precision: 20, scale: 4 }),
+    threshold: numeric({ precision: 20, scale: 4 }),
+    message: text().notNull(),
+    opened_at: timestamp("opened_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    notified_at: timestamp("notified_at", { withTimezone: true }),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    acknowledged_by: uuid("acknowledged_by"),
+    status: varchar({ length: 16 }).default("open").notNull(), // open|acknowledged|resolved
+  },
+  (table) => ({
+    // Dedup: only one OPEN alert per (metric_key, source). Same trick
+    // telemetry_alerts uses — a flapping metric cannot spawn duplicate rows.
+    openUniq: uniqueIndex("ops_alerts_open_uniq")
+      .on(table.metric_key, table.source)
+      .where(sql`resolved_at IS NULL`),
+    openedIdx: index("ops_alerts_opened_idx").on(table.opened_at),
+    statusOpenedIdx: index("ops_alerts_status_opened_idx").on(
+      table.status,
+      table.opened_at,
+    ),
+  }),
+);

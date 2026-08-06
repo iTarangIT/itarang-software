@@ -1,0 +1,159 @@
+# ops-agent
+
+The host agent for the iTarang Ops Console (`/operations`).
+
+Reads this box's vitals every 5 minutes and POSTs them to
+`/api/operations/ingest/host`. The CRM never SSHes into anything — this push is
+the only way host metrics reach the dashboard.
+
+Dependency-free Node (18+). It is copied to boxes that may not have the repo's
+`node_modules`, and it must keep running while a deploy is half-finished.
+
+## What it reads
+
+| Source | Metrics |
+| --- | --- |
+| `node:os` | `cpu_pct` (load ÷ cores), `load1`, `mem_used_pct`, `uptime_s` |
+| `df -P -k /` | `disk_used_pct`, `disk_free_gb` |
+| `df -P -i /` | `inode_used_pct` |
+| `free -m` | `swap_used_pct` |
+| `pm2 jlist` | per-process `status`, `restarts`, `mem_mb`, `cpu_pct`, `uptime_s` |
+| `openssl s_client` + `x509 -enddate` | `cert_days_left` |
+
+Every reader fails soft. A box without `free`, or one where pm2 is not
+installed, loses that metric and nothing else — the cycle still posts.
+
+Missing readings are **omitted**, never sent as `0`. A zero would render on the
+dashboard as a real measurement and hide the gap.
+
+## Log forwarding
+
+The agent also tails log files and forwards new lines to `/operations/logs`.
+
+**Exactly once, by byte offset.** Each file's offset is remembered in a local
+state file (`OPS_LOG_STATE_FILE`, default `.ops-agent-state.json` next to the
+agent). Every cycle reads from that offset to EOF. Not `tail -n`: a line count
+cannot express "everything written since five minutes ago".
+
+Four behaviours worth knowing:
+
+- **First sight of a file ships nothing.** The offset starts at the current end.
+  Forwarding a months-old log on install would bury today's errors and blow
+  through the 14-day retention in one POST.
+- **Rotation is detected** by the file being shorter than the stored offset, and
+  reading restarts from 0.
+- **Offsets advance only after the POST succeeds.** If the CRM is down for a
+  cycle, the same lines ship on the next one instead of being lost — which is
+  exactly when you want them. `MAX_TAIL_BYTES` (256 KB per file per cycle)
+  bounds how far the backlog can grow meanwhile.
+- **A half-written trailing line waits** for its newline, so it arrives whole
+  rather than truncated.
+
+**Level detection**, most explicit signal first: nginx's `[error]` bracket, then
+an uppercase level token (`INFO`, `WARN`, `ERROR`…), then keywords, and only
+then the stream (`*.err.log` ⇒ at least `warn`). A line that says what it is
+always beats a guess about it.
+
+**Only `warn` and above are forwarded by default.** `web.out.log` is
+request-level chatter on a busy box; forwarding `info` would exhaust the 200-line
+per-POST budget every cycle and bury the errors. Set `OPS_LOG_MIN_LEVEL=info`
+deliberately if you want everything.
+
+Server side, each line is truncated to 2000 chars and fingerprinted (a hash of
+service + level + the message with ids, numbers and timestamps normalised out)
+so the explorer can say "this error, 4,812 times" instead of rendering 4,812
+rows.
+
+## Configuration
+
+All via environment variables:
+
+| Var | Required | Notes |
+| --- | --- | --- |
+| `OPS_INGEST_URL` | yes | e.g. `https://crm.itarang.com/api/operations/ingest/host` |
+| `OPS_INGEST_SECRET` | yes | must equal the CRM's `OPS_INGEST_SECRET` |
+| `OPS_HOST_NAME` | yes | one of `prod`, `sandbox`, `iot` — must appear in the CRM's `OPS_INGEST_HOSTS` |
+| `OPS_CERT_DOMAIN` | no | domain to check TLS expiry for; omit to skip the check |
+| `OPS_INTERVAL_MS` | no | default `300000` (5 min) |
+| `OPS_ONCE` | no | `1` = run one cycle and exit (cron mode) |
+| `OPS_LOG_FILES` | no | comma-separated `service:path`; default `itarang-crm-web:logs/web.out.log,itarang-crm-web:logs/web.err.log,nginx:/var/log/nginx/error.log` |
+| `OPS_LOG_STATE_FILE` | no | where byte offsets are remembered; default `.ops-agent-state.json` beside the agent |
+| `OPS_LOG_MIN_LEVEL` | no | `error`\|`warn`\|`info`; default `warn` |
+
+The default `OPS_LOG_FILES` paths for pm2 are **relative to the agent's cwd**,
+which under the supplied pm2 config is the agent's own directory. If your pm2
+logs live elsewhere, pass absolute paths.
+
+### CRM side
+
+Set these on the CRM, not on the agent box:
+
+```
+OPS_INGEST_SECRET=<same value the agent sends>
+OPS_INGEST_HOSTS=prod,sandbox,iot
+```
+
+> **Prod's `shared/.env` is rewritten from the `PROD_ENV_FILE_B64` GitHub secret
+> on every deploy.** Both vars must be added to the box **and** to that secret,
+> or they vanish on the next deploy and ingest starts answering 503.
+>
+> **Sandbox's `shared/.env` is seeded once and edited on the box.** Changing the
+> GitHub env secret does *not* propagate there — edit it on the box.
+
+## Install
+
+```bash
+# 1. Copy the directory to the box (any path; ~/ops-agent is fine)
+scp -r ops-agent/ user@box:~/ops-agent
+
+# 2. Export the config (or append it to the box's shared/.env)
+export OPS_INGEST_URL=https://crm.itarang.com/api/operations/ingest/host
+export OPS_INGEST_SECRET=...
+export OPS_HOST_NAME=prod
+export OPS_CERT_DOMAIN=crm.itarang.com
+
+# 3. Smoke-test one cycle before daemonising
+OPS_ONCE=1 node ~/ops-agent/agent.js
+
+# 4. Run it under pm2 and make it survive a reboot
+cd ~/ops-agent
+pm2 start ecosystem.ops-agent.config.js
+pm2 save
+```
+
+`OPS_ONCE=1` prints `sent N metrics, M processes for host=<name>` on success.
+Anything else is the error — see below.
+
+### cron instead of pm2
+
+If you would rather not add a pm2 process:
+
+```cron
+*/5 * * * * OPS_ONCE=1 /usr/bin/node /home/user/ops-agent/agent.js >> /home/user/ops-agent/logs/cron.log 2>&1
+```
+
+The env vars must be set in the crontab or sourced in a wrapper — cron does not
+read the box's shell profile.
+
+## Verifying
+
+1. `/operations/jobs` shows the `infra.host` collector completing.
+2. `/operations/infrastructure` shows a card for the host with a fresh
+   "last seen" — that is `host.agent_age_min`, which is what tells you the agent
+   itself is alive.
+
+A rising `host.agent_age_min` means the agent, or the box, is gone and **every
+other number for that host is stale**. That is the metric to alert on, not the
+individual vitals.
+
+## Troubleshooting
+
+| Response | Meaning |
+| --- | --- |
+| `401 Unauthorized` | `OPS_INGEST_SECRET` differs between agent and CRM |
+| `403 Host not allowed` | `OPS_HOST_NAME` is not in the CRM's `OPS_INGEST_HOSTS` |
+| `413 Payload too large` | >512 KB body — only reachable once Phase 3 sends logs |
+| `422 captured_at is N minutes from server time` | the box's clock has drifted; fix NTP |
+| `429 Rate limited` | more than one post per host per minute; check for a duplicate agent |
+| `500 relation "ops_metric_samples" does not exist` | `drizzle/E-210_ops_monitoring.sql` is not applied on that environment |
+| `503 Ingest is not configured` | `OPS_INGEST_SECRET` or `OPS_INGEST_HOSTS` is unset on the CRM |

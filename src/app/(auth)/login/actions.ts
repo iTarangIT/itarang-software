@@ -77,6 +77,15 @@ export async function login(formData: FormData) {
     redirect("/dealer-onboarding");
   }
 
+  // The Ops Console monitoring login. Note this chain is much shorter than the
+  // one in login/page.tsx — ceo, sales_head and the rest are handled there and
+  // fall through to "/" here, which middleware then bounces to the right
+  // dashboard. Adding the branch here anyway so `operations` does not depend on
+  // that bounce.
+  if (appUser.role === "operations") {
+    redirect("/operations");
+  }
+
   redirect("/");
 }
 
