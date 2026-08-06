@@ -137,6 +137,8 @@ export default function LoginPage() {
                 navigateTo('/inside-sales');
             } else if (appUser.role === 'asm') {
                 navigateTo('/asm');
+            } else if (appUser.role === 'operations') {
+                navigateTo('/operations');
             } else {
                 navigateTo('/');
             }

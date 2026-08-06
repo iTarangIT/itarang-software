@@ -43,6 +43,10 @@ import {
   FolderOpen,
   Wallet,
   Bell,
+  Server,
+  Database,
+  Activity,
+  AudioLines,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -1134,6 +1138,99 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  // The Ops Console — one screen per question the tech team actually asks.
+  // Order is deliberate: the one-slide board first (it is the standup
+  // screenshot), then the layers you drill into when it goes red, then the
+  // monitoring's own health last.
+  operations: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "ops-slide",
+          label: "One-Slide Board",
+          icon: LayoutDashboard,
+          href: "/operations",
+        },
+        {
+          id: "ops-alerts",
+          label: "Alerts",
+          icon: AlertTriangle,
+          href: "/operations/alerts",
+        },
+      ],
+    },
+    {
+      section: "INFRASTRUCTURE",
+      items: [
+        {
+          id: "ops-infrastructure",
+          label: "Hosts & Processes",
+          icon: Server,
+          href: "/operations/infrastructure",
+        },
+        {
+          id: "ops-database",
+          label: "Database Health",
+          icon: Database,
+          href: "/operations/database",
+        },
+        {
+          id: "ops-logs",
+          label: "Logs & Errors",
+          icon: FileText,
+          href: "/operations/logs",
+        },
+        {
+          id: "ops-system",
+          label: "System Usage",
+          icon: Activity,
+          href: "/operations/system",
+        },
+      ],
+    },
+    {
+      section: "COST & BUSINESS",
+      items: [
+        {
+          id: "ops-spend",
+          label: "Vendor Spend",
+          icon: Wallet,
+          href: "/operations/spend",
+        },
+        {
+          id: "ops-elevenlabs",
+          label: "ElevenLabs Usage",
+          icon: AudioLines,
+          href: "/operations/elevenlabs",
+        },
+        {
+          id: "ops-business",
+          label: "Business Metrics",
+          icon: TrendingUp,
+          href: "/operations/business",
+        },
+        {
+          id: "ops-team",
+          label: "Team Usage",
+          icon: Users,
+          href: "/operations/team",
+        },
+      ],
+    },
+    {
+      section: "MONITORING ITSELF",
+      items: [
+        {
+          id: "ops-jobs",
+          label: "Collector Health",
+          icon: ListChecks,
+          href: "/operations/jobs",
+        },
+      ],
+    },
+  ],
+
   user: [
     {
       section: "OVERVIEW",
@@ -1384,6 +1481,7 @@ export function Sidebar() {
     if (pathname.startsWith("/sales-insight")) return "sales_insight";
     if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
     if (pathname.startsWith("/asm")) return "asm";
+    if (pathname.startsWith("/operations")) return "operations";
     return "user";
   })();
 
@@ -1426,7 +1524,10 @@ export function Sidebar() {
   //  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
   //    files a business expense for a CEO to approve; offering that to the firm
   //    we are selling scrap to is not a universal action, it is a wrong one.
-  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor"]);
+  //  · "operations" — a shared monitoring login, not a person. Nobody files an
+  //    expense as operations@itarang.com, and the console is meant to be one
+  //    screen with nothing on it that isn't monitoring.
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "operations"]);
   let menuItems = NO_COMMON_ITEMS.has(inferredRole)
     ? filteredMenuItems
     : [...filteredMenuItems, ...COMMON_ITEMS];
@@ -1529,12 +1630,18 @@ export function Sidebar() {
     }));
   }
 
-  // The mobile drawer shows on the dealer portal and on the shared /expenses
-  // pages (a common route reachable by any role — without this the user lands
-  // there on mobile with no way to open navigation). The desktop sidebar is
-  // unchanged for every role.
+  // The mobile drawer shows on the dealer portal, the shared /expenses pages
+  // (a common route reachable by any role — without this the user lands there
+  // on mobile with no way to open navigation) and the Ops Console (whoever is
+  // on call reads it from a phone). The desktop sidebar is unchanged for every
+  // role.
+  //
+  // Keep in step with `showMobileNav` in components/layout/header.tsx — that is
+  // an independent copy of this condition and the hamburger comes from there.
   const showMobileDrawer =
-    pathname.startsWith("/dealer-portal") || pathname.startsWith("/expenses");
+    pathname.startsWith("/dealer-portal") ||
+    pathname.startsWith("/expenses") ||
+    pathname.startsWith("/operations");
 
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
