@@ -13,8 +13,13 @@ import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
 import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
-import { EXPENSE_BUCKET_VALUES, EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
+import {
+  EXPENSE_BUCKET_VALUES,
+  EXPENSE_DEPARTMENT_VALUES,
+  expenseDepartmentLabel,
+} from "@/lib/expenses";
 import { resolveBucket } from "@/lib/expenses/resolveBucket";
+import { resolveDepartment } from "@/lib/expenses/departmentRules";
 import { resolveMonthRange } from "@/lib/expenses/monthRange";
 
 export const runtime = "nodejs";
@@ -94,6 +99,43 @@ export async function POST(req: NextRequest) {
           aiConfidence: aiRaw?.bucket_confidence,
         });
 
+    // E-229 — resolve the department the same way every other ingest path does.
+    //
+    // This route was the LAST write path that took a department on trust. The
+    // Drive scan (driveScan.ts) and the bulk import (./bulk/route.ts) both run
+    // resolveDepartment(); this one wrote `d.department` straight through. And
+    // the value it received is, almost always, the extractor's own answer —
+    // ExpenseTrackerView prefills the select from `ex.department` and the
+    // reviewer usually confirms without touching it. So the one classifier
+    // mistake E-224 was written to correct could still walk in here, one
+    // invoice at a time, and put another Trontek bill on the Tech budget.
+    //
+    // A named-vendor rule therefore beats the submitted value. It is a fact
+    // about the vendor — Trontek sells cells, production buys them — not a
+    // judgement about this invoice, so there is nothing for the form to
+    // usefully disagree with. It is not silent either: the response says what
+    // was changed and why, and PATCH /api/admin/ai-expenses/:id still lets a
+    // human have the last word on a row that is genuinely an exception.
+    //
+    // No confidence is passed. `d.department` has already cleared the zod
+    // enum and reflects what a reviewer had on screen, so the sub-0.5 floor —
+    // which exists to catch a model guessing — would be the wrong test here.
+    const resolvedDepartment = resolveDepartment({
+      vendor: d.vendor,
+      description: d.description,
+      project_tag: d.project_tag,
+      bucket: bucket.bucket,
+      aiDepartment: d.department,
+    });
+    const departmentNote =
+      resolvedDepartment.department === d.department
+        ? null
+        : `Filed under ${expenseDepartmentLabel(
+            resolvedDepartment.department,
+          )} rather than ${expenseDepartmentLabel(d.department)} — ${
+            resolvedDepartment.detail ?? "rule"
+          }.`;
+
     // Dedup: skip an AI invoice whose number already exists (case-insensitive).
     if (invoiceNumber) {
       const [dup] = await db
@@ -135,7 +177,7 @@ export async function POST(req: NextRequest) {
           status: "approved",
           approved_by: user.id,
           approved_at: now,
-          department: d.department,
+          department: resolvedDepartment.department,
           project_tag: d.project_tag ?? null,
           bucket: bucket.bucket,
           bucket_source: bucket.source,
@@ -164,7 +206,15 @@ export async function POST(req: NextRequest) {
       throw e;
     }
 
-    return NextResponse.json({ success: true, id: inserted?.id });
+    return NextResponse.json({
+      success: true,
+      id: inserted?.id,
+      // E-229 — what was actually stored, so the reviewer is told when a rule
+      // overrode the department they submitted rather than finding out from
+      // the dashboard later.
+      department: resolvedDepartment.department,
+      department_note: departmentNote,
+    });
   } catch (e: unknown) {
     if (isNextRedirectError(e)) throw e;
     const msg = errorMessage(e);

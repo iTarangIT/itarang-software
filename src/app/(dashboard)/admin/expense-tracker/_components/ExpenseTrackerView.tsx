@@ -258,10 +258,21 @@ export function ExpenseTrackerView() {
         const detail = j?.error?.details?.[0]?.message;
         throw new Error(detail || j?.error?.message || "Submit failed");
       }
-      return j;
+      return j as { department_note?: string | null };
     },
-    onSuccess: () => {
-      setSuccess("Expense recorded — reflected on the CEO dashboard.");
+    onSuccess: (j) => {
+      // E-229 — a vendor rule may have overridden the department on the way in
+      // (a Trontek invoice is Operations spend however the form was filled).
+      // Say so here; the alternative is the reviewer meeting the change on the
+      // CEO dashboard with no idea what moved it.
+      setSuccess(
+        [
+          "Expense recorded — reflected on the CEO dashboard.",
+          j?.department_note,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
       resetForm();
       qc.invalidateQueries({ queryKey: ["ai-expenses"] });
       qc.invalidateQueries({ queryKey: ["ai-expense-tags"] });
