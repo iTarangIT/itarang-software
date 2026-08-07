@@ -8,6 +8,11 @@ import {
   type RecentCall,
 } from "@/lib/operations/elevenlabs";
 import {
+  monthOptions,
+  parseRange,
+  resolveRange,
+} from "@/lib/operations/elevenlabsSeries";
+import {
   formatCount,
   formatDuration,
   formatIst,
@@ -17,6 +22,7 @@ import {
 import { getMetric, severityFor, type Severity } from "@/lib/operations/registry";
 
 import { AutoRefresh } from "../_components/AutoRefresh";
+import { ElevenLabsFilterBar } from "../_components/ElevenLabsFilterBar";
 import { MetricSparkline } from "../_components/MetricSparkline";
 import { UsageBarChart } from "../_components/UsageBarChart";
 
@@ -210,32 +216,45 @@ function RecentRow({ call }: { call: RecentCall }) {
   );
 }
 
-export default async function OperationsElevenLabsPage() {
+export default async function OperationsElevenLabsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const filters = resolveRange(parseRange(await searchParams));
+
   let view: Awaited<ReturnType<typeof getElevenLabsView>>;
   try {
-    view = await getElevenLabsView();
+    view = await getElevenLabsView(filters);
   } catch (e) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base text-danger">
-            ElevenLabs usage unavailable
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-ink-muted">
-          <pre className="overflow-x-auto rounded-lg bg-bg p-3 text-[11px] text-ink">
-            {e instanceof Error ? e.message : String(e)}
-          </pre>
-          <p>
-            If this says a relation does not exist, apply{" "}
-            <code>drizzle/E-210_ops_monitoring.sql</code> to this database.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        {/* The bar renders here too, deliberately. Without it, filtering into a
+            window whose query fails leaves no way back to a working view except
+            hand-editing the URL. monthOptions(null) degrades to the current
+            month, which is why it must not require a view. */}
+        <ElevenLabsFilterBar filters={filters} months={monthOptions(null)} />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base text-danger">
+              ElevenLabs usage unavailable
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-ink-muted">
+            <pre className="overflow-x-auto rounded-lg bg-bg p-3 text-[11px] text-ink">
+              {e instanceof Error ? e.message : String(e)}
+            </pre>
+            <p>
+              If this says a relation does not exist, apply{" "}
+              <code>drizzle/E-210_ops_monitoring.sql</code> to this database.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
-  const { credits, mtd, total, thirty_day: thirty } = view;
+  const { credits, range, prev, total } = view;
 
   // Thresholds come from the registry, so a tile here goes amber at exactly the
   // value that opens a warn alert. Duplicating the numbers would let the two
@@ -251,7 +270,20 @@ export default async function OperationsElevenLabsPage() {
 
   const noCredits = credits.remaining == null && credits.used_pct == null;
   const categoryCalls = view.by_category.reduce((sum, r) => sum + r.calls, 0);
-  const costGap = mtd.calls - mtd.calls_with_cost;
+  const costGap = range.calls - range.calls_with_cost;
+
+  /**
+   * "vs the window before this one". Null for all time, which has no
+   * predecessor, and for a zero base — "+∞%" is not a number anyone can act on.
+   */
+  const versusPrev = (now: number, before: number | undefined): string => {
+    if (before == null) {
+      return view.first_call_at ? `since ${formatIst(view.first_call_at)}` : "";
+    }
+    if (before <= 0) return "no calls in the previous window";
+    const pct = ((now - before) / before) * 100;
+    return `${pct >= 0 ? "+" : ""}${pct.toFixed(0)}% vs previous period`;
+  };
 
   return (
     <div className="space-y-4">
@@ -264,79 +296,109 @@ export default async function OperationsElevenLabsPage() {
         <AutoRefresh intervalMs={60_000} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Tile
-          label="Credits remaining"
-          value={credits.remaining == null ? "—" : `${formatCount(credits.remaining)} cr`}
-          hint={credits.limit == null ? undefined : `of ${formatCount(credits.limit)} quota`}
-          severity={remainingSeverity}
-          help={getMetric("vendor.credits_remaining")?.help}
-        />
-        <Tile
-          label="Quota used"
-          value={credits.used_pct == null ? "—" : `${credits.used_pct}%`}
-          hint={credits.reset_at ? `resets ${formatIst(credits.reset_at)}` : undefined}
-          severity={quotaSeverity}
-          help={getMetric("vendor.credits_used_pct")?.help}
-        />
-        <Tile
-          label="Credits consumed"
-          value={credits.used == null ? "—" : `${formatCount(credits.used)} cr`}
-          hint="this billing period"
-          help="Reported by ElevenLabs, not derived from our cost figures."
-        />
-        <Tile
-          label="Calls (MTD)"
-          value={formatCount(mtd.calls)}
-          hint={`${formatCount(thirty.calls)} in last 30d`}
-        />
-        <Tile
-          label="Cost (MTD)"
-          value={formatINR(mtd.cost_paise)}
-          hint={
-            costGap > 0 ? `${formatCount(costGap)} calls missing cost` : "all calls costed"
-          }
-          help={
-            costGap > 0
-              ? "Some calls have no cost yet — the figure reads low until the backfill catches them."
-              : undefined
-          }
-        />
-        <Tile
-          label="Talk time (MTD)"
-          value={formatDuration(mtd.duration_s)}
-          hint={`${formatDuration(thirty.duration_s)} in last 30d`}
-        />
+      <ElevenLabsFilterBar
+        filters={view.filters}
+        months={monthOptions(view.first_call_at)}
+      />
+
+      {/* Two grids, not one six-up row. The credit tiles are a LIVE balance and
+          the usage tiles follow the date filter, so showing them in one row
+          under "February 2026" would imply February's credit balance — which
+          nothing here can know (raw samples are pruned at 30 days). */}
+      <div className="space-y-1">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+          Live balance — right now, not affected by the date filter
+        </p>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <Tile
+            label="Credits remaining"
+            value={credits.remaining == null ? "—" : `${formatCount(credits.remaining)} cr`}
+            hint={credits.limit == null ? undefined : `of ${formatCount(credits.limit)} quota`}
+            severity={remainingSeverity}
+            help={getMetric("vendor.credits_remaining")?.help}
+          />
+          <Tile
+            label="Quota used"
+            value={credits.used_pct == null ? "—" : `${credits.used_pct}%`}
+            hint={credits.reset_at ? `resets ${formatIst(credits.reset_at)}` : undefined}
+            severity={quotaSeverity}
+            help={getMetric("vendor.credits_used_pct")?.help}
+          />
+          <Tile
+            label="Credits consumed"
+            value={credits.used == null ? "—" : `${formatCount(credits.used)} cr`}
+            hint="this billing period"
+            help="Reported by ElevenLabs, not derived from our cost figures."
+          />
+        </div>
+      </div>
+
+      {/* The window is stated ONCE here rather than suffixed onto each tile
+          label: "(February 2026)" inside an 11px uppercase label in a two-column
+          cell is what breaks this grid. */}
+      <div className="space-y-1">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+          Usage · {view.filters.label}
+        </p>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <Tile
+            label="Calls"
+            value={formatCount(range.calls)}
+            hint={versusPrev(range.calls, prev?.calls)}
+          />
+          <Tile
+            label="Cost"
+            value={formatINR(range.cost_paise)}
+            hint={
+              costGap > 0 ? `${formatCount(costGap)} calls missing cost` : "all calls costed"
+            }
+            help={
+              costGap > 0
+                ? "Some calls have no cost yet — the figure reads low until the backfill catches them."
+                : undefined
+            }
+          />
+          <Tile
+            label="Talk time"
+            value={formatDuration(range.duration_s)}
+            hint={versusPrev(range.duration_s, prev?.duration_s)}
+          />
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Daily usage (30 days)</CardTitle>
+            <CardTitle className="text-base">Usage · {view.filters.label}</CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
-              Calls per day, IST. Empty days are drawn as a baseline rather than
-              skipped — a run of them is the signal this page exists for.
+              Calls per {view.filters.bucket === "day" ? "day" : "month"}, IST.
+              Empty {view.filters.bucket === "day" ? "days" : "months"} are drawn
+              as a baseline rather than skipped — a run of them is the signal this
+              page exists for.
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
             <UsageBarChart
-              points={view.daily.map((d) => ({
-                key: d.day,
+              points={view.trend.map((d) => ({
+                key: d.key,
                 value: d.calls,
-                tooltip: `${d.day} — ${formatCount(d.calls)} calls, ${formatINR(d.cost_paise)}`,
+                tooltip: `${d.key} — ${formatCount(d.calls)} calls, ${formatINR(d.cost_paise)}`,
               }))}
-              ariaLabel={`Daily ElevenLabs call volume over 30 days, peak ${Math.max(
-                ...view.daily.map((d) => d.calls),
+              ariaLabel={`ElevenLabs call volume for ${view.filters.label}, peak ${Math.max(
+                ...view.trend.map((d) => d.calls),
                 0,
-              )} per day`}
-              startLabel={view.daily[0]?.day ?? ""}
-              endLabel={view.daily[view.daily.length - 1]?.day ?? ""}
-              footNote={`${formatCount(thirty.calls)} calls · ${formatINR(thirty.cost_paise)}`}
+              )} per ${view.filters.bucket}`}
+              startLabel={view.trend[0]?.key ?? ""}
+              endLabel={view.trend[view.trend.length - 1]?.key ?? ""}
+              footNote={`${formatCount(range.calls)} calls · ${formatINR(range.cost_paise)}`}
             />
-            {thirty.calls === 0 && (
+            {range.calls === 0 && (
               <p className="text-[11px] text-warning">
-                No ElevenLabs calls in the last 30 days. Either the dialer is idle
-                or calls are going through another provider.
+                No ElevenLabs calls in {view.filters.label}.
+                {/* "The dialer is idle" is a claim about NOW. Saying it about a
+                    month that ended six months ago would be nonsense. */}
+                {view.filters.key === "mtd" &&
+                  " Either the dialer is idle or calls are going through another provider."}
               </p>
             )}
           </CardContent>
@@ -347,7 +409,9 @@ export default async function OperationsElevenLabsPage() {
             <CardTitle className="text-base">Credits &amp; quota</CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
               Polled hourly from ElevenLabs. Read the percentage with the reset
-              date — 90% on the last day of the period is fine.
+              date — 90% on the last day of the period is fine. Live: not
+              affected by the date filter, since raw samples are pruned at 30
+              days and older balances no longer exist to show.
             </p>
           </CardHeader>
           <CardContent>
@@ -402,7 +466,9 @@ export default async function OperationsElevenLabsPage() {
             <CardTitle className="text-base">Month over month</CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
               Metered cost per calendar month, IST. The last bar is the month in
-              progress.
+              progress. Always the last six months — not affected by the date
+              filter, because this chart is how you find the month worth
+              selecting.
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -432,15 +498,15 @@ export default async function OperationsElevenLabsPage() {
           <CardHeader>
             <CardTitle className="text-base">Usage by campaign category</CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
-              Last 30 days. Calls are attributed through the dialer campaign that
-              placed them; everything else lands in one explicit bucket rather
-              than being dropped.
+              {view.filters.label}. Calls are attributed through the dialer
+              campaign that placed them; everything else lands in one explicit
+              bucket rather than being dropped.
             </p>
           </CardHeader>
           <CardContent>
             {view.by_category.length === 0 ? (
               <p className="text-sm text-ink-muted">
-                No ElevenLabs calls in the last 30 days.
+                No ElevenLabs calls in {view.filters.label}.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -464,15 +530,19 @@ export default async function OperationsElevenLabsPage() {
                     ))}
                   </tbody>
                 </table>
-                {categoryCalls !== thirty.calls && (
+                {categoryCalls !== range.calls && (
                   // These two are computed by different queries over the same
                   // window and must agree. If they ever do not, the attribution
                   // join has started dropping or duplicating rows — say so
                   // rather than quietly showing a breakdown that does not add up.
+                  //
+                  // This assertion is exactly why by_category has to follow the
+                  // date filter: scoped to a different window it would false-alarm
+                  // on every range other than the default.
                   <p className="mt-3 text-[11px] text-warning">
-                    Breakdown totals {formatCount(categoryCalls)} calls but the
-                    30-day total is {formatCount(thirty.calls)} — the campaign
-                    attribution join is losing or duplicating rows.
+                    Breakdown totals {formatCount(categoryCalls)} calls but the{" "}
+                    {view.filters.label} total is {formatCount(range.calls)} — the
+                    campaign attribution join is losing or duplicating rows.
                   </p>
                 )}
               </div>
@@ -486,17 +556,22 @@ export default async function OperationsElevenLabsPage() {
           <div>
             <CardTitle className="text-base">Recent calls</CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
-              The last 20 completed ElevenLabs calls, campaign or not. Numbers are
-              masked — this console is for operations, not sales.
+              The last 20 completed ElevenLabs calls in {view.filters.label},
+              campaign or not. Numbers are masked — this console is for
+              operations, not sales.
             </p>
           </div>
+          {/* `short` exists so this badge stays on one line whatever is selected. */}
           <Badge variant="muted">
-            30d {formatINR(thirty.cost_paise)} · {formatCount(thirty.calls)} calls
+            {view.filters.short} {formatINR(range.cost_paise)} ·{" "}
+            {formatCount(range.calls)} calls
           </Badge>
         </CardHeader>
         <CardContent>
           {view.recent.length === 0 ? (
-            <p className="text-sm text-ink-muted">No ElevenLabs calls on record.</p>
+            <p className="text-sm text-ink-muted">
+              No ElevenLabs calls in {view.filters.label}.
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[52rem] text-sm">
@@ -537,6 +612,7 @@ export default async function OperationsElevenLabsPage() {
           : "never"}
         {view.last_updated && ` · sampled ${formatIst(view.last_updated, { withSeconds: true })}`}
         {" · call data read live from ai_call_logs"}
+        {` · ${view.filters.label}`}
       </p>
     </div>
   );

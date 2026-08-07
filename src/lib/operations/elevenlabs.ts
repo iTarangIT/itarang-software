@@ -45,20 +45,30 @@ import { db } from "@/lib/db";
 
 import {
   categoryLabel,
-  fillDays,
+  DEFAULT_RANGE,
+  fillMonths,
+  fillRange,
   istDay,
+  istMonth,
   maskPhone,
   momDelta,
   OUTSIDE_MARKER,
+  prevRange,
+  resolveRange,
   UNCATEGORISED_MARKER,
   type DailyUsage,
+  type ElevenLabsFilters,
   type MonthlyUsage,
 } from "./elevenlabsSeries";
 import { toNumber } from "./format";
 import { getCollectorHealth, type CollectorHealth } from "./runner";
 import { latestSamples, seriesFor, type SeriesPoint } from "./samples";
 
-export type { DailyUsage, MonthlyUsage } from "./elevenlabsSeries";
+export type {
+  DailyUsage,
+  ElevenLabsFilters,
+  MonthlyUsage,
+} from "./elevenlabsSeries";
 
 /** The provider string written by src/lib/ai/elevenlabs/finalizeCall.ts. */
 const PROVIDER = "elevenlabs" as const;
@@ -89,6 +99,26 @@ function filters(
     page: 1,
     limit: 20,
   };
+}
+
+/**
+ * The same date window as `filters()`, for the two queries written by hand
+ * (category attribution and recent calls) rather than through the shared Cost
+ * Analytics builders.
+ *
+ * It exists so the two cannot drift on the boundary convention: `to` is an
+ * INCLUSIVE day, expressed as `< to + 1 day`, exactly as whereClauseAcl does.
+ * A hand-written `<= to` here would silently drop the last day's calls on one
+ * half of the page and not the other.
+ */
+function dateBounds(f: ElevenLabsFilters) {
+  const from = f.from
+    ? sql` AND acl.ended_at >= ${f.from}::date`
+    : sql``;
+  const to = f.to
+    ? sql` AND acl.ended_at < (${f.to}::date + INTERVAL '1 day')`
+    : sql``;
+  return sql`${from}${to}`;
 }
 
 export interface ElevenLabsCredits {
@@ -134,24 +164,45 @@ export interface RecentCall {
   phone_masked: string | null;
 }
 
+/**
+ * One bar on the trend chart. `key` is YYYY-MM-DD for day buckets and YYYY-MM
+ * for month buckets, so the chart renders from one shape either way.
+ */
+export interface TrendPoint {
+  key: string;
+  calls: number;
+  cost_paise: number;
+}
+
 export interface ElevenLabsView {
+  /** The resolved window everything below (except where noted) is scoped to. */
+  filters: ElevenLabsFilters;
   credits: ElevenLabsCredits;
   /** 7 days of credits_remaining, hourly buckets, for the sparkline. */
   credits_series: SeriesPoint[];
-  /** Month to date, IST. */
-  mtd: UsageTotals;
-  /** All time. */
+  /** Totals for the selected range. */
+  range: UsageTotals;
+  /**
+   * The equally-long window immediately before it, for the "vs previous" hint.
+   * Null for all time, which has no predecessor.
+   */
+  prev: UsageTotals | null;
+  /** All time. NOT filtered — the absolute anchor the page prints as context. */
   total: UsageTotals;
   first_call_at: Date | null;
-  /** Trailing 30 days, one entry per day INCLUDING days with no calls. */
-  daily: DailyUsage[];
-  /** Six calendar months, newest first. Index 0 is the current partial month. */
+  /** The selected range, gaps filled. Granularity follows `filters.bucket`. */
+  trend: TrendPoint[];
+  /**
+   * Six calendar months, newest first. Index 0 is the current partial month.
+   * DELIBERATELY NOT filtered — this chart is the navigation context (you see
+   * the spike, you pick that month), and momDelta is defined on complete
+   * calendar months, so a range-relative version would mean nothing.
+   */
   monthly: MonthlyUsage[];
   /** Change between the two most recent COMPLETE months. */
   mom_delta_pct: number | null;
-  /** Trailing 30 days. Rows sum to `thirty_day.calls` — see the LEFT JOIN note. */
+  /** Selected range. Rows sum to `range.calls` — see the LEFT JOIN note. */
   by_category: CategoryUsage[];
-  thirty_day: UsageTotals;
   recent: RecentCall[];
   collector: CollectorHealth | null;
   /** Newest captured_at across the credit samples. */
@@ -170,18 +221,24 @@ function totals(row: Record<string, unknown> | undefined): UsageTotals {
   };
 }
 
-export async function getElevenLabsView(): Promise<ElevenLabsView> {
+/**
+ * @param f The resolved date window. Defaults to month-to-date, which keeps the
+ *   two existing call sites (the page and the JSON route) compiling unchanged
+ *   and preserves the pre-filter behaviour for anything that forgets to pass one.
+ */
+export async function getElevenLabsView(
+  f: ElevenLabsFilters = resolveRange(DEFAULT_RANGE),
+): Promise<ElevenLabsView> {
   const today = istDay();
-  const currentMonth = today.slice(0, 7);
-  const monthStart = `${currentMonth}-01`;
-  const trendStart = istDay(new Date(Date.now() - 29 * 86_400_000));
+  const currentMonth = istMonth();
+  const previous = prevRange(f);
 
   const [
     creditSamples,
     creditSeries,
-    mtdRows,
+    rangeRows,
     totalRows,
-    thirtyRows,
+    prevRows,
     trendRows,
     monthlyRows,
     categoryRows,
@@ -202,10 +259,33 @@ export async function getElevenLabsView(): Promise<ElevenLabsView> {
     // Reused verbatim from Cost Analytics so both surfaces report the same
     // numbers for the same window. Neither joins dialer_campaign_leads — that
     // join is what made Cost Analytics read ~5x low before May 2026.
-    rows(buildSummarySql(filters(monthStart, today))),
+    //
+    // The builders already take nullable bounds (whereClauseAcl omits each
+    // clause when null), which is why supporting a date filter needed no change
+    // to cost-analytics-query.ts at all.
+    rows(buildSummarySql(filters(f.from, f.to))),
     rows(buildSummarySql(filters(null, null))),
-    rows(buildSummarySql(filters(trendStart, today))),
-    rows(buildTrendSql(filters(trendStart, today))),
+    previous
+      ? rows(buildSummarySql(filters(previous.from, previous.to)))
+      : Promise.resolve([]),
+
+    // Day buckets go through the shared trend builder; month buckets need a
+    // GROUP BY the SQL builder does not express, and running the day builder
+    // over an all-time window would return a row per day since the first call.
+    f.bucket === "day"
+      ? rows(buildTrendSql(filters(f.from, f.to)))
+      : rows(sql`
+          SELECT
+            TO_CHAR(acl.ended_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS month,
+            COALESCE(SUM(acl.total_cost_cents), 0)::bigint               AS cost_cents,
+            COUNT(*)::int                                                AS calls
+          FROM ai_call_logs acl
+          WHERE acl.call_id IS NOT NULL
+            AND acl.provider = ${PROVIDER}
+            AND acl.ended_at IS NOT NULL
+            ${dateBounds(f)}
+          GROUP BY 1
+        `),
 
     // Six calendar months. Bounded by DATE_TRUNC rather than
     // `NOW() - INTERVAL '6 months'` so the oldest bucket is a whole month, not
@@ -261,9 +341,16 @@ export async function getElevenLabsView(): Promise<ElevenLabsView> {
         LIMIT 1
       ) dcl ON TRUE
       LEFT JOIN dialer_campaigns dc ON dc.id = dcl.campaign_id
+      -- Deliberately NO "ended_at IS NOT NULL" here. whereClauseAcl adds no
+      -- ended_at predicate when the window is unbounded, so on "all time" the
+      -- headline counts in-flight calls (ended_at NULL) and this breakdown must
+      -- too — otherwise the two disagree and the page raises its "attribution
+      -- join is losing rows" warning against a difference that is really just a
+      -- different NULL rule. For any bounded window dateBounds() excludes NULLs
+      -- anyway, so this only changes the all-time case.
       WHERE acl.call_id IS NOT NULL
         AND acl.provider = ${PROVIDER}
-        AND acl.ended_at > NOW() - INTERVAL '30 days'
+        ${dateBounds(f)}
       GROUP BY 1
       ORDER BY calls DESC
     `),
@@ -293,6 +380,7 @@ export async function getElevenLabsView(): Promise<ElevenLabsView> {
       WHERE acl.call_id IS NOT NULL
         AND acl.provider = ${PROVIDER}
         AND acl.ended_at IS NOT NULL
+        ${dateBounds(f)}
       ORDER BY acl.ended_at DESC
       LIMIT 20
     `),
@@ -336,11 +424,13 @@ export async function getElevenLabsView(): Promise<ElevenLabsView> {
   >((newest, at) => (at && (!newest || at > newest) ? at : newest), null);
 
   // ---- our side: usage ------------------------------------------------------
-  const trend = new Map<string, { calls: number; cost_paise: number }>();
+  const found = new Map<string, { calls: number; cost_paise: number }>();
   for (const r of trendRows) {
-    // buildTrendSql casts to ::date, which arrives as YYYY-MM-DD already in IST.
-    const day = String(r.date).slice(0, 10);
-    trend.set(day, { calls: int(r.calls), cost_paise: int(r.cost_cents) });
+    // buildTrendSql casts to ::date, which arrives as YYYY-MM-DD already in IST;
+    // the month branch selects a YYYY-MM string directly.
+    const key =
+      f.bucket === "day" ? String(r.date).slice(0, 10) : String(r.month);
+    found.set(key, { calls: int(r.calls), cost_paise: int(r.cost_cents) });
   }
 
   const monthly: MonthlyUsage[] = monthlyRows.map((r) => ({
@@ -371,19 +461,39 @@ export async function getElevenLabsView(): Promise<ElevenLabsView> {
   }));
 
   const firstCallRaw = firstRows[0]?.first_call_at;
+  const firstCallAt = firstCallRaw ? new Date(firstCallRaw as string) : null;
+
+  // All time has no stored bounds, so the chart is bounded by the data itself:
+  // the first call ever through today. Without this the "all" window would have
+  // nothing to enumerate between.
+  const chartFrom = f.from ?? (firstCallAt ? istDay(firstCallAt) : today);
+  const chartTo = f.to ?? today;
+  const trend: TrendPoint[] =
+    f.bucket === "day"
+      ? fillRange(found, chartFrom, chartTo).map((d) => ({
+          key: d.day,
+          calls: d.calls,
+          cost_paise: d.cost_paise,
+        }))
+      : fillMonths(found, chartFrom, chartTo).map((m) => ({
+          key: m.month,
+          calls: m.calls,
+          cost_paise: m.cost_paise,
+        }));
 
   return {
+    filters: f,
     credits,
     credits_series:
       creditSeries.get(`vendor.credits_remaining|${CREDIT_SOURCE}`) ?? [],
-    mtd: totals(mtdRows[0]),
+    range: totals(rangeRows[0]),
+    prev: previous ? totals(prevRows[0]) : null,
     total: totals(totalRows[0]),
-    first_call_at: firstCallRaw ? new Date(firstCallRaw as string) : null,
-    daily: fillDays(trend, 30),
+    first_call_at: firstCallAt,
+    trend,
     monthly,
     mom_delta_pct: momDelta(monthly, currentMonth),
     by_category: byCategory,
-    thirty_day: totals(thirtyRows[0]),
     recent,
     collector: collectors.find((c) => c.collector_id === COLLECTOR_ID) ?? null,
     last_updated: lastUpdated,
