@@ -7,15 +7,24 @@ import { Tabs } from "@/components/ui/tabs";
 import type { SettingsBundle } from "@/lib/admin/types";
 import { AssignmentConfigForm } from "./AssignmentConfigForm";
 import { HolidayCalendarManager } from "./HolidayCalendarManager";
+import { NotificationAccessManager } from "./NotificationAccessManager";
 import { TerritoryManager } from "./TerritoryManager";
 
-type Tab = "assignment" | "holidays" | "territories";
+type Tab = "assignment" | "holidays" | "territories" | "notifications";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "assignment", label: "Assignment Config" },
     { id: "holidays", label: "Holiday Calendar" },
     { id: "territories", label: "ASM Territories" },
+    { id: "notifications", label: "Notification Access" },
 ];
+
+// The first three tabs are fed by one bundled query; Notification Access owns
+// its own. Kept as a set so the loading and error blocks below can skip the
+// tabs that do not depend on the bundle — otherwise this tab would sit behind a
+// spinner for three tables it never reads, and would show an error banner for a
+// request that has nothing to do with it.
+const BUNDLE_TABS = new Set<Tab>(["assignment", "holidays", "territories"]);
 
 export function SettingsView() {
     const [tab, setTab] = useState<Tab>("assignment");
@@ -41,13 +50,13 @@ export function SettingsView() {
             </div>
 
             <div className="p-5">
-                {query.isLoading && (
+                {query.isLoading && BUNDLE_TABS.has(tab) && (
                     <div className="flex items-center justify-center py-10 text-ink-muted">
                         <Loader2 className="h-5 w-5 animate-spin mr-2" />
                         Loading settings…
                     </div>
                 )}
-                {query.error && (
+                {query.error && BUNDLE_TABS.has(tab) && (
                     <div className="flex items-center gap-2 text-sm text-danger">
                         <AlertTriangle className="h-4 w-4" />
                         {(query.error as Error).message}
@@ -62,6 +71,7 @@ export function SettingsView() {
                 {data && tab === "territories" && (
                     <TerritoryManager territories={data.territories} />
                 )}
+                {tab === "notifications" && <NotificationAccessManager />}
             </div>
         </div>
     );

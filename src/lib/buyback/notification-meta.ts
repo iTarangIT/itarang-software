@@ -53,7 +53,10 @@ export const CATEGORIES: NotificationCategory[] = [
  * non-transition events that also land in the bell: `gateway_*` (money-gateway
  * anomalies), `price_review_due`, `duplicate_photo`, `agreement_signed`.
  */
-const CATEGORY_BY_ACTION: Record<string, NotificationCategory> = {
+// Exported so src/lib/notifications/registry.ts can DERIVE the admin
+// Notification Access screen's buyback type list (`buyback.${action}`) from this
+// map instead of restating it. Same contract as catalog.ts's CATEGORY_BY_TYPE.
+export const CATEGORY_BY_ACTION: Record<string, NotificationCategory> = {
   // Dealer ↔ admin price negotiation
   negotiate: "Negotiation",
   dealer_counter: "Negotiation",
@@ -103,6 +106,12 @@ const CATEGORY_BY_ACTION: Record<string, NotificationCategory> = {
   gateway_payout_initiated: "Payments",
   gateway_link_created: "Payments",
   vendor_payment_link: "Payments",
+  // Both of these are emitted (gateway.ts:449 and the settlements payment-link
+  // route) and were never mapped, so they fell into "System" in the bell's
+  // filter bar and were invisible to the E-231 admin screen. Found by
+  // `npm run verify:notifications` against sandbox: 42 and 4 live rows.
+  gateway_failed: "Payments",
+  payment_link_created: "Payments",
 
   // Internal / system
   set_margin: "System",
@@ -117,6 +126,8 @@ const CRITICAL = new Set([
   "return_invoice",
   "cancel",
   "gateway_alert",
+  // A payment that actually failed is at least as urgent as a gateway anomaly.
+  "gateway_failed",
   "duplicate_photo",
 ]);
 

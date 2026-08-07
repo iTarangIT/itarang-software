@@ -81,7 +81,11 @@ const isBuyback = (type: string) => type.startsWith("buyback.");
  * backfill is needed. NOTE `notifications.type` is varchar(50) — keep new type
  * strings under 50 characters.
  */
-const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
+// Exported so src/lib/notifications/registry.ts can DERIVE the admin
+// Notification Access screen's type list from this map instead of restating it.
+// A type added here shows up on that screen automatically; the registry's test
+// fails loudly if it has no human label yet.
+export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // --- Leads ---
   "lead.created": "Leads",
   "lead.assigned": "Leads",
@@ -99,6 +103,11 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "onboarding.rejected": "Onboarding",
   "onboarding.correction_requested": "Onboarding",
   dealer_onboarding_submitted: "Onboarding",
+  // Emitted by /api/inside-sales/lead/[id]/mark-converted via notifyRoles, and
+  // unmapped until E-231 — so it fell into "System" in the bell's filter bar
+  // and, worse, was invisible to the admin Notification Access screen. Mapped
+  // here so it is both filed correctly and governable.
+  onboarding_initiated: "Onboarding",
 
   // --- KYC & consent ---
   "kyc.submitted": "KYC & Consent",
@@ -131,6 +140,10 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.doc_rejected": "NBFC Requests",
   "nbfc.verdict_raised": "NBFC Requests",
   "nbfc.verdict_responded": "NBFC Requests",
+  // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
+  // story as onboarding_initiated above — real, emitted, and unmapped until
+  // E-231.
+  nbfc_verdict_forwarded: "NBFC Requests",
 
   // --- Field investigation ---
   "fi.requested": "Field Investigation",
@@ -188,6 +201,11 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "vendor.registered": "Onboarding",
   "nbfc.dual_approval": "System",
   "nbfc.wallet_low": "System",
+  // 141 live rows on sandbox and NO emitter anywhere in src/ — found by
+  // `npm run verify:notifications`. Mapped rather than left unmapped so the
+  // rows already in people's bells file correctly and the type is governable
+  // from the E-231 screen if whatever wrote them ever runs again.
+  ops_alert: "System",
 
   // --- Escalations / internal ---
   escalation_raised: "Escalations",
