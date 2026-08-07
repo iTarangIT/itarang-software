@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -29,7 +29,6 @@ import {
   MapPinned,
   AlertTriangle,
   Upload,
-  Settings,
   BarChart3,
   GitMerge,
   MessageSquare,
@@ -46,6 +45,7 @@ import {
   Bell,
   ShieldAlert,
   Radar,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -207,6 +207,36 @@ const COMMON_ITEMS = [
     ],
   },
 ];
+
+// Per-role sections pinned BELOW COMMON_ITEMS.
+//
+// COMMON_ITEMS is appended to every role at the end of the build (see
+// `menuItems` below), so anything inside a role's own array can only ever
+// render ABOVE "EXPENSES / Submit Expense". A role whose last item must
+// genuinely BE last goes here instead.
+//
+// Only sales_head uses this today; every other role's rendered nav is unchanged.
+// The item keeps the id `sh-settings` on purpose — getActiveItemId() is
+// longest-href-wins so /admin/settings still beats /admin, and the badge mapping
+// further down keys on item.id.
+const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
+  sales_head: [
+    {
+      section: "Settings",
+      items: [
+        {
+          // id and href keep their old "settings" spelling on purpose — the id
+          // backs `data-testid="nav-sh-settings"` and the route is unchanged.
+          // Only the label the user reads was renamed.
+          id: "sh-settings",
+          label: "Notifications",
+          icon: Bell,
+          href: "/admin/settings",
+        },
+      ],
+    },
+  ],
+};
 
 const roleNavigation: Record<string, any[]> = {
   ceo: [
@@ -391,6 +421,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/leads-info",
         },
         {
+          id: "sh-leads",
+          label: "Leads",
+          icon: Users,
+          href: "/leads",
+        },
+        {
           id: "sh-escalations",
           label: "Escalations",
           icon: AlertTriangle,
@@ -426,18 +462,14 @@ const roleNavigation: Record<string, any[]> = {
           icon: BarChart3,
           href: "/admin/reports",
         },
-        {
-          id: "sh-settings",
-          label: "Settings",
-          icon: Settings,
-          href: "/admin/settings",
-        },
+        // "Notifications" (formerly "Settings") used to sit here, buried in
+        // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
+        // last — see the note there.
       ],
     },
     {
       section: "SALES",
       items: [
-        { id: "leads", label: "Leads", icon: Users, href: "/leads" },
         { id: "deals", label: "Deals", icon: FileCheck, href: "/deals" },
         {
           id: "approvals",
@@ -722,8 +754,8 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-settings",
-          label: "Settings",
-          icon: Settings,
+          label: "Notifications",
+          icon: Bell,
           href: "/admin/settings",
         },
       ],
@@ -1376,6 +1408,12 @@ function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): stri
   return winnerId;
 }
 
+// Section names are display strings ("BATTERY BUYBACK"); this makes them safe
+// for the aria-controls id linking a group header to its panel.
+function slugifySection(section: string) {
+  return section.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
 // Shared inner content rendered by BOTH the desktop sidebar and the mobile
 // drawer. Receives the already-computed (role-aware, finance-gated, badged)
 // menuItems so all that logic stays in Sidebar(). `onNavigate` lets the drawer
@@ -1403,6 +1441,35 @@ function SidebarNav({
     [menuItems, pathname],
   );
 
+  // The group holding the current route. Open by default, so landing on a page
+  // always reveals where you are.
+  const activeSection = useMemo(
+    () =>
+      menuItems.find((group) =>
+        group.items.some((item: any) => item.id === activeItemId),
+      )?.section ?? null,
+    [menuItems, activeItemId],
+  );
+
+  // Explicit user toggles ONLY — a section absent from this map falls back to
+  // `section === activeSection`. Storing the full open-set instead would need an
+  // effect to re-open the active group after every navigation, and a setState in
+  // an effect body is a cascading render (react-hooks/set-state-in-effect).
+  // Deriving gets the same behaviour for free.
+  const [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
+
+  const isSectionOpen = (section: string) =>
+    toggled.has(section) ? (toggled.get(section) as boolean) : section === activeSection;
+
+  const toggleSection = (section: string) => {
+    const next = !isSectionOpen(section);
+    setToggled((prev) => new Map(prev).set(section, next));
+  };
+
+  // Desktop sidebar and mobile drawer both render this component at the same
+  // time, so the aria-controls ids have to be per-instance.
+  const navId = useId();
+
   return (
     <>
       {/* Logo lockup */}
@@ -1415,50 +1482,88 @@ function SidebarNav({
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto py-6 space-y-7">
-        {menuItems.map((group: any) => (
-          <div key={group.section}>
-            <h3 className="sidebar-section-label px-5 mb-2">
-              {group.section}
-            </h3>
-            <div>
-              {group.items.map((item: any) => {
-                const isActive = item.id === activeItemId;
-                return (
-                  <Link
-                    key={item.id}
-                    href={item.href}
-                    onClick={onNavigate}
-                    data-testid={`nav-${item.id}`}
-                    className={cn(
-                      isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
-                    )}
-                  >
-                    <item.icon
-                      className={cn(
-                        "w-[18px] h-[18px] shrink-0",
-                        isActive ? "text-white" : "text-white/55",
-                      )}
-                      strokeWidth={1.75}
-                    />
-                    <span className="truncate flex-1">{item.label}</span>
-                    {item.badge ? (
-                      <span
-                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
-                        style={{
-                          background: "var(--color-brand-sky)",
-                          color: "#fff",
-                        }}
-                      >
-                        {item.badge}
-                      </span>
-                    ) : null}
-                  </Link>
-                );
-              })}
+      <div className="sidebar-scroll flex-1 overflow-y-auto py-2">
+        {menuItems.map((group: any) => {
+          const isOpen = isSectionOpen(group.section);
+          const hasActive = group.items.some(
+            (item: any) => item.id === activeItemId,
+          );
+          const panelId = `${navId}-${slugifySection(group.section)}`;
+          return (
+            <div key={group.section} className="sidebar-section">
+              <button
+                type="button"
+                onClick={() => toggleSection(group.section)}
+                aria-expanded={isOpen}
+                aria-controls={panelId}
+                data-has-active={hasActive ? "true" : undefined}
+                className="sidebar-section-toggle"
+              >
+                <span className="truncate">{group.section}</span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className={cn(
+                    "w-4 h-4 ml-auto shrink-0 opacity-70 transition-transform duration-200",
+                    isOpen ? "rotate-180" : "rotate-0",
+                  )}
+                  strokeWidth={2}
+                />
+              </button>
+              {/* 0fr → 1fr grid row is the only way to transition to an
+                  auto height without measuring the panel. */}
+              <div
+                id={panelId}
+                className={cn(
+                  "grid transition-[grid-template-rows] duration-200 ease-out",
+                  isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+                )}
+              >
+                {/* Items stay mounted so the collapse can animate; `inert`
+                    keeps the hidden ones out of the tab order. */}
+                <div className="min-h-0 overflow-hidden" inert={!isOpen}>
+                  <div className="pb-2">
+                    {group.items.map((item: any) => {
+                      const isActive = item.id === activeItemId;
+                      return (
+                        <Link
+                          key={item.id}
+                          href={item.href}
+                          onClick={onNavigate}
+                          data-testid={`nav-${item.id}`}
+                          className={cn(
+                            isActive
+                              ? "sidebar-nav-item-active"
+                              : "sidebar-nav-item",
+                          )}
+                        >
+                          <item.icon
+                            className={cn(
+                              "w-[18px] h-[18px] shrink-0",
+                              isActive ? "text-white" : "text-white/55",
+                            )}
+                            strokeWidth={1.75}
+                          />
+                          <span className="truncate flex-1">{item.label}</span>
+                          {item.badge ? (
+                            <span
+                              className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                              style={{
+                                background: "var(--color-brand-sky)",
+                                color: "#fff",
+                              }}
+                            >
+                              {item.badge}
+                            </span>
+                          ) : null}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Profile mini-card — NOTE: `displayRole` is sourced from users.role
@@ -1616,9 +1721,35 @@ export function Sidebar() {
   //  · "it" — the IT console is a single-purpose security surface (scanner
   //    findings + live attacks); expense filing is out of scope for it.
   const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it"]);
-  let menuItems = NO_COMMON_ITEMS.has(inferredRole)
-    ? filteredMenuItems
-    : [...filteredMenuItems, ...COMMON_ITEMS];
+  let menuItems = [
+    ...filteredMenuItems,
+    ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),
+    // Anything that must render below the shared EXPENSES group. Empty for
+    // every role but sales_head, so this is a no-op elsewhere.
+    ...(ROLE_TRAILING_SECTIONS[inferredRole] ?? []),
+  ];
+
+  // Merge duplicate EXPENSES groups so a role with its own EXPENSES section
+  // gets the shared "Submit Expense" item inside it instead of rendering two
+  // separate headings.
+  menuItems = menuItems.reduce((acc: any[], group: any) => {
+    if (group.section !== "EXPENSES") {
+      acc.push(group);
+      return acc;
+    }
+
+    const existingExpenses = acc.find((item) => item.section === "EXPENSES");
+    if (!existingExpenses) {
+      acc.push({
+        section: "EXPENSES",
+        items: [...group.items],
+      });
+      return acc;
+    }
+
+    existingExpenses.items.push(...group.items);
+    return acc;
+  }, []);
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue

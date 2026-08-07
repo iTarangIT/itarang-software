@@ -33,6 +33,7 @@ import {
   users,
 } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email/mailer";
+import { blockedDashboardsFor } from "@/lib/notifications/access";
 import { emailWorthy } from "@/lib/notifications/catalog";
 import { getEmailTransport } from "@/lib/notifications/resolve-channel";
 import {
@@ -124,6 +125,14 @@ interface ResolvedTarget {
   dealerId?: string | null;
   /** Tenant whose SMTP should send this recipient's email, when NBFC-scoped. */
   tenantId?: string | null;
+  /**
+   * `users.role`, raw. E-231 gates the bell per dashboard, and a dashboard IS a
+   * role — but `notifications` has no role column, so the only place that
+   * knowledge exists is here, between resolving an audience and writing the row.
+   * Compared case-insensitively everywhere; seeded roles are inconsistently
+   * cased (see the "roles" case below).
+   */
+  role?: string | null;
 }
 
 function genId(): string {
@@ -139,7 +148,14 @@ function safeType(type: string): string {
 
 async function usersWhere(where: SQL | undefined) {
   return db
-    .select({ id: users.id, email: users.email, dealer_id: users.dealer_id })
+    .select({
+      id: users.id,
+      email: users.email,
+      dealer_id: users.dealer_id,
+      // E-231 — the bell gate needs the recipient's dashboard, and the dashboard
+      // is the role. Free: same rows, one more column.
+      role: users.role,
+    })
     .from(users)
     .where(where);
 }
@@ -156,13 +172,18 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
       const rows = await usersWhere(
         and(sql`LOWER(${users.role}) IN ${roles}`, eq(users.is_active, true)),
       );
-      return rows.map((r) => ({ userId: r.id, email: r.email ?? null }));
+      return rows.map((r) => ({ userId: r.id, email: r.email ?? null, role: r.role }));
     }
 
     case "user": {
       if (!audience.userId) return [];
       const rows = await usersWhere(eq(users.id, audience.userId));
-      return rows.map((r) => ({ userId: r.id, email: r.email ?? null, dealerId: r.dealer_id }));
+      return rows.map((r) => ({
+        userId: r.id,
+        email: r.email ?? null,
+        dealerId: r.dealer_id,
+        role: r.role,
+      }));
     }
 
     case "dealer": {
@@ -174,6 +195,7 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
         userId: r.id,
         email: r.email ?? null,
         dealerId: audience.dealerId,
+        role: r.role,
       }));
     }
 
@@ -191,11 +213,19 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
     case "nbfc": {
       if (!audience.tenantId) return [];
       const rows = await db
-        .select({ id: users.id, email: users.email })
+        // users.role, not nbfcUsers.role: E-231 governs the CRM dashboard, and
+        // every NBFC seat is users.role = 'nbfc_partner'. The finer NBFC role
+        // lives on nbfcUsers and is deliberately not what the gate reads.
+        .select({ id: users.id, email: users.email, role: users.role })
         .from(nbfcUsers)
         .innerJoin(users, eq(users.id, nbfcUsers.user_id))
         .where(and(eq(nbfcUsers.tenant_id, audience.tenantId), eq(users.is_active, true)));
-      return rows.map((r) => ({ userId: r.id, email: r.email ?? null, tenantId: audience.tenantId }));
+      return rows.map((r) => ({
+        userId: r.id,
+        email: r.email ?? null,
+        tenantId: audience.tenantId,
+        role: r.role,
+      }));
     }
 
     case "lead_nbfc": {
@@ -219,12 +249,13 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
         const rows = await usersWhere(
           and(eq(users.vendor_entity_id, audience.vendorEntityId), eq(users.is_active, true)),
         );
-        if (rows.length > 0) return rows.map((r) => ({ userId: r.id, email: r.email ?? null }));
+        if (rows.length > 0)
+          return rows.map((r) => ({ userId: r.id, email: r.email ?? null, role: r.role }));
       }
       if (audience.email) {
         // Scoped to the vendor role so a shared address can never notify a dealer.
         const rows = await db
-          .select({ id: users.id, email: users.email })
+          .select({ id: users.id, email: users.email, role: users.role })
           .from(users)
           .where(
             and(
@@ -236,7 +267,7 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
         const wanted = audience.email.toLowerCase();
         return rows
           .filter((r) => (r.email ?? "").toLowerCase() === wanted)
-          .map((r) => ({ userId: r.id, email: r.email ?? null }));
+          .map((r) => ({ userId: r.id, email: r.email ?? null, role: r.role }));
       }
       return [];
     }
@@ -269,12 +300,21 @@ export async function emit(input: EmitInput): Promise<void> {
   // admin role and the lead's dealer gets the first, most specific copy only.
   const alreadyNotified = new Set<string>();
 
+  // E-231 — dashboards that have muted this type in their bell. One lookup for
+  // the whole fan-out, so every recipient of one event gets a consistent answer.
+  // Empty (the common case) makes the filter below a no-op.
+  const blocked = new Set(await blockedDashboardsFor(type));
+
   for (const recipient of input.to) {
     try {
       const targets = dedupe(await resolve(recipient.audience)).filter(
         (t) => !alreadyNotified.has(t.userId),
       );
       if (targets.length === 0) continue;
+      // Marked BEFORE the E-231 filter, deliberately, and on the full list. A
+      // person holds one role, so a muted user would be muted by any later
+      // audience too — but they would be re-resolved and EMAILED a second time,
+      // because email follows `targets`, not `bellTargets`.
       targets.forEach((t) => alreadyNotified.add(t.userId));
 
       const title = recipient.title ?? input.title;
@@ -290,21 +330,32 @@ export async function emit(input: EmitInput): Promise<void> {
         leadId: input.leadId ?? null,
       };
 
-      await db.insert(notifications).values(
-        targets.map((t) => ({
-          id: genId(),
-          user_id: t.userId,
-          // Kept in step with user_id so anything still reading dealer_id sees
-          // the row too; the feed's scope prefers user_id.
-          dealer_id: t.dealerId ?? null,
-          lead_id: input.leadId ?? null,
-          type,
-          title,
-          message,
-          data,
-          read: false,
-        })),
-      );
+      // The E-231 gate is BELL-ONLY. A muted person stays in `targets` (so their
+      // email still goes) and drops out of `bellTargets` (so no row is written).
+      // Filtering `targets` instead would silence the email too, which is not
+      // what "silent in the bell" means — and would let an admin stop an
+      // agreement link from a settings screen.
+      const bellTargets = blocked.size
+        ? targets.filter((t) => !blocked.has((t.role ?? "").trim().toLowerCase()))
+        : targets;
+
+      if (bellTargets.length > 0) {
+        await db.insert(notifications).values(
+          bellTargets.map((t) => ({
+            id: genId(),
+            user_id: t.userId,
+            // Kept in step with user_id so anything still reading dealer_id sees
+            // the row too; the feed's scope prefers user_id.
+            dealer_id: t.dealerId ?? null,
+            lead_id: input.leadId ?? null,
+            type,
+            title,
+            message,
+            data,
+            read: false,
+          })),
+        );
+      }
 
       const sendMail = recipient.email ?? wantEmailByDefault;
       if (sendMail) {

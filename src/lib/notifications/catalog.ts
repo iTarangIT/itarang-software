@@ -81,7 +81,11 @@ const isBuyback = (type: string) => type.startsWith("buyback.");
  * backfill is needed. NOTE `notifications.type` is varchar(50) — keep new type
  * strings under 50 characters.
  */
-const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
+// Exported so src/lib/notifications/registry.ts can DERIVE the admin
+// Notification Access screen's type list from this map instead of restating it.
+// A type added here shows up on that screen automatically; the registry's test
+// fails loudly if it has no human label yet.
+export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // --- Leads ---
   "lead.created": "Leads",
   "lead.assigned": "Leads",
@@ -99,6 +103,11 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "onboarding.rejected": "Onboarding",
   "onboarding.correction_requested": "Onboarding",
   dealer_onboarding_submitted: "Onboarding",
+  // Emitted by /api/inside-sales/lead/[id]/mark-converted via notifyRoles, and
+  // unmapped until E-231 — so it fell into "System" in the bell's filter bar
+  // and, worse, was invisible to the admin Notification Access screen. Mapped
+  // here so it is both filed correctly and governable.
+  onboarding_initiated: "Onboarding",
 
   // --- KYC & consent ---
   "kyc.submitted": "KYC & Consent",
@@ -131,6 +140,17 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.doc_rejected": "NBFC Requests",
   "nbfc.verdict_raised": "NBFC Requests",
   "nbfc.verdict_responded": "NBFC Requests",
+  // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
+  // story as onboarding_initiated above — real, emitted, and unmapped until
+  // E-231.r
+  nbfc_verdict_forwarded: "NBFC Requests",
+  // The flat predecessor of `nbfc.request_forwarded`. No emitter left in src/,
+  // but 2 live rows on database-2 (prod) — found by running
+  // verify:notifications against PROD, which is the only place they exist;
+  // database-1 has none, so the sandbox run reported the registry clean. Mapped
+  // for the same reason as ops_alert: the bells already written should file
+  // correctly and stay muteable.
+  nbfc_doc_request_forwarded: "NBFC Requests",
 
   // --- Field investigation ---
   "fi.requested": "Field Investigation",
@@ -193,6 +213,17 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "vendor.registered": "Onboarding",
   "nbfc.dual_approval": "System",
   "nbfc.wallet_low": "System",
+  // 141 live rows on sandbox and NO emitter anywhere in src/ — found by
+  // `npm run verify:notifications`. Mapped rather than left unmapped so the
+  // rows already in people's bells file correctly and the type is governable
+  // from the E-231 screen if whatever wrote them ever runs again.
+  ops_alert: "System",
+  // NOTE `oem.price_missing` was briefly mapped here too, as a second System
+  // entry, because a verify:notifications run found 5 live rows on database-1
+  // and no emitter in src/. E-230 landed the emitter on main in the same window
+  // (events.ts oemPriceMissing) and filed it under Inventory, above — which is
+  // the right home now that a human is being asked to go and fix a price. The
+  // duplicate key silently won at runtime and would have mis-filed it; removed.
 
   // --- Escalations / internal ---
   escalation_raised: "Escalations",
