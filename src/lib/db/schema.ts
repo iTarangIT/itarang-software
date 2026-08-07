@@ -172,11 +172,18 @@ export const productMasterParaphernalia = pgTable(
   }),
 );
 
-// E-226 — the OEM reference price book. Append-only: a revision closes the live
-// row (effective_to = now()) and inserts a new one, so history survives for
-// audit. Exactly one live row per (asset_type, product_id), enforced in SQL by
-// the partial unique index oem_reference_prices_live_uniq — partial indexes are
-// not expressible here, so it lives only in the migration.
+// E-226 + E-230 — the OEM reference price book. Append-only: a revision closes
+// the row it replaces (effective_to) and inserts a new one, so history survives
+// for audit.
+//
+// E-230 made it DATED. Each open row (effective_to IS NULL) owns a half-open
+// window [effective_from, valid_until) and one product's windows never overlap,
+// so a product may hold the price in force PLUS any scheduled successors —
+// which is how "my next pricing for the next period would be 52,000" is
+// represented. The non-overlap is held by setOemPrice() locking the product's
+// open rows FOR UPDATE; the partial unique index
+// oem_reference_prices_open_from_uniq is the backstop and, being partial, lives
+// only in the migration.
 //
 // product_id is TEXT, not uuid, on purpose: it joins to
 // dealer_lead_commercials.product_lines[].product_id, which the picker emits as
@@ -191,10 +198,18 @@ export const oemReferencePrices = pgTable(
     model_id: varchar("model_id", { length: 100 }),
     product_name: varchar("product_name", { length: 200 }),
     oem_price: numeric("oem_price", { precision: 14, scale: 2 }).notNull(),
+    // May be in the future since E-230 — that is a queued successor line.
     effective_from: timestamp("effective_from", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // Superseded-at. Bookkeeping, never chosen by the admin.
     effective_to: timestamp("effective_to", { withTimezone: true }),
+    // E-230 — the DECLARED expiry, exclusive. NULL means open-ended, which is
+    // every pre-E-230 row. Not the same thing as effective_to: a row can expire
+    // without ever being superseded, and that is the state the notification
+    // exists to catch.
+    valid_until: timestamp("valid_until", { withTimezone: true }),
+    expiry_notified_at: timestamp("expiry_notified_at", { withTimezone: true }),
     note: text(),
     created_by: text("created_by").notNull(),
     created_at: timestamp("created_at", { withTimezone: true })
@@ -3217,18 +3232,47 @@ export const scrapeRuns = pgTable("scraper_runs", {
   new_leads_skipped_invalid_phone: integer(
     "new_leads_skipped_invalid_phone",
   ).default(0),
+  // E-227 — liveness heartbeat, bumped by executeChunk() alongside
+  // completed_chunks. reapStuckRuns() reaps on silence rather than on total run
+  // age, so a legitimately long multi-query run isn't force-failed at minute 11.
+  last_progress_at: timestamp("last_progress_at", { withTimezone: true }),
+  // NOTE: E-227 also creates idx_scraper_runs_running (partial, WHERE status =
+  // 'running'). It is deliberately NOT declared here: "scraper_runs" is mapped
+  // by TWO pgTable declarations in this file (scraperRuns above and scrapeRuns
+  // here), so declaring indexes on both aliases would emit duplicate DDL if
+  // drizzle-kit is ever run. The migration file owns that index.
 });
 
-export const scraperRunChunks = pgTable("scraper_run_chunks", {
-  id: text().primaryKey().notNull(),
-  run_id: text("run_id").notNull(),
-  combination_query: text("combination_query").notNull(),
-  status: text().default('pending').notNull(),
-  leads_count: integer("leads_count").default(0),
-  error_message: text("error_message"),
-  created_at: timestamp("created_at").defaultNow(),
-  completed_at: timestamp("completed_at"),
-});
+export const scraperRunChunks = pgTable(
+  "scraper_run_chunks",
+  {
+    id: text().primaryKey().notNull(),
+    run_id: text("run_id").notNull(),
+    combination_query: text("combination_query").notNull(),
+    status: text().default('pending').notNull(),
+    leads_count: integer("leads_count").default(0),
+    error_message: text("error_message"),
+    created_at: timestamp("created_at").defaultNow(),
+    completed_at: timestamp("completed_at"),
+    // E-227 — the two components of combination_query, stored at fan-out time.
+    // combination_query may itself contain " in ", so it can't be parsed back
+    // apart reliably. NULL on chunks created before E-227.
+    query_text: text("query_text"),
+    city: text(),
+  },
+  (t) => ({
+    // E-227 — the progress poll runs WHERE run_id = ? GROUP BY status every few
+    // seconds against ~1,500 rows per run; this table had no index at all.
+    runIdIdx: index("idx_scraper_run_chunks_run_id").on(t.run_id),
+    // Serves the chunk-drain ticker's claim query. Partial (WHERE status =
+    // 'pending') in the migration — Drizzle's builder can't express that, so
+    // E-227 is the source of truth for the WHERE clause.
+    pendingIdx: index("idx_scraper_run_chunks_pending").on(
+      t.status,
+      t.created_at,
+    ),
+  }),
+);
 
 export const scraperLeads = pgTable("scraper_leads", {
   id: text().primaryKey().notNull(),
@@ -3440,6 +3484,21 @@ export const dialerCampaigns = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // E-228 — per-campaign calling window. NULL on all three means UNSCHEDULED:
+    // the campaign dials continuously, exactly as it did before E-228. Defaults
+    // are pre-filled in the UI from assignment_config (E-120), not stored here.
+    window_start: varchar("window_start", { length: 5 }), // "HH:MM" IST
+    window_end: varchar("window_end", { length: 5 }), // "HH:MM" IST
+    window_days: jsonb("window_days"), // ["mon","tue",…]
+    // E-228 — pause/resume bookkeeping. status flips to 'scheduled' when the
+    // window closes; the resume ticker claims on resume_after <= now().
+    paused_at: timestamp("paused_at", { withTimezone: true }),
+    resume_after: timestamp("resume_after", { withTimezone: true }),
+    // E-228 — real activity timestamp. The stall watchdog measures inactivity
+    // from COALESCE(last_advanced_at, started_at); without it, a campaign
+    // resumed the morning after an overnight pause carries yesterday's
+    // started_at and is force-stopped before placing its first call.
+    last_advanced_at: timestamp("last_advanced_at", { withTimezone: true }),
   },
   (t) => ({
     statusIdx: index("idx_dialer_campaigns_status").on(t.status),
@@ -3447,6 +3506,10 @@ export const dialerCampaigns = pgTable(
       "idx_dialer_campaigns_triggered_by_started",
     ).on(t.triggered_by, t.started_at),
     startedAtIdx: index("idx_dialer_campaigns_started_at").on(t.started_at),
+    // E-228 — the resume ticker's only predicate. Partial in the migration
+    // (WHERE status = 'scheduled'); Drizzle's builder can't express that, so the
+    // migration file is the source of truth for the WHERE clause.
+    resumeIdx: index("idx_dialer_campaigns_resume").on(t.resume_after),
   }),
 );
 

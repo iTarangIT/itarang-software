@@ -18,6 +18,7 @@
     "intent:tune-weights": "node --import tsx --env-file=.env.local scripts/intent/tuneWeights.ts",
     "telemetry:diagnose-cycles": "node --import tsx --env-file=.env.local scripts/diagnose-charging-cycles.ts",
     "test": "vitest run",
+    "test:oem-pricing": "node --import tsx --env-file=.env.local scripts/test-oem-pricing-flow.ts",
     "test:watch": "vitest",
     "db:push": "drizzle-kit push",
     "db:update-passwords": "node scripts/update-passwords.js",
