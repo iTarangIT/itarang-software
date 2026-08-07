@@ -112,6 +112,18 @@ export const CATEGORY_BY_ACTION: Record<string, NotificationCategory> = {
   // `npm run verify:notifications` against sandbox: 42 and 4 live rows.
   gateway_failed: "Payments",
   payment_link_created: "Payments",
+  // The rest of `insertAdminPortalAlert`'s vocabulary (gateway.ts:313/342/381/
+  // 489/554) plus the webhook's partial-payment alert. Every one of these is
+  // written to buyback_notification_events and surfaces as
+  // `buyback.<event_type>`, but none was mapped — so they fell into "System" in
+  // the bell and were invisible to the E-231 admin screen, exactly like the two
+  // above. These are the money-anomaly alerts, so being unmuteable-because-
+  // invisible mattered most here.
+  gateway_amount_mismatch: "Payments",
+  gateway_deadlink_paid: "Payments",
+  gateway_double_payment: "Payments",
+  gateway_reversed: "Payments",
+  gateway_partial_payment: "Payments",
 
   // Internal / system
   set_margin: "System",

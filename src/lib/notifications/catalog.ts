@@ -142,7 +142,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.verdict_responded": "NBFC Requests",
   // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
   // story as onboarding_initiated above — real, emitted, and unmapped until
-  // E-231.
+  // E-231.r
   nbfc_verdict_forwarded: "NBFC Requests",
 
   // --- Field investigation ---
@@ -206,6 +206,11 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // rows already in people's bells file correctly and the type is governable
   // from the E-231 screen if whatever wrote them ever runs again.
   ops_alert: "System",
+  // Same story as ops_alert: 5 live rows on database-1, no emitter anywhere in
+  // src/ — found by `npm run verify:notifications`. Whatever wrote them is gone
+  // or lives outside this repo; mapping it keeps those bells filed correctly and
+  // muteable.
+  "oem.price_missing": "System",
 
   // --- Escalations / internal ---
   escalation_raised: "Escalations",

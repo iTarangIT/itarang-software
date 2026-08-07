@@ -11,6 +11,17 @@
 // ~130) is never materialised in memory or over the network — the type list and
 // every label come from the registry the client already bundles, and the server
 // sends only the denials.
+//
+// DELIVERED vs NOT SEEN. Only a few roles are ever in an audience, so most of
+// the 17 x ~138 grid governs an event that dashboard cannot receive; the old
+// "all N on" summary read as coverage when (say) ASM has only ever been sent one
+// type. Each panel now splits on `observed` — what the bell actually delivered
+// there in 180 days — and leads with the count that is true.
+//
+// NOTHING IS HIDDEN. Not-seen types stay listed and stay toggleable, just
+// collapsed. A type that has not fired YET is not the same as one that cannot,
+// and the two are indistinguishable from here; demoting is honest, removing
+// would be a guess that silently costs an admin control they have today.
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,6 +40,8 @@ interface Payload {
     denied: DeniedRow[];
     last_change: { updated_at: string; updated_by_name: string | null } | null;
     unknown_roles: string[];
+    /** dashboard -> types actually delivered to it in the last 180 days. */
+    observed: Record<string, string[]>;
 }
 
 const key = (dashboard: string, type: string) => `${dashboard}|${type}`;
@@ -44,6 +57,7 @@ export function NotificationAccessManager() {
     const [pending, setPending] = useState<Map<string, boolean>>(new Map());
     const [openDashboard, setOpenDashboard] = useState<string | null>(null);
     const [openCategory, setOpenCategory] = useState<string | null>(null);
+    const [showUnseen, setShowUnseen] = useState<string | null>(null);
     const [savedAt, setSavedAt] = useState<string | null>(null);
 
     const query = useQuery<{ success: true; data: Payload }>({
@@ -120,6 +134,65 @@ export function NotificationAccessManager() {
         },
     });
 
+    // One category accordion per group. Shared by the delivered and not-seen
+    // sections, so `section` keeps their open-category keys from colliding.
+    const renderGroups = (
+        dash: DashboardMeta,
+        groupList: ReturnType<typeof typeGroups>,
+        section: string,
+    ) =>
+        groupList.map((group) => {
+            const values = group.types.map((t) => t.value);
+            const onCount = values.filter((v) => isOn(dash.value, v)).length;
+            const state: TriState =
+                onCount === values.length ? "on" : onCount === 0 ? "off" : "mixed";
+            const catKey = `${dash.value}|${section}|${group.category}`;
+            const catOpen = openCategory === catKey;
+
+            return (
+                <div key={catKey} className="border-b border-border last:border-0">
+                    <div className="flex items-center gap-3 py-2">
+                        <TriStateCheckbox
+                            state={state}
+                            ariaLabel={`${group.category} for ${dash.label}`}
+                            onToggle={(next) => setMany(dash.value, values, next)}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setOpenCategory(catOpen ? null : catKey)}
+                            className="flex flex-1 items-center gap-2 text-left"
+                        >
+                            <ChevronRight
+                                className={`h-3.5 w-3.5 text-ink-muted transition-transform ${catOpen ? "rotate-90" : ""}`}
+                            />
+                            <span className="text-sm text-ink">{group.category}</span>
+                            <span className="text-xs text-ink-muted">
+                                {onCount}/{values.length}
+                            </span>
+                        </button>
+                    </div>
+
+                    {catOpen && (
+                        <ul className="space-y-1 pb-2 pl-10">
+                            {group.types.map((t) => (
+                                <li key={t.value} className="flex items-center gap-3">
+                                    <TriStateCheckbox
+                                        state={isOn(dash.value, t.value) ? "on" : "off"}
+                                        ariaLabel={`${t.label} for ${dash.label}`}
+                                        onToggle={(next) => setOne(dash.value, t.value, next)}
+                                    />
+                                    <span className="text-sm text-ink">{t.label}</span>
+                                    <code className="font-mono text-[11px] text-ink-muted">
+                                        {t.value}
+                                    </code>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            );
+        });
+
     if (query.isLoading) {
         return (
             <div className="flex items-center justify-center py-10 text-ink-muted">
@@ -170,11 +243,22 @@ export function NotificationAccessManager() {
 
             <div className="divide-y divide-border rounded-lg border border-border">
                 {data.dashboards.map((dash) => {
-                    const mutedCount = groups.reduce(
+                    const seen = new Set(data.observed?.[dash.value] ?? []);
+                    const seenGroups = groups
+                        .map((g) => ({ ...g, types: g.types.filter((t) => seen.has(t.value)) }))
+                        .filter((g) => g.types.length > 0);
+                    const unseenGroups = groups
+                        .map((g) => ({ ...g, types: g.types.filter((t) => !seen.has(t.value)) }))
+                        .filter((g) => g.types.length > 0);
+                    const unseenCount = totalTypes - seen.size;
+                    // Muted is counted over what actually arrives here; a mute on
+                    // something never delivered is not a silenced notification.
+                    const mutedCount = seenGroups.reduce(
                         (n, g) => n + g.types.filter((t) => !isOn(dash.value, t.value)).length,
                         0,
                     );
                     const open = openDashboard === dash.value;
+                    const unseenOpen = showUnseen === dash.value;
 
                     return (
                         <div key={dash.value}>
@@ -197,12 +281,17 @@ export function NotificationAccessManager() {
                                     )}
                                 </span>
                                 <span className="shrink-0 text-xs text-ink-muted">
-                                    {mutedCount === 0 ? (
-                                        `all ${totalTypes} on`
+                                    {seen.size === 0 ? (
+                                        <span className="inline-flex items-center gap-1">
+                                            <AlertTriangle className="h-3 w-3" />
+                                            nothing delivered here in 180d
+                                        </span>
+                                    ) : mutedCount === 0 ? (
+                                        `all ${seen.size} delivered here are on`
                                     ) : (
                                         <span className="inline-flex items-center gap-1">
                                             <BellOff className="h-3 w-3" />
-                                            {mutedCount} of {totalTypes} muted
+                                            {mutedCount} of {seen.size} muted
                                         </span>
                                     )}
                                 </span>
@@ -210,84 +299,54 @@ export function NotificationAccessManager() {
 
                             {open && (
                                 <div className="border-t border-border bg-bg/40 px-4 pb-3">
-                                    {groups.map((group) => {
-                                        const values = group.types.map((t) => t.value);
-                                        const onCount = values.filter((v) =>
-                                            isOn(dash.value, v),
-                                        ).length;
-                                        const state: TriState =
-                                            onCount === values.length
-                                                ? "on"
-                                                : onCount === 0
-                                                  ? "off"
-                                                  : "mixed";
-                                        const catKey = `${dash.value}|${group.category}`;
-                                        const catOpen = openCategory === catKey;
+                                    <p className="pt-3 text-xs text-ink-muted">
+                                        {seen.size === 0 ? (
+                                            <>
+                                                No notification has reached this dashboard in the
+                                                last 180 days. Every type below is listed for
+                                                completeness, but muting one changes nothing until
+                                                something is actually routed here.
+                                            </>
+                                        ) : (
+                                            <>
+                                                <strong>{seen.size}</strong> of {totalTypes} types
+                                                have actually been delivered to this dashboard in
+                                                the last 180 days. The rest are listed under “not
+                                                seen” below.
+                                            </>
+                                        )}
+                                    </p>
+                                    {renderGroups(dash, seenGroups, "seen")}
 
-                                        return (
-                                            <div key={group.category} className="border-b border-border last:border-0">
-                                                <div className="flex items-center gap-3 py-2">
-                                                    <TriStateCheckbox
-                                                        state={state}
-                                                        ariaLabel={`${group.category} for ${dash.label}`}
-                                                        onToggle={(next) =>
-                                                            setMany(dash.value, values, next)
-                                                        }
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                            setOpenCategory(catOpen ? null : catKey)
-                                                        }
-                                                        className="flex flex-1 items-center gap-2 text-left"
-                                                    >
-                                                        <ChevronRight
-                                                            className={`h-3.5 w-3.5 text-ink-muted transition-transform ${catOpen ? "rotate-90" : ""}`}
-                                                        />
-                                                        <span className="text-sm text-ink">
-                                                            {group.category}
-                                                        </span>
-                                                        <span className="text-xs text-ink-muted">
-                                                            {onCount}/{values.length}
-                                                        </span>
-                                                    </button>
+                                    {unseenGroups.length > 0 && (
+                                        <div className="mt-2 border-t border-border pt-2">
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    setShowUnseen(unseenOpen ? null : dash.value)
+                                                }
+                                                className="flex w-full items-center gap-2 py-1 text-left text-xs text-ink-muted hover:text-ink"
+                                            >
+                                                <ChevronRight
+                                                    className={`h-3.5 w-3.5 transition-transform ${unseenOpen ? "rotate-90" : ""}`}
+                                                />
+                                                {unseenCount} type
+                                                {unseenCount === 1 ? "" : "s"} not seen on this
+                                                dashboard in 180 days
+                                            </button>
+                                            {unseenOpen && (
+                                                <div className="opacity-70">
+                                                    <p className="py-2 text-xs text-ink-muted">
+                                                        These are still muteable. Not-seen means it
+                                                        has not arrived here recently — it may be an
+                                                        event this dashboard is never routed, or one
+                                                        that simply has not fired yet.
+                                                    </p>
+                                                    {renderGroups(dash, unseenGroups, "unseen")}
                                                 </div>
-
-                                                {catOpen && (
-                                                    <ul className="space-y-1 pb-2 pl-10">
-                                                        {group.types.map((t) => (
-                                                            <li
-                                                                key={t.value}
-                                                                className="flex items-center gap-3"
-                                                            >
-                                                                <TriStateCheckbox
-                                                                    state={
-                                                                        isOn(dash.value, t.value)
-                                                                            ? "on"
-                                                                            : "off"
-                                                                    }
-                                                                    ariaLabel={`${t.label} for ${dash.label}`}
-                                                                    onToggle={(next) =>
-                                                                        setOne(
-                                                                            dash.value,
-                                                                            t.value,
-                                                                            next,
-                                                                        )
-                                                                    }
-                                                                />
-                                                                <span className="text-sm text-ink">
-                                                                    {t.label}
-                                                                </span>
-                                                                <code className="font-mono text-[11px] text-ink-muted">
-                                                                    {t.value}
-                                                                </code>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                )}
-                                            </div>
-                                        );
-                                    })}
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

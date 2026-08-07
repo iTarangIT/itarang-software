@@ -306,6 +306,50 @@
     @apply text-[9px] font-bold uppercase tracking-[0.14em];
     color: rgba(255, 255, 255, 0.30);
   }
+  /* Collapsible group header. Full-bleed like .sidebar-nav-item — a header
+     narrower than the rows it owns reads as misaligned. Left padding is
+     20px so its text sits on the same gutter as a nav item's label
+     (3px accent border + 17px). */
+  .sidebar-section-toggle {
+    @apply w-full flex items-center gap-2 text-[11px] font-bold uppercase
+           tracking-[0.11em] transition-colors duration-150
+           cursor-pointer select-none;
+    padding: 11px 18px 11px 20px;
+    color: rgba(255, 255, 255, 0.42);
+  }
+  .sidebar-section-toggle:hover {
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.045);
+  }
+  /* Group holds the active route — keeps you oriented after manually
+     collapsing it, and marks the open group while browsing. */
+  .sidebar-section-toggle[data-has-active="true"] {
+    color: rgba(255, 255, 255, 0.88);
+  }
+  /* Hairline between groups gives the column structure once every section
+     is collapsed; :first-child would otherwise draw one under the logo rule. */
+  .sidebar-section + .sidebar-section {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  /* The native scrollbar renders as a bright grey gutter against the navy
+     shell; this makes the nav column's bar thin and translucent. */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+  }
+  .sidebar-scroll:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.28);
+  }
   .sidebar-nav-item {
     @apply flex items-center gap-3 text-[13px] font-medium
            transition-colors duration-150;

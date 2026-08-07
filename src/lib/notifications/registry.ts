@@ -99,20 +99,28 @@ export function isKnownDashboard(value: string): boolean {
 /**
  * Which dashboards a given CRM role may edit on this screen.
  *
- * admin / ceo get everything. sales_head gets only its own reporting line — a
- * sales head must not be able to silence the CEO's or the admin's alerts, and
- * the three external surfaces (dealer, NBFC, vendor) carry contractual weight,
- * so muting them is not a sales-ops decision.
+ * admin / ceo get everything. sales_head gets its own reporting line plus the
+ * CEO dashboard and the Dealer Portal.
+ *
+ * ON THE TWO ADDITIONS. They were deliberately excluded at first, on the
+ * reasoning that a sales head should not be able to silence their own
+ * supervisor's alerts, and that the external-facing portals carry contractual
+ * weight — muting Dealer Portal changes what your dealers are told, not just
+ * what your own team sees. Both were added back on request; the risk is
+ * accepted, not overlooked. `admin`, `it`, `nbfc_partner` and `scrap_vendor`
+ * remain out of scope.
  *
  * This rule lives here, once. The API applies it on BOTH read and write.
  */
 const SALES_HEAD_SCOPE = [
+  "ceo",
   "sales_head",
   "sales_manager",
   "asm",
   "sales_executive",
   "inside_sales_rep",
   "sales_insight",
+  "dealer",
 ];
 
 export function editableDashboardsFor(role: string | null | undefined): string[] {
@@ -251,6 +259,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.dual_approval": "Dual approval requested",
   "nbfc.wallet_low": "NBFC wallet balance is low",
   ops_alert: "Operations alert (no current emitter)",
+  "oem.price_missing": "OEM price missing (no current emitter)",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",
@@ -299,6 +308,11 @@ export const TYPE_LABELS: Record<string, string> = {
   "buyback.settle": "Buyback settled",
   "buyback.gateway_alert": "Payment gateway anomaly",
   "buyback.gateway_failed": "Payment failed at the gateway",
+  "buyback.gateway_amount_mismatch": "Payment amount does not reconcile",
+  "buyback.gateway_deadlink_paid": "Payment arrived on a dead payment link",
+  "buyback.gateway_double_payment": "Duplicate payment detected",
+  "buyback.gateway_reversed": "Payout was reversed",
+  "buyback.gateway_partial_payment": "Partial payment arrived",
   "buyback.gateway_payout_initiated": "Payout initiated",
   "buyback.gateway_link_created": "Payment link created (gateway)",
   "buyback.payment_link_created": "Payment link created (settlement)",
