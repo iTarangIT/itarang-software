@@ -20,6 +20,32 @@
  *
  * The per-person breakdown the page shows (top actors) is computed live from
  * audit_logs at render time and never persisted as a time series.
+ *
+ * ---------------------------------------------------------------------------
+ * E-214 UPDATE — what changed, and what did not.
+ *
+ * A per-person usage record now EXISTS, in user_login_events and
+ * user_activity_sessions, read only by /operations/usage. So reason 2's first
+ * clause no longer describes the whole system, and pretending otherwise would
+ * make this comment a lie.
+ *
+ * REASON 1 STILL HOLDS EXACTLY AS WRITTEN, and this collector still obeys it:
+ * no per-person row is written to ops_metric_samples or ops_daily_snapshots, by
+ * either collector. The permanent, never-pruned record stays aggregate-only.
+ * That is the invariant — not "we don't measure people", but "the metric series
+ * is not where people are measured". A test pins the sample count and source.
+ *
+ * REASON 2's SECOND CLAUSE — "not one you can quietly opt into" — is the part
+ * that was honoured rather than deleted. The per-person tables carry a stated
+ * retention (90 days logins / 30 days sessions, pruned by runDailySnapshot),
+ * store no IP, user-agent or page path, sit behind their own role set
+ * (USAGE_ANALYTICS_ROLES, separate from OPERATIONS_ROLES so widening one does
+ * not widen the other), and the heartbeat half did not ship until the staff
+ * notice in docs/OPERATIONS_RUNBOOK.md had gone out. The scope moved; the
+ * principle did not.
+ *
+ * This collector is unchanged and stays what it always was: licence and capacity.
+ * ---------------------------------------------------------------------------
  */
 
 import { sql } from "drizzle-orm";

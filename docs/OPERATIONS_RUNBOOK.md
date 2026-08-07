@@ -152,7 +152,8 @@ worse than none, because it looks green.
 | `/operations/system` | Dependency up/down + latency + uptime %, Upstash circuit, job liveness, deploy SHA | `system.app_health` + `system.jobs` |
 | `/operations/spend` | Monthly burn, MoM, vendor credit balances, metered-vs-billed | `spend.*` + `vendor.*` |
 | `/operations/business` | CEO metrics mirrored, live vs collected | `business.mtd` |
-| `/operations/team` | Licence usage, actions by role, top actors | `team.usage` |
+| `/operations/team` | Licence usage, actions by role, top actors — **aggregate only** | `team.usage` |
+| `/operations/usage` | Logins, DAU/WAU/MAU, session duration, login history — **per-person, see §8** | `usage.activity` + `user_login_events` |
 | `/operations/alerts` | Open alerts, ack/resolve, editable thresholds | `ops_alerts` |
 | `/operations/jobs` | Every collector's last run — **is the monitoring itself alive?** | `ops_collector_runs` |
 | `/operations/elevenlabs` | Credits, quota, daily/monthly call volume, usage by campaign category, recent calls — **is sales actually using it?** | `vendor.elevenlabs` sample + `ai_call_logs` read live |
@@ -309,3 +310,95 @@ that do not import `db`.
 Anything touching the database is verified against sandbox by running the
 collector directly. There is no fixture harness; the tables are cheap to read
 and the data is real.
+
+---
+
+## 8. User usage analytics — what we record, and the promise attached to it
+
+`/operations/usage` is the only surface in this codebase that holds **per-person**
+records. Everything else in the console is aggregate. That difference is not an
+implementation detail — it is the thing this section exists to keep honest.
+
+### What is recorded
+
+| Table | Row | Retention |
+| --- | --- | --- |
+| `user_login_events` | one per credential entry — user, time, role at the time | **90 days** |
+| `user_activity_sessions` | one per CRM session — start, last seen, heartbeat count | **30 days** |
+| `ops_daily_snapshots` | daily **aggregates only** (`usage.*`) | permanent |
+
+### What is NOT recorded — deliberately
+
+**No IP address. No user-agent or device. No page paths or URLs. No search terms.
+No field contents. No failed login attempts.**
+
+None of the metrics this feature exists for needs any of them, and each one turns
+a usage table into a forensics table. If security later needs a source IP for an
+"unexpected login location" check, it belongs additively on `user_login_events`,
+where it answers a security question — **not** on the session table.
+
+### The invariant
+
+> No per-person row is ever written to `ops_metric_samples` or
+> `ops_daily_snapshots`.
+
+The permanent record is aggregate-only; the per-person record expires on the
+schedule above. This is what `src/lib/operations/collectors/team.ts` always
+argued for, and it still holds — the *scope* of measurement moved into
+purpose-built tables, the *principle* did not. A vitest pins the collector to
+aggregate samples under the single source `usage:all`; if that test starts
+failing, something has crossed the line.
+
+### Who can read it
+
+The `operations` role only, via `USAGE_ANALYTICS_ROLES` in
+`src/lib/operations/route-guard.ts` — a **separate set** from `OPERATIONS_ROLES`
+even though the members are identical today, so that widening console access does
+not silently widen access to per-employee history. `ceo` is redirected to `/ceo`.
+Opening the per-person view writes an `audit_logs` row (`usage_analytics` / `view`),
+deduped to one per viewer per hour: the watchers are watched.
+
+### Kill switch
+
+`USAGE_TRACKING=0` stops every write immediately, no deploy needed. The dashboard
+keeps rendering whatever was already collected.
+
+### Two numbers that look like they should match, and should not
+
+`/operations/team` reports active users from Supabase's `auth.users.last_sign_in_at`
+— sign-in **recency**, which includes people whose token still refreshes but who
+have not opened the CRM in weeks. `/operations/usage` counts **observed sessions**.
+Usage will read lower. Both pages label which is which; do not "fix" one to match
+the other.
+
+Likewise `usage.logins_24h` counts **credential entries**, not visits. Because
+Supabase refresh tokens keep a session alive for days, somebody who signed in on
+Monday works all week without appearing again. It will be far smaller than DAU.
+That is correct.
+
+### Staff notice — send before the heartbeat ships
+
+Phase 1 (login events) records nothing beyond what Supabase's `last_sign_in_at`
+already holds and what `/operations/team` already surfaces. **Phase 2 (the session
+heartbeat) must not ship until the notice below has gone to all CRM users.** That
+is the literal content of "not one you can quietly opt into on the tech team's
+dashboard", and honouring it is what makes the whole thing legitimate rather than
+a bypass.
+
+> **Subject: A note on CRM usage measurement**
+>
+> To help us plan licences, capacity and support, the CRM now records:
+> when you sign in; the start and last-active time of each CRM session; a count of
+> activity pings taken every 5 minutes while the CRM tab is in the foreground; and
+> your role at the time.
+>
+> It does **not** record the pages you visit, the records you open, anything you
+> search for or type, your IP address, or your browser or device.
+>
+> Sign-in records are deleted after 90 days and session records after 30 days.
+> Only day-level totals are kept beyond that.
+>
+> Access is limited to the `operations` monitoring login. Opening the per-person
+> view is itself logged. Leadership sees aggregate trends.
+>
+> Questions go to the tech team.

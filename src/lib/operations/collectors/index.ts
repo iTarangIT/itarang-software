@@ -19,6 +19,7 @@ import { logsCollector } from "./logs";
 import { spendCollector } from "./spend";
 import { teamCollector } from "./team";
 import type { OpsCollector } from "./types";
+import { usageCollector } from "./usage";
 import { vendorCollectors } from "./vendors";
 
 export const COLLECTORS: OpsCollector[] = [
@@ -31,9 +32,9 @@ export const COLLECTORS: OpsCollector[] = [
   ...vendorCollectors,
   businessCollector,
   teamCollector,
-  // Every metric in registry.ts now has a collector behind it. Phase 6 adds no
-  // new ones — it adds daily.ts (the snapshot rollup) and alerts.ts (threshold
-  // evaluation), which consume what these already write.
+  // CRM usage (E-214). Reads our own tables, unlike teamCollector which asks
+  // Supabase — the two measure different things and are meant to differ.
+  usageCollector,
 ];
 
 // Duplicate ids would silently share a lock, so one collector would

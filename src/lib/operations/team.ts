@@ -15,6 +15,19 @@
  * `audit_logs.performed_by` is written by ~36 API routes, so it measures
  * write-shaped work only. Somebody who spent the day reading dashboards shows
  * up as zero, which is why nothing here should be read as effort.
+ *
+ * NOT THE ONLY USAGE SURFACE ANY MORE. Per-person sign-in history and session
+ * duration live on /operations/usage (src/lib/operations/usage.ts, E-214) under
+ * their own role set and their own retention. This module deliberately stays
+ * aggregate — do not add per-person reads here; the split is the point. See
+ * collectors/team.ts for what the E-214 work did and did not change.
+ *
+ * The two pages report DIFFERENT active-user numbers on purpose, from different
+ * sources: this one buckets Supabase's auth.users.last_sign_in_at (sign-in
+ * RECENCY, including people who have not opened the CRM in weeks but whose token
+ * still refreshes), while /operations/usage counts observed sessions. Neither is
+ * wrong; each page states which it is showing, because two unexplained
+ * "active users" figures would train people to trust neither.
  */
 
 import { sql } from "drizzle-orm";
