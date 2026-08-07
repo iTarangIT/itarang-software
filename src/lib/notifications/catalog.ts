@@ -144,6 +144,13 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // story as onboarding_initiated above — real, emitted, and unmapped until
   // E-231.r
   nbfc_verdict_forwarded: "NBFC Requests",
+  // The flat predecessor of `nbfc.request_forwarded`. No emitter left in src/,
+  // but 2 live rows on database-2 (prod) — found by running
+  // verify:notifications against PROD, which is the only place they exist;
+  // database-1 has none, so the sandbox run reported the registry clean. Mapped
+  // for the same reason as ops_alert: the bells already written should file
+  // correctly and stay muteable.
+  nbfc_doc_request_forwarded: "NBFC Requests",
 
   // --- Field investigation ---
   "fi.requested": "Field Investigation",
