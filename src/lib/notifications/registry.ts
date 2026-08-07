@@ -259,7 +259,12 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.dual_approval": "Dual approval requested",
   "nbfc.wallet_low": "NBFC wallet balance is low",
   ops_alert: "Operations alert (no current emitter)",
-  "oem.price_missing": "OEM price missing (no current emitter)",
+  // E-230's price-register sweep. `oem.price_missing` predates its emitter —
+  // 5 rows were already in the bell from something outside this repo when
+  // verify:notifications first flagged it — but notifyOemPricesMissing() and
+  // notifyOemPricesExpiring() are the producers now.
+  "oem.price_missing": "Models with no OEM reference price",
+  "oem.price_expiring": "OEM prices about to lapse",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

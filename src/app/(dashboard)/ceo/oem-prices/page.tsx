@@ -1,37 +1,19 @@
-"use client";
-
 /**
- * E-226 — /ceo/oem-prices
+ * E-226 → E-230 — this route moved to /oem-pricing.
  *
- * The reference price book behind quotation auto-approval. A quote whose every
- * line is at or above the price set here releases to the dealer without
- * reaching the approval queue; anything below it, or against a product with no
- * price here, waits for the CEO.
+ * E-226 put the reference price book under /ceo. E-230 moved it onto the OEM
+ * tab as "OEM Inventory Pricing", where the requirement asked for it, and where
+ * Admin can reach it too — the price book is named as an Admin responsibility
+ * as often as a CEO one.
  *
- * Client component + React Query, matching every other page under /ceo. There
- * is no ceo/layout.tsx — src/middleware.ts gates the route and the API
- * re-asserts the role.
+ * Kept as a redirect rather than deleted: this path is in the CEO's history and
+ * in E-226's own documentation, and a 404 there would read as the feature
+ * having been removed. Server component with no client bundle — the redirect
+ * happens before anything renders.
  */
 
-import React from "react";
-import { OemPriceTable } from "@/components/dashboard/ceo/OemPriceTable";
+import { redirect } from "next/navigation";
 
 export default function OemPricesPage() {
-    return (
-        <div className="space-y-6 pb-12">
-            <div>
-                <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-                    OEM Reference Prices
-                </h1>
-                <p className="text-sm text-gray-500 mt-1">
-                    The benchmark every dealer quotation is checked against. A quote at or
-                    above these prices is approved automatically; one below any of them comes
-                    to you. Revising a price never overwrites the old one — past quotes stay
-                    auditable against the price that was live when they were raised.
-                </p>
-            </div>
-
-            <OemPriceTable />
-        </div>
-    );
+    redirect("/oem-pricing");
 }

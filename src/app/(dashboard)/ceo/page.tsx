@@ -6,7 +6,7 @@ import { MetricsChart } from "@/components/shared/charts";
 import { BusinessSnapshotPanel } from "@/components/dashboard/ceo/BusinessSnapshotPanel";
 import { ExpenseBreakdownPanel } from "@/components/dashboard/ceo/ExpenseBreakdownPanel";
 import { ExpenseLedgerPanel } from "@/components/dashboard/ceo/ExpenseLedgerPanel";
-import { PendingQuotationsPanel } from "@/components/dashboard/ceo/PendingQuotationsPanel";
+import { QuotationApprovalsPanel } from "@/components/dashboard/ceo/PendingQuotationsPanel";
 import {
   CeoFilterBar,
   ceoWindowParams,
@@ -345,7 +345,7 @@ export default function CEODashboard() {
         <div className="space-y-6">
           {/* E-221 — first in the rail because it blocks someone else's work:
               a rep cannot send a quote until the CEO acts on it here. */}
-          <PendingQuotationsPanel />
+          <QuotationApprovalsPanel />
 
           <div data-testid="business-snapshot-panel-wrapper">
             <BusinessSnapshotPanel
