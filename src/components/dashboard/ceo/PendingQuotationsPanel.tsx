@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-221 — the CEO's pending-quotation queue on /ceo.
+ * E-221 — the CEO's quotation-approval panel on /ceo.
  *
  * Every quote a rep raises waits here before it may be sent to a dealer, so
  * this panel is a blocker on someone else's work: it leads with the wait time,
@@ -12,19 +12,48 @@
  * no stated reason leaves the rep nothing to act on, and the number they were
  * refused is the one they will otherwise send again.
  *
- * E-226 — every quote here failed the OEM reference-price check, so every row
- * states which check it failed and, where money is involved, what the
- * concession is worth. The per-line breakdown expands rather than showing by
- * default: the summary is enough to decide most rows, and the queue is worked
- * front to back.
+ * E-226 — every quote in the PENDING tab failed the OEM reference-price check,
+ * so every row states which check it failed and, where money is involved, what
+ * the concession is worth. The per-line breakdown expands rather than showing
+ * by default: the summary is enough to decide most rows, and the queue is
+ * worked front to back.
+ *
+ * E-230 — the APPROVED tab, and why it is a tab rather than a second panel.
+ *
+ * Auto-approval opened a blind spot. Before it, every quote passed through the
+ * CEO's hands, so the pending queue was also the complete record of what went
+ * out. Now the quotes that clear the reference price release themselves and
+ * appear nowhere. "What went out in my name, and at what margin" is the
+ * question the price book makes askable, and it belongs beside the queue that
+ * answers its opposite — a separate card would put two halves of one subject in
+ * two places and add a second thing to scroll past.
+ *
+ * The two tabs share every row primitive and differ only where they must: the
+ * released rows carry who released them instead of Approve/Reject, because
+ * nothing about a released quote is still decidable here.
  */
 
 import React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, FileText, Loader2, ScrollText } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Loader2,
+  ScrollText,
+  UserCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
+
+type Tab = "pending" | "approved";
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: "pending", label: "Pending" },
+  { key: "approved", label: "Approved" },
+];
 
 interface OemLine {
   product_name: string;
@@ -43,7 +72,7 @@ interface OemSummary {
   lines: OemLine[];
 }
 
-interface PendingQuotation {
+interface Quotation {
   commercial_id: string;
   dealer_lead_id: string;
   version_no: number;
@@ -57,12 +86,19 @@ interface PendingQuotation {
   dealer_name: string;
   city: string | null;
   created_at: string;
+  /** Approved tab only. null on rows that predate the distinction. */
+  approval_route: "auto" | "manual" | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
 }
 
 interface QueueResponse {
+  status: Tab;
   total: number;
   capped: boolean;
-  quotations: PendingQuotation[];
+  auto_count: number;
+  value_total: number;
+  quotations: Quotation[];
 }
 
 /** "3d" / "5h" / "just now" — how long a rep has been blocked. */
@@ -101,6 +137,38 @@ function oemCause(oem: OemSummary): string {
     default:
       return "Needs manual approval";
   }
+}
+
+/**
+ * The rupees this quote sits ABOVE the reference book, across all lines.
+ *
+ * The stored evaluation carries only `shortfall_total`, which is 0 for
+ * everything the rule released — so on the approved tab it says nothing. The
+ * margin above reference is the number that makes a released quote worth
+ * reading, and it is derivable from the lines already in hand rather than
+ * needing a new column.
+ */
+function headroomOf(oem: OemSummary): number {
+  return oem.lines.reduce(
+    (sum, l) => (l.delta != null && l.delta > 0 ? sum + l.delta * l.quantity : sum),
+    0,
+  );
+}
+
+/** Why this quote was released, in one line. Mirrors oemCause on the queue. */
+function releaseCause(q: Quotation): string | null {
+  if (!q.oem) return null;
+  if (q.oem.reason !== "at_or_above_reference") {
+    // Released by the CEO despite failing a check — the concession they signed
+    // off is the most important thing on the row, so it keeps its own wording.
+    return `Released over: ${oemCause(q.oem)}`;
+  }
+  const headroom = headroomOf(q.oem);
+  const n = q.oem.lines.length;
+  const lines = `${n} line${n === 1 ? "" : "s"}`;
+  return headroom > 0
+    ? `${lines} at or above OEM reference · ${formatINRExact(headroom)} above`
+    : `${lines} exactly at OEM reference`;
 }
 
 const LINE_STATUS_LABEL: Record<OemLine["status"], string> = {
@@ -158,21 +226,61 @@ function OemBreakdown({ oem }: { oem: OemSummary }) {
   );
 }
 
-export function PendingQuotationsPanel() {
+/**
+ * Who released this quote.
+ *
+ * Auto and CEO are visually distinct because they answer different questions: a
+ * row of Auto pills is the rule working, and a CEO pill among them is a
+ * decision somebody made and may need to explain.
+ */
+function ReleaseBadge({ q }: { q: Quotation }) {
+  if (q.approval_route === "auto") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">
+        <Bot className="w-3 h-3" /> Auto
+      </span>
+    );
+  }
+  if (q.approval_route === "manual") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-brand-50 text-brand-700"
+        title={q.approved_by_name ? `Approved by ${q.approved_by_name}` : undefined}
+      >
+        <UserCheck className="w-3 h-3" />
+        {q.approved_by_name ?? "CEO"}
+      </span>
+    );
+  }
+  // Pre-E-226: approved, but the row records nothing about how. Saying "auto"
+  // here would credit the rule with decisions people made before it existed.
+  return (
+    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500">
+      Approved
+    </span>
+  );
+}
+
+export function QuotationApprovalsPanel() {
   const qc = useQueryClient();
+  const [tab, setTab] = React.useState<Tab>("pending");
   const [rejecting, setRejecting] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery<QueueResponse>({
-    queryKey: ["ceo-pending-quotations"],
+    queryKey: ["ceo-quotations", tab],
     queryFn: async () => {
-      const r = await fetch("/api/dashboard/ceo/quotations", { cache: "no-store" });
+      const r = await fetch(`/api/dashboard/ceo/quotations?status=${tab}`, {
+        cache: "no-store",
+      });
       if (!r.ok) throw new Error("Failed to load quotations");
       return (await r.json()).data as QueueResponse;
     },
-    refetchInterval: 60_000,
+    // The pending queue is a live work surface; the released record is not, and
+    // re-fetching a historical list every minute is noise the tab does not need.
+    refetchInterval: tab === "pending" ? 60_000 : false,
   });
 
   const decide = useMutation({
@@ -197,7 +305,9 @@ export function PendingQuotationsPanel() {
       setRejecting(null);
       setReason("");
       setError(null);
-      qc.invalidateQueries({ queryKey: ["ceo-pending-quotations"] });
+      // Both tabs: an approval leaves one list and joins the other, so a stale
+      // Approved tab would omit the row the CEO just released.
+      qc.invalidateQueries({ queryKey: ["ceo-quotations"] });
     },
     // Surfaced in the panel rather than swallowed — the most likely failure is
     // a 409 because someone else already decided, and the CEO needs to know
@@ -207,10 +317,29 @@ export function PendingQuotationsPanel() {
 
   const quotations = React.useMemo(() => data?.quotations ?? [], [data]);
   const paged = usePagination(quotations, 5);
+  const { setPage } = paged;
+
+  // Page 1 on every tab switch. usePagination only clamps DOWN when a list
+  // shrinks, so switching from page 3 of a long queue to a short released list
+  // would otherwise land mid-list with no indication why.
+  const switchTab = React.useCallback(
+    (next: Tab) => {
+      setTab(next);
+      setPage(1);
+      setExpanded(null);
+      setRejecting(null);
+      setError(null);
+    },
+    [setPage],
+  );
+
+  const header = (
+    <Tabs value={tab} onChange={switchTab} pendingCount={data?.total} />
+  );
 
   if (isLoading) {
     return (
-      <Shell>
+      <Shell header={header}>
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-5 h-5 animate-spin text-gray-300" />
         </div>
@@ -220,9 +349,9 @@ export function PendingQuotationsPanel() {
 
   if (isError) {
     return (
-      <Shell>
+      <Shell header={header}>
         <p className="text-sm text-rose-600 py-6 text-center">
-          Couldn&apos;t load pending quotations.
+          Couldn&apos;t load quotations.
         </p>
       </Shell>
     );
@@ -230,19 +359,34 @@ export function PendingQuotationsPanel() {
 
   if (quotations.length === 0) {
     return (
-      <Shell count={0}>
+      <Shell header={header}>
         <p className="text-sm text-gray-400 italic py-6 text-center">
-          No quotations waiting for approval.
+          {tab === "pending"
+            ? "No quotations waiting for approval."
+            : "No quotations released yet."}
         </p>
       </Shell>
     );
   }
 
+  const approved = tab === "approved";
+
   return (
-    <Shell count={data?.total ?? 0}>
+    <Shell header={header}>
+      {approved && data && (
+        <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mb-3">
+          <span className="font-semibold text-gray-700">
+            {data.total} quote{data.total === 1 ? "" : "s"} released
+          </span>
+          {data.value_total > 0 && ` · ${formatINRCompact(data.value_total)} total`}
+          {" · "}
+          {data.auto_count} auto-approved, {data.total - data.auto_count} by hand
+        </p>
+      )}
       {data?.capped && (
         <p className="text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
-          Showing the 100 oldest of {data.total} pending quotations.
+          Showing the {approved ? "100 most recent" : "100 oldest"} of {data.total}{" "}
+          {approved ? "released" : "pending"} quotations.
         </p>
       )}
       {error && (
@@ -255,16 +399,22 @@ export function PendingQuotationsPanel() {
         {paged.pageItems.map((q) => {
           const isRejecting = rejecting === q.commercial_id;
           const busy = decide.isPending && decide.variables?.id === q.commercial_id;
+          const cause = approved ? releaseCause(q) : q.oem ? oemCause(q.oem) : null;
+          const overridden =
+            approved && q.oem != null && q.oem.reason !== "at_or_above_reference";
           return (
             <li key={q.commercial_id} className="py-3">
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div className="min-w-0">
-                  <Link
-                    href={`/inside-sales/lead/${q.dealer_lead_id}`}
-                    className="text-sm font-semibold text-gray-900 hover:text-brand-700 hover:underline"
-                  >
-                    {q.dealer_name}
-                  </Link>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Link
+                      href={`/inside-sales/lead/${q.dealer_lead_id}`}
+                      className="text-sm font-semibold text-gray-900 hover:text-brand-700 hover:underline"
+                    >
+                      {q.dealer_name}
+                    </Link>
+                    {approved && <ReleaseBadge q={q} />}
+                  </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     {q.city ? `${q.city} · ` : ""}
                     {q.raised_by} · v{q.version_no}
@@ -279,13 +429,19 @@ export function PendingQuotationsPanel() {
                   >
                     {q.value > 0 ? formatINRCompact(q.value) : "—"}
                   </p>
-                  <p className="text-[11px] font-medium text-amber-600">
-                    waiting {waitedFor(q.created_at)}
-                  </p>
+                  {approved ? (
+                    <p className="text-[11px] font-medium text-gray-400">
+                      released {waitedFor(q.approved_at ?? q.created_at)} ago
+                    </p>
+                  ) : (
+                    <p className="text-[11px] font-medium text-amber-600">
+                      waiting {waitedFor(q.created_at)}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {q.oem && (
+              {q.oem && cause && (
                 <div className="mt-1.5">
                   <button
                     type="button"
@@ -294,9 +450,11 @@ export function PendingQuotationsPanel() {
                     }
                     disabled={q.oem.lines.length === 0}
                     className={`inline-flex items-center gap-1 text-[11px] font-medium rounded-md px-1.5 py-0.5 -ml-1.5 ${
-                      q.oem.reason === "below_reference"
-                        ? "text-rose-700"
-                        : "text-amber-700"
+                      approved && !overridden
+                        ? "text-emerald-700"
+                        : q.oem.reason === "below_reference"
+                          ? "text-rose-700"
+                          : "text-amber-700"
                     } ${q.oem.lines.length > 0 ? "hover:bg-gray-50" : "cursor-default"}`}
                   >
                     {q.oem.lines.length > 0 &&
@@ -305,7 +463,7 @@ export function PendingQuotationsPanel() {
                       ) : (
                         <ChevronRight className="w-3 h-3" />
                       ))}
-                    {oemCause(q.oem)}
+                    {cause}
                   </button>
                   {expanded === q.commercial_id && <OemBreakdown oem={q.oem} />}
                 </div>
@@ -323,7 +481,11 @@ export function PendingQuotationsPanel() {
                   </a>
                 )}
                 <div className="flex-1" />
-                {!isRejecting && (
+                {/* Nothing about a released quote is decidable here, so the
+                    row ends at the document link. Rejecting after release
+                    would need to unsend what the dealer already has, which is
+                    a different operation than refusing to send it. */}
+                {!approved && !isRejecting && (
                   <>
                     <button
                       type="button"
@@ -351,7 +513,7 @@ export function PendingQuotationsPanel() {
                 )}
               </div>
 
-              {isRejecting && (
+              {!approved && isRejecting && (
                 <div className="mt-2 flex items-center gap-2 flex-wrap">
                   <input
                     autoFocus
@@ -402,20 +564,73 @@ export function PendingQuotationsPanel() {
   );
 }
 
-function Shell({ children, count }: { children: React.ReactNode; count?: number }) {
+/**
+ * The tab switch, in the dashboard's segmented-control style (same markup as
+ * CeoFilterBar's period picker) so it reads as part of the page rather than a
+ * new idiom.
+ *
+ * The pending count rides on its own tab rather than in the panel title: it is
+ * a property of that list, and a title-level badge would keep claiming
+ * "3 pending" while the released tab is on screen.
+ */
+function Tabs({
+  value,
+  onChange,
+  pendingCount,
+}: {
+  value: Tab;
+  onChange: (t: Tab) => void;
+  pendingCount?: number;
+}) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
+      {TABS.map((t) => {
+        const active = value === t.key;
+        const badge = t.key === "pending" && active ? pendingCount : undefined;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(t.key)}
+            className={`px-3 h-7 text-xs font-semibold rounded-md transition-colors ${
+              active ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {t.label}
+            {badge != null && badge > 0 && (
+              <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                {badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Shell({
+  children,
+  header,
+}: {
+  children: React.ReactNode;
+  header?: React.ReactNode;
+}) {
   return (
     <div
       data-testid="pending-quotations-panel"
       className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm"
     >
-      <div className="flex items-center gap-2 mb-4">
-        <ScrollText className="w-4 h-4 text-gray-400" />
-        <h3 className="text-sm font-semibold text-gray-900">Quotation Approvals</h3>
-        {count != null && count > 0 && (
-          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
-            {count} pending
-          </span>
-        )}
+      {/* flex-wrap, and the title truncates rather than shrinking the tabs:
+          on a narrow column the switch drops to its own line instead of
+          colliding with the heading. */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <ScrollText className="w-4 h-4 text-gray-400 shrink-0" />
+        <h3 className="text-sm font-semibold text-gray-900 truncate">
+          Quotation Approvals
+        </h3>
+        {header && <div className="ml-auto">{header}</div>}
       </div>
       {children}
     </div>
