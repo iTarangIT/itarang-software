@@ -3542,6 +3542,36 @@ export const notifications = pgTable(
   }),
 );
 
+// -----------------------------------------------------------------------------
+// E-231 — per-dashboard control of which notification types reach the bell
+// -----------------------------------------------------------------------------
+// NO ROW = ENABLED. The table holds only decisions a human actually made, so a
+// newly-added notification type is on everywhere the moment it exists and an
+// unapplied migration is indistinguishable from today's behaviour. The reader
+// (src/lib/notifications/access.ts) loads ONLY the enabled=false rows and fails
+// open on any error — see the E-231 file for why that is not negotiable.
+//
+// `dashboard` is LOWER(users.role). The CHECK enforcing lowercase lives in the
+// migration; drizzle's builder has no CHECK syntax, so it is intentionally
+// absent here and the migration is the source of truth.
+// -----------------------------------------------------------------------------
+
+export const notificationAccess = pgTable(
+  "notification_access",
+  {
+    dashboard: varchar({ length: 50 }).notNull(),
+    notification_type: varchar("notification_type", { length: 50 }).notNull(),
+    enabled: boolean().notNull().default(true),
+    // users.id AS TEXT — matches assignment_config.updated_by on the same
+    // settings screen, which joins u.id::text.
+    updated_by: text("updated_by"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.dashboard, table.notification_type] }),
+  }),
+);
+
 export const scraperCityQueue = pgTable("scraper_city_queue", {
   id: text().primaryKey().notNull(),
   base_query: text("base_query").notNull(),

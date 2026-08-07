@@ -209,6 +209,33 @@ const COMMON_ITEMS = [
   },
 ];
 
+// Per-role sections pinned BELOW COMMON_ITEMS.
+//
+// COMMON_ITEMS is appended to every role at the end of the build (see
+// `menuItems` below), so anything inside a role's own array can only ever
+// render ABOVE "EXPENSES / Submit Expense". A role whose last item must
+// genuinely BE last goes here instead.
+//
+// Only sales_head uses this today; every other role's rendered nav is unchanged.
+// The item keeps the id `sh-settings` on purpose — getActiveItemId() is
+// longest-href-wins so /admin/settings still beats /admin, and the badge mapping
+// further down keys on item.id.
+const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
+  sales_head: [
+    {
+      section: "SETTINGS",
+      items: [
+        {
+          id: "sh-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
+        },
+      ],
+    },
+  ],
+};
+
 const roleNavigation: Record<string, any[]> = {
   ceo: [
     {
@@ -422,12 +449,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: BarChart3,
           href: "/admin/reports",
         },
-        {
-          id: "sh-settings",
-          label: "Settings",
-          icon: Settings,
-          href: "/admin/settings",
-        },
+        // "Settings" used to sit here, buried in LEAD MANAGEMENT. It now lives
+        // in ROLE_TRAILING_SECTIONS so it renders last — see the note there.
       ],
     },
     {
@@ -1594,9 +1617,13 @@ export function Sidebar() {
   //  · "it" — the IT console is a single-purpose security surface (scanner
   //    findings + live attacks); expense filing is out of scope for it.
   const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it"]);
-  let menuItems = NO_COMMON_ITEMS.has(inferredRole)
-    ? filteredMenuItems
-    : [...filteredMenuItems, ...COMMON_ITEMS];
+  let menuItems = [
+    ...filteredMenuItems,
+    ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),
+    // Anything that must render below the shared EXPENSES group. Empty for
+    // every role but sales_head, so this is a no-op elsewhere.
+    ...(ROLE_TRAILING_SECTIONS[inferredRole] ?? []),
+  ];
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue
