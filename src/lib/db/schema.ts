@@ -9055,3 +9055,83 @@ export const opsAlerts = pgTable(
     ),
   }),
 );
+
+// --- USAGE ANALYTICS (E-214) ---
+//
+// The storage behind /operations/usage. Mirrors drizzle/E-214_usage_analytics.sql
+// — that file is the source of truth; these declarations exist so type-checking
+// matches the DB.
+//
+// SCOPE, because these are the only per-person tables in the codebase:
+// what is recorded is that somebody signed in, and that a session was alive at a
+// point in time. NOT recorded, deliberately: IP, user-agent, page paths, search
+// terms, or failed attempts. Retention is 90 days (logins) / 30 days (sessions),
+// enforced by runDailySnapshot(). Only AGGREGATES survive in ops_daily_snapshots
+// — no per-person row is ever written to the metric series. See the migration
+// header for the full reasoning, and route-guard.ts for who may read it.
+//
+// user_activity_sessions also carries storage parameters (fillfactor 80 +
+// autovacuum tuning) that Drizzle cannot express. Their absence here is
+// expected, not drift — see the migration.
+
+export const userLoginEvents = pgTable(
+  "user_login_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // No .references(): follows the audit_logs.performed_by convention so a
+    // deleted user cannot cascade away or block on historical rows.
+    user_id: uuid("user_id").notNull(),
+    /** Role AT THE TIME — a promotion must not rewrite history. */
+    role_at_login: varchar("role_at_login", { length: 50 }),
+    /** 'password' today; reserved for sso | magic_link | impersonation. */
+    method: varchar({ length: 24 }).default("password").notNull(),
+    occurred_at: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    occurredIdx: index("user_login_events_occurred_idx").on(table.occurred_at),
+    userOccurredIdx: index("user_login_events_user_occurred_idx").on(
+      table.user_id,
+      table.occurred_at,
+    ),
+  }),
+);
+
+export const userActivitySessions = pgTable(
+  "user_activity_sessions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    user_id: uuid("user_id").notNull(),
+    /** Client-minted, held in localStorage. The unique index below is what
+     *  makes the heartbeat an idempotent upsert rather than an append. */
+    session_id: uuid("session_id").notNull(),
+    role_at_start: varchar("role_at_start", { length: 50 }),
+    started_at: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    last_seen_at: timestamp("last_seen_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    /** Heartbeats received. engaged = LEAST(ping_count*300, span+300). */
+    ping_count: integer("ping_count").default(1).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    sessionUniq: uniqueIndex("user_activity_sessions_session_uniq").on(
+      table.session_id,
+    ),
+    lastSeenIdx: index("user_activity_sessions_last_seen_idx").on(
+      table.last_seen_at,
+    ),
+    userStartedIdx: index("user_activity_sessions_user_started_idx").on(
+      table.user_id,
+      table.started_at,
+    ),
+  }),
+);

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   ShoppingCart,
   Users,
+  UserCheck,
   FileText,
   Calculator,
   Phone,
@@ -1215,6 +1216,15 @@ const roleNavigation: Record<string, any[]> = {
           label: "Team Usage",
           icon: Users,
           href: "/operations/team",
+        },
+        {
+          // Distinct from "Team Usage" above: that one is licence and capacity
+          // from Supabase sign-in recency, this one is observed CRM usage from
+          // our own tables (E-214) and is the only per-person surface here.
+          id: "ops-usage",
+          label: "CRM Usage",
+          icon: UserCheck,
+          href: "/operations/usage",
         },
       ],
     },

@@ -24,6 +24,7 @@ const TABS: Array<{ href: string; label: string }> = [
   { href: "/operations/spend", label: "Spend" },
   { href: "/operations/business", label: "Business" },
   { href: "/operations/team", label: "Team" },
+  { href: "/operations/usage", label: "Usage" },
   { href: "/operations/alerts", label: "Alerts" },
   { href: "/operations/jobs", label: "Collectors" },
   { href: "/operations/elevenlabs", label: "ElevenLabs" },

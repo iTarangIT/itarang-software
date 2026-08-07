@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCount, formatMetricValue, formatMinutesAgo } from "@/lib/operations/format";
@@ -11,12 +13,16 @@ export const metadata = { title: "Team · Ops Console" };
  * Licence and capacity monitoring — how many seats are in use, how many
  * accounts were provisioned and forgotten, whether system activity collapsed.
  *
- * Deliberately NOT per-person productivity tracking. The sign-in buckets are
- * aggregate counts; the by-role and top-actor tables are read live from
- * audit_logs and never stored as a time series, so no per-employee history
- * accumulates. `audit_logs` records write-shaped work only — somebody who spent
- * the day reading dashboards appears as zero, which is why none of this should
- * be read as effort.
+ * THIS PAGE is aggregate only. The sign-in buckets are counts; the by-role and
+ * top-actor tables are read live from audit_logs and never stored as a time
+ * series, so no per-employee history accumulates here. `audit_logs` records
+ * write-shaped work only — somebody who spent the day reading dashboards appears
+ * as zero, which is why none of this should be read as effort.
+ *
+ * Per-person sign-in history and session duration live on /operations/usage
+ * (E-214), behind their own role set and retention. The on-screen caption says
+ * so: a page promising something the console next door no longer does would be
+ * worse than saying nothing.
  */
 
 export default async function OperationsTeamPage() {
@@ -47,8 +53,17 @@ export default async function OperationsTeamPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-ink-muted">
-          Aggregate activity only — capacity and licence monitoring, not
-          per-person surveillance.
+          Aggregate only on this page — licence and capacity. Per-person sign-in
+          history and session detail live on{" "}
+          <Link
+            href="/operations/usage"
+            className="font-semibold text-brand-700 underline-offset-2 hover:underline"
+          >
+            Usage
+          </Link>
+          . Sign-in counts here come from Supabase and measure sign-in{" "}
+          <em>recency</em>, so they read higher than Usage&rsquo;s observed
+          sessions.
         </p>
         <AutoRefresh intervalMs={60_000} />
       </div>

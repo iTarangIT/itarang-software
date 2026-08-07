@@ -100,6 +100,18 @@ export default function LoginPage() {
                 return;
             }
 
+            // Record the sign-in. Fire-and-forget: not awaited, errors swallowed,
+            // so a slow or failing analytics write can never delay or break a
+            // login. `keepalive` matters because navigateTo() below does a hard
+            // window.location.assign, which would otherwise cancel the request
+            // in flight. Placed AFTER the is_active check so an account that is
+            // immediately signed out again does not count as a login.
+            void fetch('/api/usage/login-event', {
+                method: 'POST',
+                credentials: 'include',
+                keepalive: true,
+            }).catch(() => {});
+
             toast.success(`Welcome back, ${appUser.name || appUser.email}!`);
 
             if (appUser.must_change_password) {

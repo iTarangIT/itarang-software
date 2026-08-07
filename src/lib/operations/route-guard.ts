@@ -93,3 +93,76 @@ export async function requireOperationsPage() {
 
   redirect("/");
 }
+
+/**
+ * Access control for /operations/usage and /api/operations/usage.
+ *
+ * SAME MEMBERS AS OPERATIONS_ROLES TODAY. That is not the point — the point is
+ * that they are now two sets, so widening one does not silently widen the other.
+ *
+ * The doc comment above literally invites the widening: "Widen OPERATIONS_ROLES
+ * if that call is ever revisited." The day somebody does that for a legitimate
+ * infrastructure reason — an admin who needs to see disk space, say — they would
+ * otherwise also be handing over per-employee sign-in history in the same edit,
+ * without noticing. This split makes that a separate, deliberate, reviewable
+ * decision next to a comment explaining exactly what it grants.
+ *
+ * `ceo` keeps the /ceo redirect it gets from requireOperationsPage(): the usage
+ * data is per-person, so the one role middleware waves through is the last one
+ * that should land here by accident.
+ */
+export const USAGE_ANALYTICS_ROLES = new Set(["operations"]);
+
+/**
+ * API gate for the usage endpoints. Same contract as requireOperationsAdmin().
+ */
+export async function requireUsageAnalyticsAdmin(): Promise<
+  | { ok: true; user: Awaited<ReturnType<typeof requireAuth>> }
+  | { ok: false; response: NextResponse }
+> {
+  const user = await requireAuth();
+
+  const forbidden = {
+    ok: false as const,
+    response: NextResponse.json(
+      {
+        success: false,
+        error: { message: "FORBIDDEN: usage analytics access required" },
+      },
+      { status: 403 },
+    ),
+  };
+
+  if (!USAGE_ANALYTICS_ROLES.has(normalise(user.role))) return forbidden;
+  if ((user as { is_active?: boolean | null }).is_active === false) {
+    return forbidden;
+  }
+
+  return { ok: true, user };
+}
+
+/**
+ * Page gate for /operations/usage.
+ *
+ * Called INSIDE the page as well as inheriting operations/layout.tsx's gate.
+ * The layout comment argues that a per-page gate is the failure mode to avoid
+ * (a new module shipping unguarded), and that is right in general — this page is
+ * the deliberate exception, because the layout gate is precisely the thing that
+ * might get widened later. Two gates here is cheap; the failure it prevents is
+ * not.
+ */
+export async function requireUsageAnalyticsPage() {
+  const user = await requireAuth();
+  const role = normalise(user.role);
+
+  if (USAGE_ANALYTICS_ROLES.has(role)) {
+    if ((user as { is_active?: boolean | null }).is_active === false) {
+      redirect("/login");
+    }
+    return user;
+  }
+
+  if (role === "ceo") redirect("/ceo");
+
+  redirect("/");
+}

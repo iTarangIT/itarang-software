@@ -20,7 +20,10 @@ export type OpsModule =
   | "spend"
   | "business"
   | "team"
-  | "system";
+  | "system"
+  // CRM usage (E-214). Distinct from "team": that one is licence and capacity
+  // from Supabase sign-in recency; this one is observed usage of the CRM.
+  | "usage";
 
 export type MetricUnit =
   | "count"
@@ -618,6 +621,29 @@ export const METRICS: MetricDef[] = [
     unit: "count",
     direction: "neutral",
     help: "Rows written to audit_logs in the last 24 hours. A proxy for system usage; a collapse to zero suggests writes are failing.",
+  },
+
+  // ----------------------------------------------------------------- usage --
+  //
+  // CRM usage, from our own tables (E-214) rather than from Supabase. Phase 1
+  // ships logins only; the session-derived metrics (DAU/WAU/MAU, session length)
+  // arrive with the heartbeat and are deliberately NOT declared yet — a MetricDef
+  // with no collector behind it would seed an alert rule that fires on the
+  // absence of data it was never going to receive.
+  //
+  // Nothing here is onSlide. The board is for things that are on fire, and a
+  // healthy login count is not news; the one usage signal that IS news (the
+  // pipeline dying) is covered by an alert once WAU exists.
+  {
+    key: "usage.logins_24h",
+    label: "Logins (24h)",
+    module: "usage",
+    unit: "count",
+    // Neutral ON PURPOSE. Alerting on "logins dropped" would page the tech team
+    // because people took leave, and an ops console that cries wolf on a public
+    // holiday is one nobody reads on the day it matters.
+    direction: "neutral",
+    help: "Credential entries in the last 24 hours — NOT visits. Supabase refresh tokens keep a session alive for days, so somebody who signed in on Monday works all week without appearing here again. Expect this to read far lower than active users.",
   },
 ];
 
