@@ -1148,5 +1148,104 @@ export async function notifyWalletLowBalance(p: {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * E-230 — the OEM price register
+ * ------------------------------------------------------------------ */
+
+/**
+ * Admin and CEO only — NOT `toAdmins()`.
+ *
+ * The requirement names those two ("a notification should go to Admin and
+ * CEO"), and ADMIN_AUDIENCE_ROLES is a superset that also carries business_head
+ * and sales_head. Neither of them maintains the price book, and a recurring
+ * nag about somebody else's screen is how an audience learns to ignore the
+ * bell.
+ */
+const PRICE_KEEPERS: Recipient = {
+  audience: { kind: "roles", roles: ["admin", "ceo"] },
+  as: ADMIN_PARTY,
+  href: "/oem-pricing",
+};
+
+/**
+ * One or more reference prices are about to run out with nothing behind them.
+ *
+ * Batched into a single notification per sweep rather than one per model. The
+ * OEM revises a whole price list at once, so "eleven prices lapse on 1 August"
+ * is one piece of news and eleven rows would bury the bell on exactly the day
+ * somebody needs to read it.
+ */
+export async function notifyOemPriceExpiring(p: {
+  items: { product_name: string | null; model_id: string | null; valid_until: string }[];
+}) {
+  if (p.items.length === 0) return;
+
+  const soonest = p.items.reduce((a, b) => (a.valid_until <= b.valid_until ? a : b));
+  const when = new Date(soonest.valid_until).toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+  const name = (i: { product_name: string | null; model_id: string | null }) =>
+    i.product_name || i.model_id || "a model";
+
+  const message =
+    p.items.length === 1
+      ? `The OEM price for ${name(p.items[0])} is valid only until ${when}. ` +
+        `Add the next line before then, or every quotation for it starts coming ` +
+        `to you for approval.`
+      : `${p.items.length} OEM prices lapse from ${when}, starting with ` +
+        `${name(soonest)}. Update the pricing register before then, or every ` +
+        `quotation containing them starts coming to you for approval.`;
+
+  await emit({
+    type: "oem.price_expiring",
+    title: "OEM prices about to lapse",
+    message,
+    stage: "OEM Pricing",
+    from: ADMIN_PARTY,
+    data: {
+      count: p.items.length,
+      earliest: soonest.valid_until,
+      models: p.items.slice(0, 20).map(name),
+    },
+    to: [PRICE_KEEPERS],
+  });
+}
+
+/**
+ * Models with no reference price in force at all.
+ *
+ * `lapsed` is the count that had one and lost it — worth separating, because
+ * "you never priced this" is a backlog item and "this stopped working on
+ * Saturday" is a regression, and the second deserves the sharper sentence.
+ */
+export async function notifyOemPricesMissing(p: {
+  total: number;
+  lapsed: number;
+  examples: string[];
+}) {
+  if (p.total === 0) return;
+
+  const lead =
+    p.lapsed > 0
+      ? `${p.lapsed} of them had a price that has now run out.`
+      : `None of them has ever been priced.`;
+  const eg = p.examples.length ? ` e.g. ${p.examples.slice(0, 3).join(", ")}.` : "";
+
+  await emit({
+    type: "oem.price_missing",
+    title: "Models with no OEM reference price",
+    message:
+      `${p.total} active model${p.total === 1 ? " has" : "s have"} no OEM reference ` +
+      `price in force, so every quotation containing ${p.total === 1 ? "it" : "them"} ` +
+      `goes to the approval queue. ${lead}${eg}`,
+    stage: "OEM Pricing",
+    from: ADMIN_PARTY,
+    data: { total: p.total, lapsed: p.lapsed, examples: p.examples.slice(0, 20) },
+    to: [PRICE_KEEPERS],
+  });
+}
+
 /** Re-exported so routes need only one import. */
 export { ADMIN_AUDIENCE_ROLES };

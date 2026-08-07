@@ -24,6 +24,7 @@ export async function register() {
       startBuybackDedupTicker,
       startBuybackGatewayTicker,
       startDriveExpenseTicker,
+      startOemPriceSweepTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -31,5 +32,6 @@ export async function register() {
     await startBuybackDedupTicker();
     await startBuybackGatewayTicker();
     await startDriveExpenseTicker();
+    await startOemPriceSweepTicker();
   }
 }

@@ -183,6 +183,11 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   inventory_assigned: "Inventory",
   inventory_transfer_incoming: "Inventory",
   inventory_transfer_acknowledged: "Inventory",
+  // E-230 — the OEM price register. Filed under Inventory rather than System
+  // because the thing being nagged about is a product's price, and the person
+  // who fixes it goes to the same place they maintain models.
+  "oem.price_expiring": "Inventory",
+  "oem.price_missing": "Inventory",
 
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
@@ -233,6 +238,11 @@ const WARNING = new Set([
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",
+  // E-230 — both are "act before a date", which is exactly amber. A lapsed OEM
+  // price is not an error anywhere; it just quietly sends every quote for that
+  // model to the CEO, which is why it has to be visible BEFORE it happens.
+  "oem.price_expiring",
+  "oem.price_missing",
 ]);
 
 /**

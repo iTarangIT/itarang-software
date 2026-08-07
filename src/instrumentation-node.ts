@@ -535,3 +535,83 @@ export async function startDriveExpenseTicker() {
     )}m) started in-process`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// E-230 — OEM reference price sweep.
+//
+// Warns Admin and CEO before a price's validity window closes, and reminds them
+// about models that have no price in force at all.
+//
+// An in-process ticker for the same reason as the Zoho and Drive ones above:
+// Vercel crons do not fire on the PM2 boxes, and there is no other driver. It
+// matters more here than it looks, because the thing being watched is invisible
+// when it goes wrong — a lapsed reference price throws no error and turns
+// nothing red; every quotation for that model just silently starts going to the
+// CEO for approval. Nobody discovers that by watching logs.
+//
+// Six-hourly rather than daily so a box restarted each evening still gets a
+// pass in. Re-running is cheap and safe: the expiry half is stamped per price
+// line and the backlog half is behind a one-week cooldown, so extra ticks
+// notify nobody twice.
+// ---------------------------------------------------------------------------
+export async function startOemPriceSweepTicker() {
+  // Skip on Vercel — a cron entry would own it there.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process double-notifying.
+  if (process.env.ENABLE_OEM_PRICE_SWEEP === "0") return;
+
+  const SWEEP_INTERVAL_MS =
+    Number(process.env.OEM_PRICE_SWEEP_INTERVAL_MS || "") || 6 * 60 * 60_000;
+  const WARN_DAYS = Number(process.env.OEM_PRICE_WARN_DAYS || "") || 14;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the Drizzle
+      // graph is never pulled into the Edge compile.
+      const { runOemPriceSweep } = await import("@/lib/leads/oemPriceSweep");
+      const r = await runOemPriceSweep({ warnDays: WARN_DAYS });
+
+      // Log only when something happened. A fully-priced register should not
+      // write a line every six hours forever.
+      if (r.expiring > 0 || r.missing_notified) {
+        console.log(
+          `[instrumentation:oem-price-sweep] warned=${r.expiring} ` +
+            `covered=${r.expiring_covered} missing=${r.missing} ` +
+            `lapsed=${r.missing_lapsed} missingNotified=${r.missing_notified}`,
+        );
+      }
+      if (r.error) {
+        console.error(`[instrumentation:oem-price-sweep] sweep failed: ${r.error}`);
+      }
+    } catch (err) {
+      // runOemPriceSweep already swallows its own failures; this catches the
+      // import itself (e.g. a DB with no E-230 columns) so a broken sweep can
+      // never take the ticker, or the boot, down with it.
+      console.error(
+        "[instrumentation:oem-price-sweep] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Last in the staggered kickoff queue — dialer (5s), Zoho (20s), dispatch
+  // (35s), gateway (45s), dedup (60s), drive (90s). Nothing here is urgent to
+  // the minute.
+  const kickoff = setTimeout(tick, 120_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, SWEEP_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] oem-price-sweep (${Math.round(
+      SWEEP_INTERVAL_MS / 60_000,
+    )}m, ${WARN_DAYS}d notice) started in-process`,
+  );
+}
