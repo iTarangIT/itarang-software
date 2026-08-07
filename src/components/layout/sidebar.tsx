@@ -45,7 +45,6 @@ import {
   Bell,
   ShieldAlert,
   Radar,
-  Tag,
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -284,7 +283,16 @@ const roleNavigation: Record<string, any[]> = {
           icon: Package,
           href: "/product-catalog",
         },
-        { id: "oems", label: "OEMs", icon: Landmark, href: "/oem-onboarding" },
+        // E-230 — OEM Onboarding came off this slot and OEM Inventory Pricing
+        // took its place, as asked on the 2026-08-06 call. The onboarding form
+        // is not deleted: it still lives at /oem-onboarding and is still linked
+        // from the sales_order_manager sidebar, which is who actually uses it.
+        {
+          id: "oem-pricing",
+          label: "OEM Inventory Pricing",
+          icon: Landmark,
+          href: "/oem-pricing",
+        },
         {
           id: "inventory-reports",
           label: "Inventory",
@@ -374,15 +382,11 @@ const roleNavigation: Record<string, any[]> = {
           icon: ClipboardCheck,
           href: "/ceo/expenses",
         },
-        // E-226 — the reference prices that decide which quotations
-        // auto-approve. Lives under the CEO because setting them IS the
-        // approval decision, made once per product instead of once per quote.
-        {
-          id: "oem-prices",
-          label: "OEM Price List",
-          icon: Tag,
-          href: "/ceo/oem-prices",
-        },
+        // E-230 — E-226's "OEM Price List" entry pointed at /ceo/oem-prices,
+        // which now redirects to /oem-pricing under BUSINESS above. Two sidebar
+        // entries onto one table is exactly the "multiple gates to reach one
+        // single place" the same call objected to, so this one is gone rather
+        // than repointed.
       ],
     },
     NEODOVE_SECTION,
@@ -788,6 +792,24 @@ const roleNavigation: Record<string, any[]> = {
           label: "Product Master",
           icon: Package,
           href: "/admin/product-master",
+        },
+        // E-230 — the same screen the CEO reaches under BUSINESS. Admin is
+        // authorised for it everywhere else (the API allows ceo + admin, the
+        // middleware gate allows ceo + admin, and both price notifications go
+        // to PRICE_KEEPERS = admin + ceo with href "/oem-pricing"), so without
+        // this entry an admin could follow a notification INTO the screen and
+        // then have no way back to it.
+        //
+        // Next to Product Master rather than with the stock movements below:
+        // both are reference data about what we sell, and this screen prices
+        // exactly the models that one defines. Deliberately NOT added to the
+        // sales_head or inventory_manager copies of this section — the route
+        // gate admits ceo and admin only, so a link there would just bounce.
+        {
+          id: "admin-oem-pricing",
+          label: "OEM Inventory Pricing",
+          icon: Landmark,
+          href: "/oem-pricing",
         },
         {
           id: "admin-inventory-upload",

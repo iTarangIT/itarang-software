@@ -1,17 +1,22 @@
 /**
- * E-226 — reading and revising the OEM reference price book.
+ * E-226 + E-230 — reading and revising the OEM reference price book.
  *
  * The database half of [[oemPricing]], kept separate so the decision rules stay
  * testable without a connection.
  *
- * The table is append-only. A revision closes the live row and inserts a new
- * one; `oem_price` is never updated in place, so "what was this product's
- * reference price in June" is always answerable. Exactly one row per product
- * has `effective_to IS NULL`, enforced in SQL by
- * `oem_reference_prices_live_uniq`.
+ * The table is append-only AND dated. Each open row (effective_to IS NULL) owns
+ * a half-open window [effective_from, valid_until) for one product, and one
+ * product's windows never overlap — so a product may hold the price in force
+ * plus any number of scheduled successors, and "the price in force at time T"
+ * is a lookup rather than a computation. `oem_price` is never updated in place,
+ * so "what was this product's reference price in June" is always answerable.
+ *
+ * The non-overlap is held here, in [[setOemPrice]], by locking the product's
+ * open rows FOR UPDATE before writing — see the migration for why it is not a
+ * btree_gist EXCLUDE constraint.
  */
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { oemReferencePrices } from "@/lib/db/schema";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
@@ -60,6 +65,7 @@ export interface OemPriceRow {
     oem_price: number;
     effective_from: string;
     effective_to: string | null;
+    valid_until: string | null;
     note: string | null;
     created_by: string | null;
     created_by_name: string | null;
@@ -67,16 +73,24 @@ export interface OemPriceRow {
 }
 
 /**
- * The live reference price for every product on these lines, keyed
+ * The reference price in force for every product on these lines AT `at`, keyed
  * `asset_type:product_id`.
  *
- * One query regardless of line count. Products with no price simply do not
- * appear in the map, which the rule reads as `no_reference` — that absence is
- * meaningful, so this must not invent a zero.
+ * `at` is the requirement's "your lookup happens according to the validity set
+ * on that pricing engine" — a price scheduled to start on 1 August must leave a
+ * quote raised in July alone, and an expired price must not go on approving
+ * quotes just because nothing replaced it. Defaults to now() for callers that
+ * genuinely mean "right now" (the price screen); the quote path passes the
+ * instant the quote is being written.
+ *
+ * One query regardless of line count. Products with no price in force simply do
+ * not appear in the map, which the rule reads as `no_reference` — that absence
+ * is meaningful, so this must not invent a zero.
  */
 export async function loadLiveOemPrices(
     lines: CommercialsProductLine[],
     tx?: Tx,
+    at: Date = new Date(),
 ): Promise<Map<string, OemPriceRef>> {
     const productIds = [...new Set(lines.map((l) => l.product_id))];
     if (productIds.length === 0) return new Map();
@@ -94,6 +108,20 @@ export async function loadLiveOemPrices(
             and(
                 isNull(oemReferencePrices.effective_to),
                 inArray(oemReferencePrices.product_id, productIds),
+                // Half-open [from, until): a window starting exactly at `at` is
+                // in force, one ending exactly at `at` is not. Two adjacent
+                // lines therefore hand over cleanly with no overlapping instant.
+                //
+                // lte/gt rather than a raw sql`` fragment: Drizzle serialises
+                // raw-template parameters through postgres.js `unsafe()` with no
+                // column type, which throws ERR_INVALID_ARG_TYPE on a Date. The
+                // operators know the column is timestamptz. Same trap the
+                // comment in setOemPrice names.
+                lte(oemReferencePrices.effective_from, at),
+                or(
+                    isNull(oemReferencePrices.valid_until),
+                    gt(oemReferencePrices.valid_until, at),
+                ),
             ),
         );
 
@@ -144,40 +172,131 @@ export interface SetOemPriceInput {
     model_id: string | null;
     product_name: string | null;
     oem_price: number;
+    /**
+     * Start of validity, inclusive. In the past or now → this replaces whatever
+     * is in force. In the future → it queues behind it.
+     */
+    effective_from: Date;
+    /** Declared expiry, exclusive. null = open-ended. */
+    valid_until: Date | null;
     note: string | null;
     created_by: string;
 }
 
+/** Raised when a new window would straddle a line already on the schedule. */
+export class OemPriceOverlapError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "OemPriceOverlapError";
+    }
+}
+
+function overlaps(
+    aFrom: Date,
+    aUntil: Date | null,
+    bFrom: Date,
+    bUntil: Date | null,
+): boolean {
+    // Half-open [from, until), null until = +infinity.
+    const aEnds = aUntil?.getTime() ?? Infinity;
+    const bEnds = bUntil?.getTime() ?? Infinity;
+    return aFrom.getTime() < bEnds && bFrom.getTime() < aEnds;
+}
+
+function fmtDay(d: Date): string {
+    return d.toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+    });
+}
+
 /**
- * Revise a product's reference price.
+ * Add a price line for a product.
  *
- * Closes the live row and inserts the new one in one transaction, both stamped
- * with the same instant so the history has no gap and no overlap. Never an
- * UPDATE of `oem_price` — that would erase the number a past quote was judged
- * against, which is the one thing this table exists to keep.
+ * Two shapes, distinguished only by `effective_from`, because that is how the
+ * requirement reads them ("add a second line for the same model ID, starting
+ * after the validity date we put above"):
+ *
+ *   effective_from <= now   a REVISION. Supersedes the line in force by
+ *                           stamping its effective_to at THIS line's start, so
+ *                           the history is contiguous — no gap, no overlap.
+ *   effective_from >  now   a SCHEDULED SUCCESSOR. Nothing is superseded; it
+ *                           simply waits its turn.
+ *
+ * A line that would straddle an already-scheduled one is REFUSED rather than
+ * quietly closing it. Silently discarding a schedule somebody set up is the
+ * worse failure: they would not find out until a quote was judged against a
+ * price they thought they had replaced.
+ *
+ * Never an UPDATE of `oem_price` — that would erase the number a past quote was
+ * judged against, which is the one thing this table exists to keep.
  */
 export async function setOemPrice(input: SetOemPriceInput): Promise<string> {
+    if (input.valid_until && input.valid_until <= input.effective_from) {
+        throw new OemPriceOverlapError(
+            "The validity end date must be after the start date.",
+        );
+    }
+
     return db.transaction(async (tx) => {
-        // One instant for both statements, so the closed row's effective_to and
-        // the new row's effective_from meet exactly — no gap, no overlap.
         const now = new Date();
 
-        // Query builder rather than a raw sql`` template, deliberately: Drizzle
-        // runs raw templates through postgres.js `unsafe()`, which serialises
-        // parameters with no column type and throws ERR_INVALID_ARG_TYPE on a
-        // Date object. The builder knows the column is timestamptz and encodes
-        // it correctly, so this whole class of bug cannot reach here.
-        await tx
-            .update(oemReferencePrices)
-            .set({ effective_to: now })
+        // Lock this product's open rows for the length of the transaction, so
+        // two admins saving at once cannot each pass their own overlap check
+        // and then both insert. This is what stands in for the EXCLUDE
+        // constraint the migration explains we are not using.
+        const openRows = await tx
+            .select({
+                price_id: oemReferencePrices.price_id,
+                effective_from: oemReferencePrices.effective_from,
+                valid_until: oemReferencePrices.valid_until,
+            })
+            .from(oemReferencePrices)
             .where(
                 and(
                     eq(oemReferencePrices.asset_type, input.asset_type),
                     eq(oemReferencePrices.product_id, input.product_id),
                     isNull(oemReferencePrices.effective_to),
                 ),
-            );
+            )
+            .for("update");
 
+        for (const row of openRows) {
+            const rowFrom = new Date(row.effective_from as unknown as string);
+            const rowUntil = row.valid_until
+                ? new Date(row.valid_until as unknown as string)
+                : null;
+
+            if (!overlaps(input.effective_from, input.valid_until, rowFrom, rowUntil)) {
+                continue;
+            }
+
+            // Overlaps something that starts LATER than us: that is a queued
+            // successor, and closing it would throw away a decision somebody
+            // already made. Refuse and say what to do about it.
+            if (rowFrom.getTime() > input.effective_from.getTime()) {
+                throw new OemPriceOverlapError(
+                    `A price is already scheduled to start on ${fmtDay(rowFrom)}. ` +
+                        `End this one on or before that date, or remove the scheduled ` +
+                        `line first.`,
+                );
+            }
+
+            // Overlaps the line in force (or one starting at the same instant,
+            // which the unique index would refuse anyway). Supersede it AT OUR
+            // START, so the two windows meet exactly.
+            await tx
+                .update(oemReferencePrices)
+                .set({ effective_to: input.effective_from })
+                .where(eq(oemReferencePrices.price_id, row.price_id));
+        }
+
+        // Query builder rather than a raw sql`` template, deliberately: Drizzle
+        // runs raw templates through postgres.js `unsafe()`, which serialises
+        // parameters with no column type and throws ERR_INVALID_ARG_TYPE on a
+        // Date object. The builder knows the column is timestamptz and encodes
+        // it correctly, so this whole class of bug cannot reach here.
         const inserted = await tx
             .insert(oemReferencePrices)
             .values({
@@ -188,9 +307,11 @@ export async function setOemPrice(input: SetOemPriceInput): Promise<string> {
                 // numeric columns take a string in Drizzle — passing a JS number
                 // would lose precision on the way in.
                 oem_price: String(input.oem_price),
-                effective_from: now,
+                effective_from: input.effective_from,
+                valid_until: input.valid_until,
                 note: input.note,
                 created_by: input.created_by,
+                created_at: now,
             })
             .returning({ price_id: oemReferencePrices.price_id });
 
@@ -198,7 +319,54 @@ export async function setOemPrice(input: SetOemPriceInput): Promise<string> {
     });
 }
 
-/** Every revision for one product, newest first. The audit surface. */
+/**
+ * Drop a line that has not started yet.
+ *
+ * Only ever a scheduled successor — a price that has been in force has judged
+ * quotes and must stay on the record, which is why this refuses anything whose
+ * window has already opened. Deleting rather than closing it: a row that never
+ * applied to anything is not history, and leaving it as a zero-length closed
+ * window would clutter the schedule with lines that never meant anything.
+ */
+export async function deleteScheduledOemPrice(
+    priceId: string,
+): Promise<{ deleted: boolean; reason?: string }> {
+    return db.transaction(async (tx) => {
+        const rows = await tx
+            .select({
+                price_id: oemReferencePrices.price_id,
+                effective_from: oemReferencePrices.effective_from,
+                effective_to: oemReferencePrices.effective_to,
+            })
+            .from(oemReferencePrices)
+            .where(eq(oemReferencePrices.price_id, priceId))
+            .for("update");
+
+        const row = rows[0];
+        if (!row) return { deleted: false, reason: "That price line no longer exists." };
+        if (row.effective_to) {
+            return { deleted: false, reason: "That line has already been superseded." };
+        }
+        if (new Date(row.effective_from as unknown as string) <= new Date()) {
+            return {
+                deleted: false,
+                reason:
+                    "That price is already in force — quotes have been judged against " +
+                    "it. Revise it instead, which keeps it in the history.",
+            };
+        }
+
+        await tx
+            .delete(oemReferencePrices)
+            .where(eq(oemReferencePrices.price_id, priceId));
+        return { deleted: true };
+    });
+}
+
+/**
+ * Every line for one product, newest first — history, the one in force, and
+ * anything scheduled. The audit surface, and what the schedule panel renders.
+ */
 export async function listOemPriceHistory(
     assetType: OemAssetType,
     productId: string,
@@ -209,7 +377,7 @@ export async function listOemPriceHistory(
     const rows = await db.execute<Record<string, unknown>>(sql`
         SELECT p.price_id::text AS price_id, p.asset_type, p.product_id,
                p.model_id, p.product_name, p.oem_price::text AS oem_price,
-               p.effective_from, p.effective_to, p.note,
+               p.effective_from, p.effective_to, p.valid_until, p.note,
                p.created_by, u.name AS created_by_name, p.created_at
           FROM oem_reference_prices p
           LEFT JOIN users u ON u.id::text = p.created_by
@@ -232,6 +400,9 @@ function toPriceRow(r: Record<string, unknown>): OemPriceRow {
         effective_to: r.effective_to
             ? new Date(r.effective_to as string).toISOString()
             : null,
+        valid_until: r.valid_until
+            ? new Date(r.valid_until as string).toISOString()
+            : null,
         note: r.note != null ? String(r.note) : null,
         created_by: r.created_by != null ? String(r.created_by) : null,
         created_by_name: r.created_by_name != null ? String(r.created_by_name) : null,
@@ -245,27 +416,52 @@ export interface OemCatalogueRow {
     model_id: string;
     product_name: string;
     detail: string | null;
+    /** The price in force right now. null = this product is blocking approval. */
     oem_price: number | null;
     price_id: string | null;
     effective_from: string | null;
+    /** Declared expiry of the price in force. null = open-ended. */
+    valid_until: string | null;
     set_by_name: string | null;
     note: string | null;
+    /** The queued successor, if one has been scheduled. */
+    next_price: number | null;
+    next_price_id: string | null;
+    next_effective_from: string | null;
+    next_valid_until: string | null;
 }
 
 /**
- * Every active product across the three masters, with its live reference price
- * where one has been set.
+ * Every active product across the three masters, with the price in force and
+ * the next one scheduled behind it.
  *
- * A LEFT JOIN, not an inner one: the products with NO price are the ones
- * blocking auto-approval, so they are the most important rows on the screen.
+ * A LEFT JOIN, not an inner one: the products with NO price in force are the
+ * ones blocking auto-approval, so they are the most important rows on the
+ * screen — including the ones that HAD a price which has since lapsed, which
+ * this query reports identically to never-priced because operationally they are
+ * the same thing.
  */
 export async function listOemCatalogue(): Promise<OemCatalogueRow[]> {
     const rows = await db.execute<Record<string, unknown>>(sql`
         WITH live AS (
             SELECT asset_type, product_id, price_id, oem_price, effective_from,
-                   note, created_by
+                   valid_until, note, created_by
               FROM oem_reference_prices
              WHERE effective_to IS NULL
+               AND effective_from <= now()
+               AND (valid_until IS NULL OR valid_until > now())
+        ),
+        -- The earliest line that has not started yet. DISTINCT ON rather than a
+        -- window function because only the front of the queue is shown; the
+        -- rest are in the schedule drawer.
+        upcoming AS (
+            SELECT DISTINCT ON (asset_type, product_id)
+                   asset_type, product_id, price_id, oem_price, effective_from,
+                   valid_until
+              FROM oem_reference_prices
+             WHERE effective_to IS NULL
+               AND effective_from > now()
+             ORDER BY asset_type, product_id, effective_from ASC
         ),
         catalogue AS (
             SELECT 'battery'::text AS asset_type, b.id::text AS product_id,
@@ -292,11 +488,18 @@ export async function listOemCatalogue(): Promise<OemCatalogueRow[]> {
                live.price_id::text AS price_id,
                live.oem_price::text AS oem_price,
                live.effective_from,
+               live.valid_until,
                live.note,
-               u.name AS set_by_name
+               u.name AS set_by_name,
+               nxt.price_id::text  AS next_price_id,
+               nxt.oem_price::text AS next_price,
+               nxt.effective_from  AS next_effective_from,
+               nxt.valid_until     AS next_valid_until
           FROM catalogue cat
           LEFT JOIN live ON live.asset_type = cat.asset_type
                         AND live.product_id = cat.product_id
+          LEFT JOIN upcoming nxt ON nxt.asset_type = cat.asset_type
+                                AND nxt.product_id = cat.product_id
           LEFT JOIN users u ON u.id::text = live.created_by
          ORDER BY cat.asset_type ASC, cat.product_name ASC
     `);
@@ -309,10 +512,134 @@ export async function listOemCatalogue(): Promise<OemCatalogueRow[]> {
         detail: r.detail != null ? String(r.detail) : null,
         oem_price: r.oem_price != null ? Number(r.oem_price) : null,
         price_id: r.price_id != null ? String(r.price_id) : null,
-        effective_from: r.effective_from
-            ? new Date(r.effective_from as string).toISOString()
-            : null,
+        effective_from: isoOrNull(r.effective_from),
+        valid_until: isoOrNull(r.valid_until),
         set_by_name: r.set_by_name != null ? String(r.set_by_name) : null,
         note: r.note != null ? String(r.note) : null,
+        next_price: r.next_price != null ? Number(r.next_price) : null,
+        next_price_id: r.next_price_id != null ? String(r.next_price_id) : null,
+        next_effective_from: isoOrNull(r.next_effective_from),
+        next_valid_until: isoOrNull(r.next_valid_until),
+    }));
+}
+
+function isoOrNull(v: unknown): string | null {
+    if (!v) return null;
+    const d = new Date(v as string);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// ─── What the daily sweep asks ───────────────────────────────────────────────
+
+export interface ExpiringOemPrice {
+    price_id: string;
+    asset_type: string;
+    product_id: string;
+    model_id: string | null;
+    product_name: string | null;
+    oem_price: number;
+    valid_until: string;
+    /** True if a successor is already queued — then this is not a problem. */
+    has_successor: boolean;
+}
+
+/**
+ * Prices in force whose declared window closes within `days`, that nobody has
+ * been warned about yet.
+ *
+ * Excludes any product that already has a successor queued: the whole point of
+ * the warning is "this lapses and nothing replaces it", and nagging somebody
+ * who has already done the work is how people learn to ignore notifications.
+ */
+export async function listExpiringOemPrices(days: number): Promise<ExpiringOemPrice[]> {
+    const rows = await db.execute<Record<string, unknown>>(sql`
+        SELECT p.price_id::text AS price_id, p.asset_type, p.product_id,
+               p.model_id, p.product_name, p.oem_price::text AS oem_price,
+               p.valid_until,
+               EXISTS (
+                   SELECT 1 FROM oem_reference_prices s
+                    WHERE s.asset_type = p.asset_type
+                      AND s.product_id = p.product_id
+                      AND s.effective_to IS NULL
+                      AND s.effective_from >= p.valid_until
+               ) AS has_successor
+          FROM oem_reference_prices p
+         WHERE p.effective_to IS NULL
+           AND p.valid_until IS NOT NULL
+           AND p.effective_from <= now()
+           AND p.valid_until > now()
+           AND p.valid_until <= now() + (${String(days)} || ' days')::interval
+           AND p.expiry_notified_at IS NULL
+         ORDER BY p.valid_until ASC
+    `);
+
+    return (rows as unknown as Record<string, unknown>[]).map((r) => ({
+        price_id: String(r.price_id),
+        asset_type: String(r.asset_type),
+        product_id: String(r.product_id),
+        model_id: r.model_id != null ? String(r.model_id) : null,
+        product_name: r.product_name != null ? String(r.product_name) : null,
+        oem_price: Number(r.oem_price),
+        valid_until: new Date(r.valid_until as string).toISOString(),
+        has_successor: r.has_successor === true,
+    }));
+}
+
+/** Remember that these lines have been warned about, so the nag fires once. */
+export async function markExpiryNotified(priceIds: string[]): Promise<void> {
+    if (priceIds.length === 0) return;
+    await db
+        .update(oemReferencePrices)
+        .set({ expiry_notified_at: new Date() })
+        .where(inArray(oemReferencePrices.price_id, priceIds));
+}
+
+export interface UnpricedOemProduct {
+    asset_type: OemAssetType;
+    product_id: string;
+    model_id: string;
+    product_name: string;
+    /** True if it once had a price that has since lapsed, vs. never priced. */
+    lapsed: boolean;
+}
+
+/**
+ * Active products with no reference price in force — the ones whose every quote
+ * is still going to the CEO.
+ *
+ * `lapsed` separates "nobody ever set one" from "this product HAD a price and
+ * it ran out". Both block auto-approval identically, but the second is a
+ * regression against a decision somebody already made — a product that was
+ * auto-approving last week and silently stopped — so the notification says so.
+ * It is decided by whether any row for the product has a window that has
+ * already opened, which is the only honest test: a queued successor alone means
+ * the price is merely not live YET.
+ */
+export async function listUnpricedOemProducts(): Promise<UnpricedOemProduct[]> {
+    const catalogue = await listOemCatalogue();
+    const unpriced = catalogue.filter((p) => p.oem_price == null);
+    if (unpriced.length === 0) return [];
+
+    const rows = await db.execute<Record<string, unknown>>(sql`
+        SELECT DISTINCT asset_type, product_id
+          FROM oem_reference_prices
+         WHERE effective_from <= now()
+           AND product_id IN (${sql.join(
+               unpriced.map((p) => sql`${p.product_id}`),
+               sql`, `,
+           )})
+    `);
+    const everApplied = new Set(
+        (rows as unknown as Record<string, unknown>[]).map(
+            (r) => `${String(r.asset_type)}:${String(r.product_id)}`,
+        ),
+    );
+
+    return unpriced.map((p) => ({
+        asset_type: p.asset_type,
+        product_id: p.product_id,
+        model_id: p.model_id,
+        product_name: p.product_name,
+        lapsed: everApplied.has(`${p.asset_type}:${p.product_id}`),
     }));
 }

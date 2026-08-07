@@ -38,6 +38,32 @@ interface Props {
 }
 
 /**
+ * The gutter between columns, on every cell of every row.
+ *
+ * Stated once and applied to thead, tbody and tfoot alike, because the bug it
+ * fixes came from them disagreeing: the headers carried `!px-0` and the body
+ * cells carried no horizontal padding at all, so adjacent columns touched.
+ * "Miscellaneous" ran into "Office Rental" and the amount ran into "View" with
+ * no space between them, which read as broken rather than dense.
+ *
+ * `first:pl-0 last:pr-0` keeps the outer edges flush with the card's own
+ * padding — an indented first column would leave the table looking inset from
+ * the heading above it.
+ */
+const CELL = "px-3 first:pl-0 last:pr-0";
+
+/**
+ * The same gutter for header cells, marked important.
+ *
+ * SortableTh applies its own `px-2`, and two conflicting padding utilities
+ * resolve by stylesheet order rather than by which one was passed last — so the
+ * header would sometimes take the component's value and drift out of alignment
+ * with the body beneath it. The `!` is what the original `!px-0` was reaching
+ * for; it is kept, and only the value is corrected.
+ */
+const HEAD_CELL = "!px-3 first:!pl-0 last:!pr-0";
+
+/**
  * E-224 — what each column sorts by.
  *
  * The Date column renders `expense_date` and falls back to `created_at`, so it
@@ -175,40 +201,56 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
         <p className="text-[11px] text-gray-400 italic">No tracked expenses yet.</p>
       ) : (
         <>
+          {/* min-w forces the horizontal scroll this wrapper already offers.
+              Without it the table compresses to the card instead, which is how
+              eight columns ended up crushed into each other on a half-width
+              dashboard column. */}
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[920px] text-sm">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
-                  <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggle} className="!px-0" />
-                  <SortableTh label="Vendor" sortKey="vendor" sort={sort} onToggle={toggle} className="!px-0" />
-                  <SortableTh label="Department" sortKey="department" sort={sort} onToggle={toggle} className="!px-0" />
-                  <SortableTh label="Bucket" sortKey="bucket" sort={sort} onToggle={toggle} className="!px-0" />
-                  <SortableTh label="Project" sortKey="project_tag" sort={sort} onToggle={toggle} className="!px-0" />
-                  <SortableTh label="Added by" sortKey="submitter_name" sort={sort} onToggle={toggle} className="!px-0" />
-                  <SortableTh label="Amount" sortKey="amount" sort={sort} onToggle={toggle} align="right" className="!px-0" />
-                  <SortableTh label="Bill" sort={sort} onToggle={toggle} align="right" className="!px-0" />
+                  <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggle} className={HEAD_CELL} />
+                  <SortableTh label="Vendor" sortKey="vendor" sort={sort} onToggle={toggle} className={HEAD_CELL} />
+                  <SortableTh label="Department" sortKey="department" sort={sort} onToggle={toggle} className={HEAD_CELL} />
+                  <SortableTh label="Bucket" sortKey="bucket" sort={sort} onToggle={toggle} className={HEAD_CELL} />
+                  <SortableTh label="Project" sortKey="project_tag" sort={sort} onToggle={toggle} className={HEAD_CELL} />
+                  <SortableTh label="Added by" sortKey="submitter_name" sort={sort} onToggle={toggle} className={HEAD_CELL} />
+                  <SortableTh label="Amount" sortKey="amount" sort={sort} onToggle={toggle} align="right" className={HEAD_CELL} />
+                  <SortableTh label="Bill" sort={sort} onToggle={toggle} align="right" className={HEAD_CELL} />
                 </tr>
               </thead>
               <tbody>
                 {paged.pageItems.map((r) => (
-                  <tr key={r.id} className="border-b border-gray-50">
-                    <td className="py-3 text-xs text-gray-600 whitespace-nowrap">
+                  // align-top: a two-line vendor cell must not drag the single
+                  // line values in every other column down to its middle.
+                  <tr key={r.id} className="border-b border-gray-50 align-top">
+                    <td className={`py-3 ${CELL} text-xs text-gray-600 whitespace-nowrap`}>
                       {r.expense_date
                         ? new Date(r.expense_date).toLocaleDateString("en-IN")
                         : new Date(r.created_at).toLocaleDateString("en-IN")}
                     </td>
-                    <td className="py-3 text-xs font-semibold text-gray-900">
-                      {r.vendor || "—"}
+                    {/* The one column allowed to be long, and so the one that
+                        has to be bounded — an unclipped legal name like
+                        "BHARATNXT WAVE SERVICES PRIVATE LIMITED" otherwise
+                        steals width from every column to its right. Full text
+                        stays available on hover. */}
+                    <td className={`py-3 ${CELL} text-xs font-semibold text-gray-900`}>
+                      <span className="block max-w-[220px] truncate" title={r.vendor || undefined}>
+                        {r.vendor || "—"}
+                      </span>
                       {r.description && (
-                        <span className="block text-[10px] font-normal text-gray-400 truncate max-w-[220px]">
+                        <span
+                          className="block text-[10px] font-normal text-gray-400 truncate max-w-[220px]"
+                          title={r.description}
+                        >
                           {r.description}
                         </span>
                       )}
                     </td>
-                    <td className="py-3 text-xs text-gray-700">
+                    <td className={`py-3 ${CELL} text-xs text-gray-700 whitespace-nowrap`}>
                       {expenseDepartmentLabel(r.department)}
                     </td>
-                    <td className="py-3 text-xs text-gray-700">
+                    <td className={`py-3 ${CELL} text-xs text-gray-700 whitespace-nowrap`}>
                       <span className="inline-flex items-center gap-1.5">
                         <span
                           className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -217,12 +259,24 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                         {expenseBucketLabel(r.bucket)}
                       </span>
                     </td>
-                    <td className="py-3 text-xs text-gray-700">{r.project_tag || "—"}</td>
-                    <td className="py-3 text-xs text-gray-500">{r.submitter_name || "—"}</td>
-                    <td className="py-3 text-xs font-bold text-gray-900 text-right whitespace-nowrap">
+                    <td className={`py-3 ${CELL} text-xs text-gray-700`}>
+                      <span
+                        className="block max-w-[160px] truncate"
+                        title={r.project_tag || undefined}
+                      >
+                        {r.project_tag || "—"}
+                      </span>
+                    </td>
+                    <td className={`py-3 ${CELL} text-xs text-gray-500 whitespace-nowrap`}>
+                      {r.submitter_name || "—"}
+                    </td>
+                    <td
+                      className={`py-3 ${CELL} text-xs font-bold text-gray-900 text-right whitespace-nowrap tabular-nums`}
+                      title={formatINRExact(Number(r.amount))}
+                    >
                       ₹{Number(r.amount).toLocaleString("en-IN")}
                     </td>
-                    <td className="py-3 text-xs text-right">
+                    <td className={`py-3 ${CELL} text-xs text-right whitespace-nowrap`}>
                       {r.bill_url ? (
                         <a
                           href={r.bill_url}
@@ -230,7 +284,7 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                           rel="noreferrer"
                           className="inline-flex items-center gap-1 text-brand-600 hover:underline font-semibold"
                         >
-                          <FileText className="w-3 h-3" /> View
+                          <FileText className="w-3 h-3 shrink-0" /> View
                         </a>
                       ) : (
                         <span className="text-gray-300">—</span>
@@ -243,17 +297,20 @@ export function ExpenseLedgerPanel({ rows = [] }: Props) {
                 {/* Totals every filtered row, not the page on screen — this is
                     the ledger's bottom line and must not change as you page. */}
                 <tr className="border-t border-gray-100">
-                  <td colSpan={6} className="py-3 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  <td
+                    colSpan={6}
+                    className={`py-3 ${CELL} text-[11px] font-semibold uppercase tracking-wider text-gray-500`}
+                  >
                     Total ({dept === "all" ? "all departments" : expenseDepartmentLabel(dept)}
                     {bucket !== "all" && ` · ${expenseBucketLabel(bucket)}`})
                   </td>
                   <td
-                    className="py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap"
+                    className={`py-3 ${CELL} text-sm font-bold text-gray-900 text-right whitespace-nowrap tabular-nums`}
                     title={formatINRExact(total)}
                   >
                     {formatINRCompact(total)}
                   </td>
-                  <td />
+                  <td className={CELL} />
                 </tr>
               </tfoot>
             </table>

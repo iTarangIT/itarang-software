@@ -196,6 +196,11 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   inventory_assigned: "Inventory",
   inventory_transfer_incoming: "Inventory",
   inventory_transfer_acknowledged: "Inventory",
+  // E-230 — the OEM price register. Filed under Inventory rather than System
+  // because the thing being nagged about is a product's price, and the person
+  // who fixes it goes to the same place they maintain models.
+  "oem.price_expiring": "Inventory",
+  "oem.price_missing": "Inventory",
 
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
@@ -206,11 +211,12 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // rows already in people's bells file correctly and the type is governable
   // from the E-231 screen if whatever wrote them ever runs again.
   ops_alert: "System",
-  // Same story as ops_alert: 5 live rows on database-1, no emitter anywhere in
-  // src/ — found by `npm run verify:notifications`. Whatever wrote them is gone
-  // or lives outside this repo; mapping it keeps those bells filed correctly and
-  // muteable.
-  "oem.price_missing": "System",
+  // NOTE `oem.price_missing` was briefly mapped here too, as a second System
+  // entry, because a verify:notifications run found 5 live rows on database-1
+  // and no emitter in src/. E-230 landed the emitter on main in the same window
+  // (events.ts oemPriceMissing) and filed it under Inventory, above — which is
+  // the right home now that a human is being asked to go and fix a price. The
+  // duplicate key silently won at runtime and would have mis-filed it; removed.
 
   // --- Escalations / internal ---
   escalation_raised: "Escalations",
@@ -256,6 +262,11 @@ const WARNING = new Set([
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",
+  // E-230 — both are "act before a date", which is exactly amber. A lapsed OEM
+  // price is not an error anywhere; it just quietly sends every quote for that
+  // model to the CEO, which is why it has to be visible BEFORE it happens.
+  "oem.price_expiring",
+  "oem.price_missing",
 ]);
 
 /**

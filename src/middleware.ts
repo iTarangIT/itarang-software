@@ -377,6 +377,9 @@ export async function middleware(request: NextRequest) {
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
+    // E-230 — the OEM price register. Role is re-asserted by the API (ceo,
+    // admin); listing it here is the "you must be signed in" half.
+    path.startsWith("/oem-pricing") ||
     path.startsWith("/deals") ||
     path.startsWith("/leads") ||
     path.startsWith("/approvals") ||
@@ -472,6 +475,16 @@ export async function middleware(request: NextRequest) {
       );
     }
     return finalize(response);
+  }
+
+  // E-230 — the OEM price register moved off /ceo onto the OEM tab, so that
+  // Admin can reach it as the requirement asks. It therefore lost the gate it
+  // used to inherit: /ceo IS a roleDashboards prefix, and /oem-pricing is not,
+  // so without this it would fall through to the permissive default at the
+  // bottom of this function and render for any signed-in user. The API 403s
+  // either way — this stops the page from rendering at all.
+  if (path.startsWith("/oem-pricing") && role !== "ceo" && role !== "admin") {
+    return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
   }
 
   // Shared access routes

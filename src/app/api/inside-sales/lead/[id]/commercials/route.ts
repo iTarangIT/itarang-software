@@ -87,7 +87,12 @@ export const POST = withErrorHandler(
 
             if (isGatedQuoteEvent(body.event_type)) {
                 const lines = body.product_lines ?? [];
-                const refs = await loadLiveOemPrices(lines, tx);
+                // performedAt, not now(): E-230 resolves the price by its
+                // validity window, so the quote must be judged against the
+                // price in force at the instant the quote is stamped. Letting
+                // the lookup default to its own clock would let a window that
+                // opens mid-request judge a quote dated before it.
+                const refs = await loadLiveOemPrices(lines, tx, performedAt);
                 oemEvaluation = evaluateAgainstOemPrices(lines, refs, performedAt);
                 const resolved = resolveQuoteApproval(oemEvaluation);
                 approvalStatus = resolved.status;
