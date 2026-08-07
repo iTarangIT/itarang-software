@@ -35,7 +35,7 @@ import postgres from "postgres";
 const USER = {
   email: process.env.OPS_USER_EMAIL || "operations@itarang.com",
   password: process.env.OPS_USER_PASSWORD || "password",
-  name: "Operations",
+  name: "Tech Ops",
   role: "operations",
 };
 
