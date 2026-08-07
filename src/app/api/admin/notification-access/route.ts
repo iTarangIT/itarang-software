@@ -63,11 +63,46 @@ export const GET = withErrorHandler(async () => {
     .filter((r) => r && !known.has(r))
     .sort();
 
+  // OBSERVED DELIVERY — which types have actually reached each dashboard.
+  //
+  // The screen used to offer all ~138 types to all 17 dashboards and summarise
+  // every panel as "all N on", which is untrue for most of them: only a handful
+  // of roles are ever in an audience (see ADMIN_AUDIENCE_ROLES in emit.ts and
+  // the audience kinds in resolve()), so the majority of those toggles govern an
+  // event the dashboard cannot receive. `all 132 on` next to ASM Dashboard read
+  // as coverage when ASM has only ever been sent one type.
+  //
+  // WHY THE TABLE AND NOT A STATIC MAP. A hand-derived type->role map was tried
+  // and is not safe to hide rows on: it misses live types (escalation_raised,
+  // dealer_onboarding_submitted, buyback.price_review_due all look dead to a
+  // source scan and all fire), and it disagrees with reality on others
+  // (buyback.approve_invoice and buyback.reopen are declared DEALER in
+  // NOTIFICATION_FOR but land on scrap_vendor). The bell itself is the only
+  // honest record of who receives what.
+  //
+  // This informs the UI ONLY — every type stays toggleable on every dashboard,
+  // so nothing an admin can mute today stops being muteable. A type that has
+  // simply not fired yet shows as not-yet-seen and corrects itself the first
+  // time it does.
+  const seen = await db.execute<{ role: string; notification_type: string }>(sql`
+    SELECT DISTINCT LOWER(u.role) AS role, n.type AS notification_type
+      FROM notifications n
+      JOIN users u ON u.id::text = n.user_id::text
+     WHERE n.created_at > now() - interval '180 days'
+       AND u.role IS NOT NULL
+  `);
+  const observed: Record<string, string[]> = {};
+  for (const row of seen) {
+    if (!editable.has(row.role)) continue;
+    (observed[row.role] ??= []).push(row.notification_type);
+  }
+
   return successResponse({
     dashboards: DASHBOARDS.filter((d) => editable.has(d.value)),
     denied: denied.filter((r) => editable.has(r.dashboard)),
     last_change: last[0] ?? null,
     unknown_roles,
+    observed,
   });
 });
 

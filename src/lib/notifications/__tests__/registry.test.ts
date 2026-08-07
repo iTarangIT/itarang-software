@@ -100,16 +100,19 @@ describe("notification registry", () => {
       expect(editableDashboardsFor("ceo")).toHaveLength(DASHBOARDS.length);
     });
 
-    it("limits sales_head to its own reporting line", () => {
+    it("gives sales_head its reporting line plus CEO and Dealer", () => {
       const scope = editableDashboardsFor("sales_head");
       expect(scope).toContain("sales_head");
       expect(scope).toContain("asm");
-      // The point of the restriction: no silencing your own supervisors, and no
-      // touching the external-facing portals.
-      expect(scope).not.toContain("ceo");
+      // Granted on request despite the supervisor/contractual concerns noted on
+      // SALES_HEAD_SCOPE — asserted so re-tightening is a deliberate edit.
+      expect(scope).toContain("ceo");
+      expect(scope).toContain("dealer");
+      // Still out of scope.
       expect(scope).not.toContain("admin");
-      expect(scope).not.toContain("dealer");
+      expect(scope).not.toContain("it");
       expect(scope).not.toContain("nbfc_partner");
+      expect(scope).not.toContain("scrap_vendor");
     });
 
     it("gives everyone else nothing", () => {
