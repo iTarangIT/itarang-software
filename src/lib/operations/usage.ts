@@ -19,6 +19,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { usageHeartbeatEnabled } from "@/lib/usage/track";
 
 import { getModuleUsage, type ModuleUsageView } from "./moduleUsage";
 import { getMetric, type MetricDef } from "./registry";
@@ -89,6 +90,18 @@ export interface UsageView {
    * enabled — the table is empty, which is a true reading of "no sessions".
    */
   sessions: SessionTotals;
+  /**
+   * Whether the server is actually recording sessions and module usage right
+   * now, i.e. usageHeartbeatEnabled().
+   *
+   * Surfaced because the page previously INFERRED it from `sessions.count === 0`
+   * and printed "session tracking not enabled yet" — which is a claim about
+   * configuration derived from an absence of data. It happened to be right while
+   * the flag was off, and would have been confidently wrong the moment the flag
+   * was switched on with nobody yet measured. A page whose job is diagnosis has
+   * to distinguish "switched off" from "on, but nothing recorded".
+   */
+  heartbeat_enabled: boolean;
   /** Logins per day over the selected window, gaps included as explicit zeros. */
   login_trend: LoginDayPoint[];
   /**
@@ -255,6 +268,8 @@ export async function getUsageView(
       minutes: Math.round(Number(sess?.minutes ?? 0)),
       active_now: Number(sess?.active_now ?? 0),
     },
+    // Read here rather than in the page so the JSON API reports the same thing.
+    heartbeat_enabled: usageHeartbeatEnabled(),
     login_trend: fillLoginDays(found, days),
     modules,
     people_in_window: Number(totals?.people ?? 0),
