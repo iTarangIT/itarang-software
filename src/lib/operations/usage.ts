@@ -20,6 +20,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 
+import { getModuleUsage, type ModuleUsageView } from "./moduleUsage";
 import { getMetric, type MetricDef } from "./registry";
 import { bySourceKey, latestSamples, seriesFor, type SeriesPoint } from "./samples";
 import { MAX_USAGE_ROWS, type UsageFilters } from "./usageMath";
@@ -90,6 +91,13 @@ export interface UsageView {
   sessions: SessionTotals;
   /** Logins per day over the selected window, gaps included as explicit zeros. */
   login_trend: LoginDayPoint[];
+  /**
+   * Per-module roll-up over the same window (E-215). Aggregate only — it has no
+   * user filter because module_usage_daily has no user_id, so unlike everything
+   * else on this page it does not narrow when `?user=` is set. The page labels it
+   * as company-wide so that is not read as a bug.
+   */
+  modules: ModuleUsageView;
   /** Distinct people who entered a credential in the window. */
   people_in_window: number;
   logins_in_window: number;
@@ -112,8 +120,15 @@ export async function getUsageView(
     ? sql` AND s.user_id = ${filters.user}::uuid`
     : sql``;
 
-  const [samples, series, trendRows, totalsRows, historyRows, sessionRows] =
-    await Promise.all([
+  const [
+    samples,
+    series,
+    trendRows,
+    totalsRows,
+    historyRows,
+    sessionRows,
+    modules,
+  ] = await Promise.all([
       // 48 hours, matching the other module views: the collector runs every 15
       // minutes, so a 24h window would still show a number after a long outage
       // but a shorter one would blank out after a couple of missed cycles.
@@ -181,6 +196,11 @@ export async function getUsageView(
         WHERE s.started_at > NOW() - (${days} || ' days')::interval
           ${sessionUserFilter}
       `),
+
+      // Takes no user filter — see the `modules` field on UsageView. It also
+      // never rejects, so an unapplied E-215 cannot turn this whole page into an
+      // error card; it reports `unavailable` and the page says so.
+      getModuleUsage(days),
     ]);
 
   const index = bySourceKey(samples);
@@ -236,6 +256,7 @@ export async function getUsageView(
       active_now: Number(sess?.active_now ?? 0),
     },
     login_trend: fillLoginDays(found, days),
+    modules,
     people_in_window: Number(totals?.people ?? 0),
     logins_in_window: Number(totals?.logins ?? 0),
     history,

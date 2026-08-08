@@ -325,6 +325,8 @@ implementation detail — it is the thing this section exists to keep honest.
 | --- | --- | --- |
 | `user_login_events` | one per credential entry — user, time, role at the time | **90 days** |
 | `user_activity_sessions` | one per CRM session — start, last seen, heartbeat count | **30 days** |
+| `module_usage_daily` | daily **aggregate** counters per module — no user id | permanent |
+| `module_visit_keys` | scratch dedupe hashes behind the above | **2 days** |
 | `ops_daily_snapshots` | daily **aggregates only** (`usage.*`) | permanent |
 
 ### What is NOT recorded — deliberately
@@ -336,6 +338,43 @@ None of the metrics this feature exists for needs any of them, and each one turn
 a usage table into a forensics table. If security later needs a source IP for an
 "unexpected login location" check, it belongs additively on `user_login_events`,
 where it answers a security question — **not** on the session table.
+
+### Per-module usage (E-215) — and why it is not a page path
+
+Module tracking is the one feature that looked like it needed the URL, so it is
+worth being exact about why the promise above still holds.
+
+The browser resolves its own location against a **closed seven-value allow-list**
+(`MODULES` in `src/lib/usage/constants.ts`) and transmits the resulting **label**.
+`/nbfc/applications/PL-2291/documents?tab=kyc` leaves the tab as the four letters
+`nbfc`. The path is never sent, and there is no column that could store it.
+
+`module_usage_daily` is **aggregate by construction — it has no `user_id` column**,
+so it cannot answer "which modules does this person use" even for someone with
+direct database access. That is why per-module usage needs none of the machinery
+the login history carries: no read-audit, no row cap, no expiry.
+
+Two consequences to know before reading the table:
+
+- **It does not narrow when you filter to one person.** The page says so. There is
+  no user id to filter on.
+- **`role_bucket` is `internal` | `external`, never the role.** There is exactly
+  one `ceo`, so `(day, 'nbfc', 'ceo', sessions=1)` would be a per-person row
+  wearing an aggregate's name. Two permanently-crowded buckets cannot degrade that
+  way as the org changes. If a per-role breakdown is ever genuinely needed, add a
+  minimum cohort size enforced in SQL — do not widen the column.
+
+`module_visit_keys` holds `md5(session_id, module, day)` so `sessions` can count
+distinctly. **Do not describe it as anonymised.** `user_activity_sessions` maps
+session ids to people for 30 days, so anyone who can read that table can recompute
+these hashes; the protection is the 2-day prune bounding the join window, not the
+hash. It is deduplication that declines to make re-identification convenient.
+
+Externals (`dealer`, `scrap_vendor`, `nbfc_partner`) are **excluded** from
+`user_activity_sessions` and **included** in `module_usage_daily`. The asymmetry is
+deliberate: session-timing a business partner is a different product under a
+different consent basis, while "are dealers using the dealer portal" is a
+legitimate ops question the aggregate answers without measuring any one dealer.
 
 ### The invariant
 
@@ -383,15 +422,38 @@ data** — the read-audit above stays on regardless, because a period when
 collection is disabled is exactly when you would want to know who was still
 reading the archive.
 
+There are three switches, nested rather than parallel, so "one switch stops
+everything" stays true:
+
+| Variable | Default | Stops |
+| --- | --- | --- |
+| `USAGE_TRACKING=0` | on | **everything** — logins, sessions, modules |
+| `USAGE_HEARTBEAT=1` | **off** | sessions *and* per-module usage (server-side writes) |
+| `NEXT_PUBLIC_USAGE_HEARTBEAT=1` | **off** | the browser timer itself; needs a rebuild |
+
+The two heartbeat flags default **off** and are tested with `=== "1"`, the inverse
+of `USAGE_TRACKING`'s `!== "0"`. The asymmetry is deliberate: login tracking is
+already live so turning it *off* is the emergency action, while anything that
+measures people continuously must never start recording merely because a deploy
+shipped. Recommended launch posture is the client flag on and the server flag off
+— the code is live and exercised, nothing is written, and enabling it later is an
+env change rather than a rebuild.
+
 ### Retention is enforced by the daily rollup
 
-`runDailySnapshot()` (`src/lib/operations/daily.ts`) deletes expired rows from
-both tables on the same tick that writes the day's aggregates. The two prunes are
-individually guarded against a missing table, so an environment without E-214
-applied skips them and still prunes `ops_metric_samples` — an unguarded throw
-here would have turned a schema gap into unbounded disk growth, silently. Any
-other error is re-thrown: failing to delete expired personal data must be loud.
-Counts land in the ticker log line (`sessions`, `login events`).
+`runDailySnapshot()` (`src/lib/operations/daily.ts`) deletes expired rows on the
+same tick that writes the day's aggregates. The three prunes are individually
+guarded against a missing table, so an environment without E-214 or E-215 applied
+skips them and still prunes `ops_metric_samples` — an unguarded throw here would
+have turned a schema gap into unbounded disk growth, silently. Any other error is
+re-thrown: failing to delete expired personal data must be loud. Counts land in
+the ticker log line (`sessions`, `login events`, `module keys`).
+
+`module_visit_keys` is pruned at **2 days, not 1**: the prune runs on an IST day
+boundary and a session still pinging across midnight must not have its key deleted
+underneath it, or the next ping looks like a first visit and double-counts that
+session. It also compares against an IST date rather than `NOW()`, since the keys
+are written under an IST day and a UTC comparison would shift the edge by 5h30.
 
 ### Two numbers that look like they should match, and should not
 

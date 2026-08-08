@@ -14,6 +14,7 @@ import {
   index,
   uniqueIndex,
   bigint,
+  char,
   date,
   serial,
   bigserial,
@@ -9133,5 +9134,71 @@ export const userActivitySessions = pgTable(
       table.user_id,
       table.started_at,
     ),
+  }),
+);
+
+/**
+ * E-215. Per-module usage counters.
+ *
+ * NOTE THE ABSENCE OF user_id. It is not an oversight and it is not a column
+ * waiting to be added — the whole design of E-215 rests on this table being
+ * incapable of answering "which modules does this person use". Anyone reaching
+ * for a `.user_id` here should read the migration header first.
+ *
+ * `module` intentionally carries no CHECK/enum: an unrecognised label must land
+ * as 'other' and be visible rather than fail a heartbeat. The allow-list is
+ * enforced in normaliseModule() in src/lib/usage/track.ts.
+ *
+ * Storage parameters (fillfactor 70 + autovacuum tuning) are set by the
+ * migration and cannot be expressed in Drizzle. Their absence here is expected
+ * and is NOT drift — same situation as user_activity_sessions above.
+ */
+export const moduleUsageDaily = pgTable(
+  "module_usage_daily",
+  {
+    /** IST, matching every other day boundary in the console. */
+    day: date().notNull(),
+    /** One of MODULES in src/lib/usage/constants.ts, or 'other'. */
+    module: varchar({ length: 32 }).notNull(),
+    /** 'internal' | 'external' — never the role. See the E-215 header. */
+    role_bucket: varchar("role_bucket", { length: 16 }).notNull(),
+    /** Heartbeats attributed here. pings * 300 ≈ engaged seconds. */
+    pings: integer().default(0).notNull(),
+    /** Distinct sessions, deduped via moduleVisitKeys. */
+    sessions: integer().default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.day, table.module, table.role_bucket],
+    }),
+    dayIdx: index("module_usage_daily_day_idx").on(table.day),
+  }),
+);
+
+/**
+ * E-215. Two-day dedupe behind moduleUsageDaily.sessions.
+ *
+ * Holds md5(session_id, module, day) and nothing else. Not anonymised — see the
+ * "RESIDUAL EXPOSURE" note in the migration header before describing it as
+ * such. Pruned by runDailySnapshot().
+ */
+export const moduleVisitKeys = pgTable(
+  "module_visit_keys",
+  {
+    visit_key: char("visit_key", { length: 32 }).primaryKey().notNull(),
+    /** In the clear only so the prune can range-scan. */
+    day: date().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    dayIdx: index("module_visit_keys_day_idx").on(table.day),
   }),
 );

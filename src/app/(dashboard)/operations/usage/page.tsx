@@ -122,6 +122,12 @@ export default async function OperationsUsagePage({
             in the foreground.
           </p>
           <p className="mt-1">
+            Also records <strong>which module</strong> a session was in — one of
+            six names such as <code>nbfc</code> or <code>asm</code> — as a{" "}
+            <strong>company-wide daily total only</strong>. Those totals carry no
+            user id and cannot be traced back to a person.
+          </p>
+          <p className="mt-1">
             Does <strong>not</strong> record individual pages, records opened,
             searches, anything typed, IP address, or device. Sign-in records are
             deleted after 90 days and session records after 30 days; only
@@ -242,6 +248,123 @@ export default async function OperationsUsagePage({
             startLabel={view.login_trend[0]?.day ?? ""}
             endLabel={view.login_trend[view.login_trend.length - 1]?.day ?? ""}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            Module usage · last {view.filters.days}{" "}
+            {view.filters.days === 1 ? "day" : "days"}
+          </CardTitle>
+          <p className="mt-1 text-xs text-ink-muted">
+            Which parts of the CRM are being used.{" "}
+            <strong>Company-wide totals</strong> — this table has no user id
+            behind it, so unlike everything else on this page it does{" "}
+            <strong>not</strong> narrow when you filter to one person. Time is
+            derived from 5-minute heartbeats, so treat it as share of attention
+            rather than as a timesheet.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {view.modules.unavailable ? (
+            <p className="text-sm text-ink-muted">
+              Module usage unavailable — most likely{" "}
+              <code>drizzle/E-215_module_usage.sql</code> has not been applied to
+              this database. The rest of this page is unaffected.
+            </p>
+          ) : (
+            <>
+              {view.modules.empty && (
+                <p className="mb-3 text-sm text-ink-muted">
+                  No module data in this window. All three causes look identical
+                  here, so check them in order: session tracking off
+                  (<code>USAGE_HEARTBEAT</code> is not <code>1</code>),{" "}
+                  <code>E-215</code> applied but nothing recorded yet, or nobody
+                  has used the CRM in {view.filters.days}{" "}
+                  {view.filters.days === 1 ? "day" : "days"}.
+                </p>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[34rem] text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-ink-muted">
+                      <th className="pb-2 pr-3 font-medium">Module</th>
+                      <th className="pb-2 pr-3 text-right font-medium">
+                        Sessions
+                      </th>
+                      <th className="pb-2 pr-3 text-right font-medium">
+                        Internal
+                      </th>
+                      <th className="pb-2 pr-3 text-right font-medium">
+                        External
+                      </th>
+                      <th className="pb-2 pr-3 text-right font-medium">Time</th>
+                      <th className="pb-2 font-medium">Share</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {view.modules.rows.map((m) => (
+                      <tr
+                        key={m.module}
+                        className="border-b border-border/60 last:border-0"
+                      >
+                        <td className="py-2.5 pr-3 text-ink">
+                          {m.label}
+                          {/* A module nobody has opened is the most useful
+                              reading on this table, so it is called out rather
+                              than left as an unremarkable zero. */}
+                          {m.never_seen && (
+                            <span className="ml-2 text-[10px] uppercase tracking-wide text-ink-muted">
+                              no data
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums text-ink">
+                          {m.sessions === 0 ? "—" : formatCount(m.sessions)}
+                        </td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums text-ink-muted">
+                          {m.internal_sessions === 0
+                            ? "—"
+                            : formatCount(m.internal_sessions)}
+                        </td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums text-ink-muted">
+                          {m.external_sessions === 0
+                            ? "—"
+                            : formatCount(m.external_sessions)}
+                        </td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums text-ink-muted">
+                          {m.pings === 0
+                            ? "—"
+                            : formatMetricValue(m.minutes, "minutes")}
+                        </td>
+                        <td className="py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="h-1.5 w-24 overflow-hidden rounded-full bg-border"
+                              aria-hidden="true"
+                            >
+                              <div
+                                className="h-full rounded-full bg-brand-navy"
+                                style={{
+                                  width: `${Math.round(m.share * 100)}%`,
+                                }}
+                              />
+                            </div>
+                            <span className="text-xs tabular-nums text-ink-muted">
+                              {m.pings === 0
+                                ? "—"
+                                : `${Math.round(m.share * 100)}%`}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 

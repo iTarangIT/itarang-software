@@ -39,6 +39,18 @@ export const LOG_RETENTION_DAYS = 14;
 export const SESSION_RETENTION_DAYS = 30;
 export const LOGIN_RETENTION_DAYS = 90;
 
+/**
+ * Module dedupe keys (E-215). Not a privacy retention figure like the two above
+ * — module_usage_daily itself is aggregate and kept permanently. This is the
+ * lifetime of the scratch keys that make its `sessions` column count distinctly.
+ *
+ * TWO DAYS, NOT ONE. The prune runs on an IST day boundary, and a session still
+ * pinging across midnight must not have its key deleted underneath it — the next
+ * ping would then look like a first visit and count that session twice. One day
+ * of slack costs a few hundred rows and removes the whole class of bug.
+ */
+export const MODULE_VISIT_KEY_RETENTION_DAYS = 2;
+
 export interface DailySnapshotResult {
   snapshot_date: string;
   snapshots_written: number;
@@ -46,6 +58,7 @@ export interface DailySnapshotResult {
   logs_pruned: number;
   sessions_pruned: number;
   login_events_pruned: number;
+  module_visit_keys_pruned: number;
 }
 
 /** Today's date in IST as YYYY-MM-DD. */
@@ -172,6 +185,19 @@ export async function runDailySnapshot(
     `,
   );
 
+  // Same guard, same reason (E-215 is newer still). Note this one deletes by
+  // `day`, a date, rather than by a timestamp — the keys are written with an IST
+  // day and comparing them against a UTC NOW() would shift the boundary by 5h30.
+  const moduleVisitKeysPruned = await pruneQuietly(
+    "module_visit_keys",
+    sql`
+      DELETE FROM module_visit_keys
+      WHERE day < ((NOW() AT TIME ZONE 'Asia/Kolkata')::date
+                   - ${MODULE_VISIT_KEY_RETENTION_DAYS}::int)
+      RETURNING visit_key
+    `,
+  );
+
   const result: DailySnapshotResult = {
     snapshot_date: snapshotDate,
     snapshots_written: snapshotsWritten,
@@ -179,12 +205,14 @@ export async function runDailySnapshot(
     logs_pruned: prunedLogs.length,
     sessions_pruned: sessionsPruned,
     login_events_pruned: loginEventsPruned,
+    module_visit_keys_pruned: moduleVisitKeysPruned,
   };
 
   log.info(
     `[ops] daily rollup ${snapshotDate}: ${snapshotsWritten} snapshots, ` +
       `pruned ${result.samples_pruned} samples / ${result.logs_pruned} logs / ` +
-      `${result.sessions_pruned} sessions / ${result.login_events_pruned} logins`,
+      `${result.sessions_pruned} sessions / ${result.login_events_pruned} logins / ` +
+      `${result.module_visit_keys_pruned} module keys`,
   );
 
   return result;
