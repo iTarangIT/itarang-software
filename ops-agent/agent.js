@@ -18,6 +18,8 @@
  *   OPS_INTERVAL_MS     optional, default 300000 (5 minutes)
  *   OPS_ONCE            optional, "1" runs a single cycle and exits (cron mode)
  *   OPS_LOG_FILES       optional, comma-separated `service:path` pairs to tail
+ *   OPS_LOG_DIR         optional, base directory for RELATIVE paths in
+ *                       OPS_LOG_FILES, and the location of the CRM's pm2 logs
  *   OPS_LOG_STATE_FILE  optional, where byte offsets are remembered
  *   OPS_LOG_MIN_LEVEL   optional, error|warn|info — default warn
  */
@@ -45,13 +47,35 @@ const POST_TIMEOUT_MS = 15000;
 // ---------------------------------------------------------------------------
 
 /**
- * `service:path` pairs. The defaults are the pm2 files named in
- * ecosystem.prod.config.js plus nginx, relative to the pm2 cwd for the first
- * two — override wholesale with OPS_LOG_FILES when a box differs.
+ * Base directory for RELATIVE paths, and where the CRM's pm2 logs live.
+ *
+ * This exists because the old defaults could not work. They were written as
+ * `logs/web.out.log` — relative, with a comment saying "relative to the pm2
+ * cwd" — but ecosystem.ops-agent.config.js sets `cwd: __dirname` and the README
+ * installs the agent to its own directory (deliberately, so it survives a
+ * half-finished deploy). So those paths resolved to the AGENT's own log folder,
+ * which contains ops-agent.out.log and nothing else. The agent would run
+ * perfectly, post its metrics, forward zero application log lines, and say
+ * nothing about it — because a missing log file is skipped silently, by design,
+ * since nginx genuinely is absent on some boxes.
+ *
+ * The result was an empty Logs & Errors page with no diagnostic anywhere. Set
+ * OPS_LOG_DIR to the CRM's log directory (the one holding web.out.log), or give
+ * absolute paths in OPS_LOG_FILES.
+ */
+const LOG_DIR = process.env.OPS_LOG_DIR || "";
+
+/**
+ * `service:path` pairs.
+ *
+ * nginx is absolute and always included. The two pm2 files are only defaulted in
+ * when OPS_LOG_DIR says where they are — a default that cannot resolve is worse
+ * than no default, because it looks configured.
  */
 const DEFAULT_LOG_FILES = [
-  "itarang-crm-web:logs/web.out.log",
-  "itarang-crm-web:logs/web.err.log",
+  ...(LOG_DIR
+    ? ["itarang-crm-web:web.out.log", "itarang-crm-web:web.err.log"]
+    : []),
   "nginx:/var/log/nginx/error.log",
 ];
 
@@ -64,7 +88,14 @@ const LOG_FILES = (process.env.OPS_LOG_FILES || DEFAULT_LOG_FILES.join(","))
     // colon-bearing path must not lose everything after it.
     const at = entry.indexOf(":");
     if (at < 1) return null;
-    return { service: entry.slice(0, at), file: entry.slice(at + 1) };
+    const service = entry.slice(0, at);
+    const raw = entry.slice(at + 1);
+    // Relative paths resolve against OPS_LOG_DIR when set; otherwise against
+    // the cwd, which is what they did before — so an existing install that
+    // relied on that keeps working rather than silently changing meaning.
+    const file =
+      path.isAbsolute(raw) || !LOG_DIR ? raw : path.join(LOG_DIR, raw);
+    return { service, file };
   })
   .filter(Boolean);
 
@@ -556,8 +587,65 @@ async function cycle() {
   }
 }
 
+/**
+ * Say once, at startup, which log files were found and which were not.
+ *
+ * A missing log file is skipped silently during a cycle and that is correct —
+ * nginx is not on every box and pm2 has not created web.err.log until something
+ * writes to stderr, so warning every five minutes forever would be noise. But
+ * silence for the WHOLE configuration is how an agent ends up posting metrics
+ * happily while forwarding nothing, with an empty Logs & Errors page and no
+ * clue anywhere as to why.
+ *
+ * Once at startup costs nothing and is printed by the README's `OPS_ONCE=1`
+ * smoke test, which is exactly when somebody is looking.
+ */
+function reportLogFiles() {
+  if (LOG_FILES.length === 0) {
+    console.error(
+      "[ops-agent] no log files configured — set OPS_LOG_FILES, or OPS_LOG_DIR " +
+        "to the directory holding the CRM's web.out.log. No log lines will be forwarded.",
+    );
+    return;
+  }
+
+  let found = 0;
+  for (const { service, file } of LOG_FILES) {
+    let note;
+    try {
+      fs.accessSync(file, fs.constants.R_OK);
+      note = "ok";
+      found++;
+    } catch (e) {
+      // ENOENT is "not there yet", EACCES is "there but this user cannot read
+      // it" — a different fix, so name them differently.
+      note =
+        e && e.code === "EACCES"
+          ? "NOT READABLE by this user"
+          : "not found (will be picked up if it appears)";
+    }
+    console.log(`[ops-agent] log ${service}: ${file} — ${note}`);
+  }
+
+  if (found === 0) {
+    console.error(
+      "[ops-agent] none of the configured log files are readable — Logs & Errors " +
+        "will stay empty. Check OPS_LOG_DIR / OPS_LOG_FILES, and that this user " +
+        "can read them.",
+    );
+  }
+  if (!process.env.OPS_LOG_FILES && !LOG_DIR) {
+    console.error(
+      "[ops-agent] OPS_LOG_DIR is not set, so only nginx is being tailed — the " +
+        "CRM's own pm2 logs are NOT. Set OPS_LOG_DIR to the directory holding " +
+        "web.out.log.",
+    );
+  }
+}
+
 async function main() {
   if (RUN_ONCE) {
+    reportLogFiles();
     await cycle();
     return;
   }
@@ -565,6 +653,7 @@ async function main() {
   console.log(
     `[ops-agent] host=${HOST_NAME} interval=${Math.round(INTERVAL_MS / 1000)}s -> ${INGEST_URL}`,
   );
+  reportLogFiles();
   await cycle();
   setInterval(cycle, INTERVAL_MS);
 }

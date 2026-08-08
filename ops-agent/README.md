@@ -30,6 +30,31 @@ dashboard as a real measurement and hide the gap.
 
 The agent also tails log files and forwards new lines to `/operations/logs`.
 
+**Set `OPS_LOG_DIR`, or the CRM's own logs are never read.** The agent runs with
+`cwd` set to its own directory — deliberately, so it survives a half-finished
+deploy — so a relative path like `logs/web.out.log` resolves next to the *agent*,
+where only `ops-agent.out.log` lives. `OPS_LOG_DIR` is the directory holding the
+CRM's `web.out.log`; relative entries in `OPS_LOG_FILES` resolve against it, and
+the two pm2 defaults are only added when it is set. Absolute paths in
+`OPS_LOG_FILES` ignore it entirely.
+
+This used to be a default that could not work, and it failed *silently*: a
+missing log file is skipped without complaint (nginx genuinely is absent on some
+boxes), so the agent posted metrics happily while forwarding nothing and the
+Logs & Errors page sat empty with no diagnostic anywhere. The agent now prints
+every configured file and whether it is readable, once at startup — which the
+`OPS_ONCE=1` smoke test below shows you:
+
+```
+[ops-agent] log itarang-crm-web: /…/shared/logs/web.out.log — ok
+[ops-agent] log itarang-crm-web: /…/shared/logs/web.err.log — not found (will be picked up if it appears)
+[ops-agent] log nginx: /var/log/nginx/error.log — NOT READABLE by this user
+```
+
+`NOT READABLE` and `not found` are different fixes: the first is permissions
+(nginx logs are often `root`-owned — add the agent's user to the `adm` group or
+point at a readable copy), the second is a path that does not exist yet.
+
 **Exactly once, by byte offset.** Each file's offset is remembered in a local
 state file (`OPS_LOG_STATE_FILE`, default `.ops-agent-state.json` next to the
 agent). Every cycle reads from that offset to EOF. Not `tail -n`: a line count
@@ -111,6 +136,11 @@ export OPS_INGEST_URL=https://crm.itarang.com/api/operations/ingest/host
 export OPS_INGEST_SECRET=...
 export OPS_HOST_NAME=prod
 export OPS_CERT_DOMAIN=crm.itarang.com
+# Where the CRM's pm2 logs live — the directory holding web.out.log.
+# WITHOUT THIS, ONLY NGINX IS TAILED and Logs & Errors stays empty of app
+# errors. The agent runs from its own directory, so a relative path would
+# resolve next to the agent, not next to the CRM. See "Log forwarding".
+export OPS_LOG_DIR=/home/itarang-crm/htdocs/crm.itarang.com/shared/logs
 
 # 3. Smoke-test one cycle before daemonising
 OPS_ONCE=1 node ~/ops-agent/agent.js
