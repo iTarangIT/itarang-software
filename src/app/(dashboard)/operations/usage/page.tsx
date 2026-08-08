@@ -205,10 +205,15 @@ export default async function OperationsUsagePage({
               ? "—"
               : formatMetricValue(view.sessions.minutes, "minutes")}
           </p>
+          {/* Reports the FLAG, not an inference from an empty table. "No rows"
+              and "switched off" are different diagnoses and used to render
+              identically — see UsageView.heartbeat_enabled. */}
           <p className="mt-1 text-[10px] text-ink-muted">
-            {view.sessions.count === 0
-              ? "session tracking not enabled yet"
-              : `${formatCount(view.sessions.people)} people`}
+            {view.sessions.count > 0
+              ? `${formatCount(view.sessions.people)} people`
+              : view.heartbeat_enabled
+                ? "recording — no sessions in this window yet"
+                : "session tracking is OFF (USAGE_HEARTBEAT)"}
           </p>
         </div>
         <div
@@ -277,12 +282,25 @@ export default async function OperationsUsagePage({
             <>
               {view.modules.empty && (
                 <p className="mb-3 text-sm text-ink-muted">
-                  No module data in this window. All three causes look identical
-                  here, so check them in order: session tracking off
-                  (<code>USAGE_HEARTBEAT</code> is not <code>1</code>),{" "}
-                  <code>E-215</code> applied but nothing recorded yet, or nobody
-                  has used the CRM in {view.filters.days}{" "}
-                  {view.filters.days === 1 ? "day" : "days"}.
+                  {view.heartbeat_enabled ? (
+                    <>
+                      No module data in this window yet. Recording <strong>is</strong>{" "}
+                      on, so this means nobody has opened a tracked module in{" "}
+                      {view.filters.days}{" "}
+                      {view.filters.days === 1 ? "day" : "days"}. A ping is
+                      attributed on the 5-minute heartbeat, so a brief visit may
+                      not register — and this console itself is deliberately not
+                      tracked.
+                    </>
+                  ) : (
+                    <>
+                      Module usage is <strong>not being recorded</strong>:{" "}
+                      <code>USAGE_HEARTBEAT</code> is not set to <code>1</code>.
+                      The browser timer needs{" "}
+                      <code>NEXT_PUBLIC_USAGE_HEARTBEAT=1</code> as well, which is
+                      compiled in and so requires a restart.
+                    </>
+                  )}
                 </p>
               )}
               <div className="overflow-x-auto">
