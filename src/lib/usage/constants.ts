@@ -85,3 +85,88 @@ export const LS_OFF_UNTIL = "itarang.usage.off.v1";
 export function heartbeatClientEnabled(): boolean {
   return process.env.NEXT_PUBLIC_USAGE_HEARTBEAT === "1";
 }
+
+/**
+ * The modules /operations/usage reports on (E-215).
+ *
+ * A CLOSED ALLOW-LIST, and that is the entire privacy argument for per-module
+ * tracking. The browser resolves its own location against this list and sends
+ * the LABEL; the path itself never leaves the tab. See the E-215 header.
+ *
+ * Values are the first path segment, which is also what is stored — so
+ * `module_usage_daily.module` reads the same as the URL people talk about in
+ * standups, and no lookup table is needed to interpret the data.
+ *
+ * Adding one is a one-line change here plus a row in the page's label map.
+ * Until then a new module accumulates under `other`, visibly, which is the
+ * intended failure mode: a rising 'other' count is a prompt, not a silent loss.
+ */
+export const MODULES = [
+  "nbfc",
+  "inside-sales",
+  "dealer-portal",
+  "ceo",
+  "sales-head",
+  "asm",
+] as const;
+
+export type ModuleName = (typeof MODULES)[number] | "other";
+
+/** Everything not in MODULES. A real value, not a null — see above. */
+export const MODULE_OTHER = "other" as const;
+
+const MODULE_SET: ReadonlySet<string> = new Set(MODULES);
+
+/**
+ * Reduce a pathname to a module label.
+ *
+ * Matches on the FIRST SEGMENT ONLY, compared for equality rather than by
+ * prefix. `startsWith("/sales-head")` would quietly fold a future
+ * `/sales-headcount` into `sales-head` and nobody would ever notice the numbers
+ * were wrong; segment equality cannot.
+ *
+ * Everything else — including `/operations` itself, `/profile`, and the
+ * dashboard root — is `other`. The console deliberately does not track itself:
+ * the people reading the page would otherwise be its most active users.
+ *
+ * Pure, total, and never throws on a malformed input: this runs inside the
+ * heartbeat's ping path, where an exception would silently kill the timer for
+ * the rest of the tab's life.
+ */
+export function moduleFromPath(pathname: string | null | undefined): ModuleName {
+  if (typeof pathname !== "string" || pathname.length === 0) {
+    return MODULE_OTHER;
+  }
+
+  // Strip any query or hash a caller passed in by mistake, then take segment 1.
+  // Split on "/" and skip the empty string before the leading slash.
+  const first = pathname.split(/[?#]/, 1)[0]!.split("/")[1] ?? "";
+  const segment = first.trim().toLowerCase();
+
+  return MODULE_SET.has(segment) ? (segment as ModuleName) : MODULE_OTHER;
+}
+
+/**
+ * Coerce a module label that arrived over the wire onto the allow-list.
+ *
+ * The client already maps its own path through moduleFromPath(), so in normal
+ * operation this is a formality — but it sits on a WRITE PATH TAKING A STRING
+ * FROM A BROWSER, and the one thing that must never happen is an arbitrary
+ * string reaching the `module` column. That column deliberately has no CHECK
+ * constraint (an unknown label must land as 'other' and stay visible rather than
+ * fail somebody's heartbeat), which puts the entire burden here.
+ *
+ * Anything unrecognised becomes 'other': a stale client after a rename, a
+ * hand-crafted POST, or a caller that skipped moduleFromPath and sent a full
+ * path. That last case is why this does NOT fall back to moduleFromPath() — a
+ * path arriving here is a bug to be starved of data, not a format to support.
+ *
+ * Lives beside moduleFromPath rather than in track.ts so it can be unit tested;
+ * track.ts imports @/lib/db and therefore cannot be. Same split, same reason, as
+ * usageMath.ts vs usage.ts.
+ */
+export function normaliseModule(value: unknown): ModuleName {
+  if (typeof value !== "string") return MODULE_OTHER;
+  const clean = value.trim().toLowerCase();
+  return MODULE_SET.has(clean) ? (clean as ModuleName) : MODULE_OTHER;
+}

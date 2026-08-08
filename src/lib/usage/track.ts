@@ -23,6 +23,8 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 
+import { normaliseModule } from "./constants";
+
 /**
  * Re-exported from ./constants so this module's import surface is unchanged.
  * It cannot be DEFINED here: this file imports @/lib/db, so a client component
@@ -205,5 +207,93 @@ export async function recordHeartbeat(params: {
     `);
   } catch (e) {
     console.error("[usage] recordHeartbeat failed:", e);
+  }
+}
+
+/**
+ * Which of the two buckets a role counts in (E-215).
+ *
+ * NOT the role itself. There is exactly one ceo, so (day, 'nbfc', 'ceo') would
+ * be a per-person row with an aggregate's name on it — and the same is true of
+ * any role the company happens to staff with one person, with nothing in the
+ * schema to notice when that becomes the case. Two permanently-crowded buckets
+ * cannot degrade that way. Full argument in the E-215 header.
+ */
+export function roleBucket(role: string | null | undefined): "internal" | "external" {
+  return isExternalRole(role) ? "external" : "internal";
+}
+
+/**
+ * Record one heartbeat against a module (E-215).
+ *
+ * DELIBERATELY HAS NO EXTERNAL-ROLE EARLY RETURN, unlike recordHeartbeat above.
+ * That asymmetry is the point of the whole design, so it is written down rather
+ * than left to be discovered as an inconsistency:
+ *
+ *   recordHeartbeat   writes user_id. Externals are excluded, because
+ *                     session-timing a business partner is a different product
+ *                     under a different consent basis.
+ *   recordModuleUsage writes no user_id and cannot. Externals are INCLUDED and
+ *                     bucketed, because "are dealers using the dealer portal"
+ *                     is a legitimate ops question that the aggregate answers
+ *                     without measuring any individual dealer.
+ *
+ * The counter and the dedupe key move in ONE statement, as a data-modifying CTE.
+ * Not for the round trip saved — for atomicity: two statements could increment
+ * `pings` and then fail before the visit key landed, and the next ping would
+ * count the same session as new. `sessions` would then drift upward forever
+ * with no way to detect it, because there is nothing left to recount from.
+ *
+ * The day is IST, matching every other day boundary in the console.
+ *
+ * Never throws.
+ */
+export async function recordModuleUsage(params: {
+  role: string | null | undefined;
+  sessionId: string;
+  module: unknown;
+}): Promise<void> {
+  if (!usageHeartbeatEnabled()) return;
+
+  const moduleName = normaliseModule(params.module);
+  const bucket = roleBucket(params.role);
+
+  try {
+    await db.execute(sql`
+      WITH d AS (
+        SELECT (NOW() AT TIME ZONE 'Asia/Kolkata')::date AS day
+      ),
+      -- First visit for this (session, module) today? The INSERT returns a row
+      -- only when the key is new, so COUNT(*) below is exactly 0 or 1. The
+      -- session id is hashed here and never stored in the clear — see the E-215
+      -- header for what that does and does not protect against.
+      k AS (
+        INSERT INTO module_visit_keys (visit_key, day)
+        SELECT
+          -- Every parameter cast explicitly. Postgres resolves concatenation
+          -- over two untyped parameters by guessing, and a guess that lands on
+          -- a non-text overload fails with "operator is not unique" at runtime —
+          -- which this write path would then swallow, leaving an empty table
+          -- and no clue why.
+          md5(${params.sessionId}::text || ':' || ${moduleName}::text
+              || ':' || d.day::text),
+          d.day
+        FROM d
+        ON CONFLICT (visit_key) DO NOTHING
+        RETURNING 1
+      )
+      INSERT INTO module_usage_daily (day, module, role_bucket, pings, sessions)
+      SELECT d.day, ${moduleName}::varchar, ${bucket}::varchar, 1,
+             (SELECT COUNT(*) FROM k)::int
+      FROM d
+      ON CONFLICT (day, module, role_bucket) DO UPDATE SET
+        pings      = module_usage_daily.pings + 1,
+        sessions   = module_usage_daily.sessions + EXCLUDED.sessions,
+        updated_at = NOW()
+    `);
+  } catch (e) {
+    // Swallowed like every other write here. If E-215 is unapplied this log is
+    // the only signal, since the dashboard would otherwise just read empty.
+    console.error("[usage] recordModuleUsage failed:", e);
   }
 }

@@ -512,7 +512,8 @@ export async function startOpsMonitorTicker() {
           `[instrumentation:ops-monitor] daily rollup for ${result.snapshot_date}: ` +
             `${result.snapshots_written} snapshots, pruned ${result.samples_pruned} samples / ` +
             `${result.logs_pruned} logs / ${result.sessions_pruned} sessions / ` +
-            `${result.login_events_pruned} login events`,
+            `${result.login_events_pruned} login events / ` +
+            `${result.module_visit_keys_pruned} module keys`,
         );
       }
     } catch (err) {

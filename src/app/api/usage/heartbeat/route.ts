@@ -19,7 +19,11 @@ import { NextResponse } from "next/server";
 
 import { requireAuth } from "@/lib/auth-utils";
 import { isUuid } from "@/lib/operations/usageMath";
-import { recordHeartbeat, usageHeartbeatEnabled } from "@/lib/usage/track";
+import {
+  recordHeartbeat,
+  recordModuleUsage,
+  usageHeartbeatEnabled,
+} from "@/lib/usage/track";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,17 +41,35 @@ export async function POST(req: Request) {
     const user = await requireAuth();
     const body = (await req.json().catch(() => null)) as {
       session_id?: unknown;
+      module?: unknown;
     } | null;
 
     // A malformed session id can only be a bug or a probe. Either way there is
     // nothing to record and nothing useful to say back.
     if (!isUuid(body?.session_id)) return NextResponse.json({ ok: true });
 
-    await recordHeartbeat({
-      userId: user.id,
-      role: user.role,
-      sessionId: body!.session_id as string,
-    });
+    const sessionId = body!.session_id as string;
+
+    // Two INDEPENDENT writes, not one call that does both, because they do not
+    // cover the same people: recordHeartbeat excludes external roles (it stores
+    // a user_id), while recordModuleUsage includes them (it cannot). Chaining
+    // them would have made the narrower rule silently govern both.
+    //
+    // `module` is passed through unvalidated on purpose — normaliseModule()
+    // owns that, so the allow-list is enforced in one place rather than once
+    // here and again in the writer.
+    await Promise.all([
+      recordHeartbeat({
+        userId: user.id,
+        role: user.role,
+        sessionId,
+      }),
+      recordModuleUsage({
+        role: user.role,
+        sessionId,
+        module: body!.module,
+      }),
+    ]);
   } catch (e) {
     // Includes the unauthenticated case: requireAuth() redirects, which throws
     // NEXT_REDIRECT here. Logged, never surfaced.

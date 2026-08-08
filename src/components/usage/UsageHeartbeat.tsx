@@ -14,6 +14,7 @@ import {
   MAX_SESSION_MS,
   OFF_CACHE_MS,
   heartbeatClientEnabled,
+  moduleFromPath,
 } from "@/lib/usage/constants";
 
 /**
@@ -24,10 +25,19 @@ import {
  * dashboard route, including /nbfc and /risk-head, which skip the sidebar and
  * header entirely.
  *
- * WHAT IT SENDS: a session id and nothing else. No page path, no page title, no
- * scroll position, no timing, no referrer. The server derives everything else
- * from the auth cookie. That is the whole payload, and it is the reason the
- * staff notice can say what it says.
+ * WHAT IT SENDS: a session id, and a module label from a closed seven-value
+ * allow-list. Nothing else. No page path, no page title, no scroll position, no
+ * timing, no referrer, no query string. The server derives everything else from
+ * the auth cookie.
+ *
+ * The module label is the one thing added since Phase 2, and the distinction it
+ * rests on is worth being precise about. The tab resolves its OWN location
+ * through moduleFromPath() and transmits the result:
+ * `/nbfc/applications/PL-2291/documents?tab=kyc` leaves this component as the
+ * four letters `nbfc`. The path is read in the browser and never transmitted,
+ * and the table it lands in (E-215 module_usage_daily) has no user_id column
+ * and no path column, so the aggregate cannot be unwound into a browsing
+ * history even by someone with the database.
  *
  * WHAT IT REFUSES TO DO:
  *   · ping while the tab is hidden — a tab left open in the background is not
@@ -170,7 +180,17 @@ export function UsageHeartbeat() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ session_id: sessionId }),
+          // Read from window.location at PING TIME rather than from
+          // usePathname(). This effect has empty deps on purpose (see the note
+          // at the bottom), so it never re-runs on navigation and has no
+          // subscription to the router — which means the module reflects where
+          // the person is when the ping fires, not where they were when the tab
+          // mounted. Reading location directly is what keeps those two facts
+          // compatible.
+          body: JSON.stringify({
+            session_id: sessionId,
+            module: moduleFromPath(window.location.pathname),
+          }),
         });
         const json = (await res.json().catch(() => null)) as {
           enabled?: boolean;
