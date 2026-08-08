@@ -29,6 +29,12 @@ module.exports = {
         OPS_HOST_NAME: process.env.OPS_HOST_NAME || "",
         OPS_CERT_DOMAIN: process.env.OPS_CERT_DOMAIN || "",
         OPS_INTERVAL_MS: process.env.OPS_INTERVAL_MS || "300000",
+        // REQUIRED for application log forwarding. `cwd` above is the agent's
+        // own directory (deliberately — it must survive a mid-flight deploy),
+        // so a relative log path resolves next to THIS file, not next to the
+        // CRM. Without OPS_LOG_DIR the agent tails nginx only and says so at
+        // startup. Point it at the directory holding web.out.log.
+        OPS_LOG_DIR: process.env.OPS_LOG_DIR || "",
       },
       // The agent is ~10 MB resident. Anything near this is a leak, and a
       // restart is the right response for a process with no in-memory state.
