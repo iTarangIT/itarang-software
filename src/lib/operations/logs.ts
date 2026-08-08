@@ -15,66 +15,21 @@ import { and, eq, gt, ilike, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { opsLogEvents } from "@/lib/db/schema";
 
-export type LogLevel = "error" | "warn" | "info";
+import { MAX_GROUPS, MAX_LINES, type LogFilters } from "./logsMath";
 
-export interface LogFilters {
-  host?: string;
-  service?: string;
-  level?: LogLevel;
-  /** Case-insensitive substring over `message`. */
-  q?: string;
-  /** Look-back window. Clamped to MAX_HOURS. */
-  hours: number;
-  /** Restrict to one error group. */
-  fingerprint?: string;
-}
-
-/** 14 days is the retention; asking for more just scans the whole table. */
-export const MAX_HOURS = 24 * 14;
-export const DEFAULT_HOURS = 24;
-/** Raw lines rendered at once. Beyond this, narrow the filters. */
-export const MAX_LINES = 300;
-const MAX_GROUPS = 25;
-const MAX_SEARCH_CHARS = 200;
-
-/**
- * Normalise whatever arrived in the query string.
- *
- * Everything here is user input reaching SQL. Values are bound as parameters
- * (Drizzle never interpolates), but clamping still matters: an unbounded `hours`
- * turns a filtered read into a full scan of a table that grows with every
- * incident.
- */
-export function parseFilters(
-  params: Record<string, string | string[] | undefined>,
-): LogFilters {
-  const one = (key: string): string | undefined => {
-    const value = params[key];
-    const raw = Array.isArray(value) ? value[0] : value;
-    const trimmed = raw?.trim();
-    return trimmed ? trimmed : undefined;
-  };
-
-  const level = one("level")?.toLowerCase();
-  const hours = Number(one("hours") ?? DEFAULT_HOURS);
-
-  return {
-    host: one("host")?.slice(0, 32),
-    service: one("service")?.slice(0, 120),
-    level:
-      level === "error" || level === "warn" || level === "info"
-        ? level
-        : undefined,
-    q: one("q")?.slice(0, MAX_SEARCH_CHARS),
-    hours:
-      Number.isFinite(hours) && hours > 0 ? Math.min(hours, MAX_HOURS) : DEFAULT_HOURS,
-    // sha256 hex — anything else cannot match a stored row, so reject it here
-    // rather than run a guaranteed-empty query.
-    fingerprint: /^[0-9a-f]{64}$/.test(one("fingerprint") ?? "")
-      ? one("fingerprint")
-      : undefined,
-  };
-}
+// Re-exported so every existing import of "@/lib/operations/logs" keeps working
+// — the pure half moved out to become testable, not to move callers around.
+export {
+  DEFAULT_HOURS,
+  MAX_GROUPS,
+  MAX_HOURS,
+  MAX_LINES,
+  MAX_SEARCH_CHARS,
+  parseFilters,
+  parseHours,
+  type LogFilters,
+  type LogLevel,
+} from "./logsMath";
 
 function whereFor(filters: LogFilters): SQL | undefined {
   const clauses: SQL[] = [
@@ -133,6 +88,17 @@ export interface LogsView {
   /** True when the cap truncated the result — the UI must say so. */
   truncated: boolean;
   groups: ErrorGroup[];
+  /**
+   * How many distinct fingerprints match, IGNORING the MAX_GROUPS cap.
+   *
+   * Separate from `groups.length` because they answer different questions and
+   * were previously conflated: the page rendered `groups.length` in a badge
+   * labelled "distinct", which pinned at 25 forever and so read as "there are 25
+   * distinct errors" during an incident with hundreds.
+   */
+  distinct_groups: number;
+  /** True when `groups` is a top-N slice rather than the whole set. */
+  groups_truncated: boolean;
   rate: RatePoint[];
   totals: { errors: number; warns: number; infos: number };
   facets: { hosts: string[]; services: string[] };
@@ -159,8 +125,11 @@ export async function getLogsView(filters: LogFilters): Promise<LogsView> {
       .orderBy(sql`${opsLogEvents.logged_at} DESC`)
       .limit(MAX_LINES + 1),
 
-    // Grouped by fingerprint. DISTINCT ON picks the newest message per group as
-    // the sample, so the table shows a real line rather than a normalised one.
+    // Grouped by fingerprint. `(ARRAY_AGG(x ORDER BY logged_at DESC))[1]` picks
+    // the newest value per group — so the sample shown is a real line as it was
+    // logged, not the normalised form the fingerprint was computed from.
+    // (Not DISTINCT ON, which an earlier version of this comment claimed: that
+    // cannot coexist with the GROUP BY aggregates this needs.)
     db.execute(sql`
       SELECT
         fingerprint,
@@ -178,24 +147,61 @@ export async function getLogsView(filters: LogFilters): Promise<LogsView> {
       LIMIT ${MAX_GROUPS}
     `),
 
-    // Hourly error/warn counts for the sparkline. Buckets, not raw rows: a busy
-    // hour is thousands of rows and the chart needs 24 numbers.
+    // Hourly error/warn counts for the chart. Buckets, not raw rows: a busy hour
+    // is thousands of rows and the chart needs one number per hour.
+    //
+    // GAP-FILLED, via generate_series LEFT JOINed to the counts. The previous
+    // version emitted only hours that HAD rows, which defeated the chart's whole
+    // stated purpose — LogRateChart's comment argues that "an hour with no errors
+    // is a real, meaningful zero" and it draws a baseline tick for one, but it
+    // never received those rows. Bars are positioned by array index, so three
+    // scattered hours in a 14-day window rendered as three bars spread evenly
+    // across the axis, reading as continuous activity.
+    //
+    // BUCKETED IN IST, like every other day/hour boundary in the console. On a
+    // UTC session (which is what the pooled connection gives us) truncating the
+    // raw timestamptz put boundaries at :30 in IST, so every bar was labelled
+    // 05:30, 06:30 and so on. The join happens in naive IST space and the result
+    // is converted back to timestamptz, so what reaches JS is still an instant
+    // and formatIst() cannot double-shift it.
     db.execute(sql`
+      WITH bounds AS (
+        SELECT
+          DATE_TRUNC('hour', (NOW() AT TIME ZONE 'Asia/Kolkata')
+                             - MAKE_INTERVAL(hours => ${filters.hours})) AS from_h,
+          DATE_TRUNC('hour', (NOW() AT TIME ZONE 'Asia/Kolkata'))        AS to_h
+      ),
+      buckets AS (
+        SELECT generate_series(from_h, to_h, INTERVAL '1 hour') AS bucket
+        FROM bounds
+      ),
+      counted AS (
+        SELECT
+          DATE_TRUNC('hour', logged_at AT TIME ZONE 'Asia/Kolkata') AS bucket,
+          COUNT(*) FILTER (WHERE level = 'error')::int AS errors,
+          COUNT(*) FILTER (WHERE level = 'warn')::int  AS warns
+        FROM ops_log_events
+        WHERE ${where}
+        GROUP BY 1
+      )
       SELECT
-        DATE_TRUNC('hour', logged_at) AS bucket,
-        COUNT(*) FILTER (WHERE level = 'error')::int AS errors,
-        COUNT(*) FILTER (WHERE level = 'warn')::int  AS warns
-      FROM ops_log_events
-      WHERE ${where}
-      GROUP BY bucket
-      ORDER BY bucket
+        (b.bucket AT TIME ZONE 'Asia/Kolkata') AS bucket,
+        COALESCE(c.errors, 0)::int             AS errors,
+        COALESCE(c.warns, 0)::int              AS warns
+      FROM buckets b
+      LEFT JOIN counted c ON c.bucket = b.bucket
+      ORDER BY b.bucket
     `),
 
+    // COUNT(DISTINCT fingerprint) rides along on the totals query rather than
+    // costing a fifth round trip — same window, same predicate, one more
+    // aggregate over rows already being scanned.
     db.execute(sql`
       SELECT
         COUNT(*) FILTER (WHERE level = 'error')::int AS errors,
         COUNT(*) FILTER (WHERE level = 'warn')::int  AS warns,
-        COUNT(*) FILTER (WHERE level = 'info')::int  AS infos
+        COUNT(*) FILTER (WHERE level = 'info')::int  AS infos,
+        COUNT(DISTINCT fingerprint)::int             AS distinct_groups
       FROM ops_log_events
       WHERE ${where}
     `),
@@ -234,11 +240,15 @@ export async function getLogsView(filters: LogFilters): Promise<LogsView> {
   const totalRow = (totalRows as unknown as Array<Record<string, unknown>>)[0];
   const facets = facetRows as unknown as Array<Record<string, unknown>>;
 
+  const distinctGroups = Number(totalRow?.distinct_groups ?? 0);
+
   return {
     filters,
     lines: lineRows.slice(0, MAX_LINES) as LogLine[],
     truncated: lineRows.length > MAX_LINES,
     groups,
+    distinct_groups: distinctGroups,
+    groups_truncated: distinctGroups > groups.length,
     rate,
     totals: {
       errors: Number(totalRow?.errors ?? 0),

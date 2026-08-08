@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCount, formatIst } from "@/lib/operations/format";
 import {
   getLogsView,
+  MAX_GROUPS,
   MAX_LINES,
   parseFilters,
   type ErrorGroup,
@@ -162,8 +163,11 @@ export default async function OperationsLogsPage({
               {formatCount(view.totals.warns)} warnings
             </Badge>
             <Badge variant="muted">{formatCount(view.totals.infos)} info</Badge>
+            {/* The TRUE distinct count, not groups.length — that is capped at
+                MAX_GROUPS and used to pin this badge at 25 during exactly the
+                incidents where the real number is the thing you need. */}
             <Badge variant="muted">
-              {formatCount(view.groups.length)} distinct
+              {formatCount(view.distinct_groups)} distinct
             </Badge>
           </div>
           <LogRateChart points={view.rate} />
@@ -195,13 +199,18 @@ export default async function OperationsLogsPage({
       ) : (
         <>
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Top errors</CardTitle>
-              <p className="mt-1 text-xs text-ink-muted">
-                Grouped by fingerprint — the message with ids, numbers and
-                timestamps normalised out, so the same error at different values
-                counts once.
-              </p>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">Top errors</CardTitle>
+                <p className="mt-1 text-xs text-ink-muted">
+                  Grouped by fingerprint — the message with ids, numbers and
+                  timestamps normalised out, so the same error at different
+                  values counts once.
+                  {view.groups_truncated &&
+                    ` Showing the ${MAX_GROUPS} largest of ${formatCount(view.distinct_groups)} groups — narrow the window or the filters to see the rest.`}
+                </p>
+              </div>
+              {view.groups_truncated && <Badge variant="warning">Top {MAX_GROUPS}</Badge>}
             </CardHeader>
             <CardContent>
               {view.groups.length === 0 ? (
