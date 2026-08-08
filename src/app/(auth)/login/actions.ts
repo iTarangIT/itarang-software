@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { recordLoginEvent } from "@/lib/usage/track";
 import { eq } from "drizzle-orm";
 
 export async function login(formData: FormData) {
@@ -55,10 +54,10 @@ export async function login(formData: FormData) {
   });
 
   // NOTE: nothing imports this file — the live login is the client component in
-  // ./page.tsx, which POSTs /api/usage/login-event instead. This call is here so
-  // that reviving the server action does not silently create a hole in the login
-  // record. It cannot throw (recordLoginEvent swallows its own errors).
-  await recordLoginEvent({ id: appUser.id, role: appUser.role });
+  // ./page.tsx. No usage-tracking call is needed here either way: sign-ins are
+  // recorded server-side in /api/user/profile, keyed off Supabase's own
+  // last_sign_in_at, and every post-login destination calls it. See
+  // src/lib/usage/track.ts.
 
   revalidatePath("/", "layout");
 
