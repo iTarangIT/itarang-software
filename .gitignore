@@ -115,3 +115,8 @@ docs/nbfc/_simple/
 
 final-prod.txt
 azure-architecture.md
+
+# ops-agent runtime files. The agent defaults OPS_LOG_STATE_FILE to its own
+# directory, so smoke-testing from a checkout would otherwise dirty the tree.
+ops-agent/.ops-agent-state.json
+ops-agent/logs/
