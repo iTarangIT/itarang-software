@@ -5,6 +5,8 @@ import {
   DEFAULT_RANGE,
   fillMonths,
   fillRange,
+  formatDayLabel,
+  isCustomRange,
   monthEnd,
   monthLabel,
   monthOptions,
@@ -337,5 +339,198 @@ describe("fillMonths", () => {
       "2026-01",
       "2026-02",
     ]);
+  });
+});
+
+// ------------------------------------------------------------ custom range --
+//
+// An arbitrary start/end window, which is NOT constrained to whole calendar
+// months. These are the cases where a plausible-looking range can silently
+// describe a different window than the URL claims.
+
+describe("parseRange — custom windows", () => {
+  it("accepts the from/to pair the date form submits", () => {
+    expect(parseRange({ from: "2026-01-12", to: "2026-04-27" }, NOW)).toBe(
+      "2026-01-12..2026-04-27",
+    );
+  });
+
+  it("accepts the canonical a..b form every internal link uses", () => {
+    expect(parseRange({ range: "2026-01-12..2026-04-27" }, NOW)).toBe(
+      "2026-01-12..2026-04-27",
+    );
+  });
+
+  it("resolves both URL shapes to the identical key", () => {
+    // The whole point of canonicalising: a pasted form URL and a generated
+    // link must describe the same window, not two windows that merely agree.
+    const a = parseRange({ from: "2026-02-01", to: "2026-03-01" }, NOW);
+    const b = parseRange({ range: "2026-02-01..2026-03-01" }, NOW);
+    expect(a).toBe(b);
+    expect(resolveRange(a, NOW)).toEqual(resolveRange(b, NOW));
+  });
+
+  it("lets the pair win when both a preset and a pair are present", () => {
+    // Only reachable by hand-writing a URL — a GET form replaces the whole
+    // query string — but the precedence must be defined rather than emergent.
+    expect(parseRange({ range: "6m", from: "2026-02-01", to: "2026-02-05" }, NOW))
+      .toBe("2026-02-01..2026-02-05");
+  });
+
+  it("accepts a single-day window", () => {
+    expect(parseRange({ from: "2026-08-05", to: "2026-08-05" }, NOW)).toBe(
+      "2026-08-05..2026-08-05",
+    );
+  });
+
+  it("rejects an inverted range rather than silently swapping it", () => {
+    // Swapping would render a window the user never asked for while the URL
+    // kept claiming the one they typed.
+    expect(parseRange({ from: "2026-04-27", to: "2026-01-12" }, NOW)).toBe(
+      DEFAULT_RANGE,
+    );
+  });
+
+  it("clamps a future end date instead of discarding the range", () => {
+    // A date picker defaulting to end-of-month is the common case; future days
+    // hold no data, so trimming changes nothing that is displayed.
+    expect(parseRange({ from: "2026-08-01", to: "2026-12-31" }, NOW)).toBe(
+      "2026-08-01..2026-08-07",
+    );
+  });
+
+  it("rejects a window that lies entirely in the future", () => {
+    expect(parseRange({ from: "2027-01-01", to: "2027-02-01" }, NOW)).toBe(
+      DEFAULT_RANGE,
+    );
+  });
+
+  it("rejects dates that match the pattern but do not exist", () => {
+    // 2026-02-31 and 2025-02-29 both pass a regex and neither is a real day.
+    expect(parseRange({ from: "2026-02-01", to: "2026-02-31" }, NOW)).toBe(
+      DEFAULT_RANGE,
+    );
+    expect(parseRange({ from: "2025-02-29", to: "2025-03-01" }, NOW)).toBe(
+      DEFAULT_RANGE,
+    );
+    // ...but a real leap day is fine.
+    expect(parseRange({ from: "2024-02-29", to: "2024-03-01" }, NOW)).toBe(
+      "2024-02-29..2024-03-01",
+    );
+  });
+
+  it("rejects a span beyond the fill ceiling rather than truncating the chart", () => {
+    // 400 is MAX_FILL_DAYS. Truncating would draw a chart that silently stops
+    // short of the window named in the URL.
+    expect(parseRange({ from: "2020-01-01", to: "2026-08-07" }, NOW)).toBe(
+      DEFAULT_RANGE,
+    );
+  });
+
+  it("rejects malformed halves", () => {
+    for (const [from, to] of [
+      ["2026-1-12", "2026-04-27"],
+      ["2026-01-12", "27-04-2026"],
+      ["2026-01-12", ""],
+      ["'; DROP TABLE ai_call_logs; --", "2026-04-27"],
+      ["2026-01-12", "2026-04-27T00:00:00Z"],
+    ]) {
+      expect(parseRange({ from, to }, NOW)).toBe(DEFAULT_RANGE);
+    }
+    expect(parseRange({ range: "2026-01-12..bogus" }, NOW)).toBe(DEFAULT_RANGE);
+    expect(parseRange({ range: "2026-01-12.." }, NOW)).toBe(DEFAULT_RANGE);
+  });
+
+  it("still needs BOTH halves — one alone is not a window", () => {
+    expect(parseRange({ from: "2026-01-12" }, NOW)).toBe(DEFAULT_RANGE);
+    expect(parseRange({ to: "2026-04-27" }, NOW)).toBe(DEFAULT_RANGE);
+  });
+});
+
+describe("resolveRange — custom windows", () => {
+  it("uses the exact bounds, not the enclosing months", () => {
+    // The requirement: a range must NOT be rounded out to whole months.
+    const r = resolveRange("2026-01-12..2026-04-27", NOW);
+    expect(r.from).toBe("2026-01-12");
+    expect(r.to).toBe("2026-04-27");
+  });
+
+  it("buckets by span using the same rule as the presets", () => {
+    // A few days stays daily...
+    expect(resolveRange("2026-08-01..2026-08-08", NOW).bucket).toBe("day");
+    // ...92 days is the boundary, still daily...
+    expect(resolveRange("2026-05-08..2026-08-07", NOW).bucket).toBe("day");
+    // ...and a long window switches to month bars rather than a 3,000px SVG.
+    expect(resolveRange("2026-01-12..2026-08-07", NOW).bucket).toBe("month");
+  });
+
+  it("labels a multi-day window readably", () => {
+    const r = resolveRange("2026-01-12..2026-04-27", NOW);
+    expect(r.label).toBe("12 Jan 2026 – 27 Apr 2026");
+  });
+
+  it("collapses a single-day window to one date", () => {
+    const r = resolveRange("2026-08-05..2026-08-05", NOW);
+    expect(r.label).toBe("5 Aug 2026");
+    expect(r.short).toBe("5 Aug");
+  });
+
+  it("keeps the badge short within one year and disambiguates across years", () => {
+    expect(resolveRange("2026-01-12..2026-04-27", NOW).short).toBe("12 Jan–27 Apr");
+    expect(resolveRange("2025-12-20..2026-01-05", NOW).short).toBe(
+      "20 Dec–5 Jan 2026",
+    );
+  });
+
+  it("echoes the key so links round-trip", () => {
+    expect(resolveRange("2026-01-12..2026-04-27", NOW).key).toBe(
+      "2026-01-12..2026-04-27",
+    );
+  });
+});
+
+describe("custom windows reuse the existing machinery", () => {
+  it("prevRange gives an equal-length preceding window", () => {
+    // 5-8 Aug is 4 days; its predecessor is the 4 days ending 4 Aug.
+    expect(prevRange(resolveRange("2026-08-05..2026-08-08", NOW))).toEqual({
+      from: "2026-08-01",
+      to: "2026-08-04",
+    });
+  });
+
+  it("fillRange enumerates exactly the window, both bounds included", () => {
+    const out = fillRange(new Map(), "2026-08-05", "2026-08-08");
+    expect(out.map((d) => d.day)).toEqual([
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-08",
+    ]);
+  });
+
+  it("fillRange does not run past a window that ended in the past", () => {
+    const out = fillRange(new Map(), "2026-02-10", "2026-02-12");
+    expect(out).toHaveLength(3);
+    expect(out.at(-1)!.day).toBe("2026-02-12");
+  });
+
+  it("an empty window still yields zero-filled buckets to chart", () => {
+    // Not fabricated data — explicit zeros, which is what "no calls" looks like.
+    const out = fillRange(new Map(), "2026-03-01", "2026-03-03");
+    expect(out.every((d) => d.calls === 0 && d.cost_paise === 0)).toBe(true);
+  });
+});
+
+describe("isCustomRange / formatDayLabel", () => {
+  it("distinguishes custom windows from presets and months", () => {
+    expect(isCustomRange("2026-01-12..2026-04-27")).toBe(true);
+    for (const k of ["mtd", "3m", "6m", "all", "2026-02"]) {
+      expect(isCustomRange(k)).toBe(false);
+    }
+  });
+
+  it("formats a day the way the caption reads it", () => {
+    expect(formatDayLabel("2026-01-12")).toBe("12 Jan 2026");
+    expect(formatDayLabel("2026-12-05")).toBe("5 Dec 2026");
   });
 });
