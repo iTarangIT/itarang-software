@@ -82,6 +82,88 @@ vars gate it, and they live in the app's env, not in a GitHub secret of their ow
 
 Agent install is per-box and manual: see `ops-agent/README.md`.
 
+## CRM usage analytics env vars (E-214 / E-215)
+
+`/operations/usage` stays empty — 0 sessions, no module data — however many
+people log in, until these are set. Three switches, nested; see §8 of
+`OPERATIONS_RUNBOOK.md` for what each one records.
+
+| Var | Value | Read |
+| --- | --- | --- |
+| `USAGE_TRACKING` | `1` (defaults ON; `0` is the kill switch) | runtime, server |
+| `USAGE_HEARTBEAT` | `1` (**defaults OFF**) | runtime, server |
+| `NEXT_PUBLIC_USAGE_HEARTBEAT` | `1` (**defaults OFF**) | **build time, client** |
+
+Both heartbeat vars are tested with `=== "1"` — the inverse of
+`USAGE_TRACKING`'s `!== "0"` — so an absent variable means OFF, not ON. Setting
+only one of the two gets you nothing: the server flag with no client flag means
+no browser ever pings, and the client flag with no server flag means every ping
+is answered `{enabled:false}` and discarded.
+
+> ### The one that catches people: `NEXT_PUBLIC_*` is baked into the bundle
+>
+> The E-210 guidance above says sandbox env vars are edited **on the box** and
+> that changing the GitHub secret does not propagate. That is true for
+> server-side vars. **It is wrong for `NEXT_PUBLIC_USAGE_HEARTBEAT`**, and
+> following it will leave the browser timer permanently off while everything
+> looks configured.
+>
+> Both deploy lanes decode the GitHub secret into `.env` and *then* run
+> `next build` (`deploy-production.yml` / `deploy-sandbox.yml`, "Write .env from
+> …_ENV_FILE_B64" immediately before "Build"). `next build` inlines
+> `NEXT_PUBLIC_*` into the client chunks at that moment. A value added to
+> `shared/.env` on the box afterwards is never seen by the bundle — the bundle
+> was built on the runner, from the secret.
+>
+> So `NEXT_PUBLIC_USAGE_HEARTBEAT` **must be in the GitHub secret**
+> (`SANDBOX_ENV_FILE_B64` / `PROD_ENV_FILE_B64`) and a deploy must run. There is
+> no on-box shortcut for it.
+
+**Sandbox**
+
+1. Add all three vars to `SANDBOX_ENV_FILE_B64` (decode → edit → re-base64 →
+   update the secret). Required for the client flag; there is no alternative.
+2. Re-run the sandbox deploy so a fresh `next build` inlines it.
+3. `shared/.env` is seeded once and edited on the box, so also add
+   `USAGE_TRACKING` / `USAGE_HEARTBEAT` there and reload pm2 — otherwise the
+   server half stays off until someone happens to reseed it.
+
+**Production**
+
+1. Add all three to `PROD_ENV_FILE_B64`, then deploy. Prod rewrites
+   `shared/.env` from that secret on every deploy, so the secret is the source
+   of truth and an on-box-only edit is erased by the next release.
+2. Nothing else to do — the same deploy both rebuilds the bundle and rewrites
+   `shared/.env`.
+
+**Verifying it took**, in increasing order of confidence:
+
+```bash
+# 1. server flag — an UNAUTHENTICATED probe distinguishes it, because the flag
+#    is checked before auth. {"ok":true,"enabled":false} = OFF, {"ok":true} = ON
+curl -s -X POST https://<host>/api/usage/heartbeat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"00000000-0000-4000-8000-000000000001"}'
+
+# 2. client flag — the compiled chunk should contain the inlined comparison
+#    `return "1" === "1"` rather than `return undefined === "1"`
+curl -s https://<host>/_next/static/chunks/app/%28dashboard%29/layout-*.js \
+  | grep -o 'heartbeatClientEnabled() {[^;]*;'
+```
+
+3. Open a tracked module (`/nbfc`, `/ceo`, `/asm`, …) and wait one heartbeat
+   interval (5 min), then check `/operations/usage`. Note the console itself is
+   deliberately **not** tracked — time spent on `/operations/*` lands under
+   `other`, so verifying from that page alone will show module usage as empty.
+
+**Before switching the server flag on in production:** `USAGE_HEARTBEAT` is what
+starts recording per-person session data about every employee.
+`src/lib/usage/constants.ts` records the intended sequence — the client flag on
+and the server flag off is a deliberate posture, with the server flag switched
+"on deliberately, after the staff notice". The notice text is already rendered on
+`/operations/usage`; the decision to have circulated it is yours, not the
+deploy's.
+
 ## SSH key setup (one-time, per env)
 
 On the VPS as the relevant user:
