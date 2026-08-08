@@ -102,6 +102,10 @@ export function formatMetricValue(
       return value >= 1 ? "Yes" : "No";
     case "days":
       return `${formatCount(value)}d`;
+    case "minutes":
+      // formatDuration takes SECONDS and renders at most two units, so 90
+      // reads as "1h 30m" rather than the meaningless "90".
+      return formatDuration(value * 60);
     case "count":
     default:
       return formatCount(value);

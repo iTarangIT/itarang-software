@@ -23,6 +23,8 @@ import { db } from "@/lib/db";
 import { getMetric, type MetricDef } from "./registry";
 import { bySourceKey, latestSamples, seriesFor, type SeriesPoint } from "./samples";
 import { MAX_USAGE_ROWS, type UsageFilters } from "./usageMath";
+import { USAGE_SAMPLE_KEYS } from "./usageSamples";
+import { ENGAGED_SECONDS_SQL } from "./usageSql";
 
 export type { UsageFilters } from "./usageMath";
 
@@ -30,11 +32,15 @@ export type { UsageFilters } from "./usageMath";
 const SOURCE = "usage:all";
 
 /**
- * Phase 1 declares logins only. The session-derived metrics arrive with the
- * heartbeat; adding them here before a collector writes them would render a row
- * of permanent em-dashes and teach people the page is broken.
+ * Every metric the usage collector emits, in tile order. Kept in step with
+ * USAGE_SAMPLE_KEYS in usageSamples.ts — that module is the one the
+ * aggregate-only test pins, this one is just the render order.
+ *
+ * The session-derived tiles read "—" until USAGE_HEARTBEAT is switched on,
+ * which is correct: no data is not zero, and severityFor() renders an absent
+ * value as "unknown" rather than green.
  */
-const USAGE_METRICS = ["usage.logins_24h"];
+const USAGE_METRICS = [...USAGE_SAMPLE_KEYS];
 
 export interface UsageMetricRow {
   key: string;
@@ -62,9 +68,26 @@ export interface LoginDayPoint {
   people: number;
 }
 
+export interface SessionTotals {
+  /** Sessions started in the window. */
+  count: number;
+  /** Distinct people behind them. */
+  people: number;
+  /** Sum of engaged time, in minutes. Ping-derived, never wall-clock. */
+  minutes: number;
+  /** Sessions still pinging (last 11 minutes). */
+  active_now: number;
+}
+
 export interface UsageView {
   filters: UsageFilters;
   metrics: UsageMetricRow[];
+  /**
+   * Live session figures over the selected window, computed here rather than
+   * read from samples so they follow the filter. Zeroed until the heartbeat is
+   * enabled — the table is empty, which is a true reading of "no sessions".
+   */
+  sessions: SessionTotals;
   /** Logins per day over the selected window, gaps included as explicit zeros. */
   login_trend: LoginDayPoint[];
   /** Distinct people who entered a credential in the window. */
@@ -85,7 +108,11 @@ export async function getUsageView(
     ? sql` AND e.user_id = ${filters.user}::uuid`
     : sql``;
 
-  const [samples, series, trendRows, totalsRows, historyRows] =
+  const sessionUserFilter = filters.user
+    ? sql` AND s.user_id = ${filters.user}::uuid`
+    : sql``;
+
+  const [samples, series, trendRows, totalsRows, historyRows, sessionRows] =
     await Promise.all([
       // 48 hours, matching the other module views: the collector runs every 15
       // minutes, so a 24h window would still show a number after a long outage
@@ -137,6 +164,23 @@ export async function getUsageView(
         ORDER BY e.occurred_at DESC
         LIMIT ${MAX_USAGE_ROWS + 1}
       `),
+
+      // Session totals over the SAME window as everything else, so the tiles and
+      // the tables below cannot describe different periods. Duration uses the
+      // shared ENGAGED_SECONDS_SQL, which is the SQL twin of engagedSeconds() —
+      // defined once so the collector's p50/p90 and this figure cannot drift.
+      db.execute(sql`
+        SELECT
+          COUNT(*)::int                  AS count,
+          COUNT(DISTINCT s.user_id)::int AS people,
+          COALESCE(SUM(${ENGAGED_SECONDS_SQL}), 0) / 60 AS minutes,
+          COUNT(*) FILTER (
+            WHERE s.last_seen_at > NOW() - INTERVAL '11 minutes'
+          )::int                         AS active_now
+        FROM user_activity_sessions s
+        WHERE s.started_at > NOW() - (${days} || ' days')::interval
+          ${sessionUserFilter}
+      `),
     ]);
 
   const index = bySourceKey(samples);
@@ -180,9 +224,17 @@ export async function getUsageView(
 
   const totals = (totalsRows as unknown as Array<Record<string, unknown>>)[0];
 
+  const sess = (sessionRows as unknown as Array<Record<string, unknown>>)[0];
+
   return {
     filters,
     metrics,
+    sessions: {
+      count: Number(sess?.count ?? 0),
+      people: Number(sess?.people ?? 0),
+      minutes: Math.round(Number(sess?.minutes ?? 0)),
+      active_now: Number(sess?.active_now ?? 0),
+    },
     login_trend: fillLoginDays(found, days),
     people_in_window: Number(totals?.people ?? 0),
     logins_in_window: Number(totals?.logins ?? 0),

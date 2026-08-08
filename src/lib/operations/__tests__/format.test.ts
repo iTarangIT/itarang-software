@@ -105,6 +105,19 @@ describe("formatMetricValue", () => {
     expect(formatMetricValue(2500, "ms")).toBe("2.50 s");
   });
 
+  it("renders session minutes as a duration, not a bare number", () => {
+    // The one people get wrong: 90 must read as "1h 30m", not "90".
+    // The unit is MINUTES but formatDuration takes seconds, so the x60 in
+    // formatMetricValue is load-bearing — dropping it would render 90 minutes
+    // as "1m 30s" and nobody would notice for a long time.
+    expect(formatMetricValue(90, "minutes")).toBe("1h 30m");
+    expect(formatMetricValue(45, "minutes")).toBe("45m");
+    expect(formatMetricValue(0, "minutes")).toBe("0s");
+    // A missing value is never zero — an empty window must not read as
+    // "sessions are instantaneous".
+    expect(formatMetricValue(null, "minutes")).toBe("—");
+  });
+
   it("uses the Indian grouping for counts", () => {
     expect(formatCount(253404)).toBe("2,53,404");
   });

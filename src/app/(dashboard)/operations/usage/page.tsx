@@ -99,12 +99,18 @@ export default async function OperationsUsagePage({
             Per-person data — recorded, retained, and deleted on a schedule.
           </p>
           <p className="mt-1">
-            Records <strong>when someone signed in</strong> and their role at the
-            time. Does <strong>not</strong> record pages visited, records opened,
+            Records <strong>when someone signed in</strong>, their role at the
+            time, and — while session tracking is enabled — the{" "}
+            <strong>start and last-active time of each CRM session</strong> plus
+            a count of activity pings taken every 5 minutes while the CRM tab is
+            in the foreground.
+          </p>
+          <p className="mt-1">
+            Does <strong>not</strong> record individual pages, records opened,
             searches, anything typed, IP address, or device. Sign-in records are
-            deleted after 90 days; only day-level totals are kept beyond that.
-            Readable by the <code>operations</code> login only. See §8 of the Ops
-            Runbook.
+            deleted after 90 days and session records after 30 days; only
+            day-level totals are kept beyond that. Readable by the{" "}
+            <code>operations</code> login only. See §8 of the Ops Runbook.
           </p>
         </div>
         <AutoRefresh intervalMs={60_000} />
@@ -147,6 +153,40 @@ export default async function OperationsUsagePage({
           </p>
           <p className="mt-1 text-xl font-semibold tabular-nums text-ink">
             {formatCount(view.logins_in_window)}
+          </p>
+        </div>
+        <div
+          className="rounded-xl border border-border bg-surface p-3"
+          title="Sessions started in this window. A session ends after 15 minutes idle, so one person can have several in a day — this is not a login count."
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+            Sessions in window
+          </p>
+          <p className="mt-1 text-xl font-semibold tabular-nums text-ink">
+            {formatCount(view.sessions.count)}
+          </p>
+          {view.sessions.active_now > 0 && (
+            <p className="mt-1 text-[10px] text-success">
+              {formatCount(view.sessions.active_now)} active now
+            </p>
+          )}
+        </div>
+        <div
+          className="rounded-xl border border-border bg-surface p-3"
+          title="Summed engaged time. Derived from heartbeat count, not wall-clock — a tab left open while the laptop slept does not count as work."
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+            Time in CRM
+          </p>
+          <p className="mt-1 text-xl font-semibold tabular-nums text-ink">
+            {view.sessions.count === 0
+              ? "—"
+              : formatMetricValue(view.sessions.minutes, "minutes")}
+          </p>
+          <p className="mt-1 text-[10px] text-ink-muted">
+            {view.sessions.count === 0
+              ? "session tracking not enabled yet"
+              : `${formatCount(view.sessions.people)} people`}
           </p>
         </div>
         <div
