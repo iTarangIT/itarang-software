@@ -127,6 +127,35 @@ OPS_INGEST_HOSTS=prod,sandbox,iot
 
 ## Install
 
+Use `install.sh` — it validates the configuration, runs one real cycle, and
+refuses to daemonise an agent that would not work:
+
+```bash
+scp -r ops-agent/ user@box:~/ops-agent
+ssh user@box
+cd ~/ops-agent
+
+export OPS_INGEST_URL=https://crm.itarang.com/api/operations/ingest/host
+export OPS_INGEST_SECRET=...        # must equal the CRM's
+export OPS_HOST_NAME=prod           # must be in the CRM's OPS_INGEST_HOSTS
+export OPS_CERT_DOMAIN=crm.itarang.com
+# OPS_LOG_DIR is auto-detected from ../shared/logs when the agent sits beside
+# the app; set it explicitly otherwise.
+
+./install.sh --dry-run    # validate + smoke-test, touch nothing
+./install.sh              # then start under pm2 and pm2 save
+```
+
+It reads `OPS_*` from the box's `shared/.env` when they are not exported, checks
+node ≥ 18, prints which log files are readable, and translates the three failures
+that are otherwise invisible: 401 (wrong secret), 403 (host not in
+`OPS_INGEST_HOSTS`), 503 (CRM not configured). Re-running is safe — an existing
+`ops-agent` process is deleted and recreated so a changed variable actually takes
+effect, which `pm2 restart` would not do.
+
+<details>
+<summary>Manual steps, if you would rather not use the script</summary>
+
 ```bash
 # 1. Copy the directory to the box (any path; ~/ops-agent is fine)
 scp -r ops-agent/ user@box:~/ops-agent
@@ -152,7 +181,11 @@ pm2 save
 ```
 
 `OPS_ONCE=1` prints `sent N metrics, M processes for host=<name>` on success.
-Anything else is the error — see below.
+Anything else is the error — see below. Note the agent exits 0 even when the
+POST is rejected (a daemon must survive a CRM that is briefly down), so check
+for that line rather than the exit code — which is what `install.sh` does.
+
+</details>
 
 ### cron instead of pm2
 
