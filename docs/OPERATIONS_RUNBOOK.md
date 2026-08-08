@@ -345,9 +345,19 @@ where it answers a security question — **not** on the session table.
 The permanent record is aggregate-only; the per-person record expires on the
 schedule above. This is what `src/lib/operations/collectors/team.ts` always
 argued for, and it still holds — the *scope* of measurement moved into
-purpose-built tables, the *principle* did not. A vitest pins the collector to
-aggregate samples under the single source `usage:all`; if that test starts
-failing, something has crossed the line.
+purpose-built tables, the *principle* did not.
+
+`src/lib/operations/__tests__/usageSamples.test.ts` enforces this: every sample
+carries the single source `usage:all`, no source or key may contain a UUID, no
+sample may carry a `meta`/`value_text` payload, and every emitted key must be
+declared in the registry. If that test starts failing, something has crossed the
+line.
+
+> The shaping lives in `src/lib/operations/usageSamples.ts` rather than in the
+> collector for exactly this reason — the collector imports `@/lib/db`, which
+> throws at import time without `DATABASE_URL`, so an invariant expressed only
+> inside it could never be tested. This documentation previously claimed such a
+> test existed when it did not.
 
 ### Who can read it
 

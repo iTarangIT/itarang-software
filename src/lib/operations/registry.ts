@@ -33,7 +33,10 @@ export type MetricUnit =
   | "inr_paise"
   | "credits"
   | "bool"
-  | "days";
+  | "days"
+  // Session lengths. Stored as minutes and rendered through the existing
+  // formatDuration(), so "90" reads as "1h 30m" rather than "90".
+  | "minutes";
 
 export interface MetricDef {
   /** Stable, dot-namespaced, e.g. "host.disk_used_pct". Never rename. */
@@ -644,6 +647,74 @@ export const METRICS: MetricDef[] = [
     // holiday is one nobody reads on the day it matters.
     direction: "neutral",
     help: "Credential entries in the last 24 hours — NOT visits. Supabase refresh tokens keep a session alive for days, so somebody who signed in on Monday works all week without appearing here again. Expect this to read far lower than active users.",
+  },
+
+  // Session-derived (E-214, filled by the heartbeat). These measure OBSERVED
+  // USE of the CRM, which is a different question from /operations/team's
+  // active-user counts — those come from Supabase sign-in RECENCY and include
+  // people whose token still refreshes but who have not opened the app in
+  // weeks. Expect these to read LOWER. Both pages say which is which.
+  {
+    key: "usage.dau",
+    label: "Active users (24h)",
+    module: "usage",
+    unit: "count",
+    direction: "neutral",
+    help: "Distinct people with an observed CRM session in the last 24 hours. Lower than the Team page's figure, which measures sign-in recency rather than use.",
+  },
+  {
+    key: "usage.wau",
+    label: "Active users (7d)",
+    module: "usage",
+    unit: "count",
+    // The ONLY usage metric that alerts, and it is a pipeline-death detector
+    // rather than a judgement about people. `higher_is_better` maps to a strict
+    // `lt` comparison, so warn:1 fires at exactly zero — and zero active people
+    // across seven consecutive days does not mean the company took a week off,
+    // it means the heartbeat, the route or the collector is broken.
+    direction: "higher_is_better",
+    warn: 1,
+    help: "Distinct people with a session in the last 7 days. Alerts only at zero, which cannot happen while the pipeline is alive — treat a breach as 'tracking is broken', never as 'nobody is working'.",
+  },
+  {
+    key: "usage.mau",
+    label: "Active users (30d)",
+    module: "usage",
+    unit: "count",
+    direction: "neutral",
+    help: "Distinct people with a session in the last 30 days — the licence-capacity number. Computable ONLY because session retention is 30 days; if that window is ever shortened this silently becomes a shorter measure rather than failing.",
+  },
+  {
+    key: "usage.sessions_24h",
+    label: "CRM sessions (24h)",
+    module: "usage",
+    unit: "count",
+    direction: "neutral",
+    help: "Sessions started in the last 24 hours. A session ends after 15 minutes idle, so one person can have several in a day — this is not a login count.",
+  },
+  {
+    key: "usage.active_sessions",
+    label: "Sessions active now",
+    module: "usage",
+    unit: "count",
+    direction: "neutral",
+    help: "Sessions that sent a heartbeat in the last 10 minutes, i.e. roughly who is in the CRM right now.",
+  },
+  {
+    key: "usage.session_minutes_p50",
+    label: "Session length p50",
+    module: "usage",
+    unit: "minutes",
+    direction: "neutral",
+    help: "Median length of sessions that finished in the last 24 hours. Derived from heartbeat count, not wall-clock, so a tab left open while the laptop slept does not count as work.",
+  },
+  {
+    key: "usage.session_minutes_p90",
+    label: "Session length p90",
+    module: "usage",
+    unit: "minutes",
+    direction: "neutral",
+    help: "90th-percentile session length over the last 24 hours. Read with p50: a large gap means a few very long sessions, usually a tab left open rather than sustained work.",
   },
 ];
 

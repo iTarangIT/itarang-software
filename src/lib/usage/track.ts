@@ -24,11 +24,12 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 
 /**
- * How often the browser heartbeat fires, in seconds. Duration maths depends on
- * it (engaged = ping_count * HEARTBEAT_SECONDS), so it lives here rather than
- * being repeated in the client and the collector.
+ * Re-exported from ./constants so this module's import surface is unchanged.
+ * It cannot be DEFINED here: this file imports @/lib/db, so a client component
+ * importing the constant from here would drag a Postgres client into the
+ * browser bundle.
  */
-export const HEARTBEAT_SECONDS = 300;
+export { HEARTBEAT_SECONDS } from "./constants";
 
 /**
  * Roles NOT tracked: external counterparties, not staff.
@@ -62,6 +63,30 @@ export function usageTrackingEnabled(): boolean {
 export function shouldTrack(role: string | null | undefined): boolean {
   if (!usageTrackingEnabled()) return false;
   return !EXTERNAL_ROLES.has((role ?? "").trim().toLowerCase());
+}
+
+/** Is this an external counterparty rather than staff? */
+export function isExternalRole(role: string | null | undefined): boolean {
+  return EXTERNAL_ROLES.has((role ?? "").trim().toLowerCase());
+}
+
+/**
+ * The heartbeat's own switch, on top of the global one.
+ *
+ * Three properties, each deliberate:
+ *
+ *   1. DEFAULTS OFF, tested with `=== "1"` — the inverse of usageTrackingEnabled's
+ *      `!== "0"`. The asymmetry is the point: login tracking is already live, so
+ *      turning it OFF is the emergency action; the heartbeat is new and measures
+ *      people continuously, so it must never start recording merely because a
+ *      deploy shipped. It is switched on deliberately, after the staff notice.
+ *   2. NESTED, not parallel. USAGE_TRACKING=0 kills this too, or the runbook's
+ *      "one switch stops everything" promise becomes false the day this ships.
+ *   3. Named for the mechanism, not the metric — it gates session AND (from
+ *      E-215) module tracking, so USAGE_SESSIONS would have been too narrow.
+ */
+export function usageHeartbeatEnabled(): boolean {
+  return usageTrackingEnabled() && process.env.USAGE_HEARTBEAT === "1";
 }
 
 /**
@@ -127,5 +152,58 @@ export async function recordLoginEvent(user: {
     // Deliberately swallowed. If the table is missing (E-214 unapplied) this is
     // the ONLY signal, so it is logged rather than silently dropped.
     console.error("[usage] recordLoginEvent failed:", e);
+  }
+}
+
+/**
+ * Record one heartbeat against a session.
+ *
+ * The caller passes a user id already proven by requireAuth() against the
+ * session cookie, and a role read from the same place — never from the request
+ * body, or a client could assert its way out of the external classification.
+ *
+ * Two clauses in the upsert are controls rather than optimisations:
+ *
+ *   WHERE user_id = EXCLUDED.user_id
+ *     SECURITY. If B posts A's session_id the conflict fires, this predicate is
+ *     false, and nothing happens — A's ping_count and last_seen_at are
+ *     untouched, and because it is ON CONFLICT the INSERT does not run either,
+ *     so B cannot claim the row. The cost is explicit: B's own session then goes
+ *     unrecorded for as long as they keep sending A's id. That is the correct
+ *     direction to fail. A missing session understates usage; the alternative
+ *     overstates somebody ELSE's working day, which is the one error a page
+ *     that measures people must never make.
+ *
+ *   AND last_seen_at < NOW() - INTERVAL '240 seconds'
+ *     INFLATION. 240s is 80% of the 300s cadence, so ordinary timer drift always
+ *     passes while a client looping at 1Hz gets exactly one increment per four
+ *     minutes. Read-time engagedSeconds() caps at wall clock as well, so
+ *     inflation is defended at both ends.
+ *
+ * Never throws.
+ */
+export async function recordHeartbeat(params: {
+  userId: string;
+  role: string | null | undefined;
+  sessionId: string;
+}): Promise<void> {
+  if (!usageHeartbeatEnabled()) return;
+  // Externals get NO session row at all — that guarantee is enforced by this
+  // early return rather than by a filter somebody could later relax. Their
+  // module usage is recorded in aggregate by E-215; see the migration header.
+  if (isExternalRole(params.role)) return;
+
+  try {
+    await db.execute(sql`
+      INSERT INTO user_activity_sessions (user_id, session_id, role_at_start)
+      VALUES (${params.userId}::uuid, ${params.sessionId}::uuid, ${params.role ?? null})
+      ON CONFLICT (session_id) DO UPDATE SET
+        last_seen_at = NOW(),
+        ping_count   = user_activity_sessions.ping_count + 1
+      WHERE user_activity_sessions.user_id = EXCLUDED.user_id
+        AND user_activity_sessions.last_seen_at < NOW() - INTERVAL '240 seconds'
+    `);
+  } catch (e) {
+    console.error("[usage] recordHeartbeat failed:", e);
   }
 }
