@@ -1,0 +1,143 @@
+name: ops-agent (manual)
+
+# Install or dry-run the Ops Console host agent on sandbox or production.
+#
+# WHY THIS EXISTS. The agent install is a manual per-box step, and the boxes are
+# reachable by exactly one credential: the deploy key in SANDBOX_VPS_SSH_KEY /
+# PROD_VPS_SSH_KEY. Those are GitHub secrets, which are write-only — the
+# runbook's own key procedure ends with `rm ~/.ssh/itarang_deploy`, so the
+# private key exists nowhere else. A workstation without that key cannot reach
+# the boxes at all, which is where this stalled. Actions can, so the install
+# runs here.
+#
+# MANUAL DISPATCH ONLY. No push, schedule or PR trigger — this touches
+# production, and it should happen when somebody decides it should.
+#
+# Defaults are sandbox + dry-run: the least destructive combination, so a
+# mis-click validates something instead of starting something.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which box"
+        type: choice
+        options: [sandbox, production]
+        default: sandbox
+        required: true
+      mode:
+        description: "dry-run validates and starts nothing; install daemonises under pm2"
+        type: choice
+        options: [dry-run, install]
+        default: dry-run
+        required: true
+
+# One at a time per environment. Two concurrent runs would race on pm2.
+concurrency:
+  group: ops-agent-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  # ── sandbox ────────────────────────────────────────────────────────────
+  sandbox:
+    if: inputs.environment == 'sandbox'
+    runs-on: ubuntu-latest
+    env:
+      APP_DIR: /home/itarang-sandbox/htdocs/sandbox.itarang.com
+      AGENT_DIR: /home/itarang-sandbox/ops-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy ops-agent to the box
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          source: "ops-agent/*"
+          target: "${{ env.AGENT_DIR }}/"
+          strip_components: 1
+          overwrite: true
+          timeout: 2m
+
+      - name: Run install.sh (${{ inputs.mode }})
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          # Fail the job when the script does. The whole point of install.sh is
+          # that it refuses a broken install; swallowing that would undo it.
+          script_stop: true
+          envs: APP_DIR,AGENT_DIR,MODE
+          script: |
+            set -eo pipefail
+            cd "$AGENT_DIR"
+            chmod +x install.sh
+            # Explicit rather than auto-detected: the agent lives in ~ and the
+            # CRM's logs live under APP_DIR, so ../shared/logs would not find
+            # them.
+            export OPS_ENV_FILE="$APP_DIR/shared/.env"
+            export OPS_LOG_DIR="$APP_DIR/shared/logs"
+            if [ "$MODE" = "install" ]; then
+              ./install.sh
+            else
+              ./install.sh --dry-run
+            fi
+        env:
+          MODE: ${{ inputs.mode }}
+
+  # ── production ─────────────────────────────────────────────────────────
+  production:
+    if: inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    # A second, deliberate gate. Configure a required reviewer on this
+    # environment in repo settings and a production run needs an approval.
+    environment: production
+    env:
+      APP_DIR: /home/itarang-crm/htdocs/crm.itarang.com
+      AGENT_DIR: /home/itarang-crm/ops-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy ops-agent to the box
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          source: "ops-agent/*"
+          target: "${{ env.AGENT_DIR }}/"
+          strip_components: 1
+          overwrite: true
+          timeout: 2m
+
+      - name: Run install.sh (${{ inputs.mode }})
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: true
+          envs: APP_DIR,AGENT_DIR,MODE
+          script: |
+            set -eo pipefail
+            cd "$AGENT_DIR"
+            chmod +x install.sh
+            export OPS_ENV_FILE="$APP_DIR/shared/.env"
+            export OPS_LOG_DIR="$APP_DIR/shared/logs"
+            if [ "$MODE" = "install" ]; then
+              ./install.sh
+            else
+              ./install.sh --dry-run
+            fi
+        env:
+          MODE: ${{ inputs.mode }}
