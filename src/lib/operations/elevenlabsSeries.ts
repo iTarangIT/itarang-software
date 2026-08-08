@@ -150,6 +150,9 @@ const MAX_FILL_MONTHS = 120;
 const MONTH_OPTION_CAP = 36;
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/** A custom window: two IST days joined by "..", e.g. 2026-01-12..2026-04-27. */
+const CUSTOM_RE = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/;
 
 export interface ElevenLabsFilters {
   /** The validated URL value. Echoed back into every link. */
@@ -169,6 +172,46 @@ export interface ElevenLabsFilters {
 /** "2026-02" → { y: 2026, m: 2 } (m is 1-based). */
 function splitMonth(ym: string): { y: number; m: number } {
   return { y: Number(ym.slice(0, 4)), m: Number(ym.slice(5, 7)) };
+}
+
+/**
+ * Is this a real calendar day, not merely a well-shaped string?
+ *
+ * DAY_RE accepts 2026-02-31 and 2025-02-29 — both match the pattern and neither
+ * exists. Round-tripping through Date.UTC is what catches them: an overflowing
+ * day rolls into the next month and stops matching itself.
+ */
+function isRealDay(day: string): boolean {
+  if (!DAY_RE.test(day)) return false;
+  const [y, m, d] = day.split("-").map(Number);
+  const at = new Date(Date.UTC(y!, m! - 1, d!));
+  return at.toISOString().slice(0, 10) === day;
+}
+
+/** True for a custom `from..to` key, false for any preset or YYYY-MM. */
+export function isCustomRange(key: ElevenLabsRangeKey): boolean {
+  return CUSTOM_RE.test(key);
+}
+
+/** "2026-01-12" → "12 Jan 2026". */
+export function formatDayLabel(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y!, m! - 1, d!)));
+}
+
+/** "2026-01-12" → "12 Jan". Year dropped for the one-line badge. */
+function formatDayShort(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y!, m! - 1, d!)));
 }
 
 /** Shift a YYYY-MM by n months. Handles year rollover in both directions. */
@@ -243,15 +286,78 @@ export function parseRange(
   params: Record<string, string | string[] | undefined>,
   now: Date = new Date(),
 ): ElevenLabsRangeKey {
-  const raw = params.range;
-  const value = Array.isArray(raw) ? raw[0] : raw;
+  const one = (key: string): string | undefined => {
+    const raw = params[key];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return typeof value === "string" ? value : undefined;
+  };
+
+  // A custom window arrives in two shapes and both mean the same thing:
+  //
+  //   ?from=2026-01-12&to=2026-04-27   what the date form submits, because a
+  //                                    plain GET form cannot merge two inputs
+  //                                    into one parameter without JavaScript,
+  //                                    and this bar must work before JS loads.
+  //   ?range=2026-01-12..2026-04-27    the canonical form every link we build
+  //                                    uses, so the rest of the module still
+  //                                    sees exactly one parameter.
+  //
+  // Checked FIRST so the pair wins outright when present. There is no
+  // precedence puzzle in practice: submitting a GET form replaces the whole
+  // query string, so a URL never carries a preset and a custom window at once
+  // unless somebody hand-writes one.
+  const custom = normaliseCustom(one("from"), one("to"), now);
+  if (custom) return custom;
+
+  const value = one("range");
   if (typeof value !== "string") return DEFAULT_RANGE;
 
   if (value === "mtd" || value === "3m" || value === "6m" || value === "all") {
     return value;
   }
   if (MONTH_RE.test(value) && value <= istMonth(now)) return value;
+
+  const pair = CUSTOM_RE.exec(value);
+  if (pair) {
+    const fromPair = normaliseCustom(pair[1], pair[2], now);
+    if (fromPair) return fromPair;
+  }
   return DEFAULT_RANGE;
+}
+
+/**
+ * Validate a custom window and return it as the canonical `from..to` key, or
+ * null if it is not usable.
+ *
+ * Rejects rather than repairs, for the same reason the month check does: a
+ * silently-corrected range would leave the URL describing a window that is not
+ * on screen. The one exception is a `to` in the future, which is clamped to
+ * today — future dates carry no data by definition, so trimming them changes
+ * nothing about what is displayed while letting a date picker's default
+ * end-of-month value through instead of throwing the whole range away.
+ */
+function normaliseCustom(
+  fromRaw: string | undefined,
+  toRaw: string | undefined,
+  now: Date,
+): string | null {
+  if (!fromRaw || !toRaw) return null;
+  if (!isRealDay(fromRaw) || !isRealDay(toRaw)) return null;
+
+  const today = istDay(now);
+  const from = fromRaw;
+  const to = toRaw > today ? today : toRaw;
+
+  // An inverted range is a user error, not something to silently swap: swapping
+  // would show a window nobody asked for.
+  if (from > to) return null;
+  // Entirely in the future — nothing to clamp to.
+  if (from > today) return null;
+  // The same ceiling fillRange() enforces, applied here so the URL is rejected
+  // rather than quietly truncated at 400 bars.
+  if (spanDays(from, to) > MAX_FILL_DAYS) return null;
+
+  return `${from}..${to}`;
 }
 
 /**
@@ -276,6 +382,34 @@ export function resolveRange(
       label: "All time",
       short: "All",
       bucket: "month",
+    };
+  }
+
+  // A custom window. Bounds are already validated by parseRange, so this only
+  // has to label and bucket them — the same DAY_BUCKET_MAX_SPAN rule the
+  // presets use, so three days gets three bars and two years gets month bars.
+  const custom = CUSTOM_RE.exec(key);
+  if (custom) {
+    const from = custom[1]!;
+    const to = custom[2]!;
+    const sameDay = from === to;
+    return {
+      key,
+      from,
+      to,
+      label: sameDay
+        ? formatDayLabel(from)
+        : `${formatDayLabel(from)} – ${formatDayLabel(to)}`,
+      // Year dropped from the start date when both fall in the same year, so
+      // the badge stays on one line for the common case.
+      short: sameDay
+        ? formatDayShort(from)
+        : `${formatDayShort(from)}–${
+            from.slice(0, 4) === to.slice(0, 4)
+              ? formatDayShort(to)
+              : formatDayLabel(to)
+          }`,
+      bucket: spanDays(from, to) > DAY_BUCKET_MAX_SPAN ? "month" : "day",
     };
   }
 

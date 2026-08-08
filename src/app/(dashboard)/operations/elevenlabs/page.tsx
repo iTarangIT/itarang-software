@@ -8,6 +8,7 @@ import {
   type RecentCall,
 } from "@/lib/operations/elevenlabs";
 import {
+  istDay,
   monthOptions,
   parseRange,
   resolveRange,
@@ -233,7 +234,11 @@ export default async function OperationsElevenLabsPage({
             window whose query fails leaves no way back to a working view except
             hand-editing the URL. monthOptions(null) degrades to the current
             month, which is why it must not require a view. */}
-        <ElevenLabsFilterBar filters={filters} months={monthOptions(null)} />
+        <ElevenLabsFilterBar
+          filters={filters}
+          months={monthOptions(null)}
+          earliest={null}
+        />
         <Card>
           <CardHeader>
             <CardTitle className="text-base text-danger">
@@ -299,6 +304,7 @@ export default async function OperationsElevenLabsPage({
       <ElevenLabsFilterBar
         filters={view.filters}
         months={monthOptions(view.first_call_at)}
+        earliest={view.first_call_at ? istDay(view.first_call_at) : null}
       />
 
       {/* Two grids, not one six-up row. The credit tiles are a LIVE balance and
