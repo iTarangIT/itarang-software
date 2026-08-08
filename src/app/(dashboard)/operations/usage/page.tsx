@@ -1,3 +1,5 @@
+import { after } from "next/server";
+
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -9,6 +11,7 @@ import {
 import { requireUsageAnalyticsPage } from "@/lib/operations/route-guard";
 import { getUsageView, type LoginEventRow } from "@/lib/operations/usage";
 import { parseUsageFilters } from "@/lib/operations/usageMath";
+import { recordUsageView } from "@/lib/usage/audit";
 
 import { AutoRefresh } from "../_components/AutoRefresh";
 import { UsageBarChart } from "../_components/UsageBarChart";
@@ -50,9 +53,22 @@ export default async function OperationsUsagePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireUsageAnalyticsPage();
+  const viewer = await requireUsageAnalyticsPage();
 
   const filters = parseUsageFilters(await searchParams);
+
+  // Watching the watchers. This page names individuals, so opening it is itself
+  // recorded — deduped per (viewer, subject) per hour, so the 60-second
+  // auto-refresh does not bury the trail. after(), so an audit write never
+  // delays the render. See src/lib/usage/audit.ts.
+  after(async () => {
+    await recordUsageView({
+      viewerId: viewer.id,
+      subjectId: filters.user ?? null,
+      days: filters.days,
+      surface: "page",
+    });
+  });
 
   let view: Awaited<ReturnType<typeof getUsageView>>;
   try {
