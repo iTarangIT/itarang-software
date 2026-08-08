@@ -365,13 +365,33 @@ The `operations` role only, via `USAGE_ANALYTICS_ROLES` in
 `src/lib/operations/route-guard.ts` — a **separate set** from `OPERATIONS_ROLES`
 even though the members are identical today, so that widening console access does
 not silently widen access to per-employee history. `ceo` is redirected to `/ceo`.
-Opening the per-person view writes an `audit_logs` row (`usage_analytics` / `view`),
-deduped to one per viewer per hour: the watchers are watched.
+Reading the per-person view writes an `audit_logs` row (`usage_analytics` / `view`),
+from the page and from `GET /api/operations/usage` alike — the trail is not
+avoidable by using curl instead of a click. `entity_id` is the person inspected,
+or `all` for the unfiltered list, and rows are deduped per **(viewer, person)**
+per hour rather than per viewer: the 60-second auto-refresh cannot bury the
+trail, and inspecting two colleagues in one hour records both. The watchers are
+watched, and this is deliberately **not** gated by `USAGE_TRACKING` — see below.
 
 ### Kill switch
 
 `USAGE_TRACKING=0` stops every write immediately, no deploy needed. The dashboard
 keeps rendering whatever was already collected.
+
+It stops recording **employees**. It does not stop recording **who reads employee
+data** — the read-audit above stays on regardless, because a period when
+collection is disabled is exactly when you would want to know who was still
+reading the archive.
+
+### Retention is enforced by the daily rollup
+
+`runDailySnapshot()` (`src/lib/operations/daily.ts`) deletes expired rows from
+both tables on the same tick that writes the day's aggregates. The two prunes are
+individually guarded against a missing table, so an environment without E-214
+applied skips them and still prunes `ops_metric_samples` — an unguarded throw
+here would have turned a schema gap into unbounded disk growth, silently. Any
+other error is re-thrown: failing to delete expired personal data must be loud.
+Counts land in the ticker log line (`sessions`, `login events`).
 
 ### Two numbers that look like they should match, and should not
 

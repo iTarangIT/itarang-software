@@ -26,11 +26,26 @@ export const SAMPLE_RETENTION_DAYS = 30;
 /** Log lines older than this go. Matches the E-210 comment. */
 export const LOG_RETENTION_DAYS = 14;
 
+/**
+ * Per-person usage retention (E-214). These are not tuning knobs: both numbers
+ * are promised in the migration header, in §8 of the Ops Runbook, and in the
+ * notice shown to staff on /operations/usage. Changing either without changing
+ * those three is breaking a commitment made to the people being measured.
+ *
+ * usage.mau also sits exactly on the 30-day session edge. If that window is
+ * ever shortened, MAU silently becomes a shorter measure rather than failing —
+ * which is why the metric's help text says so.
+ */
+export const SESSION_RETENTION_DAYS = 30;
+export const LOGIN_RETENTION_DAYS = 90;
+
 export interface DailySnapshotResult {
   snapshot_date: string;
   snapshots_written: number;
   samples_pruned: number;
   logs_pruned: number;
+  sessions_pruned: number;
+  login_events_pruned: number;
 }
 
 /** Today's date in IST as YYYY-MM-DD. */
@@ -132,19 +147,74 @@ export async function runDailySnapshot(
     RETURNING id
   `)) as unknown as Array<Record<string, unknown>>;
 
+  // The E-214 prunes are INDIVIDUALLY GUARDED, unlike the two above.
+  //
+  // Those are unguarded safely, because E-210 is applied on every environment.
+  // E-214 is not — and an undefined_table thrown here would abort the whole
+  // function BEFORE ops_metric_samples was pruned, turning a schema gap on one
+  // environment into unbounded disk growth on it. That failure would be silent
+  // and slow, which is the worst combination. Each prune now fails alone.
+  const sessionsPruned = await pruneQuietly(
+    "user_activity_sessions",
+    sql`
+      DELETE FROM user_activity_sessions
+      WHERE last_seen_at < NOW() - MAKE_INTERVAL(days => ${SESSION_RETENTION_DAYS})
+      RETURNING id
+    `,
+  );
+
+  const loginEventsPruned = await pruneQuietly(
+    "user_login_events",
+    sql`
+      DELETE FROM user_login_events
+      WHERE occurred_at < NOW() - MAKE_INTERVAL(days => ${LOGIN_RETENTION_DAYS})
+      RETURNING id
+    `,
+  );
+
   const result: DailySnapshotResult = {
     snapshot_date: snapshotDate,
     snapshots_written: snapshotsWritten,
     samples_pruned: prunedSamples.length,
     logs_pruned: prunedLogs.length,
+    sessions_pruned: sessionsPruned,
+    login_events_pruned: loginEventsPruned,
   };
 
   log.info(
     `[ops] daily rollup ${snapshotDate}: ${snapshotsWritten} snapshots, ` +
-      `pruned ${result.samples_pruned} samples / ${result.logs_pruned} logs`,
+      `pruned ${result.samples_pruned} samples / ${result.logs_pruned} logs / ` +
+      `${result.sessions_pruned} sessions / ${result.login_events_pruned} logins`,
   );
 
   return result;
+}
+
+/**
+ * Run one DELETE, returning how many rows went, and swallow a missing table.
+ *
+ * Retention is a promise to the people in these tables, so a prune that fails
+ * must be loud in the logs — but it must not take the rest of the rollup with
+ * it. Anything other than a missing relation is re-thrown, because a genuine
+ * failure to delete expired personal data should not be hidden.
+ */
+async function pruneQuietly(
+  table: string,
+  statement: ReturnType<typeof sql>,
+): Promise<number> {
+  try {
+    const rows = (await db.execute(statement)) as unknown as Array<
+      Record<string, unknown>
+    >;
+    return rows.length;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/does not exist/i.test(message)) {
+      log.warn(`[ops] skipped ${table} prune — table not present (E-214?)`);
+      return 0;
+    }
+    throw e;
+  }
 }
 
 /** Yesterday's frozen row per metric+source, for the one-slide board. */

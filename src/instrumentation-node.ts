@@ -510,7 +510,9 @@ export async function startOpsMonitorTicker() {
         lastDailyDate = today;
         console.log(
           `[instrumentation:ops-monitor] daily rollup for ${result.snapshot_date}: ` +
-            `${result.snapshots_written} snapshots, pruned ${result.samples_pruned} samples / ${result.logs_pruned} logs`,
+            `${result.snapshots_written} snapshots, pruned ${result.samples_pruned} samples / ` +
+            `${result.logs_pruned} logs / ${result.sessions_pruned} sessions / ` +
+            `${result.login_events_pruned} login events`,
         );
       }
     } catch (err) {
