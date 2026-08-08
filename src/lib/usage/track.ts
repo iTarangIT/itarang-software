@@ -65,32 +65,62 @@ export function shouldTrack(role: string | null | undefined): boolean {
 }
 
 /**
- * Record one credential entry.
+ * Record a credential entry, keyed on Supabase's OWN sign-in timestamp.
  *
- * The caller passes an id already proven by requireAuth() against the session
- * cookie — never a value from a request body, so one account cannot manufacture
- * a login for another.
+ * WHY THIS IS DRIVEN BY A TIMESTAMP RATHER THAN BY A CLIENT CALL.
  *
- * The WHERE NOT EXISTS is a dedupe guard, not an optimisation: a double-clicked
- * submit, a retried fetch or a React strict-mode double-invoke would otherwise
- * each add a row and inflate the count. Two minutes is comfortably longer than
- * any of those and far shorter than a real second login. Served by
- * user_login_events_user_occurred_idx.
+ * The first design fired a fire-and-forget fetch from the login page after
+ * signInWithPassword resolved. It is a browser's prerogative to drop a
+ * keepalive request when the page navigates away a moment later, and when that
+ * happens it fails SILENTLY — no error, no row, and nothing anywhere to
+ * distinguish "the write was lost" from "nobody logged in". That ambiguity cost
+ * a long debugging session and would have recurred forever in production.
+ *
+ * So this is now called from /api/user/profile, which the login flow already
+ * awaits and which cannot be lost to navigation. The catch is that route runs
+ * on EVERY AuthProvider mount, so "was called" says nothing about whether a
+ * login happened.
+ *
+ * `auth.users.last_sign_in_at` is what makes it work. Supabase updates it on
+ * every password grant and NOT on a token refresh, so it is an authoritative,
+ * idempotent marker for "a credential was entered at time T". Insert only when
+ * T is newer than the newest row already stored for that user:
+ *
+ *   · a page navigation reuses the same T -> no row
+ *   · a token refresh does not move T     -> no row
+ *   · a real new sign-in moves T          -> exactly one row
+ *   · two tabs racing both compare against the same T; the unique-ish check
+ *     plus the equality guard means at most one wins
+ *
+ * That also removes the old two-minute dedupe window, which was a heuristic
+ * standing in for exactly this signal — and it stores occurred_at = T, so a row
+ * here can never disagree with Supabase about when somebody signed in.
+ *
+ * Never throws. A login must not fail, or look like it failed, because
+ * analytics did.
  */
 export async function recordLoginEvent(user: {
   id: string;
   role?: string | null;
+  /** authUser.last_sign_in_at from requireAuthWithSupabaseUser(). */
+  lastSignInAt?: string | null;
 }): Promise<void> {
   if (!shouldTrack(user.role)) return;
+  // No timestamp means no way to tell a login from a navigation. Record
+  // nothing rather than one row per page view.
+  if (!user.lastSignInAt) return;
+
+  const at = new Date(user.lastSignInAt);
+  if (Number.isNaN(at.getTime())) return;
 
   try {
     await db.execute(sql`
-      INSERT INTO user_login_events (user_id, role_at_login, method)
-      SELECT ${user.id}::uuid, ${user.role ?? null}, 'password'
+      INSERT INTO user_login_events (user_id, role_at_login, method, occurred_at)
+      SELECT ${user.id}::uuid, ${user.role ?? null}, 'password', ${at.toISOString()}::timestamptz
       WHERE NOT EXISTS (
         SELECT 1 FROM user_login_events
         WHERE user_id = ${user.id}::uuid
-          AND occurred_at > NOW() - INTERVAL '2 minutes'
+          AND occurred_at >= ${at.toISOString()}::timestamptz
       )
     `);
   } catch (e) {
