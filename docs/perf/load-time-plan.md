@@ -6,7 +6,104 @@ static analysis + production-build bundle measurement), the fixes shipped on
 
 Measurement tooling lives in `scripts/perf-audit/` — see [Tooling](#tooling).
 
-## What was shipped on this branch
+## Round 2 — `claude/slow-loading-time-vrz3bd`
+
+Picks up the [Follow-up roadmap](#follow-up-roadmap-highest-impact-first) below.
+All seven round-1 fixes were verified still present on `main` before starting.
+
+| # | Roadmap item | What shipped | Files |
+|---|---|---|---|
+| R1 | #1 Local JWT verify | `getUser()` → `getClaims()` in middleware. Was a Supabase **network round-trip on every request** — including every `/api/*` call, since the API early-exit sits *after* it, so a page firing 5 API calls paid the hop 6×. Now an in-process WebCrypto signature check against the cached JWKS. | `src/middleware.ts` |
+| R2 | #3 Sidebar fetch | Dealer menu gating (`/api/dealer/stats`) seeded from a session snapshot, revalidated in background — the menu no longer renders incomplete on every hard navigation. | `src/components/layout/sidebar.tsx`, `src/lib/session-snapshot.ts` (new), `src/components/auth/AuthProvider.tsx` |
+| R3 | #6 Self-host fonts | Dropped the render-blocking `fonts.googleapis.com` stylesheet + 2 preconnects; 6 woff2 files (104 KB total) now served from `public/fonts/` via `@font-face` in `globals.css`, with `<link rel=preload>` on the DM Sans latin subset only. | `src/app/layout.tsx`, `src/app/globals.css`, `public/fonts/*`, `next.config.ts` |
+| R4 | *(not on the roadmap — found while verifying R3)* | **Every `_next/static` chunk was being served `no-store`.** The catch-all header rule overrode the immutable rule above it, so every content-hashed JS/CSS chunk was re-downloaded on **every navigation**. | `next.config.ts` |
+| R5 | *(regression fix for R3)* | Excluded `fonts/` from the middleware matcher — moving fonts same-origin meant every woff2 started paying a full auth check it never paid on gstatic.com. | `src/middleware.ts` |
+
+### R4 is probably the biggest single win here
+
+This was not in the audit and was not something static analysis would have
+caught — it only showed up under `curl -I` against a real production build:
+
+```
+$ curl -sSI localhost:3111/_next/static/chunks/<hash>.js
+HTTP/1.1 200 OK
+Cache-Control: no-store, must-revalidate     # ← from the /:path* catch-all
+```
+
+`next.config.ts` declares `/_next/static/:path*` → `max-age=31536000, immutable`
+**first**, then `/:path*` → `no-store`. Next applies *every* matching entry and
+the later one wins on a duplicate key, so the immutable rule was dead and the
+config's own comment ("Static assets are content-hashed so they stay
+long-cacheable") described behaviour that wasn't happening. Every repeat visit
+and every hard navigation re-downloaded the entire JS bundle.
+
+Both immutable rules are now protected by excluding their paths from the
+catch-all (`/((?!fonts/|_next/static/).*)`) rather than relying on rule order.
+Content-hashed filenames change whenever content changes, so this cannot serve
+stale code — the anti-stale-deploy `no-store` only ever needed to cover HTML,
+which it still does.
+
+**Verified locally** against `next build` + `next start` (not just the manifest):
+
+```
+/fonts/dm-sans-latin.woff2   200  Cache-Control: public, max-age=31536000, immutable
+                                  Content-Type: font/woff2   Content-Length: 36980
+/_next/static/chunks/*.js    200  Cache-Control: public, max-age=31536000, immutable   ← was no-store
+/login  (HTML)               200  Cache-Control: no-store, ...                          ← unchanged, as intended
+```
+
+Also confirmed in the build output: all 6 `@font-face` rules compile with
+`/fonts/*.woff2` sources, and no `fonts.googleapis.com` / `fonts.gstatic.com`
+reference survives anywhere in `.next/`.
+
+Worth re-running the same three `curl -I` checks against the real host after
+deploy, since a CDN or reverse proxy in front of the app can override
+`Cache-Control` independently of what Next sends.
+
+### Two things worth knowing
+
+**R1's speedup is conditional.** `getClaims()` only verifies locally when the
+Supabase project has **asymmetric JWT signing keys** enabled. On a project still
+using the legacy symmetric (HS256) secret, the SDK internally falls back to a
+`getUser()` round-trip — identical behaviour, zero speedup. The change is safe to
+ship either way, but **the win requires rotating the project to asymmetric keys**
+(Supabase Dashboard → Auth → JWT Keys). Verify with the TTFB numbers from
+`npm run perf:audit`, not by assumption. There is a deliberate second property:
+when there is no session at all, `getClaims()` returns null *without* an error and
+we do **not** call `getUser()` — an unauthenticated request must not pay an extra
+round-trip.
+
+**R3 required a `next.config.ts` header fix to be a win at all.** The existing
+catch-all `Cache-Control: no-store` on `/:path*` also matched `/fonts/*`, which
+would have made the browser re-fetch every woff2 on every navigation — strictly
+worse than the Google-hosted setup, which at least cached for a year. The
+catch-all is now `/((?!fonts/).*)` with an explicit immutable rule for
+`/fonts/:path*`, so precedence between overlapping rules never has to be
+reasoned about.
+
+### Corrections to the round-1 findings
+
+- **framer-motion (roadmap #4) is not worth doing.** Re-measured: **8** import
+  sites in total, and `ui/tabs` + `ui/stat-card` are imported by **3 files each**
+  — not the "~75 import sites / lands on nearly every page" the original write-up
+  assumed. Dropped from the roadmap.
+- **The sidebar fires one badge fetch per user, not four.** All four
+  (`/api/dealer/stats`, `/api/admin/nbfc/approvals/count`,
+  `/api/it/security/events/count`, `/api/vendor/threads`) are role-gated, so any
+  given user hits exactly one. Only the dealer one was worth snapshotting,
+  because it gates *which menu items render*; the other three are cosmetic
+  badges that can arrive late without the UI looking wrong.
+- **`/api/it/security/events/count` polls every 20 s** (`setInterval`, sidebar).
+  Intentional for a live-attack badge, but it is the only poll in the chrome and
+  is worth knowing about when reading API traffic for the `it` role.
+
+### Still open from the roadmap
+
+#2 (sequential-await sweep on remaining fat API routes), #5 (`public/nbfc-uploads`
+→ object storage, still 37 MB of the 39 MB `public/`), #7 (split the three giant
+client pages — still 3,832 / 2,973 / 2,176 lines).
+
+## What was shipped in round 1 (`claude/crm-load-testing-05ewb7`)
 
 | # | Fix | Files | Expected effect |
 |---|-----|-------|-----------------|

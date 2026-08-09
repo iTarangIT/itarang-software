@@ -76,8 +76,43 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // Self-hosted brand fonts (public/fonts/). These are immutable content —
+      // the filenames pin a specific subset of a specific font version, and a
+      // new font means a new filename. They MUST be excluded from the no-store
+      // catch-all below: leaving them in it would make the browser re-fetch
+      // every woff2 on every single navigation, which is strictly worse than
+      // the Google Fonts setup they replaced (that at least cached for a year).
       {
-        source: "/:path*",
+        source: "/fonts/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+          // Carried over from the catch-all below, which no longer matches
+          // these paths — the `upload_headers` security probe checks this
+          // header per-response, so dropping it here would register as a
+          // regression even though a woff2 URL carries nothing sensitive.
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
+      {
+        // The exclusions here are what actually keep the two immutable rules
+        // above effective. Next applies EVERY matching headers() entry and the
+        // LATER one wins on a duplicate key, so a bare `/:path*` silently
+        // overrode both.
+        //
+        // `_next/static` was a REAL, pre-existing bug, not a hypothetical:
+        // `curl -I` on a built chunk returned `Cache-Control: no-store,
+        // must-revalidate`, meaning every content-hashed JS/CSS chunk was
+        // re-downloaded on every single navigation. That directly contradicts
+        // the stated intent of the rule above ("Static assets are
+        // content-hashed so they stay long-cacheable") — the rule was dead.
+        // Content-hashed filenames change whenever the content does, so
+        // caching them immutably cannot serve stale code; the anti-stale-deploy
+        // measure that motivated no-store only needs to cover HTML, which it
+        // still does.
+        source: "/((?!fonts/|_next/static/).*)",
         headers: [
           { key: "Cache-Control", value: "no-store, must-revalidate" },
           { key: "Pragma", value: "no-cache" },
