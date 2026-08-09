@@ -76,8 +76,33 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // Self-hosted brand fonts (public/fonts/). These are immutable content —
+      // the filenames pin a specific subset of a specific font version, and a
+      // new font means a new filename. They MUST be excluded from the no-store
+      // catch-all below: leaving them in it would make the browser re-fetch
+      // every woff2 on every single navigation, which is strictly worse than
+      // the Google Fonts setup they replaced (that at least cached for a year).
       {
-        source: "/:path*",
+        source: "/fonts/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+          // Carried over from the catch-all below, which no longer matches
+          // these paths — the `upload_headers` security probe checks this
+          // header per-response, so dropping it here would register as a
+          // regression even though a woff2 URL carries nothing sensitive.
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
+      {
+        // The `(?!fonts/)` exclusion is what actually keeps the rule above
+        // effective. Next applies EVERY matching headers() entry, so a bare
+        // `/:path*` would also match /fonts/* and set a second, conflicting
+        // Cache-Control on it; excluding the path here means precedence never
+        // has to be reasoned about.
+        source: "/((?!fonts/).*)",
         headers: [
           { key: "Cache-Control", value: "no-store, must-revalidate" },
           { key: "Pragma", value: "no-cache" },
