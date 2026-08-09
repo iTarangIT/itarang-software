@@ -619,6 +619,16 @@ export const config = {
     // rest of the app (which is refreshed on each request) keeps working.
     // Middleware passes /api/* through without a redirect (isPublicRoute), so
     // this only adds the refresh, never a dashboard bounce.
-    "/((?!_next/static|_next/image|favicon.ico|(?!api/).*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
+    // `fonts/` is excluded outright. The brand fonts used to be served by
+    // fonts.gstatic.com, so they never touched this middleware at all; once
+    // they moved into public/fonts/ (to get a third-party render-blocking
+    // request off the critical path) they became same-origin requests, and
+    // every woff2 would otherwise pay a full auth check on the critical path
+    // of the first paint. They are public static files with no session
+    // semantics — nothing here has anything to say about them. Note this
+    // could NOT be handled by adding woff2 to the extension list below: that
+    // branch is guarded by `(?!api/)`, and its purpose is the authenticated
+    // file proxy, which is a different concern.
+    "/((?!_next/static|_next/image|favicon.ico|fonts/|(?!api/).*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
   ],
 };

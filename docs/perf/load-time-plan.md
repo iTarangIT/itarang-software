@@ -16,6 +16,36 @@ All seven round-1 fixes were verified still present on `main` before starting.
 | R1 | #1 Local JWT verify | `getUser()` → `getClaims()` in middleware. Was a Supabase **network round-trip on every request** — including every `/api/*` call, since the API early-exit sits *after* it, so a page firing 5 API calls paid the hop 6×. Now an in-process WebCrypto signature check against the cached JWKS. | `src/middleware.ts` |
 | R2 | #3 Sidebar fetch | Dealer menu gating (`/api/dealer/stats`) seeded from a session snapshot, revalidated in background — the menu no longer renders incomplete on every hard navigation. | `src/components/layout/sidebar.tsx`, `src/lib/session-snapshot.ts` (new), `src/components/auth/AuthProvider.tsx` |
 | R3 | #6 Self-host fonts | Dropped the render-blocking `fonts.googleapis.com` stylesheet + 2 preconnects; 6 woff2 files (104 KB total) now served from `public/fonts/` via `@font-face` in `globals.css`, with `<link rel=preload>` on the DM Sans latin subset only. | `src/app/layout.tsx`, `src/app/globals.css`, `public/fonts/*`, `next.config.ts` |
+| R4 | *(not on the roadmap — found while verifying R3)* | **Every `_next/static` chunk was being served `no-store`.** The catch-all header rule overrode the immutable rule above it, so every content-hashed JS/CSS chunk was re-downloaded on **every navigation**. | `next.config.ts` |
+| R5 | *(regression fix for R3)* | Excluded `fonts/` from the middleware matcher — moving fonts same-origin meant every woff2 started paying a full auth check it never paid on gstatic.com. | `src/middleware.ts` |
+
+### R4 is probably the biggest single win here
+
+This was not in the audit and was not something static analysis would have
+caught — it only showed up under `curl -I` against a real production build:
+
+```
+$ curl -sSI localhost:3111/_next/static/chunks/<hash>.js
+HTTP/1.1 200 OK
+Cache-Control: no-store, must-revalidate     # ← from the /:path* catch-all
+```
+
+`next.config.ts` declares `/_next/static/:path*` → `max-age=31536000, immutable`
+**first**, then `/:path*` → `no-store`. Next applies *every* matching entry and
+the later one wins on a duplicate key, so the immutable rule was dead and the
+config's own comment ("Static assets are content-hashed so they stay
+long-cacheable") described behaviour that wasn't happening. Every repeat visit
+and every hard navigation re-downloaded the entire JS bundle.
+
+Both immutable rules are now protected by excluding their paths from the
+catch-all (`/((?!fonts/|_next/static/).*)`) rather than relying on rule order.
+Content-hashed filenames change whenever content changes, so this cannot serve
+stale code — the anti-stale-deploy `no-store` only ever needed to cover HTML,
+which it still does.
+
+**Verify after deploy** — this is a one-line check and worth doing:
+`curl -sSI https://<host>/_next/static/chunks/<any>.js | grep -i cache-control`
+should now report `public, max-age=31536000, immutable`.
 
 ### Two things worth knowing
 

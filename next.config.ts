@@ -97,12 +97,22 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // The `(?!fonts/)` exclusion is what actually keeps the rule above
-        // effective. Next applies EVERY matching headers() entry, so a bare
-        // `/:path*` would also match /fonts/* and set a second, conflicting
-        // Cache-Control on it; excluding the path here means precedence never
-        // has to be reasoned about.
-        source: "/((?!fonts/).*)",
+        // The exclusions here are what actually keep the two immutable rules
+        // above effective. Next applies EVERY matching headers() entry and the
+        // LATER one wins on a duplicate key, so a bare `/:path*` silently
+        // overrode both.
+        //
+        // `_next/static` was a REAL, pre-existing bug, not a hypothetical:
+        // `curl -I` on a built chunk returned `Cache-Control: no-store,
+        // must-revalidate`, meaning every content-hashed JS/CSS chunk was
+        // re-downloaded on every single navigation. That directly contradicts
+        // the stated intent of the rule above ("Static assets are
+        // content-hashed so they stay long-cacheable") — the rule was dead.
+        // Content-hashed filenames change whenever the content does, so
+        // caching them immutably cannot serve stale code; the anti-stale-deploy
+        // measure that motivated no-store only needs to cover HTML, which it
+        // still does.
+        source: "/((?!fonts/|_next/static/).*)",
         headers: [
           { key: "Cache-Control", value: "no-store, must-revalidate" },
           { key: "Pragma", value: "no-cache" },
