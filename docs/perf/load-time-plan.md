@@ -43,9 +43,22 @@ Content-hashed filenames change whenever content changes, so this cannot serve
 stale code — the anti-stale-deploy `no-store` only ever needed to cover HTML,
 which it still does.
 
-**Verify after deploy** — this is a one-line check and worth doing:
-`curl -sSI https://<host>/_next/static/chunks/<any>.js | grep -i cache-control`
-should now report `public, max-age=31536000, immutable`.
+**Verified locally** against `next build` + `next start` (not just the manifest):
+
+```
+/fonts/dm-sans-latin.woff2   200  Cache-Control: public, max-age=31536000, immutable
+                                  Content-Type: font/woff2   Content-Length: 36980
+/_next/static/chunks/*.js    200  Cache-Control: public, max-age=31536000, immutable   ← was no-store
+/login  (HTML)               200  Cache-Control: no-store, ...                          ← unchanged, as intended
+```
+
+Also confirmed in the build output: all 6 `@font-face` rules compile with
+`/fonts/*.woff2` sources, and no `fonts.googleapis.com` / `fonts.gstatic.com`
+reference survives anywhere in `.next/`.
+
+Worth re-running the same three `curl -I` checks against the real host after
+deploy, since a CDN or reverse proxy in front of the app can override
+`Cache-Control` independently of what Next sends.
 
 ### Two things worth knowing
 
