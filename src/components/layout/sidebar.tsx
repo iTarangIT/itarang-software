@@ -57,6 +57,15 @@ import {
   type DealerTypeValue,
 } from "@/lib/dealer/dealer-type";
 import { capabilitiesFor } from "@/lib/dealer/dealer-capabilities";
+import { readSnapshot, writeSnapshot } from "@/lib/session-snapshot";
+
+/**
+ * Session snapshot of the two flags that decide which dealer menu items exist.
+ * Non-sensitive (a boolean and an enum), and cleared on sign-out by
+ * clearSnapshots() so one user's menu gating can't leak into the next
+ * user's session in the same tab.
+ */
+const DEALER_GATE_SNAPSHOT_KEY = "itarang:sidebar:dealer-gate:v1";
 
 /** Loan entries, hidden when the dealer's finance enablement is off. */
 const FINANCE_GATED_ITEM_IDS = new Set(["loans", "loan-mgmt"]);
@@ -1658,19 +1667,49 @@ export function Sidebar() {
   useEffect(() => {
     if (inferredRole !== "dealer") return;
     let cancelled = false;
+
+    // These two flags gate WHICH menu items render, so until the fetch below
+    // lands the dealer sees an incomplete menu — and this component remounts on
+    // every hard navigation, so they see it every time. Seeding from the
+    // session snapshot paints the last-known-good menu immediately while the
+    // fetch revalidates behind it.
+    //
+    // Read here in the effect, NOT in a useState initialiser: this client
+    // component is still server-rendered, where sessionStorage does not exist,
+    // so seeding during render would make the client's first paint disagree
+    // with the server HTML and trip a hydration mismatch. AuthProvider's
+    // profile snapshot is read from an effect for exactly this reason.
+    const snapshot = readSnapshot<{
+      financeEnabled: boolean;
+      dealerType: DealerTypeValue;
+    }>(DEALER_GATE_SNAPSHOT_KEY);
+    if (snapshot) {
+      setDealerFinanceEnabled(snapshot.financeEnabled);
+      setDealerType(snapshot.dealerType);
+    }
+
     fetch("/api/dealer/stats", { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
         const flag = json?.data?.dealer?.financeEnabled;
-        setDealerFinanceEnabled(typeof flag === "boolean" ? flag : false);
+        const financeEnabled = typeof flag === "boolean" ? flag : false;
         // `dealer` is null when no onboarding application is found. Default to
         // 'new' — the safe direction: a dealer we can't classify keeps the
         // portal they have today rather than losing every menu.
-        setDealerType(normalizeDealerType(json?.data?.dealer?.dealerType) ?? "new");
+        const resolvedType = normalizeDealerType(json?.data?.dealer?.dealerType) ?? "new";
+        setDealerFinanceEnabled(financeEnabled);
+        setDealerType(resolvedType);
+        writeSnapshot(DEALER_GATE_SNAPSHOT_KEY, {
+          financeEnabled,
+          dealerType: resolvedType,
+        });
       })
       .catch(() => {
-        if (!cancelled) setDealerFinanceEnabled(false);
+        // Only fall back to the closed state if there was no snapshot to show.
+        // A transient network blip must not blank out a menu we were already
+        // rendering correctly from cache.
+        if (!cancelled && !snapshot) setDealerFinanceEnabled(false);
       });
     return () => {
       cancelled = true;

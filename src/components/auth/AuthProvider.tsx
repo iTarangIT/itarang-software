@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { clearSnapshots } from "@/lib/session-snapshot";
 
 type AppUser = {
   id: string;
@@ -121,6 +122,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === "SIGNED_OUT") {
         setUser(null);
         writeProfileSnapshot(null);
+        // Drop every other module's session snapshot too (e.g. the sidebar's
+        // dealer menu gating). Without this the next user to sign in on this
+        // tab paints the previous user's chrome until their own fetch lands.
+        clearSnapshots();
         return;
       }
       // Only refetch the profile on real identity changes. INITIAL_SESSION
@@ -141,6 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setUser(null);
       writeProfileSnapshot(null);
+      clearSnapshots();
       // Route through /api/auth/logout — relative, hits the current public
       // host. Server clears sb-* cookies and redirects to /login using
       // X-Forwarded-Host so browsers never land on the internal upstream.

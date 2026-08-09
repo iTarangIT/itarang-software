@@ -6,7 +6,61 @@ static analysis + production-build bundle measurement), the fixes shipped on
 
 Measurement tooling lives in `scripts/perf-audit/` — see [Tooling](#tooling).
 
-## What was shipped on this branch
+## Round 2 — `claude/slow-loading-time-vrz3bd`
+
+Picks up the [Follow-up roadmap](#follow-up-roadmap-highest-impact-first) below.
+All seven round-1 fixes were verified still present on `main` before starting.
+
+| # | Roadmap item | What shipped | Files |
+|---|---|---|---|
+| R1 | #1 Local JWT verify | `getUser()` → `getClaims()` in middleware. Was a Supabase **network round-trip on every request** — including every `/api/*` call, since the API early-exit sits *after* it, so a page firing 5 API calls paid the hop 6×. Now an in-process WebCrypto signature check against the cached JWKS. | `src/middleware.ts` |
+| R2 | #3 Sidebar fetch | Dealer menu gating (`/api/dealer/stats`) seeded from a session snapshot, revalidated in background — the menu no longer renders incomplete on every hard navigation. | `src/components/layout/sidebar.tsx`, `src/lib/session-snapshot.ts` (new), `src/components/auth/AuthProvider.tsx` |
+| R3 | #6 Self-host fonts | Dropped the render-blocking `fonts.googleapis.com` stylesheet + 2 preconnects; 6 woff2 files (104 KB total) now served from `public/fonts/` via `@font-face` in `globals.css`, with `<link rel=preload>` on the DM Sans latin subset only. | `src/app/layout.tsx`, `src/app/globals.css`, `public/fonts/*`, `next.config.ts` |
+
+### Two things worth knowing
+
+**R1's speedup is conditional.** `getClaims()` only verifies locally when the
+Supabase project has **asymmetric JWT signing keys** enabled. On a project still
+using the legacy symmetric (HS256) secret, the SDK internally falls back to a
+`getUser()` round-trip — identical behaviour, zero speedup. The change is safe to
+ship either way, but **the win requires rotating the project to asymmetric keys**
+(Supabase Dashboard → Auth → JWT Keys). Verify with the TTFB numbers from
+`npm run perf:audit`, not by assumption. There is a deliberate second property:
+when there is no session at all, `getClaims()` returns null *without* an error and
+we do **not** call `getUser()` — an unauthenticated request must not pay an extra
+round-trip.
+
+**R3 required a `next.config.ts` header fix to be a win at all.** The existing
+catch-all `Cache-Control: no-store` on `/:path*` also matched `/fonts/*`, which
+would have made the browser re-fetch every woff2 on every navigation — strictly
+worse than the Google-hosted setup, which at least cached for a year. The
+catch-all is now `/((?!fonts/).*)` with an explicit immutable rule for
+`/fonts/:path*`, so precedence between overlapping rules never has to be
+reasoned about.
+
+### Corrections to the round-1 findings
+
+- **framer-motion (roadmap #4) is not worth doing.** Re-measured: **8** import
+  sites in total, and `ui/tabs` + `ui/stat-card` are imported by **3 files each**
+  — not the "~75 import sites / lands on nearly every page" the original write-up
+  assumed. Dropped from the roadmap.
+- **The sidebar fires one badge fetch per user, not four.** All four
+  (`/api/dealer/stats`, `/api/admin/nbfc/approvals/count`,
+  `/api/it/security/events/count`, `/api/vendor/threads`) are role-gated, so any
+  given user hits exactly one. Only the dealer one was worth snapshotting,
+  because it gates *which menu items render*; the other three are cosmetic
+  badges that can arrive late without the UI looking wrong.
+- **`/api/it/security/events/count` polls every 20 s** (`setInterval`, sidebar).
+  Intentional for a live-attack badge, but it is the only poll in the chrome and
+  is worth knowing about when reading API traffic for the `it` role.
+
+### Still open from the roadmap
+
+#2 (sequential-await sweep on remaining fat API routes), #5 (`public/nbfc-uploads`
+→ object storage, still 37 MB of the 39 MB `public/`), #7 (split the three giant
+client pages — still 3,832 / 2,973 / 2,176 lines).
+
+## What was shipped in round 1 (`claude/crm-load-testing-05ewb7`)
 
 | # | Fix | Files | Expected effect |
 |---|-----|-------|-----------------|
