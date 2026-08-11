@@ -29,6 +29,18 @@ module.exports = {
         // .env, and instead of falling back to a bundled Chromium the
         // standalone build never ships. Production sets the same value.
         PUPPETEER_EXECUTABLE_PATH: "/usr/bin/google-chrome-stable",
+        // What this process announces as `application_name` on every Postgres
+        // connection it opens, so /operations/database can attribute
+        // connections to a service. MUST match `name` above.
+        //
+        // Sandbox, production and the worker all run on this one VPS and reach
+        // the same RDS from the same IP, so client_addr cannot separate them.
+        // Without this they collapse into one `postgres.js` row and an
+        // operator cannot tell which service is holding the connections.
+        //
+        // Read by src/lib/db/applicationName.ts. Requires `pm2 reload
+        // --update-env` to take effect.
+        OPS_APP_NAME: "sandbox-web",
       },
       max_memory_restart: "700M",
       // Give Next 8s to close its listener gracefully before SIGKILL. The
@@ -53,6 +65,13 @@ module.exports = {
       exec_mode: "fork",
       env: {
         NODE_ENV: "production",
+        // Same purpose as sandbox-web above; MUST match `name`. The worker
+        // reaches Postgres transitively — callWorker.ts imports triggerCall
+        // and pollCallStatus, both of which import @/lib/db at module load, so
+        // a pool opens even on the runs where the BullMQ loop stays gated off.
+        // Naming it is what separates worker connections from web connections
+        // on the shared VPS IP.
+        OPS_APP_NAME: "sandbox-worker",
       },
       // The worker is intentionally dormant: callWorker.ts gates its BullMQ
       // loop behind ENABLE_CALL_WORKER (unset here), so it logs "disabled" and
