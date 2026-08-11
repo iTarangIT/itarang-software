@@ -31,6 +31,23 @@ export interface VendorDef {
   match: string[];
   /** Where the metered half of this vendor's numbers comes from, if anywhere. */
   meteredFrom?: string;
+  /**
+   * What one unit of the metered VOLUME column is for this vendor.
+   *
+   * The column holds AI calls for elevenlabs/bolna, KYC verifications for
+   * decentro/digio, WhatsApp messages for meta and payment attempts for
+   * razorpay — six incomparable things rendered as one unlabelled integer,
+   * which invited reading a message count as an invoice line. Naming the unit
+   * per row is the cheapest honest fix.
+   */
+  meteredUnit?: string;
+  /**
+   * True when metering this vendor is not a thing we can do — a SaaS seat, a
+   * VPS, a subscription. Distinct from "we could meter it and haven't":
+   * the table renders these as "not applicable" instead of an em-dash that
+   * reads as missing data.
+   */
+  meteringNotApplicable?: boolean;
 }
 
 /**
@@ -44,12 +61,14 @@ export const VENDORS: VendorDef[] = [
     label: "ElevenLabs",
     match: ["eleven labs", "elevenlabs"],
     meteredFrom: "ai_call_logs (provider='elevenlabs')",
+    meteredUnit: "AI calls",
   },
   {
     id: "bolna",
     label: "Bolna",
     match: ["bolna"],
     meteredFrom: "ai_call_logs (provider='bolna')",
+    meteredUnit: "AI calls",
   },
   { id: "anthropic", label: "Anthropic", match: ["anthropic"] },
   { id: "openai", label: "OpenAI", match: ["openai", "open ai"] },
@@ -59,42 +78,51 @@ export const VENDORS: VendorDef[] = [
     label: "Decentro",
     match: ["decentro"],
     meteredFrom: "kyc_verifications (api_provider like 'decentro%')",
+    meteredUnit: "KYC verifications",
   },
   {
     id: "digio",
     label: "DigiO",
     match: ["digio", "digiotech"],
     meteredFrom: "kyc_verifications (api_provider='digio')",
+    meteredUnit: "e-sign / KYC calls",
   },
   {
     id: "razorpay",
     label: "Razorpay / RazorpayX",
     match: ["razorpay"],
     meteredFrom: "facilitation_payments + emi_payment_attempts + buyback_gateway_transactions",
+    // Attempts, not settled transactions — a failed attempt is not billed.
+    meteredUnit: "payment attempts (proxy)",
   },
-  {
-    id: "zoho",
-    label: "Zoho",
-    match: ["zoho"],
-    meteredFrom: "zoho_invoices",
-  },
+  // Zoho's metered probe counted OUR invoice syncs, not Zoho's API billing —
+  // removed with the probe in collectors/vendors/usage.ts.
+  { id: "zoho", label: "Zoho", match: ["zoho"], meteringNotApplicable: true },
   {
     id: "meta",
     label: "Meta WhatsApp",
     match: ["meta platforms", "whatsapp"],
     meteredFrom: "whatsapp_messages",
+    // Meta bills per 24-hour CONVERSATION; this counts messages, of which a
+    // conversation holds many. Directionally useful, never an invoice line.
+    meteredUnit: "messages (proxy)",
   },
   { id: "haptik", label: "Jio Haptik", match: ["haptik"] },
   { id: "neodove", label: "NeoDove", match: ["neodove"] },
+  // Firecrawl's probe counted scraper_runs, inside which Firecrawl, Apify and
+  // Google Places are all invoked without per-source attribution — removed.
   { id: "firecrawl", label: "Firecrawl", match: ["firecrawl"] },
   { id: "apify", label: "Apify", match: ["apify"] },
-  { id: "aws", label: "AWS", match: ["amazon web services", "aws"] },
-  { id: "vercel", label: "Vercel", match: ["vercel"] },
-  { id: "supabase", label: "Supabase", match: ["supabase"] },
-  { id: "upstash", label: "Upstash", match: ["upstash"] },
-  { id: "github", label: "GitHub", match: ["github"] },
-  { id: "cloudflare", label: "Cloudflare", match: ["cloudflare"] },
-  { id: "hostinger", label: "Hostinger", match: ["hostinger"] },
+  // Infrastructure and SaaS seats. We hold no per-unit meter for any of these,
+  // and no rate card to price one with, so the metered half is not "missing" —
+  // it does not exist.
+  { id: "aws", label: "AWS", match: ["amazon web services", "aws"], meteringNotApplicable: true },
+  { id: "vercel", label: "Vercel", match: ["vercel"], meteringNotApplicable: true },
+  { id: "supabase", label: "Supabase", match: ["supabase"], meteringNotApplicable: true },
+  { id: "upstash", label: "Upstash", match: ["upstash"], meteringNotApplicable: true },
+  { id: "github", label: "GitHub", match: ["github"], meteringNotApplicable: true },
+  { id: "cloudflare", label: "Cloudflare", match: ["cloudflare"], meteringNotApplicable: true },
+  { id: "hostinger", label: "Hostinger", match: ["hostinger"], meteringNotApplicable: true },
   { id: "cibil", label: "CIBIL / Equifax", match: ["cibil", "transunion", "equifax"] },
 ];
 
@@ -189,4 +217,21 @@ export function vendorLabel(id: string): string {
 
 export function vendorDef(id: string): VendorDef | undefined {
   return BY_ID.get(id);
+}
+
+/**
+ * What one unit of this vendor's metered VOLUME column means, or null when the
+ * vendor has no volume meter.
+ *
+ * Unknown vendors (an unmatched invoice entity) get null: inventing a unit for
+ * something we are not measuring is exactly the kind of plausible-looking
+ * wrongness this table is being cleaned up to remove.
+ */
+export function vendorMeteredUnit(id: string): string | null {
+  return BY_ID.get(id)?.meteredUnit ?? null;
+}
+
+/** True when metering this vendor is not a concept — a seat, a VPS, a plan. */
+export function vendorMeteringNotApplicable(id: string): boolean {
+  return BY_ID.get(id)?.meteringNotApplicable === true;
 }

@@ -9,6 +9,7 @@ import {
   momDelta,
   OUTSIDE_CAMPAIGN,
   OUTSIDE_MARKER,
+  toIsoDay,
   UNCATEGORISED,
   UNCATEGORISED_MARKER,
 } from "../elevenlabsSeries";
@@ -193,5 +194,84 @@ describe("maskPhone", () => {
     expect(maskPhone("123")).toBe("123");
     expect(maskPhone("1234")).toBe("1234");
     expect(maskPhone("12345")).toBe("••••2345");
+  });
+});
+
+/**
+ * The regression that emptied every day-bucketed chart on the page.
+ *
+ * postgres.js parses a `date` column (oid 1082) into a JS Date, so the old
+ * `String(r.date).slice(0, 10)` produced "Mon Jun 22" and never matched the
+ * "2026-06-22" keys fillRange builds. Month buckets were unaffected because
+ * TO_CHAR returns a real string — which is why only "Current month" and "Last
+ * 3 months" looked broken while "Last 6 months" looked fine.
+ */
+describe("toIsoDay", () => {
+  it("reads a Date back as the calendar day it was selected as", () => {
+    // Exactly what postgres.js builds from the wire value "2026-06-22".
+    expect(toIsoDay(new Date("2026-06-22"))).toBe("2026-06-22");
+  });
+
+  it("is what the old String().slice() was NOT", () => {
+    const fromDriver = new Date("2026-06-22");
+    expect(String(fromDriver).slice(0, 10)).not.toBe("2026-06-22");
+    expect(toIsoDay(fromDriver)).toBe("2026-06-22");
+  });
+
+  it("accepts a plain string too, so a driver change cannot reintroduce the bug", () => {
+    expect(toIsoDay("2026-06-22")).toBe("2026-06-22");
+    expect(toIsoDay("2026-06-22T00:00:00.000Z")).toBe("2026-06-22");
+  });
+
+  it("returns null rather than a plausible-looking wrong day", () => {
+    expect(toIsoDay(null)).toBeNull();
+    expect(toIsoDay(undefined)).toBeNull();
+    expect(toIsoDay(12345)).toBeNull();
+    expect(toIsoDay("not-a-date")).toBeNull();
+    expect(toIsoDay(new Date("nonsense"))).toBeNull();
+  });
+
+  it("agrees with the key fillDays builds, for every day of a month", () => {
+    // The two must agree on every day or the maps silently half-intersect.
+    for (let day = 1; day <= 31; day++) {
+      const iso = `2026-01-${String(day).padStart(2, "0")}`;
+      expect(toIsoDay(new Date(iso))).toBe(iso);
+    }
+  });
+});
+
+describe("momDelta adjacency", () => {
+  const m = (month: string, cost_paise: number) => ({
+    month,
+    calls: 1,
+    cost_paise,
+  });
+
+  it("compares two adjacent complete months", () => {
+    const delta = momDelta(
+      [m("2026-08", 500), m("2026-07", 200), m("2026-06", 100)],
+      "2026-08",
+    );
+    expect(delta).toBe(100);
+  });
+
+  it("refuses to call July-against-May a month-over-month", () => {
+    // June is missing entirely — the exact shape spend.ts's ungapped burn query
+    // returns when a month has no invoices.
+    expect(
+      momDelta([m("2026-08", 500), m("2026-07", 200), m("2026-05", 100)], "2026-08"),
+    ).toBeNull();
+  });
+
+  it("still returns null on a zero base rather than infinity", () => {
+    expect(
+      momDelta([m("2026-08", 500), m("2026-07", 200), m("2026-06", 0)], "2026-08"),
+    ).toBeNull();
+  });
+
+  it("handles a year boundary as adjacent", () => {
+    expect(
+      momDelta([m("2026-02", 0), m("2026-01", 150), m("2025-12", 100)], "2026-02"),
+    ).toBe(50);
   });
 });

@@ -44,6 +44,7 @@ import {
 import { db } from "@/lib/db";
 
 import {
+  addMonths,
   categoryLabel,
   DEFAULT_RANGE,
   fillMonths,
@@ -55,6 +56,7 @@ import {
   OUTSIDE_MARKER,
   prevRange,
   resolveRange,
+  toIsoDay,
   UNCATEGORISED_MARKER,
   type DailyUsage,
   type ElevenLabsFilters,
@@ -72,6 +74,12 @@ export type {
 
 /** The provider string written by src/lib/ai/elevenlabs/finalizeCall.ts. */
 const PROVIDER = "elevenlabs" as const;
+/**
+ * Lower bound for the "all time" totals. Earlier than any call this CRM could
+ * hold, so it excludes nothing real — its only job is to make the builder emit
+ * an `ended_at >=` predicate, which in turn excludes calls that have not ended.
+ */
+const ALL_TIME_FLOOR = "2000-01-01" as const;
 /** The sample source written by collectors/vendors/elevenlabs.ts. */
 const CREDIT_SOURCE = "vendor:elevenlabs";
 const COLLECTOR_ID = "vendor.elevenlabs";
@@ -187,7 +195,11 @@ export interface ElevenLabsView {
    * Null for all time, which has no predecessor.
    */
   prev: UsageTotals | null;
-  /** All time. NOT filtered — the absolute anchor the page prints as context. */
+  /**
+   * All time — every call that has ENDED, not range-filtered. The absolute
+   * anchor the page prints as context. In-flight calls are excluded so this
+   * counts the same population as every windowed figure beside it.
+   */
   total: UsageTotals;
   first_call_at: Date | null;
   /** The selected range, gaps filled. Granularity follows `filters.bucket`. */
@@ -264,7 +276,17 @@ export async function getElevenLabsView(
     // clause when null), which is why supporting a date filter needed no change
     // to cost-analytics-query.ts at all.
     rows(buildSummarySql(filters(f.from, f.to))),
-    rows(buildSummarySql(filters(null, null))),
+    // All time — but bounded below rather than left unbounded, so it counts
+    // the same population every windowed figure on this page counts.
+    //
+    // whereClauseAcl omits the ended_at predicate entirely when from_date is
+    // null, which quietly lets IN-FLIGHT calls (ended_at IS NULL) into this one
+    // number and no other. On this data that is 53 calls: the tile read "293
+    // calls" all-time against "240" for the last six months, with no calls
+    // older than April and no way to see where the extra 53 came from. An epoch
+    // floor restores `ended_at IS NOT NULL` without touching the shared builder
+    // that Cost Analytics also depends on.
+    rows(buildSummarySql(filters(ALL_TIME_FLOOR, istDay()))),
     previous
       ? rows(buildSummarySql(filters(previous.from, previous.to)))
       : Promise.resolve([]),
@@ -426,18 +448,34 @@ export async function getElevenLabsView(
   // ---- our side: usage ------------------------------------------------------
   const found = new Map<string, { calls: number; cost_paise: number }>();
   for (const r of trendRows) {
-    // buildTrendSql casts to ::date, which arrives as YYYY-MM-DD already in IST;
-    // the month branch selects a YYYY-MM string directly.
-    const key =
-      f.bucket === "day" ? String(r.date).slice(0, 10) : String(r.month);
+    // buildTrendSql casts to ::date, which postgres.js hands back as a Date
+    // object — NOT the "YYYY-MM-DD" string this used to assume. toIsoDay()
+    // normalises both shapes; see its doc comment for the outage it fixes.
+    // The month branch selects a YYYY-MM string via TO_CHAR and needs no help.
+    const key = f.bucket === "day" ? toIsoDay(r.date) : String(r.month);
+    if (!key) continue;
     found.set(key, { calls: int(r.calls), cost_paise: int(r.cost_cents) });
   }
 
-  const monthly: MonthlyUsage[] = monthlyRows.map((r) => ({
-    month: String(r.month),
-    calls: int(r.calls),
-    cost_paise: int(r.cost_cents),
-  }));
+  // Gap-filled across whole calendar months. Without this a month with no
+  // ElevenLabs calls produces no row and simply vanishes, so six evenly-spaced
+  // bars can silently be March, May, July and August — a chart that draws a gap
+  // as continuity. July 2026 is exactly that case on this data.
+  const monthlyFound = new Map<string, { calls: number; cost_paise: number }>();
+  for (const r of monthlyRows) {
+    monthlyFound.set(String(r.month), {
+      calls: int(r.calls),
+      cost_paise: int(r.cost_cents),
+    });
+  }
+  const monthly: MonthlyUsage[] = fillMonths(
+    monthlyFound,
+    `${addMonths(currentMonth, -5)}-01`,
+    `${currentMonth}-01`,
+  )
+    // fillMonths returns oldest-first; this array is documented newest-first,
+    // with index 0 the current partial month, and momDelta relies on that.
+    .reverse();
 
   const byCategory: CategoryUsage[] = categoryRows.map((r) => {
     const { category, is_campaign } = categoryLabel(String(r.category));

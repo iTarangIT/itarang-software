@@ -85,48 +85,32 @@ const PROBES: UsageProbe[] = [
       ) t
     `,
   },
-  {
-    vendor: "zoho",
-    label: "Zoho invoice syncs",
-    query: sql`
-      SELECT COUNT(*)::int AS n FROM zoho_invoices
-      WHERE synced_at > NOW() - INTERVAL '30 days'
-    `,
-  },
-  {
-    vendor: "openai",
-    label: "LLM runs (risk + security)",
-    // Each table stamps its own column: risk_runs and security_scan_runs use
-    // started_at, risk_card_runs uses run_at. Assuming a shared name here is
-    // exactly the mistake that left ../jobs.ts probing a column risk_card_runs
-    // does not have.
-    query: sql`
-      SELECT COALESCE(SUM(n), 0)::int AS n FROM (
-        SELECT COUNT(*)::int AS n FROM risk_runs
-          WHERE started_at > NOW() - INTERVAL '30 days'
-        UNION ALL
-        SELECT COUNT(*)::int FROM risk_card_runs
-          WHERE run_at > NOW() - INTERVAL '30 days'
-        UNION ALL
-        SELECT COUNT(*)::int FROM security_scan_runs
-          WHERE started_at > NOW() - INTERVAL '30 days'
-      ) t
-    `,
-  },
-  {
-    vendor: "firecrawl",
-    label: "Scraper runs",
-    // scraper_runs counts RUNS, not per-source API calls. Firecrawl, Apify and
-    // Google Places are all invoked inside a run and are not attributed
-    // individually anywhere — §8.6 of the plan calls that out and defers the
-    // call-site instrumentation. Filed under firecrawl as the dominant source;
-    // treat it as "scraper activity", not a Firecrawl invoice line.
-    query: sql`
-      SELECT COUNT(*)::int AS n FROM scraper_runs
-      WHERE started_at > NOW() - INTERVAL '30 days'
-    `,
-  },
 ];
+
+/**
+ * THREE PROBES WERE REMOVED HERE, DELIBERATELY. They are recorded rather than
+ * deleted silently, because "why doesn't the console track OpenAI?" is a
+ * question somebody will ask.
+ *
+ *   zoho      — counted rows in `zoho_invoices` where synced_at was recent.
+ *               That is OUR sync activity, not Zoho API billing. The number
+ *               moved when our cron ran, not when Zoho charged us.
+ *   openai    — counted risk_runs + risk_card_runs + security_scan_runs. Those
+ *               are LLM runs in general, and this codebase's LLM work is
+ *               largely Anthropic. It attributed Anthropic's usage to OpenAI
+ *               and rendered it beside OpenAI's invoice as a reconciliation.
+ *   firecrawl — counted scraper_runs. The comment shipped with it said to
+ *               "treat it as scraper activity, not a Firecrawl invoice line",
+ *               which is an accurate description of a number that should not
+ *               have been in a billing reconciliation table.
+ *
+ * Each produced a plausible-looking row in Metered vs Billed that could not be
+ * reconciled against anything, which is worse than an absent row: an absent row
+ * says "not measured", and a wrong one says "measured, and it disagrees".
+ *
+ * Restoring any of them needs real per-call attribution at the call site
+ * (§8.6 of the plan), not a proxy count.
+ */
 
 export const vendorUsageCollector: OpsCollector = {
   id: "vendor.usage",

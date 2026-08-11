@@ -12,11 +12,19 @@
  * The one number that genuinely cannot be derived here is the vendor credit
  * balance — only ElevenLabs knows that — so that alone comes from samples.
  *
- * WINDOWS. The reconciliation table uses trailing 30 days on BOTH halves. That
- * is the whole point: metered-over-30d against billed-MTD would be comparing
- * different spans and every row would look wrong on the 2nd of the month. The
- * MTD figure survives only as the headline, matching spend.billed_tech_mtd in
- * registry.ts.
+ * WINDOWS. The reconciliation table uses ONE window across BOTH halves, and the
+ * window is chosen by the reader (see ./spendWindow.ts). That matched span is
+ * the whole point: metered-over-30d against billed-MTD would be comparing
+ * different periods and every row would look wrong on the 2nd of the month.
+ *
+ * The default is the CURRENT MONTH rather than trailing 30 days. Both are
+ * defensible, but only one of them agrees with the burn chart directly above
+ * it — and an unlabelled 30-day figure sitting under a month-to-date figure is
+ * what made a correct Hostinger total (₹28,387.88, which legitimately includes
+ * two July invoices) read as a bug. Trailing 30 days is still selectable.
+ *
+ * The MTD figure survives as the headline regardless of the selected window,
+ * matching spend.billed_tech_mtd in registry.ts.
  *
  * MONEY IS INR PAISE. expense_submissions.amount is already the INR-converted
  * figure (original_amount x fx_rate, computed at entry); ai_call_logs
@@ -28,9 +36,22 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 
+import { addMonths, istMonth, momDelta } from "./elevenlabsSeries";
 import { toNumber } from "./format";
 import { latestSamples, bySourceKey } from "./samples";
-import { canonicalVendor, vendorDef, vendorLabel } from "./vendors";
+import {
+  defaultSpendWindow,
+  resolveSpendWindow,
+  type SpendWindow,
+  type SpendWindowKey,
+} from "./spendWindow";
+import {
+  canonicalVendor,
+  vendorDef,
+  vendorLabel,
+  vendorMeteredUnit,
+  vendorMeteringNotApplicable,
+} from "./vendors";
 
 const rows = async (
   query: ReturnType<typeof sql>,
@@ -89,15 +110,23 @@ export interface VendorRow {
   label: string;
   /** False when the invoice entity matched no known vendor. */
   matched: boolean;
-  /** Trailing-30d invoiced total, INR paise. */
+  /** Invoiced total over the selected window, INR paise. */
   billed_paise: number;
   billed_invoices: number;
-  /** Trailing-30d metered cost where we have one (AI providers only). */
+  /** Metered cost over the same window, where we have one (AI providers only). */
   metered_paise: number | null;
-  /** Trailing-30d billable API volume where we can count it. */
+  /** Metered volume over the same window, where we can count it. */
   metered_calls: number | null;
+  /** What one unit of `metered_calls` is — never render the count without it. */
+  metered_unit: string | null;
   /** What the metered half was derived from, for the row's tooltip. */
   metered_from: string | null;
+  /**
+   * True when metering this vendor is not a concept (a VPS, a SaaS seat).
+   * The row still belongs in the table — the invoice is real — but its metered
+   * half reads "not applicable" rather than an em-dash that means "missing".
+   */
+  metering_not_applicable: boolean;
   /** Invoice entity names that rolled up into this row. */
   entities: string[];
 }
@@ -112,35 +141,63 @@ export interface CreditTile {
   age_minutes: number | null;
 }
 
+/** One invoice behind a month's burn total. */
+export interface BreakdownRow {
+  id: string;
+  vendor: string | null;
+  vendor_label: string | null;
+  invoice_number: string | null;
+  description: string | null;
+  effective_date: string | null;
+  paise: number;
+}
+
 export interface SpendView {
-  /** Newest first. Index 0 is the current (partial) month. */
+  /** Newest first. Index 0 is the current (partial) month. Gap-filled. */
   burn: MonthBurn[];
   mom_delta_pct: number | null;
   billed_tech_mtd_paise: number;
-  billed_tech_30d_paise: number;
-  ai_cost_30d_paise: number;
-  ai_calls_30d: number;
+  /** Billed in the SELECTED window — same population as MTD. */
+  billed_window_paise: number;
+  ai_cost_window_paise: number;
+  ai_calls_window: number;
   vendors: VendorRow[];
   credits: CreditTile[];
   /** Current month in IST, YYYY-MM. The page uses it to mark the partial bar. */
   current_month: string;
+  /** The window both halves of the reconciliation were computed over. */
+  window: SpendWindow;
   /** Null when neither `bucket` nor `department` exists on this database. */
   tech_filter_column: "bucket" | "department" | null;
 }
 
-export async function getSpendView(): Promise<SpendView> {
+export async function getSpendView(
+  windowKey?: SpendWindowKey,
+): Promise<SpendView> {
   const column = await techFilterColumn();
+  const window = resolveSpendWindow(windowKey ?? defaultSpendWindow());
+
+  // Inclusive IST day bounds, applied identically to both halves. `to` is
+  // expressed as `< to + 1 day` so the last day is whole — the same boundary
+  // convention whereClauseAcl uses, so the two surfaces cannot drift.
+  const meteredWindow = sql`
+    AND ended_at >= (${window.from}::date::timestamp AT TIME ZONE 'Asia/Kolkata')
+    AND ended_at <  ((${window.to}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')
+  `;
 
   // ---- metered: AI calls -------------------------------------------------
   // Not joined to dialer_campaign_leads. That join is what made Cost Analytics
   // read ~5x low before May 2026 — calls outside a campaign, and campaign calls
   // whose webhook dropped, have no DCL row. Spend is spend.
+  //
+  // Bounded by the selected window rather than a hardcoded `NOW() - INTERVAL
+  // '30 days'`, so the metered half moves with the billed half.
   const [aiTotal] = await rows(sql`
     SELECT
       COALESCE(SUM(total_cost_cents), 0)::bigint AS cost_cents,
       COUNT(*)::int                              AS calls
     FROM ai_call_logs
-    WHERE call_id IS NOT NULL AND ended_at > NOW() - INTERVAL '30 days'
+    WHERE call_id IS NOT NULL ${meteredWindow}
   `);
 
   const aiByProvider = await rows(sql`
@@ -148,15 +205,19 @@ export async function getSpendView(): Promise<SpendView> {
            COALESCE(SUM(total_cost_cents), 0)::bigint AS cost_cents,
            COUNT(*)::int                              AS calls
     FROM ai_call_logs
-    WHERE call_id IS NOT NULL AND ended_at > NOW() - INTERVAL '30 days'
+    WHERE call_id IS NOT NULL ${meteredWindow}
       AND provider IS NOT NULL
     GROUP BY provider
   `);
 
   // ---- billed ------------------------------------------------------------
+  // The current IST month, needed here (not just at the end) because the burn
+  // range is anchored to it.
+  const currentMonth = istMonth();
+
   let burn: MonthBurn[] = [];
   let billedMtd = 0;
-  let billed30d = 0;
+  let billedWindowPaise = 0;
   const billedByVendor = new Map<
     string,
     { label: string; matched: boolean; paise: number; invoices: number; entities: string[] }
@@ -166,22 +227,43 @@ export async function getSpendView(): Promise<SpendView> {
     const scope = sql`
       WHERE ${sql.raw(column)} = 'tech' AND status = 'approved'
     `;
+    // The same inclusive IST day bounds the metered half uses.
+    const billedWindow = sql`
+      AND ${EFFECTIVE_DATE} >= ${window.from}::date
+      AND ${EFFECTIVE_DATE} <= ${window.to}::date
+    `;
 
+    // Six calendar months back from the current one, so the range is fixed
+    // rather than "the six months that happen to have invoices". LIMIT 6 on a
+    // DESC scan returned the six most recent months WITH ROWS and the chart
+    // drew them evenly spaced — a month with no tech spend simply vanished and
+    // the gap rendered as continuity.
+    const oldestMonth = addMonths(currentMonth, -5);
     const monthly = await rows(sql`
       SELECT TO_CHAR(${EFFECTIVE_DATE}, 'YYYY-MM') AS month,
              COALESCE(SUM(amount), 0)::numeric     AS inr,
              COUNT(*)::int                         AS invoices
       FROM expense_submissions ${scope}
-        AND ${EFFECTIVE_DATE} IS NOT NULL
+        AND ${EFFECTIVE_DATE} >= ${`${oldestMonth}-01`}::date
       GROUP BY month
       ORDER BY month DESC
-      LIMIT 6
     `);
-    burn = monthly.map((r) => ({
-      month: String(r.month),
-      paise: paise(r.inr),
-      invoices: Number(r.invoices ?? 0),
-    }));
+    const byMonth = new Map(
+      monthly.map((r) => [
+        String(r.month),
+        { paise: paise(r.inr), invoices: Number(r.invoices ?? 0) },
+      ]),
+    );
+    burn = [];
+    for (let i = 0; i < 6; i++) {
+      const month = addMonths(currentMonth, -i);
+      const hit = byMonth.get(month);
+      burn.push({
+        month,
+        paise: hit?.paise ?? 0,
+        invoices: hit?.invoices ?? 0,
+      });
+    }
 
     const [mtd] = await rows(sql`
       SELECT COALESCE(SUM(amount), 0)::numeric AS inr
@@ -190,13 +272,25 @@ export async function getSpendView(): Promise<SpendView> {
     `);
     billedMtd = paise(mtd?.inr);
 
+    // The window total, computed in ITS OWN query rather than accumulated
+    // inside the per-vendor loop below. The loop's query carries
+    // `AND vendor IS NOT NULL`, so summing it produced a headline that silently
+    // excluded every approved tech invoice with a blank vendor while the MTD
+    // figure beside it included them — two numbers in one card that could not
+    // be reconciled, and no way to see why.
+    const [windowTotal] = await rows(sql`
+      SELECT COALESCE(SUM(amount), 0)::numeric AS inr
+      FROM expense_submissions ${scope} ${billedWindow}
+    `);
+    billedWindowPaise = paise(windowTotal?.inr);
+
     const perVendor = await rows(sql`
       SELECT vendor,
              COALESCE(SUM(amount), 0)::numeric AS inr,
              COUNT(*)::int                     AS invoices
       FROM expense_submissions ${scope}
         AND vendor IS NOT NULL
-        AND ${EFFECTIVE_DATE} > (NOW() AT TIME ZONE 'Asia/Kolkata')::date - 30
+        ${billedWindow}
       GROUP BY vendor
     `);
 
@@ -215,7 +309,6 @@ export async function getSpendView(): Promise<SpendView> {
       entry.invoices += Number(r.invoices ?? 0);
       if (!entry.entities.includes(raw)) entry.entities.push(raw);
       billedByVendor.set(vendor.id, entry);
-      billed30d += paise(r.inr);
     }
   }
 
@@ -230,7 +323,18 @@ export async function getSpendView(): Promise<SpendView> {
   for (const s of samples) {
     if (s.metric_key !== "vendor.api_calls_30d") continue;
     if (s.value_num == null) continue;
-    meteredCalls.set(s.source.replace(/^vendor:/, ""), s.value_num);
+    const id = s.source.replace(/^vendor:/, "");
+    // A sample is rendered only while the vendor still DECLARES where its
+    // metered volume comes from. Three probes were withdrawn as misattributions
+    // (zoho counted our own invoice syncs, openai counted Anthropic's LLM runs,
+    // firecrawl counted whole scraper runs) — but withdrawing the probe only
+    // stops new samples, and latestSamples() keeps serving the old ones for up
+    // to 48 hours. Without this guard the retired rows would linger on the
+    // page, now stripped of their unit label, which is strictly worse than
+    // before. Gating on the declaration makes the removal take effect at once
+    // and keeps vendors.ts the single source of truth for what is metered.
+    if (!vendorDef(id)?.meteredFrom) continue;
+    meteredCalls.set(id, s.value_num);
   }
 
   const meteredCost = new Map<string, { paise: number; calls: number }>();
@@ -265,7 +369,9 @@ export async function getSpendView(): Promise<SpendView> {
         billed_invoices: billed?.invoices ?? 0,
         metered_paise: cost?.paise ?? null,
         metered_calls: cost?.calls ?? calls ?? null,
+        metered_unit: vendorMeteredUnit(id),
         metered_from: vendorDef(id)?.meteredFrom ?? null,
+        metering_not_applicable: vendorMeteringNotApplicable(id),
         entities: billed?.entities ?? [],
       };
     })
@@ -304,30 +410,71 @@ export async function getSpendView(): Promise<SpendView> {
   // all, so on 4 August the newest row is July — a finished month — and
   // dropping it silently compared June against May while ignoring the most
   // recent real data.
-  const currentMonth = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-  })
-    .format(new Date())
-    .slice(0, 7);
-
+  //
+  // Shared with the ElevenLabs page rather than reimplemented: momDelta() also
+  // enforces that the two months are ADJACENT, which this open-coded version
+  // did not. `burn` is now gap-filled, so a missing month is a zero row rather
+  // than an absent one and the adjacency check passes on real data — but the
+  // guarantee belongs in one place.
   const complete = burn.filter((m) => m.month !== currentMonth);
-  const momDelta =
-    complete.length >= 2 && complete[1]!.paise > 0
-      ? ((complete[0]!.paise - complete[1]!.paise) / complete[1]!.paise) * 100
-      : null;
+  const momDeltaPct = momDelta(
+    complete.map((m) => ({ month: m.month, calls: m.invoices, cost_paise: m.paise })),
+    currentMonth,
+  );
 
   return {
     burn,
-    mom_delta_pct: momDelta,
+    mom_delta_pct: momDeltaPct,
     billed_tech_mtd_paise: billedMtd,
-    billed_tech_30d_paise: billed30d,
-    ai_cost_30d_paise: Number(aiTotal?.cost_cents ?? 0),
-    ai_calls_30d: Number(aiTotal?.calls ?? 0),
+    billed_window_paise: billedWindowPaise,
+    ai_cost_window_paise: Number(aiTotal?.cost_cents ?? 0),
+    ai_calls_window: Number(aiTotal?.calls ?? 0),
     vendors,
     credits,
     current_month: currentMonth,
+    window,
     tech_filter_column: column,
   };
+}
+
+/**
+ * The invoices behind one month's burn bar.
+ *
+ * Same scope as the burn query — `bucket`/`department` = 'tech', approved, same
+ * effective date — so the rows returned here always sum to the bar that was
+ * clicked. Anything else would be a drill-down that disagrees with the number
+ * it drilled into.
+ */
+export async function getSpendBreakdown(
+  month: string,
+): Promise<BreakdownRow[]> {
+  const column = await techFilterColumn();
+  if (!column) return [];
+
+  const result = await rows(sql`
+    SELECT id::text                        AS id,
+           vendor,
+           invoice_number,
+           description,
+           ${EFFECTIVE_DATE}::text         AS effective_date,
+           COALESCE(amount, 0)::numeric    AS inr
+    FROM expense_submissions
+    WHERE ${sql.raw(column)} = 'tech' AND status = 'approved'
+      AND TO_CHAR(${EFFECTIVE_DATE}, 'YYYY-MM') = ${month}
+    ORDER BY ${EFFECTIVE_DATE} DESC, amount DESC
+  `);
+
+  return result.map((r) => {
+    const raw = r.vendor == null ? null : String(r.vendor);
+    return {
+      id: String(r.id),
+      vendor: raw,
+      vendor_label: raw ? (canonicalVendor(raw)?.label ?? raw) : null,
+      invoice_number: r.invoice_number == null ? null : String(r.invoice_number),
+      description: r.description == null ? null : String(r.description),
+      effective_date:
+        r.effective_date == null ? null : String(r.effective_date).slice(0, 10),
+      paise: paise(r.inr),
+    };
+  });
 }
