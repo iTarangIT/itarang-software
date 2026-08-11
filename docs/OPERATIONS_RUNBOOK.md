@@ -96,7 +96,17 @@ Optional:
 
 ### 4. Install the host agent
 
-Per box — see `ops-agent/README.md` for the full procedure.
+> **Doing this for the first time? Follow
+> [`docs/OPS_AGENT_ROLLOUT.md`](./OPS_AGENT_ROLLOUT.md) instead** — the
+> sandbox-first runbook, with a stop condition on every step. It covers the
+> prerequisite most people miss: the Ops Console and its `ops-agent` workflow
+> must be on the repo's DEFAULT BRANCH and deployed before any of this can work,
+> or the agent posts into a 404 and reports nothing wrong.
+
+Per box — see `ops-agent/README.md` for the full procedure. Prefer
+`.github/workflows/ops-agent.yml` (manual dispatch, sandbox + dry-run by
+default) over hand-running the commands below: nobody holds the VPS deploy key
+locally.
 
 ```bash
 scp -r ops-agent/ user@box:~/ops-agent

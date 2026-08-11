@@ -34,13 +34,48 @@ head_ "1. Configuration"
 
 # Pull from the box's shared/.env when the caller has not exported them. Only
 # the OPS_* keys, so this cannot drag DATABASE_URL into the agent's environment.
+#
+# TWO RULES, both learned the hard way:
+#
+#  1. AN ALREADY-EXPORTED VALUE WINS. The env file used to override the caller
+#     unconditionally, which silently defeated the deliberate
+#     `export OPS_LOG_DIR=...` that .github/workflows/ops-agent.yml sets before
+#     calling this script — the workflow passes it precisely because the agent
+#     lives in ~ and the CRM's logs do not, and a stale line in shared/.env
+#     would quietly win anyway.
+#
+#  2. QUOTES ARE STRIPPED. `export OPS_INGEST_SECRET="abc123"` through the old
+#     `export "$line"` exported the value WITH the quote characters in it. The
+#     CRM then compares "abc123" against abc123, returns 401, and the operator
+#     is told the secret is wrong — for a secret that is correct. Env files in
+#     this repo do use quoted values (10 of 124 assignments in .env.local), so
+#     this was a live trap, not a theoretical one.
 for CANDIDATE in "${OPS_ENV_FILE:-}" ../shared/.env ../../shared/.env; do
   [ -n "$CANDIDATE" ] && [ -f "$CANDIDATE" ] || continue
   say "reading OPS_* from $CANDIDATE"
   while IFS= read -r line; do
     case "$line" in
-      OPS_*=*) export "${line?}" ;;
+      OPS_*=*) ;;
+      *) continue ;;
     esac
+
+    KEY="${line%%=*}"
+    VALUE="${line#*=}"
+
+    # Leading/trailing whitespace, then ONE matching pair of surrounding quotes.
+    VALUE="${VALUE#"${VALUE%%[![:space:]]*}"}"
+    VALUE="${VALUE%"${VALUE##*[![:space:]]}"}"
+    case "$VALUE" in
+      \"*\") VALUE="${VALUE#\"}"; VALUE="${VALUE%\"}" ;;
+      \'*\') VALUE="${VALUE#\'}"; VALUE="${VALUE%\'}" ;;
+    esac
+
+    # An exported value wins over the file — see rule 1 above.
+    if [ -n "${!KEY:-}" ]; then
+      say "  $KEY: keeping the exported value (file ignored)"
+      continue
+    fi
+    export "$KEY=$VALUE"
   done < <(tr -d '\r' < "$CANDIDATE")
   break
 done

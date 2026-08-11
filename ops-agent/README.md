@@ -101,13 +101,24 @@ All via environment variables:
 | `OPS_CERT_DOMAIN` | no | domain to check TLS expiry for; omit to skip the check |
 | `OPS_INTERVAL_MS` | no | default `300000` (5 min) |
 | `OPS_ONCE` | no | `1` = run one cycle and exit (cron mode) |
-| `OPS_LOG_FILES` | no | comma-separated `service:path`; default `itarang-crm-web:logs/web.out.log,itarang-crm-web:logs/web.err.log,nginx:/var/log/nginx/error.log` |
+| `OPS_LOG_DIR` | **effectively yes** | Directory holding the CRM's `web.out.log`. Without it the pm2 defaults are not added at all and only nginx is tailed — see "Log forwarding" |
+| `OPS_LOG_FILES` | no | comma-separated `service:path`. Default: `itarang-crm-web:web.out.log,itarang-crm-web:web.err.log` (added **only when `OPS_LOG_DIR` is set**, and resolved against it) plus `nginx:/var/log/nginx/error.log` |
 | `OPS_LOG_STATE_FILE` | no | where byte offsets are remembered; default `.ops-agent-state.json` beside the agent |
 | `OPS_LOG_MIN_LEVEL` | no | `error`\|`warn`\|`info`; default `warn` |
+| `OPS_ENV_FILE` | no | Path to an env file `install.sh` reads `OPS_*` from. Defaults to probing `../shared/.env` then `../../shared/.env`. Set by the GitHub workflow |
 
-The default `OPS_LOG_FILES` paths for pm2 are **relative to the agent's cwd**,
-which under the supplied pm2 config is the agent's own directory. If your pm2
-logs live elsewhere, pass absolute paths.
+Relative entries in `OPS_LOG_FILES` resolve against `OPS_LOG_DIR`, **not** against
+the agent's cwd. Absolute paths ignore `OPS_LOG_DIR` entirely. If `OPS_LOG_DIR`
+is unset, the two pm2 defaults are omitted rather than resolved to a path that
+cannot exist — a relative default resolved next to the *agent*, where only
+`ops-agent.out.log` lives, which is the bug fixed in 34b9db4b.
+
+`install.sh` **strips surrounding quotes** from values read out of an env file.
+`OPS_INGEST_SECRET="abc123"` in `shared/.env` used to be exported with the quote
+characters included, so the CRM saw a different string and answered `401` — for
+a secret that was correct. It also lets an **already-exported** value win over
+the file, so the workflow's deliberate `OPS_LOG_DIR` is not silently overridden
+by a stale line on the box.
 
 ### CRM side
 
