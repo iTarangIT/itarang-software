@@ -11,7 +11,6 @@ import {
   User,
   TrendingUp,
   Clock,
-  RefreshCw,
   AlertCircle,
   Search,
   ChevronLeft,
@@ -26,10 +25,7 @@ import {
   FileSpreadsheet,
   Loader2,
   ChevronDown,
-  Send,
 } from "lucide-react";
-import { CallButton } from "@/components/leads/call-button";
-import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
 import { SendToNeodoveModal } from "@/components/leads/send-to-neodove-modal";
 import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
@@ -41,47 +37,55 @@ import {
   type DialerCategory,
   type DialerStartPayload,
 } from "@/components/leads/dialer-start-modal";
-import {
-  LeadCallStatus,
-  type CallRowStatus,
-} from "@/components/leads/lead-call-status";
 import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
 import { CampaignsTable } from "@/components/leads/campaigns-table";
 import { CostAnalyticsView } from "@/components/leads/cost-analytics-view";
 import { AddLeadModal } from "@/components/leads/add-lead-modal";
+import {
+  capabilitiesFor,
+  LEAD_ASSIGNEE_ROLES,
+  NO_CAPABILITIES,
+  type LeadsCapabilities,
+} from "@/lib/leads/access";
+import type { UserOption } from "@/lib/admin/types";
+import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
+import type { LeadListFacets } from "@/lib/leads/leadListQuery";
+import { LeadsFilterBar } from "./_components/LeadsFilterBar";
+import { LeadsStatCards } from "./_components/LeadsStatCards";
+import { LeadsTable, type LeadRow } from "./_components/LeadsTable";
+import { LeadDrawer } from "./_components/LeadDrawer";
+import { LeadsSelectionBar } from "./_components/LeadsSelectionBar";
+import {
+  EMPTY_FILTERS,
+  fromSearchParams,
+  hasAnyFilter,
+  toSearchParams,
+  type LeadFilters,
+} from "./_components/filters";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
 
 type Tab = "leads" | "scraper" | "converted" | "campaigns" | "cost-analytics";
 
-// Roles allowed to see the Cost Analytics tab. Mirrors the server-side
-// gate in /api/campaigns/cost-analytics so the UI never surfaces a tab
-// that the API would refuse.
-const COST_ANALYTICS_ROLES = new Set([
-  "ceo",
-  "business_head",
-  "sales_head",
-  "finance_controller",
-  "admin",
-]);
-
-// Roles allowed to hand leads to NeoDove. Mirrors NEODOVE_ADMIN_ROLES in
-// src/lib/neodove/roles.ts — kept as a literal rather than imported because
-// that module is only reached from server routes, and pulling it into a client
-// bundle to read five strings is not worth the coupling.
-const NEODOVE_ROLES = new Set([
-  "admin",
-  "sales_head",
-  "business_head",
-  "ceo",
-  "sales_manager",
-]);
+// The Cost-Analytics and NeoDove role lists used to be duplicated here as two
+// literal Sets. They now live in src/lib/leads/access.ts alongside the
+// oversight and bulk-action lists, and GET /api/dealer-leads returns the
+// resolved capabilities with the rows — so the page renders what the server
+// decided instead of re-deriving it from a copy that can drift.
 
 type DialerPhase = "idle" | "calling" | "countdown";
 type UploadStatus = "idle" | "parsing" | "uploading" | "done" | "error";
 
-const SALES_MANAGERS = ["SM1", "SM2", "SM3", "SM4"];
+// SALES_MANAGERS used to be ["SM1","SM2","SM3","SM4"] — placeholder strings,
+// not users. The dropdown posted one of them to POST /api/dealer-leads/assign,
+// a route that DOES NOT EXIST, with no res.ok check, so every click 404'd
+// silently. Even had it existed, its twin at /api/leads/dealer-lead/assign
+// writes the literal string into dealer_leads.assigned_to — a plain `text`
+// column with no FK, which src/lib/admin/reports.ts:439 notes is NULL on every
+// production row precisely because nothing ever reached its only writer.
+// Real ownership lives in current_owner_id and is written by the audited
+// /api/admin/leads/bulk. The picker now loads real users; see ConvertedLeadCard.
 
 const STATUS_CONFIG: Record<
   string,
@@ -161,14 +165,6 @@ const STATUS_CONFIG: Record<
   },
 };
 
-const OUTCOME_CONFIG: Record<string, { label: string; color: string }> = {
-  callback_requested: { label: "Callback Requested", color: "text-purple-600" },
-  interested: { label: "Interested", color: "text-emerald-600" },
-  disqualified: { label: "Not Interested", color: "text-red-500" },
-  unknown: { label: "No Outcome", color: "text-gray-400" },
-  completed: { label: "Completed", color: "text-teal-600" },
-};
-
 const NO_CALL_STATUSES = ["stop", "completed", "dnc", "failed"];
 const COUNTDOWN_SECS = 10;
 
@@ -196,21 +192,8 @@ function getIntentBg(score: number | null) {
   if (score >= INTENT_THRESHOLDS.WARM) return "bg-amber-50";
   return "bg-red-50";
 }
-function formatNextCall(date: string | null) {
-  if (!date) return null;
-  const now = new Date();
-  const diff = new Date(date).getTime() - now.getTime();
-  if (diff < 0) return "Overdue";
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `in ${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `in ${hrs}h`;
-  return `in ${Math.floor(hrs / 24)}d`;
-}
-function getLastOutcome(history: any[]): string | null {
-  if (!Array.isArray(history) || history.length === 0) return null;
-  return history[history.length - 1]?.outcome ?? null;
-}
+// formatNextCall / getLastOutcome / OUTCOME_CONFIG moved into
+// _components/LeadsTable.tsx with the row rendering they served.
 function formatDate(date: string | null) {
   if (!date) return "-";
   return new Date(date).toLocaleDateString("en-IN", {
@@ -654,25 +637,53 @@ function UploadModal({
 
 // ─── Pagination ───────────────────────────────────────────────
 
+const PAGE_SIZES = [10, 25, 50, 100];
+
 function Pagination({
   page,
   total,
   limit,
   onChange,
+  onLimitChange,
 }: {
   page: number;
   total: number;
   limit: number;
   onChange: (p: number) => void;
+  /** Omitted by the Converted tab, which has no page-size control. */
+  onLimitChange?: (n: number) => void;
 }) {
-  const totalPages = Math.ceil(total / limit);
-  if (totalPages <= 1) return null;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  // Still render when there is only one page — the rows-per-page control lives
+  // here, and hiding it at &lt;=1 page would strand anyone who set 100 and then
+  // filtered down to a handful.
+  if (totalPages <= 1 && !onLimitChange) return null;
   return (
-    <div className="flex items-center justify-between px-1 mt-4">
-      <p className="text-xs text-gray-400">
-        Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of{" "}
-        {total}
-      </p>
+    <div className="flex flex-wrap items-center justify-between gap-3 px-1 mt-4">
+      <div className="flex items-center gap-3">
+        <p className="text-xs text-gray-400">
+          {total === 0
+            ? "0 results"
+            : `Showing ${(page - 1) * limit + 1}–${Math.min(page * limit, total)} of ${total.toLocaleString("en-IN")}`}
+        </p>
+        {onLimitChange && (
+          <label className="flex items-center gap-1.5 text-xs text-gray-400">
+            Rows
+            <select
+              value={limit}
+              onChange={(e) => onLimitChange(Number(e.target.value))}
+              className="rounded-lg border border-gray-200 bg-white px-1.5 py-1 text-xs text-gray-600 outline-none focus:border-gray-400"
+            >
+              {PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      {totalPages > 1 && (
       <div className="flex items-center gap-1">
         <button
           onClick={() => onChange(page - 1)}
@@ -708,6 +719,7 @@ function Pagination({
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
+      )}
     </div>
   );
 }
@@ -869,12 +881,16 @@ function AiDialerBanner({
 function ConvertedLeadCard({
   lead,
   onUpdate,
+  caps,
 }: {
   lead: any;
   onUpdate: () => void;
+  caps: LeadsCapabilities;
 }) {
   const [assigning, setAssigning] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [owners, setOwners] = useState<UserOption[]>([]);
+  const [ownersError, setOwnersError] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const statusCfg = getStatusConfig(lead.current_status);
@@ -894,24 +910,63 @@ function ConvertedLeadCard({
     return () => document.removeEventListener("mousedown", handler);
   }, [assigning]);
 
-  const handleAssign = async (manager: string) => {
+  // Load real assignable users the first time the dropdown opens. Distinct
+  // query from the shared ["admin-user-options"] pickers — see the note on
+  // LEAD_ASSIGNEE_ROLES; this is a plain fetch, so there is no cache to poison,
+  // but the roles param is still required or the API returns reps + ASMs only.
+  useEffect(() => {
+    if (!assigning || owners.length > 0) return;
+    let cancelled = false;
+    const roles = LEAD_ASSIGNEE_ROLES.join(",");
+    fetch(`/api/admin/users?roles=${encodeURIComponent(roles)}`, {
+      cache: "no-store",
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("load failed"))))
+      .then((json) => {
+        if (!cancelled) setOwners(json?.data?.users ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setOwnersError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assigning, owners.length]);
+
+  // Posts to the same audited endpoint the bulk bar and the lead drawer use:
+  // it validates the target, writes current_owner_id / asm_id / assigned_at,
+  // and records an ownership_transfer touchpoint. The reason is fixed because
+  // this is a one-click control; the bulk bar and drawer take a typed reason.
+  const handleAssign = async (user: UserOption) => {
     setSaving(true);
     try {
-      await fetch("/api/dealer-leads/assign", {
+      const res = await fetch("/api/admin/leads/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          leadId: lead.id,
-          action: "assign",
-          assignTo: manager,
+          action: "reassign",
+          lead_ids: [lead.id],
+          target_user_id: user.user_id,
+          reason: "Assigned from the Converted Leads list.",
         }),
       });
+      const json = await res.json().catch(() => null);
+      // The old version ignored the response entirely, which is why a 404 was
+      // indistinguishable from a successful assignment.
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error?.message ?? `Assign failed (${res.status}).`);
+      }
+      toast.success(`Assigned to ${user.name ?? user.email}.`);
       onUpdate();
+    } catch (e) {
+      toast.error((e as Error).message);
     } finally {
       setSaving(false);
       setAssigning(false);
     }
   };
+
+  const ownerLabel = lead.current_owner_name ?? null;
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 hover:border-gray-300 hover:shadow-sm transition-all duration-150">
@@ -967,13 +1022,17 @@ function ConvertedLeadCard({
             </span>
           )}
 
-          {lead.assigned_to && (
+          {ownerLabel && (
             <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-600">
               <User className="w-3 h-3" />
-              {lead.assigned_to}
+              {ownerLabel}
             </span>
           )}
 
+          {/* Assigning writes ownership, so it is gated on the same roles the
+              endpoint enforces (admin, sales_head). Previously every viewer saw
+              a button that silently did nothing. */}
+          {caps.canBulkAct && (
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setAssigning((v) => !v)}
@@ -985,7 +1044,7 @@ function ConvertedLeadCard({
               ) : (
                 <User className="w-3 h-3" />
               )}
-              {lead.assigned_to ? "Reassign" : "Assign to Sales Head"}
+              {ownerLabel ? "Reassign" : "Assign owner"}
               <ChevronDown
                 className={`w-3 h-3 text-gray-400 transition-transform ${assigning ? "rotate-180" : ""}`}
               />
@@ -995,26 +1054,46 @@ function ConvertedLeadCard({
               <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden">
                 <div className="px-3 py-2 border-b">
                   <p className="text-xs font-medium text-gray-500">
-                    Select Sales Manager
+                    Assign to
                   </p>
                 </div>
-                <div className="py-1">
-                  {SALES_MANAGERS.map((manager) => (
-                    <button
-                      key={manager}
-                      onClick={() => handleAssign(manager)}
-                      className={`w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition-colors flex items-center justify-between ${lead.assigned_to === manager ? "text-blue-600 font-medium" : "text-gray-700"}`}
-                    >
-                      {manager}
-                      {lead.assigned_to === manager && (
-                        <CheckCircle className="w-3 h-3 text-blue-500" />
-                      )}
-                    </button>
-                  ))}
+                <div className="py-1 max-h-64 overflow-y-auto">
+                  {ownersError && (
+                    <p className="px-3 py-2 text-xs text-rose-600">
+                      Could not load users.
+                    </p>
+                  )}
+                  {!ownersError && owners.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>
+                  )}
+                  {owners.map((u) => {
+                    const isCurrent = u.user_id === lead.current_owner_id;
+                    return (
+                      <button
+                        key={u.user_id}
+                        onClick={() => handleAssign(u)}
+                        disabled={isCurrent}
+                        className={`w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition-colors flex items-center justify-between gap-2 disabled:opacity-50 ${isCurrent ? "text-blue-600 font-medium" : "text-gray-700"}`}
+                      >
+                        <span className="min-w-0 truncate">
+                          {u.name ?? u.email}
+                          {u.role && (
+                            <span className="ml-1 text-gray-400">
+                              · {u.role.replaceAll("_", " ")}
+                            </span>
+                          )}
+                        </span>
+                        {isCurrent && (
+                          <CheckCircle className="w-3 h-3 shrink-0 text-blue-500" />
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
           </div>
+          )}
 
           <Link href={`/leads/${lead.id}`}>
             <button className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">
@@ -1044,14 +1123,15 @@ export default function LeadsUnifiedPage() {
       : "leads";
   })();
 
-  // User role for cost-analytics tab visibility. Fetched once; failure
-  // leaves canSeeCostAnalytics=false so we never accidentally show a tab
-  // to an unauthorized user (the API would block them anyway).
-  const [canSeeCostAnalytics, setCanSeeCostAnalytics] = useState(false);
-  // Same single profile fetch also decides whether the NeoDove hand-off
-  // controls render. Defaults to false so a failed fetch hides an action the
-  // API would refuse anyway.
-  const [canSendToNeodove, setCanSendToNeodove] = useState(false);
+  // What this user may see and do on this page: the Cost Analytics tab, the
+  // NeoDove hand-off, the Owner/ASM columns, and the bulk actions.
+  //
+  // Derived from one profile fetch so the tab strip can render before any lead
+  // data lands; GET /api/dealer-leads then returns the SAME object computed
+  // server-side and we adopt that (see fetchLeads). The server is the authority
+  // — this is only so the UI doesn't flash controls it is about to hide.
+  // Defaults to all-false so a failed fetch hides actions the API would refuse.
+  const [caps, setCaps] = useState(NO_CAPABILITIES);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/user/profile")
@@ -1059,20 +1139,16 @@ export default function LeadsUnifiedPage() {
       .then((json) => {
         if (cancelled) return;
         const role = json?.data?.role as string | undefined;
-        if (role && COST_ANALYTICS_ROLES.has(role)) {
-          setCanSeeCostAnalytics(true);
-        }
-        if (role && NEODOVE_ROLES.has(role)) {
-          setCanSendToNeodove(true);
-        }
+        if (role) setCaps(capabilitiesFor(role));
       })
       .catch(() => {
-        // Silent failure — tab stays hidden.
+        // Silent failure — controls stay hidden.
       });
     return () => {
       cancelled = true;
     };
   }, []);
+  const canSeeCostAnalytics = caps.canSeeCostAnalytics;
   const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
   const [showUpload, setShowUpload] = useState(false);
@@ -1086,16 +1162,46 @@ export default function LeadsUnifiedPage() {
   const [leadsStats, setLeadsStats] = useState({
     hot: 0,
     warm: 0,
-    qualified: 0,
+    cold: 0,
+    unassigned: 0,
     scheduled: 0,
   });
+  // Owner / ASM / source dropdown options, served alongside the rows so the
+  // filter bar never needs its own request.
+  const [facets, setFacets] = useState<LeadListFacets | undefined>(undefined);
+  // Lead opened in the side drawer (row click).
+  const [drawerLead, setDrawerLead] = useState<LeadRow | null>(null);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
-  // Created-at date range filter for the Leads tab (cards + list). Empty =
-  // all-time (default). Both ends inclusive; sent to /api/dealer-leads.
-  const [leadsFrom, setLeadsFrom] = useState("");
-  const [leadsTo, setLeadsTo] = useState("");
+  // ── Merged-list filters ───────────────────────────────────────────────
+  // `draft` is what the user is typing; `applied` is what has been sent. The
+  // 350ms debounce between them stops every keystroke from firing a request —
+  // the pattern the old Leads Info page used, which the un-debounced /leads
+  // search lacked.
+  //
+  // Seeded from the URL so /admin/leads-info?status=Lost&owner_id=… can redirect
+  // here and land on the same filtered view, keeping old bookmarks alive.
+  const [draft, setDraft] = useState<LeadFilters>(() =>
+    fromSearchParams(new URLSearchParams(searchParams?.toString() ?? "")),
+  );
+  const [applied, setApplied] = useState<LeadFilters>(draft);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setApplied(draft);
+      setLeadsPage(1);
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [draft]);
+
+  const setFilter = useCallback((key: keyof LeadFilters, value: string | boolean) => {
+    setDraft((d) => ({ ...d, [key]: value }));
+  }, []);
+  const setDateRange = useCallback((from: string, to: string) => {
+    setDraft((d) => ({ ...d, from, to }));
+  }, []);
+  const clearFilters = useCallback(() => setDraft(EMPTY_FILTERS), []);
 
   // Bulk NeoDove hand-off. Selection is scoped to the leads currently on
   // screen and cleared whenever the visible set changes — carrying a hidden
@@ -1105,9 +1211,23 @@ export default function LeadsUnifiedPage() {
     () => new Set(),
   );
   const [showBulkNeodove, setShowBulkNeodove] = useState(false);
+  // "Select all N matching" — in flight, and the cap if the match count
+  // exceeded what a bulk action accepts.
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [selectionCap, setSelectionCap] = useState<number | null>(null);
+  // Clearing on ANY filter change is load-bearing: a selection carried across
+  // a filter change would let a bulk Reassign or a NeoDove push hit leads the
+  // operator can no longer see, and neither can be undone.
+  //
+  // Paging deliberately does NOT clear any more. It used to, which made a
+  // cross-page selection impossible — and "select all 3,000 matching" is the
+  // whole point of a bulk action. What made clearing necessary was the
+  // selection being invisible; the sticky bar now shows the running count and a
+  // Clear at all times, so carrying it across pages is both safe and expected.
   useEffect(() => {
     setSelectedLeadIds(new Set());
-  }, [leadsPage, search, leadsFrom, leadsTo, tab]);
+    setSelectionCap(null);
+  }, [applied, tab]);
 
   const toggleLeadSelected = (id: string) => {
     setSelectedLeadIds((prev) => {
@@ -1190,14 +1310,9 @@ export default function LeadsUnifiedPage() {
     return () => clearInterval(tick);
   }, [callingLeadId, callingLeadStartedAt]);
 
-  const getRowStatus = useCallback(
-    (leadId: string): CallRowStatus => {
-      if (callingLeadId === leadId) return "calling";
-      if (endedLeadIds.has(leadId)) return "ended";
-      return "idle";
-    },
-    [callingLeadId, endedLeadIds],
-  );
+  // getRowStatus() lived here to colour each row while the dialer ran. That
+  // now happens inside _components/LeadsTable.tsx, which receives callingLeadId
+  // / dialerPhase / endedLeadIds as props and derives the same three states.
   const [dialerCallsMade, setDialerCallsMade] = useState(0);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
 
@@ -1213,14 +1328,15 @@ export default function LeadsUnifiedPage() {
   const queueRef = useRef<any[]>([]);
   const indexRef = useRef(0);
 
-  const LIMIT = 10;
+  // Rows per page. Was hardcoded to 10, which is why "select all on this page"
+  // never felt like a bulk action. Changing it resets to page 1 — staying on
+  // page 40 of a 10-per-page list makes no sense at 100 per page.
+  const [LIMIT, setLimit] = useState(10);
 
   const fetchLeads = useCallback(
     async (
       page: number,
-      q: string,
-      fromDate: string,
-      toDate: string,
+      f: LeadFilters,
       opts?: { silent?: boolean },
     ) => {
       // When the dialer is running we re-fetch every 2s to surface lead
@@ -1230,12 +1346,7 @@ export default function LeadsUnifiedPage() {
       const seq = ++fetchSeqRef.current;
       if (!silent) setLeadsLoading(true);
       try {
-        const params = new URLSearchParams();
-        params.set("page", String(page));
-        params.set("limit", String(LIMIT));
-        params.set("search", q);
-        if (fromDate) params.set("from", fromDate);
-        if (toDate) params.set("to", toDate);
+        const params = toSearchParams(f, page, LIMIT);
         const res = await fetch(`/api/dealer-leads?${params.toString()}`);
         const data = await res.json();
         // A newer fetch superseded this one while it was in flight — drop the
@@ -1245,6 +1356,11 @@ export default function LeadsUnifiedPage() {
           setLeads(data.leads);
           setLeadsTotal(data.total);
           if (data.stats) setLeadsStats(data.stats);
+          if (data.facets) setFacets(data.facets);
+          // The server decides what this role may see and do; the client just
+          // renders it. Keeps the gate in one place instead of duplicating role
+          // lists here and hoping they stay in sync with the APIs.
+          if (data.capabilities) setCaps(data.capabilities);
           setLeadsError(null);
         } else {
           // Surface API failures instead of rendering a silent empty state.
@@ -1290,9 +1406,9 @@ export default function LeadsUnifiedPage() {
   }, []);
 
   useEffect(() => {
-    if (tab === "leads") fetchLeads(leadsPage, search, leadsFrom, leadsTo);
+    if (tab === "leads") fetchLeads(leadsPage, applied);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
-  }, [tab, leadsPage, convertedPage, search, leadsFrom, leadsTo]);
+  }, [tab, leadsPage, convertedPage, search, applied]);
 
   // While the AI dialer is running, poll the leads list every 2s so the
   // `current_status` column reflects lead transitions (pending → calling
@@ -1302,40 +1418,41 @@ export default function LeadsUnifiedPage() {
   useEffect(() => {
     if (tab !== "leads" || !dialerOn) return;
     const id = setInterval(() => {
-      fetchLeads(leadsPage, search, leadsFrom, leadsTo, { silent: true });
+      fetchLeads(leadsPage, applied, { silent: true });
     }, 2000);
     return () => clearInterval(id);
-  }, [tab, dialerOn, leadsPage, search, leadsFrom, leadsTo, fetchLeads]);
+  }, [tab, dialerOn, leadsPage, applied, fetchLeads]);
 
+  // Search box on the header row now belongs to the Converted tab only — the
+  // Leads tab has its own search inside LeadsFilterBar, wired to `draft`.
   const handleSearch = (v: string) => {
     setSearch(v);
-    setLeadsPage(1);
     setConvertedPage(1);
   };
 
-  // Local YYYY-MM-DD (avoids UTC off-by-one from toISOString()).
-  const toISODate = (d: Date) => {
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 10);
-  };
-  // Quick date presets for month-wise filtering. offset 0 = current month
-  // (start → today), -1 = previous full calendar month.
-  const applyMonthPreset = (offset: number) => {
-    const now = new Date();
-    const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-    const last =
-      offset === 0
-        ? now
-        : new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
-    setLeadsFrom(toISODate(first));
-    setLeadsTo(toISODate(last));
-    setLeadsPage(1);
-  };
-  const clearDateRange = () => {
-    setLeadsFrom("");
-    setLeadsTo("");
-    setLeadsPage(1);
-  };
+  // Pulls every id matching the active filters, not just the visible page.
+  const selectAllMatching = useCallback(async () => {
+    setSelectingAll(true);
+    try {
+      const params = toSearchParams(applied, 1, LIMIT);
+      params.set("ids_only", "1");
+      const res = await fetch(`/api/dealer-leads?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error?.message ?? "Could not select all leads.");
+      }
+      setSelectedLeadIds(new Set<string>(data.ids ?? []));
+      setSelectionCap(data.capped ? data.cap : null);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSelectingAll(false);
+    }
+  }, [applied]);
+
+  const refreshLeads = useCallback(() => {
+    fetchLeads(leadsPage, applied, { silent: true });
+  }, [fetchLeads, leadsPage, applied]);
 
   const triggerCall = useCallback(
     async (lead: any) => {
@@ -1556,34 +1673,26 @@ export default function LeadsUnifiedPage() {
     [],
   );
 
-  // Counts come from the server now (computed across ALL matching leads).
-  // The old client-side filter only saw the visible 10 rows on the current
-  // page, which is why Hot/Warm/Qualified always read 0 unless a high-intent
-  // lead happened to be on page 1.
-  const stats = {
-    total: leadsTotal,
-    hot: leadsStats.hot,
-    warm: leadsStats.warm,
-    qualified: leadsStats.qualified,
-    scheduled: leadsStats.scheduled,
-  };
-
   const currentDialerLead = dialerQueue[dialerIndex] ?? null;
   const nextDialerLead = dialerQueue[dialerIndex + 1] ?? null;
 
   return (
-    <div className="max-w-6xl mx-auto py-8 px-6 min-h-screen bg-gray-50">
+    // Widened from max-w-6xl (1152px) when Leads Info merged in: the list now
+    // carries the oversight columns too (qualification, owner, ASM, visit) and
+    // was cramped at the old width. Matches the max-w-[1600px] the Leads Info
+    // page used for the same table.
+    <div className="max-w-[1600px] mx-auto py-8 px-6 min-h-screen bg-gray-50">
       {showUpload && (
         <UploadModal
           onClose={() => setShowUpload(false)}
-          onSuccess={() => fetchLeads(1, search)}
+          onSuccess={() => fetchLeads(1, applied)}
         />
       )}
 
       {showAddLead && (
         <AddLeadModal
           onClose={() => setShowAddLead(false)}
-          onSuccess={() => fetchLeads(1, search)}
+          onSuccess={() => fetchLeads(1, applied)}
         />
       )}
 
@@ -1660,33 +1769,21 @@ export default function LeadsUnifiedPage() {
         </div>
       </div>
 
-      {/* STATS ROW */}
+      {/* STATS ROW — each card is also a filter. */}
       {tab === "leads" && (
-        <div className="grid grid-cols-5 gap-3 mb-6">
-          {[
-            { label: "Total Leads", value: leadsTotal, color: "text-gray-900" },
-            { label: "Hot", value: stats.hot, color: "text-red-600" },
-            { label: "Warm", value: stats.warm, color: "text-amber-600" },
-            {
-              label: "Qualified",
-              value: stats.qualified,
-              color: "text-emerald-600",
-            },
-            {
-              label: "Scheduled",
-              value: stats.scheduled,
-              color: "text-purple-600",
-            },
-          ].map(({ label, value, color }) => (
-            <div
-              key={label}
-              className="bg-white border border-gray-200 rounded-xl p-4"
-            >
-              <p className="text-xs text-gray-500 mb-1">{label}</p>
-              <p className={`text-2xl font-bold ${color}`}>{value}</p>
-            </div>
-          ))}
-        </div>
+        <LeadsStatCards
+          total={leadsTotal}
+          stats={leadsStats}
+          filters={draft}
+          onIntent={(b) => setFilter("intent", b)}
+          onUnassigned={() =>
+            setFilter(
+              "status",
+              draft.status === UNASSIGNED_FILTER ? "" : UNASSIGNED_FILTER,
+            )
+          }
+          unassignedActive={draft.status === UNASSIGNED_FILTER}
+        />
       )}
 
       {/* TABS + SEARCH */}
@@ -1714,9 +1811,7 @@ export default function LeadsUnifiedPage() {
             </button>
           ))}
         </div>
-        {tab !== "scraper" &&
-          tab !== "campaigns" &&
-          tab !== "cost-analytics" && (
+        {tab === "converted" && (
             <div className="relative shrink-0">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
@@ -1727,62 +1822,25 @@ export default function LeadsUnifiedPage() {
                 className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
               />
             </div>
-          )}
+        )}
       </div>
 
-      {/* DATE RANGE FILTER (Leads tab) — filters the stat cards AND the list
-          below by lead created date. Empty range = all-time. */}
+      {/* FILTER BAR (Leads tab) — search, qualification, intent, owner, created
+          range, and the drill-downs behind "More filters". Everything here
+          drives the stat cards AND the list from one shared WHERE clause. */}
       {tab === "leads" && (
-        <div className="flex flex-wrap items-center gap-2 mb-5">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mr-0.5">
-            Created
-          </span>
-          <div className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-1.5 shadow-sm transition-colors focus-within:border-gray-400">
-            <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
-            <input
-              type="date"
-              value={leadsFrom}
-              max={leadsTo || undefined}
-              onChange={(e) => {
-                setLeadsFrom(e.target.value);
-                setLeadsPage(1);
-              }}
-              aria-label="From (lead created date)"
-              className="bg-transparent text-sm text-gray-700 outline-none"
-            />
-            <span className="text-gray-300">–</span>
-            <input
-              type="date"
-              value={leadsTo}
-              min={leadsFrom || undefined}
-              onChange={(e) => {
-                setLeadsTo(e.target.value);
-                setLeadsPage(1);
-              }}
-              aria-label="To (lead created date)"
-              className="bg-transparent text-sm text-gray-700 outline-none"
-            />
-          </div>
-          <button
-            onClick={() => applyMonthPreset(0)}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-900"
-          >
-            This month
-          </button>
-          <button
-            onClick={() => applyMonthPreset(-1)}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-900"
-          >
-            Last month
-          </button>
-          {(leadsFrom || leadsTo) && (
-            <button
-              onClick={clearDateRange}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
-            >
-              <X className="w-3.5 h-3.5" /> Clear
-            </button>
-          )}
+        <div className="mb-5">
+          <LeadsFilterBar
+            draft={draft}
+            onChange={setFilter}
+            onClear={clearFilters}
+            facets={facets}
+            caps={caps}
+            showMore={showMoreFilters}
+            onToggleMore={() => setShowMoreFilters((v) => !v)}
+            onDateRange={setDateRange}
+            busy={leadsLoading}
+          />
         </div>
       )}
 
@@ -1829,31 +1887,8 @@ export default function LeadsUnifiedPage() {
               </div>
             </div>
           )}
-          {/* Bulk hand-off bar. Only rendered when something is ticked, so it
-              never competes for attention with the normal list. */}
-          {canSendToNeodove && selectedLeadIds.size > 0 && (
-            <div className="mb-3 flex items-center justify-between gap-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
-              <p className="text-sm text-sky-900">
-                <strong>{selectedLeadIds.size}</strong> lead
-                {selectedLeadIds.size === 1 ? "" : "s"} selected on this page
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setSelectedLeadIds(new Set())}
-                  className="px-3 py-1.5 text-xs font-medium text-sky-900 rounded-lg hover:bg-sky-100 transition-all"
-                >
-                  Clear
-                </button>
-                <button
-                  onClick={() => setShowBulkNeodove(true)}
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 transition-all"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  Send {selectedLeadIds.size} to NeoDove
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Selection bar lives BELOW the table now (sticky) — see
+              _components/LeadsSelectionBar.tsx. */}
 
           {showBulkNeodove && (
             <SendToNeodoveModal
@@ -1864,234 +1899,82 @@ export default function LeadsUnifiedPage() {
             />
           )}
 
-          {leadsLoading ? (
-            <LoadingSkeleton />
-          ) : (
-            <>
-              {canSendToNeodove && leads.length > 0 && (
-                <label className="mb-2 flex w-fit items-center gap-2 text-xs text-gray-500 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={
-                      leads.length > 0 &&
-                      leads.every((l) => selectedLeadIds.has(l.id))
-                    }
-                    onChange={(e) =>
-                      setSelectedLeadIds(
-                        e.target.checked
-                          ? new Set(leads.map((l) => l.id as string))
-                          : new Set(),
-                      )
-                    }
-                    className="w-4 h-4 rounded border-gray-300 accent-gray-900 cursor-pointer"
-                  />
-                  Select all {leads.length} on this page
-                </label>
-              )}
-              <div className="space-y-2">
-                {leads.map((lead) => {
-                  const statusCfg = getStatusConfig(lead.current_status);
-                  const lastOutcome = getLastOutcome(
-                    lead.follow_up_history ?? [],
-                  );
-                  const outcomeCfg = lastOutcome
-                    ? OUTCOME_CONFIG[lastOutcome]
-                    : null;
-                  const nextCallLabel = formatNextCall(lead.next_call_at);
-                  const isDisabled = NO_CALL_STATUSES.includes(
-                    lead.current_status ?? "",
-                  );
-                  const intentScore = lead.final_intent_score;
-                  const rowStatus = getRowStatus(lead.id);
-                  const isBeingCalled =
-                    rowStatus === "calling" ||
-                    (dialerOn &&
-                      dialerPhase === "calling" &&
-                      currentDialerLead?.id === lead.id);
-                  const isCallEnded = rowStatus === "ended";
-                  const isUpNext =
-                    dialerOn &&
-                    dialerPhase === "countdown" &&
-                    currentDialerLead?.id === lead.id;
+          <LeadsTable
+            rows={leads as LeadRow[]}
+            loading={leadsLoading}
+            caps={caps}
+            hasFilters={hasAnyFilter(draft)}
+            selected={selectedLeadIds}
+            onToggle={toggleLeadSelected}
+            onToggleAll={() =>
+              setSelectedLeadIds((prev) => {
+                // Scoped to the visible page. Returning an empty Set here (what
+                // it used to do) would also discard everything selected on
+                // other pages, which a cross-page selection makes destructive.
+                const next = new Set(prev);
+                const allOnPage =
+                  leads.length > 0 && leads.every((l) => next.has(l.id));
+                for (const l of leads) {
+                  if (allOnPage) next.delete(l.id as string);
+                  else next.add(l.id as string);
+                }
+                return next;
+              })
+            }
+            onOpen={setDrawerLead}
+            onRefresh={refreshLeads}
+            onCallStart={startCallingLead}
+            dialerLeadId={
+              dialerOn ? (currentDialerLead?.id ?? callingLeadId) : callingLeadId
+            }
+            dialerPhase={dialerOn ? dialerPhase : "idle"}
+            countdown={countdown}
+            endedLeadIds={new Set(endedLeadIds.keys())}
+          />
 
-                  return (
-                    <div
-                      key={lead.id}
-                      className={`bg-white border rounded-xl px-5 py-4 transition-all duration-150 ${
-                        isBeingCalled
-                          ? "border-emerald-400 ring-1 ring-emerald-300 shadow-sm"
-                          : isUpNext
-                            ? "border-amber-300 ring-1 ring-amber-200"
-                            : "border-gray-200 hover:border-gray-300 hover:shadow-sm"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          {canSendToNeodove && (
-                            <input
-                              type="checkbox"
-                              checked={selectedLeadIds.has(lead.id)}
-                              onChange={() => toggleLeadSelected(lead.id)}
-                              aria-label={`Select ${lead.shop_name || "lead"}`}
-                              className="w-4 h-4 shrink-0 rounded border-gray-300 accent-gray-900 cursor-pointer"
-                            />
-                          )}
-                          <div
-                            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isBeingCalled ? "bg-emerald-50" : isUpNext ? "bg-amber-50" : "bg-gray-100"}`}
-                          >
-                            {isBeingCalled ? (
-                              <PhoneCall className="w-4 h-4 text-emerald-600 animate-pulse" />
-                            ) : (
-                              <Store className="w-4 h-4 text-gray-500" />
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-semibold text-gray-900 truncate">
-                                {lead.shop_name || "Unnamed Shop"}
-                              </p>
-                              {isBeingCalled && (
-                                <LeadCallStatus status="calling" />
-                              )}
-                              {isCallEnded && (
-                                <LeadCallStatus status="ended" />
-                              )}
-                              {isUpNext && (
-                                <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600 shrink-0">
-                                  <Clock className="w-3 h-3" /> Up next in{" "}
-                                  {countdown}s
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                              <span className="flex items-center gap-1 text-xs text-gray-500">
-                                <User className="w-3 h-3" />
-                                {lead.dealer_name || "Unknown"}
-                              </span>
-                              <span className="text-gray-300">·</span>
-                              <span className="flex items-center gap-1 text-xs text-gray-400">
-                                <MapPin className="w-3 h-3" />
-                                {lead.location || "-"}
-                              </span>
-                              <span className="text-gray-300">·</span>
-                              <span className="flex items-center gap-1 text-xs text-gray-400">
-                                <Phone className="w-3 h-3" />
-                                {lead.phone || "-"}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                          <span
-                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusCfg.bg} ${statusCfg.text}`}
-                          >
-                            <span
-                              className={`w-1.5 h-1.5 rounded-full ${statusCfg.dot}`}
-                            />
-                            {statusCfg.label}
-                          </span>
-                          {intentScore != null && (
-                            <span
-                              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${getIntentBg(intentScore)} ${getIntentColor(intentScore)}`}
-                            >
-                              <TrendingUp className="w-3 h-3" />
-                              {intentScore}
-                            </span>
-                          )}
-                          {(lead.total_attempts ?? 0) > 0 && (
-                            <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-                              <RefreshCw className="w-3 h-3" />
-                              {lead.total_attempts}x
-                            </span>
-                          )}
-                          {outcomeCfg && (
-                            <span
-                              className={`text-xs font-medium ${outcomeCfg.color} hidden lg:block`}
-                            >
-                              {outcomeCfg.label}
-                            </span>
-                          )}
-                          {nextCallLabel && (
-                            <span
-                              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${nextCallLabel === "Overdue" ? "bg-red-50 text-red-600" : "bg-purple-50 text-purple-600"}`}
-                            >
-                              <Clock className="w-3 h-3" />
-                              {nextCallLabel}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {isDisabled && (
-                            <span className="flex items-center gap-1 text-xs text-gray-400">
-                              <AlertCircle className="w-3 h-3" /> No calls
-                            </span>
-                          )}
-                          <CallButton
-                            leadId={lead.id}
-                            phone={lead.phone ?? ""}
-                            disabled={isDisabled || !lead.phone}
-                            provider="bolna"
-                            onCallStart={startCallingLead}
-                          />
-                          <CallButton
-                            leadId={lead.id}
-                            phone={lead.phone ?? ""}
-                            disabled={isDisabled || !lead.phone}
-                            provider="elevenlabs"
-                            onCallStart={startCallingLead}
-                          />
-                          {/* "Call now" (the priority-dial hand-off) was removed
-                              from this row on request. The component and
-                              POST /api/neodove/leads/[id]/dial are intact, as is
-                              neodove_campaigns.is_priority_dial — only this
-                              call site is gone, so re-adding it is one JSX block.
-                              "NeoDove" below stays: it chooses a campaign and
-                              hands the lead over as part of that campaign's
-                              audience. */}
-                          {canSendToNeodove && (
-                            <SendToNeodoveButton
-                              leadId={lead.id}
-                              leadName={
-                                lead.shop_name ||
-                                lead.dealer_name ||
-                                "this lead"
-                              }
-                              disabled={isDisabled || !lead.phone}
-                              syncStatus={lead.neodove_sync_status}
-                              onSent={() =>
-                                fetchLeads(leadsPage, search, leadsFrom, leadsTo, {
-                                  silent: true,
-                                })
-                              }
-                            />
-                          )}
-                          <Link href={`/leads/${lead.id}`}>
-                            <button className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">
-                              View
-                            </button>
-                          </Link>
-                          <Link href={`/leads/${lead.id}/edit`}>
-                            <button className="px-3 py-1.5 text-xs font-medium text-gray-500 rounded-lg hover:bg-gray-50 transition-all">
-                              Edit
-                            </button>
-                          </Link>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {leads.length === 0 && (
-                <EmptyState label="No dealer leads found" />
-              )}
-              <Pagination
-                page={leadsPage}
-                total={leadsTotal}
-                limit={LIMIT}
-                onChange={setLeadsPage}
-              />
-            </>
-          )}
+          <LeadsSelectionBar
+            selectedCount={selectedLeadIds.size}
+            pageCount={leads.length}
+            total={leadsTotal}
+            allOnPageSelected={
+              leads.length > 0 &&
+              leads.every((l) => selectedLeadIds.has(l.id))
+            }
+            allMatchingSelected={selectedLeadIds.size >= leadsTotal}
+            selectAllMatching={selectAllMatching}
+            selectingAll={selectingAll}
+            cappedAt={selectionCap}
+            onClear={() => {
+              setSelectedLeadIds(new Set());
+              setSelectionCap(null);
+            }}
+            caps={caps}
+            selectedIds={[...selectedLeadIds]}
+            onBulkDone={() => {
+              setSelectedLeadIds(new Set());
+              setSelectionCap(null);
+              refreshLeads();
+            }}
+            onSendToNeodove={() => setShowBulkNeodove(true)}
+          />
+
+          <Pagination
+            page={leadsPage}
+            total={leadsTotal}
+            limit={LIMIT}
+            onChange={setLeadsPage}
+            onLimitChange={(n) => {
+              setLimit(n);
+              setLeadsPage(1);
+            }}
+          />
+
+          <LeadDrawer
+            lead={drawerLead}
+            caps={caps}
+            onClose={() => setDrawerLead(null)}
+            onDone={refreshLeads}
+          />
         </div>
       )}
 
@@ -2105,6 +1988,7 @@ export default function LeadsUnifiedPage() {
               <div className="space-y-2">
                 {convertedLeads.map((lead) => (
                   <ConvertedLeadCard
+                    caps={caps}
                     key={lead.id}
                     lead={lead}
                     onUpdate={() => fetchConvertedLeads(convertedPage, search)}

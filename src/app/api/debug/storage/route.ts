@@ -2,8 +2,14 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { isS3Backend } from '@/lib/storage/s3';
+import { requireDebugAccess } from '@/lib/auth/requireDebugAccess';
 
+// Reveals the active storage backend, bucket name and a sample of stored
+// filenames. 404s in production and without an admin/IT session.
 export async function GET() {
+    const access = await requireDebugAccess();
+    if (!access.ok) return access.response;
+
     try {
         if (isS3Backend) {
             // No S3 equivalent of listBuckets() in our storage abstraction — return

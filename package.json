@@ -34,6 +34,8 @@
     "seed:calculator": "node --import tsx --env-file=.env.local scripts/seed-loan-calculator.ts",
     "verify:calculator": "node --import tsx scripts/verify-calculator-engine.ts",
     "verify:notifications": "node --import tsx --env-file=.env.local scripts/verify-notification-registry.ts",
+    "verify:auction": "node --import tsx --env-file=.env.local scripts/verify-auction-e2e.ts",
+    "test:e2e:auction": "playwright test tests/e2e/nbfc/E-234_battery-auction-e2e.spec.ts --project=chromium --no-deps",
     "security:scan": "node --import tsx --env-file=.env.local scripts/security-scan.ts",
     "seed:it-user": "node --import tsx --env-file=.env.local scripts/create-it-user.ts",
     "db:catalog": "tsx scripts/db-catalog.ts",

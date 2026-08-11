@@ -273,6 +273,59 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
     });
   }
 
+  /**
+   * [E-234] Template with an image header. See the interface doc-block for why
+   * this cannot be folded into `sendTemplate`.
+   *
+   * The upload is best-effort: if Meta rejects the media we send the template
+   * WITHOUT the header component rather than failing the whole message. That
+   * is only correct when the template's header is optional at Meta's end — if
+   * it is not, Meta rejects the send and the caller sees `ok: false`, which is
+   * the same outcome as not trying. Never worse, sometimes better.
+   */
+  async sendTemplateWithImageHeader(
+    to: string,
+    name: string,
+    languageCode: string,
+    bodyParams: string[],
+    image?: { bytes: Buffer; mimeType: string; filename: string } | null,
+  ): Promise<SendResult> {
+    let mediaId: string | null = null;
+    if (image?.bytes?.length) {
+      const up = await this.uploadMedia(image.bytes, image.mimeType, image.filename);
+      mediaId = up.id;
+      if (!up.id) {
+        console.warn(
+          `[WhatsApp/meta] template "${name}": image header dropped (${up.error ?? "upload failed"})`,
+        );
+      }
+    }
+
+    const components: Record<string, unknown>[] = [];
+    if (mediaId) {
+      components.push({
+        type: "header",
+        parameters: [{ type: "image", image: { id: mediaId } }],
+      });
+    }
+    if (bodyParams.length > 0) {
+      components.push({
+        type: "body",
+        parameters: bodyParams.map((text) => ({ type: "text", text })),
+      });
+    }
+
+    return this.send({
+      to: normalizePhone(to),
+      type: "template",
+      template: {
+        name,
+        language: { code: languageCode },
+        ...(components.length ? { components } : {}),
+      },
+    });
+  }
+
   sendDocument(
     to: string,
     link: string,
