@@ -282,22 +282,23 @@ export const METRICS: MetricDef[] = [
     label: "Connections in use",
     module: "database",
     unit: "count",
-    direction: "lower_is_better",
-    warn: 55,
-    crit: 70,
-    onSlide: true,
-    help: "RDS has ~79 max_connections and NO pooler; a deploy burst trips 53300 and fails /api/health, which rolls the deploy back. This is the highest-value number on the board.",
+    // Neutral, and deliberately so. The absolute warn 55 / crit 70 this used to
+    // carry encoded one specific instance size (79 slots); resize the instance
+    // and the count thresholds are wrong while the percentage stays right. The
+    // alerting lives on db.connections_pct, which survives a resize.
+    direction: "neutral",
+    help: "Client backends across the whole instance. Background workers (checkpointer, walwriter, autovacuum launcher…) are excluded — they appear in pg_stat_activity but consume no max_connections slot, and counting them overstated this number by ~6.",
   },
   {
     key: "db.connections_pct",
-    label: "Connection headroom used",
+    label: "Connection capacity used",
     module: "database",
     unit: "percent",
     direction: "lower_is_better",
     warn: 70,
     crit: 88,
     onSlide: true,
-    help: "Connections in use as a share of max_connections. Percentage rather than count, so it stays meaningful if the instance is ever resized.",
+    help: "Client backends as a share of the slots the application can actually reach — max_connections MINUS superuser_reserved_connections. RDS has no pooler here, so a deploy burst trips 53300, fails /api/health and rolls the deploy back. At 100% the database is out of capacity. This is the highest-value number on the board.",
   },
   {
     key: "db.max_connections",
@@ -305,7 +306,23 @@ export const METRICS: MetricDef[] = [
     module: "database",
     unit: "count",
     direction: "neutral",
-    help: "The server's configured ceiling. Recorded so a silent instance resize is visible in the history rather than confusing the headroom chart.",
+    help: "The server's configured ceiling. Recorded so a silent instance resize is visible in the history rather than confusing the capacity chart. Shown as context on the capacity tile rather than as a tile of its own.",
+  },
+  {
+    key: "db.connection_sources",
+    label: "Connection sources",
+    module: "database",
+    unit: "count",
+    direction: "neutral",
+    help: "Distinct application/database/user combinations holding client backends right now. The breakdown itself is in this sample's meta — it is what tells you whether the CRM's own pool, a stray psql, or RDS's internal sessions are consuming the headroom.",
+  },
+  {
+    key: "db.stat_counters",
+    label: "Raw pg_stat_database counters",
+    module: "database",
+    unit: "count",
+    direction: "neutral",
+    help: "Internal. The cumulative counters this cycle read, carried in meta so the NEXT cycle can difference against them. Never rendered — every derived rate below is computed from two consecutive readings of this sample.",
   },
   {
     key: "db.longest_query_s",
@@ -335,7 +352,7 @@ export const METRICS: MetricDef[] = [
     direction: "higher_is_better",
     warn: 97,
     crit: 90,
-    help: "Share of block reads served from shared buffers. A sustained drop means the working set no longer fits in memory.",
+    help: "Share of block accesses served from shared buffers SINCE THE LAST COLLECTION (~2 min), not since the database was created. Measures shared-buffer effectiveness only — a miss here may still be served by the OS page cache without touching a disk. A sustained drop means the working set no longer fits in memory. History from before this metric became interval-based is a lifetime average and is not comparable.",
   },
   {
     key: "db.deadlocks",
@@ -345,7 +362,7 @@ export const METRICS: MetricDef[] = [
     direction: "lower_is_better",
     warn: 1,
     crit: 10,
-    help: "Cumulative deadlocks since stats were last reset. Any movement is worth a look.",
+    help: "Deadlocks IN THE LAST COLLECTION INTERVAL (~2 min), not the lifetime total — as a running total this latched red on the first deadlock the database ever had and could never clear. The lifetime figure is in this sample's meta. Any movement is worth a look.",
   },
   {
     key: "db.rollback_pct",
@@ -355,7 +372,33 @@ export const METRICS: MetricDef[] = [
     direction: "lower_is_better",
     warn: 5,
     crit: 15,
-    help: "Rollbacks as a share of transactions. A jump usually means a route is erroring after it opens a transaction.",
+    help: "Rollbacks as a share of transactions IN THE LAST COLLECTION INTERVAL (~2 min). A jump usually means a route is erroring after it opens a transaction. As a lifetime average this sat frozen near 0.08% and could never breach.",
+  },
+  {
+    key: "db.reads_per_s",
+    label: "Read activity",
+    module: "database",
+    unit: "count",
+    direction: "neutral",
+    help: "Rows returned + fetched per second over the last collection interval (pg_stat_database tup_returned + tup_fetched). Read volume, not latency — pair it with the longest-query tile to tell 'busy' from 'struggling'.",
+  },
+  {
+    key: "db.writes_per_s",
+    label: "Write activity",
+    module: "database",
+    unit: "count",
+    direction: "neutral",
+    help: "Rows inserted + updated + deleted per second over the last collection interval. A sustained climb here is what precedes dead-tuple growth and autovacuum falling behind.",
+  },
+  {
+    key: "db.dead_tuple_pct",
+    label: "Dead tuple share",
+    module: "database",
+    unit: "percent",
+    direction: "lower_is_better",
+    warn: 20,
+    crit: 40,
+    help: "Dead tuples as a share of all tuples. The absolute count does not scale — 500k dead rows is a crisis on a 1M-row table and noise on a 100M-row one — so this is the number to alert on and the count beside it is the context.",
   },
   {
     key: "db.size_bytes",
@@ -370,10 +413,10 @@ export const METRICS: MetricDef[] = [
     label: "Dead tuples",
     module: "database",
     unit: "count",
-    direction: "lower_is_better",
-    warn: 500_000,
-    crit: 5_000_000,
-    help: "Rows awaiting vacuum across all tables. A large number that never falls means autovacuum is not keeping up.",
+    // Tracked, not alerted. A fixed row count cannot be a threshold across
+    // tables of wildly different sizes — db.dead_tuple_pct carries the alerting.
+    direction: "neutral",
+    help: "Rows awaiting vacuum across all tables. Context for the dead-tuple share beside it, which is the number that scales with the table and therefore the one that alerts.",
   },
   {
     key: "db.table_bytes",

@@ -74,6 +74,56 @@ export async function latestSamples(
   });
 }
 
+/**
+ * The most recent sample of one metric for ONE source — the "previous reading"
+ * a rate calculation needs.
+ *
+ * Called from a collector BEFORE it writes this cycle's sample, so the newest
+ * row in the table is still the previous cycle's. That is the whole contract:
+ * a cumulative counter (blks_hit, xact_commit, deadlocks…) only means something
+ * as the difference between two readings, and the earlier reading has to come
+ * from somewhere that survives a process restart. ops_metric_samples is that
+ * somewhere — an in-memory previous value would reset on every deploy and
+ * silently produce a first-interval spike.
+ *
+ * Returns null when there is no predecessor inside `maxAgeMinutes`. Callers
+ * must OMIT the derived metric in that case rather than emitting zero: a zero
+ * renders as a real measurement and hides the gap.
+ *
+ * The age window matters. Two samples an hour apart still divide correctly, but
+ * a "reads per second" averaged over an hour of which 58 minutes were downtime
+ * describes nothing, so the caller passes a bound close to its own interval.
+ */
+export async function previousSample(
+  metricKey: string,
+  source: string,
+  maxAgeMinutes: number,
+): Promise<LatestSample | null> {
+  const rows = (await db.execute(sql`
+    SELECT metric_key, source, value_num, value_text, meta, captured_at
+    FROM ops_metric_samples
+    WHERE metric_key = ${metricKey}
+      AND source = ${source}
+      AND captured_at > NOW() - MAKE_INTERVAL(mins => ${maxAgeMinutes})
+    ORDER BY captured_at DESC
+    LIMIT 1
+  `)) as unknown as Array<Record<string, unknown>>;
+
+  const r = rows[0];
+  if (!r) return null;
+
+  const capturedAt = new Date(r.captured_at as string);
+  return {
+    metric_key: r.metric_key as string,
+    source: r.source as string,
+    value_num: toNumber(r.value_num),
+    value_text: (r.value_text as string) ?? null,
+    meta: (r.meta as Record<string, unknown>) ?? null,
+    captured_at: capturedAt,
+    age_minutes: (Date.now() - capturedAt.getTime()) / 60_000,
+  };
+}
+
 /** Index a LatestSample[] as `${metric_key}|${source}` for O(1) tile lookups. */
 export function bySourceKey(
   samples: LatestSample[],
