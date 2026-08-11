@@ -64,10 +64,21 @@ export default async function OperationsDatabasePage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-ink-muted">
+      <div className="flex items-start justify-between gap-3">
+        <p className="max-w-3xl text-xs text-ink-muted">
           Read from <code>pg_stat_*</code> every 2 minutes. No CloudWatch, no
-          extra IAM.
+          extra IAM.{" "}
+          <span className="text-ink">
+            Cache hit ratio, rollback ratio, deadlocks and the read/write rates
+            are measured <strong>over the last collection interval</strong>, not
+            since the database was created.
+          </span>{" "}
+          The <code>pg_stat_database</code> columns behind them are counters that
+          only ever climb, so as lifetime averages they sat frozen — this
+          instance&apos;s lifetime cache hit ratio is 100.00% against a
+          denominator of a billion blocks, which no cache collapse today could
+          move. Cache hit ratio covers <em>shared buffers only</em>: a miss may
+          still be served by the OS page cache without touching a disk.
         </p>
         <AutoRefresh intervalMs={30_000} />
       </div>
@@ -87,17 +98,91 @@ export default async function OperationsDatabasePage() {
               <Badge variant="muted">Live</Badge>
             )}
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             {instance.unreachable ? (
               <p className="text-sm text-danger" title={instance.unreachable}>
                 {instance.unreachable}
               </p>
             ) : (
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-                {instance.metrics.map((metric) => (
-                  <MetricTile key={metric.key} metric={metric} />
-                ))}
-              </div>
+              <>
+                {/* The raw pair behind the capacity percentage. Subtext rather
+                    than two more tiles — a count, a ceiling and the percentage
+                    of one over the other are one measurement, not three. */}
+                {instance.connections_used != null &&
+                  instance.connections_usable != null && (
+                    <p className="text-xs text-ink-muted">
+                      <span className="font-semibold tabular-nums text-ink">
+                        {formatCount(instance.connections_used)}
+                      </span>{" "}
+                      of{" "}
+                      <span className="font-semibold tabular-nums text-ink">
+                        {formatCount(instance.connections_usable)}
+                      </span>{" "}
+                      usable connections
+                      {instance.max_connections != null && (
+                        <>
+                          {" "}
+                          (max_connections {formatCount(instance.max_connections)},
+                          less the superuser-reserved slots the application cannot
+                          reach)
+                        </>
+                      )}
+                      . Client backends only — background workers appear in{" "}
+                      <code>pg_stat_activity</code> but consume no slot.
+                    </p>
+                  )}
+
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                  {instance.metrics.map((metric) => (
+                    <MetricTile key={metric.key} metric={metric} />
+                  ))}
+                </div>
+
+                {instance.clients.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                      Where the connections come from
+                    </p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[26rem] text-sm">
+                        <thead>
+                          <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                            <th className="py-2 pr-3">Application</th>
+                            <th className="py-2 pr-3">Database</th>
+                            <th className="py-2 pr-3">User</th>
+                            <th className="py-2 pr-3 text-right">Conns</th>
+                            <th className="py-2 text-right">Active</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {instance.clients.map((client) => (
+                            <tr
+                              key={`${client.application}|${client.database}|${client.username}`}
+                              className="border-b border-border/60 last:border-0"
+                            >
+                              <td className="py-2 pr-3 font-mono text-[12px] text-ink">
+                                {client.application}
+                              </td>
+                              <td className="py-2 pr-3 text-[12px] text-ink-muted">
+                                {client.database ?? "—"}
+                              </td>
+                              <td className="py-2 pr-3 text-[12px] text-ink-muted">
+                                {client.username ?? "—"}
+                              </td>
+                              <td className="py-2 pr-3 text-right tabular-nums text-ink">
+                                {formatCount(client.connections)}
+                              </td>
+                              <td className="py-2 text-right tabular-nums text-ink-muted">
+                                {formatCount(client.active)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

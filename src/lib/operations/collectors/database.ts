@@ -23,7 +23,13 @@ import { getTableName, is, sql, Table } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import {
+  connectionCapacityPct,
+  intervalMetrics,
+  type StatCounters,
+} from "@/lib/operations/databaseMath";
 import { rootCauseMessage } from "@/lib/operations/errors";
+import { previousSample } from "@/lib/operations/samples";
 
 import type { CollectedSample, OpsCollector } from "./types";
 import { MINUTE } from "./types";
@@ -83,6 +89,61 @@ async function migrationDrift(): Promise<{ count: number; missing: string[] }> {
   return { count: missing.length, missing };
 }
 
+/**
+ * How far back a predecessor counter reading may be and still yield an
+ * honest rate.
+ *
+ * The collector runs every 2 minutes, so this tolerates a few missed cycles.
+ * It is deliberately not unbounded: "reads per second" averaged across an hour
+ * of which 58 minutes were downtime is a number that describes nothing, and it
+ * would land on the dashboard looking like a measurement.
+ */
+const MAX_COUNTER_AGE_MINUTES = 15;
+
+interface CounterReading {
+  at: Date;
+  counters: StatCounters;
+}
+
+/**
+ * The previous cycle's raw counters for this database, or null when there is
+ * no usable predecessor.
+ *
+ * Always reads the CRM's ops_metric_samples (the `db` client), whichever
+ * database is being PROBED — the samples table lives on the CRM RDS for every
+ * source, including "rds:iot".
+ */
+async function previousCounters(source: string): Promise<CounterReading | null> {
+  const sample = await previousSample(
+    "db.stat_counters",
+    source,
+    MAX_COUNTER_AGE_MINUTES,
+  );
+  const meta = sample?.meta;
+  if (!sample || !meta) return null;
+
+  const read = (key: string): number | null => {
+    const value = meta[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+
+  const counters = {
+    blks_hit: read("blks_hit"),
+    blks_read: read("blks_read"),
+    xact_commit: read("xact_commit"),
+    xact_rollback: read("xact_rollback"),
+    deadlocks: read("deadlocks"),
+    reads: read("reads"),
+    writes: read("writes"),
+  };
+  // A partially-written predecessor (an older shape of this meta, say) cannot
+  // be differenced safely — treat it as absent rather than defaulting the
+  // missing halves to zero, which would invent an enormous first delta.
+  if (Object.values(counters).some((v) => v == null)) return null;
+
+  return { at: sample.captured_at, counters: counters as CounterReading["counters"] };
+}
+
 /** Connections, query ages, cache/transaction stats and size for one database. */
 async function probeDatabase(
   client: Executor,
@@ -92,23 +153,62 @@ async function probeDatabase(
 
   // ---- connections -------------------------------------------------------
   // current_setting() rather than SHOW: SHOW cannot be used as a subquery, and
-  // this needs both numbers in one round trip to be consistent with each other.
+  // this needs every number in one round trip to be consistent with the others.
   //
-  // A non-superuser sees every ROW of pg_stat_activity (so the count is right)
-  // but has query/state masked for other roles' backends — which is why the
-  // ages below are best-effort on the IoT bridge and exact on the CRM.
+  // ONLY `client backend` ROWS COUNT. pg_stat_activity also lists the
+  // background workers — checkpointer, walwriter, bgwriter, archiver, the
+  // autovacuum and logical-replication launchers — and those do NOT consume a
+  // max_connections slot. Counting them inflated this instance's headline from
+  // a true 9 to a reported 15 against a ceiling of 79: 11.4% shown as 19.0%,
+  // on the one tile the whole module exists for.
+  //
+  // Instance-wide, not per-database, because max_connections is an INSTANCE
+  // ceiling — `rdsadmin`'s own sessions occupy slots the CRM cannot have. The
+  // per-database figure rides along in meta for attribution, rather than as a
+  // second tile that would say almost the same thing.
+  //
+  // A non-superuser sees every ROW of pg_stat_activity (so the counts are
+  // right) but has query/state masked for other roles' backends — which is why
+  // the ages below are best-effort on the IoT bridge and exact on the CRM.
   const [conn] = await rows(
     client,
     sql`
       SELECT
-        (SELECT COUNT(*) FROM pg_stat_activity)      AS used,
-        current_setting('max_connections')::int      AS max_conn
+        COUNT(*) FILTER (WHERE backend_type = 'client backend')     AS used,
+        COUNT(*) FILTER (WHERE backend_type = 'client backend'
+                           AND datname = current_database())        AS used_this_db,
+        COUNT(*) FILTER (WHERE backend_type = 'client backend'
+                           AND state = 'active')                    AS active,
+        COUNT(*) FILTER (WHERE backend_type = 'client backend'
+                           AND state = 'idle in transaction')       AS idle_tx,
+        current_setting('max_connections')::int                     AS max_conn,
+        current_setting('superuser_reserved_connections')::int      AS reserved
+      FROM pg_stat_activity
     `,
   );
   const used = num(conn?.used);
   const maxConn = num(conn?.max_conn);
+  const reserved = num(conn?.reserved) ?? 0;
+  // What the application can actually reach. The reserved slots are held back
+  // for superusers, so treating max_connections as the denominator overstates
+  // the headroom by exactly the amount that matters during the incident this
+  // metric exists to predict.
+  const usable = maxConn == null ? null : maxConn - reserved;
+
   if (used != null) {
-    samples.push({ metric_key: "db.connections_used", source, value_num: used });
+    samples.push({
+      metric_key: "db.connections_used",
+      source,
+      value_num: used,
+      meta: {
+        this_database: num(conn?.used_this_db),
+        active: num(conn?.active),
+        idle_in_transaction: num(conn?.idle_tx),
+        max_connections: maxConn,
+        superuser_reserved: reserved,
+        usable: usable,
+      },
+    });
   }
   if (maxConn != null) {
     samples.push({
@@ -116,18 +216,66 @@ async function probeDatabase(
       source,
       value_num: maxConn,
     });
-    if (used != null && maxConn > 0) {
-      samples.push({
-        metric_key: "db.connections_pct",
-        source,
-        value_num: Math.round((used / maxConn) * 1000) / 10,
-      });
+    const pct = connectionCapacityPct(used, maxConn, reserved);
+    if (pct != null) {
+      samples.push({ metric_key: "db.connections_pct", source, value_num: pct });
     }
+  }
+
+  // ---- where the connections come from ------------------------------------
+  // "Identify where active connections are coming from" — answerable from
+  // pg_stat_activity alone, no extra grant. application_name is what separates
+  // the CRM's own pool (postgres.js) from RDS's internal sessions and from any
+  // psql somebody left open.
+  //
+  // Stored as one sample carrying the breakdown in meta rather than one sample
+  // per client: the cardinality is unbounded (every application_name ever seen
+  // would become a permanent `source` in the metric table).
+  const connSources = await rows(
+    client,
+    sql`
+      SELECT
+        COALESCE(NULLIF(application_name, ''), '(unnamed)') AS application,
+        datname                                             AS database,
+        usename                                             AS username,
+        COUNT(*)::int                                       AS connections,
+        COUNT(*) FILTER (WHERE state = 'active')::int       AS active
+      FROM pg_stat_activity
+      WHERE backend_type = 'client backend'
+      GROUP BY application, database, username
+      ORDER BY connections DESC
+      LIMIT 20
+    `,
+  );
+  if (connSources.length > 0) {
+    samples.push({
+      metric_key: "db.connection_sources",
+      source,
+      value_num: connSources.length,
+      value_text: connSources
+        .map((r) => `${String(r.application)}×${num(r.connections) ?? 0}`)
+        .join(", ")
+        .slice(0, 500),
+      meta: {
+        clients: connSources.map((r) => ({
+          application: String(r.application),
+          database: r.database == null ? null : String(r.database),
+          username: r.username == null ? null : String(r.username),
+          connections: num(r.connections) ?? 0,
+          active: num(r.active) ?? 0,
+        })),
+      },
+    });
   }
 
   // ---- query / transaction ages ------------------------------------------
   // Excludes this backend: the collector's own query is always the newest
   // "active" one, and counting it would put a floor under longest_query_s.
+  //
+  // It also excludes the OTHER Ops Console backends. runner.ts runs collectors
+  // three at a time over a shared pool, so on a quiet database the longest
+  // "active" query is routinely one of this console's own — the monitor
+  // measuring itself and reporting it as load.
   const [ages] = await rows(
     client,
     sql`
@@ -139,6 +287,8 @@ async function probeDatabase(
       FROM pg_stat_activity
       WHERE pid <> pg_backend_pid()
         AND datname = current_database()
+        AND query NOT LIKE '%ops_metric_samples%'
+        AND query NOT LIKE '%pg_stat_activity%'
     `,
   );
   const longestQuery = num(ages?.longest_query_s);
@@ -160,64 +310,151 @@ async function probeDatabase(
     });
   }
 
-  // ---- cache, transactions, deadlocks, size -------------------------------
-  // Cumulative since the last stats reset, which is what the thresholds in
-  // registry.ts assume: it is the movement between samples that means something,
-  // not the absolute number.
+  // ---- cache, transactions, deadlocks, throughput, size -------------------
+  // EVERY COLUMN HERE IS A COUNTER, cumulative since the last stats reset, and
+  // that is the whole difficulty. This instance reports blks_hit 993,400,285
+  // against blks_read 13,042 with stats_reset NULL — a lifetime ratio of
+  // 100.00% that no cache collapse today could drag below the 97% warn line,
+  // because the denominator is a billion blocks of history. The same is true of
+  // the rollback ratio, and `deadlocks` as a level meant the tile latched red
+  // on the first deadlock the database ever had and never cleared.
+  //
+  // So the LEVEL is not the metric — the MOVEMENT is. Each derived number below
+  // is computed against the previous cycle's reading of the same counter.
   const [stat] = await rows(
     client,
     sql`
       SELECT
         blks_hit, blks_read, xact_commit, xact_rollback, deadlocks,
+        tup_returned, tup_fetched,
+        tup_inserted, tup_updated, tup_deleted,
+        stats_reset,
         pg_database_size(current_database()) AS size_bytes
       FROM pg_stat_database
       WHERE datname = current_database()
     `,
   );
+
   if (stat) {
-    const hit = num(stat.blks_hit) ?? 0;
-    const read = num(stat.blks_read) ?? 0;
-    if (hit + read > 0) {
-      samples.push({
-        metric_key: "db.cache_hit_pct",
-        source,
-        value_num: Math.round((hit / (hit + read)) * 1000) / 10,
-      });
-    }
-
-    const commit = num(stat.xact_commit) ?? 0;
-    const rollback = num(stat.xact_rollback) ?? 0;
-    if (commit + rollback > 0) {
-      samples.push({
-        metric_key: "db.rollback_pct",
-        source,
-        value_num: Math.round((rollback / (commit + rollback)) * 1000) / 10,
-      });
-    }
-
-    const deadlocks = num(stat.deadlocks);
-    if (deadlocks != null) {
-      samples.push({ metric_key: "db.deadlocks", source, value_num: deadlocks });
-    }
-
     const size = num(stat.size_bytes);
     if (size != null) {
       samples.push({ metric_key: "db.size_bytes", source, value_num: size });
     }
+
+    const counters = {
+      blks_hit: num(stat.blks_hit) ?? 0,
+      blks_read: num(stat.blks_read) ?? 0,
+      xact_commit: num(stat.xact_commit) ?? 0,
+      xact_rollback: num(stat.xact_rollback) ?? 0,
+      deadlocks: num(stat.deadlocks) ?? 0,
+      reads: (num(stat.tup_returned) ?? 0) + (num(stat.tup_fetched) ?? 0),
+      writes:
+        (num(stat.tup_inserted) ?? 0) +
+        (num(stat.tup_updated) ?? 0) +
+        (num(stat.tup_deleted) ?? 0),
+    };
+
+    // The raw counters, always written, value-less. This one row is what the
+    // NEXT cycle differences against — which is why it is persisted rather than
+    // held in memory: an in-process previous value resets on every deploy and
+    // would produce a fabricated spike on the first cycle after each release.
+    // It also makes every derived number below auditable after the fact.
+    samples.push({
+      metric_key: "db.stat_counters",
+      source,
+      value_num: null,
+      meta: {
+        ...counters,
+        stats_reset: stat.stats_reset == null ? null : String(stat.stats_reset),
+      },
+    });
+
+    // The arithmetic lives in ../databaseMath.ts so its rules — omit rather
+    // than zero, skip an interval whose counters went backwards — can be tested
+    // without an RDS instance and a two-minute wait between readings.
+    const previous = await previousCounters(source);
+    const derived = intervalMetrics(
+      previous?.counters ?? null,
+      counters,
+      previous ? (Date.now() - previous.at.getTime()) / 1000 : 0,
+    );
+    const detail = derived.detail;
+
+    if (detail) {
+      if (derived.cache_hit_pct != null) {
+        samples.push({
+          metric_key: "db.cache_hit_pct",
+          source,
+          value_num: derived.cache_hit_pct,
+          meta: {
+            blks_hit: detail.blks_hit,
+            blks_read: detail.blks_read,
+            interval_s: detail.interval_s,
+          },
+        });
+      }
+      if (derived.rollback_pct != null) {
+        samples.push({
+          metric_key: "db.rollback_pct",
+          source,
+          value_num: derived.rollback_pct,
+          meta: {
+            commits: detail.commits,
+            rollbacks: detail.rollbacks,
+            interval_s: detail.interval_s,
+          },
+        });
+      }
+      samples.push({
+        metric_key: "db.deadlocks",
+        source,
+        value_num: derived.deadlocks,
+        meta: { interval_s: detail.interval_s, lifetime: counters.deadlocks },
+      });
+      samples.push({
+        metric_key: "db.reads_per_s",
+        source,
+        value_num: derived.reads_per_s,
+        meta: { rows: detail.read_rows, interval_s: detail.interval_s },
+      });
+      samples.push({
+        metric_key: "db.writes_per_s",
+        source,
+        value_num: derived.writes_per_s,
+        meta: { rows: detail.write_rows, interval_s: detail.interval_s },
+      });
+    }
   }
 
   // ---- dead tuples --------------------------------------------------------
+  // Both the absolute count and the share of all tuples. The count alone does
+  // not scale: 500k dead rows is a crisis on a 1M-row table and noise on a
+  // 100M-row one, and a fixed threshold cannot tell those apart.
   const [dead] = await rows(
     client,
-    sql`SELECT COALESCE(SUM(n_dead_tup), 0) AS dead FROM pg_stat_user_tables`,
+    sql`
+      SELECT COALESCE(SUM(n_dead_tup), 0) AS dead,
+             COALESCE(SUM(n_live_tup), 0) AS live
+      FROM pg_stat_user_tables
+    `,
   );
   const deadTuples = num(dead?.dead);
+  const liveTuples = num(dead?.live);
   if (deadTuples != null) {
     samples.push({
       metric_key: "db.dead_tuples",
       source,
       value_num: deadTuples,
     });
+    const total = deadTuples + (liveTuples ?? 0);
+    if (total > 0) {
+      samples.push({
+        metric_key: "db.dead_tuple_pct",
+        source,
+        value_num: Math.round((deadTuples / total) * 1000) / 10,
+        meta: { dead: deadTuples, live: liveTuples },
+      });
+    }
   }
 
   return samples;
@@ -285,8 +522,32 @@ export const databaseCollector: OpsCollector = {
     const samples: CollectedSample[] = [];
 
     // ---- CRM RDS: the one that must always be probed ----------------------
-    samples.push(...(await probeDatabase(db, "rds:crm")));
-    samples.push(...(await probeTables(db, "table")));
+    // Each half is isolated. probeTables runs pg_total_relation_size over every
+    // user table and is by far the most expensive thing here; letting it take
+    // the connection samples down with it would lose exactly the number this
+    // file's header calls the highest-value monitor in the build, at exactly
+    // the moment the instance is unhealthy enough to make it time out.
+    try {
+      samples.push(...(await probeDatabase(db, "rds:crm")));
+    } catch (e) {
+      samples.push({
+        metric_key: "db.connections_used",
+        source: "rds:crm",
+        value_num: null,
+        value_text: `probe failed: ${rootCauseMessage(e)}`,
+      });
+    }
+
+    try {
+      samples.push(...(await probeTables(db, "table")));
+    } catch (e) {
+      samples.push({
+        metric_key: "db.table_bytes",
+        source: "table:(probe failed)",
+        value_num: null,
+        value_text: `probe failed: ${rootCauseMessage(e)}`,
+      });
+    }
 
     try {
       const drift = await migrationDrift();

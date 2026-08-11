@@ -219,19 +219,40 @@ export async function getInfrastructureView(): Promise<InfrastructureView> {
 // Database
 // ---------------------------------------------------------------------------
 
-/** Connection headroom first — it is the number the whole module exists for. */
+/**
+ * Connection capacity first — it is the number the whole module exists for.
+ *
+ * `db.connections_used` and `db.max_connections` are NOT tiles. Three tiles for
+ * one measurement (a count, a ceiling, and the percentage of one over the
+ * other) is the redundancy this list used to carry; the raw pair now renders as
+ * subtext on the capacity tile, where it reads as "13 of 76" instead of as two
+ * more numbers to scan. Both are still collected, so the history is unbroken.
+ *
+ * Order is render order: capacity, then throughput, then the ratios, then the
+ * slow-burn maintenance numbers.
+ */
 const DB_METRICS = [
   "db.connections_pct",
-  "db.connections_used",
-  "db.max_connections",
+  "db.reads_per_s",
+  "db.writes_per_s",
   "db.cache_hit_pct",
-  "db.longest_query_s",
-  "db.longest_idle_tx_s",
   "db.rollback_pct",
   "db.deadlocks",
+  "db.longest_query_s",
+  "db.longest_idle_tx_s",
+  "db.dead_tuple_pct",
   "db.dead_tuples",
   "db.size_bytes",
 ] as const;
+
+/** One application/database/user holding client backends right now. */
+export interface ConnectionClient {
+  application: string;
+  database: string | null;
+  username: string | null;
+  connections: number;
+  active: number;
+}
 
 export interface DatabaseInstanceView {
   source: string;
@@ -239,6 +260,30 @@ export interface DatabaseInstanceView {
   metrics: MetricReading[];
   /** Set when the collector recorded a text sample instead of a number. */
   unreachable: string | null;
+  /**
+   * The raw pair behind the capacity tile: client backends, and the slots the
+   * application can actually reach (max_connections − superuser_reserved).
+   * Rendered as subtext rather than as two more tiles.
+   */
+  connections_used: number | null;
+  connections_usable: number | null;
+  max_connections: number | null;
+  /** Where those connections come from. Empty when the probe found nothing. */
+  clients: ConnectionClient[];
+}
+
+/** Narrow one entry of the collector's `clients` meta array. */
+function parseClient(raw: unknown): ConnectionClient | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.application !== "string") return null;
+  return {
+    application: r.application,
+    database: typeof r.database === "string" ? r.database : null,
+    username: typeof r.username === "string" ? r.username : null,
+    connections: typeof r.connections === "number" ? r.connections : 0,
+    active: typeof r.active === "number" ? r.active : 0,
+  };
 }
 
 export interface TableRow {
@@ -266,6 +311,9 @@ const INSTANCE_LABELS: Record<string, string> = {
 export async function getDatabaseView(): Promise<DatabaseView> {
   const metricKeys = [
     ...DB_METRICS,
+    "db.connections_used",
+    "db.max_connections",
+    "db.connection_sources",
     "db.migration_drift",
     "db.table_bytes",
     "db.table_rows",
@@ -273,9 +321,15 @@ export async function getDatabaseView(): Promise<DatabaseView> {
 
   const [samples, series] = await Promise.all([
     latestSamples(metricKeys, { maxAgeHours: 48 }),
-    seriesFor(["db.connections_pct", "db.connections_used", "db.cache_hit_pct"], {
-      hours: 24,
-    }),
+    seriesFor(
+      [
+        "db.connections_pct",
+        "db.cache_hit_pct",
+        "db.reads_per_s",
+        "db.writes_per_s",
+      ],
+      { hours: 24 },
+    ),
   ]);
   const index = bySourceKey(samples);
 
@@ -296,10 +350,32 @@ export async function getDatabaseView(): Promise<DatabaseView> {
         ? connSample.value_text
         : null;
 
+    // Usable slots come from the connections sample's own meta, so the tile's
+    // subtext and the percentage above it are always computed from the same
+    // reading — a separately-fetched max_connections could be one cycle older
+    // and make "13 of 76" disagree with the percentage beside it.
+    const usable =
+      typeof connSample?.meta?.usable === "number"
+        ? (connSample.meta.usable as number)
+        : null;
+
+    const clientsMeta = index.get(`db.connection_sources|${source}`)?.meta
+      ?.clients;
+    const clients = Array.isArray(clientsMeta)
+      ? clientsMeta
+          .map(parseClient)
+          .filter((c): c is ConnectionClient => c !== null)
+          .sort((a, b) => b.connections - a.connections)
+      : [];
+
     return {
       source,
       label: INSTANCE_LABELS[source] ?? source,
       unreachable,
+      connections_used: connSample?.value_num ?? null,
+      connections_usable: usable,
+      max_connections: index.get(`db.max_connections|${source}`)?.value_num ?? null,
+      clients,
       metrics: DB_METRICS.map((key) =>
         reading(key, index.get(`${key}|${source}`), series.get(`${key}|${source}`)),
       ).filter((m): m is MetricReading => m !== null),
