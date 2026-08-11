@@ -27,16 +27,44 @@ export type CostAnalyticsFilters = {
   limit: number;
 };
 
+/**
+ * The window bounds, as IST calendar days.
+ *
+ * `ended_at` is timestamptz and the callers' dates are IST calendar days. A
+ * bare `${date}::date` comparison casts the date to timestamptz using the
+ * SESSION timezone, and nothing in src/lib/db sets one — so on a UTC server the
+ * window was a UTC day while every GROUP BY on this same column buckets by
+ * `AT TIME ZONE 'Asia/Kolkata'`. That is a 5h30m skew at each edge: calls
+ * between 00:00 and 05:30 IST on a boundary day fell on the wrong side of the
+ * filter while being bucketed on the right side of the chart.
+ *
+ * Casting to a naive `timestamp` first and then applying `AT TIME ZONE` pins
+ * the boundary to midnight IST regardless of where the server thinks it is.
+ * Same construction as src/lib/operations/spend.ts, which has always done this
+ * correctly against the same column.
+ *
+ * `to_date` stays INCLUSIVE, expressed as a half-open `< to + 1 day`.
+ */
+function istDayBounds(from: string | null, to: string | null): SQL[] {
+  const parts: SQL[] = [];
+  if (from) {
+    parts.push(
+      sql`acl.ended_at >= (${from}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+    );
+  }
+  if (to) {
+    parts.push(
+      sql`acl.ended_at < ((${to}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+    );
+  }
+  return parts;
+}
+
 // WHERE clause for panels that read ai_call_logs directly (no DCL join).
 // Always references the alias `acl`.
 function whereClauseAcl(f: CostAnalyticsFilters): SQL {
   const parts: SQL[] = [sql`acl.call_id IS NOT NULL`];
-  if (f.from_date) {
-    parts.push(sql`acl.ended_at >= ${f.from_date}::date`);
-  }
-  if (f.to_date) {
-    parts.push(sql`acl.ended_at < (${f.to_date}::date + interval '1 day')`);
-  }
+  parts.push(...istDayBounds(f.from_date, f.to_date));
   if (f.provider) {
     parts.push(sql`acl.provider = ${f.provider}`);
   }
@@ -52,12 +80,7 @@ function whereClauseDcl(f: CostAnalyticsFilters): SQL {
     sql`acl.call_id IS NOT NULL`,
     sql`dcl.bolna_call_id IS NOT NULL`,
   ];
-  if (f.from_date) {
-    parts.push(sql`acl.ended_at >= ${f.from_date}::date`);
-  }
-  if (f.to_date) {
-    parts.push(sql`acl.ended_at < (${f.to_date}::date + interval '1 day')`);
-  }
+  parts.push(...istDayBounds(f.from_date, f.to_date));
   if (f.provider) {
     parts.push(sql`acl.provider = ${f.provider}`);
   }
