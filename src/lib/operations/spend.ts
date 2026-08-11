@@ -36,7 +36,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 
-import { addMonths, istMonth, momDelta } from "./elevenlabsSeries";
+import { addMonths, istDay, istMonth, momDelta } from "./elevenlabsSeries";
 import { toNumber } from "./format";
 import { latestSamples, bySourceKey } from "./samples";
 import {
@@ -45,6 +45,11 @@ import {
   type SpendWindow,
   type SpendWindowKey,
 } from "./spendWindow";
+import {
+  classifyTechSpend,
+  REASON_LABELS,
+  type TechSpendReason,
+} from "./techSpendRules";
 import {
   canonicalVendor,
   vendorDef,
@@ -150,6 +155,35 @@ export interface BreakdownRow {
   description: string | null;
   effective_date: string | null;
   paise: number;
+  /**
+   * False for rows the Tech Spend rules removed. They are still LISTED — the
+   * drill-down's job is to explain the bar, and "this invoice exists but is not
+   * in the total, because …" is part of that explanation — but they do not
+   * count toward it.
+   */
+  included: boolean;
+  reason_label: string;
+  explanation: string;
+}
+
+/**
+ * One invoice the classifier removed from Tech Spend, with the reason.
+ *
+ * Rendered in full on the page. The rules can only narrow `bucket = 'tech'`, so
+ * every row here is money that WAS in the headline and no longer is — and the
+ * card footer reconciles kept + excluded back to the unfiltered total. An
+ * over-eager rule therefore shows up as a visible line item rather than as a
+ * number that quietly got smaller.
+ */
+export interface ExcludedRow {
+  vendor: string | null;
+  vendor_label: string | null;
+  description: string | null;
+  effective_date: string | null;
+  paise: number;
+  reason: TechSpendReason;
+  reason_label: string;
+  explanation: string;
 }
 
 export interface SpendView {
@@ -159,6 +193,16 @@ export interface SpendView {
   billed_tech_mtd_paise: number;
   /** Billed in the SELECTED window — same population as MTD. */
   billed_window_paise: number;
+  /** Rows the classifier removed from the window, newest-largest first. */
+  excluded: ExcludedRow[];
+  /** What those rows total. `billed_window_paise + this` = the unfiltered total. */
+  excluded_window_paise: number;
+  /** Approved tech invoices with no usable date — in NO figure on this page. */
+  undated_invoices: number;
+  undated_paise: number;
+  /** Included window money on invoices with a blank vendor. */
+  no_vendor_paise: number;
+  no_vendor_invoices: number;
   ai_cost_window_paise: number;
   ai_calls_window: number;
   vendors: VendorRow[];
@@ -218,6 +262,15 @@ export async function getSpendView(
   let burn: MonthBurn[] = [];
   let billedMtd = 0;
   let billedWindowPaise = 0;
+  /** Money the classifier removed from the window, itemised on the page. */
+  const excluded: ExcludedRow[] = [];
+  let excludedWindowPaise = 0;
+  /** Approved tech invoices with no usable date — outside every figure here. */
+  let undatedInvoices = 0;
+  let undatedPaise = 0;
+  /** Included invoices carrying no vendor. Real money, no row to sit on. */
+  let noVendorPaise = 0;
+  let noVendorInvoices = 0;
   const billedByVendor = new Map<
     string,
     { label: string; matched: boolean; paise: number; invoices: number; entities: string[] }
@@ -227,11 +280,6 @@ export async function getSpendView(
     const scope = sql`
       WHERE ${sql.raw(column)} = 'tech' AND status = 'approved'
     `;
-    // The same inclusive IST day bounds the metered half uses.
-    const billedWindow = sql`
-      AND ${EFFECTIVE_DATE} >= ${window.from}::date
-      AND ${EFFECTIVE_DATE} <= ${window.to}::date
-    `;
 
     // Six calendar months back from the current one, so the range is fixed
     // rather than "the six months that happen to have invoices". LIMIT 6 on a
@@ -239,21 +287,132 @@ export async function getSpendView(
     // drew them evenly spaced — a month with no tech spend simply vanished and
     // the gap rendered as continuity.
     const oldestMonth = addMonths(currentMonth, -5);
-    const monthly = await rows(sql`
-      SELECT TO_CHAR(${EFFECTIVE_DATE}, 'YYYY-MM') AS month,
-             COALESCE(SUM(amount), 0)::numeric     AS inr,
-             COUNT(*)::int                         AS invoices
+    const today = istDay();
+
+    // ONE ROW-LEVEL QUERY, not four aggregates.
+    //
+    // Tech Spend is no longer `SUM(amount) WHERE bucket = 'tech'`: that column
+    // is written by a process outside this repository and files our own GST
+    // payments, retail electronics and recruitment invoices as technology. The
+    // correction is per-row (see techSpendRules.ts), and a SUM() cannot be
+    // filtered per row after the fact — so the rows are fetched once and every
+    // figure on the page is folded out of the SAME classified list. Burn, MTD,
+    // the window total, the vendor table and the exclusions panel are then
+    // arithmetically incapable of disagreeing with each other.
+    //
+    // The volume this walks is ~80 rows for all time on the current data. The
+    // aggregates it replaces were four round trips against the instance this
+    // console exists to keep connections free on.
+    //
+    // UPPER-BOUNDED, unlike the MTD aggregate it replaces. That query was
+    // `>= DATE_TRUNC('month', now())` with no ceiling, so an invoice carrying a
+    // mistyped future expense_date counted toward "MTD" forever while the
+    // window total beside it — which IS bounded — excluded it. Two numbers in
+    // one card footer that could not be reconciled.
+    const rangeFrom =
+      window.from < `${oldestMonth}-01` ? window.from : `${oldestMonth}-01`;
+    const rangeTo = window.to > today ? window.to : today;
+
+    const invoices = await rows(sql`
+      SELECT vendor,
+             description,
+             TO_CHAR(${EFFECTIVE_DATE}, 'YYYY-MM')  AS month,
+             ${EFFECTIVE_DATE}::text                AS effective_date,
+             COALESCE(amount, 0)::numeric           AS inr
       FROM expense_submissions ${scope}
-        AND ${EFFECTIVE_DATE} >= ${`${oldestMonth}-01`}::date
-      GROUP BY month
-      ORDER BY month DESC
+        AND ${EFFECTIVE_DATE} >= ${rangeFrom}::date
+        AND ${EFFECTIVE_DATE} <= ${rangeTo}::date
     `);
-    const byMonth = new Map(
-      monthly.map((r) => [
-        String(r.month),
-        { paise: paise(r.inr), invoices: Number(r.invoices ?? 0) },
-      ]),
-    );
+
+    // Approved tech invoices with NEITHER an expense_date NOR an approved_at.
+    // EFFECTIVE_DATE is NULL for them, so they fail every bound above and sit
+    // outside all six bars, MTD, the window total and the breakdown at once —
+    // consistently invisible, which is exactly why nobody would notice. Counted
+    // so the page can say they exist rather than quietly losing the money.
+    const [undated] = await rows(sql`
+      SELECT COUNT(*)::int                     AS invoices,
+             COALESCE(SUM(amount), 0)::numeric AS inr
+      FROM expense_submissions ${scope}
+        AND ${EFFECTIVE_DATE} IS NULL
+    `);
+    undatedInvoices = Number(undated?.invoices ?? 0);
+    undatedPaise = paise(undated?.inr);
+
+    const byMonth = new Map<string, { paise: number; invoices: number }>();
+    const monthStart = `${currentMonth}-01`;
+
+    for (const r of invoices) {
+      const vendorRaw = r.vendor == null ? null : String(r.vendor);
+      const description = r.description == null ? null : String(r.description);
+      const amount = paise(r.inr);
+      const month = r.month == null ? null : String(r.month);
+      const day =
+        r.effective_date == null ? null : String(r.effective_date).slice(0, 10);
+      if (!day) continue;
+
+      const verdict = classifyTechSpend({ vendor: vendorRaw, description });
+      const inWindow = day >= window.from && day <= window.to;
+
+      if (!verdict.include) {
+        // Excluded from every total, and itemised for the window on screen.
+        // An exclusion nobody can see is indistinguishable from a bug.
+        if (inWindow) {
+          excluded.push({
+            vendor: vendorRaw,
+            vendor_label: vendorRaw
+              ? (canonicalVendor(vendorRaw)?.label ?? vendorRaw)
+              : null,
+            description,
+            effective_date: day,
+            paise: amount,
+            reason: verdict.reason,
+            reason_label: REASON_LABELS[verdict.reason],
+            explanation: verdict.explanation,
+          });
+          excludedWindowPaise += amount;
+        }
+        continue;
+      }
+
+      if (month) {
+        const hit = byMonth.get(month) ?? { paise: 0, invoices: 0 };
+        hit.paise += amount;
+        hit.invoices += 1;
+        byMonth.set(month, hit);
+      }
+
+      // Month-to-date: this calendar month, up to and including today. The
+      // upper bound is the fix described above.
+      if (day >= monthStart && day <= today) billedMtd += amount;
+
+      if (!inWindow) continue;
+      billedWindowPaise += amount;
+
+      // Blank-vendor invoices are real money and used to be dropped from the
+      // vendor table by `AND vendor IS NOT NULL`, so the rows could not sum to
+      // the headline and nothing on screen said why. They roll up into an
+      // explicit residual row instead.
+      if (!vendorRaw || !vendorRaw.trim()) {
+        noVendorPaise += amount;
+        noVendorInvoices += 1;
+        continue;
+      }
+
+      const vendor = canonicalVendor(vendorRaw);
+      if (!vendor) continue;
+      const entry = billedByVendor.get(vendor.id) ?? {
+        label: vendor.label,
+        matched: vendor.matched,
+        paise: 0,
+        invoices: 0,
+        entities: [],
+      };
+      entry.paise += amount;
+      entry.invoices += 1;
+      if (!entry.entities.includes(vendorRaw)) entry.entities.push(vendorRaw);
+      billedByVendor.set(vendor.id, entry);
+    }
+
     burn = [];
     for (let i = 0; i < 6; i++) {
       const month = addMonths(currentMonth, -i);
@@ -263,52 +422,6 @@ export async function getSpendView(
         paise: hit?.paise ?? 0,
         invoices: hit?.invoices ?? 0,
       });
-    }
-
-    const [mtd] = await rows(sql`
-      SELECT COALESCE(SUM(amount), 0)::numeric AS inr
-      FROM expense_submissions ${scope}
-        AND ${EFFECTIVE_DATE} >= DATE_TRUNC('month', (NOW() AT TIME ZONE 'Asia/Kolkata'))::date
-    `);
-    billedMtd = paise(mtd?.inr);
-
-    // The window total, computed in ITS OWN query rather than accumulated
-    // inside the per-vendor loop below. The loop's query carries
-    // `AND vendor IS NOT NULL`, so summing it produced a headline that silently
-    // excluded every approved tech invoice with a blank vendor while the MTD
-    // figure beside it included them — two numbers in one card that could not
-    // be reconciled, and no way to see why.
-    const [windowTotal] = await rows(sql`
-      SELECT COALESCE(SUM(amount), 0)::numeric AS inr
-      FROM expense_submissions ${scope} ${billedWindow}
-    `);
-    billedWindowPaise = paise(windowTotal?.inr);
-
-    const perVendor = await rows(sql`
-      SELECT vendor,
-             COALESCE(SUM(amount), 0)::numeric AS inr,
-             COUNT(*)::int                     AS invoices
-      FROM expense_submissions ${scope}
-        AND vendor IS NOT NULL
-        ${billedWindow}
-      GROUP BY vendor
-    `);
-
-    for (const r of perVendor) {
-      const raw = String(r.vendor);
-      const vendor = canonicalVendor(raw);
-      if (!vendor) continue;
-      const entry = billedByVendor.get(vendor.id) ?? {
-        label: vendor.label,
-        matched: vendor.matched,
-        paise: 0,
-        invoices: 0,
-        entities: [],
-      };
-      entry.paise += paise(r.inr);
-      entry.invoices += Number(r.invoices ?? 0);
-      if (!entry.entities.includes(raw)) entry.entities.push(raw);
-      billedByVendor.set(vendor.id, entry);
     }
   }
 
@@ -427,6 +540,12 @@ export async function getSpendView(
     mom_delta_pct: momDeltaPct,
     billed_tech_mtd_paise: billedMtd,
     billed_window_paise: billedWindowPaise,
+    excluded: excluded.sort((a, b) => b.paise - a.paise),
+    excluded_window_paise: excludedWindowPaise,
+    undated_invoices: undatedInvoices,
+    undated_paise: undatedPaise,
+    no_vendor_paise: noVendorPaise,
+    no_vendor_invoices: noVendorInvoices,
     ai_cost_window_paise: Number(aiTotal?.cost_cents ?? 0),
     ai_calls_window: Number(aiTotal?.calls ?? 0),
     vendors,
@@ -451,6 +570,12 @@ export async function getSpendBreakdown(
   const column = await techFilterColumn();
   if (!column) return [];
 
+  // Upper-bounded at today for the CURRENT month, matching resolveSpendWindow()
+  // and the burn query. Without it, an invoice post-dated later this month
+  // appeared in the drill-down but not in the bar it was drilled into — a
+  // breakdown that exceeds its own total.
+  const today = istDay();
+
   const result = await rows(sql`
     SELECT id::text                        AS id,
            vendor,
@@ -461,20 +586,26 @@ export async function getSpendBreakdown(
     FROM expense_submissions
     WHERE ${sql.raw(column)} = 'tech' AND status = 'approved'
       AND TO_CHAR(${EFFECTIVE_DATE}, 'YYYY-MM') = ${month}
+      AND ${EFFECTIVE_DATE} <= ${today}::date
     ORDER BY ${EFFECTIVE_DATE} DESC, amount DESC
   `);
 
   return result.map((r) => {
     const raw = r.vendor == null ? null : String(r.vendor);
+    const description = r.description == null ? null : String(r.description);
+    const verdict = classifyTechSpend({ vendor: raw, description });
     return {
       id: String(r.id),
       vendor: raw,
       vendor_label: raw ? (canonicalVendor(raw)?.label ?? raw) : null,
       invoice_number: r.invoice_number == null ? null : String(r.invoice_number),
-      description: r.description == null ? null : String(r.description),
+      description,
       effective_date:
         r.effective_date == null ? null : String(r.effective_date).slice(0, 10),
       paise: paise(r.inr),
+      included: verdict.include,
+      reason_label: REASON_LABELS[verdict.reason],
+      explanation: verdict.explanation,
     };
   });
 }
