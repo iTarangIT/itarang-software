@@ -196,6 +196,10 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.verdict_raised": "NBFC raised a verdict",
   "nbfc.verdict_responded": "Verdict answered",
   nbfc_verdict_forwarded: "NBFC verdict forwarded to the dealer",
+  // The flat predecessor of `nbfc.request_forwarded`. Its catalog entry landed
+  // without a matching label, so verify:notifications has been failing on it
+  // since; the two maps have to move together.
+  nbfc_doc_request_forwarded: "Admin forwarded an NBFC request (legacy)",
 
   // --- Field investigation ---
   "fi.requested": "Field investigation requested",
@@ -248,6 +252,13 @@ export const TYPE_LABELS: Record<string, string> = {
   inventory_assigned: "Inventory assigned to a dealer",
   inventory_transfer_incoming: "Incoming inventory transfer",
   inventory_transfer_acknowledged: "Inventory transfer acknowledged",
+
+  // --- Battery auctions (E-234) ---
+  "auction.lot_published": "A battery lot went live for bidding",
+  "auction.outbid": "You have been outbid on a lot",
+  "auction.ending_soon": "A lot you bid on is ending within the hour",
+  "auction.won": "You won a battery lot",
+  "auction.lost": "A lot you bid on closed with someone else",
 
   // --- Escalations ---
   escalation_raised: "Escalation raised (legacy)",

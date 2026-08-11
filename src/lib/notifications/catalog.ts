@@ -49,6 +49,7 @@ export type NotificationCategory =
   | "Product & Dispatch"
   | "Onboarding"
   | "Inventory"
+  | "Auctions"
   | "Escalations";
 
 /** Ordered exactly as the filter bar should list them. "System" stays last. */
@@ -64,6 +65,7 @@ export const CATEGORIES: NotificationCategory[] = [
   "Loan & Sanction",
   "Product & Dispatch",
   "Inventory",
+  "Auctions",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
   ...BUYBACK_CATEGORIES.filter((c) => c !== "System"),
@@ -209,6 +211,17 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "oem.price_expiring": "Inventory",
   "oem.price_missing": "Inventory",
 
+  // --- Battery auctions (E-234) ---
+  // Its own category rather than a corner of Inventory: the recipient is a
+  // DEALER outside the company, the clock is minutes not days, and an admin
+  // muting "Inventory" for the Dealer Portal must not accidentally silence a
+  // live bidding war.
+  "auction.lot_published": "Auctions",
+  "auction.outbid": "Auctions",
+  "auction.ending_soon": "Auctions",
+  "auction.won": "Auctions",
+  "auction.lost": "Auctions",
+
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
   "nbfc.dual_approval": "System",
@@ -274,6 +287,11 @@ const WARNING = new Set([
   // model to the CEO, which is why it has to be visible BEFORE it happens.
   "oem.price_expiring",
   "oem.price_missing",
+  // You are no longer winning, and the window is finite — both are "act now or
+  // lose it", which is the definition of amber. `auction.lost` is NOT here: by
+  // the time it arrives there is nothing left to act on.
+  "auction.outbid",
+  "auction.ending_soon",
 ]);
 
 /**
@@ -294,6 +312,20 @@ const NO_EMAIL = new Set([
   "onboarding.docs_uploaded",
   "product.delivered",
   "delivery_confirmed",
+  // Auctions opt out of the GENERIC email for a reason each:
+  //   outbid       — the proxy engine can fire this several times inside one
+  //                  second while two standing maxima resolve. An inbox is the
+  //                  wrong place for that; the bell and the live page are not.
+  //   lot_published / ending_soon / won
+  //                — sendAuctionLotEmail() sends these instead, with the
+  //                  battery photo, the lot facts and a bid CTA. Leaving them
+  //                  email-worthy here would send BOTH.
+  // `auction.lost` is deliberately absent: the plain emit email is exactly
+  // right for it, and it is the one auction mail with nothing to illustrate.
+  "auction.outbid",
+  "auction.lot_published",
+  "auction.ending_soon",
+  "auction.won",
 ]);
 
 export function categorize(type: string): NotificationCategory {
@@ -384,6 +416,14 @@ export function linkFor(
 
   if (category === "Inventory") {
     return role === "dealer" ? "/dealer-portal/inventory" : "/admin/inventory";
+  }
+
+  if (category === "Auctions") {
+    // No lot id in the fallback path (emit() always sets data.href, which won
+    // above) — so land on the list, which is never a dead click.
+    if (role === "dealer") return "/dealer-portal/auctions";
+    if (role === "nbfc") return "/nbfc/auction";
+    return "/admin/nbfc/auction";
   }
 
   if (category === "Escalations") {

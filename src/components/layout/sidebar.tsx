@@ -46,6 +46,7 @@ import {
   ShieldAlert,
   Radar,
   ChevronDown,
+  Gavel,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -414,12 +415,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: LayoutDashboard,
           href: "/admin",
         },
-        {
-          id: "sh-leads-info",
-          label: "Leads Info",
-          icon: ListChecks,
-          href: "/admin/leads-info",
-        },
+        // "Leads Info" merged into /leads — one screen, one lead, one row.
+        // sales_head was the only role carrying both entries.
         {
           id: "sh-leads",
           label: "Leads",
@@ -505,6 +502,16 @@ const roleNavigation: Record<string, any[]> = {
           label: "Risk Cards",
           icon: AlertTriangle,
           href: "/admin/nbfc/risk-cards",
+        },
+        // [E-234] The Auction Control Centre. Its eight endpoints have existed
+        // since E-069/E-070 with no screen and no nav entry, so pause / extend /
+        // reduce / reserve-price / approve-winner / cancel were reachable only
+        // by hand-written curl. This is the first way in.
+        {
+          id: "nbfc-auction-control",
+          label: "Auction Control",
+          icon: Gavel,
+          href: "/admin/nbfc/auction",
         },
         {
           id: "nbfc-my-drafts",
@@ -710,11 +717,14 @@ const roleNavigation: Record<string, any[]> = {
     {
       section: "LEAD MANAGEMENT",
       items: [
+        // Repointed, not deleted: this was admin's ONLY route into leads —
+        // the admin nav had no /leads entry — so removing it would have taken
+        // admin off the merged screen entirely.
         {
-          id: "admin-leads-info",
-          label: "Leads Info",
-          icon: ListChecks,
-          href: "/admin/leads-info",
+          id: "admin-leads",
+          label: "Leads",
+          icon: Users,
+          href: "/leads",
         },
         {
           id: "admin-escalations",
@@ -1318,6 +1328,34 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      // [E-234] The dealer BUYS recovered stock from an NBFC partner here.
+      //
+      // Its own section for the same reason BUYBACK got one: direction. Buyback
+      // is the dealer selling dead batteries to iTarang; this is the dealer
+      // buying recovered ones at auction. Filing them together would put two
+      // opposite money flows under one heading.
+      section: "BATTERY AUCTIONS",
+      items: [
+        {
+          id: "auctions",
+          label: "Live Auctions",
+          icon: Gavel,
+          // Deliberately NOT `exact`. The detail route
+          // /dealer-portal/auctions/[id] should highlight this item, and the
+          // default startsWith match does that for free. `my-bids` sits below
+          // and is longer, so getActiveItemId's longest-match rule picks it
+          // correctly when the dealer is there.
+        href: "/dealer-portal/auctions",
+        },
+        {
+          id: "auction-my-bids",
+          label: "My Bids",
+          icon: Gavel,
+          href: "/dealer-portal/auctions/my-bids",
+        },
+      ],
+    },
   ],
 
   user: [
@@ -1903,15 +1941,6 @@ export function Sidebar() {
     }));
   }
 
-  // The mobile drawer shows on the dealer portal and on the shared /expenses
-  // pages (a common route reachable by any role — without this the user lands
-  // there on mobile with no way to open navigation). The desktop sidebar is
-  // unchanged for every role.
-  const showMobileDrawer =
-    pathname.startsWith("/dealer-portal") ||
-    pathname.startsWith("/expenses") ||
-    pathname.startsWith("/it");
-
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
   // left border, active = `rgba(19,143,198,0.15)` bg + `#138fc6` left border
@@ -1929,52 +1958,54 @@ export function Sidebar() {
         />
       </div>
 
-      {/* Mobile drawer — phone-only (md:hidden), shown on dealer portal, the
-          shared /expenses pages and the /it console. Mirrors the
-          NbfcPortalSidebar pattern: backdrop + left
-          slide-in panel, driven by the shared uiStore and the header hamburger. */}
-      {showMobileDrawer && (
+      {/* Mobile drawer — phone-only (md:hidden), rendered on EVERY route this
+          sidebar serves. It was previously gated to /dealer-portal, /expenses
+          and /it, which meant the header hamburger had nothing to open anywhere
+          else (sales-head, admin, ceo, …) — the desktop sidebar is `hidden
+          md:flex`, so those roles had no navigation at all on a phone. The
+          drawer is already role-aware (it renders the same computed menuItems),
+          so no per-role work is needed. Mirrors the NbfcPortalSidebar pattern:
+          backdrop + left slide-in panel, driven by the shared uiStore. */}
+      <div
+        className={`md:hidden fixed inset-0 z-50 ${
+          sidebarOpen ? "" : "pointer-events-none"
+        }`}
+        aria-hidden={!sidebarOpen}
+      >
+        {/* Backdrop */}
         <div
-          className={`md:hidden fixed inset-0 z-50 ${
-            sidebarOpen ? "" : "pointer-events-none"
+          onClick={closeSidebar}
+          className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+            sidebarOpen ? "opacity-100" : "opacity-0"
           }`}
-          aria-hidden={!sidebarOpen}
+        />
+        {/* Panel */}
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label="Main navigation"
+          className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
+            sidebarOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
         >
-          {/* Backdrop */}
-          <div
+          <button
+            type="button"
             onClick={closeSidebar}
-            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
-              sidebarOpen ? "opacity-100" : "opacity-0"
-            }`}
-          />
-          {/* Panel */}
-          <aside
-            role="dialog"
-            aria-modal="true"
-            aria-label="Main navigation"
-            className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
-              sidebarOpen ? "translate-x-0" : "-translate-x-full"
-            }`}
+            aria-label="Close navigation"
+            className="absolute right-3 top-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
           >
-            <button
-              type="button"
-              onClick={closeSidebar}
-              aria-label="Close navigation"
-              className="absolute right-3 top-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <SidebarNav
-              menuItems={menuItems}
-              pathname={pathname}
-              user={user}
-              loading={loading}
-              inferredRole={inferredRole}
-              onNavigate={closeSidebar}
-            />
-          </aside>
-        </div>
-      )}
+            <X className="w-5 h-5" />
+          </button>
+          <SidebarNav
+            menuItems={menuItems}
+            pathname={pathname}
+            user={user}
+            loading={loading}
+            inferredRole={inferredRole}
+            onNavigate={closeSidebar}
+          />
+        </aside>
+      </div>
     </>
   );
 }
