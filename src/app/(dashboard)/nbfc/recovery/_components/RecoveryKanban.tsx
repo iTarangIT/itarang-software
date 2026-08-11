@@ -50,16 +50,28 @@ interface Props {
 }
 
 // BRD §6.1.7 — allowed stage transitions.
+//
+// [E-233] Kept in step with ALLOWED_TRANSITIONS in
+// src/lib/nbfc/recovery/stages.ts, which is the enforcing copy. This one only
+// decides which buttons to render; it is NOT a guard, and it never was — the
+// service accepted anything a direct API call sent until E-233 moved the rule
+// server-side. Note `ready_for_auction` on needs_inspection: refurbishment is
+// recommended, never mandatory (Battery Auction BRD §5), so a healthy battery
+// skips the workshop.
 const ALLOWED_NEXT: Record<Stage, Stage[]> = {
-  needs_inspection: ["refurbishable", "scrap"],
+  needs_inspection: ["refurbishable", "scrap", "ready_for_auction"],
   refurbishable: ["ready_for_auction", "scrap"],
-  ready_for_auction: ["resold", "refurbishable"],
+  ready_for_auction: ["resold"],
   resold: [],
   scrap: [],
 };
 
-// BRD §6.1.7 — a battery may only enter Refurbishable above this SOH.
-const REFURBISHABLE_MIN_SOH = 70;
+// [E-233] The one set of SOH bands, mirrored from stages.ts for button state.
+// Below SOH_SCRAP_BELOW a battery can only be scrapped; between the two it is
+// partial_working and goes straight to auction; at or above the threshold it
+// may be refurbished.
+const SOH_SCRAP_BELOW = 55;
+const SOH_REFURBISHABLE_MIN = 70;
 
 const STAGE_TONE: Record<Stage, string> = {
   needs_inspection: "bg-amber-50 border-amber-200",
@@ -227,22 +239,27 @@ function Card({
       {next.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1">
           {next.map((n) => {
-            // BRD §6.1.7 — Refurbishable requires SOH > 70%.
-            // Unknown SOH must fail the guard too — a missing reading is not
-            // evidence the battery clears the §6.1.7 threshold.
-            const blocked =
-              n === "refurbishable" &&
-              (row.live_soh_pct == null ||
-                row.live_soh_pct <= REFURBISHABLE_MIN_SOH);
+            // [E-233] Mirrors assertSohAllowsStage() in stages.ts, which is
+            // where this is actually enforced. Unknown SOH fails too — a
+            // missing reading is not evidence the battery clears anything.
+            const soh = row.live_soh_pct;
+            const unknownSoh = soh == null;
+            let blockedReason: string | null = null;
+            if (n === "refurbishable" || n === "ready_for_auction") {
+              if (unknownSoh) {
+                blockedReason = "Record an evaluation first — no state of health on file";
+              } else if (soh < SOH_SCRAP_BELOW) {
+                blockedReason = `SOH is ${soh}%, below the ${SOH_SCRAP_BELOW}% scrap floor — this battery can only be scrapped`;
+              } else if (n === "refurbishable" && soh < SOH_REFURBISHABLE_MIN) {
+                blockedReason = `SOH is ${soh}%, below the ${SOH_REFURBISHABLE_MIN}% refurbishment threshold — send it straight to auction as partial working`;
+              }
+            }
+            const blocked = blockedReason !== null;
             return (
               <button
                 key={n}
                 disabled={busy || blocked}
-                title={
-                  blocked
-                    ? `SOH must exceed ${REFURBISHABLE_MIN_SOH}% to mark Refurbishable (BRD §6.1.7)`
-                    : undefined
-                }
+                title={blockedReason ?? undefined}
                 onClick={() => onMove(row.id, n)}
                 className="rounded border border-slate-300 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >

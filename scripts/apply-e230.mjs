@@ -37,8 +37,26 @@ import postgres from "postgres";
 
 const CHECK_ONLY = process.argv.includes("--check");
 
+// Which key of .env.local to connect through. Defaults to DATABASE_URL, so the
+// documented invocations above are unchanged. The override exists because this
+// repo has two live DBs that drift (database-1 = sandbox, database-2 = prod) and
+// only ONE of them is ever in DATABASE_URL: without it, targeting the other
+// means editing DATABASE_URL in place, which silently repoints the dev server
+// and the BullMQ worker at production for as long as the edit is there. Add a
+// second key (e.g. DATABASE_URL_DB2=...) and pass --env-key=DATABASE_URL_DB2.
+// The value stays in .env.local rather than on argv, where it would be visible
+// in the process list and shell history.
+const ENV_KEY =
+  process.argv.find((a) => a.startsWith("--env-key="))?.split("=")[1] ??
+  "DATABASE_URL";
+
 const env = readFileSync(".env.local", "utf8");
-const url = env.match(/^DATABASE_URL=(.*)$/m)[1].trim().replace(/^["']|["']$/g, "");
+const found = env.match(new RegExp(`^${ENV_KEY}=(.*)$`, "m"));
+if (!found) {
+  console.error(`FAILED — no ${ENV_KEY} in .env.local.`);
+  process.exit(1);
+}
+const url = found[1].trim().replace(/^["']|["']$/g, "");
 const ddl = readFileSync("drizzle/E-230_oem_price_validity.sql", "utf8");
 
 const sql = postgres(url, {

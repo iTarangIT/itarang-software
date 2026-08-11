@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, LogOut, User, ChevronDown, Settings, Menu } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import NotificationBell from '@/components/shared/NotificationBell';
@@ -17,19 +17,18 @@ import { toast } from 'sonner';
 
 export function Header() {
     const router = useRouter();
-    const pathname = usePathname() ?? '';
     const supabase = createClient();
     const { user } = useAuth();
-    // Mobile hamburger → opens the shared nav drawer. Shown on the dealer portal,
-    // on the shared /expenses pages (a common route any role can reach) and on
-    // the /it console — anywhere the user would otherwise be stranded on a phone
-    // with the desktop sidebar hidden and no way to open navigation.
+    // Mobile hamburger → opens the shared nav drawer. Shown on EVERY route this
+    // header renders on. It used to be an allowlist of three prefixes
+    // (/dealer-portal, /expenses, /it), which left every other role — sales_head,
+    // admin, ceo, business_head… — stranded on a phone with the desktop sidebar
+    // hidden (md:hidden) and no way to open navigation. The stated reason for the
+    // allowlist was exactly that failure mode, so it applies everywhere.
+    // /nbfc/* and /risk-head/* never reach here (LayoutWrapper hands them to
+    // their own shells, which carry their own hamburgers).
     const openSidebar = useUIStore((s) => s.openSidebar);
     const openChangePassword = useUIStore((s) => s.openChangePassword);
-    const showMobileNav =
-        pathname.startsWith('/dealer-portal') ||
-        pathname.startsWith('/expenses') ||
-        pathname.startsWith('/it');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
@@ -95,16 +94,14 @@ export function Header() {
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
             <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                {showMobileNav && (
-                    <button
-                        type="button"
-                        onClick={openSidebar}
-                        aria-label="Open navigation menu"
-                        className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                        <Menu className="w-6 h-6" />
-                    </button>
-                )}
+                <button
+                    type="button"
+                    onClick={openSidebar}
+                    aria-label="Open navigation menu"
+                    className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                    <Menu className="w-6 h-6" />
+                </button>
                 <img
                     src="/itarang-logo.png"
                     alt="iTarang"
