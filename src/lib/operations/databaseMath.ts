@@ -26,6 +26,27 @@ export interface StatCounters {
   reads: number;
   /** tup_inserted + tup_updated + tup_deleted. */
   writes: number;
+  /**
+   * SUM(calls) from pg_stat_statements — statements executed, server-wide.
+   *
+   * OPTIONAL ON PURPOSE, and deliberately not one of the required fields above.
+   * Three separate reasons, each of which would otherwise be a silent
+   * regression:
+   *
+   *  1. pg_stat_statements is an extension. It is present on the CRM RDS but
+   *     cannot be assumed on the IoT database, whose role is SELECT-only.
+   *  2. Every db.stat_counters sample already written predates this field. If
+   *     it were required, `previousCounters()` would reject all of them and the
+   *     four working interval metrics would blank for MAX_COUNTER_AGE_MINUTES
+   *     after every deploy that ships this change.
+   *  3. It resets on its own schedule (pg_stat_statements_reset), independently
+   *     of pg_stat_database. Folding it into the shared negative-delta guard
+   *     would let one extension's reset discard the cache-hit ratio too.
+   *
+   * So it is carried alongside, differenced separately, and its absence costs
+   * exactly one metric.
+   */
+  calls?: number | null;
 }
 
 export interface IntervalMetrics {
@@ -34,6 +55,23 @@ export interface IntervalMetrics {
   deadlocks: number | null;
   reads_per_s: number | null;
   writes_per_s: number | null;
+  /**
+   * Transactions per second — Δ(xact_commit + xact_rollback) / Δt.
+   *
+   * The request-rate metric that needs no extension, so it is the one the board
+   * can always show. Counts transactions, not statements: an autocommit query
+   * is one of each, but a multi-statement transaction is one txn and many
+   * statements, which is why queries_per_s sits beside it rather than replacing
+   * it.
+   */
+  txns_per_s: number | null;
+  /**
+   * Statements per second — Δ SUM(pg_stat_statements.calls) / Δt.
+   *
+   * Null, never zero, whenever either reading lacks `calls` or the extension
+   * reset between them.
+   */
+  queries_per_s: number | null;
   /** Deltas and span, for the samples' meta. */
   detail: {
     interval_s: number;
@@ -43,6 +81,8 @@ export interface IntervalMetrics {
     rollbacks: number;
     read_rows: number;
     write_rows: number;
+    /** Statements in the interval; absent when pg_stat_statements is not usable. */
+    queries?: number;
   } | null;
   /**
    * Why nothing was derived, when nothing was. Surfaced so a blank tile can be
@@ -57,6 +97,8 @@ const NOTHING: IntervalMetrics = {
   deadlocks: null,
   reads_per_s: null,
   writes_per_s: null,
+  txns_per_s: null,
+  queries_per_s: null,
   detail: null,
   skipped: "no-predecessor",
 };
@@ -105,6 +147,19 @@ export function intervalMetrics(
   const blocks = d.blks_hit + d.blks_read;
   const xacts = d.xact_commit + d.xact_rollback;
 
+  // Statements are differenced on their own, outside `d` and outside the guard
+  // above. Both readings must carry a finite `calls`, and the extension must
+  // not have been reset between them; failing either yields null, so the tile
+  // reads "unknown" rather than claiming an idle database.
+  const queryDelta =
+    typeof previous.calls === "number" &&
+    Number.isFinite(previous.calls) &&
+    typeof current.calls === "number" &&
+    Number.isFinite(current.calls) &&
+    current.calls >= previous.calls
+      ? current.calls - previous.calls
+      : null;
+
   return {
     // No block accesses at all in the interval means there is no ratio to
     // report. Reporting 0% would read as a total cache collapse on an idle
@@ -114,6 +169,9 @@ export function intervalMetrics(
     deadlocks: d.deadlocks,
     reads_per_s: round1(d.reads / elapsedSeconds),
     writes_per_s: round1(d.writes / elapsedSeconds),
+    txns_per_s: round1(xacts / elapsedSeconds),
+    queries_per_s:
+      queryDelta == null ? null : round1(queryDelta / elapsedSeconds),
     detail: {
       interval_s: Math.round(elapsedSeconds),
       blks_hit: d.blks_hit,
@@ -122,6 +180,7 @@ export function intervalMetrics(
       rollbacks: d.xact_rollback,
       read_rows: d.reads,
       write_rows: d.writes,
+      ...(queryDelta == null ? {} : { queries: queryDelta }),
     },
     skipped: null,
   };

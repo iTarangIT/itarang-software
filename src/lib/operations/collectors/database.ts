@@ -141,7 +141,19 @@ async function previousCounters(source: string): Promise<CounterReading | null> 
   // missing halves to zero, which would invent an enormous first delta.
   if (Object.values(counters).some((v) => v == null)) return null;
 
-  return { at: sample.captured_at, counters: counters as CounterReading["counters"] };
+  return {
+    at: sample.captured_at,
+    counters: {
+      ...(counters as CounterReading["counters"]),
+      // Read SEPARATELY and never included in the completeness check above.
+      // Every sample written before pg_stat_statements was wired in lacks this
+      // key; requiring it would reject all of them and blank the four working
+      // interval metrics for MAX_COUNTER_AGE_MINUTES after the deploy that
+      // ships it. databaseMath.intervalMetrics() treats null as "unknown" and
+      // drops only the statement rate.
+      calls: read("calls"),
+    },
+  };
 }
 
 /** Connections, query ages, cache/transaction stats and size for one database. */
@@ -150,6 +162,91 @@ async function probeDatabase(
   source: string,
 ): Promise<CollectedSample[]> {
   const samples: CollectedSample[] = [];
+
+  // ---- identity + what this role is allowed to see ------------------------
+  // FIRST, and deliberately the cheapest query in the file: it doubles as the
+  // reachability check, so a database that answers anything at all is recorded
+  // as reachable before any of the heavier probes get a chance to fail.
+  //
+  // pg_monitor membership is the difference between an honest connection table
+  // and a fabricated one. Without it a role still sees every ROW of
+  // pg_stat_activity, but on a managed instance a restricted role can be
+  // filtered to its own backends — and a connection count that silently means
+  // "ours only" is worse than no count at all. The CRM role has pg_monitor
+  // (verified); the IoT bridge's dashboard_ro almost certainly does not, so the
+  // read model hides that instance's connection block rather than showing a
+  // small wrong number.
+  const [identity] = await rows(
+    client,
+    sql`
+      SELECT
+        current_database()                                        AS database,
+        current_user                                              AS username,
+        pg_has_role(current_user, 'pg_monitor', 'member')          AS can_see_all,
+        (current_setting('server_version_num')::int / 10000)       AS major_version
+    `,
+  );
+  const canSeeAll = identity?.can_see_all === true;
+
+  samples.push({
+    metric_key: "db.reachable",
+    source,
+    value_num: 1,
+    meta: {
+      database: identity?.database == null ? null : String(identity.database),
+      username: identity?.username == null ? null : String(identity.username),
+      can_see_all_backends: canSeeAll,
+      major_version: num(identity?.major_version),
+    },
+  });
+
+  // ---- structure: how many tables, how many columns -----------------------
+  // The first two questions asked of an unfamiliar database, and neither was
+  // answerable from this page before. information_schema.columns carries both,
+  // so it is one round trip rather than two.
+  //
+  // `public` only — that is the schema this application owns. Counting
+  // pg_catalog and information_schema would add a few hundred tables that are
+  // identical on every Postgres instance and tell an operator nothing.
+  //
+  // Its own try/catch: a role that cannot read information_schema must not cost
+  // us the connection numbers, which are the ones that predict an outage.
+  try {
+    const [structure] = await rows(
+      client,
+      sql`
+        SELECT
+          COUNT(DISTINCT table_schema || '.' || table_name)::int AS tables,
+          COUNT(*)::int                                          AS columns
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+      `,
+    );
+    const tableCount = num(structure?.tables);
+    const columnCount = num(structure?.columns);
+    if (tableCount != null) {
+      samples.push({
+        metric_key: "db.table_count",
+        source,
+        value_num: tableCount,
+      });
+    }
+    if (columnCount != null) {
+      samples.push({
+        metric_key: "db.column_count",
+        source,
+        value_num: columnCount,
+        meta: { tables: tableCount },
+      });
+    }
+  } catch (e) {
+    samples.push({
+      metric_key: "db.table_count",
+      source,
+      value_num: null,
+      value_text: `unavailable: ${rootCauseMessage(e)}`,
+    });
+  }
 
   // ---- connections -------------------------------------------------------
   // current_setting() rather than SHOW: SHOW cannot be used as a subquery, and
@@ -181,6 +278,7 @@ async function probeDatabase(
                            AND state = 'active')                    AS active,
         COUNT(*) FILTER (WHERE backend_type = 'client backend'
                            AND state = 'idle in transaction')       AS idle_tx,
+        COUNT(*) FILTER (WHERE backend_type <> 'client backend')    AS background,
         current_setting('max_connections')::int                     AS max_conn,
         current_setting('superuser_reserved_connections')::int      AS reserved
       FROM pg_stat_activity
@@ -207,6 +305,16 @@ async function probeDatabase(
         max_connections: maxConn,
         superuser_reserved: reserved,
         usable: usable,
+        // Carried here as well as on db.reachable so the read model can decide
+        // whether to render this number at all without joining two samples that
+        // could be one cycle apart.
+        can_see_all_backends: canSeeAll,
+        // Background workers (checkpointer, walwriter, the autovacuum and
+        // logical-replication launchers). They appear in pg_stat_activity and
+        // consume NO max_connections slot, which is why they are excluded from
+        // `used` — reported so the page can say so instead of leaving an
+        // operator to wonder why the rows do not add up to the total.
+        background_workers: num(conn?.background),
       },
     });
   }
@@ -224,9 +332,23 @@ async function probeDatabase(
 
   // ---- where the connections come from ------------------------------------
   // "Identify where active connections are coming from" — answerable from
-  // pg_stat_activity alone, no extra grant. application_name is what separates
-  // the CRM's own pool (postgres.js) from RDS's internal sessions and from any
-  // psql somebody left open.
+  // pg_stat_activity alone, no extra grant.
+  //
+  // application_name is the primary key of this table, and until src/lib/db
+  // started setting it, EVERY connection this codebase opens reported the
+  // driver default. The real reading was `postgres.js × 26` against a ceiling
+  // of 79: the sandbox web server, the BullMQ worker and any developer laptop
+  // pointed at the shared RDS, collapsed into one indistinguishable row. See
+  // src/lib/db/applicationName.ts.
+  //
+  // client_addr is the second axis, and it works even for backends that never
+  // set a name — a laptop and the VPS have different addresses. host() strips
+  // the /32 mask inet would otherwise render. NULL means a Unix-socket
+  // connection local to the instance, which is what RDS's own tooling uses.
+  //
+  // The state split matters more than a single total: 20 idle connections and
+  // 20 active ones are the same number and completely different situations, and
+  // `idle in transaction` is the state that holds locks and blocks autovacuum.
   //
   // Stored as one sample carrying the breakdown in meta rather than one sample
   // per client: the cardinality is unbounded (every application_name ever seen
@@ -235,14 +357,19 @@ async function probeDatabase(
     client,
     sql`
       SELECT
-        COALESCE(NULLIF(application_name, ''), '(unnamed)') AS application,
-        datname                                             AS database,
-        usename                                             AS username,
-        COUNT(*)::int                                       AS connections,
-        COUNT(*) FILTER (WHERE state = 'active')::int       AS active
+        COALESCE(NULLIF(application_name, ''), '(unnamed)')          AS application,
+        datname                                                      AS database,
+        usename                                                      AS username,
+        COALESCE(host(client_addr), 'local')                         AS client_host,
+        COUNT(*)::int                                                AS connections,
+        COUNT(*) FILTER (WHERE state = 'active')::int                AS active,
+        COUNT(*) FILTER (WHERE state = 'idle')::int                  AS idle,
+        COUNT(*) FILTER (WHERE state = 'idle in transaction')::int   AS idle_tx,
+        COALESCE(ROUND(MAX(EXTRACT(EPOCH FROM (NOW() - state_change)))), 0)::int
+                                                                     AS oldest_state_s
       FROM pg_stat_activity
       WHERE backend_type = 'client backend'
-      GROUP BY application, database, username
+      GROUP BY application, database, username, client_host
       ORDER BY connections DESC
       LIMIT 20
     `,
@@ -257,12 +384,17 @@ async function probeDatabase(
         .join(", ")
         .slice(0, 500),
       meta: {
+        can_see_all_backends: canSeeAll,
         clients: connSources.map((r) => ({
           application: String(r.application),
           database: r.database == null ? null : String(r.database),
           username: r.username == null ? null : String(r.username),
+          client_host: r.client_host == null ? null : String(r.client_host),
           connections: num(r.connections) ?? 0,
           active: num(r.active) ?? 0,
+          idle: num(r.idle) ?? 0,
+          idle_tx: num(r.idle_tx) ?? 0,
+          oldest_state_s: num(r.oldest_state_s) ?? 0,
         })),
       },
     });
@@ -335,6 +467,30 @@ async function probeDatabase(
     `,
   );
 
+  // ---- statements executed (the request counter) --------------------------
+  // pg_stat_statements is the only place Postgres exposes a count of STATEMENTS
+  // rather than of rows or transactions, which is what "request rate" actually
+  // means. It is an extension, so this is best-effort and entirely separate
+  // from the block above: on the CRM RDS it is installed and readable (verified
+  // — 26.7M calls since a 2026-04-15 reset), on the IoT bridge it may not be.
+  //
+  // Like every counter here it is cumulative, so the sum is only useful as the
+  // input to a delta. It is carried into the counters blob rather than emitted
+  // as a tile of its own — a lifetime total on a dashboard is the exact defect
+  // the interval rewrite removed.
+  let statementCalls: number | null = null;
+  try {
+    const [pss] = await rows(
+      client,
+      sql`SELECT COALESCE(SUM(calls), 0)::bigint AS calls FROM pg_stat_statements`,
+    );
+    statementCalls = num(pss?.calls);
+  } catch {
+    // Extension absent, or not readable by this role. db.txns_per_s still
+    // carries a request rate; nothing is reported as zero.
+    statementCalls = null;
+  }
+
   if (stat) {
     const size = num(stat.size_bytes);
     if (size != null) {
@@ -342,6 +498,7 @@ async function probeDatabase(
     }
 
     const counters = {
+      calls: statementCalls,
       blks_hit: num(stat.blks_hit) ?? 0,
       blks_read: num(stat.blks_read) ?? 0,
       xact_commit: num(stat.xact_commit) ?? 0,
@@ -423,6 +580,32 @@ async function probeDatabase(
         value_num: derived.writes_per_s,
         meta: { rows: detail.write_rows, interval_s: detail.interval_s },
       });
+      samples.push({
+        metric_key: "db.txns_per_s",
+        source,
+        value_num: derived.txns_per_s,
+        meta: {
+          transactions: detail.commits + detail.rollbacks,
+          interval_s: detail.interval_s,
+          // Cumulative context, in meta and never as a tile.
+          lifetime: counters.xact_commit + counters.xact_rollback,
+        },
+      });
+      // Emitted only when both readings carried pg_stat_statements. No sample
+      // at all is the honest outcome when the extension is missing — the tile
+      // then renders "unknown", which is true, instead of 0/s, which is not.
+      if (derived.queries_per_s != null) {
+        samples.push({
+          metric_key: "db.queries_per_s",
+          source,
+          value_num: derived.queries_per_s,
+          meta: {
+            statements: detail.queries ?? null,
+            interval_s: detail.interval_s,
+            lifetime: statementCalls,
+          },
+        });
+      }
     }
   }
 
@@ -510,6 +693,48 @@ async function probeTables(
   return samples;
 }
 
+/**
+ * The samples that stand in for a database we could not read.
+ *
+ * `db.reachable` carries the state as a first-class metric rather than as a
+ * text value smuggled into `db.connections_used`. The old overload is why an
+ * unreachable instance could only ever render as one red line: there was no
+ * sample that said "this database is down and here is why" independently of a
+ * number that happened to be missing.
+ *
+ * `target` is the host:port being dialled, never the credentials. For the IoT
+ * bridge that is the whole diagnosis — the connection goes through an SSH
+ * tunnel to a loopback port, so ECONNREFUSED alone cannot distinguish a stopped
+ * tunnel from a tunnel listening somewhere other than where the environment
+ * expects.
+ */
+function unreachableSamples(
+  source: string,
+  prefix: string,
+  error: unknown,
+  target: string | null,
+): CollectedSample[] {
+  const reason = `${prefix}: ${rootCauseMessage(error)}`;
+  return [
+    {
+      metric_key: "db.reachable",
+      source,
+      value_num: 0,
+      value_text: reason,
+      meta: { target, reason },
+    },
+    // Kept for the read model's existing unreachable detection, which keys on a
+    // valueless connections sample. Removing it would blank the instance card
+    // on any deployment still running the previous read model.
+    {
+      metric_key: "db.connections_used",
+      source,
+      value_num: null,
+      value_text: reason,
+    },
+  ];
+}
+
 export const databaseCollector: OpsCollector = {
   id: "db.rds",
   label: "Database health (RDS + IoT)",
@@ -530,12 +755,7 @@ export const databaseCollector: OpsCollector = {
     try {
       samples.push(...(await probeDatabase(db, "rds:crm")));
     } catch (e) {
-      samples.push({
-        metric_key: "db.connections_used",
-        source: "rds:crm",
-        value_num: null,
-        value_text: `probe failed: ${rootCauseMessage(e)}`,
-      });
+      samples.push(...unreachableSamples("rds:crm", "probe failed", e, null));
     }
 
     try {
@@ -570,22 +790,48 @@ export const databaseCollector: OpsCollector = {
     }
 
     // ---- IoT bridge: best effort ------------------------------------------
-    // Not every environment has IOT_DATABASE_URL, and the VPS is reachable over
-    // the public internet. Skipped silently when unconfigured (that is a
-    // deployment fact, not a fault); a genuine failure is recorded as a text
-    // sample so /operations/database can say "unreachable" rather than showing
-    // an empty column that reads as "fine".
-    if (process.env.IOT_DATABASE_URL) {
+    // The VPS Postgres reached over an SSH tunnel to a loopback port. Three
+    // outcomes, and they are NOT the same thing:
+    //
+    //   not configured — IOT_DATABASE_URL unset. A deployment fact, not a
+    //     fault. Previously this produced no rds:iot samples at all and the
+    //     card silently vanished, which reads as "we didn't check" only if you
+    //     already knew to look for it.
+    //   unreachable    — configured, but the tunnel is down or pointed
+    //     elsewhere. Recorded WITH the host:port so the diagnosis is on screen.
+    //   live           — probed like the CRM.
+    //
+    // Isolated from everything above: the IoT bridge being down must never cost
+    // us the CRM numbers, which are the ones that predict an outage.
+    const { getIotDb, iotTarget } = await import("@/lib/db/iot");
+    const iotUrl = process.env.IOT_DATABASE_URL;
+
+    if (!iotUrl) {
+      samples.push({
+        metric_key: "db.reachable",
+        source: "rds:iot",
+        value_num: null,
+        value_text: "not configured: IOT_DATABASE_URL is not set",
+        meta: { configured: false },
+      });
+    } else {
+      const target = iotTarget();
       try {
-        const { getIotDb } = await import("@/lib/db/iot");
         samples.push(...(await probeDatabase(getIotDb(), "rds:iot")));
       } catch (e) {
-        samples.push({
-          metric_key: "db.connections_used",
-          source: "rds:iot",
-          value_num: null,
-          value_text: `unreachable: ${rootCauseMessage(e)}`,
-        });
+        samples.push(...unreachableSamples("rds:iot", "unreachable", e, target));
+      }
+
+      // Table sizes for the IoT database, under their own prefix so the read
+      // model can show each instance its own tables instead of attributing the
+      // telemetry database's tables to the CRM. Runs pg_total_relation_size
+      // across a tunnel, so it gets its own try/catch and never gates the
+      // numbers above.
+      try {
+        samples.push(...(await probeTables(getIotDb(), "iot_table")));
+      } catch {
+        // Silent: when the bridge is unreachable this always fails, and a
+        // second copy of the same error adds nothing the card above lacks.
       }
     }
 

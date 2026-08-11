@@ -121,6 +121,79 @@ describe("intervalMetrics", () => {
     expect(m.deadlocks).toBe(0);
   });
 
+  it("computes the transaction rate from commits plus rollbacks", () => {
+    // The request-rate metric that needs no extension. 90 commits + 30
+    // rollbacks over 60s = 2 txn/s.
+    const m = intervalMetrics(
+      counters(),
+      counters({ xact_commit: 50_000 + 90, xact_rollback: 100 + 30 }),
+      60,
+    );
+    expect(m.txns_per_s).toBe(2);
+  });
+
+  it("computes the statement rate when both readings carry pg_stat_statements", () => {
+    const m = intervalMetrics(
+      counters({ calls: 26_724_141 }),
+      counters({ calls: 26_724_141 + 6_000 }),
+      120,
+    );
+    expect(m.queries_per_s).toBe(50);
+    expect(m.detail).toMatchObject({ queries: 6_000 });
+  });
+
+  it("omits the statement rate when the PREDECESSOR predates the field", () => {
+    // Every db.stat_counters sample written before this change has no `calls`.
+    // The four metrics that never needed it must still be derived, or shipping
+    // this blanks the board for MAX_COUNTER_AGE_MINUTES after every deploy.
+    const m = intervalMetrics(
+      counters(), // no `calls`
+      counters({ calls: 26_724_141, blks_hit: 1_000_500, blks_read: 10_500 }),
+      120,
+    );
+    expect(m.queries_per_s).toBeNull();
+    expect(m.detail?.queries).toBeUndefined();
+    expect(m.skipped).toBeNull();
+    expect(m.cache_hit_pct).toBe(50);
+    expect(m.txns_per_s).toBe(0);
+  });
+
+  it("omits the statement rate when pg_stat_statements is absent entirely", () => {
+    const m = intervalMetrics(counters(), counters({ reads: 900_000 + 60 }), 60);
+    expect(m.queries_per_s).toBeNull();
+    // Everything else, including the extension-free request rate, survives.
+    expect(m.reads_per_s).toBe(1);
+    expect(m.txns_per_s).toBe(0);
+  });
+
+  it("drops only the statement rate when pg_stat_statements resets mid-interval", () => {
+    // pg_stat_statements_reset() is independent of pg_stat_database, so this
+    // must not be treated as the shared "counters-reset" case.
+    const m = intervalMetrics(
+      counters({ calls: 26_724_141 }),
+      counters({ calls: 12, blks_hit: 1_000_500, blks_read: 10_500 }),
+      120,
+    );
+    expect(m.queries_per_s).toBeNull();
+    expect(m.skipped).toBeNull();
+    expect(m.cache_hit_pct).toBe(50);
+  });
+
+  it("treats a null `calls` the same as an absent one", () => {
+    const m = intervalMetrics(
+      counters({ calls: null }),
+      counters({ calls: 500 }),
+      60,
+    );
+    expect(m.queries_per_s).toBeNull();
+  });
+
+  it("omits the new rates too when there is no predecessor", () => {
+    const m = intervalMetrics(null, counters({ calls: 10 }), 120);
+    expect(m.txns_per_s).toBeNull();
+    expect(m.queries_per_s).toBeNull();
+  });
+
   it("never returns a percentage outside 0-100", () => {
     const m = intervalMetrics(
       counters(),
