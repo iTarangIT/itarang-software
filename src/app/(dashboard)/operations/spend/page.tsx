@@ -274,6 +274,50 @@ export default async function OperationsSpendPage({
                 this database, so no invoice can be classified as tech spend.
               </p>
             )}
+
+            {/* The reconciliation. Every figure above is a SUBSET of the raw
+                `bucket = 'tech'` total, so stating both halves and their sum is
+                what makes the subsetting auditable rather than mysterious. */}
+            {view.excluded_window_paise > 0 && (
+              <p className="text-[11px] text-ink-muted">
+                {view.window.label}:{" "}
+                <span className="font-semibold text-ink">
+                  {formatINR(view.billed_window_paise)}
+                </span>{" "}
+                tech +{" "}
+                <span className="font-semibold text-ink">
+                  {formatINR(view.excluded_window_paise)}
+                </span>{" "}
+                excluded ={" "}
+                <span className="font-semibold text-ink">
+                  {formatINR(
+                    view.billed_window_paise + view.excluded_window_paise,
+                  )}
+                </span>{" "}
+                in the raw <code>{view.tech_filter_column}</code> ={" "}
+                &lsquo;tech&rsquo; bucket. The exclusions are itemised below.
+              </p>
+            )}
+
+            {view.no_vendor_invoices > 0 && (
+              <p className="text-[11px] text-ink-muted">
+                Includes {view.no_vendor_invoices} invoice
+                {view.no_vendor_invoices === 1 ? "" : "s"} worth{" "}
+                {formatINR(view.no_vendor_paise)} with no vendor recorded — real
+                money with no row to sit on in the vendor table below.
+              </p>
+            )}
+
+            {view.undated_invoices > 0 && (
+              <p className="text-[11px] text-warning">
+                {view.undated_invoices} approved tech invoice
+                {view.undated_invoices === 1 ? "" : "s"} worth{" "}
+                {formatINR(view.undated_paise)} have neither an invoice date nor
+                an approval date, so they appear in <em>no</em> figure on this
+                page — not the bars, not MTD, not the window total. Fix the date
+                at source to bring them in.
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -391,6 +435,93 @@ export default async function OperationsSpendPage({
         </CardContent>
       </Card>
 
+      {view.excluded.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">
+                Excluded from Tech Spend · {view.window.label}
+              </CardTitle>
+              <p className="mt-1 max-w-3xl text-xs text-ink-muted">
+                Invoices the database filed under{" "}
+                <code>{view.tech_filter_column} = &lsquo;tech&rsquo;</code> that
+                are not technology spend. That column is written by a process
+                outside this codebase and keys largely on the vendor&apos;s legal
+                name, which is how our own{" "}
+                <strong className="text-ink">
+                  &ldquo;ITARANG TECHNOLOGIES LLP&rdquo; GST payments
+                </strong>{" "}
+                ended up in the technology run-rate. The rules that remove them
+                live in <code>src/lib/operations/techSpendRules.ts</code> and key
+                on vendor and description only — never on an invoice id — so they
+                apply to invoices that do not exist yet. Nothing is hidden: every
+                row is listed with its reason, and the totals above reconcile.
+              </p>
+            </div>
+            <Badge variant="muted">
+              {formatINR(view.excluded_window_paise)} ·{" "}
+              {formatCount(view.excluded.length)}{" "}
+              {view.excluded.length === 1 ? "invoice" : "invoices"}
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[46rem] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                    <th className="py-2 pr-3">Date</th>
+                    <th className="py-2 pr-3">Vendor</th>
+                    <th className="py-2 pr-3">Description</th>
+                    <th className="py-2 pr-3">Reason</th>
+                    <th className="py-2 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.excluded.map((row, i) => (
+                    <tr
+                      key={`${row.effective_date}|${row.vendor}|${row.paise}|${i}`}
+                      className="border-b border-border/60 last:border-0"
+                    >
+                      <td className="py-2 pr-3 whitespace-nowrap tabular-nums text-ink-muted">
+                        {row.effective_date ?? "—"}
+                      </td>
+                      <td className="py-2 pr-3 text-ink">
+                        {row.vendor_label ?? "— no vendor —"}
+                      </td>
+                      <td className="max-w-[20rem] truncate py-2 pr-3 text-[12px] text-ink-muted">
+                        {row.description ?? "—"}
+                      </td>
+                      <td className="py-2 pr-3 text-[12px]">
+                        <span
+                          className={
+                            row.reason === "unclassified"
+                              ? "text-warning"
+                              : "text-ink-muted"
+                          }
+                          title={row.explanation}
+                        >
+                          {row.reason_label}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-ink-muted">
+                        {formatINR(row.paise)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-[11px] text-ink-muted">
+              A row marked <span className="text-warning">Unclassified</span> was
+              not recognisable either way and is excluded pending review — add
+              the vendor to <code>VENDORS</code> in{" "}
+              <code>src/lib/operations/vendors.ts</code> if it belongs in Tech
+              Spend, or have it re-bucketed at source if it does not.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {breakdown && (
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -400,15 +531,22 @@ export default async function OperationsSpendPage({
               </CardTitle>
               <p className="mt-1 text-xs text-ink-muted">
                 Every approved tech-bucket invoice with an effective date in{" "}
-                {view.window.key}. Same scope as the bar above, so these rows sum
-                to it exactly — a drill-down that disagreed with the number it
-                drilled into would be worse than none.
+                {view.window.key}. Rows struck through were excluded by the Tech
+                Spend rules and do NOT count toward the bar — they are listed
+                because explaining the bar means accounting for the invoices that
+                are not in it. The rest sum to the bar exactly.
               </p>
             </div>
             <Badge variant="muted">
-              {formatINR(breakdown.reduce((sum, row) => sum + row.paise, 0))} ·{" "}
-              {formatCount(breakdown.length)}{" "}
-              {breakdown.length === 1 ? "invoice" : "invoices"}
+              {formatINR(
+                breakdown
+                  .filter((row) => row.included)
+                  .reduce((sum, row) => sum + row.paise, 0),
+              )}{" "}
+              · {formatCount(breakdown.filter((row) => row.included).length)}{" "}
+              {breakdown.filter((row) => row.included).length === 1
+                ? "invoice"
+                : "invoices"}
             </Badge>
           </CardHeader>
           <CardContent>
@@ -426,6 +564,7 @@ export default async function OperationsSpendPage({
                       <th className="py-2 pr-3">Vendor</th>
                       <th className="py-2 pr-3">Invoice</th>
                       <th className="py-2 pr-3">Description</th>
+                      <th className="py-2 pr-3">In Tech Spend</th>
                       <th className="py-2 text-right">Amount</th>
                     </tr>
                   </thead>
@@ -433,7 +572,9 @@ export default async function OperationsSpendPage({
                     {breakdown.map((row) => (
                       <tr
                         key={row.id}
-                        className="border-b border-border/60 last:border-0"
+                        className={`border-b border-border/60 last:border-0 ${
+                          row.included ? "" : "opacity-60"
+                        }`}
                       >
                         <td className="py-2 pr-3 whitespace-nowrap tabular-nums text-ink-muted">
                           {row.effective_date ?? "—"}
@@ -457,7 +598,19 @@ export default async function OperationsSpendPage({
                         <td className="max-w-[22rem] truncate py-2 pr-3 text-[12px] text-ink-muted">
                           {row.description ?? "—"}
                         </td>
-                        <td className="py-2 text-right tabular-nums text-ink">
+                        <td
+                          className="py-2 pr-3 text-[12px] text-ink-muted"
+                          title={row.explanation}
+                        >
+                          {row.included ? "yes" : `no — ${row.reason_label}`}
+                        </td>
+                        <td
+                          className={`py-2 text-right tabular-nums ${
+                            row.included
+                              ? "text-ink"
+                              : "text-ink-muted line-through"
+                          }`}
+                        >
                           {formatINR(row.paise)}
                         </td>
                       </tr>

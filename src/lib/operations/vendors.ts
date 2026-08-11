@@ -72,6 +72,10 @@ export const VENDORS: VendorDef[] = [
   },
   { id: "anthropic", label: "Anthropic", match: ["anthropic"] },
   { id: "openai", label: "OpenAI", match: ["openai", "open ai"] },
+  // Listed before "openai" would match it: "openrouter" is the longer needle,
+  // and matching is longest-wins, so the order here is cosmetic — but an entry
+  // is needed either way or OpenRouter's invoices render under OpenAI's row.
+  { id: "openrouter", label: "OpenRouter", match: ["openrouter"] },
   { id: "google", label: "Google Cloud / Gemini", match: ["google"] },
   {
     id: "decentro",
@@ -166,6 +170,33 @@ function lightlyNormalise(raw: string): string {
 const BY_ID = new Map(VENDORS.map((v) => [v.id, v]));
 
 /**
+ * At or below this length, a needle must match a WHOLE WORD rather than any
+ * substring.
+ *
+ * The shortest patterns in VENDORS are "aws" and "zoho". As bare substrings
+ * they are three and four characters looking for a home inside a 160-character
+ * free-text vendor field: "Kawsar Enterprises" normalises to "kawsar", which
+ * contains "aws", so it rendered on the reconciliation table as AWS. The money
+ * was real and the total was right; the row it landed on was not.
+ *
+ * Long needles keep substring matching, and must: "eleven labs" has to match
+ * inside "Eleven Labs Inc." after normalisation, and a false positive at eleven
+ * characters is not a realistic concern.
+ */
+const WHOLE_WORD_MAX_LENGTH = 4;
+
+/** Does `haystack` contain `needle`, respecting the whole-word rule above? */
+function matchesNeedle(haystack: string, needle: string): boolean {
+  if (needle.length > WHOLE_WORD_MAX_LENGTH) return haystack.includes(needle);
+  // Both normalisation forms reduce separators to single spaces, so word
+  // boundaries here are spaces and the string ends — no regex escaping needed
+  // for the patterns actually in VENDORS, but the needle is escaped anyway so
+  // adding one containing a metacharacter cannot silently change the semantics.
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|\\s)${escaped}($|\\s)`).test(haystack);
+}
+
+/**
  * Resolve any vendor string — an invoice entity or a code-level provider — to a
  * canonical slug.
  *
@@ -192,7 +223,8 @@ export function canonicalVendor(
     for (const needle of vendor.match) {
       // Either form may carry the match — see lightlyNormalise() for why the
       // aggressive one alone is not enough.
-      const hit = normalised.includes(needle) || light.includes(needle);
+      const hit =
+        matchesNeedle(normalised, needle) || matchesNeedle(light, needle);
       if (hit && needle.length > bestLength) {
         best = vendor;
         bestLength = needle.length;

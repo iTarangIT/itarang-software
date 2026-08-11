@@ -31,6 +31,7 @@ import { unavailableText } from "@/lib/operations/errors";
 // collector must resolve 'tech' the same way, and two copies of that decision
 // would eventually disagree about which column to trust.
 import { techFilterColumn } from "@/lib/operations/spend";
+import { classifyTechSpend } from "@/lib/operations/techSpendRules";
 import { canonicalVendor } from "@/lib/operations/vendors";
 
 import type { CollectedSample, OpsCollector } from "./types";
@@ -129,32 +130,27 @@ async function billedSamples(): Promise<CollectedSample[]> {
 
   // Month to date in IST — the team's month, not UTC's. A bill dated the 1st at
   // 02:00 IST belongs to the new month, and UTC would file it under the old one.
+  //
+  // Upper-bounded at today, matching spend.ts. Unbounded, an invoice with a
+  // mistyped future expense_date counted toward "MTD" forever.
   const scope = sql`
     WHERE ${sql.raw(column)} = 'tech'
       AND status = 'approved'
       AND COALESCE(expense_date, (approved_at AT TIME ZONE 'Asia/Kolkata')::date)
           >= DATE_TRUNC('month', (NOW() AT TIME ZONE 'Asia/Kolkata'))::date
+      AND COALESCE(expense_date, (approved_at AT TIME ZONE 'Asia/Kolkata')::date)
+          <= (NOW() AT TIME ZONE 'Asia/Kolkata')::date
   `;
 
-  const [total] = await rows(sql`
-    SELECT COALESCE(SUM(amount), 0)::numeric AS inr, COUNT(*)::int AS invoices
+  // ROW-LEVEL, not SUM(): `bucket = 'tech'` is written outside this repository
+  // and includes our own GST payments, retail electronics and recruitment
+  // invoices. classifyTechSpend() removes them per row, and the READ MODEL in
+  // spend.ts applies the identical rules — so this sample and the page headline
+  // are the same number by construction. They were previously two independent
+  // queries that could, and did, diverge.
+  const invoices = await rows(sql`
+    SELECT vendor, description, COALESCE(amount, 0)::numeric AS inr
     FROM expense_submissions ${scope}
-  `);
-
-  const samples: CollectedSample[] = [
-    {
-      metric_key: "spend.billed_tech_mtd",
-      source: "spend:tech",
-      value_num: rupeesToPaise(total?.inr) ?? 0,
-      meta: { invoices: num(total?.invoices), filter_column: column },
-    },
-  ];
-
-  const perVendor = await rows(sql`
-    SELECT vendor, COALESCE(SUM(amount), 0)::numeric AS inr, COUNT(*)::int AS invoices
-    FROM expense_submissions ${scope}
-      AND vendor IS NOT NULL
-    GROUP BY vendor
   `);
 
   // Several invoice entities can collapse to one canonical vendor (a vendor
@@ -166,8 +162,26 @@ async function billedSamples(): Promise<CollectedSample[]> {
     { label: string; matched: boolean; paise: number; invoices: number; raw: string[] }
   >();
 
-  for (const row of perVendor) {
-    const raw = String(row.vendor);
+  let totalPaise = 0;
+  let totalInvoices = 0;
+  let excludedPaise = 0;
+  let excludedInvoices = 0;
+
+  for (const row of invoices) {
+    const raw = row.vendor == null ? null : String(row.vendor);
+    const description = row.description == null ? null : String(row.description);
+    const amount = rupeesToPaise(row.inr) ?? 0;
+
+    if (!classifyTechSpend({ vendor: raw, description }).include) {
+      excludedPaise += amount;
+      excludedInvoices += 1;
+      continue;
+    }
+
+    totalPaise += amount;
+    totalInvoices += 1;
+
+    if (!raw || !raw.trim()) continue;
     const vendor = canonicalVendor(raw);
     if (!vendor) continue;
 
@@ -178,11 +192,27 @@ async function billedSamples(): Promise<CollectedSample[]> {
       invoices: 0,
       raw: [],
     };
-    entry.paise += rupeesToPaise(row.inr) ?? 0;
-    entry.invoices += num(row.invoices) ?? 0;
+    entry.paise += amount;
+    entry.invoices += 1;
     if (!entry.raw.includes(raw)) entry.raw.push(raw);
     byVendor.set(vendor.id, entry);
   }
+
+  const samples: CollectedSample[] = [
+    {
+      metric_key: "spend.billed_tech_mtd",
+      source: "spend:tech",
+      value_num: totalPaise,
+      meta: {
+        invoices: totalInvoices,
+        filter_column: column,
+        // What the Tech Spend rules removed this month, so the sample carries
+        // its own reconciliation back to the raw `bucket = 'tech'` total.
+        excluded_paise: excludedPaise,
+        excluded_invoices: excludedInvoices,
+      },
+    },
+  ];
 
   for (const [id, entry] of byVendor) {
     samples.push({
