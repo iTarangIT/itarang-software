@@ -307,14 +307,22 @@ export default async function OperationsElevenLabsPage({
         earliest={view.first_call_at ? istDay(view.first_call_at) : null}
       />
 
-      {/* Two grids, not one six-up row. The credit tiles are a LIVE balance and
-          the usage tiles follow the date filter, so showing them in one row
-          under "February 2026" would imply February's credit balance — which
-          nothing here can know (raw samples are pruned at 30 days). */}
-      <div className="space-y-1">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
-          Live balance — right now, not affected by the date filter
-        </p>
+      {/* ------------------------------------------------ LIVE ACCOUNT STATE --
+          Two sections, never one six-up row. Everything above the divider is
+          the vendor account AS IT STANDS; everything below it is scoped to the
+          selected window. Showing them together under "February 2026" would
+          imply a February credit balance, which is not a thing that exists —
+          a balance is a level at an instant, not a quantity over a period. */}
+      <div className="space-y-2 rounded-xl border border-border p-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink">
+            Live account state
+          </h2>
+          <p className="text-[11px] text-ink-muted">
+            The ElevenLabs account right now. Not affected by the date filter —
+            these are balances, not history.
+          </p>
+        </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           <Tile
             label="Credits remaining"
@@ -333,20 +341,99 @@ export default async function OperationsElevenLabsPage({
           <Tile
             label="Credits consumed"
             value={credits.used == null ? "—" : `${formatCount(credits.used)} cr`}
-            hint="this billing period"
-            help="Reported by ElevenLabs, not derived from our cost figures."
+            hint={
+              credits.reset_at
+                ? `this billing period, resets ${formatIst(credits.reset_at)}`
+                : "this billing period"
+            }
+            help="Reported by ElevenLabs for the CURRENT billing period, whatever window is selected above. For consumption inside the selected window, see 'Credits used' in the historical section."
           />
         </div>
+
+        {noCredits ? (
+          <p className="text-sm text-ink-muted">
+            No credit data yet. The <code>vendor.elevenlabs</code> collector
+            needs <code>ELEVENLABS_API_KEY</code> set; without it the collector
+            returns nothing rather than failing.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div className="h-1.5 overflow-hidden rounded-full bg-bg">
+              <div
+                className={
+                  quotaSeverity === "crit"
+                    ? "h-full bg-danger"
+                    : quotaSeverity === "warn"
+                      ? "h-full bg-warning"
+                      : "h-full bg-success"
+                }
+                style={{ width: `${Math.min(credits.used_pct ?? 0, 100)}%` }}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-[11px] text-ink-muted">
+              <span>{credits.used_pct ?? 0}% of quota used</span>
+              {credits.tier && <span>tier {credits.tier}</span>}
+              {credits.status && <span>status {credits.status}</span>}
+              {credits.reset_at && (
+                <span>resets {formatIst(credits.reset_at)}</span>
+              )}
+              <span className="ml-auto tabular-nums">
+                {formatMinutesAgo(credits.age_minutes)}
+              </span>
+            </div>
+            {view.credits_series.length >= 2 && (
+              <div>
+                <div className={`${TONE[remainingSeverity]} opacity-60`}>
+                  <MetricSparkline
+                    points={view.credits_series}
+                    className="h-8 w-full"
+                  />
+                </div>
+                <p className="mt-1 text-[10px] text-ink-muted">
+                  Credits remaining, last 7 days. Only 7 — raw samples are
+                  pruned at 30 days, so this sparkline cannot be extended
+                  backwards. Historical CONSUMPTION is a different question and
+                  is answered below, from the vendor&apos;s own usage history.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* The window is stated ONCE here rather than suffixed onto each tile
-          label: "(February 2026)" inside an 11px uppercase label in a two-column
-          cell is what breaks this grid. */}
-      <div className="space-y-1">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
-          Usage · {view.filters.label}
-        </p>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+      {/* -------------------------------------------------- HISTORICAL USAGE --
+          The window is stated ONCE on the section rather than suffixed onto
+          each tile label: "(February 2026)" inside an 11px uppercase label in a
+          two-column cell is what breaks this grid. */}
+      <div className="space-y-2 rounded-xl border border-border p-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink">
+            Historical usage · {view.filters.label}
+          </h2>
+          <p className="text-[11px] text-ink-muted">
+            {view.filters.from && view.filters.to
+              ? `${view.filters.from} to ${view.filters.to}, IST`
+              : "Every call on record"}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Tile
+            label="Credits used"
+            value={
+              view.credit_usage.unavailable
+                ? "—"
+                : `${formatCount(Math.round(view.credit_usage.total))} cr`
+            }
+            hint={
+              view.credit_usage.unavailable
+                ? "unavailable"
+                : `in ${view.filters.label}`
+            }
+            help={
+              view.credit_usage.unavailable ??
+              "Credits consumed inside the selected window, from ElevenLabs' own usage history (/v1/usage/character-stats). This is a DIFFERENT number from the live 'Credits consumed' tile above, which is always the current billing period."
+            }
+          />
           <Tile
             label="Calls"
             value={formatCount(range.calls)}
@@ -412,55 +499,58 @@ export default async function OperationsElevenLabsPage({
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Credits &amp; quota</CardTitle>
+            <CardTitle className="text-base">
+              Credits consumed · {view.filters.label}
+            </CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
-              Polled hourly from ElevenLabs. Read the percentage with the reset
-              date — 90% on the last day of the period is fine. Live: not
-              affected by the date filter, since raw samples are pruned at 30
-              days and older balances no longer exist to show.
+              ElevenLabs&apos; own usage history for the selected window, not our
+              call ledger — so it includes any consumption that never became an{" "}
+              <code>ai_call_logs</code> row. Distinct from the live balance
+              above, which is always the current billing period.
             </p>
           </CardHeader>
-          <CardContent>
-            {noCredits ? (
+          <CardContent className="space-y-3">
+            {view.credit_usage.unavailable ? (
               <p className="text-sm text-ink-muted">
-                No credit data yet. The <code>vendor.elevenlabs</code> collector
-                needs <code>ELEVENLABS_API_KEY</code> set; without it the collector
-                returns nothing rather than failing.
+                {view.credit_usage.unavailable}
+                <span className="mt-1 block text-[11px]">
+                  Nothing is shown rather than a zero — a vendor we could not
+                  reach is not the same as a period in which nothing was spent.
+                </span>
+              </p>
+            ) : view.credit_usage.points.length === 0 ? (
+              <p className="text-sm text-ink-muted">
+                ElevenLabs reported no usage buckets for this window.
               </p>
             ) : (
-              <div className="space-y-3">
-                <div className="h-1.5 overflow-hidden rounded-full bg-bg">
-                  <div
-                    className={
-                      quotaSeverity === "crit"
-                        ? "h-full bg-danger"
-                        : quotaSeverity === "warn"
-                          ? "h-full bg-warning"
-                          : "h-full bg-success"
-                    }
-                    style={{ width: `${Math.min(credits.used_pct ?? 0, 100)}%` }}
-                  />
-                </div>
-                <div className="flex flex-wrap items-center gap-3 text-[11px] text-ink-muted">
-                  <span>{credits.used_pct ?? 0}% of quota used</span>
-                  {credits.tier && <span>tier {credits.tier}</span>}
-                  {credits.status && <span>status {credits.status}</span>}
-                  {credits.reset_at && <span>resets {formatIst(credits.reset_at)}</span>}
-                  <span className="ml-auto tabular-nums">
-                    {formatMinutesAgo(credits.age_minutes)}
-                  </span>
-                </div>
-                {view.credits_series.length >= 2 && (
-                  <div>
-                    <div className={`${TONE[remainingSeverity]} opacity-60`}>
-                      <MetricSparkline points={view.credits_series} className="h-8 w-full" />
-                    </div>
-                    <p className="mt-1 text-[10px] text-ink-muted">
-                      Credits remaining, last 7 days
-                    </p>
-                  </div>
-                )}
-              </div>
+              <>
+                <UsageBarChart
+                  points={view.credit_usage.points.map((p) => ({
+                    key: p.key,
+                    value: p.credits,
+                    tooltip: `${p.key} — ${formatCount(
+                      Math.round(p.credits),
+                    )} credits`,
+                  }))}
+                  ariaLabel={`ElevenLabs credit consumption for ${view.filters.label}, peak ${Math.max(
+                    ...view.credit_usage.points.map((p) => p.credits),
+                    0,
+                  )} credits per ${view.credit_usage.window.interval}`}
+                  startLabel={view.credit_usage.points[0]?.key ?? ""}
+                  endLabel={
+                    view.credit_usage.points[
+                      view.credit_usage.points.length - 1
+                    ]?.key ?? ""
+                  }
+                  footNote={`${formatCount(
+                    Math.round(view.credit_usage.total),
+                  )} credits in ${view.filters.label}`}
+                />
+                <p className="text-[10px] text-ink-muted">
+                  Buckets are UTC-aligned at source, while our call charts bucket
+                  by IST — the two can disagree by up to 5h30m at a boundary.
+                </p>
+              </>
             )}
           </CardContent>
         </Card>

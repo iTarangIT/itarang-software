@@ -62,6 +62,7 @@ import {
   type ElevenLabsFilters,
   type MonthlyUsage,
 } from "./elevenlabsSeries";
+import { fetchCreditUsage, type CreditUsageResult } from "./elevenlabsUsage";
 import { toNumber } from "./format";
 import { getCollectorHealth, type CollectorHealth } from "./runner";
 import { latestSamples, seriesFor, type SeriesPoint } from "./samples";
@@ -119,14 +120,39 @@ function filters(
  * A hand-written `<= to` here would silently drop the last day's calls on one
  * half of the page and not the other.
  */
+/**
+ * The window bounds to actually query with.
+ *
+ * "All time" arrives as `{ from: null, to: null }`, and a null lower bound makes
+ * whereClauseAcl omit the `ended_at` predicate entirely — which quietly lets
+ * IN-FLIGHT calls (`ended_at IS NULL`) into the figure. On this data that is 53
+ * calls: selecting "All time" reported 293 calls against 240 for the last six
+ * months, with no calls older than April and nothing on screen to explain the
+ * extra 53, while the all-time anchor beside it read 240 because it already
+ * used the floor.
+ *
+ * Substituting the floor here fixes every all-time figure at once — the range
+ * totals, the trend, the category breakdown and the recent list — so they all
+ * count the same population as the anchor: calls that have ENDED.
+ */
+function windowBounds(f: ElevenLabsFilters): { from: string; to: string } {
+  return { from: f.from ?? ALL_TIME_FLOOR, to: f.to ?? istDay() };
+}
+
 function dateBounds(f: ElevenLabsFilters) {
-  const from = f.from
-    ? sql` AND acl.ended_at >= ${f.from}::date`
-    : sql``;
-  const to = f.to
-    ? sql` AND acl.ended_at < (${f.to}::date + INTERVAL '1 day')`
-    : sql``;
-  return sql`${from}${to}`;
+  // IST calendar days, pinned by casting to a naive timestamp before applying
+  // the zone — NOT a bare `::date`, which Postgres resolves using the session
+  // timezone. Nothing in src/lib/db sets one, so on a UTC server the window was
+  // a UTC day while every GROUP BY on this column buckets by IST: a 5h30m skew
+  // that put calls made between 00:00 and 05:30 IST on a boundary day into one
+  // period for the filter and a different one for the chart. See the matching
+  // note on istDayBounds() in cost-analytics-query.ts, which the summary and
+  // trend halves of this page go through.
+  const { from, to } = windowBounds(f);
+  return sql`
+    AND acl.ended_at >= (${from}::date::timestamp AT TIME ZONE 'Asia/Kolkata')
+    AND acl.ended_at <  ((${to}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')
+  `;
 }
 
 export interface ElevenLabsCredits {
@@ -185,9 +211,20 @@ export interface TrendPoint {
 export interface ElevenLabsView {
   /** The resolved window everything below (except where noted) is scoped to. */
   filters: ElevenLabsFilters;
+  /**
+   * LIVE — the vendor account as it stands right now. Not affected by the date
+   * filter, and structurally incapable of being: it is a balance, not a series.
+   */
   credits: ElevenLabsCredits;
   /** 7 days of credits_remaining, hourly buckets, for the sparkline. */
   credits_series: SeriesPoint[];
+  /**
+   * HISTORICAL — credits actually consumed inside the selected window, from
+   * the vendor's own usage history. This is the number the live tiles cannot
+   * give: `credits.used` is consumption in the CURRENT billing period, whatever
+   * window is selected.
+   */
+  credit_usage: CreditUsageResult;
   /** Totals for the selected range. */
   range: UsageTotals;
   /**
@@ -244,6 +281,10 @@ export async function getElevenLabsView(
   const today = istDay();
   const currentMonth = istMonth();
   const previous = prevRange(f);
+  // Resolved once and used by every query below, so the summary, the trend, the
+  // category breakdown and the recent list cannot disagree about what "all
+  // time" means. See windowBounds().
+  const bounds = windowBounds(f);
 
   const [
     creditSamples,
@@ -257,6 +298,7 @@ export async function getElevenLabsView(
     recentRows,
     firstRows,
     collectors,
+    creditUsage,
   ] = await Promise.all([
     // 48 hours, matching spend.ts: the collector runs hourly, so a 24h window
     // would show "no credit data" after a single missed cycle.
@@ -275,7 +317,7 @@ export async function getElevenLabsView(
     // The builders already take nullable bounds (whereClauseAcl omits each
     // clause when null), which is why supporting a date filter needed no change
     // to cost-analytics-query.ts at all.
-    rows(buildSummarySql(filters(f.from, f.to))),
+    rows(buildSummarySql(filters(bounds.from, bounds.to))),
     // All time — but bounded below rather than left unbounded, so it counts
     // the same population every windowed figure on this page counts.
     //
@@ -295,7 +337,7 @@ export async function getElevenLabsView(
     // GROUP BY the SQL builder does not express, and running the day builder
     // over an all-time window would return a row per day since the first call.
     f.bucket === "day"
-      ? rows(buildTrendSql(filters(f.from, f.to)))
+      ? rows(buildTrendSql(filters(bounds.from, bounds.to)))
       : rows(sql`
           SELECT
             TO_CHAR(acl.ended_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS month,
@@ -363,13 +405,12 @@ export async function getElevenLabsView(
         LIMIT 1
       ) dcl ON TRUE
       LEFT JOIN dialer_campaigns dc ON dc.id = dcl.campaign_id
-      -- Deliberately NO "ended_at IS NOT NULL" here. whereClauseAcl adds no
-      -- ended_at predicate when the window is unbounded, so on "all time" the
-      -- headline counts in-flight calls (ended_at NULL) and this breakdown must
-      -- too — otherwise the two disagree and the page raises its "attribution
-      -- join is losing rows" warning against a difference that is really just a
-      -- different NULL rule. For any bounded window dateBounds() excludes NULLs
-      -- anyway, so this only changes the all-time case.
+      -- No explicit "ended_at IS NOT NULL": dateBounds() now always emits an
+      -- ended_at predicate, including on "all time" (windowBounds substitutes
+      -- the epoch floor), and a NULL fails it. So in-flight calls are excluded
+      -- from this breakdown and from the headline by the same rule, and the
+      -- page's "attribution join is losing rows" warning stays meaningful
+      -- rather than firing on a difference that was only ever a NULL policy.
       WHERE acl.call_id IS NOT NULL
         AND acl.provider = ${PROVIDER}
         ${dateBounds(f)}
@@ -414,6 +455,12 @@ export async function getElevenLabsView(
     `),
 
     getCollectorHealth(),
+
+    // The vendor's own usage history for the SELECTED window — the only source
+    // that can answer "how many credits did we burn in May". Never throws: a
+    // failure comes back as `unavailable` with the reason, so the panel says it
+    // could not read rather than drawing zero consumption.
+    fetchCreditUsage(f),
   ]);
 
   // ---- vendor side: credits -------------------------------------------------
@@ -524,6 +571,7 @@ export async function getElevenLabsView(
     credits,
     credits_series:
       creditSeries.get(`vendor.credits_remaining|${CREDIT_SOURCE}`) ?? [],
+    credit_usage: creditUsage,
     range: totals(rangeRows[0]),
     prev: previous ? totals(prevRows[0]) : null,
     total: totals(totalRows[0]),
