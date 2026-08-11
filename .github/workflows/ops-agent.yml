@@ -73,16 +73,34 @@ jobs:
           # Fail the job when the script does. The whole point of install.sh is
           # that it refuses a broken install; swallowing that would undo it.
           script_stop: true
-          envs: APP_DIR,AGENT_DIR,MODE
+          envs: APP_DIR,AGENT_DIR,MODE,IN_URL,IN_SECRET,IN_HOST,IN_CERT
           script: |
             set -eo pipefail
             cd "$AGENT_DIR"
             chmod +x install.sh
             # Explicit rather than auto-detected: the agent lives in ~ and the
             # CRM's logs live under APP_DIR, so ../shared/logs would not find
-            # them.
+            # them. install.sh treats an exported value as authoritative, so a
+            # stale OPS_LOG_DIR in shared/.env cannot override this.
             export OPS_ENV_FILE="$APP_DIR/shared/.env"
             export OPS_LOG_DIR="$APP_DIR/shared/logs"
+            # The agent-side trio. Supplied from GitHub secrets when they exist,
+            # otherwise left unset so install.sh falls back to shared/.env.
+            #
+            # WITHOUT THIS BLOCK a first install cannot succeed: the workflow
+            # passed only OPS_ENV_FILE and OPS_LOG_DIR, so install.sh died with
+            # "missing required config: OPS_INGEST_URL OPS_INGEST_SECRET
+            # OPS_HOST_NAME" unless somebody had already hand-edited the box —
+            # and those three variables are documented only in the agent's own
+            # README, in no env-file checklist anywhere.
+            # if-blocks, not `[ -n "$X" ] && export …`: under `set -e` a false
+            # test as the first half of an && list is survivable but leaves the
+            # list returning 1, and as the last statement of a script that is an
+            # exit code. Explicit is cheaper than remembering that rule.
+            if [ -n "$IN_URL" ];    then export OPS_INGEST_URL="$IN_URL"; fi
+            if [ -n "$IN_SECRET" ]; then export OPS_INGEST_SECRET="$IN_SECRET"; fi
+            if [ -n "$IN_HOST" ];   then export OPS_HOST_NAME="$IN_HOST"; fi
+            if [ -n "$IN_CERT" ];   then export OPS_CERT_DOMAIN="$IN_CERT"; fi
             if [ "$MODE" = "install" ]; then
               ./install.sh
             else
@@ -90,6 +108,14 @@ jobs:
             fi
         env:
           MODE: ${{ inputs.mode }}
+          # SANDBOX values only. The two jobs never share a secret name, so a
+          # sandbox run cannot reach production's ingest and vice versa.
+          # Undefined secrets arrive as empty strings, which the script treats
+          # as "not supplied" and falls back to the box's shared/.env.
+          IN_URL: ${{ secrets.SANDBOX_OPS_INGEST_URL }}
+          IN_SECRET: ${{ secrets.SANDBOX_OPS_INGEST_SECRET }}
+          IN_HOST: ${{ secrets.SANDBOX_OPS_HOST_NAME }}
+          IN_CERT: ${{ secrets.SANDBOX_OPS_CERT_DOMAIN }}
 
   # ── production ─────────────────────────────────────────────────────────
   production:
@@ -127,13 +153,25 @@ jobs:
           timeout: 60s
           command_timeout: 5m
           script_stop: true
-          envs: APP_DIR,AGENT_DIR,MODE
+          envs: APP_DIR,AGENT_DIR,MODE,IN_URL,IN_SECRET,IN_HOST,IN_CERT
           script: |
             set -eo pipefail
             cd "$AGENT_DIR"
             chmod +x install.sh
+            # install.sh treats an exported value as authoritative, so a stale
+            # OPS_LOG_DIR in shared/.env cannot override this.
             export OPS_ENV_FILE="$APP_DIR/shared/.env"
             export OPS_LOG_DIR="$APP_DIR/shared/logs"
+            # The agent-side trio, from GitHub secrets when set. See the sandbox
+            # job for why this block is load-bearing. NOTE FOR PRODUCTION: prod's
+            # shared/.env is rewritten from PROD_ENV_FILE_B64 on EVERY deploy
+            # (deploy-production.yml), so a value hand-added to the box is erased
+            # by the next release and ingest silently reverts to 503. Supplying
+            # the trio here, from secrets, is the durable route.
+            if [ -n "$IN_URL" ];    then export OPS_INGEST_URL="$IN_URL"; fi
+            if [ -n "$IN_SECRET" ]; then export OPS_INGEST_SECRET="$IN_SECRET"; fi
+            if [ -n "$IN_HOST" ];   then export OPS_HOST_NAME="$IN_HOST"; fi
+            if [ -n "$IN_CERT" ];   then export OPS_CERT_DOMAIN="$IN_CERT"; fi
             if [ "$MODE" = "install" ]; then
               ./install.sh
             else
@@ -141,3 +179,10 @@ jobs:
             fi
         env:
           MODE: ${{ inputs.mode }}
+          # PRODUCTION values only — a separate set of secret names from the
+          # sandbox job above, so neither environment can be configured with the
+          # other's ingest URL or secret by a typo in one place.
+          IN_URL: ${{ secrets.PROD_OPS_INGEST_URL }}
+          IN_SECRET: ${{ secrets.PROD_OPS_INGEST_SECRET }}
+          IN_HOST: ${{ secrets.PROD_OPS_HOST_NAME }}
+          IN_CERT: ${{ secrets.PROD_OPS_CERT_DOMAIN }}

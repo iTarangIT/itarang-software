@@ -116,7 +116,18 @@ async function persistLogs(
     return rows.length;
   } catch (e) {
     log.error("[ops:ingest] failed to write log events", e);
-    return 0;
+    // RETHROW. This used to swallow the error and return 0 while the request
+    // still answered 200 — which is unrecoverable data loss, not a degraded
+    // write. The agent advances its byte offsets only after a successful POST
+    // (ops-agent/agent.js), so a 200 tells it those lines are safely stored and
+    // it never reads them again. A missing ops_log_events table, a constraint
+    // violation or a connection blip therefore destroyed log lines permanently
+    // while the dashboard reported a healthy ingest.
+    //
+    // Failing the request instead means the agent keeps its offsets and ships
+    // the same lines next cycle — which is exactly what you want during the
+    // incident that caused the failure.
+    throw e;
   }
 }
 
@@ -259,16 +270,27 @@ export async function POST(request: NextRequest) {
 
   try {
     const written = await writeSamples(samples);
-    // Stamp the throttle only on success, so a failed write does not lock the
-    // host out for a minute while the agent is trying to tell us something.
-    lastAcceptedAt.set(host, Date.now());
 
-    // Logs are written AFTER the samples and in their own try. Metrics are the
-    // load-bearing half of this payload — a malformed log line must not cost us
-    // the CPU and disk readings, and the agent has already moved its byte
-    // offset past these lines, so failing the whole request would not get them
-    // back either.
+    // Logs are written AFTER the samples, and a failure here FAILS THE REQUEST.
+    //
+    // The comment that used to sit here said the agent "has already moved its
+    // byte offset past these lines, so failing the whole request would not get
+    // them back either". That is the opposite of what the agent does:
+    // ops-agent/agent.js calls writeState(logState) only AFTER post() resolves,
+    // and post() throws on any non-2xx. So a 200 is precisely the signal that
+    // makes the agent forget those lines forever.
+    //
+    // Swallowing the error and answering 200 therefore destroyed log lines on
+    // every failed insert while reporting a healthy ingest. Failing instead
+    // means the agent keeps its offsets and re-ships them next cycle. The cost
+    // is a duplicate metric sample when logs fail but samples succeeded, which
+    // is a rounding error against losing the errors you are trying to read.
     const logsPersisted = await persistLogs(host, body.logs);
+
+    // Stamp the throttle only once the WHOLE payload is stored, so a failed
+    // write does not lock the host out for a minute while the agent is trying
+    // to tell us something.
+    lastAcceptedAt.set(host, Date.now());
 
     return NextResponse.json({
       success: true,
@@ -284,10 +306,10 @@ export async function POST(request: NextRequest) {
     // Almost always "relation ops_metric_samples does not exist" — E-210 not
     // applied here. A 500 makes the agent retry on its next cycle, which is the
     // behaviour we want once the migration lands.
-    log.error("[ops:ingest] failed to write samples", e);
+    log.error("[ops:ingest] failed to persist payload", e);
     return jsonError(
       500,
-      e instanceof Error ? e.message : "Failed to persist samples",
+      e instanceof Error ? e.message : "Failed to persist payload",
     );
   }
 }
