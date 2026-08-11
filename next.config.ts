@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 import path from "node:path";
 
+const isDev = process.env.NODE_ENV !== "production";
+
 // force-rebuild: vercel
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -120,6 +122,65 @@ const nextConfig: NextConfig = {
           // parties via Referer — the `upload_headers` security probe flags
           // this when unset.
           { key: "Referrer-Policy", value: "no-referrer" },
+          // ── Security headers. Each closes a finding raised by
+          // securityHeadersProbe (src/lib/security/probes/upload_headers.ts).
+          //
+          // Browsers ignore HSTS over plain HTTP, so this is inert on
+          // localhost and active on the HTTPS sandbox/prod hosts.
+          // `preload` is deliberately NOT sent: submitting to the preload
+          // list is a hard-to-reverse commitment that every current and
+          // future subdomain is HTTPS-only.
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=31536000; includeSubDomains",
+          },
+          // Stop the browser second-guessing declared content types — the
+          // matching half of the upload routes that store client-supplied
+          // file.type without magic-byte sniffing.
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          // Clickjacking. SAMEORIGIN rather than DENY because the app frames
+          // its own pages — the document/PDF viewers embed same-origin
+          // /api/files URLs in iframes. CSP frame-ancestors below is the
+          // modern equivalent; both are sent for older-browser coverage.
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          {
+            key: "Content-Security-Policy",
+            value: [
+              "default-src 'self'",
+              // ⚠ 'unsafe-inline'/'unsafe-eval' are required by Next's inline
+              // bootstrap and hydration scripts. Removing them needs
+              // per-request nonce plumbing through middleware, which static
+              // headers here cannot express. So script-src is NOT an XSS
+              // barrier today — the value of this policy is the directives
+              // below it (object/base/form/frame-ancestors), which are what
+              // actually blunt injection and clickjacking.
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com",
+              // Google Fonts is loaded via <link> in app/layout.tsx, not
+              // next/font — the sandbox VPS can't reach it at build time.
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+              "font-src 'self' data: https://fonts.gstatic.com",
+              // blob: covers the client-side document preview URLs; https:
+              // covers S3/Supabase-served documents and map tiles.
+              "img-src 'self' data: blob: https:",
+              // `ws:` is dev-only: Next's HMR socket is plain ws:// on
+              // localhost, and without it hot reload dies behind the CSP.
+              // Production pages are https, where a ws:// connection would be
+              // blocked as mixed content anyway.
+              `connect-src 'self' https: wss:${isDev ? " ws:" : ""}`,
+              // Razorpay checkout renders in an iframe; maps/doc viewers are
+              // also framed. Own-origin blobs cover the PDF preview panes.
+              "frame-src 'self' blob: https://checkout.razorpay.com https://api.razorpay.com https://www.google.com https://www.openstreetmap.org https://docs.google.com",
+              // The clickjacking control proper.
+              "frame-ancestors 'self'",
+              // No Flash/Java-era plugin content, ever.
+              "object-src 'none'",
+              // Stop an injected <base> rewriting every relative URL on the
+              // page to an attacker's host.
+              "base-uri 'self'",
+              // Stop an injected form posting credentials off-origin.
+              "form-action 'self'",
+            ].join("; "),
+          },
         ],
       },
     ];
