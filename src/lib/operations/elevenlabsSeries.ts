@@ -104,6 +104,12 @@ export function momDelta(
   // A zero base makes the percentage meaningless (or infinite), and "+∞%" is
   // not a number anyone can act on.
   if (complete.length < 2 || complete[1]!.cost_paise <= 0) return null;
+  // The two rows must be ADJACENT calendar months. Callers that gap-fill hand
+  // us a dense array and this always holds; a caller that does not (spend.ts's
+  // burn query returns only months that HAVE invoices) would otherwise get
+  // July-against-May computed and labelled "month over month". Refusing is the
+  // honest answer — there is no month-over-month when a month is missing.
+  if (addMonths(complete[0]!.month, -1) !== complete[1]!.month) return null;
   return (
     ((complete[0]!.cost_paise - complete[1]!.cost_paise) /
       complete[1]!.cost_paise) *
@@ -265,6 +271,39 @@ function monthsBetween(from: string, to: string): number {
   const a = splitMonth(from);
   const b = splitMonth(to);
   return b.y * 12 + (b.m - 1) - (a.y * 12 + (a.m - 1));
+}
+
+/**
+ * A day bucket from SQL, as the `YYYY-MM-DD` key fillRange() builds.
+ *
+ * THIS EXISTS BECAUSE OF A SILENT, TOTAL FAILURE. The trend query selects
+ * `...::date`, and postgres.js parses oid 1082 through `parse: x => new Date(x)`
+ * — so the value arriving in JS is a `Date`, not a string. The old code did
+ * `String(r.date).slice(0, 10)`, which on a Date yields "Mon Jun 22", while
+ * fillRange() builds "2026-06-22". The two maps never intersected, so EVERY
+ * day-bucketed chart on /operations/elevenlabs rendered as a flat row of zeros
+ * — the default view (month to date), "Last 3 months", every specific month and
+ * every custom window ≤ 92 days. Two different ranges produced two identical
+ * empty charts, which is what "the values repeat" looked like from outside.
+ * The month-bucketed views were fine because TO_CHAR returns a real string.
+ *
+ * Both shapes are accepted deliberately: a driver upgrade that started
+ * returning strings must not silently reintroduce the bug in the other
+ * direction. A `date` column carries no time and no zone, and postgres.js
+ * builds it from the bare "YYYY-MM-DD" text, so the instant is UTC midnight and
+ * toISOString() reads back the same calendar day it was selected as.
+ */
+export function toIsoDay(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : value.toISOString().slice(0, 10);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+  }
+  return null;
 }
 
 /** Inclusive whole-day span between two YYYY-MM-DD strings. */

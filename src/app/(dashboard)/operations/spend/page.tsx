@@ -1,10 +1,19 @@
+import Link from "next/link";
+
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCount, formatIst, formatMinutesAgo } from "@/lib/operations/format";
 import { formatINR } from "@/lib/currency";
-import { getSpendView, type VendorRow } from "@/lib/operations/spend";
+import {
+  getSpendBreakdown,
+  getSpendView,
+  type BreakdownRow,
+  type VendorRow,
+} from "@/lib/operations/spend";
+import { parseSpendWindow, TRAILING_30 } from "@/lib/operations/spendWindow";
 
 import { AutoRefresh } from "../_components/AutoRefresh";
+import { SpendWindowSelector } from "../_components/SpendWindowSelector";
 
 export const metadata = { title: "Spend · Ops Console" };
 
@@ -38,9 +47,11 @@ function delta(pct: number | null) {
 function BurnChart({
   burn,
   currentMonth,
+  selected,
 }: {
-  burn: { month: string; paise: number }[];
+  burn: { month: string; paise: number; invoices: number }[];
   currentMonth: string;
+  selected: string;
 }) {
   if (burn.length === 0) {
     return <p className="text-sm text-ink-muted">No invoiced tech spend yet.</p>;
@@ -53,24 +64,54 @@ function BurnChart({
     <div className="flex items-end gap-2">
       {series.map((month) => {
         // Compare against the real current month, not "is it the last bar".
-        // A month with no invoices produces no row, so the newest bar is
-        // often a finished month — shading it as partial would misread it.
+        // The series is gap-filled now, so the newest bar IS the current month
+        // — but the check stays correct either way and costs nothing.
         const partial = month.month === currentMonth;
+        const isSelected = month.month === selected;
         return (
-          <div key={month.month} className="flex flex-1 flex-col items-center gap-1">
+          <Link
+            key={month.month}
+            href={`?window=${month.month}`}
+            scroll={false}
+            className="flex flex-1 flex-col items-center gap-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky"
+            title={
+              month.invoices === 0
+                ? `${month.month} — no invoices`
+                : `${month.month} — ${month.invoices} invoice${month.invoices === 1 ? "" : "s"}. Click for the breakdown.`
+            }
+          >
             <span className="text-[10px] tabular-nums text-ink-muted">
               {formatINR(month.paise)}
             </span>
             <div
-              className={`w-full rounded-t ${partial ? "bg-brand-sky/50" : "bg-brand-navy"}`}
+              className={`w-full rounded-t transition-opacity hover:opacity-80 ${
+                partial ? "bg-brand-sky/50" : "bg-brand-navy"
+              } ${isSelected ? "ring-2 ring-brand-sky ring-offset-1" : ""}`}
               style={{ height: `${Math.max((month.paise / max) * 80, 2)}px` }}
-              title={partial ? `${month.month} (month in progress)` : month.month}
             />
-            <span className="text-[10px] text-ink-muted">{month.month.slice(2)}</span>
-          </div>
+            <span
+              className={`text-[10px] ${isSelected ? "font-semibold text-ink" : "text-ink-muted"}`}
+            >
+              {month.month.slice(2)}
+            </span>
+          </Link>
         );
       })}
     </div>
+  );
+}
+
+/** "not applicable" reads differently from "—", and the difference matters. */
+function NotMetered({ applicable }: { applicable: boolean }) {
+  return applicable ? (
+    <span className="text-ink-muted">—</span>
+  ) : (
+    <span
+      className="text-ink-muted/70"
+      title="Metering is not a concept for this vendor — a VPS, a SaaS seat or a subscription. The invoice is real; there is nothing to meter it against."
+    >
+      n/a
+    </span>
   );
 }
 
@@ -107,27 +148,59 @@ function ReconRow({ vendor }: { vendor: VendorRow }) {
         {hasMeteredCost ? (
           <span className="text-ink">{formatINR(vendor.metered_paise!)}</span>
         ) : (
-          <span className="text-ink-muted">—</span>
+          <NotMetered applicable={!vendor.metering_not_applicable} />
         )}
       </td>
       <td className="py-2.5 pr-3 text-right tabular-nums text-ink-muted">
-        {vendor.metered_calls == null ? "—" : formatCount(vendor.metered_calls)}
+        {vendor.metered_calls == null ? (
+          <NotMetered applicable={!vendor.metering_not_applicable} />
+        ) : (
+          <>
+            {formatCount(vendor.metered_calls)}
+            {/* The unit, always. This column holds AI calls for one row and
+                WhatsApp messages for the next; an unlabelled integer invited
+                reading one as the other. */}
+            {vendor.metered_unit && (
+              <span className="ml-1 text-[10px] text-ink-muted/80">
+                {vendor.metered_unit}
+              </span>
+            )}
+          </>
+        )}
       </td>
       <td className="py-2.5 pr-3 text-right tabular-nums text-ink">
         {vendor.billed_paise > 0 ? formatINR(vendor.billed_paise) : "—"}
       </td>
       <td className="py-2.5 pr-3 text-right">{delta(gap)}</td>
       <td className="py-2.5 text-[11px] text-ink-muted">
-        {vendor.metered_from ?? "not metered"}
+        {vendor.metered_from ??
+          (vendor.metering_not_applicable
+            ? "metering not applicable"
+            : "not metered")}
       </td>
     </tr>
   );
 }
 
-export default async function OperationsSpendPage() {
+export default async function OperationsSpendPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const windowKey = parseSpendWindow(params);
+
+  // The breakdown only exists for a calendar month — "the invoices behind the
+  // last 30 days" is not a thing anyone asked to see, and it would not tie back
+  // to a bar on the chart.
+  let breakdown: BreakdownRow[] | null = null;
+
   let view: Awaited<ReturnType<typeof getSpendView>>;
   try {
-    view = await getSpendView();
+    view = await getSpendView(windowKey);
+    if (windowKey !== TRAILING_30) {
+      breakdown = await getSpendBreakdown(windowKey);
+    }
   } catch (e) {
     return (
       <Card>
@@ -145,12 +218,18 @@ export default async function OperationsSpendPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-ink-muted">
-          Metered and billed are independent reads over the same trailing 30
-          days. They are meant to agree — the gap is the signal.
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-2xl text-xs text-ink-muted">
+          Metered and billed are independent reads over{" "}
+          <strong className="text-ink">the same window</strong> —{" "}
+          <span className="text-ink">{view.window.label}</span>. They are meant
+          to agree; the gap is the signal. Change the window below or click a
+          bar on the burn chart.
         </p>
-        <AutoRefresh intervalMs={60_000} />
+        <div className="flex items-center gap-3">
+          <SpendWindowSelector selected={view.window.key} />
+          <AutoRefresh intervalMs={60_000} />
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -158,12 +237,20 @@ export default async function OperationsSpendPage() {
           <CardHeader>
             <CardTitle className="text-base">Monthly tech burn</CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
-              Approved invoices in the tech bucket, by invoice date. The last bar
-              is the month in progress.
+              Approved invoices in the tech bucket, by invoice date (falling
+              back to the approval date). Six calendar months — a month with no
+              invoices is drawn as a real zero rather than dropped, so the axis
+              never closes a gap. The lighter bar is the month in progress.{" "}
+              <strong className="text-ink">Click a bar</strong> for the invoices
+              behind it.
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            <BurnChart burn={view.burn} currentMonth={view.current_month} />
+            <BurnChart
+              burn={view.burn}
+              currentMonth={view.current_month}
+              selected={view.window.key}
+            />
             <div className="flex flex-wrap items-center gap-4 text-xs">
               <span className="text-ink-muted">
                 MTD{" "}
@@ -172,9 +259,9 @@ export default async function OperationsSpendPage() {
                 </span>
               </span>
               <span className="text-ink-muted">
-                Last 30d{" "}
+                {view.window.label}{" "}
                 <span className="font-semibold text-ink">
-                  {formatINR(view.billed_tech_30d_paise)}
+                  {formatINR(view.billed_window_paise)}
                 </span>
               </span>
               <span className="text-ink-muted">
@@ -255,16 +342,24 @@ export default async function OperationsSpendPage() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-base">Metered vs billed (30 days)</CardTitle>
+            <CardTitle className="text-base">
+              Metered vs billed · {view.window.label}
+            </CardTitle>
             <p className="mt-1 text-xs text-ink-muted">
-              AI call cost is metered in INR paise and directly comparable.
-              Everything else is a volume count — we hold no rate card for those
-              vendors, so a cost there would be invented.
+              Both columns cover{" "}
+              <span className="text-ink">
+                {view.window.from} to {view.window.to}
+              </span>{" "}
+              (IST, inclusive) — the same span, which is what makes the gap
+              mean anything. AI call cost is metered in INR paise and directly
+              comparable. Everything else is a volume count in its own unit; we
+              hold no rate card for those vendors, so a cost there would be
+              invented.
             </p>
           </div>
           <Badge variant="muted">
-            AI {formatINR(view.ai_cost_30d_paise)} · {formatCount(view.ai_calls_30d)}{" "}
-            calls
+            AI {formatINR(view.ai_cost_window_paise)} ·{" "}
+            {formatCount(view.ai_calls_window)} calls
           </Badge>
         </CardHeader>
         <CardContent>
@@ -295,6 +390,85 @@ export default async function OperationsSpendPage() {
           )}
         </CardContent>
       </Card>
+
+      {breakdown && (
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">
+                Invoices behind {view.window.label}
+              </CardTitle>
+              <p className="mt-1 text-xs text-ink-muted">
+                Every approved tech-bucket invoice with an effective date in{" "}
+                {view.window.key}. Same scope as the bar above, so these rows sum
+                to it exactly — a drill-down that disagreed with the number it
+                drilled into would be worse than none.
+              </p>
+            </div>
+            <Badge variant="muted">
+              {formatINR(breakdown.reduce((sum, row) => sum + row.paise, 0))} ·{" "}
+              {formatCount(breakdown.length)}{" "}
+              {breakdown.length === 1 ? "invoice" : "invoices"}
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            {breakdown.length === 0 ? (
+              <p className="text-sm text-ink-muted">
+                No approved tech invoices with an effective date in{" "}
+                {view.window.key}.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[44rem] text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                      <th className="py-2 pr-3">Date</th>
+                      <th className="py-2 pr-3">Vendor</th>
+                      <th className="py-2 pr-3">Invoice</th>
+                      <th className="py-2 pr-3">Description</th>
+                      <th className="py-2 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {breakdown.map((row) => (
+                      <tr
+                        key={row.id}
+                        className="border-b border-border/60 last:border-0"
+                      >
+                        <td className="py-2 pr-3 whitespace-nowrap tabular-nums text-ink-muted">
+                          {row.effective_date ?? "—"}
+                        </td>
+                        <td className="py-2 pr-3 text-ink">
+                          {row.vendor_label ?? "—"}
+                          {row.vendor &&
+                            row.vendor_label &&
+                            row.vendor !== row.vendor_label && (
+                              <span
+                                className="ml-1 text-[11px] text-ink-muted"
+                                title={row.vendor}
+                              >
+                                ({row.vendor})
+                              </span>
+                            )}
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-[11px] text-ink-muted">
+                          {row.invoice_number ?? "—"}
+                        </td>
+                        <td className="max-w-[22rem] truncate py-2 pr-3 text-[12px] text-ink-muted">
+                          {row.description ?? "—"}
+                        </td>
+                        <td className="py-2 text-right tabular-nums text-ink">
+                          {formatINR(row.paise)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

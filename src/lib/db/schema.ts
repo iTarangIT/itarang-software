@@ -6804,6 +6804,48 @@ export const expenseSubmissions = pgTable(
     // E-172 — invoice number (dedup key for AI rows) + original upload filename.
     invoice_number: varchar("invoice_number", { length: 120 }),
     file_name: varchar("file_name", { length: 255 }),
+    // ---------------------------------------------------------------------
+    // DECLARED TO MATCH THE DEPLOYED DATABASES, which already have all of the
+    // below. This block is a DECLARATION ONLY — there is no accompanying
+    // migration here, because the columns were shipped to the databases ahead
+    // of this branch. Verified against sandbox information_schema, types and
+    // lengths exactly as listed.
+    //
+    // WHY IT MATTERS THAT THESE ARE HERE. While they were missing, schema.ts
+    // actively said something false about money: two independent readings of
+    // this codebase concluded that expense_submissions has no currency column,
+    // therefore foreign-currency invoices are summed as if they were rupees,
+    // therefore every tech-spend total is ~94x understated for USD vendors.
+    // It is not true — the deployed table carries currency, original_amount
+    // and fx_rate, and a $1,533.85 invoice is stored as amount = ₹143,648.65,
+    // already converted at entry. `amount` is INR for every row. Never apply an
+    // FX rate to it a second time; doing so once turned a $200 Anthropic bill
+    // into ₹1.7 lakh.
+    //
+    // Note that db.migration_drift on /operations/database compares TABLE names
+    // only, so a column-level drift like this one was invisible there.
+    // ---------------------------------------------------------------------
+    // Google Drive ingestion provenance for the AI invoice tracker.
+    drive_file_id: varchar("drive_file_id", { length: 128 }),
+    drive_row_ref: varchar("drive_row_ref", { length: 64 }),
+    // Flagged for a human to look at — a low-confidence AI extraction.
+    needs_attention: boolean("needs_attention").default(false).notNull(),
+    attention_reason: text("attention_reason"),
+    // Original currency and the conversion applied at entry. `amount` above is
+    // the INR result; these preserve what the invoice actually said.
+    currency: varchar("currency", { length: 8 }),
+    original_amount: numeric("original_amount", { precision: 14, scale: 2 }),
+    fx_rate: numeric("fx_rate", { precision: 18, scale: 8 }),
+    fx_rate_date: date("fx_rate_date"),
+    fx_source: varchar("fx_source", { length: 16 }),
+    // Spend classification. `bucket` is what /operations/spend filters on for
+    // tech spend ('tech' | 'rm' | 'misc'); bucket_source records whether a rule
+    // or the AI decided. techFilterColumn() probes information_schema for this
+    // column at runtime and falls back to `department` — that probe is
+    // load-bearing, not dead code: it is what lets the spend module work on a
+    // database built from schema.ts alone.
+    bucket: varchar("bucket", { length: 24 }),
+    bucket_source: varchar("bucket_source", { length: 16 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
