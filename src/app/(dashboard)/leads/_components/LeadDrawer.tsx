@@ -28,6 +28,11 @@ import {
     INTENT_BUCKET_TONE,
     intentBucketOf,
 } from "@/lib/leads/intentBucket";
+import {
+    DISPOSITION_BUCKET_TONE,
+    DISPOSITION_NEUTRAL_TONE,
+    isDispositionBucket,
+} from "@/lib/leads/dispositions";
 import type { LeadRow } from "./LeadsTable";
 
 function pretty(value: string | null | undefined): string {
@@ -290,6 +295,41 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                         <dd className="col-span-2 tabular-nums text-gray-800">
                             {fmtDateTime(lead.last_touchpoint_at)}
                         </dd>
+
+                        {/* E-236. Shown only when there is one: every lead has a
+                            last touch, but only a called-by-the-CC-team lead has
+                            a disposition, and an empty row here would read as
+                            missing data on the other few thousand. */}
+                        {lead.last_disposition && (
+                            <>
+                                <dt className="col-span-1 text-gray-500">
+                                    Disposition
+                                </dt>
+                                <dd className="col-span-2">
+                                    <span
+                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                                            lead.last_disposition_bucket &&
+                                            isDispositionBucket(
+                                                lead.last_disposition_bucket,
+                                            )
+                                                ? DISPOSITION_BUCKET_TONE[
+                                                      lead.last_disposition_bucket
+                                                  ]
+                                                : DISPOSITION_NEUTRAL_TONE
+                                        }`}
+                                    >
+                                        {lead.last_disposition}
+                                    </span>
+                                    <span className="ml-2 text-[11px] text-gray-500">
+                                        {lead.last_connect_status === "not_connected"
+                                            ? "Not connected"
+                                            : lead.last_disposition_bucket
+                                              ? `Connected · ${lead.last_disposition_bucket}`
+                                              : "Connected"}
+                                    </span>
+                                </dd>
+                            </>
+                        )}
 
                         {caps.canSeeOwnerAsm && (
                             <>

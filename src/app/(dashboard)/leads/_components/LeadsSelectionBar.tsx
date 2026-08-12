@@ -12,6 +12,7 @@
 // bulk action, so when the whole page is ticked and more matches exist, this
 // offers the rest.
 
+import { useState } from "react";
 import { Loader2, Send, X } from "lucide-react";
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
 import type { LeadsCapabilities } from "@/lib/leads/access";
@@ -27,6 +28,8 @@ type Props = {
     /** True when the selection already covers every match. */
     allMatchingSelected: boolean;
     selectAllMatching: () => void;
+    /** Select exactly the first n matching leads, replacing the selection. */
+    selectFirstN: (n: number) => void;
     selectingAll: boolean;
     /** Set when the match count exceeded what a bulk action accepts. */
     cappedAt: number | null;
@@ -44,6 +47,7 @@ export function LeadsSelectionBar({
     allOnPageSelected,
     allMatchingSelected,
     selectAllMatching,
+    selectFirstN,
     selectingAll,
     cappedAt,
     onClear,
@@ -52,6 +56,11 @@ export function LeadsSelectionBar({
     onBulkDone,
     onSendToNeodove,
 }: Props) {
+    // Held as a STRING, not a number: a controlled number input coerced through
+    // Number() cannot be cleared — backspacing to empty yields NaN and snaps
+    // back to the last value, so the field fights anyone retyping it.
+    const [countDraft, setCountDraft] = useState("");
+
     if (selectedCount === 0) return null;
 
     // Only worth offering when the page is fully ticked and there is more
@@ -83,6 +92,46 @@ export function LeadsSelectionBar({
                             filters
                         </button>
                     )}
+
+                    {/* Select exactly N.
+                        The header checkbox takes a whole page and "select all
+                        matching" takes everything; between them there was no way
+                        to say "give me 65", which is the shape most hand-offs
+                        actually have — a batch sized to what the calling team
+                        can work, not to a page size. */}
+                    <form
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            const n = Number(countDraft);
+                            if (Number.isFinite(n) && n >= 1) selectFirstN(n);
+                        }}
+                        className="flex items-center gap-1.5"
+                    >
+                        <label className="text-xs text-sky-800" htmlFor="select-n">
+                            Select
+                        </label>
+                        <input
+                            id="select-n"
+                            type="number"
+                            min={1}
+                            max={total}
+                            inputMode="numeric"
+                            value={countDraft}
+                            onChange={(e) => setCountDraft(e.target.value)}
+                            placeholder={String(Math.min(total, 100))}
+                            className="w-20 rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs tabular-nums text-sky-900 outline-none focus:border-sky-400"
+                        />
+                        <button
+                            type="submit"
+                            disabled={selectingAll || !countDraft}
+                            className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+                        >
+                            {selectingAll && (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                            )}
+                            Apply
+                        </button>
+                    </form>
 
                     {allMatchingSelected && (
                         <span className="text-xs text-sky-700">

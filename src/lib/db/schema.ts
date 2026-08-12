@@ -3232,15 +3232,28 @@ export const scrapeRuns = pgTable("scraper_runs", {
   new_leads_skipped_invalid_phone: integer(
     "new_leads_skipped_invalid_phone",
   ).default(0),
-  // E-227 — liveness heartbeat, bumped by executeChunk() alongside
-  // completed_chunks. reapStuckRuns() reaps on silence rather than on total run
-  // age, so a legitimately long multi-query run isn't force-failed at minute 11.
-  last_progress_at: timestamp("last_progress_at", { withTimezone: true }),
-  // NOTE: E-227 also creates idx_scraper_runs_running (partial, WHERE status =
-  // 'running'). It is deliberately NOT declared here: "scraper_runs" is mapped
-  // by TWO pgTable declarations in this file (scraperRuns above and scrapeRuns
-  // here), so declaring indexes on both aliases would emit duplicate DDL if
-  // drizzle-kit is ever run. The migration file owns that index.
+  // ⚠ `last_progress_at` WAS DECLARED HERE AND HAS BEEN REMOVED. Do not add it
+  // back without first writing the migration that creates it.
+  //
+  // It was added for a liveness heartbeat — executeChunk() would bump it and
+  // reapStuckRuns() would reap on silence rather than on total run age, so a
+  // legitimately long multi-query run isn't force-failed at minute 11. That is
+  // still a good idea, but NONE of it was built: no code writes the column, no
+  // code reads it, reapStuckRuns() still compares `started_at`, and the E-227
+  // migration the old comment here credited does not exist in drizzle/.
+  //
+  // So the column existed in exactly one place — this object — and drizzle
+  // names EVERY column of a table object in its INSERT. The result was that
+  // starting any scrape died with
+  //   column "last_progress_at" of relation "scraper_runs" does not exist
+  // on every database, because no database has ever had it. Same failure mode
+  // E-224 / E-226 / E-236 each call out at length: a column that is not
+  // guaranteed present must not be named on the drizzle object.
+  //
+  // To build the heartbeat: write the migration (column + a partial
+  // idx_scraper_runs_running WHERE status = 'running'), apply it everywhere,
+  // THEN add the column back here — or write it by raw sql`` and leave this
+  // object alone, which is what the three migrations above chose.
 });
 
 export const scraperRunChunks = pgTable(

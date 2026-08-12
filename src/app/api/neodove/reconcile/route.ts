@@ -30,7 +30,7 @@ import {
 import { normalizePhone } from "@/lib/leads/dedupe";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { parseInboundEvent, callStatusFor, remarksFor } from "@/lib/neodove/mapper";
-import { attachCallEvidence } from "@/lib/neodove/inbound";
+import { attachCallEvidence, recordLeadDisposition } from "@/lib/neodove/inbound";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 
 export const runtime = "nodejs";
@@ -146,6 +146,11 @@ export const POST = withErrorHandler(async (req: Request) => {
             // webhook would have left, so a recovered call is not a poorer
             // record than one that arrived on time (E-226).
             await attachCallEvidence(touchpointId, event);
+            // Same for the lead's denormalised latest disposition (E-236). The
+            // update is guarded on last_disposition_at, so replaying an old CSV
+            // export cannot roll a lead's disposition backwards to whatever it
+            // was that week.
+            await recordLeadDisposition(dealerLeadId, event);
 
             await db.execute(sql`
                 INSERT INTO neodove_sync_events

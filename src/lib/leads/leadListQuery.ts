@@ -64,14 +64,29 @@ export type LeadListFilters = {
     /** created_at calendar-date range, inclusive both ends (YYYY-MM-DD). */
     from?: string | null;
     to?: string | null;
-    /** Restrict to leads that can actually be called. */
-    hasPhone?: boolean;
+    // ── Call disposition (E-236) ─────────────────────────────────────────
+    // The three levels are ANDed independently rather than resolved to one
+    // predicate: the UI narrows them, but each is a legitimate question on its
+    // own ("everything Not Connected", "everything we lost").
+    /** L1 — 'connected' | 'not_connected'. */
+    connectStatus?: string | null;
+    /** L2 — Cold | Warm | Hot | Converted | Lost. */
+    dispositionBucket?: string | null;
+    /** L3 — the disposition label, exact match. */
+    disposition?: string | null;
 };
 
 export type LeadListFacets = {
     owners: { id: string; name: string | null; role: string | null }[];
     asms: { id: string; name: string | null }[];
     sources: string[];
+    /** Dispositions actually present in the data — including values NeoDove
+     *  sent that are outside the CC sheet, which are filterable too. */
+    dispositions: {
+        value: string;
+        bucket: string | null;
+        connect_status: string | null;
+    }[];
 };
 
 export type LeadListStats = {
@@ -127,7 +142,19 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
     if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
     if (f.city) conds.push(sql`dl.city ILIKE ${`%${f.city}%`}`);
-    if (f.hasPhone) conds.push(sql`dl.phone IS NOT NULL AND dl.phone <> ''`);
+    // E-236. Emitted ONLY when the filter is set, which is what lets a database
+    // without the migration keep serving this list for everyone who does not use
+    // the disposition filter — the columns are not in schema.ts and a bare
+    // reference would be a hard "column does not exist".
+    if (f.connectStatus) {
+        conds.push(sql`dl.last_connect_status = ${f.connectStatus}`);
+    }
+    if (f.dispositionBucket) {
+        conds.push(sql`dl.last_disposition_bucket = ${f.dispositionBucket}`);
+    }
+    if (f.disposition) {
+        conds.push(sql`dl.last_disposition = ${f.disposition}`);
+    }
     if (f.intent && !opts?.ignoreIntent) conds.push(intentPredicate(f.intent));
     if (f.from && ISO_DATE_RE.test(f.from)) {
         conds.push(sql`dl.created_at::date >= ${f.from}`);
@@ -145,6 +172,21 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         );
     }
     return sql.join(conds, sql` AND `);
+}
+
+/**
+ * The list's WHERE clause, for callers outside this module.
+ *
+ * Exported so GET /api/dealer-leads/export builds its CSV from the SAME
+ * predicate the screen does. A second hand-written where-clause is how an
+ * export starts quietly disagreeing with the list it claims to be of — the
+ * exact divergence that made /leads and /admin/leads-info show the same lead
+ * two different ways before they were merged.
+ *
+ * Assumes the caller aliases dealer_leads as `dl`.
+ */
+export function buildExportWhere(f: LeadListFilters) {
+    return buildWhere(f);
 }
 
 export async function fetchLeadListRows(
@@ -288,10 +330,39 @@ export async function fetchLeadListFacets(): Promise<LeadListFacets> {
         WHERE is_active IS NOT FALSE AND source IS NOT NULL
         ORDER BY source
     `);
+
+    // E-236. Its own try/catch and its own statement: the columns are not in
+    // schema.ts and a database without the migration must lose the disposition
+    // dropdown, not the owner / ASM / source dropdowns beside it.
+    //
+    // Read from the DATA rather than only from the sheet so a disposition that
+    // arrived from a campaign configured with a different vocabulary is still
+    // offerable — the UI groups those apart under "Other (seen in NeoDove)".
+    let dispositions: LeadListFacets["dispositions"] = [];
+    try {
+        const rows = await db.execute<{
+            value: string;
+            bucket: string | null;
+            connect_status: string | null;
+        }>(sql`
+            SELECT DISTINCT
+                   last_disposition        AS value,
+                   last_disposition_bucket AS bucket,
+                   last_connect_status     AS connect_status
+              FROM dealer_leads
+             WHERE is_active IS NOT FALSE AND last_disposition IS NOT NULL
+             ORDER BY value
+        `);
+        dispositions = rows as unknown as LeadListFacets["dispositions"];
+    } catch {
+        // E-236 not applied here — the filter offers the sheet's values only.
+    }
+
     return {
         owners: owners as unknown as LeadListFacets["owners"],
         asms: asms as unknown as LeadListFacets["asms"],
         sources: (sources as unknown as { source: string }[]).map((r) => r.source),
+        dispositions,
     };
 }
 

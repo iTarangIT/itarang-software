@@ -45,13 +45,39 @@ Two facts drive the whole design:
 
 - [x] **Ask the CSM to enable Custom Integration.** Done — it was already enabled on the
       iTarang TECH account as of 2026-08-01.
-- [x] ~~**Email the Custom Integration account manager to activate the subscription.**~~
-      **MOOT as of 2026-08-03 — no such gate is blocking us.** 12 CRM-pushed leads are
-      visible in `CUSTOM_INTEGRATION-campaign` in NeoDove's UI, and the plan banner has
-      ticked down from 24,579 to 24,566 slots. The warning text on the Active Integrations
-      page is real, but pushes land without any further action. §2's "a 200 proves nothing"
-      still holds for any INDIVIDUAL push — it is the UI and the slot counter that are
-      evidence, not the response.
+- [ ] **Email the Custom Integration account manager to activate the subscription —
+      ONCE PER INTEGRATION.**
+      **This was recorded as "MOOT" on 2026-08-03 and that was WRONG.** The original
+      integration (`4ea39130-…`) delivers because the CSM enabled it on 2026-08-01;
+      what looked like "no gate exists" was really "the gate had already been opened
+      for the one integration we had".
+      **Proven 2026-08-11 by controlled experiment.** Three new Custom Integrations were
+      created (`aeb5d3ff-…`, `1d2e0673-…`, `c7f30377-…`), each bound to a hand-made
+      campaign. Identical probe payloads were POSTed to the old and a new integration,
+      same host, same `/integration/custom/<id>/leads` path, same body. **Both returned
+      `200 OK` with body `OK`. Only the OLD one created a lead.** The new campaign stayed
+      on "Oops, no leads found!" through four real pushes plus the probe.
+      ⇒ A newly created Custom Integration accepts and SILENTLY DISCARDS every lead until
+      the account manager activates its subscription. There is no response, header, status
+      code or log on our side that distinguishes this from success — `neodove_sync_events`
+      records a clean `http_status=200`, `error=NULL` for a lead that does not exist.
+      **This is the sharpest instance of §2's "a 200 proves nothing": budget for
+      activation lead-time whenever a new campaign destination is added.**
+
+- [x] **Can a Custom Integration bind to an EXISTING, hand-made campaign?** **YES**
+      (2026-08-11). The wizard's destination step offers existing campaigns, not only
+      "Create a new Campaign". This resolves the blocker recorded below about agent-less
+      wizard-created campaigns: make the campaign by hand with its agents, then point a
+      new Custom Integration at it.
+
+- [x] **Endpoint path shape — `/integration` is REQUIRED.** Probed 2026-08-11:
+      `https://<acct>.neodove.com/integration/custom/<id>/leads` → 200;
+      `https://connect.neodove.com/integration/custom/<id>/leads` → 200;
+      `https://<acct>.neodove.com/custom/<id>/leads` → **405 Not Allowed** (nginx).
+      `NEODOVE_PUSH_ENDPOINT_TEST` had been hand-edited into that 405 shape and was dead;
+      the 12 leads credited to it landed on 03-Aug, before the edit. Copy these URLs
+      verbatim from NeoDove and never retype them — this is the second time a hand-edit
+      has silently broken one (see the `?update=true` note in `.env.local`).
 - [ ] **Ask, in writing, whether any enterprise read API exists.** If yes, most of the
       reconciliation path becomes unnecessary. Record the answer here.
 - [ ] **Ask for the `lead_status` code table.** The inbound payload carries
@@ -129,6 +155,50 @@ NEODOVE_TIMEOUT_MS=15000
 Then set `neodove_campaigns.push_endpoint_ref` to the **variable name**
 (e.g. `NEODOVE_PUSH_ENDPOINT_DEALER_Q3`), not the URL.
 → Resolved by `resolveEndpoint()` in `src/lib/neodove/config.ts`.
+
+### Adding a campaign — the whole runbook
+
+Adding a destination is an **env change plus a DB row**, never a code change.
+That is the point of the ref indirection. Per campaign:
+
+1. **NeoDove → Pipeline → Create Campaign.** Note the campaign name *exactly*.
+2. **Integrations → Custom Integration** for that campaign. Copy the endpoint
+   URL and its `?update=true` variant.
+3. Add `NEODOVE_PUSH_ENDPOINT_<SLUG>` and `NEODOVE_UPDATE_ENDPOINT_<SLUG>` to
+   `.env.local` and to the VPS environment, then **restart PM2**. `process.env`
+   is read per request, but the process still has to be restarted to see a new
+   value. `GET /api/neodove/endpoints` then lists the new name, and the campaign
+   form's endpoint picker offers it.
+4. **CRM → Leads → NeoDove Campaigns → New campaign.** Set the CRM name, the
+   NeoDove campaign name, and pick the endpoint from the dropdown.
+   > ⚠ The NeoDove campaign name must match **exactly**. Inbound webhooks are
+   > resolved by string-matching it against `campaign_name`
+   > (`src/lib/neodove/inbound.ts`), so a typo costs you the campaign's
+   > disposition counters and its lead links.
+5. **NeoDove → Workflows → Send Webhook**, for the new campaign, pointing at
+   `/api/neodove/webhook` with the `Authorization: Bearer <NEODOVE_WEBHOOK_SECRET>`
+   header. **This is the step that gets forgotten.** Without it the campaign
+   pushes fine and nothing ever comes back — which looks exactly like the
+   disposition filter being broken.
+6. Push **one** test lead and confirm it appears in the intended campaign in
+   NeoDove. See the activation-gate warning above: a 200 is not proof.
+
+**Two campaigns must never share a `push_endpoint_ref`.** The push body carries
+no campaign identifier — `dealerLeadToNeodove()` sends `mobile`, `name` and the
+`itarang_*` custom fields, nothing else — so **the URL is the routing**. Two CRM
+campaigns pointing at one endpoint deliver into the same NeoDove campaign, and
+the destination dropdown then offers a choice that changes nothing. This is not
+hypothetical: it is how three demo campaigns all ended up in
+`CUSTOM_INTEGRATION-campaign`. Both the campaigns list and the Send-to-NeoDove
+modal now flag a shared endpoint.
+
+**"Wired" means the variable resolves, not that a ref was typed.** `is_wired`
+used to be `push_endpoint_ref IS NOT NULL` in SQL, so a campaign referencing a
+variable nobody had set was offered as a valid destination and failed at push
+time, far from the mistake. It is now computed with `isEndpointWired()` — the
+same `resolveEndpoint()` the push path calls — in both the list and detail
+routes, and the campaign detail page distinguishes *nothing configured* from
+*configured but the variable is missing on this server*.
 
 ---
 
@@ -342,23 +412,85 @@ exist to hold the first and third; both stay NULL until this is done.
 > reliable recordings need cloud telephony (the **Cloud Telephony** item in NeoDove's
 > sidebar names whichever provider the account is on).
 
-**Record the account's actual disposition vocabulary** (Settings → Dispositions). It is
-customer-configurable, so the default map in `DISPOSITION_TO_CALL_STATUS` is a guess:
+**The account's disposition vocabulary — CAPTURED (E-236).** It arrived as the
+CC team's "Lead Dispositions" sheet and now lives in
+`src/lib/leads/dispositions.ts`. It is a three-level tree, and it matched almost
+none of the factory defaults `DISPOSITION_TO_CALL_STATUS` was guessing at:
 
 ```
-disposition → our CallStatus
-______________ → connected | not_reachable | not_responding | incorrect_number | no_incoming
-______________ →
-______________ →
+L1 Connected
+   L2 Cold       Loan Procedure Issue · Service Issue · As to Call Back ·
+                 Need Some Time · No requirement in current ·
+                 Bad Experience with Trontek · Short Hang up
+   L2 Warm       Details Shared · Information Collected · Meeting Scheduled ·
+                 Commercials Explained · Price High
+   L2 Hot        Quotation Sent · Commercials Explained · Under Negotiation ·
+                 Documents Recieved · Commercials Finalised
+   L2 Converted  Deal Closed · Order Received · Full Payment Received · Onboarding Done
+   L2 Lost       Not Interested · Lost to Competition · Some other Business ·
+                 Business Closed · REJECTED BY US
+
+L1 Not Connected  (no L2 — these ARE the disposition the agent taps)
+   Did not pick · Busy in another call · User disconnected the call · Switch off ·
+   Out of Coverage area / Network issue · Call not connected / can not be completed ·
+   Other reason · Incorrect / Invalid number · Incoming calls not available ·
+   Number not in use / does not exist / out of service
 ```
 
-And the stage list, for `STAGE_TO_LEAD_STATUS`:
+**Where it arrives in the payload: `lead_tag_name`, not `lead_status_name`.**
+That is what NeoDove's own "Leads by tags" chart renders. `dispositionFor()`
+therefore reads `tag` first, then `disposition`, then an exact match on
+`dispose_remarks`. Reading `lead_status_name` first would classify nearly every
+real call as unmapped, because that field carried generic values ("Open") in the
+captured payload.
+
+`disposition → our CallStatus`, now derived from the sheet rather than guessed:
+
+| Disposition | `CallStatus` |
+|---|---|
+| every **Connected** L3 (all 26) | `connected` |
+| Did not pick, Busy in another call, User disconnected the call, Call not connected / can not be completed, Other reason | `not_responding` |
+| Switch off, Out of Coverage area / Network issue, Number not in use / does not exist / out of service | `not_reachable` |
+| Incorrect / Invalid number | `incorrect_number` |
+| Incoming calls not available | `no_incoming` |
+
+> **"Short Hang up" is Connected**, per the sheet, and is mapped that way. A
+> hang-up after one second is still a connected call; filing it under
+> `not_responding` would understate the connect rate.
+
+> **"Commercials Explained" is listed under both Warm and Hot.** That is the
+> source data, not a transcription slip, and it is the one place the taxonomy is
+> not a tree. `lead_stage_name` settles it when it disambiguates; otherwise the
+> sheet's first occurrence wins, which is **Warm**. So a Hot bucket filter
+> under-counts it — chosen over the alternative, where Warm and Hot would both
+> count it and their totals would exceed the row count.
+
+**`DISPOSITION_TO_CALL_STATUS` is now the fallback, not the primary.** It still
+covers NeoDove's stock vocabulary, so a second campaign configured with the
+factory list still gets a `call_status` instead of null.
+
+**The disposition is now persisted, not just summarised into `remarks`** (E-236):
+`lead_touchpoints.disposition` / `.disposition_bucket` / `.connect_status`
+per call, plus `dealer_leads.last_disposition*` denormalised for the `/leads`
+filter. `external_stage` / `external_tag` keep NeoDove's own words verbatim, so
+the next vocabulary change is diagnosable without re-reading raw payloads.
+
+And the stage list, for `STAGE_TO_LEAD_STATUS` — still **deliberately empty of
+the account's values**:
 
 ```
 stage → our LeadStatus
-______________ →
-______________ →
+Cold          → (none — recorded as a disposition bucket, not a pipeline stage)
+IN-PROGRESS   → (none)
+Lost          → (none — see the note below)
+Converted     → (none — see the note below)
 ```
+
+The account's stages are coarser than our pipeline (they collapse Warm and Hot
+into one "IN-PROGRESS") and the disposition carries strictly more information,
+so nothing was added here. A disposition **never moves `lead_status`** — it is
+stored, filterable and visible on the lead, and a human still decides Converted
+and Lost. See the note immediately below for why that is not a temporary state.
 
 > Note: `Lost` and `Converted` are deliberately **absent** from the stage map. Our `Lost`
 > transition requires a `lost_reason` from a fixed vocabulary NeoDove has no equivalent

@@ -24,6 +24,11 @@ import {
     touchpointSourceLabel,
 } from "@/lib/lifecycle/touchpointDisplay";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
+import {
+    DISPOSITION_BUCKET_TONE,
+    DISPOSITION_NEUTRAL_TONE,
+    isDispositionBucket,
+} from "@/lib/leads/dispositions";
 
 export type LeadTouchpoint = {
     touchpoint_id: string;
@@ -41,6 +46,11 @@ export type LeadTouchpoint = {
     // rendered as an empty slot.
     recording_url?: string | null;
     external_agent_name?: string | null;
+    // E-236. The classified disposition for THIS call, as opposed to the
+    // lead's latest. Same optionality, same reason.
+    disposition?: string | null;
+    disposition_bucket?: string | null;
+    connect_status?: string | null;
 };
 
 const PAGE = 8;
@@ -170,6 +180,38 @@ export function TouchpointTimeline({
                                                 </span>
                                             </div>
                                         ) : null}
+                                        {/* E-236. Above `remarks`, because the
+                                            disposition is the structured version
+                                            of what that prose line has always
+                                            said — "[NeoDove] Disposition: … ·
+                                            Tag: …". The remark stays: it also
+                                            carries the telecaller's own words,
+                                            which nothing else holds. */}
+                                        {t.disposition && (
+                                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                                <span
+                                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                                                        t.disposition_bucket &&
+                                                        isDispositionBucket(
+                                                            t.disposition_bucket,
+                                                        )
+                                                            ? DISPOSITION_BUCKET_TONE[
+                                                                  t.disposition_bucket
+                                                              ]
+                                                            : DISPOSITION_NEUTRAL_TONE
+                                                    }`}
+                                                >
+                                                    {t.disposition}
+                                                </span>
+                                                <span className="text-[11px] text-gray-400">
+                                                    {t.connect_status === "not_connected"
+                                                        ? "Not connected"
+                                                        : t.disposition_bucket
+                                                          ? `Connected · ${t.disposition_bucket}`
+                                                          : "Connected"}
+                                                </span>
+                                            </div>
+                                        )}
                                         {t.remarks && (
                                             <p className="text-sm text-gray-700 mt-1.5 whitespace-pre-wrap">
                                                 {t.remarks}

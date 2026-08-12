@@ -95,7 +95,11 @@ export default async function LeadDetailPage({ params }: any) {
            -- timeline on any DB without E-226 rather than just omitting the
            -- recording. The jsonb lookup resolves at runtime and yields NULL.
            to_jsonb(t) ->> 'recording_url' AS recording_url,
-           to_jsonb(t) ->> 'external_agent_name' AS external_agent_name
+           to_jsonb(t) ->> 'external_agent_name' AS external_agent_name,
+           -- E-236, same to_jsonb treatment and the same reason.
+           to_jsonb(t) ->> 'disposition' AS disposition,
+           to_jsonb(t) ->> 'disposition_bucket' AS disposition_bucket,
+           to_jsonb(t) ->> 'connect_status' AS connect_status
       FROM lead_touchpoints t
       LEFT JOIN users u ON u.id::text = t.performed_by
      WHERE t.dealer_lead_id = ${id}

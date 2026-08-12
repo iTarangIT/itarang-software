@@ -6,6 +6,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
 import { isIntentBucket } from "@/lib/leads/intentBucket";
+import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
 import {
   BULK_ID_CAP,
   fetchLeadListFacets,
@@ -181,6 +182,15 @@ export const GET = withErrorHandler(async (req: Request) => {
   const limit = Math.min(500, Math.max(1, parseInt(searchParams.get("limit") ?? "25") || 25));
 
   const intentParam = searchParams.get("intent");
+  const connectStatusParam = searchParams.get("connect_status");
+  const bucketParam = searchParams.get("disposition_bucket");
+  // L3 is NOT validated against the CC sheet. A disposition NeoDove sent from a
+  // campaign configured with a different vocabulary is legitimately filterable —
+  // the facets query offers exactly those under "Other (seen in NeoDove)" — and
+  // rejecting them here would make the dropdown offer options it then ignored.
+  // It is safe unvalidated: the predicate is an equality against a parameterised
+  // placeholder, so an unknown string matches nothing rather than doing harm.
+  const dispositionParam = searchParams.get("disposition")?.trim() || null;
   const filters: LeadListFilters = {
     status: searchParams.get("status") || null,
     intent: isIntentBucket(intentParam) ? intentParam : null,
@@ -190,7 +200,13 @@ export const GET = withErrorHandler(async (req: Request) => {
     search: searchParams.get("search")?.trim() || null,
     from: searchParams.get("from")?.trim() || null,
     to: searchParams.get("to")?.trim() || null,
-    hasPhone: searchParams.get("has_phone") === "1",
+    // E-236. L1 and L2 come from closed vocabularies, so an unrecognised value
+    // is dropped rather than queried for — it can only be a stale bookmark or a
+    // hand-edited URL, and silently returning zero rows for it reads as "no such
+    // leads" when the truth is "no such filter".
+    connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,
+    dispositionBucket: isDispositionBucket(bucketParam) ? bucketParam : null,
+    disposition: dispositionParam,
     // Owner / ASM are oversight-only (they were visible solely on the
     // admin+sales_head-gated Leads Info page). The params are IGNORED rather
     // than merely hidden in the UI, so a hand-crafted request can't filter by a
@@ -226,20 +242,36 @@ export const GET = withErrorHandler(async (req: Request) => {
   // lists are not.
   const facets = caps.canSeeOwnerAsm
     ? allFacets
-    : { owners: [], asms: [], sources: allFacets.sources };
+    : {
+        owners: [],
+        asms: [],
+        sources: allFacets.sources,
+        dispositions: allFacets.dispositions,
+      };
 
-  // NeoDove sync state for the rows on this page, so the per-row button can
-  // render "Sent" after a reload instead of resetting to "NeoDove".
+  // NeoDove sync state and the latest call disposition for the rows on this
+  // page, so the per-row button can render "Sent" after a reload instead of
+  // resetting to "NeoDove", and so the disposition being filtered on is visible
+  // on the row that matched it.
   //
   // ⚠ DO NOT FOLD THIS INTO THE MAIN QUERY. Read in a SEPARATE statement that is
-  // allowed to fail, with `neodove_sync_status` named only in the projection.
-  // The column is deliberately absent from schema.ts (E-224): naming it on the
-  // object would expand every bare `db.select().from(dealerLeads)` in the
-  // codebase into an explicit column list and hard-fail ~20 call sites on any DB
-  // without the migration. A missing column fails at PARSE time, so folding it
-  // in would take the whole leads list down on those DBs. Caught and degraded to
-  // "nothing is synced", which is the same shape as the truth there.
+  // allowed to fail, with the columns named only in the projection. They are
+  // deliberately absent from schema.ts (E-224, E-236): naming them on the object
+  // would expand every bare `db.select().from(dealerLeads)` in the codebase into
+  // an explicit column list and hard-fail ~20 call sites on any DB without the
+  // migration. A missing column fails at PARSE time, so folding it in would take
+  // the whole leads list down on those DBs. Caught and degraded to "nothing is
+  // synced and nothing is dispositioned", which is the same shape as the truth
+  // there.
+  //
+  // E-224 and E-236 are separate statements because they can be applied
+  // independently: one try/catch would let a database with E-224 but not E-236
+  // lose its sync badges too.
   const neodoveStatus: Record<string, string> = {};
+  const dispositions: Record<
+    string,
+    { label: string; bucket: string | null; connectStatus: string | null }
+  > = {};
   const pageIds = rows.map((l) => l.id).filter(Boolean) as string[];
   if (pageIds.length) {
     try {
@@ -255,6 +287,29 @@ export const GET = withErrorHandler(async (req: Request) => {
       }
     } catch {
       // E-224 not applied here — leave the map empty.
+    }
+
+    try {
+      const disposed = await db
+        .select({
+          id: dealerLeads.id,
+          label: sql<string | null>`last_disposition`,
+          bucket: sql<string | null>`last_disposition_bucket`,
+          connectStatus: sql<string | null>`last_connect_status`,
+        })
+        .from(dealerLeads)
+        .where(inArray(dealerLeads.id, pageIds));
+      for (const r of disposed) {
+        if (r.label) {
+          dispositions[r.id] = {
+            label: r.label,
+            bucket: r.bucket,
+            connectStatus: r.connectStatus,
+          };
+        }
+      }
+    } catch {
+      // E-236 not applied here — leave the map empty.
     }
   }
 
@@ -276,6 +331,9 @@ export const GET = withErrorHandler(async (req: Request) => {
       ...maskOversight(l),
       _source: "dealer",
       neodove_sync_status: neodoveStatus[l.id] ?? null,
+      last_disposition: dispositions[l.id]?.label ?? null,
+      last_disposition_bucket: dispositions[l.id]?.bucket ?? null,
+      last_connect_status: dispositions[l.id]?.connectStatus ?? null,
     })),
     total: stats.total,
     stats: {
