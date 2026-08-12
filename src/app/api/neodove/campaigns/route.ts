@@ -16,7 +16,14 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { isEndpointWired } from "@/lib/neodove/config";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
+
+export const runtime = "nodejs";
+// `is_wired` reads process.env per request, and on the VPS an endpoint can be
+// added with a PM2 restart and no rebuild — a cached response would keep
+// reporting a campaign as unwired after it had been wired.
+export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
     name: z.string().trim().min(1, "Campaign name is required"),
@@ -85,7 +92,6 @@ export const GET = withErrorHandler(async () => {
                -- an admin which campaign is wired without exposing the URL,
                -- which is the actual credential.
                c.push_endpoint_ref,
-               (c.push_endpoint_ref IS NOT NULL) AS is_wired,
                -- Read through to_jsonb rather than naming the column: a missing
                -- column fails the statement at PARSE time, which would take the
                -- whole campaigns list down on any DB without E-225. Resolved at
@@ -100,7 +106,42 @@ export const GET = withErrorHandler(async () => {
          LIMIT 100
     `);
 
-    return successResponse(rows);
+    // `is_wired` is computed HERE, not in SQL. It used to be
+    // `push_endpoint_ref IS NOT NULL`, which answers a different question: the
+    // database knows a ref was typed, only the server knows whether that env var
+    // is actually populated. A campaign pointing at an unset var was therefore
+    // offered as a valid destination in the Send-to-NeoDove dropdown and failed
+    // at push time, far from the mistake.
+    //
+    // `endpoint_shared_with` names the other campaigns pointing at the SAME env
+    // var. That is not a warning about tidiness: the URL *is* the routing —
+    // nothing in the push body names a campaign — so leads sent to either
+    // campaign land in the same place in NeoDove, and the destination dropdown
+    // would otherwise present a choice that isn't one.
+    const list = rows as unknown as {
+        id: string;
+        name: string;
+        push_endpoint_ref: string | null;
+    }[];
+
+    const byRef = new Map<string, string[]>();
+    for (const c of list) {
+        if (!c.push_endpoint_ref) continue;
+        byRef.set(c.push_endpoint_ref, [
+            ...(byRef.get(c.push_endpoint_ref) ?? []),
+            c.name,
+        ]);
+    }
+
+    return successResponse(
+        list.map((c) => ({
+            ...c,
+            is_wired: isEndpointWired(c.push_endpoint_ref),
+            endpoint_shared_with: c.push_endpoint_ref
+                ? (byRef.get(c.push_endpoint_ref) ?? []).filter((n) => n !== c.name)
+                : [],
+        })),
+    );
 });
 
 export const POST = withErrorHandler(async (req: Request) => {

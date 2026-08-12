@@ -33,6 +33,11 @@ import {
     INTENT_BUCKET_TONE,
     intentBucketOf,
 } from "@/lib/leads/intentBucket";
+import {
+    DISPOSITION_BUCKET_TONE,
+    DISPOSITION_NEUTRAL_TONE,
+    isDispositionBucket,
+} from "@/lib/leads/dispositions";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 import type { LeadListRow } from "@/lib/leads/leadListQuery";
 
@@ -82,7 +87,14 @@ function formatNextCall(date: string | null): string | null {
     return `in ${Math.floor(hrs / 24)}d`;
 }
 
-export type LeadRow = LeadListRow & { neodove_sync_status?: string | null };
+export type LeadRow = LeadListRow & {
+    neodove_sync_status?: string | null;
+    // E-236. Read in a separate, failure-tolerant statement by the API route —
+    // absent, not null, on a database without the migration.
+    last_disposition?: string | null;
+    last_disposition_bucket?: string | null;
+    last_connect_status?: string | null;
+};
 
 type Props = {
     rows: LeadRow[];
@@ -390,6 +402,37 @@ export function LeadsTable({
 
                                         <td className="px-4 py-3 align-middle text-[11px] tabular-nums text-gray-600">
                                             {fmtDate(row.last_touchpoint_at)}
+                                            {/* The call-centre disposition for the
+                                                most recent call (E-236). It sits
+                                                under Last Touch because it IS the
+                                                last touch — and because a filter you
+                                                cannot see on the row that matched it
+                                                is indistinguishable from a broken
+                                                filter. */}
+                                            {row.last_disposition && (
+                                                <span
+                                                    className={`${CHIP_BASE} mt-1 ${
+                                                        row.last_disposition_bucket &&
+                                                        isDispositionBucket(
+                                                            row.last_disposition_bucket,
+                                                        )
+                                                            ? DISPOSITION_BUCKET_TONE[
+                                                                  row.last_disposition_bucket
+                                                              ]
+                                                            : DISPOSITION_NEUTRAL_TONE
+                                                    }`}
+                                                    title={
+                                                        row.last_connect_status ===
+                                                        "not_connected"
+                                                            ? "Not connected"
+                                                            : row.last_disposition_bucket
+                                                              ? `Connected › ${row.last_disposition_bucket}`
+                                                              : "Connected"
+                                                    }
+                                                >
+                                                    {row.last_disposition}
+                                                </span>
+                                            )}
                                             {nextCall && (
                                                 <span
                                                     className={`mt-1 flex items-center gap-1 ${

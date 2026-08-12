@@ -25,6 +25,7 @@ import {
   FileSpreadsheet,
   Loader2,
   ChevronDown,
+  Download,
 } from "lucide-react";
 import { SendToNeodoveModal } from "@/components/leads/send-to-neodove-modal";
 import { toast } from "sonner";
@@ -40,7 +41,6 @@ import {
 import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
 import { CampaignsTable } from "@/components/leads/campaigns-table";
 import { CostAnalyticsView } from "@/components/leads/cost-analytics-view";
-import { AddLeadModal } from "@/components/leads/add-lead-modal";
 import {
   capabilitiesFor,
   LEAD_ASSIGNEE_ROLES,
@@ -637,7 +637,11 @@ function UploadModal({
 
 // ─── Pagination ───────────────────────────────────────────────
 
-const PAGE_SIZES = [10, 25, 50, 100];
+// Up to 500 because that is what GET /api/dealer-leads caps `limit` at. Ticking
+// an arbitrary number of leads — 65, 78 — means being able to SEE that many at
+// once, and at 10 a page it takes eight page turns. (The selection does survive
+// paging, so that always worked; it was just miserable.)
+const PAGE_SIZES = [10, 25, 50, 100, 200, 500];
 
 function Pagination({
   page,
@@ -1152,7 +1156,6 @@ export default function LeadsUnifiedPage() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
   const [showUpload, setShowUpload] = useState(false);
-  const [showAddLead, setShowAddLead] = useState(false);
 
   const [leads, setLeads] = useState<any[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
@@ -1195,8 +1198,15 @@ export default function LeadsUnifiedPage() {
     return () => window.clearTimeout(t);
   }, [draft]);
 
-  const setFilter = useCallback((key: keyof LeadFilters, value: string | boolean) => {
+  const setFilter = useCallback((key: keyof LeadFilters, value: string) => {
     setDraft((d) => ({ ...d, [key]: value }));
+  }, []);
+  // The three disposition levels narrow each other, so picking one has to clear
+  // the narrower ones in the SAME update — three sequential setFilter calls
+  // would each debounce and fire an intermediate request for a filter
+  // combination the operator never asked for.
+  const patchFilters = useCallback((patch: Partial<LeadFilters>) => {
+    setDraft((d) => ({ ...d, ...patch }));
   }, []);
   const setDateRange = useCallback((from: string, to: string) => {
     setDraft((d) => ({ ...d, from, to }));
@@ -1331,7 +1341,12 @@ export default function LeadsUnifiedPage() {
   // Rows per page. Was hardcoded to 10, which is why "select all on this page"
   // never felt like a bulk action. Changing it resets to page 1 — staying on
   // page 40 of a 10-per-page list makes no sense at 100 per page.
-  const [LIMIT, setLimit] = useState(10);
+  //
+  // Defaults to 25, not 10. This is a screen whose main job is picking a set of
+  // leads and doing something to all of them, and ten rows is below the size of
+  // a normal selection — it made every bulk action feel like it had a limit of
+  // ten, which was the complaint.
+  const [LIMIT, setLimit] = useState(25);
 
   const fetchLeads = useCallback(
     async (
@@ -1405,10 +1420,14 @@ export default function LeadsUnifiedPage() {
     }
   }, []);
 
+  // LIMIT is in here on purpose. Without it, changing rows-per-page while
+  // already on page 1 did nothing at all: the setter also calls setLeadsPage(1),
+  // which is a no-op from page 1, so no dependency changed and no refetch ran.
+  // The dropdown said 50 and the table kept showing 25.
   useEffect(() => {
     if (tab === "leads") fetchLeads(leadsPage, applied);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
-  }, [tab, leadsPage, convertedPage, search, applied]);
+  }, [tab, leadsPage, convertedPage, search, applied, LIMIT]);
 
   // While the AI dialer is running, poll the leads list every 2s so the
   // `current_status` column reflects lead transitions (pending → calling
@@ -1447,6 +1466,110 @@ export default function LeadsUnifiedPage() {
       toast.error((e as Error).message);
     } finally {
       setSelectingAll(false);
+    }
+  }, [applied]);
+
+  // "Select exactly N" — type a number, get that many leads.
+  //
+  // Takes the FIRST n of the same id list selectAllMatching uses, which is
+  // ordered identically to the visible table (last_touchpoint_at DESC, then
+  // created_at DESC). So "first 65" means the 65 rows you would reach by
+  // scrolling, not an arbitrary 65 — that correspondence is the whole reason
+  // this is trustworthy enough to hand to a bulk action.
+  //
+  // REPLACES the selection rather than adding to it: the input reads as "how
+  // many do I want selected", so typing 65 must end with 65 selected, not 115.
+  const selectFirstN = useCallback(
+    async (n: number) => {
+      if (!Number.isFinite(n) || n < 1) return;
+      setSelectingAll(true);
+      try {
+        const params = toSearchParams(applied, 1, LIMIT);
+        params.set("ids_only", "1");
+        const res = await fetch(`/api/dealer-leads?${params.toString()}`);
+        const data = await res.json();
+        if (!res.ok || !data?.success) {
+          throw new Error(data?.error?.message ?? "Could not select leads.");
+        }
+        const ids: string[] = data.ids ?? [];
+        const take = ids.slice(0, n);
+        setSelectedLeadIds(new Set<string>(take));
+
+        // Grow the page so the selection is VISIBLE. Selecting 100 while the
+        // table shows 25 is correct but reads as broken — the bar says 100 and
+        // you can count 25 ticks. Jump to the smallest page size that holds
+        // them (or the largest we offer, if they asked for more than that).
+        // Changing LIMIT does not clear the selection: that only happens when
+        // `applied` or `tab` changes, and neither does here.
+        if (take.length > LIMIT) {
+          const fits = PAGE_SIZES.find((size) => size >= take.length);
+          setLimit(fits ?? PAGE_SIZES[PAGE_SIZES.length - 1]);
+          setLeadsPage(1);
+        }
+        // Only a cap if it actually bit — asking for 65 out of 3,255 is not
+        // capped just because the id fetch stops at 5,000.
+        setSelectionCap(take.length < n && data.capped ? data.cap : null);
+        if (take.length < n) {
+          toast.success(
+            `Selected ${take.length.toLocaleString("en-IN")} — that is all that matched.`,
+          );
+        }
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setSelectingAll(false);
+      }
+    },
+    [applied, LIMIT],
+  );
+
+  // CSV of every lead matching the ACTIVE filters — not the page, not the
+  // selection. Same params the table fetched with, so the sheet is exactly what
+  // is on screen, only complete.
+  const [exportingCsv, setExportingCsv] = useState(false);
+  const exportFilteredCsv = useCallback(async () => {
+    setExportingCsv(true);
+    try {
+      // page/limit are irrelevant to the export but toSearchParams is the one
+      // place that knows every filter's query-param name; passing 1 and 1 keeps
+      // that single source of truth rather than re-listing the params here.
+      const params = toSearchParams(applied, 1, 1);
+      params.delete("page");
+      params.delete("limit");
+      const res = await fetch(`/api/dealer-leads/export?${params.toString()}`);
+      if (!res.ok) {
+        // The route returns JSON on failure and CSV on success, so read as text
+        // and show whatever it said rather than downloading an error page.
+        const detail = await res.text().catch(() => "");
+        throw new Error(detail.slice(0, 200) || "Export failed");
+      }
+      const rowCount = Number(res.headers.get("X-Export-Rows") ?? 0);
+      const matched = Number(res.headers.get("X-Export-Total") ?? 0);
+      const truncated = res.headers.get("X-Export-Truncated") === "1";
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // Server already set a dated filename in Content-Disposition; this is the
+      // fallback for browsers that ignore it on a blob URL.
+      a.download = "leads-export.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+
+      if (truncated) {
+        toast.warning(
+          `Exported the first ${rowCount.toLocaleString("en-IN")} of ${matched.toLocaleString("en-IN")} matches. Narrow the filters to get the rest.`,
+        );
+      } else {
+        toast.success(
+          `Exported ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"}.`,
+        );
+      }
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setExportingCsv(false);
     }
   }, [applied]);
 
@@ -1689,13 +1812,6 @@ export default function LeadsUnifiedPage() {
         />
       )}
 
-      {showAddLead && (
-        <AddLeadModal
-          onClose={() => setShowAddLead(false)}
-          onSuccess={() => fetchLeads(1, applied)}
-        />
-      )}
-
       <DialerStartModal
         isOpen={dialerModalOpen}
         onClose={() => setDialerModalOpen(false)}
@@ -1747,18 +1863,36 @@ export default function LeadsUnifiedPage() {
               <Upload className="w-4 h-4" /> Import
             </button>
           )}
-          {/* Single-lead entry into the PROSPECT pool (dealer_leads) — the
-              table this tab shows. Distinct from "New Lead" on the right, which
-              opens the 5-step loan-application wizard against `leads`. */}
+          {/* Exports what the FILTERS match, not what is selected — the bulk
+              bar's Export CSV already covers a selection. Uses `applied`, the
+              debounced filter state the table itself is showing, so the sheet
+              and the screen are the same set of leads. */}
           {tab === "leads" && (
             <button
-              onClick={() => setShowAddLead(true)}
-              title="Add one dealer prospect to the calling pool"
-              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm"
+              onClick={exportFilteredCsv}
+              disabled={exportingCsv}
+              title="Download every lead matching the current filters"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-50"
             >
-              <Plus className="w-4 h-4" /> Add Lead
+              {exportingCsv ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              Export CSV
             </button>
           )}
+          {/* "Add Lead" stood here — single-lead entry into the PROSPECT pool
+              (dealer_leads), as distinct from "New Lead" on the right, which
+              opens the 5-step loan-application wizard against `leads`. Removed
+              on request, along with its now-unreachable modal render, state and
+              import.
+              To restore: re-import AddLeadModal from
+              @/components/leads/add-lead-modal, add `showAddLead` state, put the
+              button back here, and render the modal beside DialerStartModal. The
+              component itself and POST /api/dealer-leads are untouched — leads
+              still arrive from Import, Bulk Lead Upload, the scraper and
+              NeoDove. */}
           {/* ── Download button shown only on Converted tab ── */}
           {tab === "converted" && <DownloadConvertedLeadsButton />}
           <Link href="/leads/new">
@@ -1833,6 +1967,7 @@ export default function LeadsUnifiedPage() {
           <LeadsFilterBar
             draft={draft}
             onChange={setFilter}
+            onPatch={patchFilters}
             onClear={clearFilters}
             facets={facets}
             caps={caps}
@@ -1899,6 +2034,37 @@ export default function LeadsUnifiedPage() {
             />
           )}
 
+          {/* Rows-per-page, ABOVE the table as well as below it.
+              It already existed at the bottom of the list, in small grey text
+              under several hundred pixels of rows — so the practical experience
+              was "I can only ever select ten", and the fix for it was invisible
+              at the moment you needed it. Selection is made here; the control
+              that governs how much you can select belongs here too. */}
+          <div className="mt-3 flex items-center justify-end gap-2 px-1">
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page
+              <select
+                value={LIMIT}
+                onChange={(e) => {
+                  setLimit(Number(e.target.value));
+                  setLeadsPage(1);
+                }}
+                className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {leads.length > 0 && leadsTotal > leads.length && (
+              <span className="text-xs text-gray-400">
+                · tick the header box to take all {leads.length} on this page
+              </span>
+            )}
+          </div>
+
           <LeadsTable
             rows={leads as LeadRow[]}
             loading={leadsLoading}
@@ -1942,6 +2108,7 @@ export default function LeadsUnifiedPage() {
             }
             allMatchingSelected={selectedLeadIds.size >= leadsTotal}
             selectAllMatching={selectAllMatching}
+            selectFirstN={selectFirstN}
             selectingAll={selectingAll}
             cappedAt={selectionCap}
             onClear={() => {

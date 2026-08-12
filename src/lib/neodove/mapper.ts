@@ -20,6 +20,10 @@ import { createHash } from "node:crypto";
 // so it can be unit-tested. Same implementation either way — dedupe.ts
 // re-exports it.
 import { normalizePhone } from "@/lib/leads/dedupe-rules";
+import {
+    classifyDisposition,
+    type ClassifiedDisposition,
+} from "@/lib/leads/dispositions";
 import type { CallStatus, TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import type {
@@ -405,11 +409,72 @@ export function touchpointTypeFor(eventType: NeodoveEventType): TouchpointType {
     }
 }
 
-// NeoDove dispositions are configured per-account in their UI, so this is a
-// best-effort map over the common defaults, not an exhaustive one. An
-// unrecognised value returns null — the touchpoint is still written, just
-// without a call_status, which is honest. Extend from the real vocabulary once
-// the account's disposition list is known.
+/**
+ * The disposition this event carries, classified against the CC team's sheet.
+ *
+ * WHY `tag` IS READ FIRST. The live account puts the sheet's L3 values in
+ * `lead_tag_name` — that is what NeoDove's own "Leads by tags" chart renders
+ * (Loan Procedure Issue, Price High, REJECTED BY US, Onboarding Done) — while
+ * `lead_status_name`, which this module calls `disposition`, carried generic
+ * values like "Open" in the captured payload. Reading `disposition` first would
+ * therefore classify almost every real call as unmapped.
+ *
+ * `remarks` (`dispose_remarks`) is tried last and ONLY for an exact match: some
+ * accounts have the agent type the disposition rather than pick it. It is never
+ * the unknown-value fallback, because that field is prose and storing a whole
+ * sentence as a disposition label would poison the filter dropdown.
+ *
+ * ONLY `tag` MAY SUPPLY AN UNMAPPED VALUE. When nothing matches the sheet, the
+ * fallback reads `tag` alone — never `disposition`. `disposition` is
+ * `lead_status_name`, and NeoDove's status vocabulary is Open / Follow-Up /
+ * Closed: real values, but statuses, not dispositions. Measured against 2,178
+ * stored webhooks, allowing them through produced 31 leads whose "disposition"
+ * was "Open", "Follow-Up", "Closed" or the bare code "6" — each of which would
+ * then appear in the filter dropdown as though a telecaller had chosen it. They
+ * are still classified when they happen to match the sheet; they just cannot
+ * invent a disposition of their own.
+ *
+ * Returns null only when the event named no usable disposition at all.
+ */
+export function dispositionFor(
+    event: NeodoveInboundEvent,
+): ClassifiedDisposition | null {
+    const hints = { stage: event.stage, callConnected: event.callConnected };
+    for (const raw of [event.tag, event.disposition, event.remarks]) {
+        const hit = classifyDisposition(raw, hints);
+        if (hit?.isKnown) return hit;
+    }
+    // Nothing matched the sheet. Keep an unmapped TAG rather than discarding it
+    // — it is the signal that NeoDove's disposition list has moved, and it is
+    // only visible if it is stored.
+    return classifyDisposition(event.tag, hints);
+}
+
+// The sheet's ten Not Connected reasons → our CallStatus. The connected side
+// needs no table: a disposition the sheet files under Connected means the call
+// connected, by definition.
+//
+// Note "Short Hang up" is NOT here. The sheet files it under Connected › Cold,
+// and it is right to — a hang-up after one second is still a connected call,
+// and counting it as not_responding would understate the connect rate.
+const NOT_CONNECTED_TO_CALL_STATUS: Record<string, CallStatus> = {
+    "Did not pick": "not_responding",
+    "Busy in another call": "not_responding",
+    "User disconnected the call": "not_responding",
+    "Call not connected / can not be completed": "not_responding",
+    "Other reason": "not_responding",
+    "Switch off": "not_reachable",
+    "Out of Coverage area / Network issue": "not_reachable",
+    "Number not in use / does not exist / out of service": "not_reachable",
+    "Incorrect / Invalid number": "incorrect_number",
+    "Incoming calls not available": "no_incoming",
+};
+
+// FALLBACK ONLY, for values outside the CC sheet — NeoDove's factory defaults,
+// and whatever a second campaign's disposition list turns out to hold. The
+// sheet (src/lib/leads/dispositions.ts) is consulted first and settles almost
+// everything; this exists so a lead worked in a campaign configured with the
+// stock vocabulary still gets a call_status instead of null.
 const DISPOSITION_TO_CALL_STATUS: Record<string, CallStatus> = {
     interested: "connected",
     connected: "connected",
@@ -432,10 +497,30 @@ const DISPOSITION_TO_CALL_STATUS: Record<string, CallStatus> = {
 };
 
 export function callStatusFor(event: NeodoveInboundEvent): CallStatus | null {
-    if (event.eventType === "call_not_connected") return "not_responding";
+    const classified = dispositionFor(event);
+    const known = classified?.isKnown ? classified : null;
 
-    // Disposition text wins when we can resolve it — it carries a reason.
-    const key = (event.disposition ?? "").trim().toLowerCase();
+    // A `call_not_connected` event cannot be overturned by a disposition:
+    // NeoDove fires it from the dialler, not from a dropdown, so when the two
+    // disagree the mechanical fact wins and the tag is treated as stale. The
+    // disposition still gets to say WHY, which is the part that was missing —
+    // this used to return a flat `not_responding` for every unanswered call.
+    if (event.eventType === "call_not_connected") {
+        const reason =
+            known?.connectStatus === "not_connected"
+                ? NOT_CONNECTED_TO_CALL_STATUS[known.label]
+                : undefined;
+        return reason ?? "not_responding";
+    }
+
+    if (known) {
+        if (known.connectStatus === "connected") return "connected";
+        const reason = NOT_CONNECTED_TO_CALL_STATUS[known.label];
+        if (reason) return reason;
+    }
+
+    // Outside the sheet: fall back to the stock-vocabulary map.
+    const key = (classified?.label ?? event.disposition ?? "").trim().toLowerCase();
     const mapped = key ? DISPOSITION_TO_CALL_STATUS[key] : undefined;
     if (mapped) return mapped;
 
