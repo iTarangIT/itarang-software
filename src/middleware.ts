@@ -164,9 +164,57 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity for this request. `getUser()` used to be called here, and it is a
+  // network round-trip to Supabase on EVERY request — including every /api/*
+  // call, because the early-return for those sits below this point. A page that
+  // fires five API calls on mount therefore paid the auth hop six times.
+  //
+  // `getClaims()` verifies the session JWT locally against the project's cached
+  // JWKS when the token is signed with an ASYMMETRIC key, turning that hop into
+  // an in-process WebCrypto signature check. It still goes through getSession()
+  // internally, so the session-cookie refresh wired into the cookie adapter
+  // above — which the matcher comment depends on for /api/files/* — still
+  // happens.
+  //
+  // IMPORTANT: the speedup is conditional on the Supabase project actually
+  // using asymmetric JWT signing keys. If the project still signs with the
+  // legacy symmetric secret (HS*), the SDK detects that and falls back to a
+  // getUser() round-trip *internally*, then returns the claims normally — so
+  // this code takes the claims branch either way and behaviour is unchanged,
+  // just not faster. That is why this is safe to ship ahead of a key rotation
+  // rather than gated behind one; it is also why measuring TTFB is the only way
+  // to confirm the win landed.
+  //
+  // Two deliberate properties of the explicit fallback below:
+  //   * No session at all → getClaims() returns null data with a null error, so
+  //     `user` stays null and we do NOT call getUser(). An unauthenticated
+  //     request must not be made to pay an extra round-trip.
+  //   * A real verification failure (bad signature, expired token the refresh
+  //     couldn't save) surfaces as an error → fall back to the authoritative
+  //     getUser() so the outcome matches the old code exactly.
+  const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+  const claims = claimsData?.claims;
+
+  let user: {
+    id: string;
+    email?: string;
+    app_metadata?: unknown;
+    user_metadata?: unknown;
+  } | null = null;
+
+  if (claims?.sub) {
+    user = {
+      id: claims.sub,
+      email: typeof claims.email === "string" ? claims.email : undefined,
+      app_metadata: claims.app_metadata,
+      user_metadata: claims.user_metadata,
+    };
+  } else if (claimsError) {
+    const {
+      data: { user: fetchedUser },
+    } = await supabase.auth.getUser();
+    user = fetchedUser;
+  }
 
   const path = request.nextUrl.pathname;
 
@@ -377,6 +425,9 @@ export async function middleware(request: NextRequest) {
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
+    // E-230 — the OEM price register. Role is re-asserted by the API (ceo,
+    // admin); listing it here is the "you must be signed in" half.
+    path.startsWith("/oem-pricing") ||
     path.startsWith("/deals") ||
     path.startsWith("/leads") ||
     path.startsWith("/approvals") ||
@@ -474,6 +525,16 @@ export async function middleware(request: NextRequest) {
     return finalize(response);
   }
 
+  // E-230 — the OEM price register moved off /ceo onto the OEM tab, so that
+  // Admin can reach it as the requirement asks. It therefore lost the gate it
+  // used to inherit: /ceo IS a roleDashboards prefix, and /oem-pricing is not,
+  // so without this it would fall through to the permissive default at the
+  // bottom of this function and render for any signed-in user. The API 403s
+  // either way — this stops the page from rendering at all.
+  if (path.startsWith("/oem-pricing") && role !== "ceo" && role !== "admin") {
+    return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
+  }
+
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
     // NBFC Risk Head dashboard — the second-approver surface of the
@@ -558,6 +619,16 @@ export const config = {
     // rest of the app (which is refreshed on each request) keeps working.
     // Middleware passes /api/* through without a redirect (isPublicRoute), so
     // this only adds the refresh, never a dashboard bounce.
-    "/((?!_next/static|_next/image|favicon.ico|(?!api/).*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
+    // `fonts/` is excluded outright. The brand fonts used to be served by
+    // fonts.gstatic.com, so they never touched this middleware at all; once
+    // they moved into public/fonts/ (to get a third-party render-blocking
+    // request off the critical path) they became same-origin requests, and
+    // every woff2 would otherwise pay a full auth check on the critical path
+    // of the first paint. They are public static files with no session
+    // semantics — nothing here has anything to say about them. Note this
+    // could NOT be handled by adding woff2 to the extension list below: that
+    // branch is guarded by `(?!api/)`, and its purpose is the authenticated
+    // file proxy, which is a different concern.
+    "/((?!_next/static|_next/image|favicon.ico|fonts/|(?!api/).*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
   ],
 };

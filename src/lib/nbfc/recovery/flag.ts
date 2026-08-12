@@ -23,6 +23,7 @@ import {
   nbfcRecoveryPipeline,
   auditLogs,
 } from "@/lib/db/schema";
+import { createRecoveryBattery } from "@/lib/nbfc/recovery/battery";
 
 /**
  * Optional caller-supplied entity context — set when the flag is raised from
@@ -142,14 +143,48 @@ export async function flagLoanForRecovery(
         ),
       )
       .limit(1);
-    if (existingPipeline.length === 0) {
-      await db.insert(nbfcRecoveryPipeline).values({
+
+    let pipelineId = existingPipeline[0]?.id ?? null;
+    if (!pipelineId) {
+      const [created] = await db
+        .insert(nbfcRecoveryPipeline)
+        .values({
+          tenant_id: input.tenant_id,
+          battery_serial: input.battery_serial,
+          stage: "needs_inspection",
+          created_at: now,
+          updated_at: now,
+        })
+        .returning({ id: nbfcRecoveryPipeline.id });
+      pipelineId = created.id;
+    }
+
+    // [E-232] Seed the battery master alongside the workflow row, so the
+    // asset exists from the moment recovery is flagged rather than appearing
+    // for the first time at intake.
+    //
+    // ONLY on a real serial. The `else` branch below invents a
+    // `LOAN-<uuid>` placeholder to satisfy the pipeline's keying, and writing
+    // that into recovery_batteries would put a serial no operator can read off
+    // a casing into the asset register — under a GLOBAL unique constraint,
+    // permanently. The battery master stays empty until somebody knows which
+    // battery this is.
+    //
+    // Best-effort, like the rest of step 5: a failure here must not undo an
+    // approved recovery flag, which is the irreversible part of this action.
+    try {
+      await createRecoveryBattery({
         tenant_id: input.tenant_id,
-        battery_serial: input.battery_serial,
-        stage: "needs_inspection",
-        created_at: now,
-        updated_at: now,
+        serial: input.battery_serial,
+        loan_sanction_id: input.loan_sanction_id,
+        recovery_pipeline_id: pipelineId,
+        recovery_date: flaggedAt.toISOString(),
       });
+    } catch (err) {
+      console.warn(
+        "[flagLoanForRecovery] battery master seed skipped:",
+        err instanceof Error ? err.message : err,
+      );
     }
   } else {
     // Per unit logic step 5, the pipeline row is created for the linked

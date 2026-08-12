@@ -535,3 +535,173 @@ export async function startDriveExpenseTicker() {
     )}m) started in-process`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// E-230 — OEM reference price sweep.
+//
+// Warns Admin and CEO before a price's validity window closes, and reminds them
+// about models that have no price in force at all.
+//
+// An in-process ticker for the same reason as the Zoho and Drive ones above:
+// Vercel crons do not fire on the PM2 boxes, and there is no other driver. It
+// matters more here than it looks, because the thing being watched is invisible
+// when it goes wrong — a lapsed reference price throws no error and turns
+// nothing red; every quotation for that model just silently starts going to the
+// CEO for approval. Nobody discovers that by watching logs.
+//
+// Six-hourly rather than daily so a box restarted each evening still gets a
+// pass in. Re-running is cheap and safe: the expiry half is stamped per price
+// line and the backlog half is behind a one-week cooldown, so extra ticks
+// notify nobody twice.
+// ---------------------------------------------------------------------------
+export async function startOemPriceSweepTicker() {
+  // Skip on Vercel — a cron entry would own it there.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process double-notifying.
+  if (process.env.ENABLE_OEM_PRICE_SWEEP === "0") return;
+
+  const SWEEP_INTERVAL_MS =
+    Number(process.env.OEM_PRICE_SWEEP_INTERVAL_MS || "") || 6 * 60 * 60_000;
+  const WARN_DAYS = Number(process.env.OEM_PRICE_WARN_DAYS || "") || 14;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the Drizzle
+      // graph is never pulled into the Edge compile.
+      const { runOemPriceSweep } = await import("@/lib/leads/oemPriceSweep");
+      const r = await runOemPriceSweep({ warnDays: WARN_DAYS });
+
+      // Log only when something happened. A fully-priced register should not
+      // write a line every six hours forever.
+      if (r.expiring > 0 || r.missing_notified) {
+        console.log(
+          `[instrumentation:oem-price-sweep] warned=${r.expiring} ` +
+            `covered=${r.expiring_covered} missing=${r.missing} ` +
+            `lapsed=${r.missing_lapsed} missingNotified=${r.missing_notified}`,
+        );
+      }
+      if (r.error) {
+        console.error(`[instrumentation:oem-price-sweep] sweep failed: ${r.error}`);
+      }
+    } catch (err) {
+      // runOemPriceSweep already swallows its own failures; this catches the
+      // import itself (e.g. a DB with no E-230 columns) so a broken sweep can
+      // never take the ticker, or the boot, down with it.
+      console.error(
+        "[instrumentation:oem-price-sweep] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Last in the staggered kickoff queue — dialer (5s), Zoho (20s), dispatch
+  // (35s), gateway (45s), dedup (60s), drive (90s). Nothing here is urgent to
+  // the minute.
+  const kickoff = setTimeout(tick, 120_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, SWEEP_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] oem-price-sweep (${Math.round(
+      SWEEP_INTERVAL_MS / 60_000,
+    )}m, ${WARN_DAYS}d notice) started in-process`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Battery auction — open scheduled lots, close elapsed ones, pick winners.
+// ---------------------------------------------------------------------------
+// [E-234] The Battery Auction BRD calls for a BullMQ repeatable job. BullMQ is
+// dead code here: `callQueue.add()` is never invoked, ecosystem.prod.config.js
+// declares no worker process at all, and the sandbox worker is deliberately
+// dormant (autorestart:false, after a 1136-restart loop). Vercel crons do not
+// fire on the pm2 VPS either. An in-process ticker is the only mechanism that
+// demonstrably runs in BOTH environments — the same conclusion, for the same
+// reasons, as startBuybackDispatchTicker above.
+//
+// 15s, because the shortest legal auction window is 2 HOURS and the anti-snipe
+// extension is 120s. A lot must not sit visibly "live" past its deadline for
+// longer than a bidder would notice, and 15s is comfortably inside that while
+// costing one cheap indexed query per tick (auction_lots_open_due_idx and
+// auction_lots_close_due_idx are both partial, so they only cover the handful
+// of lots actually in play).
+export async function startAuctionTicker() {
+  const TICK_INTERVAL_MS = 15_000;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { runAuctionTick } = await import("@/lib/nbfc/auction/scheduler");
+      const r = await runAuctionTick();
+
+      if (r.opened.length > 0 || r.closed.length > 0) {
+        console.log(
+          `[instrumentation:auction] opened=${r.opened.length} closed=${r.closed.length}` +
+            (r.closed.length > 0
+              ? ` (${r.closed
+                  .map(
+                    (c) =>
+                      `${c.lot_code}:${c.winning_amount ?? "no-bid"}${c.reserve_met ? "" : " RESERVE-NOT-MET"}`,
+                  )
+                  .join(", ")})`
+              : ""),
+        );
+      }
+
+      // [E-234] The publish fan-out. Logged only when it did something, and
+      // `failed` is called out separately from `skipped`: a skip is a dealer
+      // with no email or the SMS gate being closed (expected), a failure is a
+      // provider that rejected us (not).
+      for (const f of r.fanned_out) {
+        console.log(
+          `[instrumentation:auction] ${f.lot_code} announced to ${f.dealers} dealer(s): ` +
+            `sent=${f.sent} failed=${f.failed} skipped=${f.skipped}` +
+            (f.remaining > 0 ? ` — ${f.remaining} dealer(s) still queued` : ""),
+        );
+      }
+
+      // A lot that closed with bids but created no settlement is the one
+      // outcome that needs a human: the money is agreed and nothing recorded
+      // it. Loud, because it is silent everywhere else.
+      const stuck = r.closed.filter(
+        (c) => c.winning_bid_id !== null && c.reserve_met && !c.settlement_created,
+      );
+      if (stuck.length > 0) {
+        console.error(
+          `[instrumentation:auction] ${stuck.length} lot(s) closed with a winning bid but NO settlement ` +
+            `(${stuck.map((c) => c.lot_code).join(", ")}) — most likely seller_tenant_id is null on a ` +
+            `pre-E-232 lot. Investigate.`,
+        );
+      }
+    } catch (err) {
+      // Never let one bad tick kill the ticker — the lots are still in the
+      // table and the next tick retries them.
+      console.error(
+        "[instrumentation:auction] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered behind the dialer (5s), Zoho (20s) and buyback-dispatch (35s).
+  const kickoff = setTimeout(tick, 45_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] auction scheduler (15s) started in-process");
+}

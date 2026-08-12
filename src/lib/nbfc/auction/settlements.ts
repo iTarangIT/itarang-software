@@ -169,42 +169,61 @@ export async function patchSettlementStatus(
     .where(eq(auctionSettlements.id, current.id))
     .returning();
 
-  // 5. On delivered: best-effort mark the linked recovery_pipeline row
-  //    'resold'. The link is via the lot's lot_code → battery_serial; in this
-  //    unit's data shape an internal job populates the settlement so we
-  //    simply look up the lot and find a recovery_pipeline row owned by the
-  //    seller tenant whose battery_serial encodes the lot. To keep this unit
-  //    self-contained, we match by tenant_id only when no battery hint is
-  //    available — but only update one row to avoid clobbering siblings.
+  // 5. On delivered: mark every recovery_pipeline row behind this lot 'resold'.
+  //
+  //    [E-232] This used to match `nbfc_recovery_pipeline.battery_serial` against
+  //    `auction_lots.lot_code`. Those two values are never equal — createLot.ts
+  //    derives lot_code as "LOT-" + the first 8 hex of the PIPELINE uuid, and
+  //    never writes it into battery_serial — so the lookup returned zero rows
+  //    every single time and no battery has ever actually been marked resold.
+  //    It failed silently because the whole block was best-effort.
+  //
+  //    The join now runs on a real key. auction_lot_items (E-234) is the
+  //    eventual source of truth for lot -> battery and it handles the
+  //    multi-battery lots this BRD introduces; until it exists the single-battery
+  //    path resolves through nbfc_recovery_pipeline.battery_id.
   if (toStatus === "delivered") {
-    const lotRows = await db
-      .select({ lot_code: auctionLots.lot_code })
-      .from(auctionLots)
-      .where(eq(auctionLots.id, current.lot_id))
-      .limit(1);
-    const lotCode = lotRows[0]?.lot_code ?? null;
+    // The presence check has to happen in JS, not in the statement. Postgres
+    // resolves table names at PARSE time, so a `to_regclass(...) IS NOT NULL`
+    // guard inside a subquery does not save a statement that names a table the
+    // database does not have — it still raises 42P01. Probe first, then choose
+    // which statement to send.
+    const probe = await db.execute(
+      sql`SELECT to_regclass('public.auction_lot_items') AS t`,
+    );
+    const hasLotItems =
+      (probe as unknown as Array<{ t: string | null }>)[0]?.t != null;
 
-    if (lotCode) {
-      // Update the most recent recovery row for this seller tenant whose
-      // battery_serial matches the lot_code (single-battery lots) — falling
-      // back to the most recent row in the pipeline for this tenant.
-      const candidates = await db
-        .select({ id: nbfcRecoveryPipeline.id })
-        .from(nbfcRecoveryPipeline)
-        .where(
-          and(
-            eq(nbfcRecoveryPipeline.tenant_id, input.caller_tenant_id),
-            eq(nbfcRecoveryPipeline.battery_serial, lotCode),
-          ),
-        )
-        .limit(1);
+    let resoldCount = 0;
+    if (hasLotItems) {
+      const resoldRows = await db.execute(sql`
+        UPDATE nbfc_recovery_pipeline p
+           SET stage = 'resold', updated_at = ${now}
+         WHERE p.tenant_id = ${input.caller_tenant_id}
+           AND p.stage <> 'resold'
+           AND p.battery_id IS NOT NULL
+           AND p.battery_id IN (
+                 SELECT i.battery_id
+                   FROM auction_lot_items i
+                  WHERE i.lot_id = ${current.lot_id}
+               )
+        RETURNING p.id
+      `);
+      resoldCount = (resoldRows as unknown as Array<unknown>).length;
+    }
 
-      if (candidates.length > 0) {
-        await db
-          .update(nbfcRecoveryPipeline)
-          .set({ stage: "resold", updated_at: now })
-          .where(eq(nbfcRecoveryPipeline.id, candidates[0].id));
-      }
+    if (resoldCount === 0) {
+      // Single-battery lots, where the battery hangs off the pipeline row
+      // rather than off a lot item.
+      await db.execute(sql`
+        UPDATE nbfc_recovery_pipeline p
+           SET stage = 'resold', updated_at = ${now}
+          FROM recovery_batteries rb
+         WHERE rb.id = p.battery_id
+           AND p.tenant_id = ${input.caller_tenant_id}
+           AND p.stage <> 'resold'
+           AND rb.state_code = 'lotted'
+      `);
     }
   }
 

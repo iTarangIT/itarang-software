@@ -17,7 +17,11 @@
  */
 import { db } from "@/lib/db";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { nbfcAuditLog, nbfcRecoveryPipeline } from "@/lib/db/schema";
+import {
+  nbfcAuditLog,
+  nbfcRecoveryPipeline,
+  nbfcBatteryEvaluations,
+} from "@/lib/db/schema";
 import { publishLotFromRecovery } from "@/lib/nbfc/auction/createLot";
 
 // ---------------------------------------------------------------------------
@@ -33,12 +37,88 @@ export const RECOVERY_STAGES = [
 export type RecoveryStage = (typeof RECOVERY_STAGES)[number];
 
 export const ALLOWED_TRANSITIONS: Record<RecoveryStage, RecoveryStage[]> = {
-  needs_inspection: ["refurbishable", "scrap"],
-  refurbishable: ["ready_for_auction"],
+  // [E-233] `ready_for_auction` is new here — the BYPASS ARC.
+  //
+  // Refurbishment is RECOMMENDED, NEVER MANDATORY (Battery Auction BRD §5).
+  // Until now the only route out of needs_inspection was via `refurbishable`,
+  // so a battery that came back in perfect condition had to be booked into a
+  // workshop it did not need before it could be sold. That was not a policy
+  // decision, it was a missing edge.
+  needs_inspection: ["refurbishable", "scrap", "ready_for_auction"],
+  // A battery can also turn out to be beyond repair once the workshop opens
+  // it, which is the other edge that was missing.
+  refurbishable: ["ready_for_auction", "scrap"],
   scrap: [], // terminal
   ready_for_auction: ["resold"],
   resold: [], // terminal
 };
+
+// ---------------------------------------------------------------------------
+// Grade bands — ONE definition, enforced server-side
+// ---------------------------------------------------------------------------
+// Three sources disagreed about when a battery is refurbishable and when it is
+// scrap, and only the weakest of the three was ever enforced:
+//
+//   evaluation.ts computeBasePrice   scrap when soh < 70 AND decision='scrap'
+//   RecoveryKanban.tsx               REFURBISHABLE_MIN_SOH = 70, CLIENT-SIDE ONLY
+//   Battery Auction BRD, Figure 1    scrap when SOH < 55
+//
+// The Kanban rule was a disabled button and a tooltip. `transitionStage()` —
+// the actual write path, reachable from a plain API call — happily accepted a
+// 30% SOH battery as refurbishable. These constants are that rule, moved to the
+// server.
+//
+// The bands reconcile the BRD with the shipped code rather than picking a side:
+// 55 is the scrap floor the BRD asks for, 70 stays the refurbishment threshold
+// the pricing engine and the UI already used, and the 55–70 gap becomes the
+// `partial_working` grade that BRD §6 introduces and that nothing had a home
+// for.
+export const SOH_SCRAP_BELOW = 55;
+export const SOH_REFURBISHABLE_MIN = 70;
+
+export type ConditionGrade = "new" | "refurbished" | "partial_working";
+
+/** The grade a battery earns from its measured state of health. */
+export function gradeForSoh(soh: number | null | undefined): ConditionGrade | "scrap" {
+  if (soh === null || soh === undefined || !Number.isFinite(soh)) {
+    // No reading is not a passing reading. An ungraded battery cannot be
+    // advertised, so it stays out of the auction rather than defaulting into
+    // the most saleable grade.
+    return "partial_working";
+  }
+  if (soh < SOH_SCRAP_BELOW) return "scrap";
+  if (soh < SOH_REFURBISHABLE_MIN) return "partial_working";
+  return "refurbished";
+}
+
+/**
+ * Server-side guard for the stage the operator is asking for.
+ *
+ * Throws `BAD_REQUEST:` — which every NBFC route's `statusFromError` maps to
+ * 400 — with the SOH in the message, because "this battery is too degraded" is
+ * useless without the number that made it so.
+ */
+export function assertSohAllowsStage(
+  soh: number | null | undefined,
+  target: RecoveryStage,
+): void {
+  if (target !== "refurbishable" && target !== "ready_for_auction") return;
+  if (soh === null || soh === undefined || !Number.isFinite(soh)) {
+    throw new Error(
+      `BAD_REQUEST: cannot move to ${target} before an evaluation records a state of health`,
+    );
+  }
+  if (soh < SOH_SCRAP_BELOW) {
+    throw new Error(
+      `BAD_REQUEST: state of health is ${soh}%, below the ${SOH_SCRAP_BELOW}% scrap floor — this battery can only move to scrap`,
+    );
+  }
+  if (target === "refurbishable" && soh < SOH_REFURBISHABLE_MIN) {
+    throw new Error(
+      `BAD_REQUEST: state of health is ${soh}%, below the ${SOH_REFURBISHABLE_MIN}% refurbishment threshold — grade it partial_working and send it straight to auction`,
+    );
+  }
+}
 
 export function isAllowedTransition(
   from: string,
@@ -183,6 +263,36 @@ export async function transitionStage(
       `BAD_REQUEST: invalid stage transition ${row.stage} -> ${input.target_stage}`,
     );
   }
+
+  // 2b. [E-233] Validate the transition against the MEASURED state of health.
+  //
+  // This check previously existed only in RecoveryKanban.tsx as a disabled
+  // button and a tooltip, so any direct API call could push a 30% SOH battery
+  // into `refurbishable` and on into an auction. The rule now lives on the
+  // write path, where it cannot be bypassed by not using the UI.
+  //
+  // The reading comes from the most recent evaluation. Reading the LATEST one
+  // matters: a battery re-inspected after refurbishment has two evaluations,
+  // and judging it on the pre-repair figure would block the very promotion the
+  // repair was for.
+  const [latestEval] = await db
+    .select({ step1: nbfcBatteryEvaluations.step1 })
+    .from(nbfcBatteryEvaluations)
+    .where(
+      and(
+        eq(nbfcBatteryEvaluations.recovery_pipeline_id, row.id),
+        eq(nbfcBatteryEvaluations.tenant_id, input.tenant_id),
+      ),
+    )
+    .orderBy(desc(nbfcBatteryEvaluations.created_at))
+    .limit(1);
+
+  const soh =
+    latestEval && typeof latestEval.step1 === "object" && latestEval.step1 !== null
+      ? Number((latestEval.step1 as Record<string, unknown>).soh_percent)
+      : null;
+
+  assertSohAllowsStage(Number.isFinite(soh as number) ? (soh as number) : null, input.target_stage);
 
   const now = new Date();
 

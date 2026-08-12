@@ -1,79 +1,19 @@
 "use client";
 
-import {
-    Phone,
-    MessageSquare,
-    FileText,
-    Receipt,
-    Repeat,
-    AlertCircle,
-    UserPlus2,
-    UserMinus2,
-    Activity,
-    Sparkles,
-    Download,
-} from "lucide-react";
+import { Download } from "lucide-react";
 import type {
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
 } from "@/lib/inside-sales/types";
-import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
+import {
+    TOUCHPOINT_ICONS as ICONS,
+    TOUCHPOINT_TYPE_LABEL as TYPE_LABEL,
+} from "@/lib/lifecycle/touchpointDisplay";
 
 type Props = {
     leadId: string;
     touchpoints: LeadDetailTouchpoint[];
     statusHistory: LeadDetailStatusHistory[];
-};
-
-const ICONS: Record<TouchpointType | "default", React.ComponentType<{ className?: string }>> = {
-    ai_call: Sparkles,
-    inside_sales_call: Phone,
-    whatsapp: MessageSquare,
-    brochure_sent: FileText,
-    quote_sent: Receipt,
-    status_change_note: Activity,
-    lead_assigned: UserPlus2,
-    lead_claimed: UserPlus2,
-    ownership_transfer: Repeat,
-    asm_transfer: Repeat,
-    visit: UserMinus2,
-    escalation_raised: AlertCircle,
-    escalation_resolved_reassign: Repeat,
-    escalation_resolved_returned: Repeat,
-    escalation_resolved_no_action: Activity,
-    escalation_ceo_comment: MessageSquare,
-    escalation_ceo_recommendation: AlertCircle,
-    reactivated_via_ai_dialer: Sparkles,
-    reactivated_via_upload: Sparkles,
-    reactivated_via_admin: Sparkles,
-    ai_dialer_admin_push: Sparkles,
-    onboarding_dropout_action: AlertCircle,
-    default: Activity,
-};
-
-const TYPE_LABEL: Record<TouchpointType, string> = {
-    ai_call: "AI call",
-    inside_sales_call: "Call",
-    whatsapp: "WhatsApp",
-    brochure_sent: "Brochure sent",
-    quote_sent: "Quote sent",
-    status_change_note: "Status update",
-    lead_assigned: "Assigned",
-    lead_claimed: "Claimed",
-    ownership_transfer: "Reassigned",
-    asm_transfer: "Transferred to ASM",
-    visit: "Visit",
-    escalation_raised: "Escalation raised",
-    escalation_resolved_reassign: "Escalation → reassigned",
-    escalation_resolved_returned: "Escalation → returned",
-    escalation_resolved_no_action: "Escalation → no action",
-    escalation_ceo_comment: "CEO comment",
-    escalation_ceo_recommendation: "CEO recommendation",
-    reactivated_via_ai_dialer: "Reactivated (AI)",
-    reactivated_via_upload: "Reactivated (upload)",
-    reactivated_via_admin: "Reactivated (admin)",
-    ai_dialer_admin_push: "Pushed to AI dialer",
-    onboarding_dropout_action: "Onboarding loopback",
 };
 
 function formatTime(iso: string): string {
