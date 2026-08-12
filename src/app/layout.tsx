@@ -14,16 +14,25 @@ export const metadata: Metadata = {
   description: "iTarang dealer and admin CRM",
 };
 
-// iTarang BRD §6.B — DM Sans (body) + DM Mono (IDs / IMEI / hex). Fonts are
-// loaded by the browser at runtime via the <link> tag below, NOT by next/font
-// at build time. The sandbox VPS cannot reach fonts.googleapis.com during
-// `next build`; next/font then writes manifest entries pointing at woff2
-// files it never emits to disk, and every chunk that depends on those font
-// modules (CSS chunks, downstream JS chunks) silently goes missing too,
-// surfacing as the 19 NOT-ON-DISK / HTTP 500 chunks the deploy verifier
-// caught. Loading via <link> sidesteps build-time network entirely; the
-// browser fetches Google Fonts on first page load with --font-dm-sans /
-// --font-dm-mono falling back to system fonts via globals.css.
+// iTarang BRD §6.B — DM Sans (body) + DM Mono (IDs / IMEI / hex).
+//
+// The @font-face rules live in globals.css and point at self-hosted woff2 files
+// in public/fonts/. This replaced a render-blocking third-party stylesheet from
+// fonts.googleapis.com, which forced every page to wait on a DNS lookup + TLS
+// handshake + stylesheet fetch on one foreign origin before it could even
+// discover the font URLs on a second one (fonts.gstatic.com).
+//
+// next/font is still deliberately NOT used — the sandbox VPS cannot reach
+// fonts.googleapis.com during `next build`, so next/font emits manifest entries
+// for woff2 files it never writes to disk and silently takes out every
+// dependent CSS/JS chunk (the 19 NOT-ON-DISK / HTTP 500 chunks the deploy
+// verifier once caught). Self-hosting avoids build-time network entirely.
+//
+// Only the DM Sans latin subset is preloaded — it is the body font, so every
+// page renders with it. DM Mono (IDs / IMEI / hex) and both latin-ext subsets
+// are deliberately left unpreloaded: they are conditional on what a given page
+// actually shows, and preloading a font the page never uses just competes for
+// bandwidth with the resources it does need.
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -32,15 +41,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
+          rel="preload"
+          href="/fonts/dm-sans-latin.woff2"
+          as="font"
+          type="font/woff2"
           crossOrigin="anonymous"
-        />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap"
         />
       </head>
       <body suppressHydrationWarning>

@@ -49,6 +49,7 @@ export type NotificationCategory =
   | "Product & Dispatch"
   | "Onboarding"
   | "Inventory"
+  | "Auctions"
   | "Escalations";
 
 /** Ordered exactly as the filter bar should list them. "System" stays last. */
@@ -64,6 +65,7 @@ export const CATEGORIES: NotificationCategory[] = [
   "Loan & Sanction",
   "Product & Dispatch",
   "Inventory",
+  "Auctions",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
   ...BUYBACK_CATEGORIES.filter((c) => c !== "System"),
@@ -81,7 +83,11 @@ const isBuyback = (type: string) => type.startsWith("buyback.");
  * backfill is needed. NOTE `notifications.type` is varchar(50) — keep new type
  * strings under 50 characters.
  */
-const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
+// Exported so src/lib/notifications/registry.ts can DERIVE the admin
+// Notification Access screen's type list from this map instead of restating it.
+// A type added here shows up on that screen automatically; the registry's test
+// fails loudly if it has no human label yet.
+export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // --- Leads ---
   "lead.created": "Leads",
   "lead.assigned": "Leads",
@@ -99,6 +105,11 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "onboarding.rejected": "Onboarding",
   "onboarding.correction_requested": "Onboarding",
   dealer_onboarding_submitted: "Onboarding",
+  // Emitted by /api/inside-sales/lead/[id]/mark-converted via notifyRoles, and
+  // unmapped until E-231 — so it fell into "System" in the bell's filter bar
+  // and, worse, was invisible to the admin Notification Access screen. Mapped
+  // here so it is both filed correctly and governable.
+  onboarding_initiated: "Onboarding",
 
   // --- KYC & consent ---
   "kyc.submitted": "KYC & Consent",
@@ -131,6 +142,17 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.doc_rejected": "NBFC Requests",
   "nbfc.verdict_raised": "NBFC Requests",
   "nbfc.verdict_responded": "NBFC Requests",
+  // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
+  // story as onboarding_initiated above — real, emitted, and unmapped until
+  // E-231.r
+  nbfc_verdict_forwarded: "NBFC Requests",
+  // The flat predecessor of `nbfc.request_forwarded`. No emitter left in src/,
+  // but 2 live rows on database-2 (prod) — found by running
+  // verify:notifications against PROD, which is the only place they exist;
+  // database-1 has none, so the sandbox run reported the registry clean. Mapped
+  // for the same reason as ops_alert: the bells already written should file
+  // correctly and stay muteable.
+  nbfc_doc_request_forwarded: "NBFC Requests",
 
   // --- Field investigation ---
   "fi.requested": "Field Investigation",
@@ -183,11 +205,38 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   inventory_assigned: "Inventory",
   inventory_transfer_incoming: "Inventory",
   inventory_transfer_acknowledged: "Inventory",
+  // E-230 — the OEM price register. Filed under Inventory rather than System
+  // because the thing being nagged about is a product's price, and the person
+  // who fixes it goes to the same place they maintain models.
+  "oem.price_expiring": "Inventory",
+  "oem.price_missing": "Inventory",
+
+  // --- Battery auctions (E-234) ---
+  // Its own category rather than a corner of Inventory: the recipient is a
+  // DEALER outside the company, the clock is minutes not days, and an admin
+  // muting "Inventory" for the Dealer Portal must not accidentally silence a
+  // live bidding war.
+  "auction.lot_published": "Auctions",
+  "auction.outbid": "Auctions",
+  "auction.ending_soon": "Auctions",
+  "auction.won": "Auctions",
+  "auction.lost": "Auctions",
 
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
   "nbfc.dual_approval": "System",
   "nbfc.wallet_low": "System",
+  // 141 live rows on sandbox and NO emitter anywhere in src/ — found by
+  // `npm run verify:notifications`. Mapped rather than left unmapped so the
+  // rows already in people's bells file correctly and the type is governable
+  // from the E-231 screen if whatever wrote them ever runs again.
+  ops_alert: "System",
+  // NOTE `oem.price_missing` was briefly mapped here too, as a second System
+  // entry, because a verify:notifications run found 5 live rows on database-1
+  // and no emitter in src/. E-230 landed the emitter on main in the same window
+  // (events.ts oemPriceMissing) and filed it under Inventory, above — which is
+  // the right home now that a human is being asked to go and fix a price. The
+  // duplicate key silently won at runtime and would have mis-filed it; removed.
 
   // --- Escalations / internal ---
   escalation_raised: "Escalations",
@@ -233,6 +282,16 @@ const WARNING = new Set([
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",
+  // E-230 — both are "act before a date", which is exactly amber. A lapsed OEM
+  // price is not an error anywhere; it just quietly sends every quote for that
+  // model to the CEO, which is why it has to be visible BEFORE it happens.
+  "oem.price_expiring",
+  "oem.price_missing",
+  // You are no longer winning, and the window is finite — both are "act now or
+  // lose it", which is the definition of amber. `auction.lost` is NOT here: by
+  // the time it arrives there is nothing left to act on.
+  "auction.outbid",
+  "auction.ending_soon",
 ]);
 
 /**
@@ -253,6 +312,20 @@ const NO_EMAIL = new Set([
   "onboarding.docs_uploaded",
   "product.delivered",
   "delivery_confirmed",
+  // Auctions opt out of the GENERIC email for a reason each:
+  //   outbid       — the proxy engine can fire this several times inside one
+  //                  second while two standing maxima resolve. An inbox is the
+  //                  wrong place for that; the bell and the live page are not.
+  //   lot_published / ending_soon / won
+  //                — sendAuctionLotEmail() sends these instead, with the
+  //                  battery photo, the lot facts and a bid CTA. Leaving them
+  //                  email-worthy here would send BOTH.
+  // `auction.lost` is deliberately absent: the plain emit email is exactly
+  // right for it, and it is the one auction mail with nothing to illustrate.
+  "auction.outbid",
+  "auction.lot_published",
+  "auction.ending_soon",
+  "auction.won",
 ]);
 
 export function categorize(type: string): NotificationCategory {
@@ -343,6 +416,14 @@ export function linkFor(
 
   if (category === "Inventory") {
     return role === "dealer" ? "/dealer-portal/inventory" : "/admin/inventory";
+  }
+
+  if (category === "Auctions") {
+    // No lot id in the fallback path (emit() always sets data.href, which won
+    // above) — so land on the list, which is never a dead click.
+    if (role === "dealer") return "/dealer-portal/auctions";
+    if (role === "nbfc") return "/nbfc/auction";
+    return "/admin/nbfc/auction";
   }
 
   if (category === "Escalations") {

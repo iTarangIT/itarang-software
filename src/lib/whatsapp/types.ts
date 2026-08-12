@@ -102,6 +102,29 @@ export interface WhatsAppAdapter {
   ): Promise<SendResult>;
 
   /**
+   * Pre-approved template whose header is an IMAGE, sent outside the 24h
+   * window. `sendTemplate` above builds a `body` component only, so a template
+   * declared with an image header fails at Meta with "number of parameters
+   * does not match" — there is no way to satisfy it through that method.
+   *
+   * The image is passed as BYTES, not a link, on purpose: battery photos live
+   * behind the auth-gated S3 files proxy, so Meta cannot fetch them. The
+   * adapter uploads them and sends by media id — the same route
+   * `sendDocumentBytes` already takes.
+   *
+   * `imageBytes` is optional so a caller with an approved image template but no
+   * usable photo still sends: the header is dropped and the body goes alone,
+   * which is a degraded message rather than no message.
+   */
+  sendTemplateWithImageHeader(
+    to: string,
+    name: string,
+    languageCode: string,
+    bodyParams: string[],
+    image?: { bytes: Buffer; mimeType: string; filename: string } | null,
+  ): Promise<SendResult>;
+
+  /**
    * Send a document (PDF etc.) by public URL — the provider fetches `link`
    * itself. Valid only inside the 24h customer-service window (like sendText).
    */

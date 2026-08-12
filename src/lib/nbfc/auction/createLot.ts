@@ -21,6 +21,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   auctionLots,
+  auctionLotItems,
   nbfcBatteryEvaluations,
   nbfcRecoveryPipeline,
 } from "@/lib/db/schema";
@@ -95,6 +96,8 @@ export async function publishLotFromRecovery(
       id: nbfcRecoveryPipeline.id,
       battery_serial: nbfcRecoveryPipeline.battery_serial,
       estimated_recovery_value: nbfcRecoveryPipeline.estimated_recovery_value,
+      // [E-234] Needed to record the seeded draft's lot item.
+      battery_id: nbfcRecoveryPipeline.battery_id,
     })
     .from(nbfcRecoveryPipeline)
     .where(
@@ -174,7 +177,21 @@ export async function publishLotFromRecovery(
       base_price: basePrice.toFixed(2),
       bid_increment: bidIncrement.toFixed(2),
       ends_at: endsAt,
-      status: "live",
+      // [E-234] DRAFT, not live.
+      //
+      // This line used to publish a lot to the marketplace the instant an
+      // operator dragged a card to `ready_for_auction` — with a hard-coded
+      // 7-day window and quantity 1, neither of which the Battery Auction BRD
+      // allows (§7: 2/12/24/48 h, 48 h hard maximum; §6: a lot holds many
+      // batteries). Nobody chose to sell anything; a kanban column moved.
+      //
+      // The seeding behaviour is kept because it is genuinely useful — one
+      // draft per battery, ready to be renamed, merged with others, priced and
+      // published from the lot composer. What is gone is the publishing.
+      // See publishLot() in composeLot.ts for the deliberate step.
+      status: "draft",
+      // [E-232] The seller is knowable here and was being thrown away.
+      seller_tenant_id: input.tenant_id,
     })
     .onConflictDoNothing({ target: auctionLots.lot_code })
     .returning({
@@ -206,6 +223,26 @@ export async function publishLotFromRecovery(
       base_price: basePrice,
       ends_at: existing.ends_at.toISOString(),
     };
+  }
+
+  // [E-234] Record the battery as a lot ITEM.
+  //
+  // Without this the seeded draft is a lot with quantity 1 and nothing in it,
+  // so the composer's "is this battery already in an open lot?" check cannot
+  // see it and the same battery ends up in two lots. Guarded and best-effort:
+  // this runs inside transitionStage()'s transaction, and a battery that has no
+  // recovery_batteries row yet (pre-E-232 pipeline rows) must not fail the
+  // stage transition it is riding on.
+  if (pipeline.battery_id) {
+    await x
+      .insert(auctionLotItems)
+      .values({
+        lot_id: inserted.id,
+        battery_id: pipeline.battery_id,
+        condition: "refurbished",
+        item_price: basePrice.toFixed(2),
+      })
+      .onConflictDoNothing();
   }
 
   return {

@@ -1,6 +1,10 @@
-// Client-safe constants for the admin "Leads Info" filters. Kept in its own
-// module (no DB imports) so client components can import it without pulling the
-// server-only leadsInfoQuery.ts (and its postgres/net deps) into the bundle.
+// Client-safe constants for the leads filter bar. Kept in its own module (no DB
+// imports) so client components can import it without pulling the server-only
+// query builder (and its postgres/net deps) into the bundle.
+//
+// Originally paired with the admin "Leads Info" page; that screen merged into
+// /leads and its query builder is now src/lib/leads/leadListQuery.ts. This file
+// stays put because both the filter bar and the query still need this sentinel.
 
 // Sentinel status value for the "Unassigned" filter option. "Unassigned" means
 // "no current owner" (current_owner_id IS NULL) rather than the specific
