@@ -35,7 +35,10 @@ type CampaignRow = {
     neodove_campaign_name: string | null;
     status: string;
     push_endpoint_ref: string | null;
+    /** The env var behind push_endpoint_ref actually resolves on the server. */
     is_wired: boolean;
+    /** Names of other campaigns pushing through the same endpoint. */
+    endpoint_shared_with?: string[];
     total_pushed: number;
     push_failed: number;
     // Both server-derived — see the comments in GET /api/neodove/campaigns.
@@ -236,13 +239,36 @@ export default function NeodoveCampaignsPage() {
                                                         no NeoDove campaign recorded
                                                     </span>
                                                 )}
-                                                {/* A campaign with no endpoint can
-                                                    never push — surfaced here so it
-                                                    is visible without opening it. */}
+                                                {/* A campaign with no WORKING endpoint
+                                                    can never push — surfaced here so it
+                                                    is visible without opening it.
+                                                    `is_wired` now means the env var
+                                                    actually resolves on the server, so
+                                                    the two cases are worth telling
+                                                    apart: nothing configured is an
+                                                    unfinished setup, a ref pointing at
+                                                    an unset variable is a broken one
+                                                    that LOOKS finished. */}
                                                 {!c.is_wired && (
                                                     <span className="inline-flex items-center gap-1 text-amber-600">
                                                         <AlertTriangle className="w-3 h-3" />
-                                                        not wired
+                                                        {c.push_endpoint_ref
+                                                            ? `${c.push_endpoint_ref} not set on this server`
+                                                            : "not wired"}
+                                                    </span>
+                                                )}
+                                                {/* Two campaigns, one endpoint = one
+                                                    destination: the URL routes the
+                                                    lead, nothing in the push body
+                                                    names a campaign. */}
+                                                {(c.endpoint_shared_with?.length ?? 0) >
+                                                    0 && (
+                                                    <span
+                                                        className="inline-flex items-center gap-1 text-amber-600"
+                                                        title={`Same NeoDove destination as ${c.endpoint_shared_with?.join(", ")}`}
+                                                    >
+                                                        <AlertTriangle className="w-3 h-3" />
+                                                        shares endpoint
                                                     </span>
                                                 )}
                                                 {/* The "priority dial" badge stood

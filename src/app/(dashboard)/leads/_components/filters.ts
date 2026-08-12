@@ -2,6 +2,12 @@
 // the filter bar and the stat cards all share one shape and one set of
 // query-param names.
 
+import {
+    isConnectStatus,
+    isDispositionBucket,
+    type ConnectStatus,
+    type DispositionBucket,
+} from "@/lib/leads/dispositions";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
 
 export type LeadFilters = {
@@ -17,7 +23,18 @@ export type LeadFilters = {
     /** created_at range, YYYY-MM-DD. */
     from: string;
     to: string;
-    hasPhone: boolean;
+    // ── Call disposition, L1 → L2 → L3 (E-236) ───────────────────────────
+    // Three fields rather than one because each level is independently useful:
+    // "everything Not Connected" and "everything we lost" are questions in their
+    // own right, not just a path to picking one disposition. They narrow each
+    // other in the UI but are ANDed independently in SQL, so a bookmarked URL
+    // with only `disposition_bucket` set is valid on its own.
+    /** L1 — connected | not_connected. */
+    connectStatus: "" | ConnectStatus;
+    /** L2 — Cold | Warm | Hot | Converted | Lost. Meaningless when L1 is not_connected. */
+    dispositionBucket: "" | DispositionBucket;
+    /** L3 — the disposition itself. Free text: values outside the sheet are filterable too. */
+    disposition: string;
 };
 
 export const EMPTY_FILTERS: LeadFilters = {
@@ -31,7 +48,9 @@ export const EMPTY_FILTERS: LeadFilters = {
     city: "",
     from: "",
     to: "",
-    hasPhone: false,
+    connectStatus: "",
+    dispositionBucket: "",
+    disposition: "",
 };
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
@@ -41,12 +60,13 @@ export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
     "source",
     "state",
     "city",
-    "hasPhone",
+    "connectStatus",
+    "dispositionBucket",
+    "disposition",
 ];
 
 export function isFilterSet(f: LeadFilters, key: keyof LeadFilters): boolean {
-    const v = f[key];
-    return typeof v === "boolean" ? v : v !== "";
+    return f[key] !== "";
 }
 
 export function countSecondary(f: LeadFilters): number {
@@ -82,13 +102,17 @@ export function toSearchParams(
     if (f.city) p.set("city", f.city);
     if (f.from) p.set("from", f.from);
     if (f.to) p.set("to", f.to);
-    if (f.hasPhone) p.set("has_phone", "1");
+    if (f.connectStatus) p.set("connect_status", f.connectStatus);
+    if (f.dispositionBucket) p.set("disposition_bucket", f.dispositionBucket);
+    if (f.disposition) p.set("disposition", f.disposition);
     return p;
 }
 
 /** Seed filter state from a URL — used for the /admin/leads-info redirect. */
 export function fromSearchParams(sp: URLSearchParams): LeadFilters {
     const intent = sp.get("intent");
+    const connectStatus = sp.get("connect_status");
+    const bucket = sp.get("disposition_bucket");
     return {
         ...EMPTY_FILTERS,
         search: sp.get("search") ?? "",
@@ -102,6 +126,14 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         city: sp.get("city") ?? "",
         from: sp.get("from") ?? "",
         to: sp.get("to") ?? "",
-        hasPhone: sp.get("has_phone") === "1",
+        // Validated, not trusted: these seed a <select> whose value must be one
+        // of its options, and an unrecognised one would render as a blank
+        // selection that silently filters nothing. `disposition` is deliberately
+        // NOT validated against the sheet — a value NeoDove sent outside it is
+        // legitimately filterable, and the API validates it against what is
+        // actually in the data.
+        connectStatus: isConnectStatus(connectStatus) ? connectStatus : "",
+        dispositionBucket: isDispositionBucket(bucket) ? bucket : "",
+        disposition: sp.get("disposition") ?? "",
     };
 }

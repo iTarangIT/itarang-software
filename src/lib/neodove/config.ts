@@ -81,6 +81,27 @@ export function resolveEndpoint(ref: string | null | undefined): string {
 }
 
 /**
+ * Does this ref resolve to a real endpoint on THIS server?
+ *
+ * `push_endpoint_ref IS NOT NULL` is not the same question, and the difference
+ * is the whole bug this exists to close: the campaigns list used to compute
+ * "wired" that way, so a campaign pointing at an env var nobody ever set looked
+ * like a valid destination in the Send-to-NeoDove dropdown right up until the
+ * push failed. Same function the push path calls, so the dropdown and the push
+ * can no longer disagree.
+ *
+ * Never returns the URL — callers only ever need the boolean.
+ */
+export function isEndpointWired(ref: string | null | undefined): boolean {
+    try {
+        resolveEndpoint(ref);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Safe-to-log form of an endpoint URL: origin + path shape + a short digest of
  * the token. Enough to tell two campaigns apart in a log or in
  * neodove_sync_events, useless to anyone who reads it.
