@@ -16,8 +16,13 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { isEndpointWired } from "@/lib/neodove/config";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
 import { resolveAudience, type AudienceSelection } from "@/lib/ai-dialer/audience";
+
+export const runtime = "nodejs";
+// `is_wired` reads process.env per request — see the campaigns list route.
+export const dynamic = "force-dynamic";
 
 // A priority-dial hand-off is NOT a call — see the header of
 // src/lib/lifecycle/touchpointTypes.ts, which says so explicitly and warns that
@@ -154,8 +159,34 @@ export const GET = withErrorHandler(
             .filter((r) => r.push_status === "pushed")
             .reduce((a, r) => a + Number(r.count), 0);
 
+        // "Wired" means the env var this campaign points at is actually
+        // populated on THIS server, not merely that a ref was typed. The page
+        // used to infer it from `push_endpoint_ref` being non-null, so a
+        // campaign referencing an unset variable rendered as fully configured
+        // and only failed when someone pushed to it.
+        const endpointRef = (campaigns[0] as { push_endpoint_ref?: string | null })
+            .push_endpoint_ref;
+        const isWired = isEndpointWired(endpointRef);
+
+        // Other campaigns pointing at the SAME env var. The URL is the routing —
+        // no campaign identifier travels in the push body — so those campaigns
+        // deliver into the same NeoDove campaign as this one, and picking
+        // between them in the destination dropdown changes nothing.
+        const sharedEndpoint = endpointRef
+            ? await db.execute<{ id: string; name: string }>(sql`
+                  SELECT id, name FROM neodove_campaigns
+                   WHERE push_endpoint_ref = ${endpointRef} AND id <> ${id}
+                   ORDER BY created_at DESC
+                   LIMIT 10
+              `)
+            : [];
+
         return successResponse({
-            campaign: campaigns[0],
+            campaign: {
+                ...(campaigns[0] as Record<string, unknown>),
+                is_wired: isWired,
+                endpoint_shared_with: sharedEndpoint,
+            },
             pushBreakdown,
             dispositions,
             audienceCount,

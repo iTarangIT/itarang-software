@@ -2,11 +2,12 @@
 
 // Filter bar for the merged Leads tab.
 //
-// Nine filters is a lot to put in front of someone, so the split is deliberate:
-// the four people change constantly (search, qualification, intent, owner) plus
-// the date range stay on top; the drill-downs (ASM, source, state, city, has
-// phone) sit behind "More filters" with a COUNT BADGE — a hidden filter that is
-// silently narrowing the list is the failure mode this layout has to avoid.
+// A dozen filters is a lot to put in front of someone, so the split is
+// deliberate: the four people change constantly (search, qualification, intent,
+// owner) plus the date range stay on top; the drill-downs (ASM, source, state,
+// city, has phone) and the three-level call disposition sit behind "More
+// filters" with a COUNT BADGE — a hidden filter that is silently narrowing the
+// list is the failure mode this layout has to avoid.
 
 import { ChevronDown, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,14 @@ import {
     INTENT_BUCKET_OPTIONS,
     INTENT_BUCKET_RANGE,
 } from "@/lib/leads/intentBucket";
+import {
+    CONNECTED_DISPOSITIONS,
+    CONNECT_STATUS,
+    CONNECT_STATUS_LABEL,
+    DISPOSITION_BUCKETS,
+    NOT_CONNECTED_REASONS,
+    isKnownDisposition,
+} from "@/lib/leads/dispositions";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 import type { LeadListFacets } from "@/lib/leads/leadListQuery";
 import {
@@ -30,12 +39,23 @@ function pretty(value: string | null | undefined): string {
     return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Styling ONLY — deliberately carries no width.
+//
+// It used to start with `w-full`, and the primary-row call sites appended
+// `w-auto` to override it. That does not work: both are width utilities in the
+// same layer, so the STYLESHEET order decides which wins, not the order they
+// appear in the class attribute — and `w-full` is emitted last. Every select in
+// the top row was therefore full-width and wrapped onto a line of its own.
+// Width now belongs to the call site, which is the only place that knows
+// whether the select sits in a flex row or a grid cell.
 const SELECT_CLASS =
-    "w-full rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-700 outline-none transition-colors focus:border-gray-400";
+    "rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-700 outline-none transition-colors focus:border-gray-400";
 
 type Props = {
     draft: LeadFilters;
-    onChange: (key: keyof LeadFilters, value: string | boolean) => void;
+    onChange: (key: keyof LeadFilters, value: string) => void;
+    /** Set several filters at once — the disposition levels have to move together. */
+    onPatch: (patch: Partial<LeadFilters>) => void;
     onClear: () => void;
     facets: LeadListFacets | undefined;
     caps: LeadsCapabilities;
@@ -49,6 +69,7 @@ type Props = {
 export function LeadsFilterBar({
     draft,
     onChange,
+    onPatch,
     onClear,
     facets,
     caps,
@@ -58,6 +79,29 @@ export function LeadsFilterBar({
     busy,
 }: Props) {
     const moreCount = countSecondary(draft);
+
+    // Dispositions present in the data but NOT in the CC sheet — a campaign
+    // configured with NeoDove's stock vocabulary, or a value added in their
+    // settings since. They are filterable and must be offered, but grouped
+    // apart so the sheet stays recognisable as the sheet.
+    const extraDispositions = (facets?.dispositions ?? [])
+        .map((d) => d.value)
+        .filter((v) => !isKnownDisposition(v));
+
+    // Picking a level clears the narrower ones, so the three selects can never
+    // encode an impossible combination — "Not Connected + Hot" would return
+    // nothing and look like a bug rather than a contradiction.
+    const setConnectStatus = (value: string) =>
+        onPatch({
+            connectStatus: value as LeadFilters["connectStatus"],
+            dispositionBucket: "",
+            disposition: "",
+        });
+    const setBucket = (value: string) =>
+        onPatch({
+            dispositionBucket: value as LeadFilters["dispositionBucket"],
+            disposition: "",
+        });
 
     // "This month" / "Last month" — offset 0 and -1. Ported from the date row
     // the Leads tab used before the merge.
@@ -74,22 +118,26 @@ export function LeadsFilterBar({
 
     return (
         <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-            {/* ── Primary row ── */}
-            <div className="flex flex-wrap items-center gap-2">
-                <div className="relative min-w-[220px] flex-1">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                    <Input
-                        value={draft.search}
-                        onChange={(e) => onChange("search", e.target.value)}
-                        placeholder="Search by dealer, shop, phone or city…"
-                        className="pl-9"
-                    />
-                </div>
+            {/* ── Search ──
+                On its own row. It was in the same flex line as the three
+                selects with `flex-1 min-w-[220px]`, so it ate the free space and
+                pushed everything after it onto separate lines. */}
+            <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <Input
+                    value={draft.search}
+                    onChange={(e) => onChange("search", e.target.value)}
+                    placeholder="Search by dealer, shop, phone or city…"
+                    className="pl-9"
+                />
+            </div>
 
+            {/* ── Qualification · Intent · Owner · More filters, one row ── */}
+            <div className="flex flex-wrap items-center gap-2">
                 {/* Qualification = the BRD §0.7 pipeline stage. */}
                 <select
                     aria-label="Qualification"
-                    className={`${SELECT_CLASS} w-auto min-w-[170px]`}
+                    className={`${SELECT_CLASS} min-w-[150px] flex-1`}
                     value={draft.status}
                     onChange={(e) => onChange("status", e.target.value)}
                 >
@@ -106,7 +154,7 @@ export function LeadsFilterBar({
 
                 <select
                     aria-label="Intent"
-                    className={`${SELECT_CLASS} w-auto min-w-[150px]`}
+                    className={`${SELECT_CLASS} min-w-[150px] flex-1`}
                     value={draft.intent}
                     onChange={(e) => onChange("intent", e.target.value)}
                 >
@@ -121,7 +169,7 @@ export function LeadsFilterBar({
                 {caps.canSeeOwnerAsm && (
                     <select
                         aria-label="Owner"
-                        className={`${SELECT_CLASS} w-auto min-w-[160px]`}
+                        className={`${SELECT_CLASS} min-w-[150px] flex-1`}
                         value={draft.ownerId}
                         onChange={(e) => onChange("ownerId", e.target.value)}
                     >
@@ -225,7 +273,7 @@ export function LeadsFilterBar({
                     {caps.canSeeOwnerAsm && (
                         <select
                             aria-label="ASM"
-                            className={SELECT_CLASS}
+                            className={`${SELECT_CLASS} w-full`}
                             value={draft.asmId}
                             onChange={(e) => onChange("asmId", e.target.value)}
                         >
@@ -239,7 +287,7 @@ export function LeadsFilterBar({
                     )}
                     <select
                         aria-label="Source"
-                        className={SELECT_CLASS}
+                        className={`${SELECT_CLASS} w-full`}
                         value={draft.source}
                         onChange={(e) => onChange("source", e.target.value)}
                     >
@@ -260,15 +308,98 @@ export function LeadsFilterBar({
                         onChange={(e) => onChange("city", e.target.value)}
                         placeholder="City"
                     />
-                    <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
-                        <input
-                            type="checkbox"
-                            checked={draft.hasPhone}
-                            onChange={(e) => onChange("hasPhone", e.target.checked)}
-                            className="h-4 w-4 cursor-pointer rounded border-gray-300 accent-gray-900"
-                        />
-                        Has phone only
-                    </label>
+                    {/* ── Call disposition, L1 → L2 → L3 (E-236) ──
+                        Its own row: three selects that narrow each other read as
+                        one control, and interleaving them with the unrelated
+                        drill-downs above made the cascade invisible. */}
+                    <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                            Call disposition
+                        </p>
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <select
+                                aria-label="Call outcome"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.connectStatus}
+                                onChange={(e) => setConnectStatus(e.target.value)}
+                            >
+                                <option value="">Any call outcome</option>
+                                {CONNECT_STATUS.map((s) => (
+                                    <option key={s} value={s}>
+                                        {CONNECT_STATUS_LABEL[s]}
+                                    </option>
+                                ))}
+                            </select>
+
+                            {/* Hidden, not disabled, when the call did not connect:
+                                the sheet gives those reasons no bucket at all, so
+                                there is nothing to choose rather than nothing
+                                currently choosable. */}
+                            {draft.connectStatus !== "not_connected" && (
+                                <select
+                                    aria-label="Disposition bucket"
+                                    className={`${SELECT_CLASS} w-full`}
+                                    value={draft.dispositionBucket}
+                                    onChange={(e) => setBucket(e.target.value)}
+                                >
+                                    <option value="">Any bucket</option>
+                                    {DISPOSITION_BUCKETS.map((b) => (
+                                        <option key={b} value={b}>
+                                            {b}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
+
+                            <select
+                                aria-label="Disposition"
+                                className={`${SELECT_CLASS} col-span-2 w-full`}
+                                value={draft.disposition}
+                                onChange={(e) => onChange("disposition", e.target.value)}
+                            >
+                                <option value="">Any disposition</option>
+
+                                {draft.connectStatus !== "not_connected" &&
+                                    DISPOSITION_BUCKETS.filter(
+                                        (b) =>
+                                            !draft.dispositionBucket ||
+                                            draft.dispositionBucket === b,
+                                    ).map((b) => (
+                                        <optgroup key={b} label={`Connected › ${b}`}>
+                                            {CONNECTED_DISPOSITIONS[b].map((d) => (
+                                                <option key={`${b}:${d}`} value={d}>
+                                                    {d}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    ))}
+
+                                {/* A bucket is a CONNECTED concept, so once one is
+                                    picked the not-connected reasons cannot apply. */}
+                                {draft.connectStatus !== "connected" &&
+                                    !draft.dispositionBucket && (
+                                        <optgroup label="Not connected">
+                                            {NOT_CONNECTED_REASONS.map((d) => (
+                                                <option key={d} value={d}>
+                                                    {d}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+
+                                {extraDispositions.length > 0 &&
+                                    !draft.dispositionBucket && (
+                                        <optgroup label="Other (seen in NeoDove)">
+                                            {extraDispositions.map((d) => (
+                                                <option key={d} value={d}>
+                                                    {d}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                            </select>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
