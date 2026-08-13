@@ -30,6 +30,7 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   attachBolnaCallId,
   finalizeCampaign,
+  syncCampaignCounters,
 } from "./campaignTracker";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
@@ -191,14 +192,8 @@ export async function advanceCampaign(
             call_outcome: "no_phone",
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
-        // Failure path — bump failed_leads only. calls_made stays unchanged
-        // so it reflects "calls that actually went through to the dealer".
-        await db
-          .update(dialerCampaigns)
-          .set({
-            failed_leads: sql`${dialerCampaigns.failed_leads} + 1`,
-          })
-          .where(eq(dialerCampaigns.id, campaignId));
+        // Counters are derived from the rows — see syncCampaignCounters.
+        await syncCampaignCounters(campaignId);
         continue;
       }
 
@@ -220,12 +215,7 @@ export async function advanceCampaign(
             call_outcome: "ineligible_active_lead",
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
-        await db
-          .update(dialerCampaigns)
-          .set({
-            failed_leads: sql`${dialerCampaigns.failed_leads} + 1`,
-          })
-          .where(eq(dialerCampaigns.id, campaignId));
+        await syncCampaignCounters(campaignId);
         continue;
       }
 
@@ -270,13 +260,7 @@ export async function advanceCampaign(
             call_outcome: `trigger_exception: ${exReason}`,
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
-        // Failure path — only bump failed_leads.
-        await db
-          .update(dialerCampaigns)
-          .set({
-            failed_leads: sql`${dialerCampaigns.failed_leads} + 1`,
-          })
-          .where(eq(dialerCampaigns.id, campaignId));
+        await syncCampaignCounters(campaignId);
         continue;
       }
 
@@ -304,13 +288,7 @@ export async function advanceCampaign(
             call_outcome: `trigger_failed: ${reason}`,
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
-        // Failure path — only bump failed_leads.
-        await db
-          .update(dialerCampaigns)
-          .set({
-            failed_leads: sql`${dialerCampaigns.failed_leads} + 1`,
-          })
-          .where(eq(dialerCampaigns.id, campaignId));
+        await syncCampaignCounters(campaignId);
         continue;
       }
 
