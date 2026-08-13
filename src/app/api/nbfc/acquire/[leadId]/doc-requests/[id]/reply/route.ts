@@ -1,7 +1,7 @@
 /**
  * POST /api/nbfc/acquire/[leadId]/doc-requests/[id]/reply
  *
- * E-239 — the NBFC adds another message to a DIRECT (dealer_direct) thread: a
+ * E-240 — the NBFC adds another message to a DIRECT (dealer_direct) thread: a
  * clarification, or a follow-up after the dealer sent the wrong document. The
  * thread is pulled back to 'forwarded_to_dealer' so it reappears on the dealer's
  * Step-4 card, and the dealer is notified.

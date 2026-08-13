@@ -15,7 +15,7 @@
  * expressed by `nbfc_doc_requests.status`. Hops 4–6 are DERIVED from the child
  * min-state and stored denormalised so list views stay one-row.
  *
- * E-239 adds a SECOND, direct channel beside that cycle. A wrapper flagged
+ * E-240 adds a SECOND, direct channel beside that cycle. A wrapper flagged
  * `dealer_direct` skips the admin's forward click: it is born
  * 'forwarded_to_dealer', has NO children at all, and carries its conversation in
  * `nbfc_doc_request_messages` instead — the dealer answers from the Step-4
@@ -178,14 +178,14 @@ export async function createNbfcDocRequest(
 }
 
 /* ------------------------------------------------------------------ *
- * E-239 — the DIRECT NBFC ⇄ Dealer channel
+ * E-240 — the DIRECT NBFC ⇄ Dealer channel
  * ------------------------------------------------------------------ */
 
 export type MessageParty = "nbfc" | "dealer" | "admin";
 
 /**
  * The NBFC asks the dealer for a document DIRECTLY, skipping the admin forward
- * gate (E-239). Born 'forwarded_to_dealer' — i.e. already with the dealer — and
+ * gate (E-240). Born 'forwarded_to_dealer' — i.e. already with the dealer — and
  * flagged `dealer_direct` so `recomputeWrapperStatus` leaves it alone: it has no
  * children, and the files come back on the message thread instead.
  *
@@ -678,7 +678,7 @@ export async function recomputeWrapperStatus(
     .where(eq(nbfcDocRequests.id, requestId))
     .limit(1);
   if (!wrapper) return null;
-  // E-239 — a direct NBFC→dealer request has no children at all; its status is
+  // E-240 — a direct NBFC→dealer request has no children at all; its status is
   // driven by the message thread (dealer replies → PUSHED), so projecting from
   // child min-state here would pin it at its current value forever.
   if (wrapper.dealer_direct) return wrapper.status as NbfcDocStatus;
@@ -748,7 +748,7 @@ export async function pushNbfcDocRequest(opts: {
     .where(eq(nbfcDocRequests.id, opts.requestId))
     .limit(1);
   if (!wrapper) throw new Error("NOT_FOUND: nbfc request not found");
-  // E-239 — a direct request has no children to verify; the dealer's reply is
+  // E-240 — a direct request has no children to verify; the dealer's reply is
   // what hands it back (see markDirectRequestAnswered).
   if (wrapper.request_type !== "message" && !wrapper.dealer_direct) {
     const ok = await allChildrenVerified(opts.requestId);
@@ -812,7 +812,7 @@ export async function autoPushNbfcIfAllVerified(
 }
 
 /**
- * E-239 — the dealer answered a direct request: hand it straight back to the
+ * E-240 — the dealer answered a direct request: hand it straight back to the
  * NBFC. `pushed_to_nbfc` is reused deliberately, so the NBFC's existing
  * "Acknowledge & close" button lights up with no new UI state.
  *
@@ -836,7 +836,7 @@ export async function markDirectRequestAnswered(
 }
 
 /**
- * E-239 — the NBFC replied again on a direct thread: pull it back to the dealer
+ * E-240 — the NBFC replied again on a direct thread: pull it back to the dealer
  * so it reappears on the Step-4 card. A closed thread stays closed.
  */
 export async function markDirectRequestReopened(
@@ -867,7 +867,7 @@ export async function ackNbfcDocRequest(requestId: string): Promise<void> {
 export interface ThreadEntry {
   request: typeof nbfcDocRequests.$inferSelect;
   items: Array<typeof otherDocumentRequests.$inferSelect>;
-  /** E-239 — the NBFC ⇄ Dealer conversation on this request, oldest first. */
+  /** E-240 — the NBFC ⇄ Dealer conversation on this request, oldest first. */
   messages: Array<typeof nbfcDocRequestMessages.$inferSelect>;
 }
 
@@ -931,7 +931,7 @@ export interface DealerRequestEntry {
 }
 
 /**
- * The direct (E-239) NBFC requests on a lead, for the dealer's Step-4 card.
+ * The direct (E-240) NBFC requests on a lead, for the dealer's Step-4 card.
  *
  * Scoped to `dealer_direct` wrappers ONLY: admin-gated requests reach the dealer
  * through the existing `other_document_requests` surface on Step 2/3, and

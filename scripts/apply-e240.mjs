@@ -1,6 +1,6 @@
-// Applies drizzle/E-239_nbfc_dealer_direct_requests.sql. Idempotent — safe to
+// Applies drizzle/E-240_nbfc_dealer_direct_requests.sql. Idempotent — safe to
 // re-run:
-//   node scripts/apply-e239.mjs
+//   node scripts/apply-e240.mjs
 //
 // What breaks without it, and how loudly:
 //
@@ -23,7 +23,7 @@
 // database-2 (PRODUCTION) by hand, and the two drift, so "whatever the env says"
 // is a coin flip about which one you are altering. Pass an explicit target:
 //
-//   DATABASE_URL=postgresql://…database-1… node scripts/apply-e239.mjs
+//   DATABASE_URL=postgresql://…database-1… node scripts/apply-e240.mjs
 //
 // An explicit process.env.DATABASE_URL wins over the file. The host is printed
 // before anything is written either way — read it before trusting the run.
@@ -39,7 +39,7 @@ function resolveUrl() {
 }
 
 const { url, from } = resolveUrl();
-const ddl = readFileSync("drizzle/E-239_nbfc_dealer_direct_requests.sql", "utf8");
+const ddl = readFileSync("drizzle/E-240_nbfc_dealer_direct_requests.sql", "utf8");
 
 const EXPECTED_MSG_COLS = [
   "attachments", "author_user_id", "created_at", "id", "lead_id", "message",

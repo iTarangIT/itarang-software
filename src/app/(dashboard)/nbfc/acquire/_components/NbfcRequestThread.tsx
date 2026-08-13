@@ -27,11 +27,11 @@ interface ThreadRequest {
   admin_notes: string | null;
   // E-210 — documents the iTarang admin uploaded and sent with this message.
   attachments: Attachment[] | null;
-  // E-239 — TRUE when this request went straight to the dealer.
+  // E-240 — TRUE when this request went straight to the dealer.
   dealer_direct?: boolean | null;
   created_at: string;
 }
-// E-239 — one turn of the NBFC ⇄ Dealer conversation.
+// E-240 — one turn of the NBFC ⇄ Dealer conversation.
 interface ThreadMessage {
   id: string;
   party: string;
@@ -75,7 +75,7 @@ const TYPE_LABEL: Record<string, string> = {
   message: "Message from admin",
 };
 
-// E-239 — a direct request walks the same statuses but means something else at
+// E-240 — a direct request walks the same statuses but means something else at
 // each stop (there is no admin in the middle), so it needs its own copy.
 const DIRECT_STATUS_LABEL: Record<string, string> = {
   forwarded_to_dealer: "Sent to dealer",
@@ -167,7 +167,7 @@ export default function NbfcRequestThread({
   const [entries, setEntries] = useState<ThreadEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [acking, setAcking] = useState<string | null>(null);
-  // E-239 — per-thread reply composer (only on direct threads).
+  // E-240 — per-thread reply composer (only on direct threads).
   const [replyFor, setReplyFor] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replying, setReplying] = useState(false);
@@ -203,7 +203,7 @@ export default function NbfcRequestThread({
     }
   };
 
-  // E-239 — write back to the dealer on a direct thread.
+  // E-240 — write back to the dealer on a direct thread.
   const sendReply = async (id: string) => {
     const message = replyText.trim();
     if (!message) return;
@@ -311,7 +311,7 @@ export default function NbfcRequestThread({
             </span>
           </div>
 
-          {/* E-239 — the NBFC ⇄ Dealer conversation. */}
+          {/* E-240 — the NBFC ⇄ Dealer conversation. */}
           {msgs.length > 0 ? (
             <ul className="mt-2.5 space-y-2 border-t border-slate-100 pt-2.5">
               {msgs.map((m) => (
@@ -383,7 +383,7 @@ export default function NbfcRequestThread({
                     : "Acknowledge & close"}
               </button>
             ) : null}
-            {/* E-239 — write back to the dealer while the thread is open. */}
+            {/* E-240 — write back to the dealer while the thread is open. */}
             {direct && request.status !== "closed" && replyFor !== request.id ? (
               <button
                 type="button"

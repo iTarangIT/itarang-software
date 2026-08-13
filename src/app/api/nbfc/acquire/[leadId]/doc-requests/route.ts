@@ -10,7 +10,7 @@
  * Two routings, chosen by `route_to`:
  *   'admin'  (default) — the original E-200 path. Status 'nbfc_raised'; the admin
  *                        forwards it via /api/admin/nbfc-requests/[id]/forward.
- *   'dealer'           — E-239. Straight to the dealer's Step-4 pre-sanction
+ *   'dealer'           — E-240. Straight to the dealer's Step-4 pre-sanction
  *                        card, no admin click in between. Admins are still
  *                        notified and still see the whole thread.
  */
@@ -50,7 +50,7 @@ const Body = z.object({
   doc_for: z.enum(["primary", "co_borrower"]).default("primary"),
   target_doc_key: z.string().max(120).optional().nullable(),
   comments: z.string().max(4000).optional().nullable(),
-  // E-239 — 'dealer' skips the admin forward gate. Defaults to the original
+  // E-240 — 'dealer' skips the admin forward gate. Defaults to the original
   // admin-gated behaviour, so every existing caller is unaffected.
   route_to: z.enum(["admin", "dealer"]).default("admin"),
 });
@@ -123,7 +123,7 @@ export async function POST(
       );
     }
 
-    // E-239 — direct to the dealer. The comment IS the request here (there are
+    // E-240 — direct to the dealer. The comment IS the request here (there are
     // no structured items to forward), so it is required rather than optional.
     if (d.route_to === "dealer") {
       const comments = (d.comments ?? "").trim();

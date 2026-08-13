@@ -11,7 +11,7 @@ import NbfcRequestThread from "./NbfcRequestThread";
 // thread. The rich per-document KYC verification cards (Aadhaar/PAN/Bank/
 // CIBIL/RC) were removed from this surface; only the request loop remains.
 //
-// E-239 adds a fourth button, "Ask Dealer for Documents", which skips the admin
+// E-240 adds a fourth button, "Ask Dealer for Documents", which skips the admin
 // forward gate entirely: the message lands on the dealer's Step-4 pre-sanction
 // card and the dealer answers there. The three admin-routed buttons are
 // unchanged — use those when the admin should vet the ask first.
@@ -49,7 +49,7 @@ export default function NbfcVerificationPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // E-239 — a direct ask rides the step4_extra_items type (already
+          // E-240 — a direct ask rides the step4_extra_items type (already
           // permitted by the E-202 CHECK); route_to is what changes the routing.
           request_type: direct ? "step4_extra_items" : composer.mode,
           route_to: direct ? "dealer" : "admin",
@@ -186,7 +186,7 @@ export default function NbfcVerificationPanel({
           </p>
         ) : null}
 
-        {/* E-239 — the direct channel. Given its own row above the admin-routed
+        {/* E-240 — the direct channel. Given its own row above the admin-routed
             buttons because it is the fast path and the one to reach for first:
             the dealer sees the message immediately, on the same card they upload
             from. The admin still sees the thread and is still notified. */}
