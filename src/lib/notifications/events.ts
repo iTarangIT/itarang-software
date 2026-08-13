@@ -577,7 +577,7 @@ export async function notifyNbfcRequestForwarded(p: {
 }
 
 /**
- * E-239 — the NBFC asked the DEALER directly, skipping the admin forward gate.
+ * E-240 — the NBFC asked the DEALER directly, skipping the admin forward gate.
  *
  * The dealer is the actionable recipient and lands on the Step-4 pre-sanction
  * card, where the ask and the upload control sit together. Admins are told too,
@@ -613,7 +613,7 @@ export async function notifyNbfcDocRequestDirect(p: {
   });
 }
 
-/** E-239 — the dealer answered a direct NBFC request. Goes straight back. */
+/** E-240 — the dealer answered a direct NBFC request. Goes straight back. */
 export async function notifyDealerRepliedToNbfc(p: {
   leadId: string;
   requestId: string;

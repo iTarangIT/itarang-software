@@ -1930,7 +1930,7 @@ export const nbfcDocRequests = pgTable(
     // nbfc_raised → admin_review → forwarded_to_dealer → with_customer →
     // dealer_review → admin_review_upload → pushed_to_nbfc | closed | rejected.
     status: varchar({ length: 32 }).default('nbfc_raised').notNull(),
-    // E-239 — TRUE when the NBFC sent this straight to the dealer, skipping the
+    // E-240 — TRUE when the NBFC sent this straight to the dealer, skipping the
     // admin forward gate. Such a wrapper has NO otherDocumentRequests children
     // (the files ride on nbfcDocRequestMessages.attachments), so
     // recomputeWrapperStatus() early-returns on it. The admin still sees the
@@ -1962,7 +1962,7 @@ export const nbfcDocRequests = pgTable(
   }),
 );
 
-// E-239 — append-only NBFC ⇄ Dealer conversation hanging off an nbfcDocRequests
+// E-240 — append-only NBFC ⇄ Dealer conversation hanging off an nbfcDocRequests
 // wrapper (one row per thing one party said, with any files attached). Exists
 // because the wrapper holds exactly one `nbfc_comments` and one `admin_notes`,
 // so a dealer reply — or a second round from either side — has nowhere to live

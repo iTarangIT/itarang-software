@@ -1884,7 +1884,7 @@ export default function ProductSelectionPage() {
                   </span>
                 }
               >
-                {/* E-239 — anything the lender asked for DIRECTLY, answered in
+                {/* E-240 — anything the lender asked for DIRECTLY, answered in
                     place. Renders above the generic controls because it is the
                     one thing here someone is actually waiting on; self-hides
                     when there are no open requests. */}

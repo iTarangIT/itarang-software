@@ -138,7 +138,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.request_pushed": "NBFC Requests",
   "nbfc.request_declined": "NBFC Requests",
   "nbfc.doc_uploaded": "NBFC Requests",
-  // E-239 — the direct NBFC ⇄ dealer channel.
+  // E-240 — the direct NBFC ⇄ dealer channel.
   "nbfc.doc_req_direct": "NBFC Requests",
   "nbfc.doc_req_reply": "NBFC Requests",
   "nbfc.doc_verified": "NBFC Requests",
@@ -276,7 +276,7 @@ const WARNING = new Set([
   "nbfc.request_raised",
   "nbfc.request_forwarded",
   "nbfc.doc_uploaded",
-  // E-239 — a direct lender request is the dealer sitting still until they answer.
+  // E-240 — a direct lender request is the dealer sitting still until they answer.
   "nbfc.doc_req_direct",
   "nbfc.verdict_raised",
   "fi.requested",

@@ -53,12 +53,12 @@ interface Wrapper {
   // message, and the verdict the message answers (if any).
   attachments: VerdictAttachment[] | null;
   verdict_id: number | null;
-  // E-239 — the NBFC sent this straight to the dealer, skipping the forward
+  // E-240 — the NBFC sent this straight to the dealer, skipping the forward
   // gate. Read-only here: there is nothing for the admin to forward or push.
   dealer_direct?: boolean | null;
   created_at: string;
 }
-// E-239 — one turn of the NBFC ⇄ Dealer conversation on a direct request.
+// E-240 — one turn of the NBFC ⇄ Dealer conversation on a direct request.
 interface ThreadMessage {
   id: string;
   party: string;
@@ -647,7 +647,7 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                       ? "Direct request to dealer"
                       : request.request_type.replace(/_/g, " ")}
                     {request.target_doc_key ? ` — ${request.target_doc_key}` : ""}
-                    {/* E-239 — the admin is an observer on these, not a gate. */}
+                    {/* E-240 — the admin is an observer on these, not a gate. */}
                     {request.dealer_direct ? (
                       <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
                         NBFC → Dealer
@@ -694,7 +694,7 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                 </ul>
               ) : null}
 
-              {/* E-239 — the NBFC ⇄ Dealer conversation, so the admin can read
+              {/* E-240 — the NBFC ⇄ Dealer conversation, so the admin can read
                   what was asked and what came back without being in the loop. */}
               {(messages?.length ?? 0) > 0 ? (
                 <ul className="mt-2 space-y-2 border-t border-slate-100 pt-2">

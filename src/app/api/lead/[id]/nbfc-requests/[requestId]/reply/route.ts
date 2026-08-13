@@ -1,7 +1,7 @@
 /**
  * POST /api/lead/[id]/nbfc-requests/[requestId]/reply   (application/json)
  *
- * E-239 — the dealer answers a direct NBFC document request from the Step-4
+ * E-240 — the dealer answers a direct NBFC document request from the Step-4
  * pre-sanction card: attaches files, types a note, or both. The wrapper flips
  * straight to 'pushed_to_nbfc' (no admin review), so the NBFC's existing
  * "Acknowledge & close" button lights up on its thread.

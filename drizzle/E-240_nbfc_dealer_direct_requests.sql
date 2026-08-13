@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------------
--- E-239: NBFC → Dealer DIRECT document request + two-way message thread.
+-- E-240: NBFC → Dealer DIRECT document request + two-way message thread.
 --
 -- WHAT THIS ADDS, AND WHY.
 --
@@ -62,7 +62,7 @@
 --
 -- Strictly additive and idempotent — safe to re-run. Guarded so it is a reported
 -- no-op where E-200 has not landed.
--- Apply with: node scripts/apply-e239.mjs
+-- Apply with: node scripts/apply-e240.mjs
 ------------------------------------------------------------------------------
 
 -- 1. The direct-channel flag on the E-200 wrapper. -----------------------------
@@ -75,7 +75,7 @@ END; $do$;
 
 DO $do$ BEGIN
   COMMENT ON COLUMN nbfc_doc_requests.dealer_direct IS
-    'E-239. TRUE = the NBFC sent this straight to the dealer, skipping the admin forward gate. Such a wrapper has NO other_document_requests children — the files ride on nbfc_doc_request_messages.attachments — so recomputeWrapperStatus() must early-return on it. The admin still sees it, and is still notified, on both legs.';
+    'E-240. TRUE = the NBFC sent this straight to the dealer, skipping the admin forward gate. Such a wrapper has NO other_document_requests children — the files ride on nbfc_doc_request_messages.attachments — so recomputeWrapperStatus() must early-return on it. The admin still sees it, and is still notified, on both legs.';
 EXCEPTION
   WHEN undefined_table THEN RAISE NOTICE 'nbfc_doc_requests missing — skip comment';
   WHEN undefined_column THEN RAISE NOTICE 'dealer_direct missing — skip comment';
@@ -100,7 +100,7 @@ CREATE INDEX IF NOT EXISTS nbfc_doc_request_messages_lead_idx
   ON nbfc_doc_request_messages (lead_id);
 
 COMMENT ON TABLE nbfc_doc_request_messages IS
-  'E-239. Append-only NBFC ⇄ Dealer conversation hanging off an nbfc_doc_requests wrapper. One row per thing one party said at one moment, with any files attached to it. Exists because the wrapper holds exactly one nbfc_comments and one admin_notes, so a dealer reply — or a second round from either side — has nowhere to live without overwriting the question it answers. Same shape as E-238 nbfc_offer_negotiations.';
+  'E-240. Append-only NBFC ⇄ Dealer conversation hanging off an nbfc_doc_requests wrapper. One row per thing one party said at one moment, with any files attached to it. Exists because the wrapper holds exactly one nbfc_comments and one admin_notes, so a dealer reply — or a second round from either side — has nowhere to live without overwriting the question it answers. Same shape as E-238 nbfc_offer_negotiations.';
 
 COMMENT ON COLUMN nbfc_doc_request_messages.party IS
   'Who spoke: nbfc | dealer | admin. No CHECK constraint, per the nbfc_* family convention (cf. E-238 nbfc_offer_negotiations.party) — enforced in the route layer.';
