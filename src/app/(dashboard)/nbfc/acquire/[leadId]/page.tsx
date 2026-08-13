@@ -7,6 +7,7 @@ import {
   dealers,
   leads,
   nbfc,
+  nbfcFinancingOffers,
   nbfcLeadAssignments,
   nbfcLoanProducts,
   productSelections,
@@ -219,6 +220,16 @@ export default async function AcquireLeadDetailPage({
   const offerSubmitted = ["offer_submitted", "selected", "not_selected"].includes(
     status,
   );
+  // E-238 — negotiation state of this NBFC's offer, for the Next banner. The
+  // Offer node's own state is unchanged: it stays `active` throughout a
+  // negotiation, which is already what offerSubmitted gives it.
+  const [offerNegotiation] = await db
+    .select({ negotiation_status: nbfcFinancingOffers.negotiation_status })
+    .from(nbfcFinancingOffers)
+    .where(eq(nbfcFinancingOffers.assignment_id, assignment.id))
+    .limit(1);
+  const dealerCountered = offerNegotiation?.negotiation_status === "dealer_countered";
+  const offerFixed = offerNegotiation?.negotiation_status === "fixed";
   const won = status === "selected";
   const lost = status === "not_selected";
   const closed = status === "declined" || status === "withdrawn";
@@ -730,10 +741,19 @@ export default async function AcquireLeadDetailPage({
         tone: "info",
         text: "Credit / Underwriting: submit the firm financing offer for this lead.",
       };
+    // E-238 — the customer has come back with an ask; the lead is stalled on us,
+    // not on them, so say so before the generic "awaiting decision" line.
+    if (dealerCountered)
+      return {
+        tone: "warning",
+        text: "Credit / Underwriting: the customer requested revised terms — revise the offer, or fix the current terms to close the negotiation.",
+      };
     if (status === "offer_submitted")
       return {
         tone: "info",
-        text: "Offer submitted — awaiting the customer's decision between competing offers.",
+        text: offerFixed
+          ? "Terms fixed — awaiting the customer's decision between competing offers."
+          : "Offer submitted — awaiting the customer's decision between competing offers.",
       };
     return { tone: "muted", text: "Awaiting the next step." };
   }

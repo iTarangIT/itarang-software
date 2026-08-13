@@ -32,6 +32,10 @@ import {
 import { getNeodoveConfig } from "@/lib/neodove/config";
 import { getPriorityDialCampaign, pushOneLead } from "@/lib/neodove/pushOne";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import {
+    assignAfterPush,
+    resolveNeodoveAssignee,
+} from "@/lib/neodove/assignAfterPush";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 
 export const runtime = "nodejs";
@@ -41,6 +45,9 @@ const bodySchema = z.object({
     // an ASM is mid-negotiation on to the calling team is legitimate sometimes,
     // but never silently.
     force: z.boolean().optional(),
+    // Omitted = use the priority campaign's default CRM owner, null = don't
+    // assign, a string = override for this dial (E-237).
+    assignToUserId: z.string().trim().min(1).nullable().optional(),
 });
 
 export const POST = withErrorHandler(
@@ -68,15 +75,39 @@ export const POST = withErrorHandler(
             );
         }
 
+        const assignee = await resolveNeodoveAssignee({
+            campaignId: campaign.id,
+            assignToUserId: parsed.data.assignToUserId,
+        });
+        if (!assignee.ok) {
+            return errorResponse(assignee.message, assignee.status);
+        }
+
         const result = await pushOneLead({
             leadId: id,
             campaignId: campaign.id,
             force: parsed.data.force,
         });
-        if (!result.ok) return errorResponse(result.message, result.status);
 
         const destination =
             campaign.neodove_campaign_name ?? campaign.name;
+
+        // Assign on any ATTEMPTED push — `ok`, or a 502 that left here and
+        // failed at NeoDove's end. Never on the pre-push refusals (404 / 409 /
+        // 400), which sent nothing.
+        let assigned = false;
+        if (assignee.target && (result.ok || result.status === 502)) {
+            assigned = await assignAfterPush({
+                leadId: id,
+                campaignId: campaign.id,
+                target: assignee.target,
+                actorId: user.id,
+                actorRole: user.role,
+                campaignLabel: destination,
+            });
+        }
+
+        if (!result.ok) return errorResponse(result.message, result.status);
 
         // The request is logged as a touchpoint, NOT as a call: nobody has
         // spoken to anyone yet. The actual call lands later as a separate
@@ -113,6 +144,8 @@ export const POST = withErrorHandler(
             campaignId: campaign.id,
             campaignName: destination,
             leadName: result.leadName,
+            assigned,
+            assignedTo: assigned && assignee.target ? assignee.target.name : null,
         });
     },
 );

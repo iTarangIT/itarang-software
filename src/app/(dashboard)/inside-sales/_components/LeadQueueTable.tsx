@@ -15,6 +15,7 @@ import { StatusChip } from "./StatusChip";
 import { IntentBadge } from "./IntentBadge";
 import { InterestChip } from "./InterestChip";
 import { OwnerIndicator } from "./OwnerIndicator";
+import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { staleSeverity, workingDaysSince } from "@/lib/inside-sales/staleness";
 import type { QueueRow, QueueTab } from "@/lib/inside-sales/types";
 
@@ -139,13 +140,18 @@ export function LeadQueueTable({
                                     className={`cursor-pointer hover:bg-blue-50/40 transition ${STALE_ROW_BG[sev]}`}
                                 >
                                     <td className="px-4 py-3 align-top">
-                                        <Link
-                                            href={href}
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="font-semibold text-blue-700 hover:underline"
-                                        >
-                                            {row.dealer_name || row.shop_name || "(unnamed dealer)"}
-                                        </Link>
+                                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                                            <Link
+                                                href={href}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="font-semibold text-blue-700 hover:underline"
+                                            >
+                                                {row.dealer_name || row.shop_name || "(unnamed dealer)"}
+                                            </Link>
+                                            {/* Renders nothing unless the lead is actually with the
+                                                calling team — see NeodoveTag. */}
+                                            <NeodoveTag syncStatus={row.neodove_sync_status} />
+                                        </div>
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>
                                         )}

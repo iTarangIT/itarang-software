@@ -45,6 +45,13 @@ export type QueueRow = {
     assigned_at: string | null;
     created_at: string | null;
     updated_at: string | null;
+    /**
+     * `dealer_leads.neodove_sync_status` — pushed | inbound | priority_dial |
+     * failed, or null for a lead that has never been near NeoDove. Drives the
+     * row's NeoDove chip. Null on any database without E-224 (it is read through
+     * to_jsonb precisely so that is a null and not a 500).
+     */
+    neodove_sync_status: string | null;
 };
 
 export type QueueResponse = {

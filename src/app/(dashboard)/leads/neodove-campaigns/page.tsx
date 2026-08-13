@@ -26,6 +26,7 @@ import {
     Info,
     Plus,
     Upload,
+    UserPlus2,
 } from "lucide-react";
 import { NeodoveCampaignModal } from "@/components/leads/neodove-campaign-modal";
 
@@ -39,6 +40,10 @@ type CampaignRow = {
     is_wired: boolean;
     /** Names of other campaigns pushing through the same endpoint. */
     endpoint_shared_with?: string[];
+    /** E-237: the CRM user leads pushed here are assigned to. Undefined on any
+     *  DB without that migration — the list route reads it through to_jsonb. */
+    crm_owner_user_id?: string | null;
+    crm_owner_name?: string | null;
     total_pushed: number;
     push_failed: number;
     // Both server-derived — see the comments in GET /api/neodove/campaigns.
@@ -276,6 +281,19 @@ export default function NeodoveCampaignsPage() {
                                                     "Call now" landed; with that
                                                     button gone the badge pointed at
                                                     a destination nothing routes to. */}
+                                                {/* E-237: who picks these leads up in
+                                                    the CRM. A chip on the existing
+                                                    sub-line rather than a 9th column —
+                                                    the table is already at eight. */}
+                                                {c.crm_owner_name && (
+                                                    <span
+                                                        className="inline-flex items-center gap-1 text-gray-500"
+                                                        title={`Leads pushed to this campaign are assigned to ${c.crm_owner_name} in the CRM`}
+                                                    >
+                                                        <UserPlus2 className="w-3 h-3" />
+                                                        {c.crm_owner_name}
+                                                    </span>
+                                                )}
                                             </p>
                                         </td>
                                         <td className="px-4 py-3">

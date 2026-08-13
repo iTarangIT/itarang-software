@@ -6,8 +6,13 @@
  *   POST → raise a new request (correction | additional_docs | step4_extra_items).
  *
  * Role: `credit_underwriting` (owns verification/offer terms, §7.2) or `nbfc_admin`.
- * The request goes to the admin queue (status 'nbfc_raised'); the admin forwards
- * it to the dealer via /api/admin/nbfc-requests/[id]/forward.
+ *
+ * Two routings, chosen by `route_to`:
+ *   'admin'  (default) — the original E-200 path. Status 'nbfc_raised'; the admin
+ *                        forwards it via /api/admin/nbfc-requests/[id]/forward.
+ *   'dealer'           — E-240. Straight to the dealer's Step-4 pre-sanction
+ *                        card, no admin click in between. Admins are still
+ *                        notified and still see the whole thread.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -16,11 +21,13 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import {
+  createDirectDealerRequest,
   createNbfcDocRequest,
   listThreadForLead,
   NBFC_DOC_STATUS,
 } from "@/lib/nbfc/doc-requests";
 import { notifyAdminsOfNbfcRequest } from "@/lib/nbfc/doc-request-notify";
+import { notifyNbfcDocRequestDirect } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,6 +50,9 @@ const Body = z.object({
   doc_for: z.enum(["primary", "co_borrower"]).default("primary"),
   target_doc_key: z.string().max(120).optional().nullable(),
   comments: z.string().max(4000).optional().nullable(),
+  // E-240 — 'dealer' skips the admin forward gate. Defaults to the original
+  // admin-gated behaviour, so every existing caller is unaffected.
+  route_to: z.enum(["admin", "dealer"]).default("admin"),
 });
 
 export async function GET(
@@ -113,6 +123,38 @@ export async function POST(
       );
     }
 
+    // E-240 — direct to the dealer. The comment IS the request here (there are
+    // no structured items to forward), so it is required rather than optional.
+    if (d.route_to === "dealer") {
+      const comments = (d.comments ?? "").trim();
+      if (!comments) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "BAD_REQUEST: a message is required when sending a request straight to the dealer",
+          },
+          { status: 400 },
+        );
+      }
+      const { id } = await createDirectDealerRequest({
+        leadId,
+        assignmentId: assignment.id,
+        nbfcId: assignment.nbfc_id,
+        tenantId: actor.tenant_id,
+        docFor: d.doc_for,
+        comments,
+        raisedBy: actor.user_id,
+      });
+      await notifyNbfcDocRequestDirect({
+        leadId,
+        requestId: id,
+        nbfcName: actor.tenant_slug,
+        comments,
+      }).catch(() => {});
+      return NextResponse.json({ ok: true, id, routed_to: "dealer" });
+    }
+
     const { id } = await createNbfcDocRequest({
       leadId,
       assignmentId: assignment.id,
@@ -136,7 +178,7 @@ export async function POST(
       req,
     }).catch(() => {});
 
-    return NextResponse.json({ ok: true, id });
+    return NextResponse.json({ ok: true, id, routed_to: "admin" });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(

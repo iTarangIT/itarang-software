@@ -44,6 +44,7 @@ import {
   FullPageLoader,
 } from "@/components/dealer-portal/lead-wizard/shared";
 import FinancingOffersSection from "./FinancingOffersSection";
+import NbfcDocRequestsBlock from "./NbfcDocRequestsBlock";
 
 // BRD V2 Part E §2.2 — Step 4 Product Selection (dealer side)
 // Sections:
@@ -1883,6 +1884,14 @@ export default function ProductSelectionPage() {
                   </span>
                 }
               >
+                {/* E-240 — anything the lender asked for DIRECTLY, answered in
+                    place. Renders above the generic controls because it is the
+                    one thing here someone is actually waiting on; self-hides
+                    when there are no open requests. */}
+                <NbfcDocRequestsBlock
+                  leadId={leadId}
+                  onDocsMirrored={(items) => setPreSanctionDocs(items)}
+                />
                 <p className="mb-3 text-xs text-slate-500">
                   Attach anything the lender needs before sanction — installation
                   images, NBFC-signed docs, agreements. Any format (image, video,
