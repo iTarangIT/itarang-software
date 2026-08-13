@@ -576,6 +576,78 @@ export async function notifyNbfcRequestForwarded(p: {
   });
 }
 
+/**
+ * E-239 — the NBFC asked the DEALER directly, skipping the admin forward gate.
+ *
+ * The dealer is the actionable recipient and lands on the Step-4 pre-sanction
+ * card, where the ask and the upload control sit together. Admins are told too,
+ * on the same event, because the direct channel removes the admin as a blocker —
+ * not as an observer; without this row the first an admin hears of a lender
+ * question is the dealer's answer.
+ */
+export async function notifyNbfcDocRequestDirect(p: {
+  leadId: string;
+  requestId: string;
+  nbfcName?: string | null;
+  comments?: string | null;
+}) {
+  const lender = p.nbfcName || "Your lender";
+  const ask = (p.comments ?? "").trim();
+  const short = ask.length > 160 ? `${ask.slice(0, 157)}…` : ask;
+  await emit({
+    type: "nbfc.doc_req_direct",
+    title: "Lender needs a document",
+    message: short
+      ? `${lender} needs a document for this application: ${short}`
+      : `${lender} needs an additional document for this application.`,
+    leadId: p.leadId,
+    stage: "Step 4 · NBFC request",
+    from: nbfcParty(lender),
+    data: { requestId: p.requestId },
+    to: [
+      toLeadDealer(p.leadId, {
+        href: dealerLead(p.leadId, "/product-selection#nbfc-requests"),
+      }),
+      toAdmins({ href: adminLead(p.leadId, "#nbfc-actions") }),
+    ],
+  });
+}
+
+/** E-239 — the dealer answered a direct NBFC request. Goes straight back. */
+export async function notifyDealerRepliedToNbfc(p: {
+  leadId: string;
+  requestId: string;
+  tenantId?: string | null;
+  dealerName?: string | null;
+  count?: number | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const n = p.count ?? 0;
+  const files =
+    n > 0 ? `${n} document${n === 1 ? "" : "s"}` : "a reply with no attachment";
+  await emit({
+    type: "nbfc.doc_req_reply",
+    title: "Dealer answered your request",
+    message: `${p.dealerName ?? "The dealer"} sent ${files} for ${who}.`,
+    leadId: p.leadId,
+    stage: "Step 4 · NBFC request",
+    from: p.dealerName ? dealerParty(p.dealerName) : await actingParty(),
+    data: { requestId: p.requestId, count: n },
+    to: [
+      // Scoped to the NBFC that asked, not every routed lender — a competing
+      // lender has no business seeing what was sent to the one that asked.
+      ...(p.tenantId
+        ? [
+            toNbfc(p.tenantId, await tenantDisplayName(p.tenantId), {
+              href: nbfcLead(p.leadId, "#nbfc-requests"),
+            }),
+          ]
+        : [toLeadNbfcs(p.leadId, { href: nbfcLead(p.leadId, "#nbfc-requests") })]),
+      toAdmins({ href: adminLead(p.leadId, "#nbfc-actions") }),
+    ],
+  });
+}
+
 /** The dealer uploaded against an NBFC request — back with the admin to push. */
 export async function notifyNbfcRequestUpload(p: {
   leadId: string;
@@ -967,7 +1039,92 @@ export async function notifyOfferSubmitted(p: {
     data: { loan_amount: p.loanAmount ?? null, emi: p.emi ?? null, tenure_months: p.tenureMonths ?? null },
     to: [
       toAdmins({ href: adminLead(p.leadId, "#offers") }),
-      toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/options") }),
+      // The offers card — and, since E-238, the Negotiate button — lives on
+      // /product-selection. This used to point at /options, the legacy
+      // loan_offers page, which landed the dealer somewhere the offer isn't.
+      toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") }),
+    ],
+  });
+}
+
+/**
+ * E-238 — the dealer countered an NBFC's firm offer with specific terms.
+ *
+ * Only the NBFC being negotiated with hears about it. The other lender on the
+ * lead is a competitor mid-race, and telling it what the customer is asking for
+ * would hand it the other side's position.
+ */
+export async function notifyOfferNegotiated(p: {
+  leadId: string;
+  nbfcTenantId: string;
+  nbfcName: string;
+  asks: Record<string, string | number | null>;
+  message?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const ASK_LABEL: Record<string, (v: string | number) => string> = {
+    loan_amount: (v) => `loan ₹${v}`,
+    roi_pct: (v) => `ROI ${v}%`,
+    emi_amount: (v) => `EMI ₹${v}`,
+    tenure_months: (v) => `${v} months`,
+    down_payment: (v) => `down payment ₹${v}`,
+    processing_fee: (v) => `processing fee ₹${v}`,
+  };
+  const asked = Object.entries(p.asks)
+    .filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => (ASK_LABEL[k] ? ASK_LABEL[k](v as string | number) : `${k} ${v}`))
+    .join(" · ");
+  await emit({
+    type: "loan.offer_negotiated",
+    title: "Customer countered your offer",
+    message: `${who} asked for revised terms${asked ? ` — ${asked}` : ""}.${
+      p.message ? ` "${p.message}"` : ""
+    }`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: customerParty(who),
+    data: { asks: p.asks, message: p.message ?? null },
+    to: [
+      toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId, "#offer") }),
+      toAdmins({
+        href: adminLead(p.leadId, "#offers"),
+        title: "Dealer countered a financing offer",
+        message: `${who} asked ${p.nbfcName} for revised terms${asked ? ` — ${asked}` : ""}.`,
+      }),
+    ],
+  });
+}
+
+/**
+ * E-238 — the NBFC fixed its terms. Negotiation is over for both sides; the
+ * dealer's remaining move is to select this lender or another one.
+ */
+export async function notifyOfferFixed(p: {
+  leadId: string;
+  nbfcName: string;
+  loanAmount?: number | string | null;
+  emi?: number | string | null;
+  tenureMonths?: number | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const terms = [
+    p.loanAmount ? `₹${p.loanAmount}` : null,
+    p.emi ? `EMI ₹${p.emi}` : null,
+    p.tenureMonths ? `${p.tenureMonths} months` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  await emit({
+    type: "loan.offer_fixed",
+    title: "Financing terms are final",
+    message: `${p.nbfcName} fixed its offer for ${who}${terms ? ` — ${terms}` : ""}. These terms can no longer be negotiated.`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: nbfcParty(p.nbfcName),
+    data: { loan_amount: p.loanAmount ?? null, emi: p.emi ?? null, tenure_months: p.tenureMonths ?? null },
+    to: [
+      toAdmins({ href: adminLead(p.leadId, "#offers") }),
+      toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") }),
     ],
   });
 }

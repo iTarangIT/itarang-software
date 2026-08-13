@@ -1930,6 +1930,12 @@ export const nbfcDocRequests = pgTable(
     // nbfc_raised → admin_review → forwarded_to_dealer → with_customer →
     // dealer_review → admin_review_upload → pushed_to_nbfc | closed | rejected.
     status: varchar({ length: 32 }).default('nbfc_raised').notNull(),
+    // E-239 — TRUE when the NBFC sent this straight to the dealer, skipping the
+    // admin forward gate. Such a wrapper has NO otherDocumentRequests children
+    // (the files ride on nbfcDocRequestMessages.attachments), so
+    // recomputeWrapperStatus() early-returns on it. The admin still sees the
+    // thread and is still notified on both legs.
+    dealer_direct: boolean("dealer_direct").default(false).notNull(),
     item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
     raised_by: uuid("raised_by").notNull(), // NBFC actor
     reviewed_by: uuid("reviewed_by"), // admin who forwarded / pushed
@@ -1953,6 +1959,37 @@ export const nbfcDocRequests = pgTable(
       table.status,
     ),
     verdictIdx: index("nbfc_doc_requests_verdict_idx").on(table.verdict_id),
+  }),
+);
+
+// E-239 — append-only NBFC ⇄ Dealer conversation hanging off an nbfcDocRequests
+// wrapper (one row per thing one party said, with any files attached). Exists
+// because the wrapper holds exactly one `nbfc_comments` and one `admin_notes`,
+// so a dealer reply — or a second round from either side — has nowhere to live
+// without overwriting the question it answers. Same shape as E-238's
+// nbfcOfferNegotiations.
+export const nbfcDocRequestMessages = pgTable(
+  "nbfc_doc_request_messages",
+  {
+    id: varchar({ length: 255 }).primaryKey().notNull(), // 'NBFCMSG-YYYYMMDD-SSSS'
+    request_id: varchar("request_id", { length: 255 }).notNull(), // nbfc_doc_requests.id
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    // 'nbfc' | 'dealer' | 'admin' — no CHECK, per the nbfc_* family convention.
+    party: varchar({ length: 16 }).notNull(),
+    author_user_id: uuid("author_user_id"),
+    message: text("message"),
+    // [{ url, name, type, size }]. A dealer reply's files are ALSO appended to
+    // product_selections.pre_sanction_doc_urls, but THIS copy is canonical —
+    // that bucket is capped at 10 and the cap must never block a reply.
+    attachments: jsonb("attachments").default(sql`'[]'::jsonb`),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    requestCreatedIdx: index("nbfc_doc_request_messages_request_created_idx").on(
+      table.request_id,
+      table.created_at,
+    ),
+    leadIdx: index("nbfc_doc_request_messages_lead_idx").on(table.lead_id),
   }),
 );
 
@@ -4039,6 +4076,15 @@ export const nbfcFinancingOffers = pgTable(
     ceo_decided_at: timestamp("ceo_decided_at", { withTimezone: true }),
     submitted_by: uuid("submitted_by"),
     submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-238 — dealer <-> NBFC negotiation state for THIS offer. The round-by-round
+    // history lives in nbfcOfferNegotiations; these four are the current state.
+    // negotiation_status: open (dealer may counter) | dealer_countered (NBFC to
+    // respond) | fixed (NBFC froze the terms — neither side can change them and
+    // the dealer's Negotiate action disappears; winner selection still allowed).
+    negotiation_status: varchar("negotiation_status", { length: 16 }).default("open").notNull(),
+    negotiation_round: integer("negotiation_round").default(0).notNull(),
+    fixed_at: timestamp("fixed_at", { withTimezone: true }),
+    fixed_by: uuid("fixed_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -4047,6 +4093,57 @@ export const nbfcFinancingOffers = pgTable(
     leadIdx: index("nbfc_financing_offers_lead_idx").on(table.lead_id),
     tenantIdx: index("nbfc_financing_offers_tenant_idx").on(table.tenant_id),
     ceoStatusIdx: index("nbfc_financing_offers_ceo_status_idx").on(table.ceo_approval_status),
+  }),
+);
+
+// E-238 — append-only round log of the dealer <-> NBFC negotiation over one firm
+// financing offer. nbfcFinancingOffers is UNIQUE on assignment_id and the submit
+// route upserts in place, so every resubmit destroys the previous terms — this
+// table is where the history that a disputed sanction turns on actually lives.
+//
+// Each row is a FULL snapshot of the terms one party put on the table at one
+// moment (not a per-field ask/counter pair like vendorThreadLines): a financing
+// offer is six interdependent numbers negotiated as a set, and the UI diffs
+// consecutive rounds to surface only what changed.
+//
+// INVARIANT: a round is written only when its terms are visible to the dealer.
+// While E-161 holds an out-of-band offer at ceo_approval_status='pending' the
+// dealer cannot see it, so no round is appended until the iTarang CEO approves.
+//
+// The unique index on (offer_id, round) is a concurrency guard, not tidiness —
+// the round written is always negotiation_round + 1, so two simultaneous submits
+// must collide with 23505 rather than both claim the same round.
+export const nbfcOfferNegotiations = pgTable(
+  "nbfc_offer_negotiations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    offer_id: uuid("offer_id").notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    round: integer("round").notNull(),
+    party: varchar("party", { length: 8 }).notNull(), // 'nbfc' | 'dealer'
+    kind: varchar("kind", { length: 16 }).notNull(), // 'offer' | 'counter' | 'fix'
+    loan_amount: numeric("loan_amount", { precision: 14, scale: 2 }),
+    roi_pct: numeric("roi_pct", { precision: 5, scale: 2 }),
+    emi_amount: numeric("emi_amount", { precision: 14, scale: 2 }),
+    tenure_months: integer("tenure_months"),
+    down_payment: numeric("down_payment", { precision: 14, scale: 2 }),
+    processing_fee: numeric("processing_fee", { precision: 14, scale: 2 }),
+    conditions: text("conditions"),
+    message: text("message"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    offerRoundUnique: uniqueIndex("nbfc_offer_negotiations_offer_round_uidx").on(
+      table.offer_id,
+      table.round,
+    ),
+    offerIdx: index("nbfc_offer_negotiations_offer_idx").on(table.offer_id),
+    leadIdx: index("nbfc_offer_negotiations_lead_idx").on(table.lead_id),
+    tenantIdx: index("nbfc_offer_negotiations_tenant_idx").on(table.tenant_id),
   }),
 );
 
@@ -10072,6 +10169,16 @@ export const neodoveCampaigns = pgTable(
     // Safe to mirror despite E-226 possibly being unapplied for the same reason
     // mirror_config is: every access to this table is raw `sql`.
     is_priority_dial: boolean("is_priority_dial").default(false).notNull(),
+    // E-237: the CRM user who should own leads pushed into this campaign — the
+    // CRM-side counterpart of the NeoDove campaign-member assignment, which has
+    // no API and can be neither read nor written from here. ACTED ON (a push
+    // assigns to it), unlike the purely descriptive mirror_config above.
+    // text, matching dealer_leads.current_owner_id, so the two owner columns
+    // compare directly; users.id is uuid, hence every join's ::text cast.
+    // Safe to mirror despite E-237 possibly being unapplied for the same reason
+    // mirror_config is: every access to this table is raw `sql`. Reads still go
+    // through to_jsonb, because a missing column fails at PARSE time.
+    crm_owner_user_id: text("crm_owner_user_id"),
     // draft | pushing | active | paused | completed
     status: varchar({ length: 20 }).default("draft").notNull(),
     total_pushed: integer("total_pushed").default(0).notNull(),
@@ -10109,6 +10216,14 @@ export const neodoveLeadLinks = pgTable(
     push_status: varchar("push_status", { length: 24 }).default("pending").notNull(),
     push_error: text("push_error"),
     pushed_at: timestamp("pushed_at", { withTimezone: true }),
+    // E-237: who this push assigned the lead to in the CRM, and when.
+    // Historical by design — NOT kept in step with dealer_leads.current_owner_id
+    // if the lead is reassigned later, because the question these answer is
+    // "what did this campaign hand over", which a later reassignment must not
+    // rewrite. Also the only place the outcome survives: push-batch acks before
+    // its drain runs, so the count cannot travel in the HTTP response.
+    assigned_owner_id: text("assigned_owner_id"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
     last_event_at: timestamp("last_event_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },

@@ -11,7 +11,7 @@
 
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -21,6 +21,8 @@ import {
     ArrowUpRight,
     Code2,
     Info,
+    Search,
+    X,
 } from "lucide-react";
 
 type ActivityRow = {
@@ -29,9 +31,15 @@ type ActivityRow = {
     event_type: string | null;
     neodove_campaign_id: string | null;
     campaign_name: string | null;
+    /** Campaign name as NeoDove sent it — present even when nothing links here. */
+    external_campaign_name: string | null;
     dealer_lead_id: string | null;
     dealer_name: string | null;
     phone: string | null;
+    /** Dealer as NeoDove named them — present even when nothing links here. */
+    payload_name: string | null;
+    payload_mobile: string | null;
+    payload_lead_id: string | null;
     external_event_id: string | null;
     http_status: number | null;
     error: string | null;
@@ -79,6 +87,12 @@ export default function NeodoveActivityPage() {
     const [filter, setFilter] = useState<Filter>("all");
     const [errorsOnly, setErrorsOnly] = useState(false);
     const [page, setPage] = useState(1);
+    // Two states, not one: `search` is what the box shows and must update on
+    // every keystroke, `query` is what the server is asked for and must not.
+    // The list polls every 15s, so an undebounced box would fire a query per
+    // character against a 2,200-row scan.
+    const [search, setSearch] = useState("");
+    const [query, setQuery] = useState("");
     // Which rows have their raw payload open. A Set rather than a single id so
     // two events can be compared side by side — which is exactly what you do
     // when working out why one webhook parsed and another did not.
@@ -92,12 +106,26 @@ export default function NeodoveActivityPage() {
             return next;
         });
 
+    useEffect(() => {
+        const t = setTimeout(() => {
+            setQuery((prev) => {
+                const next = search.trim();
+                // Page 1 only when the search actually changed — resetting it
+                // unconditionally would fight the Previous/Next buttons.
+                if (next !== prev) setPage(1);
+                return next;
+            });
+        }, 300);
+        return () => clearTimeout(t);
+    }, [search]);
+
     const { data, isLoading, isError, error } = useQuery<Payload>({
-        queryKey: ["neodove-activity", filter, errorsOnly, page],
+        queryKey: ["neodove-activity", filter, errorsOnly, page, query],
         queryFn: async () => {
             const qs = new URLSearchParams({ page: String(page) });
             if (filter !== "all") qs.set("direction", filter);
             if (errorsOnly) qs.set("errorsOnly", "true");
+            if (query) qs.set("q", query);
             const res = await fetch(`/api/neodove/activity?${qs}`);
             const json = await res.json();
             if (!json.success) {
@@ -158,7 +186,38 @@ export default function NeodoveActivityPage() {
                 </div>
             )}
 
-            <div className="mt-5 flex items-center gap-2">
+            <div className="mt-5 relative max-w-md">
+                <Search className="pointer-events-none absolute left-3 top-1/2 w-4 h-4 -translate-y-1/2 text-gray-400" />
+                <input
+                    type="search"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search by mobile number or dealer name"
+                    aria-label="Search activity by mobile number or dealer name"
+                    className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-9 text-sm text-gray-900 placeholder:text-gray-400 focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-200"
+                />
+                {search && (
+                    <button
+                        onClick={() => setSearch("")}
+                        aria-label="Clear search"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                )}
+            </div>
+            {/* The number is matched digits-only against BOTH the linked lead
+                and the raw payload, so a partial number works and so do the rows
+                that never linked to a CRM lead. Saying so is worth a line: the
+                alternative is someone typing a full +91 number, getting nothing
+                because our copy is stored bare, and concluding the call is
+                missing. */}
+            <p className="mt-1.5 text-xs text-gray-500">
+                Any part of a number works — spaces, +91 and dashes are ignored.
+                Unlinked events are searched too.
+            </p>
+
+            <div className="mt-4 flex items-center gap-2">
                 {(["all", "outbound", "inbound"] as Filter[]).map((f) => (
                     <button
                         key={f}
@@ -208,11 +267,12 @@ export default function NeodoveActivityPage() {
             {!isLoading && !isError && rows.length === 0 && (
                 <div className="mt-6 rounded-xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
                     <p className="text-sm text-gray-600 font-medium">
-                        Nothing here yet
+                        {query ? `No activity for “${query}”` : "Nothing here yet"}
                     </p>
                     <p className="text-xs text-gray-500 mt-1.5">
-                        Activity appears once a campaign pushes leads, or NeoDove sends
-                        its first webhook.
+                        {query
+                            ? "No pushed lead or NeoDove event matches that number or name. Check the Sent/Received filter — it still applies."
+                            : "Activity appears once a campaign pushes leads, or NeoDove sends its first webhook."}
                     </p>
                 </div>
             )}
@@ -289,14 +349,8 @@ export default function NeodoveActivityPage() {
                                         <td className="px-4 py-3 text-gray-700 text-xs">
                                             {r.event_type ?? "—"}
                                         </td>
-                                        <td className="px-4 py-3 text-gray-700 text-xs">
-                                            {r.dealer_name || r.dealer_lead_id || "—"}
-                                            {r.phone && (
-                                                <span className="text-gray-400">
-                                                    {" "}
-                                                    · {r.phone}
-                                                </span>
-                                            )}
+                                        <td className="px-4 py-3 text-xs">
+                                            <LeadCell row={r} />
                                         </td>
                                         <td className="px-4 py-3 text-xs">
                                             {r.neodove_campaign_id ? (
@@ -307,6 +361,22 @@ export default function NeodoveActivityPage() {
                                                     {r.campaign_name ??
                                                         r.neodove_campaign_id}
                                                 </Link>
+                                            ) : r.external_campaign_name ? (
+                                                /* A campaign that exists only in
+                                                   NeoDove — nothing to link to,
+                                                   but naming it is the whole
+                                                   point of the column. Marked so
+                                                   it is not mistaken for a CRM
+                                                   campaign someone can open. */
+                                                <span
+                                                    className="text-gray-500"
+                                                    title="This campaign exists only in NeoDove — it was never created here, so there is no page to open."
+                                                >
+                                                    {r.external_campaign_name}
+                                                    <span className="ml-1 text-[10px] uppercase tracking-wide text-gray-400">
+                                                        in NeoDove
+                                                    </span>
+                                                </span>
                                             ) : (
                                                 <span className="text-gray-400">—</span>
                                             )}
@@ -410,6 +480,74 @@ export default function NeodoveActivityPage() {
                 </div>
             )}
         </div>
+    );
+}
+
+/**
+ * Who the event was about.
+ *
+ * NEVER A BARE DASH. Every NeoDove delivery names a dealer and a number, so a
+ * blank here always meant a display gap rather than missing data. Two distinct
+ * gaps produced it:
+ *
+ *   1. The ledger row was claimed before the handler resolved the lead, and the
+ *      stamp that fills it in afterwards was lost (process restart mid-after()).
+ *      Fixed at the source — the webhook now resolves before it claims.
+ *   2. The event can NEVER link: nine "Kapil Daily Visit" dispositions carry
+ *      9-digit mobiles, which normalizePhone rejects. There is no lead to match
+ *      and inventing one from a malformed number would be worse than the dash.
+ *
+ * So a linked lead renders as a link, and an unlinked one renders NeoDove's own
+ * words, greyed and labelled — the same treatment the campaign column gives a
+ * campaign that exists only on their side. The distinction has to survive: a
+ * name that looks clickable but isn't in the CRM is the thing that would make
+ * someone trust a lead they cannot actually work.
+ */
+function LeadCell({ row }: { row: ActivityRow }) {
+    if (row.dealer_lead_id) {
+        return (
+            <Link
+                href={`/leads/${row.dealer_lead_id}`}
+                className="text-gray-700 hover:text-emerald-700 hover:underline"
+            >
+                {/* payload_name before the id: a lead auto-created from a
+                    disposition often has no dealer_name of its own, and NeoDove's
+                    name for the same dealer is a better label than DL-1786…-40af. */}
+                {row.dealer_name || row.payload_name || row.dealer_lead_id}
+                {(row.phone || row.payload_mobile) && (
+                    <span className="text-gray-400">
+                        {" "}
+                        · {row.phone ?? row.payload_mobile}
+                    </span>
+                )}
+            </Link>
+        );
+    }
+
+    const name = row.payload_name;
+    const mobile = row.payload_mobile;
+    // Their lead id only when there is nothing human to show — it identifies the
+    // record in NeoDove's UI, which beats a dash, but it is not a name.
+    const fallback = name ?? mobile ?? row.payload_lead_id;
+    if (!fallback) return <span className="text-gray-400">—</span>;
+
+    return (
+        <span
+            className="text-gray-500"
+            title="NeoDove named this dealer but the event could not be matched to a CRM lead — usually an unusable mobile number in the payload."
+        >
+            {name || mobile ? (
+                fallback
+            ) : (
+                <span className="font-mono text-[11px]">
+                    NeoDove lead {fallback.slice(0, 8)}
+                </span>
+            )}
+            {name && mobile && <span className="text-gray-400"> · {mobile}</span>}
+            <span className="ml-1 text-[10px] uppercase tracking-wide text-gray-400">
+                not linked
+            </span>
+        </span>
     );
 }
 

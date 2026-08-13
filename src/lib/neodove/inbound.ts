@@ -62,7 +62,12 @@ export type InboundOutcome = {
  * Ordered by reliability rather than by cost: all three are single-row indexed
  * lookups, so trying the best one first is free.
  */
-async function resolveInboundLead(
+// Exported so the ledger backfill reuses this matcher verbatim rather than
+// re-deriving it. It carries two hard-won details — the last-10-digit phone
+// comparison (dealer_leads.phone is stored both bare and +91-prefixed) and the
+// explicit ORDER BY that stops a lead's history scattering across the duplicate
+// rows that inconsistency created.
+export async function resolveInboundLead(
     event: NeodoveInboundEvent,
 ): Promise<string | null> {
     if (event.itarangLeadId) {
@@ -131,16 +136,29 @@ export async function handleNeodoveEvent(
     event: NeodoveInboundEvent,
 ): Promise<InboundOutcome> {
     try {
+        let outcome: InboundOutcome;
         switch (event.eventType) {
             case "lead_created":
-                return await handleLeadCreated(event);
+                outcome = await handleLeadCreated(event);
+                break;
             case "lead_deleted":
-                return await handleLeadDeleted(event);
+                outcome = await handleLeadDeleted(event);
+                break;
             case "lead_disposed":
             case "call_connected":
             case "call_not_connected":
-                return await handleDisposition(event);
+                outcome = await handleDisposition(event);
+                break;
         }
+        // Stamped here, at the one choke point every handler passes through,
+        // because the ledger row is CLAIMED before any of them run — the webhook
+        // must reserve external_event_id atomically to get replay protection,
+        // and at that moment no lead has been resolved yet. So every inbound row
+        // was written with dealer_lead_id = NULL and stayed that way, which is
+        // why Sync Activity showed a dash under LEAD and CAMPAIGN for every
+        // disposition NeoDove ever sent.
+        await attachEventContext(event, outcome.dealerLeadId);
+        return outcome;
     } catch (err) {
         const note = errorMessage(err);
         console.error("[NeoDove/inbound]", event.eventType, note);
@@ -558,6 +576,47 @@ async function linkLead(
                 neodove_lead_id = COALESCE(neodove_lead_links.neodove_lead_id,
                                            EXCLUDED.neodove_lead_id)
     `);
+}
+
+/**
+ * Fill in the lead and campaign on an already-claimed inbound ledger row.
+ *
+ * Both are COALESCE'd rather than overwritten: this runs after the handler, and
+ * a later delivery for the same event must never blank a link that an earlier
+ * one established. A null resolution therefore leaves whatever is already there.
+ *
+ * The campaign is matched by NeoDove's own campaign name, which is the only
+ * identifier their payload carries that means anything here — and it matches
+ * nothing for the many campaigns that exist only on their side (lists uploaded
+ * straight into NeoDove and never pushed from the CRM). That is expected, not a
+ * failure: the activity screen falls back to showing the raw name from the
+ * payload so those rows still say where the call came from.
+ *
+ * Best-effort by design. A ledger annotation must never be the thing that fails
+ * an event whose touchpoint has already been written.
+ */
+async function attachEventContext(
+    event: NeodoveInboundEvent,
+    dealerLeadId: string | null,
+): Promise<void> {
+    try {
+        await db.execute(sql`
+            UPDATE neodove_sync_events e
+               SET dealer_lead_id = COALESCE(e.dealer_lead_id, ${dealerLeadId}),
+                   neodove_campaign_id = COALESCE(
+                       e.neodove_campaign_id,
+                       (SELECT c.id FROM neodove_campaigns c
+                         WHERE c.neodove_campaign_name = ${event.campaignName ?? null}
+                         LIMIT 1))
+             WHERE e.direction = 'inbound'
+               AND e.external_event_id = ${event.externalEventId}
+        `);
+    } catch (err) {
+        console.error(
+            "[NeoDove/inbound] failed to attach event context:",
+            errorMessage(err),
+        );
+    }
 }
 
 // Attach a failure reason to the already-claimed sync-event row, so the raw

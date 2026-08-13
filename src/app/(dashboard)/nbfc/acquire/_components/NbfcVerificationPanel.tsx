@@ -10,6 +10,11 @@ import NbfcRequestThread from "./NbfcRequestThread";
 // co-borrower request loop that routes to the admin, plus the request-history
 // thread. The rich per-document KYC verification cards (Aadhaar/PAN/Bank/
 // CIBIL/RC) were removed from this surface; only the request loop remains.
+//
+// E-239 adds a fourth button, "Ask Dealer for Documents", which skips the admin
+// forward gate entirely: the message lands on the dealer's Step-4 pre-sanction
+// card and the dealer answers there. The three admin-routed buttons are
+// unchanged — use those when the admin should vet the ask first.
 
 export default function NbfcVerificationPanel({
   leadId,
@@ -21,7 +26,12 @@ export default function NbfcVerificationPanel({
   // request composer state: which doc_key is being requested + the mode
   const [composer, setComposer] = useState<{
     docKey: string | null;
-    mode: "correction" | "additional_docs" | "step4_extra_items" | "co_borrower";
+    mode:
+      | "correction"
+      | "additional_docs"
+      | "step4_extra_items"
+      | "co_borrower"
+      | "dealer_direct";
     comment: string;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -31,6 +41,7 @@ export default function NbfcVerificationPanel({
 
   const submitRequest = async () => {
     if (!composer) return;
+    const direct = composer.mode === "dealer_direct";
     setSubmitting(true);
     setBanner(null);
     try {
@@ -38,7 +49,10 @@ export default function NbfcVerificationPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          request_type: composer.mode,
+          // E-239 — a direct ask rides the step4_extra_items type (already
+          // permitted by the E-202 CHECK); route_to is what changes the routing.
+          request_type: direct ? "step4_extra_items" : composer.mode,
+          route_to: direct ? "dealer" : "admin",
           // A co-borrower ask is about the co-borrower regardless of the current
           // applicant toggle.
           doc_for: composer.mode === "co_borrower" ? "co_borrower" : docFor,
@@ -50,7 +64,11 @@ export default function NbfcVerificationPanel({
       if (json.ok) {
         setComposer(null);
         setRefreshSignal((n) => n + 1);
-        setBanner("Request sent to the admin.");
+        setBanner(
+          direct
+            ? "Sent to the dealer — they'll see it on their product-selection page."
+            : "Request sent to the admin.",
+        );
       } else {
         setBanner(json.error ?? "Could not send request");
       }
@@ -98,7 +116,10 @@ export default function NbfcVerificationPanel({
   };
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <section
+      id="nbfc-requests"
+      className="scroll-mt-24 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+    >
       {/* Premium header — gradient icon badge + applicant toggle */}
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white px-5 py-4">
         <div className="flex items-center gap-3">
@@ -127,8 +148,8 @@ export default function NbfcVerificationPanel({
               NBFC Document Requests
             </h2>
             <p className="text-[11px] leading-relaxed text-slate-400">
-              Raise correction, additional-document or co-borrower requests —
-              routed to the iTarang admin.
+              Ask the dealer directly, or raise a correction / co-borrower
+              request through the iTarang admin.
             </p>
           </div>
         </div>
@@ -164,6 +185,35 @@ export default function NbfcVerificationPanel({
             {banner}
           </p>
         ) : null}
+
+        {/* E-239 — the direct channel. Given its own row above the admin-routed
+            buttons because it is the fast path and the one to reach for first:
+            the dealer sees the message immediately, on the same card they upload
+            from. The admin still sees the thread and is still notified. */}
+        <button
+          type="button"
+          onClick={() =>
+            setComposer({ docKey: null, mode: "dealer_direct", comment: "" })
+          }
+          className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
+          style={{
+            backgroundImage:
+              "linear-gradient(135deg, var(--color-brand-teal), var(--color-brand-navy))",
+          }}
+        >
+          <svg
+            className="h-4 w-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          Ask Dealer for Documents
+        </button>
 
         {/* Change 2 / 4 — document-request loop to the admin. */}
         <div className="flex flex-wrap gap-3">
@@ -231,8 +281,17 @@ export default function NbfcVerificationPanel({
                   ? "Request Step-4 extra items (max 10)"
                   : composer.mode === "co_borrower"
                     ? "Request a co-borrower — the admin will ask the dealer to add one"
-                    : `Request additional documents — ${docFor === "primary" ? "Customer" : "Co-borrower"}`}
+                    : composer.mode === "dealer_direct"
+                      ? `Message the dealer directly — ${docFor === "primary" ? "Customer" : "Co-borrower"}`
+                      : `Request additional documents — ${docFor === "primary" ? "Customer" : "Co-borrower"}`}
             </p>
+            {composer.mode === "dealer_direct" ? (
+              <p className="mb-1.5 text-[11px] leading-relaxed text-slate-500">
+                This goes straight to the dealer&apos;s product-selection page —
+                no admin approval needed. Describe exactly which document you
+                need; the dealer replies with the file and can write back.
+              </p>
+            ) : null}
             <textarea
               value={composer.comment}
               onChange={(e) =>
@@ -242,7 +301,9 @@ export default function NbfcVerificationPanel({
               placeholder={
                 composer.mode === "co_borrower"
                   ? "Explain why a co-borrower is needed (e.g. primary CIBIL is low / high DTI)…"
-                  : "Explain what the admin should ask the dealer/customer for…"
+                  : composer.mode === "dealer_direct"
+                    ? "e.g. Please share the last 6 months' statement for the CURRENT account, not the savings one."
+                    : "Explain what the admin should ask the dealer/customer for…"
               }
               className="w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm"
             />
@@ -253,7 +314,11 @@ export default function NbfcVerificationPanel({
                 onClick={submitRequest}
                 className="rounded-md bg-[color:var(--color-brand-navy)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
               >
-                {submitting ? "Sending…" : "Send to admin"}
+                {submitting
+                  ? "Sending…"
+                  : composer.mode === "dealer_direct"
+                    ? "Send to dealer"
+                    : "Send to admin"}
               </button>
               <button
                 type="button"

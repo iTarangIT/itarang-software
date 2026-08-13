@@ -81,7 +81,11 @@ export const GET = withErrorHandler(
                 dl.brochure_sent_at,
                 dl.dealer_onboarding_application_id,
                 app.onboarding_status AS onboarding_status,
-                app.created_at AS onboarding_created_at
+                app.created_at AS onboarding_created_at,
+                -- E-224's column, read through to_jsonb so a database without
+                -- the migration returns null rather than failing this whole
+                -- statement at parse time. See queryBuilder.ts.
+                to_jsonb(dl) ->> 'neodove_sync_status' AS neodove_sync_status
             FROM dealer_leads dl
             LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
             LEFT JOIN users originator ON originator.id::text = dl.originator_id

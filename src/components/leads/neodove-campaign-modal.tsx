@@ -51,6 +51,22 @@ export type EditableCampaign = {
     // E-226. Undefined on any DB without that migration — the list route reads
     // it through to_jsonb, so absent reads as "not the priority destination",
     // which is the correct default.
+    // E-237, read the same way: absent reads as "no default CRM owner".
+    crm_owner_user_id?: string | null;
+};
+
+type Assignee = {
+    user_id: string;
+    name: string | null;
+    role: string | null;
+};
+
+// Both assignable roles are shown, and they behave differently — an ASM target
+// lifts pushed leads to Transferred_to_ASM rather than Assigned_Not_Contacted —
+// so the picker names the role rather than leaving two bare first names.
+const ASSIGNEE_ROLE_LABEL: Record<string, string> = {
+    inside_sales_rep: "Inside Sales Rep",
+    asm: "ASM",
 };
 
 // Mirrors NeoDove's own "Pipeline" dropdown. Hard-coded because there is no API
@@ -107,6 +123,30 @@ export function NeodoveCampaignModal({
     const [leadDistribution, setLeadDistribution] = useState(
         mirror.leadDistribution ?? "",
     );
+
+    // --- CRM owner for pushed leads (E-237) — applied, not mirrored ----------
+    const [crmOwnerUserId, setCrmOwnerUserId] = useState(
+        campaign?.crm_owner_user_id ?? "",
+    );
+    const [assignees, setAssignees] = useState<Assignee[] | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetch("/api/neodove/assignees")
+            .then((r) => r.json())
+            .then((json) => {
+                if (cancelled) return;
+                setAssignees(
+                    Array.isArray(json?.data?.assignees) ? json.data.assignees : [],
+                );
+            })
+            .catch(() => {
+                if (!cancelled) setAssignees([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     function addAgent() {
         const value = agentDraft.trim();
@@ -204,6 +244,15 @@ export function NeodoveCampaignModal({
                 // Clearing every field on an existing campaign means "this
                 // mirror was wrong" — drop it rather than leave a stale record.
                 body.mirrorConfig = null;
+            }
+            // crmOwnerUserId (E-237). On create the key is omitted when empty —
+            // naming the column on a DB without E-237 would fail at PARSE time
+            // and take campaign creation down, exactly as mirror_config would.
+            // On edit an empty value is an explicit null: "stop auto-assigning".
+            if (crmOwnerUserId) {
+                body.crmOwnerUserId = crmOwnerUserId;
+            } else if (isEdit) {
+                body.crmOwnerUserId = null;
             }
             // isPriorityDial is deliberately never sent now that the checkbox is
             // gone. The API still accepts it (both routes keep their at-most-one
@@ -410,6 +459,40 @@ export function NeodoveCampaignModal({
                         the lead rows, so this control had nothing left to
                         configure and a checkbox that changes no observable
                         behaviour is worse than no checkbox. */}
+
+                    {/* ── CRM owner for pushed leads (E-237) ─────────────────
+                        DELIBERATELY OUTSIDE the mirror block below. Everything
+                        in that block is "recorded, never applied"; this field
+                        IS applied — every push into this campaign assigns its
+                        leads to this person. Putting it inside would make that
+                        block's banner untrue, which is the one thing it exists
+                        to prevent. */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                            Assign pushed leads in CRM to
+                        </label>
+                        <select
+                            value={crmOwnerUserId}
+                            onChange={(e) => setCrmOwnerUserId(e.target.value)}
+                            className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+                        >
+                            <option value="">— Nobody (leave unassigned) —</option>
+                            {(assignees ?? []).map((a) => (
+                                <option key={a.user_id} value={a.user_id}>
+                                    {a.name ?? a.user_id}
+                                    {a.role ? ` · ${ASSIGNEE_ROLE_LABEL[a.role.toLowerCase()] ?? a.role}` : ""}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="mt-1 text-xs text-gray-500">
+                            The CRM counterpart of this campaign&apos;s NeoDove
+                            assignee — set the agent who actually calls inside
+                            NeoDove&apos;s own campaign settings, since they expose no
+                            assignee API. Leads pushed here are assigned to this person
+                            so they appear on their dashboard instead of nobody&apos;s.
+                            Applies to future pushes only.
+                        </p>
+                    </div>
 
                     {/* ── Mirror of NeoDove's own campaign settings (E-225) ──
                         Everything below is RECORDED, not applied. NeoDove has

@@ -24,9 +24,15 @@ export type ActivityRow = {
     event_type: string | null;
     neodove_campaign_id: string | null;
     campaign_name: string | null;
+    /** Campaign name as NeoDove sent it — present even when nothing links here. */
+    external_campaign_name: string | null;
     dealer_lead_id: string | null;
     dealer_name: string | null;
     phone: string | null;
+    /** Dealer as NeoDove named them — present even when nothing links here. */
+    payload_name: string | null;
+    payload_mobile: string | null;
+    payload_lead_id: string | null;
     external_event_id: string | null;
     http_status: number | null;
     error: string | null;
@@ -50,15 +56,83 @@ export const GET = withErrorHandler(async (req: Request) => {
     const errorsOnly = searchParams.get("errorsOnly") === "true";
     const campaignId = searchParams.get("campaignId");
 
+    // SEARCH, MATCHED AGAINST BOTH SIDES OF THE ROW.
+    //
+    // A ledger row's identity lives in two places — the joined dealer_lead, and
+    // the raw payload NeoDove sent — and the whole reason this screen has a LEAD
+    // column fallback is that the two do not always agree. Searching only the
+    // joined lead would therefore be unable to find precisely the rows that are
+    // hardest to find by eye: the ones that never linked. So every predicate
+    // below is applied to the lead AND to the payload.
+    //
+    // The number is compared DIGITS-ONLY, on both sides. dealer_leads.phone is
+    // stored both bare and +91-prefixed (2396 vs 321 rows on database-1), and
+    // NeoDove sends the bare national number — so a literal comparison of what
+    // someone types would miss most of the table. Stripping non-digits from both
+    // and matching a substring means "9755502969", "+91 97555 02969" and the
+    // last four digits all find the same lead.
+    const q = (searchParams.get("q") ?? "").trim();
+    const digits = q.replace(/\D/g, "");
+    // Three digits before a number search engages: fewer matches half the ledger
+    // and reads as a broken filter rather than a broad one.
+    const phoneNeedle = digits.length >= 3 ? `%${digits}%` : null;
+    // Names are searched too — someone reading this screen has a dealer in mind,
+    // not a number, about as often as the reverse.
+    const nameNeedle = q.length >= 2 ? `%${q}%` : null;
+    const searching = phoneNeedle !== null || nameNeedle !== null;
+
     const rows = await db.execute<ActivityRow>(sql`
         SELECT e.id::text AS id,
                e.direction,
                e.event_type,
                e.neodove_campaign_id,
                c.name AS campaign_name,
+               -- The campaign as NEODOVE names it, straight from the payload.
+               -- Most inbound events come from campaigns that exist only on
+               -- their side — lists uploaded into NeoDove and never pushed from
+               -- here — so there is no neodove_campaigns row to join to, and
+               -- the column rendered as a dash even though the payload said
+               -- exactly which campaign the call belonged to. Two paths because
+               -- some deliveries nest the body under a 'data' key.
+               COALESCE(
+                   e.request_payload ->> 'campaign_name',
+                   e.request_payload -> 'data' ->> 'campaign_name'
+               ) AS external_campaign_name,
                e.dealer_lead_id,
                dl.dealer_name,
                dl.phone,
+               -- WHO THE EVENT WAS ABOUT, straight from the payload.
+               --
+               -- The join above only fires when the event resolved to one of our
+               -- leads, and some inbound events never can: nine dispositions from
+               -- the "Kapil Daily Visit" campaign carry 9-digit mobiles
+               -- (725888911), which normalizePhone rejects, so there is nothing to
+               -- match on and nothing legitimate to create. Those rows rendered a
+               -- bare dash under LEAD, which reads as "no data" when in fact the
+               -- payload names the dealer and the number the agent dialled.
+               --
+               -- This is a DISPLAY fallback and nothing more — it is NOT a link to
+               -- a CRM lead, and the screen marks it as such. Same two paths as
+               -- the campaign name above, for the nested-body deliveries.
+               COALESCE(
+                   e.request_payload ->> 'name',
+                   e.request_payload -> 'data' ->> 'name'
+               ) AS payload_name,
+               COALESCE(
+                   e.request_payload ->> 'mobile',
+                   e.request_payload -> 'data' ->> 'mobile',
+                   e.request_payload ->> 'phone',
+                   e.request_payload -> 'data' ->> 'phone'
+               ) AS payload_mobile,
+               -- Last resort. One captured LEAD_CREATE (2026-08-03) carries
+               -- neither a name nor a mobile — only NeoDove's own lead id. That
+               -- id is still an identity: it is what you paste into their UI to
+               -- find the record, which is the only way to learn what the event
+               -- was about.
+               COALESCE(
+                   e.request_payload ->> 'lead_id',
+                   e.request_payload -> 'data' ->> 'lead_id'
+               ) AS payload_lead_id,
                e.external_event_id,
                e.http_status,
                e.error,
@@ -91,6 +165,24 @@ export const GET = withErrorHandler(async (req: Request) => {
                )
            AND (${!errorsOnly} OR e.error IS NOT NULL)
            AND (${campaignId === null} OR e.neodove_campaign_id = ${campaignId})
+           AND (${!searching} OR (
+                   (${phoneNeedle !== null} AND (
+                        regexp_replace(COALESCE(dl.phone, ''), '[^0-9]', '', 'g')
+                            LIKE ${phoneNeedle}
+                     OR regexp_replace(
+                            COALESCE(e.request_payload ->> 'mobile',
+                                     e.request_payload -> 'data' ->> 'mobile',
+                                     e.request_payload ->> 'phone',
+                                     e.request_payload -> 'data' ->> 'phone',
+                                     ''),
+                            '[^0-9]', '', 'g') LIKE ${phoneNeedle}))
+                OR (${nameNeedle !== null} AND (
+                        dl.dealer_name ILIKE ${nameNeedle}
+                     OR COALESCE(e.request_payload ->> 'name',
+                                 e.request_payload -> 'data' ->> 'name')
+                            ILIKE ${nameNeedle}
+                     OR e.dealer_lead_id ILIKE ${nameNeedle}))
+               ))
          ORDER BY e.created_at DESC
          LIMIT ${limit} OFFSET ${offset}
     `);

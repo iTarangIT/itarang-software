@@ -20,6 +20,10 @@ import {
 import { getNeodoveConfig } from "@/lib/neodove/config";
 import { pushOneLead } from "@/lib/neodove/pushOne";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import {
+    assignAfterPush,
+    resolveNeodoveAssignee,
+} from "@/lib/neodove/assignAfterPush";
 
 export const runtime = "nodejs";
 
@@ -28,11 +32,14 @@ const bodySchema = z.object({
     // Escape hatch for a deliberate hand-off of an actively-worked lead. Not a
     // default: it has to be an explicit, auditable choice.
     force: z.boolean().optional(),
+    // Omitted = use the campaign's default CRM owner, null = don't assign,
+    // a string = override for this push (E-237).
+    assignToUserId: z.string().trim().min(1).nullable().optional(),
 });
 
 export const POST = withErrorHandler(
     async (req: Request, context: { params: Promise<{ id: string }> }) => {
-        await requireRole(NEODOVE_ADMIN_ROLES);
+        const actor = await requireRole(NEODOVE_ADMIN_ROLES);
         const { id } = await context.params;
 
         if (!getNeodoveConfig().enabled) {
@@ -47,16 +54,48 @@ export const POST = withErrorHandler(
             );
         }
 
+        // Resolved before the push so an unassignable target is a 400 rather
+        // than a lead that reached NeoDove and then failed to find an owner.
+        const assignee = await resolveNeodoveAssignee({
+            campaignId: parsed.data.campaignId,
+            assignToUserId: parsed.data.assignToUserId,
+        });
+        if (!assignee.ok) {
+            return errorResponse(assignee.message, assignee.status);
+        }
+
         const result = await pushOneLead({
             leadId: id,
             campaignId: parsed.data.campaignId,
             force: parsed.data.force,
         });
 
+        // Assign whenever the push was actually ATTEMPTED — that is `ok`, or a
+        // 502 where the request left here and failed at NeoDove's end. The
+        // other failures (404 unknown lead, 409 actively-worked, 400 no valid
+        // mobile) are refusals before anything was sent, and assigning on those
+        // would hand a rep a lead nobody has taken.
+        const attempted = result.ok || result.status === 502;
+        let assigned = false;
+        if (assignee.target && attempted) {
+            assigned = await assignAfterPush({
+                leadId: id,
+                campaignId: parsed.data.campaignId,
+                target: assignee.target,
+                actorId: actor.id,
+                actorRole: actor.role,
+                campaignLabel:
+                    (result.ok ? result.campaignName : null) ??
+                    parsed.data.campaignId,
+            });
+        }
+
         if (!result.ok) return errorResponse(result.message, result.status);
         return successResponse({
             pushed: true,
             neodoveLeadId: result.neodoveLeadId,
+            assigned,
+            assignedTo: assigned && assignee.target ? assignee.target.name : null,
         });
     },
 );

@@ -6,10 +6,25 @@
  * select the winner. Selecting marks the chosen NBFC 'selected' and the others
  * 'not_selected', and advances the lead to the winner-only E-NACH stage.
  *
+ * E-238 adds a Negotiate action alongside it: the dealer can counter an offer
+ * with specific terms instead of only taking or leaving it, until the NBFC
+ * fixes the offer. Selecting a winner stays available throughout.
+ *
  * Self-hides when the lead has no routed NBFCs (cash lead / not yet routed).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import OfferNegotiationThread from "@/components/nbfc-portal/OfferNegotiationThread";
+import type { NegotiationRound } from "@/components/nbfc-portal/OfferNegotiationThread";
+import OfferNegotiationPanel from "./OfferNegotiationPanel";
+
+/**
+ * The card claims "this updates as offers arrive", and until E-238 nothing ever
+ * refetched — a dealer had to reload the page to see a new offer. A negotiation
+ * is unusable that way, so the section polls while the tab is visible, matching
+ * NotificationBell's pattern.
+ */
+const POLL_MS = 30_000;
 
 type Offer = {
   roi_pct: string | null;
@@ -29,6 +44,12 @@ type Item = {
   nbfc_legal_name: string | null;
   status: string;
   offer: Offer | null;
+  negotiation_status: string | null;
+  negotiation_round: number;
+  fixed_at: string | null;
+  negotiation: NegotiationRound[];
+  /** E-161 ceo_approval_status when an offer exists but is withheld; else null. */
+  withheld_reason: string | null;
 };
 
 type Resp = {
@@ -45,10 +66,15 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [negotiating, setNegotiating] = useState<number | null>(null);
+  // A poll that lands mid-edit would rebuild the form from fresh props and wipe
+  // what the dealer typed. Held in a ref so the interval reads the live value
+  // without being torn down and rebuilt on every keystroke.
+  const dirtyRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/lead/${leadId}/offers`);
+      const res = await fetch(`/api/lead/${leadId}/offers`, { cache: "no-store" });
       const j = (await res.json()) as Resp;
       if (j.success && j.data) setData(j.data);
     } catch {
@@ -60,6 +86,23 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // Poll only while the tab is visible and nothing is being typed, and refetch
+  // on focus so coming back to the tab is instant rather than up to POLL_MS old.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible" || dirtyRef.current) return;
+      void load();
+    };
+    const timer = setInterval(refresh, POLL_MS);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [load]);
 
   async function pick(nbfcId: number) {
@@ -146,7 +189,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
         {decided
           ? "The customer has selected a financing partner. The winning NBFC is now running E-NACH and agreement signing."
           : anyOffer
-            ? "Compare the firm offers below with the customer and select the winning lender. The others will be marked Not Selected."
+            ? "Compare the firm offers below with the customer. Negotiate to ask a lender for revised terms, or select the winning lender — the others will be marked Not Selected."
             : "Waiting for the selected NBFCs to submit firm offers. This updates as offers arrive."}
       </p>
 
@@ -156,6 +199,10 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
         {data.items.map((item, idx) => {
           const isWinner = data.winnerNbfcId === item.nbfc_id;
           const isLoser = decided && !isWinner;
+          const isFixed = item.negotiation_status === "fixed";
+          const awaitingNbfc = item.negotiation_status === "dealer_countered";
+          const canNegotiate =
+            !decided && item.offer != null && item.status === "offer_submitted" && !isFixed;
           return (
             <div
               key={item.nbfc_id}
@@ -175,6 +222,16 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
                 </div>
                 {isWinner && <span className="text-[10px] font-bold uppercase text-emerald-700">Selected</span>}
                 {isLoser && <span className="text-[10px] font-bold uppercase text-slate-500">Not selected</span>}
+                {!decided && isFixed && (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">
+                    Fixed
+                  </span>
+                )}
+                {!decided && awaitingNbfc && (
+                  <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase text-violet-700">
+                    Awaiting NBFC
+                  </span>
+                )}
               </div>
 
               {item.offer ? (
@@ -189,19 +246,75 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
                     <div className="col-span-2 text-slate-600 mt-1">{item.offer.conditions}</div>
                   )}
                 </dl>
+              ) : item.withheld_reason ? (
+                // The NBFC HAS submitted something, but E-161 is withholding it.
+                // Distinct from "nothing submitted yet", and worth saying so the
+                // dealer doesn't think the offer vanished mid-conversation.
+                <p className="mt-3 rounded-md border border-amber-100 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                  {item.withheld_reason === "rejected"
+                    ? "These terms were outside the approved band and the lender is re-pricing them."
+                    : "Revised terms are under iTarang review."}
+                  {item.negotiation.length > 1
+                    ? " The history below still shows what was offered before."
+                    : ""}
+                </p>
               ) : (
                 <p className="mt-3 text-xs text-slate-400">No offer submitted yet.</p>
               )}
 
-              {!decided && item.offer && item.status === "offer_submitted" && (
-                <button
-                  onClick={() => pick(item.nbfc_id)}
-                  disabled={busy != null}
-                  className="mt-3 w-full px-3 py-2 rounded-lg bg-[color:var(--color-brand-navy)] text-white text-xs font-bold disabled:opacity-50"
-                >
-                  {busy === item.nbfc_id ? "Selecting…" : "Select as winner"}
-                </button>
+              {!decided && isFixed && (
+                <p className="mt-2 text-[11px] text-slate-500">
+                  These terms are final. The NBFC has fixed this offer and it can no longer be
+                  negotiated.
+                </p>
               )}
+              {!decided && awaitingNbfc && (
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Your counter-offer has been sent. You can still select this lender on the terms
+                  above while you wait.
+                </p>
+              )}
+
+              {!decided && item.offer && item.status === "offer_submitted" && (
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => pick(item.nbfc_id)}
+                    disabled={busy != null}
+                    className="flex-1 px-3 py-2 rounded-lg bg-[color:var(--color-brand-navy)] text-white text-xs font-bold disabled:opacity-50"
+                  >
+                    {busy === item.nbfc_id ? "Selecting…" : "Select as winner"}
+                  </button>
+                  {canNegotiate && (
+                    <button
+                      onClick={() =>
+                        setNegotiating((v) => (v === item.nbfc_id ? null : item.nbfc_id))
+                      }
+                      disabled={busy != null}
+                      className="px-3 py-2 rounded-lg border border-[color:var(--color-brand-navy)] text-[color:var(--color-brand-navy)] text-xs font-bold disabled:opacity-50"
+                    >
+                      {negotiating === item.nbfc_id ? "Close" : "Negotiate"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {canNegotiate && negotiating === item.nbfc_id && item.offer && (
+                <OfferNegotiationPanel
+                  leadId={leadId}
+                  nbfcId={item.nbfc_id}
+                  offer={item.offer}
+                  onDirtyChange={(d) => {
+                    dirtyRef.current = d;
+                  }}
+                  onSent={async () => {
+                    setNegotiating(null);
+                    await load();
+                  }}
+                  onCancel={() => setNegotiating(null)}
+                />
+              )}
+
+              <OfferNegotiationThread rounds={item.negotiation} viewer="dealer" />
             </div>
           );
         })}
