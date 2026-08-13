@@ -24,6 +24,17 @@ import {
 // — only this one takes `provider` and `onCallStart`, which the dialer needs.
 import { CallButton } from "@/components/leads/call-button";
 import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
+import { NeodoveTag } from "@/components/leads/neodove-tag";
+// TYPE-ONLY — both modules import `db`; a value import here would pull the
+// postgres driver into the client bundle. Runtime constants come from
+// @/lib/leads/campaign, which has no dependencies at all.
+import type { LeadCampaign } from "@/lib/leads/leadCampaign";
+import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
+import {
+    CAMPAIGN_SYSTEM_LABEL,
+    type CampaignSystem,
+} from "@/lib/leads/campaign";
+import { formatIdle, idleDays, idleSeverity, type IdleSeverity } from "@/lib/leads/idle";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
 import { LeadCallStatus } from "@/components/leads/lead-call-status";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
@@ -62,6 +73,21 @@ function pretty(value: string | null | undefined): string {
     return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Sender-role label for the stamp. Initials for the long titles, because the
+// token sits inside a table cell that already carries a name — "Sales Manager"
+// spelled out wraps the row and buries the two labels that matter, CEO and
+// Admin. The full title is in the cell's tooltip either way.
+function senderRole(role: string): string {
+    const r = role.toLowerCase();
+    if (r === "ceo") return "CEO";
+    if (r === "admin") return "Admin";
+    if (r === "asm") return "ASM";
+    return role
+        .split("_")
+        .map((w) => w[0]?.toUpperCase() ?? "")
+        .join("");
+}
+
 function fmtDate(iso: string | null): string {
     if (!iso) return "—";
     try {
@@ -76,6 +102,20 @@ function fmtDate(iso: string | null): string {
     }
 }
 
+// Idle is a warning, not a status — muted until it is worth reading, then loud.
+// Thresholds live in lib/leads/idle.ts; these are only their colours.
+const IDLE_TONE: Record<IdleSeverity, string> = {
+    fresh: "text-gray-600",
+    watch: "text-amber-700",
+    stale: "text-orange-700 font-semibold",
+    cold: "text-rose-700 font-semibold",
+};
+
+const CAMPAIGN_SYSTEM_TONE: Record<CampaignSystem, string> = {
+    ai_dialer: "border-violet-200 bg-violet-50 text-violet-700",
+    neodove: "border-sky-200 bg-sky-50 text-sky-700",
+};
+
 function formatNextCall(date: string | null): string | null {
     if (!date) return null;
     const diff = new Date(date).getTime() - Date.now();
@@ -89,6 +129,10 @@ function formatNextCall(date: string | null): string | null {
 
 export type LeadRow = LeadListRow & {
     neodove_sync_status?: string | null;
+    /** Latest campaign this lead belongs to, either system. See leadCampaign.ts. */
+    campaign?: LeadCampaign | null;
+    /** Who handed this lead to its current owner. Null for non-oversight roles. */
+    assigned_by?: LeadAssignedBy | null;
     // E-236. Read in a separate, failure-tolerant statement by the API route —
     // absent, not null, on a database without the migration.
     last_disposition?: string | null;
@@ -135,9 +179,14 @@ export function LeadsTable({
     const allOnPageSelected =
         rows.length > 0 && rows.every((r) => selected.has(r.id));
     // Fixed columns: Dealer/Shop, Phone, Region, Qualification, Intent,
-    // Visit/Outcome, Last Touch, Actions = 8. Then the optional checkbox and the
-    // optional Owner + ASM pair. Used by the loading and empty rows.
-    const colSpan = 8 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
+    // Visit/Outcome, Last Touch, Idle, Campaign/Created, Actions = 10. Then the
+    // optional checkbox and the optional Owner + ASM pair. Used by the loading
+    // and empty rows.
+    const colSpan = 10 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
+    // Pinned once per render so every row's idle figure is measured against the
+    // same instant — and so the map callback stays pure (react-hooks/purity).
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
 
     return (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
@@ -187,6 +236,15 @@ export function LeadsTable({
                             <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
                                 Last Touch
                             </th>
+                            <th
+                                className="min-w-[90px] px-4 py-3 text-left font-semibold"
+                                title="Calendar days since the last touchpoint — or since the lead was created, if it has never been touched"
+                            >
+                                Idle
+                            </th>
+                            <th className="min-w-[170px] px-4 py-3 text-left font-semibold">
+                                Campaign / Created
+                            </th>
                             <th className="min-w-[300px] px-4 py-3 text-right font-semibold">
                                 Actions
                             </th>
@@ -230,6 +288,22 @@ export function LeadsTable({
                                 const isUpNext =
                                     dialerPhase === "countdown" && dialerLeadId === row.id;
                                 const nextCall = formatNextCall(row.next_call_at);
+                                const idle = idleDays(
+                                    row.last_touchpoint_at,
+                                    row.created_at,
+                                    nowMs,
+                                );
+                                const idleText = formatIdle(idle);
+                                // A rep claiming a lead off the Unassigned queue is not
+                                // someone "sending" it — suppress the stamp when the
+                                // actor and the owner are the same person. (lead_claimed
+                                // is already excluded server-side; this also covers an
+                                // admin who assigns a lead to themselves.)
+                                const sentBy =
+                                    row.assigned_by &&
+                                    row.assigned_by.id !== row.current_owner_id
+                                        ? row.assigned_by
+                                        : null;
 
                                 return (
                                     <tr
@@ -285,6 +359,10 @@ export function LeadsTable({
                                                 </span>
                                             </div>
                                             <div className="mt-1 flex flex-wrap items-center gap-1">
+                                                {/* Persistent provenance, unlike the call-state chips
+                                                    beside it. Renders nothing for a lead that has never
+                                                    been to NeoDove, and nothing for a failed push. */}
+                                                <NeodoveTag syncStatus={row.neodove_sync_status} />
                                                 {isBeingCalled && <LeadCallStatus status="calling" />}
                                                 {endedLeadIds.has(row.id) && (
                                                     <LeadCallStatus status="ended" />
@@ -361,6 +439,34 @@ export function LeadsTable({
                                                                 >
                                                                     {pretty(row.current_owner_role)}
                                                                 </span>
+                                                            )}
+                                                            {/* Who handed it over. Sits under the
+                                                                owner because the two only mean
+                                                                anything as a pair — recipient above,
+                                                                sender below. Hidden when the two are
+                                                                the same person: that is a self-claim,
+                                                                not a hand-off. */}
+                                                            {sentBy && (
+                                                                <div
+                                                                    className="flex items-center gap-1 text-[10px] leading-none text-gray-500"
+                                                                    title={`Assigned by ${sentBy.name ?? "a user"}${
+                                                                        sentBy.role
+                                                                            ? ` (${pretty(sentBy.role)})`
+                                                                            : ""
+                                                                    }${sentBy.at ? ` on ${fmtDate(sentBy.at)}` : ""}`}
+                                                                >
+                                                                    <span className="text-gray-400">
+                                                                        sent by
+                                                                    </span>
+                                                                    <span className="truncate font-medium text-gray-600">
+                                                                        {sentBy.name ?? "—"}
+                                                                    </span>
+                                                                    {sentBy.role && (
+                                                                        <span className="shrink-0 rounded border border-gray-200 bg-white px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-gray-500">
+                                                                            {senderRole(sentBy.role)}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                             )}
                                                         </div>
                                                     ) : (
@@ -445,6 +551,63 @@ export function LeadsTable({
                                                     {nextCall}
                                                 </span>
                                             )}
+                                        </td>
+
+                                        {/* Idle — how long this lead has been sitting.
+                                            Days is the primary reading; the months line
+                                            appears only once days stop being a quantity
+                                            anyone can feel (see formatIdle). */}
+                                        <td className="px-4 py-3 align-middle">
+                                            <div
+                                                className={`text-sm tabular-nums ${IDLE_TONE[idleSeverity(idle)]}`}
+                                                title={
+                                                    idle === null
+                                                        ? "No touchpoint and no creation date"
+                                                        : row.last_touchpoint_at
+                                                          ? `${idle} days since the last touchpoint`
+                                                          : `Never touched — ${idle} days since the lead was created`
+                                                }
+                                            >
+                                                {idleText.primary}
+                                            </div>
+                                            {idleText.months && (
+                                                <div className="text-[11px] tabular-nums text-gray-400">
+                                                    {idleText.months}
+                                                </div>
+                                            )}
+                                            {!row.last_touchpoint_at && idle !== null && (
+                                                <div className="text-[10px] uppercase tracking-wide text-gray-400">
+                                                    never touched
+                                                </div>
+                                            )}
+                                        </td>
+
+                                        {/* Campaign / Created — which campaign the lead
+                                            belongs to (either system), and when the lead
+                                            itself entered the CRM. */}
+                                        <td className="px-4 py-3 align-middle">
+                                            {row.campaign ? (
+                                                <div
+                                                    className="flex flex-col gap-1"
+                                                    title={`${CAMPAIGN_SYSTEM_LABEL[row.campaign.system]} campaign · lead added ${fmtDate(row.campaign.joined_at)} · campaign created ${fmtDate(row.campaign.campaign_created_at)}`}
+                                                >
+                                                    <span className="line-clamp-2 text-[12px] font-medium text-gray-800">
+                                                        {row.campaign.name}
+                                                    </span>
+                                                    <span
+                                                        className={`${CHIP_BASE} w-fit ${CAMPAIGN_SYSTEM_TONE[row.campaign.system]}`}
+                                                    >
+                                                        {CAMPAIGN_SYSTEM_LABEL[row.campaign.system]}
+                                                    </span>
+                                                </div>
+                                            ) : (
+                                                <span className="text-[11px] italic text-gray-400">
+                                                    No campaign
+                                                </span>
+                                            )}
+                                            <div className="mt-1 text-[11px] tabular-nums text-gray-500">
+                                                Created {fmtDate(row.created_at)}
+                                            </div>
                                         </td>
 
                                         {/* Actions — stopPropagation so a button press

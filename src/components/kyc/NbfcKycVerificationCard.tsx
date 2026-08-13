@@ -53,11 +53,23 @@ interface Wrapper {
   // message, and the verdict the message answers (if any).
   attachments: VerdictAttachment[] | null;
   verdict_id: number | null;
+  // E-240 — the NBFC sent this straight to the dealer, skipping the forward
+  // gate. Read-only here: there is nothing for the admin to forward or push.
+  dealer_direct?: boolean | null;
+  created_at: string;
+}
+// E-240 — one turn of the NBFC ⇄ Dealer conversation on a direct request.
+interface ThreadMessage {
+  id: string;
+  party: string;
+  message: string | null;
+  attachments: VerdictAttachment[] | null;
   created_at: string;
 }
 interface Entry {
   request: Wrapper;
   items: ReqItem[];
+  messages?: ThreadMessage[];
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -623,18 +635,26 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
 
       {standaloneThread.length > 0 ? (
         <ul className="space-y-3">
-          {standaloneThread.map(({ request, items }) => (
+          {standaloneThread.map(({ request, items, messages }) => (
             <li
               key={request.id}
               className="rounded-lg border border-slate-200 p-3"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-slate-800 capitalize">
-                    {request.request_type.replace(/_/g, " ")}
+                  <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-slate-800 capitalize">
+                    {request.dealer_direct
+                      ? "Direct request to dealer"
+                      : request.request_type.replace(/_/g, " ")}
                     {request.target_doc_key ? ` — ${request.target_doc_key}` : ""}
+                    {/* E-240 — the admin is an observer on these, not a gate. */}
+                    {request.dealer_direct ? (
+                      <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                        NBFC → Dealer
+                      </span>
+                    ) : null}
                   </p>
-                  {request.nbfc_comments ? (
+                  {request.nbfc_comments && !request.dealer_direct ? (
                     <p className="mt-0.5 whitespace-pre-line text-xs text-slate-600">
                       <LinkifiedText text={request.nbfc_comments} />
                     </p>
@@ -674,8 +694,47 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                 </ul>
               ) : null}
 
-              {/* Admin controls per hop */}
-              {request.request_type !== "message" ? (
+              {/* E-240 — the NBFC ⇄ Dealer conversation, so the admin can read
+                  what was asked and what came back without being in the loop. */}
+              {(messages?.length ?? 0) > 0 ? (
+                <ul className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+                  {(messages ?? []).map((m) => (
+                    <li key={m.id}>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold capitalize text-slate-600">
+                          {m.party === "nbfc"
+                            ? "NBFC"
+                            : m.party === "dealer"
+                              ? "Dealer"
+                              : "Admin"}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(m.created_at).toLocaleString("en-IN", {
+                            day: "2-digit",
+                            month: "short",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                      {m.message ? (
+                        <p className="mt-1 whitespace-pre-line text-xs text-slate-600">
+                          <LinkifiedText text={m.message} />
+                        </p>
+                      ) : null}
+                      <AttachmentChips
+                        attachments={m.attachments ?? []}
+                        tone="sky"
+                      />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {/* Admin controls per hop. A direct request has no children to
+                  forward and the dealer already has it, so forward/decline/push
+                  would all be no-ops at best — the admin only watches. */}
+              {request.request_type !== "message" && !request.dealer_direct ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                   {(request.status === "nbfc_raised" ||
                     request.status === "admin_review") &&

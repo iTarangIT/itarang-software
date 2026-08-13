@@ -17,6 +17,8 @@ import {
     INTENT_BUCKET_LABEL,
     INTENT_BUCKET_OPTIONS,
     INTENT_BUCKET_RANGE,
+    INTENT_SCORE_MAX,
+    INTENT_SCORE_MIN,
 } from "@/lib/leads/intentBucket";
 import {
     CONNECTED_DISPOSITIONS,
@@ -27,12 +29,52 @@ import {
     isKnownDisposition,
 } from "@/lib/leads/dispositions";
 import type { LeadsCapabilities } from "@/lib/leads/access";
+// ⚠ TYPE-ONLY from leadListQuery — it imports `db`, and a VALUE import here
+// drags the postgres driver into the browser bundle ("Can't resolve 'fs'").
+// Runtime campaign constants come from the dependency-free module instead.
 import type { LeadListFacets } from "@/lib/leads/leadListQuery";
+import type { CampaignFacet } from "@/lib/leads/leadCampaign";
+// Client-safe (regionSummary.ts has no imports at all) and shared with
+// campaigns-table.tsx, so the two lists can never drift apart.
+import { displayCampaignName } from "@/lib/leads/regionSummary";
+import {
+    CAMPAIGN_NONE,
+    CAMPAIGN_SYSTEMS,
+    CAMPAIGN_SYSTEM_LABEL,
+} from "@/lib/leads/campaign";
+import { IDLE_RANGES, IDLE_RANGE_KEYS } from "@/lib/leads/idle";
 import {
     countSecondary,
     hasAnyFilter,
     type LeadFilters,
 } from "./filters";
+
+/**
+ * The campaign's label, EXACTLY as the Campaigns tab renders it.
+ *
+ * Deliberately the same `displayCampaignName` call that campaigns-table.tsx
+ * makes, on the same (client) side. Two reasons it is not just `c.name`:
+ *
+ *  - For AI-dialer campaigns `dialer_campaigns.name` is a frozen value that
+ *    predates the region-shape fix, so the Campaigns tab ignores it and derives
+ *    the title from category + region + start time. Using the stored name here
+ *    meant one campaign appeared under two different names on two tabs, which
+ *    is indistinguishable from the campaign being missing.
+ *  - Formatting on the client keeps the timestamp in the VIEWER's timezone.
+ *    Composing it on a UTC server would print every label 5.5 hours off what
+ *    the tab shows.
+ *
+ * NeoDove campaigns are named by a human at creation, so their stored name is
+ * authoritative — matching the `isNeodove ? c.name : …` branch in that table.
+ */
+function campaignLabel(c: CampaignFacet): string {
+    if (c.system === "neodove") return c.name;
+    return displayCampaignName({
+        category: c.category,
+        regionFilter: c.region_filter,
+        startedAt: c.started_at,
+    });
+}
 
 function pretty(value: string | null | undefined): string {
     if (!value) return "—";
@@ -50,6 +92,7 @@ function pretty(value: string | null | undefined): string {
 // whether the select sits in a flex row or a grid cell.
 const SELECT_CLASS =
     "rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-700 outline-none transition-colors focus:border-gray-400";
+
 
 type Props = {
     draft: LeadFilters;
@@ -87,6 +130,25 @@ export function LeadsFilterBar({
     const extraDispositions = (facets?.dispositions ?? [])
         .map((d) => d.value)
         .filter((v) => !isKnownDisposition(v));
+
+    // ── Intent: bucket and exact range are one axis, so they replace each
+    // other. Same principle as the disposition cascade below — the UI must not
+    // let someone build a combination that can only return nothing.
+    const setIntentBucket = (value: string) =>
+        onPatch({
+            intent: value as LeadFilters["intent"],
+            scoreMin: "",
+            scoreMax: "",
+        });
+
+    const setScore = (key: "scoreMin" | "scoreMax", value: string) =>
+        onPatch({
+            [key]: value,
+            // Clearing the last populated box must NOT also clear the bucket —
+            // that would make deleting a digit silently drop an unrelated
+            // filter. Only a range that is actually being expressed wins.
+            ...(value ? { intent: "" as const } : {}),
+        });
 
     // Picking a level clears the narrower ones, so the three selects can never
     // encode an impossible combination — "Not Connected + Hot" would return
@@ -156,7 +218,7 @@ export function LeadsFilterBar({
                     aria-label="Intent"
                     className={`${SELECT_CLASS} min-w-[150px] flex-1`}
                     value={draft.intent}
-                    onChange={(e) => onChange("intent", e.target.value)}
+                    onChange={(e) => setIntentBucket(e.target.value)}
                 >
                     <option value="">All intent</option>
                     {INTENT_BUCKET_OPTIONS.map((b) => (
@@ -165,6 +227,53 @@ export function LeadsFilterBar({
                         </option>
                     ))}
                 </select>
+
+                {/* Exact score range — the same axis as the bucket above, which
+                    is why picking either one clears the other. A bucket IS a
+                    range, so holding both can only ever be redundant (Hot +
+                    75–100) or a contradiction (Hot + 0–30) that returns nothing
+                    and reads as a broken filter. */}
+                <div
+                    className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 transition-colors focus-within:border-gray-400"
+                    title={`Filter by exact intent score (${INTENT_SCORE_MIN}–${INTENT_SCORE_MAX}). Overrides the bucket.`}
+                >
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                        Score
+                    </span>
+                    <input
+                        type="number"
+                        inputMode="numeric"
+                        aria-label="Minimum intent score"
+                        placeholder="min"
+                        min={INTENT_SCORE_MIN}
+                        max={INTENT_SCORE_MAX}
+                        value={draft.scoreMin}
+                        onChange={(e) => setScore("scoreMin", e.target.value)}
+                        className="w-14 bg-transparent text-sm text-gray-700 outline-none"
+                    />
+                    <span className="text-gray-300">–</span>
+                    <input
+                        type="number"
+                        inputMode="numeric"
+                        aria-label="Maximum intent score"
+                        placeholder="max"
+                        min={INTENT_SCORE_MIN}
+                        max={INTENT_SCORE_MAX}
+                        value={draft.scoreMax}
+                        onChange={(e) => setScore("scoreMax", e.target.value)}
+                        className="w-14 bg-transparent text-sm text-gray-700 outline-none"
+                    />
+                    {(draft.scoreMin || draft.scoreMax) && (
+                        <button
+                            type="button"
+                            onClick={() => onPatch({ scoreMin: "", scoreMax: "" })}
+                            aria-label="Clear score range"
+                            className="rounded p-0.5 text-gray-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                        >
+                            <X className="h-3 w-3" />
+                        </button>
+                    )}
+                </div>
 
                 {caps.canSeeOwnerAsm && (
                     <select
@@ -182,6 +291,36 @@ export function LeadsFilterBar({
                         ))}
                     </select>
                 )}
+
+                {/* NeoDove — a toggle in the PRIMARY row, not an option in the
+                    "Source" select behind More filters. Two reasons: it is not a
+                    source (a scraped lead we pushed keeps source = 'scraper', so
+                    the select would answer a different question), and it removes
+                    most of the list when on, which is exactly the kind of filter
+                    the layout comment above says must never be hidden. */}
+                <button
+                    type="button"
+                    onClick={() => onChange("neodove", draft.neodove ? "" : "1")}
+                    aria-pressed={draft.neodove === "1"}
+                    title={
+                        draft.neodove
+                            ? "Showing only leads handed to the NeoDove calling team — click to show all"
+                            : "Show only leads handed to the NeoDove calling team"
+                    }
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                        draft.neodove
+                            ? "border-sky-300 bg-sky-50 text-sky-700"
+                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                    }`}
+                >
+                    <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            draft.neodove ? "bg-sky-500" : "bg-gray-300"
+                        }`}
+                    />
+                    NeoDove
+                </button>
 
                 <button
                     type="button"
@@ -297,6 +436,51 @@ export function LeadsFilterBar({
                                 {pretty(s)}
                             </option>
                         ))}
+                    </select>
+                    {/* Idle band — the same thresholds the Idle column colours by,
+                        so a filtered list looks coherent rather than being an
+                        arbitrary slice through the ramp. */}
+                    <select
+                        aria-label="Idle"
+                        className={`${SELECT_CLASS} w-full`}
+                        value={draft.idle}
+                        onChange={(e) => onChange("idle", e.target.value)}
+                    >
+                        <option value="">Any idle time</option>
+                        {IDLE_RANGE_KEYS.map((k) => (
+                            <option key={k} value={k}>
+                                {IDLE_RANGES[k].label}
+                            </option>
+                        ))}
+                    </select>
+                    {/* Campaign — both systems in one control, grouped. Only
+                        campaigns that actually have leads are offered. */}
+                    <select
+                        aria-label="Campaign"
+                        className={`${SELECT_CLASS} w-full`}
+                        value={draft.campaign}
+                        onChange={(e) => onChange("campaign", e.target.value)}
+                    >
+                        <option value="">All campaigns</option>
+                        <option value={CAMPAIGN_NONE}>Not in a campaign</option>
+                        {CAMPAIGN_SYSTEMS.map((system) => {
+                            const items = (facets?.campaigns ?? []).filter(
+                                (c) => c.system === system,
+                            );
+                            if (!items.length) return null;
+                            return (
+                                <optgroup
+                                    key={system}
+                                    label={CAMPAIGN_SYSTEM_LABEL[system]}
+                                >
+                                    {items.map((c) => (
+                                        <option key={c.id} value={c.id}>
+                                            {campaignLabel(c)} ({c.lead_count})
+                                        </option>
+                                    ))}
+                                </optgroup>
+                            );
+                        })}
                     </select>
                     <Input
                         value={draft.state}

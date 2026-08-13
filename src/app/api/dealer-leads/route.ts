@@ -5,7 +5,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
-import { isIntentBucket } from "@/lib/leads/intentBucket";
+import {
+  isIntentBucket,
+  normalizeScoreRange,
+  parseScoreBound,
+} from "@/lib/leads/intentBucket";
 import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
 import {
   BULK_ID_CAP,
@@ -16,6 +20,17 @@ import {
   type LeadListFilters,
   type LeadListRow,
 } from "@/lib/leads/leadListQuery";
+import {
+  fetchCampaignFacets,
+  fetchCampaignForLeads,
+  neodoveTablesPresent,
+  type LeadCampaign,
+} from "@/lib/leads/leadCampaign";
+import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
+import {
+  fetchAssignedByForLeads,
+  type LeadAssignedBy,
+} from "@/lib/leads/leadAssignedBy";
 import { nanoid } from "nanoid";
 import {
   normalizeCity,
@@ -191,10 +206,39 @@ export const GET = withErrorHandler(async (req: Request) => {
   // It is safe unvalidated: the predicate is an equality against a parameterised
   // placeholder, so an unknown string matches nothing rather than doing harm.
   const dispositionParam = searchParams.get("disposition")?.trim() || null;
+
+  // Idle band. Validated against the closed vocabulary — an unrecognised value
+  // is dropped rather than queried for, so a stale bookmark shows everything
+  // instead of silently returning zero rows.
+  const idleParam = searchParams.get("idle");
+  const idleRange = isIdleRangeKey(idleParam) ? IDLE_RANGES[idleParam] : null;
+
+  // The campaign filter names neodove_lead_links, which does not exist on every
+  // database — the branch has to be omitted from the SQL, so the answer is
+  // needed before the statement is built.
+  const campaignParam = searchParams.get("campaign")?.trim() || null;
+  const hasNeodoveTables = campaignParam ? await neodoveTablesPresent() : false;
+
+  // Explicit intent-score range. Same axis as `intent`; see LeadListFilters.
+  const scoreRange = normalizeScoreRange(
+    parseScoreBound(searchParams.get("score_min")),
+    parseScoreBound(searchParams.get("score_max")),
+  );
+
   const filters: LeadListFilters = {
     status: searchParams.get("status") || null,
     intent: isIntentBucket(intentParam) ? intentParam : null,
+    scoreMin: scoreRange.min,
+    scoreMax: scoreRange.max,
     source: searchParams.get("source") || null,
+    // Sync state, not `source` — a scraped lead we pushed to NeoDove keeps
+    // source = 'scraper'. See LeadFilters.neodove.
+    neodoveOnly: searchParams.get("neodove") === "1",
+    idleMinDays: idleRange?.min ?? null,
+    idleMaxDays: idleRange?.max ?? null,
+    idleNeverTouched: idleParam === "never",
+    campaign: campaignParam,
+    hasNeodoveTables,
     state: searchParams.get("state")?.trim() || null,
     city: searchParams.get("city")?.trim() || null,
     search: searchParams.get("search")?.trim() || null,
@@ -232,21 +276,24 @@ export const GET = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const [rows, stats, allFacets] = await Promise.all([
+  const [rows, stats, allFacets, campaignFacets] = await Promise.all([
     fetchLeadListRows(filters, page, limit),
     fetchLeadListStats(filters),
     fetchLeadListFacets(),
+    fetchCampaignFacets(),
   ]);
 
   // Same tiering on the way out: the source list is for everyone, the people
-  // lists are not.
+  // lists are not. Campaigns go with the source list — which campaign a lead is
+  // in is a property of the lead, not of the reporting structure.
   const facets = caps.canSeeOwnerAsm
-    ? allFacets
+    ? { ...allFacets, campaigns: campaignFacets }
     : {
         owners: [],
         asms: [],
         sources: allFacets.sources,
         dispositions: allFacets.dispositions,
+        campaigns: campaignFacets,
       };
 
   // NeoDove sync state and the latest call disposition for the rows on this
@@ -267,6 +314,13 @@ export const GET = withErrorHandler(async (req: Request) => {
   // E-224 and E-236 are separate statements because they can be applied
   // independently: one try/catch would let a database with E-224 but not E-236
   // lose its sync badges too.
+  // Campaign membership for this page's rows — same decoration pattern, and
+  // fail-tolerant for the same reason (see fetchCampaignForLeads).
+  let campaigns: Record<string, LeadCampaign> = {};
+  // Who handed each lead to its current owner. Oversight information, exposed
+  // on the same terms as the Owner / ASM columns — see maskOversight below.
+  let assignedBy: Record<string, LeadAssignedBy> = {};
+
   const neodoveStatus: Record<string, string> = {};
   const dispositions: Record<
     string,
@@ -274,6 +328,13 @@ export const GET = withErrorHandler(async (req: Request) => {
   > = {};
   const pageIds = rows.map((l) => l.id).filter(Boolean) as string[];
   if (pageIds.length) {
+    campaigns = await fetchCampaignForLeads(pageIds);
+    // Only fetched for roles allowed to see it — a request that cannot render
+    // the stamp should not pay for the query either.
+    if (caps.canSeeOwnerAsm) {
+      assignedBy = await fetchAssignedByForLeads(pageIds);
+    }
+
     try {
       const synced = await db
         .select({
@@ -331,6 +392,12 @@ export const GET = withErrorHandler(async (req: Request) => {
       ...maskOversight(l),
       _source: "dealer",
       neodove_sync_status: neodoveStatus[l.id] ?? null,
+      campaign: campaigns[l.id] ?? null,
+      // Suppressed for non-oversight roles alongside owner/asm — naming the
+      // person who assigned a lead discloses the same reporting structure the
+      // Owner column does, so it cannot be the one field that leaks it.
+      // `assignedBy` is already empty for those roles; this is the second lock.
+      assigned_by: caps.canSeeOwnerAsm ? (assignedBy[l.id] ?? null) : null,
       last_disposition: dispositions[l.id]?.label ?? null,
       last_disposition_bucket: dispositions[l.id]?.bucket ?? null,
       last_connect_status: dispositions[l.id]?.connectStatus ?? null,

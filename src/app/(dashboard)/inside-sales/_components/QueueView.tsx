@@ -40,11 +40,13 @@ export function QueueView({ viewerId, viewerRole }: Props) {
     const initialTab = parseTab(params.get("tab"));
     const initialPage = Math.max(1, Number(params.get("page") ?? "1"));
     const initialQ = params.get("q") ?? "";
+    const initialNeodove = params.get("neodove") === "1";
 
     const [tab, setTab] = useState<QueueTab>(initialTab);
     const [page, setPage] = useState(initialPage);
     const [search, setSearch] = useState(initialQ);
     const [searchDebounced, setSearchDebounced] = useState(initialQ);
+    const [neodoveOnly, setNeodoveOnly] = useState(initialNeodove);
     const [createOpen, setCreateOpen] = useState(false);
 
     // Sync state → URL for back/forward + share.
@@ -53,9 +55,10 @@ export function QueueView({ viewerId, viewerRole }: Props) {
         if (tab !== "my_open") next.set("tab", tab);
         if (page !== 1) next.set("page", String(page));
         if (searchDebounced) next.set("q", searchDebounced);
+        if (neodoveOnly) next.set("neodove", "1");
         const queryString = next.toString();
         router.replace(`/inside-sales${queryString ? `?${queryString}` : ""}`, { scroll: false });
-    }, [tab, page, searchDebounced, router]);
+    }, [tab, page, searchDebounced, neodoveOnly, router]);
 
     // 300ms debounce on the search box.
     useEffect(() => {
@@ -68,9 +71,13 @@ export function QueueView({ viewerId, viewerRole }: Props) {
 
     // ── Counts (all tabs) ────────────────────────────────────────────────
     const countsQuery = useQuery<{ success: true; data: QueueCounts }>({
-        queryKey: ["inside-sales-counts"],
+        // The NeoDove filter is part of the key: the badges narrow with the list,
+        // so a cached unfiltered count must not be shown above a filtered table.
+        queryKey: ["inside-sales-counts", neodoveOnly],
         queryFn: async () => {
-            const res = await fetch("/api/inside-sales/queue/counts", { cache: "no-store" });
+            const u = new URL("/api/inside-sales/queue/counts", window.location.origin);
+            if (neodoveOnly) u.searchParams.set("neodove", "1");
+            const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) throw new Error("Failed to load tab counts");
             return res.json();
         },
@@ -80,13 +87,14 @@ export function QueueView({ viewerId, viewerRole }: Props) {
 
     // ── Rows (current tab) ───────────────────────────────────────────────
     const rowsQuery = useQuery<{ success: true; data: QueueResponse }>({
-        queryKey: ["inside-sales-queue", tab, page, searchDebounced],
+        queryKey: ["inside-sales-queue", tab, page, searchDebounced, neodoveOnly],
         queryFn: async () => {
             const u = new URL("/api/inside-sales/queue", window.location.origin);
             u.searchParams.set("tab", tab);
             u.searchParams.set("page", String(page));
             u.searchParams.set("limit", String(PAGE_SIZE));
             if (searchDebounced) u.searchParams.set("q", searchDebounced);
+            if (neodoveOnly) u.searchParams.set("neodove", "1");
             const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) throw new Error("Failed to load queue");
             return res.json();
@@ -131,6 +139,38 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                             className="pl-9"
                         />
                     </div>
+                    {/* A toggle rather than a "Source" dropdown: there is exactly one
+                        external calling system, and a select whose only non-empty
+                        option is "NeoDove" is a dropdown pretending to be a switch.
+                        It sits beside the search box, not behind a "More filters"
+                        disclosure, because a filter that changes the tab counts
+                        must never be invisible while it is doing work. */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setNeodoveOnly((v) => !v);
+                            setPage(1);
+                        }}
+                        aria-pressed={neodoveOnly}
+                        title={
+                            neodoveOnly
+                                ? "Showing only leads handed to the NeoDove calling team — click to show all"
+                                : "Show only leads handed to the NeoDove calling team"
+                        }
+                        className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 ${
+                            neodoveOnly
+                                ? "border-sky-300 bg-sky-50 text-sky-700"
+                                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        }`}
+                    >
+                        <span
+                            aria-hidden
+                            className={`h-1.5 w-1.5 rounded-full ${
+                                neodoveOnly ? "bg-sky-500" : "bg-gray-300"
+                            }`}
+                        />
+                        NeoDove
+                    </button>
                     {rowsQuery.isFetching && (
                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                     )}
