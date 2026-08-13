@@ -27,7 +27,13 @@ type Campaign = {
     name: string;
     neodove_campaign_name: string | null;
     status: string;
+    /** The endpoint env var actually resolves on the server — not merely "a ref
+     *  is recorded", which is what this used to mean and why a campaign with a
+     *  missing variable was offered here and then failed at push time. */
     is_wired: boolean;
+    /** Other campaigns pushing through the same endpoint, i.e. the same
+     *  destination in NeoDove. */
+    endpoint_shared_with?: string[];
 };
 
 type BatchResult = {
@@ -51,6 +57,26 @@ function isActivelyWorkedError(message: string): boolean {
 
 function isEndpointError(message: string): boolean {
     return message.includes("push endpoint");
+}
+
+/**
+ * One readable line per campaign.
+ *
+ * The two names are usually the same thing said twice — a CRM row called
+ * `CRM_NEODOVE_1` pointing at a NeoDove campaign called `CRM_NEODOVE_1 (DEMO)`
+ * rendered as "CRM_NEODOVE_1 → CRM_NEODOVE_1 (DEMO)", which is noise that
+ * pushes the meaningful part off the end of a narrow select. So the arrow form
+ * is kept ONLY when the names genuinely differ, which is the case that matters:
+ * `Rushikesh_Demo_1 → Custom_Rushikesh_Demo` is worth spelling out, because
+ * without it nobody could tell where that lead is about to land.
+ */
+function campaignLabel(c: Campaign): string {
+    const target = c.neodove_campaign_name?.trim();
+    if (!target) return c.name;
+    // Same name plus a suffix like " (DEMO)" — show the NeoDove one alone, since
+    // that is the name the operator will look for in NeoDove's own UI.
+    if (target.toLowerCase().startsWith(c.name.trim().toLowerCase())) return target;
+    return `${c.name} → ${target}`;
 }
 
 export function SendToNeodoveModal({
@@ -103,7 +129,13 @@ export function SendToNeodoveModal({
     }, [force]);
 
     const selected = campaigns?.find((c) => c.id === campaignId) ?? null;
-    const wiredCampaigns = (campaigns ?? []).filter((c) => c.is_wired);
+    // Alphabetical, not the API's created_at DESC. This is a picker, not a
+    // feed: the operator is looking for a name they already have in mind, and
+    // newest-first meant the most recently touched campaign — often a legacy
+    // one that was just edited — sat above the ones actually in use.
+    const wiredCampaigns = (campaigns ?? [])
+        .filter((c) => c.is_wired)
+        .sort((a, b) => campaignLabel(a).localeCompare(campaignLabel(b)));
     const unwiredCount = (campaigns?.length ?? 0) - wiredCampaigns.length;
     const targetName = selected?.neodove_campaign_name ?? selected?.name ?? "the target";
 
@@ -141,8 +173,13 @@ export function SendToNeodoveModal({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-            <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
-                <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+            {/* max-w-lg, not md: campaign labels run to ~40 characters
+                ("Rushikesh_Demo_1 → Custom_Rushikesh_Demo") and were being
+                truncated by the select at the narrower width. max-h + scroll so
+                a long error plus the batch breakdown cannot push the footer
+                buttons off a short viewport. */}
+            <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+                <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-6 py-4">
                     <h2 className="text-base font-semibold text-gray-900">
                         Send to NeoDove
                     </h2>
@@ -156,7 +193,7 @@ export function SendToNeodoveModal({
                 </div>
 
                 {done ? (
-                    <div className="px-6 py-6 space-y-3">
+                    <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3">
                         {batch ? (
                             <>
                                 <p className="text-sm text-gray-900">
@@ -226,7 +263,7 @@ export function SendToNeodoveModal({
                     </div>
                 ) : (
                     <>
-                        <div className="px-6 py-5 space-y-4">
+                        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
                             <p className="text-sm text-gray-600">
                                 Hand <strong className="text-gray-900">{label}</strong> to
                                 the NeoDove calling team.
@@ -264,10 +301,7 @@ export function SendToNeodoveModal({
                                             <option value="">Select a campaign…</option>
                                             {wiredCampaigns.map((c) => (
                                                 <option key={c.id} value={c.id}>
-                                                    {c.name}
-                                                    {c.neodove_campaign_name
-                                                        ? ` → ${c.neodove_campaign_name}`
-                                                        : ""}
+                                                    {campaignLabel(c)}
                                                 </option>
                                             ))}
                                         </select>
@@ -275,7 +309,25 @@ export function SendToNeodoveModal({
                                             <p className="mt-1 text-xs text-gray-500">
                                                 {unwiredCount} campaign
                                                 {unwiredCount === 1 ? " is" : "s are"} hidden
-                                                — no push endpoint configured.
+                                                — no working push endpoint configured.
+                                            </p>
+                                        )}
+                                        {/* THE MIS-ROUTING WARNING. The push body
+                                            carries no campaign identifier — the
+                                            endpoint URL alone decides where a lead
+                                            lands — so two campaigns sharing an
+                                            endpoint are one destination wearing two
+                                            names. Without this, picking between them
+                                            reads as a routing decision that silently
+                                            does nothing. */}
+                                        {(selected?.endpoint_shared_with?.length ?? 0) >
+                                            0 && (
+                                            <p className="mt-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                                <strong>{selected?.name}</strong> shares its
+                                                NeoDove endpoint with{" "}
+                                                {selected?.endpoint_shared_with?.join(", ")}.
+                                                These leads land in the same NeoDove
+                                                campaign whichever of them you pick.
                                             </p>
                                         )}
                                     </>
@@ -327,7 +379,7 @@ export function SendToNeodoveModal({
                             )}
                         </div>
 
-                        <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+                        <div className="flex shrink-0 justify-end gap-2 border-t border-gray-100 px-6 py-4">
                             <button
                                 onClick={onClose}
                                 className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"

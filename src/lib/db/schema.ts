@@ -3232,15 +3232,28 @@ export const scrapeRuns = pgTable("scraper_runs", {
   new_leads_skipped_invalid_phone: integer(
     "new_leads_skipped_invalid_phone",
   ).default(0),
-  // E-227 — liveness heartbeat, bumped by executeChunk() alongside
-  // completed_chunks. reapStuckRuns() reaps on silence rather than on total run
-  // age, so a legitimately long multi-query run isn't force-failed at minute 11.
-  last_progress_at: timestamp("last_progress_at", { withTimezone: true }),
-  // NOTE: E-227 also creates idx_scraper_runs_running (partial, WHERE status =
-  // 'running'). It is deliberately NOT declared here: "scraper_runs" is mapped
-  // by TWO pgTable declarations in this file (scraperRuns above and scrapeRuns
-  // here), so declaring indexes on both aliases would emit duplicate DDL if
-  // drizzle-kit is ever run. The migration file owns that index.
+  // ⚠ `last_progress_at` WAS DECLARED HERE AND HAS BEEN REMOVED. Do not add it
+  // back without first writing the migration that creates it.
+  //
+  // It was added for a liveness heartbeat — executeChunk() would bump it and
+  // reapStuckRuns() would reap on silence rather than on total run age, so a
+  // legitimately long multi-query run isn't force-failed at minute 11. That is
+  // still a good idea, but NONE of it was built: no code writes the column, no
+  // code reads it, reapStuckRuns() still compares `started_at`, and the E-227
+  // migration the old comment here credited does not exist in drizzle/.
+  //
+  // So the column existed in exactly one place — this object — and drizzle
+  // names EVERY column of a table object in its INSERT. The result was that
+  // starting any scrape died with
+  //   column "last_progress_at" of relation "scraper_runs" does not exist
+  // on every database, because no database has ever had it. Same failure mode
+  // E-224 / E-226 / E-236 each call out at length: a column that is not
+  // guaranteed present must not be named on the drizzle object.
+  //
+  // To build the heartbeat: write the migration (column + a partial
+  // idx_scraper_runs_running WHERE status = 'running'), apply it everywhere,
+  // THEN add the column back here — or write it by raw sql`` and leave this
+  // object alone, which is what the three migrations above chose.
 });
 
 export const scraperRunChunks = pgTable(
@@ -3602,6 +3615,36 @@ export const notifications = pgTable(
     // The two partial indexes (user_unread, legacy_dealer) are created by the
     // migration; drizzle's builder has no partial-index syntax, so they are
     // intentionally absent here. The migration file is the source of truth.
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-231 — per-dashboard control of which notification types reach the bell
+// -----------------------------------------------------------------------------
+// NO ROW = ENABLED. The table holds only decisions a human actually made, so a
+// newly-added notification type is on everywhere the moment it exists and an
+// unapplied migration is indistinguishable from today's behaviour. The reader
+// (src/lib/notifications/access.ts) loads ONLY the enabled=false rows and fails
+// open on any error — see the E-231 file for why that is not negotiable.
+//
+// `dashboard` is LOWER(users.role). The CHECK enforcing lowercase lives in the
+// migration; drizzle's builder has no CHECK syntax, so it is intentionally
+// absent here and the migration is the source of truth.
+// -----------------------------------------------------------------------------
+
+export const notificationAccess = pgTable(
+  "notification_access",
+  {
+    dashboard: varchar({ length: 50 }).notNull(),
+    notification_type: varchar("notification_type", { length: 50 }).notNull(),
+    enabled: boolean().notNull().default(true),
+    // users.id AS TEXT — matches assignment_config.updated_by on the same
+    // settings screen, which joins u.id::text.
+    updated_by: text("updated_by"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.dashboard, table.notification_type] }),
   }),
 );
 
@@ -4720,11 +4763,74 @@ export const nbfcRecoveryPipeline = pgTable(
     estimated_recovery_value: numeric("estimated_recovery_value", { precision: 12, scale: 2 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    // [E-232] recovery_batteries.id — the real key that replaces the string
+    // join in settlements.ts, which matched battery_serial against
+    // auction_lots.lot_code. Those two values are never equal, so marking a
+    // battery 'resold' has never once worked.
+    battery_id: uuid("battery_id"),
   },
   (table) => ({
     tenantIdx: index("nbfc_recovery_pipeline_tenant_idx").on(table.tenant_id),
     stageIdx: index("nbfc_recovery_pipeline_stage_idx").on(table.stage),
     tenantStageIdx: index("nbfc_recovery_pipeline_tenant_stage_idx").on(table.tenant_id, table.stage),
+    batteryIdx: index("nbfc_recovery_pipeline_battery_idx").on(table.battery_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-232 — recovery_batteries: the battery master (Battery Auction BRD §3)
+// -----------------------------------------------------------------------------
+// Deliberately a SEPARATE table from nbfc_recovery_pipeline rather than twelve
+// more columns on it, because the two have different lifetimes. A pipeline row
+// is a workflow position that ends at 'resold'. A battery is a physical asset
+// that outlives it — refurbished, auctioned, refinanced, and recovered again
+// later. One battery, many pipeline passes.
+//
+// `state_code` is named that way because `state` on this same row is the
+// geographic state. Values: draft | intaken | inspected | refurbishing | ready
+// | lotted | sold | scrapped. No pgEnum and no CHECK, matching every other
+// status column in this family — the vocabulary lives in
+// src/lib/nbfc/recovery/battery.ts so it can move without a migration on a
+// drifting database.
+// -----------------------------------------------------------------------------
+
+export const recoveryBatteries = pgTable(
+  "recovery_batteries",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // Global, not per-tenant: the serial is what an operator reads off the
+    // casing, and the same battery must not exist twice because it changed
+    // hands.
+    serial: varchar("serial", { length: 64 }).notNull().unique(),
+    model: varchar("model", { length: 120 }),
+    capacity: varchar("capacity", { length: 32 }),
+    manufacturing_date: date("manufacturing_date"),
+    condition_grade: varchar("condition_grade", { length: 24 }),
+    recovery_date: timestamp("recovery_date", { withTimezone: true }),
+    warehouse: varchar("warehouse", { length: 160 }),
+    lat: numeric("lat", { precision: 10, scale: 7 }),
+    lng: numeric("lng", { precision: 10, scale: 7 }),
+    city: varchar("city", { length: 120 }),
+    state: varchar("state", { length: 120 }),
+    // varchar(255), NOT uuid — `loan_sanctions.id` is character varying here.
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }),
+    recovery_pipeline_id: uuid("recovery_pipeline_id"),
+    // Relative /api/files/<bucket>/<key> strings, never absolute URLs — the
+    // backend flips between Supabase and S3 behind STORAGE_BACKEND and the
+    // proxy route is the only stable address. Captured once at inspection and
+    // reused verbatim as the auction images (BRD §20).
+    image_urls: text("image_urls").array().notNull().default(sql`'{}'::text[]`),
+    state_code: varchar("state_code", { length: 24 }).notNull().default("draft"),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("recovery_batteries_tenant_idx").on(table.tenant_id),
+    stateIdx: index("recovery_batteries_state_idx").on(table.state_code),
+    pipelineIdx: index("recovery_batteries_pipeline_idx").on(table.recovery_pipeline_id),
+    loanIdx: index("recovery_batteries_loan_idx").on(table.loan_sanction_id),
   }),
 );
 
@@ -4752,10 +4858,67 @@ export const nbfcBatteryEvaluations = pgTable(
     base_auction_price: numeric("base_auction_price", { precision: 12, scale: 2 }),
     rejected: boolean("rejected").notNull().default(false),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // [E-233] What THIS evaluation saw. recovery_batteries.image_urls is the
+    // canonical gallery; this column exists so a re-inspection after
+    // refurbishment does not overwrite the before shots.
+    photo_urls: text("photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    // [E-233] new | refurbished | partial_working (BRD §6). Stored rather than
+    // recomputed from SOH — the bands may be retuned, and a battery already
+    // sold as partial_working must not silently re-grade itself.
+    condition_grade: varchar("condition_grade", { length: 24 }),
   },
   (table) => ({
     tenantIdx: index("nbfc_battery_evaluations_tenant_idx").on(table.tenant_id),
     pipelineIdx: index("nbfc_battery_evaluations_pipeline_idx").on(table.recovery_pipeline_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-233 — refurbishment_jobs (Battery Auction BRD §5, §15)
+// -----------------------------------------------------------------------------
+// One workshop job per recovered battery. The NBFC raises it, the iTarang
+// workshop works it, and the battery re-enters the pipeline at
+// ready_for_auction.
+//
+// Refurbishment is RECOMMENDED, NEVER MANDATORY — see the bypass edge
+// needs_inspection -> ready_for_auction in src/lib/nbfc/recovery/stages.ts.
+//
+// `estimated_cost` and `actual_cost` are deliberately two columns: the estimate
+// is what the NBFC agreed to, the actual is what the workshop spent, and the
+// pair is the only thing a workshop can be audited against.
+//
+// The partial unique index enforcing at most one OPEN job per battery lives in
+// the migration only — drizzle's builder cannot express a WHERE clause on an
+// index (same treatment as E-093, E-226, E-230, E-232).
+// -----------------------------------------------------------------------------
+
+export const refurbishmentJobs = pgTable(
+  "refurbishment_jobs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_id: uuid("battery_id").notNull(),
+    recovery_pipeline_id: uuid("recovery_pipeline_id"),
+    requested_by_user_id: uuid("requested_by_user_id"),
+    assigned_workshop: varchar("assigned_workshop", { length: 160 }),
+    checklist: jsonb("checklist").notNull().default(sql`'[]'::jsonb`),
+    // BRD §15 — charger, harness, SOC meter, always new (~₹7–8k), costed here
+    // and rolled into the lot base price so the dealer sees one number.
+    accessories: jsonb("accessories").notNull().default(sql`'[]'::jsonb`),
+    estimated_cost: numeric("estimated_cost", { precision: 12, scale: 2 }),
+    actual_cost: numeric("actual_cost", { precision: 12, scale: 2 }),
+    status: varchar("status", { length: 24 }).notNull().default("requested"),
+    notes: text("notes"),
+    requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    returned_at: timestamp("returned_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("refurbishment_jobs_tenant_idx").on(table.tenant_id),
+    batteryIdx: index("refurbishment_jobs_battery_idx").on(table.battery_id),
+    statusIdx: index("refurbishment_jobs_status_idx").on(table.status),
   }),
 );
 
@@ -6239,10 +6402,27 @@ export const auctionLots = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // [E-232] Lot composition, scheduling and the seller identity.
+    // status now spans draft | scheduled | live | paused | ended | cancelled;
+    // the DEFAULT stays 'live' in SQL on purpose (changing it would silently
+    // alter every INSERT that omits the column) and the draft default is
+    // applied in src/lib/nbfc/auction/composeLot.ts instead.
+    seller_tenant_id: uuid("seller_tenant_id"),
+    auction_type: varchar("auction_type", { length: 24 })
+      .notNull()
+      .default("cash"),
+    starts_at: timestamp("starts_at", { withTimezone: true }),
+    anti_snipe_seconds: integer("anti_snipe_seconds").notNull().default(120),
+    reserve_price: numeric("reserve_price", { precision: 12, scale: 2 }),
+    title: varchar("title", { length: 160 }),
+    published_at: timestamp("published_at", { withTimezone: true }),
   },
   (table) => ({
     statusIdx: index("auction_lots_status_idx").on(table.status),
     endsAtIdx: index("auction_lots_ends_at_idx").on(table.ends_at),
+    sellerTenantIdx: index("auction_lots_seller_tenant_idx").on(
+      table.seller_tenant_id,
+    ),
   }),
 );
 
@@ -6256,11 +6436,108 @@ export const auctionBids = pgTable(
     placed_at: timestamp("placed_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // [E-232] The bidder re-point (BRD §9 — dealers only, never other NBFCs).
+    // Added ALONGSIDE tenant_id, not instead of it. On a dealer bid BOTH are
+    // populated: bidder_dealer_id is the dealer account, and tenant_id carries
+    // the SELLER's tenant so the nbfc_audit_log row lands in the right log and
+    // every existing tenant-scoped query on this table stays meaningful.
+    // bidder_kind says which one is authoritative, so nothing infers it from
+    // NULLness.
+    // varchar(255), NOT uuid — `accounts.id` holds application-issued strings
+    // like 'ACC-ITARANG-20260409-971', and so does `users.dealer_id`.
+    bidder_dealer_id: varchar("bidder_dealer_id", { length: 255 }),
+    bidder_kind: varchar("bidder_kind", { length: 16 })
+      .notNull()
+      .default("nbfc"),
   },
   (table) => ({
     lotIdx: index("auction_bids_lot_idx").on(table.lot_id),
     tenantIdx: index("auction_bids_tenant_idx").on(table.tenant_id),
     placedAtIdx: index("auction_bids_placed_at_idx").on(table.placed_at),
+    bidderDealerIdx: index("auction_bids_bidder_dealer_idx").on(
+      table.bidder_dealer_id,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-234 — multi-battery lots, visibility, and the frozen audience
+// -----------------------------------------------------------------------------
+// `auction_lot_items` is what makes "5 batteries, one lot" expressible;
+// `auction_lots.quantity` was an integer that publishLotFromRecovery() hard-
+// coded to 1. `condition` lives on the ITEM, not the lot, because a pallet may
+// mix grades and a dealer who bid on "refurbished" and received
+// "partial_working" has been mis-sold.
+//
+// It is also the real key that replaces two string joins on `lot_code` — in
+// settlements.ts and in the cancel service — which matched zero rows every time
+// because `lot_code` is "LOT-" + 8 hex of a pipeline uuid and is never equal to
+// a battery serial or an inventory serial number.
+//
+// `auction_lot_audience` is resolved ONCE at publish and frozen. Re-evaluating
+// on read would make the audience a moving target and "who did we tell?"
+// unanswerable, which is the question a disputed auction turns on.
+//
+// The partial index `auction_lot_audience_pending_idx` lives only in the
+// migration — drizzle cannot express a WHERE clause on an index.
+// -----------------------------------------------------------------------------
+
+export const auctionLotItems = pgTable(
+  "auction_lot_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    battery_id: uuid("battery_id").notNull(),
+    condition: varchar("condition", { length: 24 }).notNull().default("refurbished"),
+    item_price: numeric("item_price", { precision: 12, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_lot_items_lot_idx").on(table.lot_id),
+    batteryIdx: index("auction_lot_items_battery_idx").on(table.battery_id),
+    lotBatteryUniq: unique("auction_lot_items_lot_battery_key").on(
+      table.lot_id,
+      table.battery_id,
+    ),
+  }),
+);
+
+export const auctionLotVisibility = pgTable("auction_lot_visibility", {
+  lot_id: uuid("lot_id").primaryKey().notNull(),
+  scope: varchar("scope", { length: 16 }).notNull().default("india"),
+  states: text("states").array().notNull().default(sql`'{}'::text[]`),
+  cities: text("cities").array().notNull().default(sql`'{}'::text[]`),
+  centre_lat: numeric("centre_lat", { precision: 10, scale: 7 }),
+  centre_lng: numeric("centre_lng", { precision: 10, scale: 7 }),
+  radius_km: integer("radius_km"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const auctionLotAudience = pgTable(
+  "auction_lot_audience",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    // accounts.id — character varying, NOT uuid.
+    dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
+    dealer_name: varchar("dealer_name", { length: 255 }),
+    city: varchar("city", { length: 120 }),
+    state: varchar("state", { length: 120 }),
+    distance_km: numeric("distance_km", { precision: 8, scale: 2 }),
+    channel: varchar("channel", { length: 16 }).notNull().default("in_app"),
+    status: varchar("status", { length: 16 }).notNull().default("pending"),
+    sent_at: timestamp("sent_at", { withTimezone: true }),
+    error: text("error"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_lot_audience_lot_idx").on(table.lot_id),
+    dealerIdx: index("auction_lot_audience_dealer_idx").on(table.dealer_id),
+    lotDealerChannelUniq: unique("auction_lot_audience_lot_dealer_channel_key").on(
+      table.lot_id,
+      table.dealer_id,
+      table.channel,
+    ),
   }),
 );
 
@@ -6623,11 +6900,19 @@ export const auctionSettlements = pgTable(
     updated_at: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // [E-232] accounts.id of the winning DEALER, mirroring
+    // auction_bids.bidder_dealer_id. winner_tenant_id stays NOT NULL and
+    // carries the seller's tenant on a dealer win. payment_ref and
+    // refinance_loan_id belong to Phase 6 and are deliberately not here.
+    winner_dealer_id: varchar("winner_dealer_id", { length: 255 }),
   },
   (table) => ({
     lotIdx: index("auction_settlements_lot_idx").on(table.lot_id),
     sellerTenantIdx: index("auction_settlements_seller_tenant_idx").on(
       table.seller_tenant_id,
+    ),
+    winnerDealerIdx: index("auction_settlements_winner_dealer_idx").on(
+      table.winner_dealer_id,
     ),
     winnerTenantIdx: index("auction_settlements_winner_tenant_idx").on(
       table.winner_tenant_id,
@@ -6646,6 +6931,13 @@ export const auctionAutoBids = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     lot_id: uuid("lot_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
+    // [E-234] Required after the E-232 re-point: a dealer bid writes the
+    // SELLER's tenant into auction_bids.tenant_id, so every dealer bidding on
+    // one lot shares a tenant_id and it can no longer identify a bidder.
+    // Without this the proxy engine cannot tell whose standing order is whose,
+    // and E-093's (lot_id, tenant_id) unique index would let the second dealer
+    // to set a maximum silently cancel the first one's.
+    bidder_dealer_id: varchar("bidder_dealer_id", { length: 255 }),
     max_amount: numeric("max_amount", { precision: 12, scale: 2 }).notNull(),
     status: varchar({ length: 16 }).notNull().default("active"),
     created_at: timestamp("created_at", { withTimezone: true })

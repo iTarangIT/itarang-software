@@ -31,6 +31,10 @@ type Detail = {
         neodove_campaign_name: string | null;
         status: string;
         push_endpoint_ref: string | null;
+        /** The env var actually resolves on the server — not just "a ref is set". */
+        is_wired?: boolean;
+        /** Other campaigns pushing into the SAME NeoDove campaign via this ref. */
+        endpoint_shared_with?: { id: string; name: string }[];
         // Passed straight back into the edit modal. Omitting it is not neutral:
         // the modal treats "every mirror field blank on an existing campaign" as
         // "this mirror was wrong, clear it", so a campaign edited from this page
@@ -190,6 +194,54 @@ export default function NeodoveCampaignDetailPage({
                 </div>
             )}
 
+            {/* A ref IS set but the variable behind it is empty on this server.
+                Distinct from the case above and far more dangerous: this campaign
+                looked configured, and before is_wired became a real check it was
+                offered as a destination in the Send-to-NeoDove dropdown. */}
+            {c.push_endpoint_ref && c.is_wired === false && (
+                <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 flex gap-2">
+                    <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div>
+                        <p>
+                            This campaign points at{" "}
+                            <strong className="font-mono">{c.push_endpoint_ref}</strong>,
+                            but that environment variable is not set on this server — so
+                            nothing can be pushed here. Add it to the environment (the
+                            value is NeoDove&apos;s Custom Integration URL) and restart,
+                            or point the campaign at an endpoint that is configured.
+                        </p>
+                        <button
+                            onClick={() => setEditing(true)}
+                            className="mt-2 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700"
+                        >
+                            Change endpoint
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Two campaigns, one endpoint = one destination. The push body
+                carries no campaign identifier, so the URL alone decides where a
+                lead lands. */}
+            {(c.endpoint_shared_with?.length ?? 0) > 0 && (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex gap-2">
+                    <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                    <p>
+                        This campaign shares its push endpoint with{" "}
+                        {c.endpoint_shared_with?.map((o, i) => (
+                            <span key={o.id}>
+                                {i > 0 && ", "}
+                                <strong>{o.name}</strong>
+                            </span>
+                        ))}
+                        . Leads sent to any of them arrive in the{" "}
+                        <strong>same</strong> NeoDove campaign — the endpoint URL is what
+                        routes a lead, not the campaign chosen here. Give each one its
+                        own Custom Integration endpoint to route them separately.
+                    </p>
+                </div>
+            )}
+
             {editing && (
                 <NeodoveCampaignModal
                     campaign={{
@@ -209,9 +261,13 @@ export default function NeodoveCampaignDetailPage({
                 />
             )}
 
+            {/* is_wired, not "a ref is set": the push panel must refuse a
+                campaign whose env var is missing, which is the failure the
+                banner above now names. Falls back to the old test only when the
+                server did not send the flag (a stale cached bundle). */}
             <NeodovePushPanel
                 campaignId={c.id}
-                isWired={Boolean(c.push_endpoint_ref)}
+                isWired={c.is_wired ?? Boolean(c.push_endpoint_ref)}
             />
 
             {/* STATS

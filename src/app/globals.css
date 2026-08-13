@@ -9,6 +9,98 @@
 @custom-variant dark (&:where(.__itarang_dark_disabled *));
 
 /* ==========================================================================
+ * Self-hosted brand fonts — BRD §6.B (DM Sans body, DM Mono for IDs/IMEI/hex).
+ *
+ * These used to load from fonts.googleapis.com via a <link rel="stylesheet">
+ * in app/layout.tsx. That put a THIRD-PARTY, RENDER-BLOCKING request on the
+ * critical path of every single page: the browser had to resolve DNS,
+ * TLS-handshake and fetch Google's stylesheet, and only then discover the
+ * woff2 URLs on a second origin (fonts.gstatic.com) and fetch those. Serving
+ * the files from our own origin collapses that into same-origin fetches the
+ * browser can start immediately, on a connection that is already warm.
+ *
+ * next/font still is NOT used, and the original reason stands: the sandbox VPS
+ * cannot reach fonts.googleapis.com during `next build`, so next/font writes
+ * manifest entries for woff2 files it never emits, taking out the dependent
+ * CSS/JS chunks with it. Self-hosting sidesteps build-time network entirely
+ * rather than fighting it — the files are committed under public/fonts/.
+ *
+ * DM Sans v17 is a VARIABLE font: one file covers 400/500/600/700, which is
+ * why a single @font-face per subset carries a weight RANGE. DM Mono is not
+ * variable, so it gets one file per weight.
+ *
+ * Licence: both families are SIL Open Font License 1.1 — redistribution
+ * (including self-hosting) is permitted. See public/fonts/OFL.txt.
+ *
+ * `font-display: swap` matches what the Google stylesheet requested, so text
+ * still paints immediately in the fallback and swaps when the font lands.
+ * ========================================================================== */
+
+/* DM Sans — variable, weights 400-700 used by the design system. */
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url("/fonts/dm-sans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url("/fonts/dm-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* DM Mono — static, one file per weight. */
+@font-face {
+  font-family: "DM Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-mono-400-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "DM Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/dm-mono-400-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "DM Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/dm-mono-500-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "DM Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/dm-mono-500-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ==========================================================================
  * iTarang Brand System — BRD §6.B
  * Single source of truth for color, typography, and component primitives.
  * Every logged-in surface (24 role dashboards) inherits from these tokens.
@@ -305,6 +397,50 @@
   .sidebar-section-label {
     @apply text-[9px] font-bold uppercase tracking-[0.14em];
     color: rgba(255, 255, 255, 0.30);
+  }
+  /* Collapsible group header. Full-bleed like .sidebar-nav-item — a header
+     narrower than the rows it owns reads as misaligned. Left padding is
+     20px so its text sits on the same gutter as a nav item's label
+     (3px accent border + 17px). */
+  .sidebar-section-toggle {
+    @apply w-full flex items-center gap-2 text-[11px] font-bold uppercase
+           tracking-[0.11em] transition-colors duration-150
+           cursor-pointer select-none;
+    padding: 11px 18px 11px 20px;
+    color: rgba(255, 255, 255, 0.42);
+  }
+  .sidebar-section-toggle:hover {
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.045);
+  }
+  /* Group holds the active route — keeps you oriented after manually
+     collapsing it, and marks the open group while browsing. */
+  .sidebar-section-toggle[data-has-active="true"] {
+    color: rgba(255, 255, 255, 0.88);
+  }
+  /* Hairline between groups gives the column structure once every section
+     is collapsed; :first-child would otherwise draw one under the logo rule. */
+  .sidebar-section + .sidebar-section {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  /* The native scrollbar renders as a bright grey gutter against the navy
+     shell; this makes the nav column's bar thin and translucent. */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+  }
+  .sidebar-scroll:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.28);
   }
   .sidebar-nav-item {
     @apply flex items-center gap-3 text-[13px] font-medium

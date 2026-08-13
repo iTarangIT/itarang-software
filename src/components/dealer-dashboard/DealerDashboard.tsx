@@ -31,6 +31,8 @@ import {
 import { fetchDealerStats } from './useDealerStats';
 import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { dealerTypeLabel } from '@/lib/dealer/dealer-type';
+import '@/app/auction-theme.css';
+import LiveAuctionsStrip from './LiveAuctionsStrip';
 
 type DealerApiData = {
   id: string | null;
@@ -523,6 +525,12 @@ export default function DealerDashboard() {
           approvedAt={dealer?.approvedAt}
         />
       </div>
+
+      {/* ─── E-234 Live battery auctions ───────────────────────────────────
+          Renders nothing when this dealer is in no live lot's audience, so an
+          unapproved or out-of-area dealer sees no permanent empty card. Its
+          own scoping comes from /api/dealer/auctions, not from `isApproved`. */}
+      <LiveAuctionsStrip />
 
       {/* ─── Coupon Credits Widget ──────────────────────────────────────── */}
       {isFinanceEnabled && couponStats && (

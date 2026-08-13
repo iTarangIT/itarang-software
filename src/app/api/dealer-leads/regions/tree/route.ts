@@ -24,6 +24,8 @@
 
 import { db } from "@/lib/db";
 import { withErrorHandler, successResponse } from "@/lib/api-utils";
+import { requireRole } from "@/lib/auth-utils";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { sql } from "drizzle-orm";
 
 export const UNKNOWN_STATE = "Unknown";
@@ -43,6 +45,15 @@ interface RawRow {
 const NO_CALL_STATUSES_SQL = sql`('converted', 'not_interested', 'dnc', 'blacklisted')`;
 
 export const GET = withErrorHandler(async () => {
+  // Was unauthenticated — middleware does not gate /api/* (src/middleware.ts).
+  // No per-lead PII here, but the response is a full map of the prospect
+  // pipeline: how many dialable leads sit in every state and city we operate
+  // in. Same gate as the /leads screen this feeds (the dialer's region
+  // selector and region-group manager).
+  // Safe inside withErrorHandler — it re-throws NEXT_REDIRECT rather than
+  // turning requireAuth's redirect into a 500.
+  await requireRole([...LEADS_PAGE_ROLES]);
+
   const result = await db.execute(sql`
     WITH resolved AS (
       SELECT

@@ -3,8 +3,29 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { oemInventoryForPDI, inventory, products, oems, provisions } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { requireRole } from '@/lib/auth-utils';
+
+// Who may read the PDI queue: the service engineers who perform the
+// inspection, plus the inventory/ops roles that supervise it.
+const PDI_READ_ROLES = [
+    'service_engineer',
+    'inventory_manager',
+    'admin',
+    'ops_manager',
+    'super_admin',
+    'sales_head',
+    'ceo',
+];
 
 export async function GET(request: Request) {
+    // Was unauthenticated — middleware does not gate /api/* (src/middleware.ts),
+    // so anyone could enumerate serial numbers, OEM names and delivery dates.
+    //
+    // ⚠ MUST sit OUTSIDE the try/catch below. requireRole → requireAuth →
+    // redirect("/login") signals by THROWING a NEXT_REDIRECT error, which the
+    // catch would otherwise convert into a 500.
+    await requireRole(PDI_READ_ROLES);
+
     try {
         const { searchParams } = new URL(request.url);
         const provisionId = searchParams.get('provision_id');
