@@ -282,9 +282,16 @@ export async function finalizeElevenLabsCall(
     });
 
     await fetchAndPersistCallCost("elevenlabs", conversationId);
+    // dropped_empty connected and produced a transcript — the line just dropped
+    // before any qualifying info was captured. It is NOT a telephony failure, so
+    // the campaign row is marked completed ("Done"), not failed. The Outcome
+    // column still carries "dropped_empty" to preserve the call-quality nuance.
+    // Mirrors the Bolna path (bolna_ai/finalizeCall.ts) — this branch was missed
+    // when that one was fixed, so every ElevenLabs campaign kept producing red
+    // "Failed" rows for calls that actually connected. See E-169 / E-239.
     const dr = await completeCampaignLead({
       leadId: lead.id,
-      success: false,
+      success: true,
       bolnaCallId: conversationId || null,
       outcome: "dropped_empty",
       intentScore: null,
