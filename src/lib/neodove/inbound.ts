@@ -24,6 +24,7 @@ import { classifyAgainstExisting, loadExistingByPhone } from "@/lib/leads/dedupe
 import { canTransition, type LeadStatus } from "@/lib/lifecycle/transitions";
 import {
     callStatusFor,
+    dispositionFor,
     leadStatusFor,
     remarksFor,
     touchpointTypeFor,
@@ -233,6 +234,7 @@ async function handleDisposition(
     });
 
     await attachCallEvidence(touchpointId, event);
+    await recordLeadDisposition(dealerLeadId, event);
 
     await db.execute(sql`
         UPDATE dealer_leads
@@ -434,36 +436,96 @@ async function handleLeadDeleted(
 // ── helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Attach the recording URL and the NeoDove agent's name to a touchpoint (E-226).
+ * Attach the recording URL, the agent's name (E-226) and the classified
+ * disposition (E-236) to a touchpoint.
  *
  * A SEPARATE STATEMENT, AFTER THE TRANSACTION, ON PURPOSE. `lead_touchpoints`
  * is written through Drizzle, and Drizzle names every column of the table object
- * in its INSERT — so these two columns are deliberately absent from schema.ts
- * and cannot be set by writeTouchpoint without breaking every touchpoint write
- * on a database that hasn't applied E-226 (prod, today). Running it here, after
- * the commit and inside a try/catch, means an unapplied migration costs a
- * recording URL and never the touchpoint itself. Note a failed statement aborts
- * an open transaction in Postgres — which is exactly why this is not folded into
- * writeTouchpoint's `tx`.
+ * in its INSERT — so these columns are deliberately absent from schema.ts and
+ * cannot be set by writeTouchpoint without breaking every touchpoint write on a
+ * database that hasn't applied E-226 / E-236 (prod, today). Running it here,
+ * after the commit and inside a try/catch, means an unapplied migration costs a
+ * recording URL or a disposition label and never the touchpoint itself. Note a
+ * failed statement aborts an open transaction in Postgres — which is exactly why
+ * this is not folded into writeTouchpoint's `tx`.
  *
- * No-ops when neither field is present, which is every event until NeoDove's
- * real payload is captured.
+ * `external_stage` / `external_tag` keep NeoDove's own words verbatim beside the
+ * classified values, so a vocabulary change on their side is diagnosable without
+ * re-reading raw payloads out of neodove_sync_events.
  */
 export async function attachCallEvidence(
     touchpointId: string,
     event: NeodoveInboundEvent,
 ): Promise<void> {
-    if (!event.recordingUrl && !event.agentName) return;
+    const disposition = dispositionFor(event);
+    if (
+        !event.recordingUrl &&
+        !event.agentName &&
+        !disposition &&
+        !event.stage &&
+        !event.tag
+    ) {
+        return;
+    }
     try {
         await db.execute(sql`
             UPDATE lead_touchpoints
                SET recording_url = COALESCE(${event.recordingUrl}, recording_url),
-                   external_agent_name = COALESCE(${event.agentName}, external_agent_name)
+                   external_agent_name = COALESCE(${event.agentName}, external_agent_name),
+                   disposition = COALESCE(${disposition?.label ?? null}, disposition),
+                   disposition_bucket = COALESCE(${disposition?.bucket ?? null}, disposition_bucket),
+                   connect_status = COALESCE(${disposition?.connectStatus ?? null}, connect_status),
+                   external_stage = COALESCE(${event.stage}, external_stage),
+                   external_tag = COALESCE(${event.tag}, external_tag)
              WHERE touchpoint_id = ${touchpointId}::uuid
         `);
     } catch (err) {
         console.warn(
-            "[NeoDove/inbound] recording/agent not stored (is E-226 applied?):",
+            "[NeoDove/inbound] recording/agent/disposition not stored (are E-226 and E-236 applied?):",
+            errorMessage(err),
+        );
+    }
+}
+
+/**
+ * Denormalise the classified disposition onto the lead, for the /leads filter.
+ *
+ * ONLY EVER MOVES FORWARD. The guard on `last_disposition_at` is the whole point
+ * of the column: NeoDove retries deliveries, the reconciliation importer replays
+ * a CSV export of arbitrary age, and the backfill script walks history — without
+ * it, any of the three would overwrite a lead's current disposition with an
+ * older one, and the /leads filter would quietly start describing the past.
+ *
+ * `<=` rather than `<` so a re-delivery of the SAME event is idempotent in
+ * value (it rewrites identical data) rather than being refused — the two are
+ * indistinguishable to a reader, and `<` would make a genuine second call in the
+ * same second invisible.
+ *
+ * Best-effort and after the commit, for the same reason as attachCallEvidence:
+ * a database without E-236 must lose the filter, not the touchpoint.
+ */
+export async function recordLeadDisposition(
+    dealerLeadId: string,
+    event: NeodoveInboundEvent,
+): Promise<void> {
+    const disposition = dispositionFor(event);
+    if (!disposition) return;
+    const occurredAt = event.occurredAt ?? new Date();
+    try {
+        await db.execute(sql`
+            UPDATE dealer_leads
+               SET last_disposition        = ${disposition.label},
+                   last_disposition_bucket = ${disposition.bucket},
+                   last_connect_status     = ${disposition.connectStatus},
+                   last_disposition_at     = ${occurredAt.toISOString()}::timestamptz,
+                   last_disposition_source = 'neodove'
+             WHERE id = ${dealerLeadId}
+               AND (last_disposition_at IS NULL
+                    OR last_disposition_at <= ${occurredAt.toISOString()}::timestamptz)
+        `);
+    } catch (err) {
+        console.warn(
+            "[NeoDove/inbound] lead disposition not stored (is E-236 applied?):",
             errorMessage(err),
         );
     }

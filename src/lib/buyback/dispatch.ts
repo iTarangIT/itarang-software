@@ -42,6 +42,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { sendEmail } from "@/lib/email/mailer";
+import { blockedDashboardsFor, blockedRoleClause } from "@/lib/notifications/access";
 import { notifyRoles } from "@/lib/notifications/notify";
 import { getObject } from "@/lib/storage/s3";
 import { getAdapter } from "@/lib/whatsapp";
@@ -347,6 +348,12 @@ async function writeBell(event: DueEvent): Promise<void> {
     return;
   }
 
+  // E-231 — dashboards that have muted this buyback type in their bell. The
+  // ADMIN branch above needs no guard: it delegates to notifyRoles, which
+  // applies the same gate itself. Renders to nothing when nobody has muted it,
+  // so the statements below are unchanged in the common case.
+  const bellGuard = blockedRoleClause(sql`u.role`, await blockedDashboardsFor(type));
+
   if (event.recipient_party === "DEALER") {
     // Every active login of the request's dealer. dealer_id holds the dealer
     // code, which IS buyback_requests.dealer_entity_id (accounts.id).
@@ -356,6 +363,7 @@ async function writeBell(event: DueEvent): Promise<void> {
         FROM users u
         JOIN buyback_requests br ON br.id = ${event.request_id}::uuid
        WHERE u.dealer_id = br.dealer_entity_id AND u.is_active = TRUE
+         ${bellGuard}
     `);
     return;
   }
@@ -372,6 +380,7 @@ async function writeBell(event: DueEvent): Promise<void> {
        WHERE u.role = 'scrap_vendor'
          AND lower(u.email) = lower(${event.recipient_ref})
          AND u.is_active = TRUE
+         ${bellGuard}
     `);
   }
 }

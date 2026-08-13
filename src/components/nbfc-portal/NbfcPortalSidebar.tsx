@@ -21,6 +21,7 @@ import {
   ClipboardList,
   Cog,
   FileText,
+  Gavel,
   Layers,
   Search,
   Siren,
@@ -78,6 +79,17 @@ const NAV_ITEMS: Array<{
     href: "/nbfc/recovery",
     label: "Recovery & Auction",
     icon: ClipboardList,
+  },
+  // [E-234] `/nbfc/auction` shipped with E-038 and was never linked from
+  // anywhere — an orphan page reachable only by typing the URL. Its content is
+  // partly duplicated inside /nbfc/recovery, which is why nobody noticed. It
+  // is the marketplace view (every lot, with bids); Recovery is the pipeline
+  // that feeds it, so they are listed as siblings rather than merged.
+  {
+    id: "auction",
+    href: "/nbfc/auction",
+    label: "Auction Marketplace",
+    icon: Gavel,
   },
   {
     id: "audit",

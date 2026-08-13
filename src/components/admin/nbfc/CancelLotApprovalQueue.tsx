@@ -22,6 +22,12 @@ type PendingRow = {
   requested_by: string;
   requested_at: string;
   status: string;
+  /** [E-234] Joined in by the approvals route so the row names a lot, not a uuid. */
+  lot_code?: string | null;
+  lot_title?: string | null;
+  lot_status?: string | null;
+  /** [E-234] The server 403s on self-approval; this lets the button say so first. */
+  is_own_request?: boolean;
 };
 
 type ListResponse = { requests: PendingRow[] };
@@ -108,17 +114,41 @@ export default function CancelLotApprovalQueue() {
       </thead>
       <tbody>
         {rows.map((r) => (
-          <tr key={r.id} className="border-t">
-            <td className="p-2 font-mono text-xs">{r.lot_id}</td>
+          <tr key={r.id} className="border-t align-top">
+            <td className="p-2">
+              <div className="font-mono text-xs font-semibold">
+                {r.lot_code ?? r.lot_id}
+              </div>
+              {r.lot_title ? (
+                <div className="text-xs text-gray-500">{r.lot_title}</div>
+              ) : null}
+              {r.lot_status ? (
+                <div className="text-[11px] uppercase tracking-wide text-gray-400">
+                  {r.lot_status}
+                </div>
+              ) : null}
+            </td>
             <td className="p-2">{r.reason}</td>
-            <td className="p-2 font-mono text-xs">{r.requested_by}</td>
+            <td className="p-2 font-mono text-xs">
+              {r.requested_by}
+              {r.is_own_request ? (
+                <div className="mt-1 text-[11px] font-sans text-amber-700">
+                  You raised this — a second admin must decide.
+                </div>
+              ) : null}
+            </td>
             <td className="p-2">
               {new Date(r.requested_at).toLocaleString()}
             </td>
             <td className="p-2 space-x-2">
               <button
                 type="button"
-                disabled={busyId === r.id}
+                disabled={busyId === r.id || r.is_own_request}
+                title={
+                  r.is_own_request
+                    ? "Cancelling a lot needs two different admins"
+                    : undefined
+                }
                 onClick={() => void decide(r.id, "approve")}
                 className="rounded bg-red-600 px-3 py-1 text-white disabled:opacity-50"
               >
@@ -126,7 +156,7 @@ export default function CancelLotApprovalQueue() {
               </button>
               <button
                 type="button"
-                disabled={busyId === r.id}
+                disabled={busyId === r.id || r.is_own_request}
                 onClick={() => void decide(r.id, "reject")}
                 className="rounded border px-3 py-1 disabled:opacity-50"
               >

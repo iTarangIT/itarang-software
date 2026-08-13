@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
     callStatusFor,
     dealerLeadToNeodove,
+    dispositionFor,
     leadStatusFor,
     parseInboundEvent,
     remarksFor,
@@ -600,5 +601,190 @@ describe("parseInboundEvent — recording URL (E-226)", () => {
 
     it("is null when the payload carries no recording at all", () => {
         expect(parseInboundEvent({ disposition: "Interested" }).recordingUrl).toBeNull();
+    });
+});
+
+// ── The CC sheet, end to end through the parser (E-236) ───────────────────
+//
+// dispositions.test.ts proves the taxonomy classifies correctly given a string.
+// These prove the string is pulled out of a NeoDove payload at all — which is
+// the half that was wrong for months: the disposition arrives in
+// `lead_tag_name`, and every reader looked at `lead_status_name` first.
+
+describe("dispositionFor", () => {
+    it("reads lead_tag_name in preference to lead_status_name", () => {
+        // This IS the live account's shape: a generic status label and the real
+        // disposition in the tag. Reading `disposition` first classified almost
+        // every genuine call as unmapped.
+        const event = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: "Price High",
+            lead_status_name: "Open",
+        });
+        const hit = dispositionFor(event);
+        expect(hit?.label).toBe("Price High");
+        expect(hit?.bucket).toBe("Warm");
+        expect(hit?.isKnown).toBe(true);
+    });
+
+    it("falls back to lead_status_name when the tag is absent", () => {
+        const event = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: null,
+            lead_status_name: "Not Interested",
+        });
+        expect(dispositionFor(event)?.label).toBe("Not Interested");
+        expect(dispositionFor(event)?.bucket).toBe("Lost");
+    });
+
+    it("falls back to dispose_remarks only on an EXACT match", () => {
+        const typed = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: null,
+            dispose_remarks: "Onboarding Done",
+        });
+        expect(dispositionFor(typed)?.label).toBe("Onboarding Done");
+
+        // Prose must never become a disposition label — it would pollute the
+        // filter dropdown with one option per sentence anyone ever typed. So an
+        // unmatched remark yields NOTHING rather than an unmapped disposition:
+        // remarks are consulted for an exact hit only, never as the fallback.
+        const prose = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: null,
+            dispose_remarks: "he asked us to call back after diwali",
+        });
+        expect(dispositionFor(prose)).toBeNull();
+    });
+
+    it("uses lead_stage_name to settle the Warm/Hot ambiguity", () => {
+        const warm = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: "Commercials Explained",
+            lead_stage_name: "Cold",
+        });
+        expect(dispositionFor(warm)?.bucket).toBe("Warm");
+
+        const hot = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: "Commercials Explained",
+            lead_stage_name: "Hot",
+        });
+        expect(dispositionFor(hot)?.bucket).toBe("Hot");
+    });
+
+    it("keeps an unmapped tag rather than discarding it", () => {
+        const event = parseInboundEvent({
+            ...LIVE_DISPOSE_PAYLOAD,
+            lead_tag_name: "Sent to field team",
+        });
+        expect(dispositionFor(event)?.label).toBe("Sent to field team");
+        expect(dispositionFor(event)?.isKnown).toBe(false);
+    });
+
+    it("refuses to invent a disposition out of NeoDove's STATUS vocabulary", () => {
+        // lead_status_name is Open / Follow-Up / Closed — real values, but
+        // statuses, not dispositions. Across 2,178 stored webhooks, allowing
+        // them through put "Open" (17), "Follow-Up" (10), "Closed" (4) and the
+        // bare code "6" into the filter dropdown as if a telecaller had chosen
+        // them. They are still honoured when they match the sheet; they just
+        // cannot supply an unmapped value of their own.
+        for (const status of ["Open", "Follow-Up", "Closed", "6"]) {
+            const event = parseInboundEvent({
+                ...LIVE_DISPOSE_PAYLOAD,
+                lead_tag_name: null,
+                lead_status_name: status,
+            });
+            expect(dispositionFor(event), status).toBeNull();
+        }
+    });
+
+    it("is null when the payload names no disposition at all", () => {
+        // The live fixture is exactly this: tag null, no lead_status_name.
+        expect(dispositionFor(parseInboundEvent(LIVE_DISPOSE_PAYLOAD))).toBeNull();
+    });
+});
+
+describe("callStatusFor, driven by the sheet", () => {
+    const withTag = (tag: string, extra: Record<string, unknown> = {}) =>
+        parseInboundEvent({ ...LIVE_DISPOSE_PAYLOAD, lead_tag_name: tag, ...extra });
+
+    it("treats every connected disposition as connected", () => {
+        for (const tag of ["Price High", "REJECTED BY US", "Order Received"]) {
+            expect(callStatusFor(withTag(tag)), tag).toBe("connected");
+        }
+    });
+
+    it("treats Short Hang up as connected, per the sheet", () => {
+        // A hang-up after one second still connected. Filing it under
+        // not_responding would understate the connect rate.
+        expect(callStatusFor(withTag("Short Hang up"))).toBe("connected");
+    });
+
+    it("maps each not-connected reason to its own CallStatus", () => {
+        expect(callStatusFor(withTag("Did not pick"))).toBe("not_responding");
+        expect(callStatusFor(withTag("Switch off"))).toBe("not_reachable");
+        expect(callStatusFor(withTag("Number not in use / does not exist / out of service"))).toBe(
+            "not_reachable",
+        );
+        expect(callStatusFor(withTag("Incorrect / Invalid number"))).toBe(
+            "incorrect_number",
+        );
+        expect(callStatusFor(withTag("Incoming calls not available"))).toBe(
+            "no_incoming",
+        );
+    });
+
+    it("lets the disposition explain WHY a call_not_connected event failed", () => {
+        // Before the sheet, every one of these was a flat not_responding.
+        const event = withTag("Switch off", { event_name: "CALL_NOT_CONNECTED" });
+        expect(event.eventType).toBe("call_not_connected");
+        expect(callStatusFor(event)).toBe("not_reachable");
+    });
+
+    it("does not let a connected tag overturn a call_not_connected event", () => {
+        // NeoDove fires that event from the dialler, not from a dropdown. When
+        // the two disagree the mechanical fact wins and the tag is stale.
+        const event = withTag("Price High", { event_name: "CALL_NOT_CONNECTED" });
+        expect(callStatusFor(event)).toBe("not_responding");
+    });
+
+    it("still falls back to the stock vocabulary for values outside the sheet", () => {
+        expect(callStatusFor(parseInboundEvent({ disposition: "Interested" }))).toBe(
+            "connected",
+        );
+        expect(callStatusFor(parseInboundEvent({ disposition: "not reachable" }))).toBe(
+            "not_reachable",
+        );
+    });
+
+    it("falls back to call_connected when nothing is recognisable", () => {
+        expect(
+            callStatusFor(
+                parseInboundEvent({ disposition: "Sent to field team", call_connected: true }),
+            ),
+        ).toBe("connected");
+        expect(
+            callStatusFor(
+                parseInboundEvent({ disposition: "Sent to field team", call_connected: false }),
+            ),
+        ).toBe("not_responding");
+    });
+});
+
+describe("the disposition never moves the pipeline", () => {
+    it("leaves lead_status alone for Converted and Lost dispositions", () => {
+        // Deliberate, and the reason STAGE_TO_LEAD_STATUS omits both: our Lost
+        // transition needs a lost_reason from a fixed vocabulary NeoDove has no
+        // equivalent for, and Converted means a real onboarding record exists,
+        // which a telecaller ticking a dropdown cannot create.
+        for (const tag of ["Deal Closed", "Onboarding Done", "REJECTED BY US", "Not Interested"]) {
+            const event = parseInboundEvent({
+                ...LIVE_DISPOSE_PAYLOAD,
+                lead_tag_name: tag,
+                lead_stage_name: tag === "Deal Closed" ? "Converted" : "Lost",
+            });
+            expect(leadStatusFor(event), tag).toBeNull();
+        }
     });
 });

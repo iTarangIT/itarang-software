@@ -1,87 +1,42 @@
 /**
- * E-038 — POST /api/nbfc/auction/lots/[id]/bid
+ * POST /api/nbfc/auction/lots/[id]/bid — CLOSED as of E-232.
  *
- * BRD §6.1.7: places a binding bid against a live auction lot. The caller
- * MUST send `confirmed: true` (the binding-confirmation contract) — bids are
- * irreversible and immutably logged in nbfc_audit_log.
+ * E-038 built this route on the premise that NBFCs bid against each other for
+ * recovered stock. The Battery Auction BRD §9 states the opposite: **dealers
+ * are the only bidders, and a lot must never be visible to another NBFC**. So
+ * this is not a route that needs new permissions — it is a route whose entire
+ * premise was withdrawn.
  *
- * Validation order:
- *   1. Auth (resolveActor) — caller's tenant_id and user_id are required.
- *   2. Body schema (zod) — amount > 0, confirmed === true.
- *   3. Lot must exist, be 'live', and not past ends_at.
- *   4. amount >= current_bid + bid_increment, else accepted=false.
+ * It returns 403 rather than being deleted, deliberately. A 404 on a path that
+ * shipped and worked reads as a broken deploy and sends whoever hits it into
+ * the router and the build logs; a 403 that names the rule and the replacement
+ * answers the question where it is asked. The dealer path is
+ * POST /api/dealer/auctions/[id]/bid.
  *
- * On accept: insert auction_bids row + insert nbfc_audit_log row with
- * action_type='auction_bid' and amount captured in after_state.
+ * The bidding logic itself was NOT deleted with the route — `placeBid()` in
+ * src/lib/nbfc/auction/service.ts is intact, now transactional and row-locked,
+ * and takes a `BidderIdentity` discriminated union whose `nbfc` arm remains
+ * legal at the service layer. That arm exists so historical NBFC bids stay
+ * replayable and so the platform retains one way to record a bid that did not
+ * come from a dealer; it simply has no HTTP surface any more.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { clientError } from "@/lib/nbfc/http-error";
-import { z } from "zod";
-import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
-import { placeBid } from "@/lib/nbfc/auction/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const Body = z.object({
-  amount: z.number().positive(),
-  confirmed: z.literal(true),
-});
-
-function statusFromError(msg: string): number {
-  if (msg.startsWith("UNAUTHORIZED")) return 401;
-  if (msg.startsWith("FORBIDDEN")) return 403;
-  if (msg.startsWith("NOT_FOUND")) return 404;
-  if (msg.startsWith("CONFLICT")) return 409;
-  if (msg.startsWith("BAD_REQUEST")) return 400;
-  return 500;
-}
+const GONE = {
+  ok: false as const,
+  error:
+    "FORBIDDEN: NBFC users cannot bid on auction lots. Auction lots are sold to " +
+    "dealers only (Battery Auction BRD §9). Dealers bid at " +
+    "POST /api/dealer/auctions/[id]/bid.",
+  code: "auction_nbfc_bidding_withdrawn" as const,
+};
 
 export async function POST(
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string }> },
+  _req: NextRequest,
+  _ctx: { params: Promise<{ id: string }> },
 ) {
-  try {
-    const actor = await resolveActor(req.headers);
-    const { id: lotId } = await ctx.params;
-    if (!lotId) {
-      return NextResponse.json(
-        { ok: false, error: "BAD_REQUEST: lot id missing" },
-        { status: 400 },
-      );
-    }
-
-    let raw: unknown;
-    try {
-      raw = await req.json();
-    } catch {
-      return NextResponse.json(
-        { ok: false, error: "BAD_REQUEST: invalid JSON" },
-        { status: 400 },
-      );
-    }
-    const parsed = Body.safeParse(raw);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { ok: false, error: "VALIDATION", issues: parsed.error.issues },
-        { status: 400 },
-      );
-    }
-
-    const result = await placeBid({
-      lot_id: lotId,
-      amount: parsed.data.amount,
-      confirmed: parsed.data.confirmed,
-      tenant_id: actor.tenant_id,
-      user_id: actor.user_id,
-    });
-
-    return NextResponse.json(result, { status: 200 });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      { ok: false, error: clientError(msg) },
-      { status: statusFromError(msg) },
-    );
-  }
+  return NextResponse.json(GONE, { status: 403 });
 }
