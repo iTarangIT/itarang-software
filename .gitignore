@@ -115,3 +115,14 @@ docs/nbfc/_simple/
 
 final-prod.txt
 azure-architecture.md
+
+# local-only working notes & one-off scripts (docs/ and scripts/ are otherwise
+# tracked — list individual paths here rather than ignoring the whole folder)
+/docs/OPERATIONS_MONITORING_DASHBOARD_PLAN.md
+/docs/db/drift/
+/docs/intellicar-agent-db-handover.md
+/docs/intellicar-agent-readonly-role.md
+/docs/intellicar-agent-readonly-role.sql
+/scripts/check-iot-agent-role.mjs
+/scripts/intellicar-iot-uptime-report.ts
+/scripts/telemetry-temperature-eda.ts
