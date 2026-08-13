@@ -138,6 +138,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.request_pushed": "NBFC Requests",
   "nbfc.request_declined": "NBFC Requests",
   "nbfc.doc_uploaded": "NBFC Requests",
+  // E-239 — the direct NBFC ⇄ dealer channel.
+  "nbfc.doc_req_direct": "NBFC Requests",
+  "nbfc.doc_req_reply": "NBFC Requests",
   "nbfc.doc_verified": "NBFC Requests",
   "nbfc.doc_rejected": "NBFC Requests",
   "nbfc.verdict_raised": "NBFC Requests",
@@ -180,6 +183,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
 
   // --- Loan & sanction ---
   "loan.offer_submitted": "Loan & Sanction",
+  // E-238 — the dealer<->NBFC negotiation over a firm offer.
+  "loan.offer_negotiated": "Loan & Sanction",
+  "loan.offer_fixed": "Loan & Sanction",
   "loan.winner_selected": "Loan & Sanction",
   "loan.not_selected": "Loan & Sanction",
   "loan.sanctioned": "Loan & Sanction",
@@ -270,6 +276,8 @@ const WARNING = new Set([
   "nbfc.request_raised",
   "nbfc.request_forwarded",
   "nbfc.doc_uploaded",
+  // E-239 — a direct lender request is the dealer sitting still until they answer.
+  "nbfc.doc_req_direct",
   "nbfc.verdict_raised",
   "fi.requested",
   "fi.assigned",
@@ -279,6 +287,10 @@ const WARNING = new Set([
   "consent.sent",
   "product.submitted",
   "loan.offer_submitted",
+  // E-238 — a countered offer is a lead sitting still until the NBFC answers,
+  // which is the definition of amber here. `loan.offer_fixed` is deliberately
+  // NOT amber: it closes an action rather than opening one.
+  "loan.offer_negotiated",
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",

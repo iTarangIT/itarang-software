@@ -18,6 +18,7 @@ import {
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import { isEndpointWired } from "@/lib/neodove/config";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
+import { resolveNeodoveAssignee } from "@/lib/neodove/assignAfterPush";
 
 export const runtime = "nodejs";
 // `is_wired` reads process.env per request, and on the VPS an endpoint can be
@@ -49,6 +50,11 @@ const createSchema = z.object({
     // E-226. Unlike the mirror, this one IS acted on: it marks the campaign the
     // per-lead "Call now" push targets.
     isPriorityDial: z.boolean().optional(),
+    // E-237. Also acted on: leads pushed into this campaign are assigned to
+    // this CRM user, so they land in that person's queue instead of nobody's.
+    // Nothing is sent to NeoDove — it mirrors the assignee a human set in
+    // NeoDove's own campaign settings. Nullable so it can be cleared.
+    crmOwnerUserId: z.string().trim().min(1).nullable().optional(),
 });
 
 function makeCampaignId(): string {
@@ -99,9 +105,16 @@ export const GET = withErrorHandler(async () => {
                to_jsonb(c) -> 'mirror_config' AS mirror_config,
                -- E-226, same treatment: NULL where the migration is unapplied,
                -- which the UI reads as "not the priority destination".
-               (to_jsonb(c) ->> 'is_priority_dial') = 'true' AS is_priority_dial
+               (to_jsonb(c) ->> 'is_priority_dial') = 'true' AS is_priority_dial,
+               -- E-237, same treatment again. The push modal pre-fills its
+               -- assignee picker from this; NULL simply means "no default".
+               to_jsonb(c) ->> 'crm_owner_user_id' AS crm_owner_user_id,
+               co.name AS crm_owner_name
           FROM neodove_campaigns c
           LEFT JOIN users u ON u.id = c.created_by
+          -- Joined on the to_jsonb read, not the column, so this survives a DB
+          -- without E-237 (the expression is simply NULL and matches no row).
+          LEFT JOIN users co ON co.id::text = (to_jsonb(c) ->> 'crm_owner_user_id')
          ORDER BY c.created_at DESC
          LIMIT 100
     `);
@@ -169,6 +182,17 @@ export const POST = withErrorHandler(async (req: Request) => {
     // `false` is the column default, so sending it would buy nothing and cost
     // campaign creation on any DB without E-226.
     const priority = data.isPriorityDial === true;
+    // crm_owner_user_id (E-237) is named on the same conditional terms, for the
+    // same reason. Validated first: an inactive user or one whose role has no
+    // lead queue would produce assignments nobody can see.
+    const crmOwner = data.crmOwnerUserId ?? null;
+    if (crmOwner) {
+        const check = await resolveNeodoveAssignee({
+            campaignId: id,
+            assignToUserId: crmOwner,
+        });
+        if (!check.ok) return errorResponse(check.message, check.status);
+    }
 
     // Exactly one campaign may be the priority-dial destination — the partial
     // unique index would otherwise refuse this INSERT outright. Clearing the
@@ -187,13 +211,15 @@ export const POST = withErrorHandler(async (req: Request) => {
             (id, name, neodove_campaign_name, push_endpoint_ref,
              update_endpoint_ref, audience_filter, status, created_by
              ${mirror ? sql`, mirror_config` : sql``}
-             ${priority ? sql`, is_priority_dial` : sql``})
+             ${priority ? sql`, is_priority_dial` : sql``}
+             ${crmOwner ? sql`, crm_owner_user_id` : sql``})
         VALUES (${id}, ${data.name}, ${data.neodoveCampaignName ?? null},
                 ${data.pushEndpointRef ?? null}, ${data.updateEndpointRef ?? null},
                 ${data.audienceFilter ? JSON.stringify(data.audienceFilter) : null}::jsonb,
                 'draft', ${user.id}
                 ${mirror ? sql`, ${JSON.stringify(mirror)}::jsonb` : sql``}
-                ${priority ? sql`, true` : sql``})
+                ${priority ? sql`, true` : sql``}
+                ${crmOwner ? sql`, ${crmOwner}` : sql``})
     `);
 
     return successResponse({ id });

@@ -813,7 +813,16 @@ function DealerStep({
       .filter((d) =>
         [
           d.business_entity_name,
+          // The owner's personal name. Admins search by the name shown in the
+          // Dealer Validation queue ("AFREEN BANO", "SMT POORNIMA PRAJAPAT"),
+          // which is contact_name — the company is a separate column. Omitting
+          // it here made active dealers look absent from the dropdown.
+          d.contact_name,
           d.dealer_code,
+          d.contact_phone,
+          // city/state are NULL on every accounts row today (approve only fills
+          // them when business_address happens to carry those keys), so these
+          // two match nothing in practice — kept so they work once backfilled.
           d.city,
           d.state,
         ]
@@ -837,7 +846,7 @@ function DealerStep({
       <div>
         <h2 className="font-black text-gray-900">1. Select dealer</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Search by dealer name, code, or city. All inventory uploaded in this
+          Search by company name, owner name, dealer code, or phone. All inventory uploaded in this
           session is assigned to the selected dealer.
         </p>
       </div>
@@ -855,7 +864,7 @@ function DealerStep({
           placeholder={
             dealers.length === 0
               ? "No dealers loaded — see error above"
-              : "Type a dealer name, code, or city…"
+              : "Type a company name, owner name, code, or phone…"
           }
           disabled={dealers.length === 0}
           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:border-[#0047AB] focus:outline-none disabled:bg-gray-50"
@@ -892,7 +901,9 @@ function DealerStep({
                       )}
                     </div>
                     <div className="text-[11px] text-gray-500 mt-0.5">
-                      {[d.dealer_code, d.city, d.state]
+                      {/* contact_name first: it's the owner name admins search
+                          by, so showing it makes an owner-name match obvious. */}
+                      {[d.dealer_code, d.contact_name, d.city, d.state]
                         .filter(Boolean)
                         .join(" · ") || "—"}
                     </div>

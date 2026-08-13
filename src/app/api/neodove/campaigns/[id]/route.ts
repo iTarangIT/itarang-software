@@ -18,6 +18,7 @@ import {
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import { isEndpointWired } from "@/lib/neodove/config";
 import { mirrorConfigSchema } from "@/lib/neodove/types";
+import { resolveNeodoveAssignee } from "@/lib/neodove/assignAfterPush";
 import { resolveAudience, type AudienceSelection } from "@/lib/ai-dialer/audience";
 
 export const runtime = "nodejs";
@@ -51,11 +52,17 @@ export const GET = withErrorHandler(
                    to_jsonb(c) -> 'mirror_config' AS mirror_config,
                    -- E-226, same treatment for the same reason.
                    (to_jsonb(c) ->> 'is_priority_dial') = 'true' AS is_priority_dial,
+                   -- E-237, same treatment again: the CRM user who owns leads
+                   -- pushed into this campaign. NULL where unapplied.
+                   to_jsonb(c) ->> 'crm_owner_user_id' AS crm_owner_user_id,
+                   co.name AS crm_owner_name,
                    c.total_pushed, c.push_failed, c.dispositions_received,
                    c.started_at, c.completed_at, c.created_at,
                    u.name AS created_by_name
               FROM neodove_campaigns c
               LEFT JOIN users u ON u.id = c.created_by
+              -- Joined on the to_jsonb read so this survives a DB without E-237.
+              LEFT JOIN users co ON co.id::text = (to_jsonb(c) ->> 'crm_owner_user_id')
              WHERE c.id = ${id} LIMIT 1
         `);
         if (!campaigns[0]) return errorResponse("Campaign not found", 404);
@@ -110,6 +117,30 @@ export const GET = withErrorHandler(
              WHERE l.neodove_campaign_id = ${id}
                AND t.external_system = 'neodove'
                AND ${CALL_TOUCHPOINTS}
+        `);
+
+        // E-237: who this campaign actually handed leads to in the CRM, by
+        // owner. Read through to_jsonb so a DB without E-237 yields an empty
+        // breakdown instead of failing this route at PARSE time. Answers
+        // "did those pushes reach a rep's queue" without leaving the page —
+        // the push acks before its drain runs, so this is where the outcome
+        // becomes visible.
+        const assignedBreakdown = await db.execute<{
+            owner_id: string;
+            owner_name: string | null;
+            count: string;
+        }>(sql`
+            SELECT owner_id, u.name AS owner_name, cnt::text AS count
+              FROM (
+                    SELECT to_jsonb(l) ->> 'assigned_owner_id' AS owner_id,
+                           COUNT(*) AS cnt
+                      FROM neodove_lead_links l
+                     WHERE l.neodove_campaign_id = ${id}
+                       AND (to_jsonb(l) ->> 'assigned_owner_id') IS NOT NULL
+                     GROUP BY 1
+                   ) a
+              LEFT JOIN users u ON u.id::text = a.owner_id
+             ORDER BY cnt DESC
         `);
 
         const recentErrors = await db.execute(sql`
@@ -212,6 +243,19 @@ export const GET = withErrorHandler(
                 0,
             ),
             dialRequests: Number(dialRequests[0]?.count ?? 0),
+            // E-237. Empty on a DB without the migration, which reads correctly
+            // as "this campaign has assigned nobody".
+            assignedInCrm: (
+                assignedBreakdown as unknown as {
+                    owner_id: string;
+                    owner_name: string | null;
+                    count: string;
+                }[]
+            ).map((r) => ({
+                ownerId: r.owner_id,
+                ownerName: r.owner_name,
+                count: Number(r.count),
+            })),
             drift: {
                 backfilled: Number(drift[0]?.backfilled ?? 0),
                 live: Number(drift[0]?.live ?? 0),
@@ -258,6 +302,9 @@ const patchSchema = z.object({
     // E-226. Absent = leave alone, which is what keeps every existing caller
     // (and every DB without E-226) working untouched.
     isPriorityDial: z.boolean().optional(),
+    // E-237. Absent = leave alone; explicit null = stop auto-assigning leads
+    // pushed into this campaign.
+    crmOwnerUserId: z.string().trim().min(1).nullable().optional(),
 });
 
 export const PATCH = withErrorHandler(
@@ -321,6 +368,18 @@ export const PATCH = withErrorHandler(
                 `);
             }
             sets.push(sql`is_priority_dial = ${d.isPriorityDial}`);
+        }
+        if (d.crmOwnerUserId !== undefined) {
+            // Validated before it is stored, so a campaign can never carry a
+            // default owner that every push would then reject.
+            if (d.crmOwnerUserId !== null) {
+                const check = await resolveNeodoveAssignee({
+                    campaignId: id,
+                    assignToUserId: d.crmOwnerUserId,
+                });
+                if (!check.ok) return errorResponse(check.message, check.status);
+            }
+            sets.push(sql`crm_owner_user_id = ${d.crmOwnerUserId}`);
         }
         sets.push(sql`updated_at = NOW()`);
 

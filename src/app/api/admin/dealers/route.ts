@@ -9,7 +9,8 @@ import { requireInventoryAdmin } from "@/lib/auth-utils";
 // coupon-create page. Six call sites all expect the same shape.
 //
 //   GET /api/admin/dealers
-//     ?search=query    case-insensitive match on name / dealer_code / city
+//     ?search=query    case-insensitive match on company name / owner name
+//                      (contact_name) / dealer_code / phone / city / state
 //     ?status=…        explicit accounts.status filter (active|inactive|all);
 //                      omitted = "all onboarded dealers except rejected ones",
 //                      which is what every inventory dropdown actually wants
@@ -43,7 +44,12 @@ export const GET = withErrorHandler(async (req: Request) => {
     const like = `%${search}%`;
     const expr = or(
       ilike(accounts.business_entity_name, like),
+      // contact_name is the OWNER's name — what the Dealer Validation queue
+      // shows and what admins type. Without it, searching a dealer by the only
+      // name an admin knows returns nothing.
+      ilike(accounts.contact_name, like),
       ilike(accounts.dealer_code, like),
+      ilike(accounts.contact_phone, like),
       ilike(accounts.city, like),
       ilike(accounts.state, like),
     );

@@ -40,6 +40,11 @@ type Detail = {
         // "this mirror was wrong, clear it", so a campaign edited from this page
         // would silently lose its recorded NeoDove settings.
         mirror_config?: unknown;
+        // Same trap, same reason (E-237): the modal treats an empty owner on an
+        // existing campaign as "stop auto-assigning" and sends an explicit null,
+        // so NOT round-tripping this would clear the campaign's CRM owner every
+        // time someone opened Settings and saved.
+        crm_owner_user_id?: string | null;
         total_pushed: number;
         push_failed: number;
         dispositions_received: number;
@@ -61,6 +66,9 @@ type Detail = {
     pushAttempts: number;
     dispositionsBack: number;
     dialRequests: number;
+    // E-237. Absent on a DB without that migration — the route reads it through
+    // to_jsonb, so "no rows" and "no such column" both read as "assigned nobody".
+    assignedInCrm?: { ownerId: string; ownerName: string | null; count: number }[];
     drift: { backfilled: number; live: number };
     recentErrors: {
         id: string;
@@ -131,6 +139,8 @@ export default function NeodoveCampaignDetailPage({
     }
 
     const c = data.campaign;
+    const assignedInCrm = data.assignedInCrm ?? [];
+    const assignedTotal = assignedInCrm.reduce((n, a) => n + a.count, 0);
     const driftTotal = data.drift.backfilled + data.drift.live;
     const driftPct =
         driftTotal > 0 ? Math.round((data.drift.backfilled / driftTotal) * 100) : 0;
@@ -250,6 +260,7 @@ export default function NeodoveCampaignDetailPage({
                         neodove_campaign_name: c.neodove_campaign_name,
                         push_endpoint_ref: c.push_endpoint_ref,
                         mirror_config: c.mirror_config,
+                        crm_owner_user_id: c.crm_owner_user_id,
                     }}
                     onClose={() => setEditing(false)}
                     onCreated={() => {
@@ -268,19 +279,24 @@ export default function NeodoveCampaignDetailPage({
             <NeodovePushPanel
                 campaignId={c.id}
                 isWired={c.is_wired ?? Boolean(c.push_endpoint_ref)}
+                audienceCount={data.audienceCount}
             />
 
-            {/* STATS
-                Every card here reads a server-derived number rather than a
-                counter on the campaign row. The counters count ATTEMPTS and are
-                incremented by name-matching against NeoDove, so they disagreed
-                with the very sections below them on this same screen. */}
-            <div className="mt-6 grid grid-cols-4 gap-3">
-                <Stat
-                    label="Audience"
-                    value={data.audienceCount}
-                    hint="Leads this campaign's filter targets right now"
-                />
+            {/* STATS — OUTCOMES ONLY.
+                Every card reads a server-derived number rather than a counter on
+                the campaign row. The counters count ATTEMPTS and are incremented
+                by name-matching against NeoDove, so they disagreed with the very
+                sections below them on this same screen.
+
+                The "Audience" card was removed rather than restyled: it showed
+                the same figure as the push panel's "Will be sent" directly above
+                it. Splitting the screen by QUESTION — the panel answers "what
+                goes out next", these cards answer "what came of what already
+                went" — is what stops the two from ever appearing to disagree.
+
+                Four cards, and the fourth is the one that was missing: whether
+                those leads actually reached a person. */}
+            <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <Stat
                     label="Delivered"
                     value={data.delivered}
@@ -304,6 +320,21 @@ export default function NeodoveCampaignDetailPage({
                         data.dialRequests > 0
                             ? `${data.dialRequests} priority-dial hand-off${data.dialRequests === 1 ? "" : "s"} requested`
                             : undefined
+                    }
+                />
+                {/* E-237. Without this the page could say a lead was delivered
+                    and called while it sat unowned on nobody's dashboard, and
+                    nothing on the screen would reveal it. */}
+                <Stat
+                    label="Assigned in CRM"
+                    value={assignedTotal}
+                    tone={assignedTotal > 0 ? "text-indigo-600" : "text-gray-400"}
+                    hint={
+                        assignedInCrm.length > 0
+                            ? assignedInCrm
+                                  .map((a) => `${a.count} → ${a.ownerName ?? "unknown"}`)
+                                  .join(" · ")
+                            : "Pushes from this campaign carried no CRM assignee"
                     }
                 />
             </div>

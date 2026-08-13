@@ -37,6 +37,12 @@ import { getNeodoveConfig } from "@/lib/neodove/config";
 import { pushLead } from "@/lib/neodove/client";
 import { dealerLeadToNeodove, type PushableLead } from "@/lib/neodove/mapper";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import {
+    assignAfterPush,
+    logAssignmentSummary,
+    resolveNeodoveAssignee,
+} from "@/lib/neodove/assignAfterPush";
+import type { AssignTarget } from "@/lib/leads/assignOwner";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -55,12 +61,19 @@ const bodySchema = z.object({
     // Deliberate hand-off of actively-worked leads. Applies to the whole batch,
     // so the UI states how many it overrides before asking for it.
     force: z.boolean().optional(),
+    // Who owns these leads in the CRM afterwards (E-237). Three meanings:
+    // omitted = use the campaign's default owner, null = explicitly don't
+    // assign, a string = override the campaign default for this push only.
+    assignToUserId: z.string().trim().min(1).nullable().optional(),
 });
 
 type LeadRow = PushableLead & { ai_recall_status: string | null };
 
 export const POST = withErrorHandler(async (req: Request) => {
-    await requireRole(NEODOVE_ADMIN_ROLES);
+    // Captured, not discarded: the assignment runs inside after(), where the
+    // request context requireRole reads is already gone. The acting user has to
+    // be closed over or the audit touchpoints would have no author.
+    const actor = await requireRole(NEODOVE_ADMIN_ROLES);
 
     const cfg = getNeodoveConfig();
     if (!cfg.enabled) {
@@ -82,16 +95,32 @@ export const POST = withErrorHandler(async (req: Request) => {
     // or double-count total_pushed.
     const leadIds = [...new Set(parsed.data.leadIds)];
 
-    const campaigns = await db.execute<{ push_endpoint_ref: string | null }>(sql`
-        SELECT push_endpoint_ref FROM neodove_campaigns WHERE id = ${campaignId} LIMIT 1
+    const campaigns = await db.execute<{
+        push_endpoint_ref: string | null;
+        label: string;
+    }>(sql`
+        SELECT push_endpoint_ref,
+               COALESCE(neodove_campaign_name, name) AS label
+          FROM neodove_campaigns WHERE id = ${campaignId} LIMIT 1
     `);
     if (!campaigns[0]) return errorResponse("Campaign not found", 404);
     const endpointRef = campaigns[0].push_endpoint_ref;
+    const campaignLabel = campaigns[0].label;
     if (!endpointRef) {
         return errorResponse(
             "This campaign has no push endpoint configured. Set push_endpoint_ref to the name of the env var holding its NeoDove Custom Integration URL.",
             409,
         );
+    }
+
+    // Resolved BEFORE anything is pushed, so a bad or unassignable user id is a
+    // 400 the operator sees rather than a silent no-op inside after().
+    const assignee = await resolveNeodoveAssignee({
+        campaignId,
+        assignToUserId: parsed.data.assignToUserId,
+    });
+    if (!assignee.ok) {
+        return errorResponse(assignee.message, assignee.status);
     }
 
     const idsJson = JSON.stringify(leadIds);
@@ -159,7 +188,17 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     after(async () => {
         try {
-            await drainSelection(campaignId, endpointRef, eligible.map((l) => l.id));
+            await drainSelection(
+                campaignId,
+                endpointRef,
+                eligible.map((l) => l.id),
+                {
+                    target: assignee.target,
+                    actorId: actor.id,
+                    actorRole: actor.role,
+                    campaignLabel,
+                },
+            );
         } catch (err) {
             console.error("[NeoDove/push-batch] drain failed:", errorMessage(err));
         }
@@ -175,6 +214,17 @@ export const POST = withErrorHandler(async (req: Request) => {
         // not read `eligible` as "this many were sent now".
         alreadyLinked: eligible.length - queued,
         skipped,
+        // Intent, not outcome — the assignment runs in the drain, after this
+        // response is already sent. The Sync Activity screen carries the
+        // authoritative count (see logAssignmentSummary).
+        assignTo: assignee.target
+            ? {
+                  id: assignee.target.id,
+                  name: assignee.target.name,
+                  role: assignee.target.role,
+              }
+            : null,
+        willAssign: assignee.target ? eligible.length : 0,
         status: "pushing",
     });
 });
@@ -190,6 +240,12 @@ async function drainSelection(
     campaignId: string,
     endpointRef: string,
     leadIds: string[],
+    assign: {
+        target: AssignTarget | null;
+        actorId: string;
+        actorRole: string | null | undefined;
+        campaignLabel: string;
+    },
 ): Promise<void> {
     const { pushConcurrency, pushDelayMs } = getNeodoveConfig();
     const idsJson = JSON.stringify(leadIds);
@@ -268,6 +324,56 @@ async function drainSelection(
                updated_at = NOW()
          WHERE id = ${campaignId}
     `);
+
+    // ── CRM co-assignment (E-237) ──────────────────────────────────────────
+    //
+    // A SEPARATE SERIAL PASS, for two independent reasons.
+    //
+    // 1. Pool exhaustion. src/lib/db/index.ts caps this process at max: 5
+    //    connections (small RDS, no pooler), pushConcurrency defaults to 5, and
+    //    writeTouchpoint opens a TRANSACTION — which reserves a connection for
+    //    its whole duration. Assigning inside the Promise.all above would hold
+    //    every connection this process has, once per chunk, stalling every
+    //    other request including /api/health, whose failure rolls deploys back.
+    //    Serial costs nothing here: the 250ms pacing already dominates.
+    //
+    // 2. It keeps `results` a boolean[]. The accumulators above are
+    //    filter(Boolean) and filter(r => r === false); making the elements
+    //    objects would silently count EVERY element as pushed (objects are
+    //    truthy) and zero the failures, inflating total_pushed — the one number
+    //    reconciliation is diffed against.
+    //
+    // Iterates the full eligible selection rather than the drain's `pending`
+    // working set: ownership is the operator's decision about these leads, not
+    // a property of whether NeoDove happened to accept each one, and iterating
+    // the selection also backfills leads already linked by an earlier push.
+    if (assign.target) {
+        let assigned = 0;
+        let assignFailed = 0;
+        for (const leadId of leadIds) {
+            const ok = await assignAfterPush({
+                leadId,
+                campaignId,
+                target: assign.target,
+                actorId: assign.actorId,
+                actorRole: assign.actorRole,
+                campaignLabel: assign.campaignLabel,
+            });
+            if (ok) assigned++;
+            else assignFailed++;
+        }
+        await logAssignmentSummary({
+            campaignId,
+            target: assign.target,
+            eligible: leadIds.length,
+            assigned,
+            assignFailed,
+        });
+        console.log(
+            `[NeoDove/push-batch] campaign ${campaignId}: ${pushed} pushed, ${failed} failed, ${assigned} assigned to ${assign.target.name ?? assign.target.id}`,
+        );
+        return;
+    }
 
     console.log(
         `[NeoDove/push-batch] campaign ${campaignId}: ${pushed} pushed, ${failed} failed`,

@@ -14,14 +14,25 @@
  * The 7-hop cycle (NBFC → Admin → Dealer → Customer → Dealer → Admin → NBFC) is
  * expressed by `nbfc_doc_requests.status`. Hops 4–6 are DERIVED from the child
  * min-state and stored denormalised so list views stay one-row.
+ *
+ * E-239 adds a SECOND, direct channel beside that cycle. A wrapper flagged
+ * `dealer_direct` skips the admin's forward click: it is born
+ * 'forwarded_to_dealer', has NO children at all, and carries its conversation in
+ * `nbfc_doc_request_messages` instead — the dealer answers from the Step-4
+ * pre-sanction card and the reply flips it straight to 'pushed_to_nbfc'. The
+ * admin-gated path above is untouched, and the admin still sees every direct
+ * thread. Anything that projects status from children must early-return on these
+ * wrappers (see recomputeWrapperStatus / pushNbfcDocRequest).
  */
 import crypto from "crypto";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
   kycVerificationMetadata,
   leads,
+  nbfc,
+  nbfcDocRequestMessages,
   nbfcDocRequests,
   nbfcDocumentVerifications,
   otherDocumentRequests,
@@ -88,6 +99,9 @@ function seq4(): string {
 }
 export function generateNbfcRequestId(now: Date): string {
   return `NBFCREQ-${dateStamp(now)}-${seq4()}`;
+}
+export function generateNbfcMessageId(now: Date): string {
+  return `NBFCMSG-${dateStamp(now)}-${seq4()}`;
 }
 function slugKey(label: string): string {
   return label
@@ -161,6 +175,119 @@ export async function createNbfcDocRequest(
     updated_at: now,
   });
   return { id };
+}
+
+/* ------------------------------------------------------------------ *
+ * E-239 — the DIRECT NBFC ⇄ Dealer channel
+ * ------------------------------------------------------------------ */
+
+export type MessageParty = "nbfc" | "dealer" | "admin";
+
+/**
+ * The NBFC asks the dealer for a document DIRECTLY, skipping the admin forward
+ * gate (E-239). Born 'forwarded_to_dealer' — i.e. already with the dealer — and
+ * flagged `dealer_direct` so `recomputeWrapperStatus` leaves it alone: it has no
+ * children, and the files come back on the message thread instead.
+ *
+ * `step4_extra_items` is reused as the request type deliberately: it is already
+ * permitted by the E-202 CHECK and means exactly this ("the NBFC wants extra
+ * documents at Step 4"), so no constraint has to be widened.
+ *
+ * The admin is not cut out — the wrapper and every message in it still render in
+ * the admin "NBFC KYC Verification" card, and the route notifies admins too.
+ */
+export async function createDirectDealerRequest(input: {
+  leadId: string;
+  assignmentId: string;
+  nbfcId: number;
+  tenantId: string;
+  comments: string;
+  raisedBy: string;
+  docFor?: "primary" | "co_borrower";
+  attachments?: RequestAttachment[];
+}): Promise<{ id: string }> {
+  const { id } = await createNbfcDocRequest({
+    leadId: input.leadId,
+    assignmentId: input.assignmentId,
+    nbfcId: input.nbfcId,
+    tenantId: input.tenantId,
+    requestType: "step4_extra_items",
+    docFor: input.docFor ?? "primary",
+    comments: input.comments,
+    raisedBy: input.raisedBy,
+    initialStatus: NBFC_DOC_STATUS.FORWARDED,
+    attachments: input.attachments ?? [],
+  });
+  await db
+    .update(nbfcDocRequests)
+    .set({ dealer_direct: true })
+    .where(eq(nbfcDocRequests.id, id));
+
+  // Seed the thread with the NBFC's ask so the dealer and the NBFC read the same
+  // conversation — `nbfc_comments` alone would leave round 1 outside the thread.
+  await appendRequestMessage({
+    requestId: id,
+    leadId: input.leadId,
+    party: "nbfc",
+    authorUserId: input.raisedBy,
+    message: input.comments,
+    attachments: input.attachments ?? [],
+  });
+  return { id };
+}
+
+/** Append one message (with any files) to a request thread. Append-only. */
+export async function appendRequestMessage(input: {
+  requestId: string;
+  leadId: string;
+  party: MessageParty;
+  authorUserId?: string | null;
+  message?: string | null;
+  attachments?: RequestAttachment[];
+}): Promise<{ id: string }> {
+  const now = new Date();
+  const id = generateNbfcMessageId(now);
+  await db.insert(nbfcDocRequestMessages).values({
+    id,
+    request_id: input.requestId,
+    lead_id: input.leadId,
+    party: input.party,
+    author_user_id: input.authorUserId ?? null,
+    message: input.message ?? null,
+    attachments: input.attachments ?? [],
+    created_at: now,
+  });
+  // Keep the wrapper's updated_at meaningful — the thread list sorts on it.
+  await db
+    .update(nbfcDocRequests)
+    .set({ updated_at: now })
+    .where(eq(nbfcDocRequests.id, input.requestId));
+  return { id };
+}
+
+/**
+ * Messages for a set of wrappers, grouped by request id. One query for the whole
+ * page — never call this inside a loop over requests.
+ */
+export async function messagesByRequest(
+  requestIds: string[],
+): Promise<Map<string, Array<typeof nbfcDocRequestMessages.$inferSelect>>> {
+  const byRequest = new Map<
+    string,
+    Array<typeof nbfcDocRequestMessages.$inferSelect>
+  >();
+  if (requestIds.length === 0) return byRequest;
+  const rows = await db
+    .select()
+    .from(nbfcDocRequestMessages)
+    .where(inArray(nbfcDocRequestMessages.request_id, requestIds))
+    .orderBy(asc(nbfcDocRequestMessages.created_at));
+  for (const m of rows) {
+    const arr = byRequest.get(m.request_id) ?? [];
+    arr.push(m);
+    byRequest.set(m.request_id, arr);
+  }
+  return byRequest;
 }
 
 /**
@@ -551,6 +678,10 @@ export async function recomputeWrapperStatus(
     .where(eq(nbfcDocRequests.id, requestId))
     .limit(1);
   if (!wrapper) return null;
+  // E-239 — a direct NBFC→dealer request has no children at all; its status is
+  // driven by the message thread (dealer replies → PUSHED), so projecting from
+  // child min-state here would pin it at its current value forever.
+  if (wrapper.dealer_direct) return wrapper.status as NbfcDocStatus;
   // Terminal / message states are not projected.
   if (
     wrapper.request_type === "message" ||
@@ -617,7 +748,9 @@ export async function pushNbfcDocRequest(opts: {
     .where(eq(nbfcDocRequests.id, opts.requestId))
     .limit(1);
   if (!wrapper) throw new Error("NOT_FOUND: nbfc request not found");
-  if (wrapper.request_type !== "message") {
+  // E-239 — a direct request has no children to verify; the dealer's reply is
+  // what hands it back (see markDirectRequestAnswered).
+  if (wrapper.request_type !== "message" && !wrapper.dealer_direct) {
     const ok = await allChildrenVerified(opts.requestId);
     if (!ok) {
       throw new Error(
@@ -678,6 +811,50 @@ export async function autoPushNbfcIfAllVerified(
   };
 }
 
+/**
+ * E-239 — the dealer answered a direct request: hand it straight back to the
+ * NBFC. `pushed_to_nbfc` is reused deliberately, so the NBFC's existing
+ * "Acknowledge & close" button lights up with no new UI state.
+ *
+ * A CLOSED thread is left closed — the NBFC acknowledged it, and a late dealer
+ * message should not silently reopen a thread the NBFC has stopped watching.
+ */
+export async function markDirectRequestAnswered(
+  requestId: string,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(nbfcDocRequests)
+    .set({ status: NBFC_DOC_STATUS.PUSHED, updated_at: now })
+    .where(
+      and(
+        eq(nbfcDocRequests.id, requestId),
+        eq(nbfcDocRequests.dealer_direct, true),
+        ne(nbfcDocRequests.status, NBFC_DOC_STATUS.CLOSED),
+      ),
+    );
+}
+
+/**
+ * E-239 — the NBFC replied again on a direct thread: pull it back to the dealer
+ * so it reappears on the Step-4 card. A closed thread stays closed.
+ */
+export async function markDirectRequestReopened(
+  requestId: string,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(nbfcDocRequests)
+    .set({ status: NBFC_DOC_STATUS.FORWARDED, updated_at: now })
+    .where(
+      and(
+        eq(nbfcDocRequests.id, requestId),
+        eq(nbfcDocRequests.dealer_direct, true),
+        ne(nbfcDocRequests.status, NBFC_DOC_STATUS.CLOSED),
+      ),
+    );
+}
+
 /** NBFC (or admin) acknowledges a pushed request — closes the thread. */
 export async function ackNbfcDocRequest(requestId: string): Promise<void> {
   const now = new Date();
@@ -690,6 +867,8 @@ export async function ackNbfcDocRequest(requestId: string): Promise<void> {
 export interface ThreadEntry {
   request: typeof nbfcDocRequests.$inferSelect;
   items: Array<typeof otherDocumentRequests.$inferSelect>;
+  /** E-239 — the NBFC ⇄ Dealer conversation on this request, oldest first. */
+  messages: Array<typeof nbfcDocRequestMessages.$inferSelect>;
 }
 
 /**
@@ -727,8 +906,106 @@ export async function listThreadForLead(
       byWrapper.set(it.nbfc_request_id, arr);
     }
   }
+  const byMessages = await messagesByRequest(ids);
   return wrappers.map((request) => ({
     request,
     items: byWrapper.get(request.id) ?? [],
+    messages: byMessages.get(request.id) ?? [],
   }));
+}
+
+/** One direct request as the DEALER sees it — no tenant/assignment internals. */
+export interface DealerRequestEntry {
+  id: string;
+  nbfcName: string;
+  status: string;
+  doc_for: string;
+  created_at: Date;
+  messages: Array<{
+    id: string;
+    party: string;
+    message: string | null;
+    attachments: RequestAttachment[];
+    created_at: Date;
+  }>;
+}
+
+/**
+ * The direct (E-239) NBFC requests on a lead, for the dealer's Step-4 card.
+ *
+ * Scoped to `dealer_direct` wrappers ONLY: admin-gated requests reach the dealer
+ * through the existing `other_document_requests` surface on Step 2/3, and
+ * showing them here too would double-ask for the same document. Closed threads
+ * are dropped — the dealer's card is a to-do list, not an archive.
+ *
+ * The caller MUST have already checked that this dealer owns the lead.
+ */
+export async function listDealerRequestsForLead(
+  leadId: string,
+): Promise<DealerRequestEntry[]> {
+  const wrappers = await db
+    .select({
+      id: nbfcDocRequests.id,
+      nbfc_id: nbfcDocRequests.nbfc_id,
+      status: nbfcDocRequests.status,
+      doc_for: nbfcDocRequests.doc_for,
+      created_at: nbfcDocRequests.created_at,
+    })
+    .from(nbfcDocRequests)
+    .where(
+      and(
+        eq(nbfcDocRequests.lead_id, leadId),
+        eq(nbfcDocRequests.dealer_direct, true),
+      ),
+    )
+    .orderBy(asc(nbfcDocRequests.created_at));
+  const open = wrappers.filter((w) => w.status !== NBFC_DOC_STATUS.CLOSED);
+  if (open.length === 0) return [];
+
+  const byMessages = await messagesByRequest(open.map((w) => w.id));
+  const names = await nbfcDisplayNames([...new Set(open.map((w) => w.nbfc_id))]);
+
+  return open.map((w) => ({
+    id: w.id,
+    nbfcName: names.get(w.nbfc_id) ?? "Your lender",
+    status: w.status,
+    doc_for: w.doc_for,
+    created_at: w.created_at,
+    messages: (byMessages.get(w.id) ?? []).map((m) => ({
+      id: m.id,
+      party: m.party,
+      message: m.message,
+      attachments: (m.attachments as RequestAttachment[] | null) ?? [],
+      created_at: m.created_at,
+    })),
+  }));
+}
+
+/**
+ * Display name per nbfc.id. Best-effort — the dealer's card falls back to
+ * "Your lender" rather than failing, and the lender's legal name is not
+ * load-bearing here (the dealer already knows who the lead was routed to).
+ */
+async function nbfcDisplayNames(
+  nbfcIds: number[],
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (nbfcIds.length === 0) return out;
+  try {
+    const rows = await db
+      .select({
+        id: nbfc.id,
+        short_name: nbfc.short_name,
+        legal_name: nbfc.legal_name,
+      })
+      .from(nbfc)
+      .where(inArray(nbfc.id, nbfcIds));
+    for (const r of rows) {
+      const name = r.short_name || r.legal_name;
+      if (name) out.set(r.id, name);
+    }
+  } catch {
+    // best-effort
+  }
+  return out;
 }
