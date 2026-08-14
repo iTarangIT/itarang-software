@@ -25,6 +25,7 @@ import {
 import { CallButton } from "@/components/leads/call-button";
 import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
+import { SentByStamp } from "@/components/leads/sent-by-stamp";
 // TYPE-ONLY — both modules import `db`; a value import here would pull the
 // postgres driver into the client bundle. Runtime constants come from
 // @/lib/leads/campaign, which has no dependencies at all.
@@ -71,21 +72,6 @@ const OUTCOME_TONE: Record<VisitOutcome, string> = {
 function pretty(value: string | null | undefined): string {
     if (!value) return "—";
     return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// Sender-role label for the stamp. Initials for the long titles, because the
-// token sits inside a table cell that already carries a name — "Sales Manager"
-// spelled out wraps the row and buries the two labels that matter, CEO and
-// Admin. The full title is in the cell's tooltip either way.
-function senderRole(role: string): string {
-    const r = role.toLowerCase();
-    if (r === "ceo") return "CEO";
-    if (r === "admin") return "Admin";
-    if (r === "asm") return "ASM";
-    return role
-        .split("_")
-        .map((w) => w[0]?.toUpperCase() ?? "")
-        .join("");
 }
 
 function fmtDate(iso: string | null): string {
@@ -294,17 +280,6 @@ export function LeadsTable({
                                     nowMs,
                                 );
                                 const idleText = formatIdle(idle);
-                                // A rep claiming a lead off the Unassigned queue is not
-                                // someone "sending" it — suppress the stamp when the
-                                // actor and the owner are the same person. (lead_claimed
-                                // is already excluded server-side; this also covers an
-                                // admin who assigns a lead to themselves.)
-                                const sentBy =
-                                    row.assigned_by &&
-                                    row.assigned_by.id !== row.current_owner_id
-                                        ? row.assigned_by
-                                        : null;
-
                                 return (
                                     <tr
                                         key={row.id}
@@ -443,31 +418,12 @@ export function LeadsTable({
                                                             {/* Who handed it over. Sits under the
                                                                 owner because the two only mean
                                                                 anything as a pair — recipient above,
-                                                                sender below. Hidden when the two are
-                                                                the same person: that is a self-claim,
-                                                                not a hand-off. */}
-                                                            {sentBy && (
-                                                                <div
-                                                                    className="flex items-center gap-1 text-[10px] leading-none text-gray-500"
-                                                                    title={`Assigned by ${sentBy.name ?? "a user"}${
-                                                                        sentBy.role
-                                                                            ? ` (${pretty(sentBy.role)})`
-                                                                            : ""
-                                                                    }${sentBy.at ? ` on ${fmtDate(sentBy.at)}` : ""}`}
-                                                                >
-                                                                    <span className="text-gray-400">
-                                                                        sent by
-                                                                    </span>
-                                                                    <span className="truncate font-medium text-gray-600">
-                                                                        {sentBy.name ?? "—"}
-                                                                    </span>
-                                                                    {sentBy.role && (
-                                                                        <span className="shrink-0 rounded border border-gray-200 bg-white px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-gray-500">
-                                                                            {senderRole(sentBy.role)}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            )}
+                                                                sender below. The same stamp now
+                                                                renders on the rep and ASM queues. */}
+                                                            <SentByStamp
+                                                                assignedBy={row.assigned_by}
+                                                                currentOwnerId={row.current_owner_id}
+                                                            />
                                                         </div>
                                                     ) : (
                                                         <span className="text-[11px] italic text-gray-400">
