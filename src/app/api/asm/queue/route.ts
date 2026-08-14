@@ -6,6 +6,7 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { fetchAsmQueueRows, countAsmQueueRows } from "@/lib/asm/queryBuilder";
+import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { ASM_QUEUE_TABS, type AsmQueueResponse } from "@/lib/asm/types";
 
 export const dynamic = "force-dynamic";
@@ -47,8 +48,16 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         countAsmQueueRows({ tab: parsed.tab, asmId: user.id, q: parsed.q ?? null }),
     ]);
 
+    // Who handed each lead over — decorated separately and fail-tolerantly, same
+    // as the inside-sales queue. An ASM transfer writes `asm_transfer`, which is
+    // one of the three touchpoint types this reads, so a lead pushed down by the
+    // CEO or a rep is stamped with whoever pushed it.
+    const assignedBy = await fetchAssignedByForLeads(
+        rows.map((r) => r.id).filter(Boolean),
+    );
+
     const body: AsmQueueResponse = {
-        rows,
+        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null })),
         total,
         page: parsed.page,
         limit: parsed.limit,

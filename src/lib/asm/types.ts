@@ -3,6 +3,7 @@
 // fields overlap so frontend components can be shared.
 
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
+import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 
 export const ASM_QUEUE_TABS = [
     "my_visits",
@@ -84,6 +85,12 @@ export type AsmQueueRow = {
     scheduled_date: string | null;
     actual_visit_date: string | null;
     closed_at: string | null;
+    /**
+     * Who handed this lead to its current owner — the "sent by …" stamp. Mirrors
+     * QueueRow.assigned_by (src/lib/inside-sales/types.ts): decorated onto the
+     * page in the route, never selected by fetchAsmQueueRows, hence optional.
+     */
+    assigned_by?: LeadAssignedBy | null;
 };
 
 export type AsmQueueResponse = {
