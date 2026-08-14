@@ -48,6 +48,11 @@ const ACTION_CODES = [
   "audit_log_export",
   "risk_rule_threshold_change",
   "risk_score_run",
+  // E-238 — offer negotiation. `offer_negotiate` rows are written with the
+  // DEALER's users.id against this tenant, so the NBFC's own log shows who
+  // asked for what; `offer_fix` is the officer who froze the terms.
+  "offer_negotiate",
+  "offer_fix",
 ] as const;
 
 const STATUS_CODES = [

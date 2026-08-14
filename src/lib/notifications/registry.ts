@@ -191,6 +191,9 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.request_pushed": "Request pushed back to the NBFC",
   "nbfc.request_declined": "NBFC request declined",
   "nbfc.doc_uploaded": "Dealer uploaded a document the NBFC asked for",
+  // E-240 — the direct NBFC ⇄ dealer channel (no admin forward in between).
+  "nbfc.doc_req_direct": "NBFC asked the dealer for a document directly",
+  "nbfc.doc_req_reply": "Dealer answered the NBFC's direct request",
   "nbfc.doc_verified": "NBFC verified a document",
   "nbfc.doc_rejected": "NBFC rejected a document",
   "nbfc.verdict_raised": "NBFC raised a verdict",

@@ -18,9 +18,9 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { X, Send, AlertTriangle, ExternalLink } from "lucide-react";
+import { X, Send, AlertTriangle, ExternalLink, UserPlus2 } from "lucide-react";
 
 type Campaign = {
     id: string;
@@ -34,6 +34,15 @@ type Campaign = {
     /** Other campaigns pushing through the same endpoint, i.e. the same
      *  destination in NeoDove. */
     endpoint_shared_with?: string[];
+    /** E-237: the campaign's default CRM owner, pre-filled below. */
+    crm_owner_user_id?: string | null;
+    crm_owner_name?: string | null;
+};
+
+type Assignee = {
+    user_id: string;
+    name: string | null;
+    role: string | null;
 };
 
 type BatchResult = {
@@ -42,7 +51,43 @@ type BatchResult = {
     queued: number;
     alreadyLinked: number;
     skipped: { notFound: number; noPhone: number; activelyWorked: number };
+    assignTo?: { id: string; name: string | null; role: string | null } | null;
+    willAssign?: number;
 };
+
+type SingleResult = {
+    pushed: boolean;
+    assigned?: boolean;
+    assignedTo?: string | null;
+};
+
+/** Sentinel for "don't assign" — distinct from "" (nothing chosen yet). */
+const NO_ASSIGNEE = "__none__";
+
+// Two roles can now receive pushed leads and they behave DIFFERENTLY, so the
+// picker has to name the role — "Nidhi" and "Rakesh" are indistinguishable
+// otherwise, and picking the wrong one silently produces a different lifecycle
+// status and a different workspace.
+const ROLE_LABEL: Record<string, string> = {
+    inside_sales_rep: "Inside Sales Rep",
+    asm: "ASM",
+};
+function roleLabel(role: string | null | undefined): string {
+    const key = (role ?? "").toLowerCase();
+    return ROLE_LABEL[key] ?? role ?? "";
+}
+
+/**
+ * The lifecycle status an assignment will lift these leads to — which depends
+ * on the target's role (see assignLeadOwner). Stating the wrong one would be
+ * worse than stating none: the whole point of the note is that the operator can
+ * predict where the leads end up.
+ */
+function liftedStatusFor(role: string | null | undefined): string {
+    return (role ?? "").toLowerCase() === "asm"
+        ? "Transferred to ASM"
+        : "Assigned — not contacted";
+}
 
 /**
  * The routes signal "these leads are actively being worked" by telling the
@@ -95,11 +140,20 @@ export function SendToNeodoveModal({
 
     const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
     const [campaignId, setCampaignId] = useState("");
+    const [assignees, setAssignees] = useState<Assignee[] | null>(null);
+    const [assigneeId, setAssigneeId] = useState("");
+    // Once the operator picks an assignee by hand, switching campaigns must not
+    // silently overwrite it with the new campaign's default — that would throw
+    // away a deliberate choice without saying so.
+    const assigneeTouched = useRef(false);
     const [force, setForce] = useState(false);
     const [sending, setSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [done, setDone] = useState(false);
     const [batch, setBatch] = useState<BatchResult | null>(null);
+    // The single-lead route is synchronous, so unlike the batch it CAN report
+    // whether the assignment actually landed.
+    const [single, setSingle] = useState<SingleResult | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -116,6 +170,17 @@ export function SendToNeodoveModal({
             .catch(() => {
                 if (!cancelled) setCampaigns([]);
             });
+        fetch("/api/neodove/assignees")
+            .then((r) => r.json())
+            .then((json) => {
+                if (cancelled) return;
+                setAssignees(
+                    Array.isArray(json?.data?.assignees) ? json.data.assignees : [],
+                );
+            })
+            .catch(() => {
+                if (!cancelled) setAssignees([]);
+            });
         return () => {
             cancelled = true;
         };
@@ -129,6 +194,16 @@ export function SendToNeodoveModal({
     }, [force]);
 
     const selected = campaigns?.find((c) => c.id === campaignId) ?? null;
+
+    const chosenAssignee =
+        assignees?.find((a) => a.user_id === assigneeId) ?? null;
+
+    // Pre-fill the assignee from the chosen campaign's default, and re-fill it
+    // when the campaign changes — but never over a manual choice.
+    useEffect(() => {
+        if (assigneeTouched.current) return;
+        setAssigneeId(selected?.crm_owner_user_id ?? NO_ASSIGNEE);
+    }, [selected]);
     // Alphabetical, not the API's created_at DESC. This is a picker, not a
     // feed: the operator is looking for a name they already have in mind, and
     // newest-first meant the most recently touched campaign — often a legacy
@@ -155,6 +230,13 @@ export function SendToNeodoveModal({
                         campaignId,
                         ...(isBatch ? { leadIds } : {}),
                         ...(force ? { force: true } : {}),
+                        // Always explicit. Omitting the key would mean "use the
+                        // campaign default", which is wrong when the operator
+                        // has deliberately chosen "don't assign".
+                        assignToUserId:
+                            assigneeId === NO_ASSIGNEE || !assigneeId
+                                ? null
+                                : assigneeId,
                     }),
                 },
             );
@@ -163,6 +245,7 @@ export function SendToNeodoveModal({
                 throw new Error(json.error?.message ?? "Push failed");
             }
             if (isBatch) setBatch(json.data as BatchResult);
+            else setSingle(json.data as SingleResult);
             setDone(true);
             onSent?.();
         } catch (err) {
@@ -228,6 +311,24 @@ export function SendToNeodoveModal({
                                         </li>
                                     )}
                                 </ul>
+                                {/* FUTURE TENSE ON PURPOSE. The push drains in
+                                    the background after this response was sent,
+                                    and the assignment runs with it — so no final
+                                    count exists yet. Sync Activity carries the
+                                    authoritative one. */}
+                                {batch.assignTo && (batch.willAssign ?? 0) > 0 && (
+                                    <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                                        <UserPlus2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                        <span>
+                                            Each will be assigned to{" "}
+                                            <strong>
+                                                {batch.assignTo.name ?? "the selected user"}
+                                            </strong>{" "}
+                                            in the CRM as its push lands — they will appear
+                                            in that rep&apos;s My Open Leads shortly.
+                                        </span>
+                                    </p>
+                                )}
                                 <Link
                                     href="/leads/neodove-campaigns/activity"
                                     className="inline-flex items-center gap-1 text-xs font-medium text-gray-900 underline"
@@ -239,6 +340,13 @@ export function SendToNeodoveModal({
                         ) : (
                             <p className="text-sm text-gray-900">
                                 <strong>{label}</strong> was accepted by NeoDove.
+                                {single?.assigned && single.assignedTo ? (
+                                    <>
+                                        {" "}
+                                        Assigned to{" "}
+                                        <strong>{single.assignedTo}</strong> in the CRM.
+                                    </>
+                                ) : null}
                             </p>
                         )}
 
@@ -333,6 +441,75 @@ export function SendToNeodoveModal({
                                     </>
                                 )}
                             </div>
+
+                            {/* CRM CO-ASSIGNMENT (E-237).
+                                Sits BELOW the campaign select because it
+                                re-prefills from whichever campaign is chosen.
+                                Nothing here is sent to NeoDove: their Custom
+                                Integration endpoint has no assignee parameter
+                                and no read API, so who calls the lead is set in
+                                NeoDove's own campaign settings. This only makes
+                                the CRM agree with that choice. */}
+                            {wiredCampaigns.length > 0 && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">
+                                        Also assign in CRM to
+                                    </label>
+                                    <select
+                                        value={assigneeId}
+                                        onChange={(e) => {
+                                            assigneeTouched.current = true;
+                                            setAssigneeId(e.target.value);
+                                        }}
+                                        className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+                                    >
+                                        <option value={NO_ASSIGNEE}>
+                                            — Don&apos;t assign —
+                                        </option>
+                                        {(assignees ?? []).map((a) => (
+                                            <option key={a.user_id} value={a.user_id}>
+                                                {a.name ?? a.user_id}
+                                                {a.role ? ` · ${roleLabel(a.role)}` : ""}
+                                                {a.user_id === selected?.crm_owner_user_id
+                                                    ? " · campaign default"
+                                                    : ""}
+                                            </option>
+                                        ))}
+                                    </select>
+
+                                    {assignees !== null && assignees.length === 0 && (
+                                        <p className="mt-1 text-xs text-gray-500">
+                                            No active inside sales reps or ASMs to assign
+                                            to.
+                                        </p>
+                                    )}
+
+                                    <p className="mt-1.5 text-xs text-gray-500">
+                                        NeoDove has no assignee API — set the agent
+                                        inside NeoDove&apos;s campaign settings. This
+                                        only mirrors that choice in the CRM, so the
+                                        leads show up on their dashboard.
+                                    </p>
+
+                                    {/* The one genuinely surprising consequence,
+                                        stated before the push rather than
+                                        discovered at the second one. */}
+                                    {assigneeId && assigneeId !== NO_ASSIGNEE && (
+                                        <p className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                                            <UserPlus2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                            <span>
+                                                These leads move to{" "}
+                                                <strong>
+                                                    {liftedStatusFor(chosenAssignee?.role)}
+                                                </strong>
+                                                . They leave the AI-dialer pool, and
+                                                re-sending them to another campaign later
+                                                will need the override.
+                                            </span>
+                                        </p>
+                                    )}
+                                </div>
+                            )}
 
                             {isBatch && (
                                 <p className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">

@@ -42,7 +42,7 @@ export interface StepperStage {
   content?: ReactNode;
 }
 
-export type BannerTone = "info" | "success" | "danger" | "muted";
+export type BannerTone = "info" | "warning" | "success" | "danger" | "muted";
 
 export interface NextAction {
   tone: BannerTone;
@@ -68,6 +68,10 @@ const LABEL_TONE: Record<NodeState, string> = {
 
 const BANNER_TONE: Record<BannerTone, string> = {
   info: "border-sky-200 bg-sky-50 text-sky-800",
+  // E-238 — amber sits between info and danger: nothing has gone wrong, but the
+  // lead is stalled on US (a customer counter awaiting an answer), which reads
+  // wrong in sky and alarmist in rose.
+  warning: "border-amber-200 bg-amber-50 text-amber-800",
   success: "border-emerald-200 bg-emerald-50 text-emerald-800",
   danger: "border-rose-200 bg-rose-50 text-rose-800",
   muted: "border-slate-200 bg-slate-50 text-slate-600",

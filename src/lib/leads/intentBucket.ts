@@ -67,3 +67,39 @@ export const INTENT_BUCKET_OPTIONS: IntentBucket[] = ["hot", "warm", "cold"];
 export function isIntentBucket(v: string | null | undefined): v is IntentBucket {
   return v === "hot" || v === "warm" || v === "cold";
 }
+
+/** Bounds of the explicit score-range filter. Scores are a 0–100 scale. */
+export const INTENT_SCORE_MIN = 0;
+export const INTENT_SCORE_MAX = 100;
+
+/**
+ * Parse one end of the score range from a query string.
+ *
+ * Clamped rather than rejected: a hand-edited `score_min=999` means "the very
+ * top", and answering it with the whole unfiltered list would be a worse lie
+ * than answering it with the top of the scale. Non-numeric input is dropped.
+ */
+export function parseScoreBound(v: string | null | undefined): number | null {
+  if (v == null || v.trim() === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(
+    INTENT_SCORE_MAX,
+    Math.max(INTENT_SCORE_MIN, Math.round(n)),
+  );
+}
+
+/**
+ * Normalise a parsed pair.
+ *
+ * An inverted range is SWAPPED, not honoured. Someone who types 75 into "min"
+ * and 30 into "max" wants 30–75; returning zero rows for it looks like the
+ * filter is broken rather than like the input was backwards.
+ */
+export function normalizeScoreRange(
+  min: number | null,
+  max: number | null,
+): { min: number | null; max: number | null } {
+  if (min != null && max != null && min > max) return { min: max, max: min };
+  return { min, max };
+}

@@ -28,6 +28,12 @@ import { getNeodoveConfig } from "@/lib/neodove/config";
 import { pushLead } from "@/lib/neodove/client";
 import { dealerLeadToNeodove, type PushableLead } from "@/lib/neodove/mapper";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import {
+    assignAfterPush,
+    logAssignmentSummary,
+    resolveNeodoveAssignee,
+} from "@/lib/neodove/assignAfterPush";
+import type { AssignTarget } from "@/lib/leads/assignOwner";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -35,6 +41,7 @@ export const maxDuration = 300;
 type CampaignRow = {
     id: string;
     name: string;
+    neodove_campaign_name: string | null;
     push_endpoint_ref: string | null;
     audience_filter: unknown;
     status: string;
@@ -42,7 +49,9 @@ type CampaignRow = {
 
 export const POST = withErrorHandler(
     async (req: Request, context: { params: Promise<{ id: string }> }) => {
-        await requireRole(NEODOVE_ADMIN_ROLES);
+        // Captured for the same reason as push-batch: the assignment runs in
+        // after(), where requireRole's request context no longer exists.
+        const actor = await requireRole(NEODOVE_ADMIN_ROLES);
         const { id } = await context.params;
 
         const cfg = getNeodoveConfig();
@@ -54,7 +63,8 @@ export const POST = withErrorHandler(
         }
 
         const campaigns = await db.execute<CampaignRow>(sql`
-            SELECT id, name, push_endpoint_ref, audience_filter, status
+            SELECT id, name, neodove_campaign_name, push_endpoint_ref,
+                   audience_filter, status
               FROM neodove_campaigns WHERE id = ${id} LIMIT 1
         `);
         const campaign = campaigns[0];
@@ -104,10 +114,27 @@ export const POST = withErrorHandler(
              WHERE id = ${id}
         `);
 
+        // No per-push override here, unlike push-batch: this route's BODY is the
+        // audience selection itself, so there is nowhere to put one without
+        // colliding with a filter key — and the campaign-level default is
+        // exactly the right granularity for a whole-audience push anyway. This
+        // is the case crm_owner_user_id exists for.
+        const assignee = await resolveNeodoveAssignee({ campaignId: id });
+        if (!assignee.ok) {
+            return errorResponse(assignee.message, assignee.status);
+        }
+
         // Heavy work out of the request path.
         after(async () => {
             try {
-                await drainCampaign(id, campaign.push_endpoint_ref!);
+                await drainCampaign(id, campaign.push_endpoint_ref!, {
+                    target: assignee.target,
+                    actorId: actor.id,
+                    actorRole: actor.role,
+                    campaignLabel:
+                        campaign.neodove_campaign_name ?? campaign.name,
+                    leadIds: audience.queueIds,
+                });
             } catch (err) {
                 console.error("[NeoDove/push] drain failed:", errorMessage(err));
             }
@@ -118,6 +145,15 @@ export const POST = withErrorHandler(
             audienceResolved: audience.queueIds.length,
             queued: pendingCount,
             excluded: audience.excluded,
+            // Intent, not outcome — the drain runs after this response is sent.
+            assignTo: assignee.target
+                ? {
+                      id: assignee.target.id,
+                      name: assignee.target.name,
+                      role: assignee.target.role,
+                  }
+                : null,
+            willAssign: assignee.target ? audience.queueIds.length : 0,
             status: "pushing",
         });
     },
@@ -129,7 +165,18 @@ export const POST = withErrorHandler(
  * Re-reads the pending set from the DB rather than trusting the caller's list,
  * so a resumed or retried drain never re-sends something already marked pushed.
  */
-async function drainCampaign(campaignId: string, endpointRef: string): Promise<void> {
+async function drainCampaign(
+    campaignId: string,
+    endpointRef: string,
+    assign: {
+        target: AssignTarget | null;
+        actorId: string;
+        actorRole: string | null | undefined;
+        campaignLabel: string;
+        /** The audience this push resolved — what gets assigned. */
+        leadIds: string[];
+    },
+): Promise<void> {
     const { pushConcurrency, pushDelayMs } = getNeodoveConfig();
 
     const leads = await db.execute<PushableLead & { link_id: string }>(sql`
@@ -206,6 +253,42 @@ async function drainCampaign(campaignId: string, endpointRef: string): Promise<v
                updated_at = NOW()
          WHERE id = ${campaignId}
     `);
+
+    // ── CRM co-assignment (E-237) ──────────────────────────────────────────
+    //
+    // A separate SERIAL pass for the same two reasons as push-batch's: this
+    // process has only 5 pooled connections and writeTouchpoint reserves one per
+    // transaction, so assigning inside the Promise.all above would starve every
+    // other request; and keeping `results` a boolean[] preserves the
+    // filter(Boolean) accumulators, which would silently count every element as
+    // pushed if the elements became objects.
+    if (assign.target) {
+        let assigned = 0;
+        let assignFailed = 0;
+        for (const leadId of assign.leadIds) {
+            const ok = await assignAfterPush({
+                leadId,
+                campaignId,
+                target: assign.target,
+                actorId: assign.actorId,
+                actorRole: assign.actorRole,
+                campaignLabel: assign.campaignLabel,
+            });
+            if (ok) assigned++;
+            else assignFailed++;
+        }
+        await logAssignmentSummary({
+            campaignId,
+            target: assign.target,
+            eligible: assign.leadIds.length,
+            assigned,
+            assignFailed,
+        });
+        console.log(
+            `[NeoDove/push] campaign ${campaignId}: ${pushed} pushed, ${failed} failed, ${assigned} assigned to ${assign.target.name ?? assign.target.id}`,
+        );
+        return;
+    }
 
     console.log(
         `[NeoDove/push] campaign ${campaignId}: ${pushed} pushed, ${failed} failed`,
