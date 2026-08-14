@@ -18,6 +18,7 @@ import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChi
 import { IntentBadge } from "@/app/(dashboard)/inside-sales/_components/IntentBadge";
 import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
 import { OwnerIndicator } from "@/app/(dashboard)/inside-sales/_components/OwnerIndicator";
+import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { VISIT_OUTCOME_LABELS } from "@/lib/asm/types";
 import type {
     AsmQueueRow,
@@ -217,6 +218,10 @@ export function AsmQueueTable({
                                             currentOwnerName={row.current_owner_name}
                                             viewerId={viewerId}
                                             asmName={row.asm_name}
+                                        />
+                                        <SentByStamp
+                                            assignedBy={row.assigned_by}
+                                            currentOwnerId={row.current_owner_id}
                                         />
                                     </td>
                                 </tr>

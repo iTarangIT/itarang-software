@@ -25,7 +25,9 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MUTATE_ROLES = ["admin", "sales_head"];
+// ⚠ MUST stay equal to LEADS_BULK_ROLES in src/lib/leads/access.ts — that list
+// decides whether the bulk bar renders, this one decides whether it works.
+const MUTATE_ROLES = ["admin", "sales_head", "ceo"];
 
 const BodySchema = z.object({
     action: z.enum(["reassign", "mark_lost", "push_to_ai", "reactivate", "export"]),
