@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import type {
     LeadDetailBundle,
     LeadDetailCommercials,
@@ -138,8 +139,13 @@ export const GET = withErrorHandler(
             `),
         ]);
 
+        // Same "sent by …" stamp the queue row carries, so a lead does not lose
+        // who sent it by being opened — the same reason NeodoveTag is repeated
+        // in the detail header.
+        const assignedBy = await fetchAssignedByForLeads([id]);
+
         const bundle: LeadDetailBundle = {
-            lead: lead as LeadDetailLead,
+            lead: { ...(lead as LeadDetailLead), assigned_by: assignedBy[id] ?? null },
             current_commercials:
                 (commercialsHistory as LeadDetailCommercials[]).find((c) => c.is_current) ?? null,
             commercials_history: commercialsHistory as LeadDetailCommercials[],
