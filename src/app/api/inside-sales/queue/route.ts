@@ -6,6 +6,7 @@ import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { fetchQueueRows, countQueueRows } from "@/lib/inside-sales/queryBuilder";
+import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 
 export const dynamic = "force-dynamic";
@@ -59,8 +60,22 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         }),
     ]);
 
+    // Who handed each of this page's leads to its current owner. Decorated in a
+    // SEPARATE, fail-tolerant statement rather than joined into the queue query —
+    // same pattern and same reason as /api/dealer-leads: the queue is one raw-SQL
+    // round trip and a bad join there takes the whole workspace down, whereas a
+    // failed decoration just drops the stamp.
+    //
+    // NOT gated on role. The stamp on /leads is oversight information about other
+    // people's leads and is masked accordingly; here it is the recipient being
+    // told who sent them the lead, which is the one person who has always had a
+    // right to know and was the only one who could not see it.
+    const assignedBy = await fetchAssignedByForLeads(
+        rows.map((r) => r.id).filter(Boolean),
+    );
+
     const body: QueueResponse = {
-        rows,
+        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null })),
         total,
         page: parsed.page,
         limit: parsed.limit,

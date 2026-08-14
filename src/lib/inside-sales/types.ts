@@ -3,6 +3,7 @@
 // same source of truth.
 
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
+import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 import type {
     CallStatus,
     NextAction,
@@ -52,6 +53,14 @@ export type QueueRow = {
      * to_jsonb precisely so that is a null and not a 500).
      */
     neodove_sync_status: string | null;
+    /**
+     * Who handed this lead to its current owner — the "sent by CEO Test [CEO]"
+     * stamp. Decorated onto the page in the route, not selected in the queue
+     * query (see fetchAssignedByForLeads), which is why it is OPTIONAL: every
+     * other consumer of this type — LeadDetailLead extends it — would otherwise
+     * be claiming a field its own query never selects.
+     */
+    assigned_by?: LeadAssignedBy | null;
 };
 
 export type QueueResponse = {

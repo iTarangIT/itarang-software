@@ -67,7 +67,7 @@ export const LEADS_OVERSIGHT_ROLES = [
  * so showing this bar to a role the API refuses renders three buttons that all
  * 403. The reassign form in the lead drawer posts to the same endpoint.
  */
-export const LEADS_BULK_ROLES = ["admin", "sales_head"] as const;
+export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo"] as const;
 
 /**
  * Roles that can be handed ownership of a lead — the target list for the
