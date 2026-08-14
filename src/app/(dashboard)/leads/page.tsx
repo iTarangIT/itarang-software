@@ -1034,7 +1034,7 @@ function ConvertedLeadCard({
           )}
 
           {/* Assigning writes ownership, so it is gated on the same roles the
-              endpoint enforces (admin, sales_head). Previously every viewer saw
+              endpoint enforces (LEADS_BULK_ROLES). Previously every viewer saw
               a button that silently did nothing. */}
           {caps.canBulkAct && (
           <div className="relative" ref={dropdownRef}>

@@ -16,6 +16,7 @@ import { IntentBadge } from "./IntentBadge";
 import { InterestChip } from "./InterestChip";
 import { OwnerIndicator } from "./OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
+import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { staleSeverity, workingDaysSince } from "@/lib/inside-sales/staleness";
 import type { QueueRow, QueueTab } from "@/lib/inside-sales/types";
 
@@ -182,6 +183,12 @@ export function LeadQueueTable({
                                             currentOwnerId={row.current_owner_id}
                                             currentOwnerName={row.current_owner_name}
                                             viewerId={viewerId}
+                                        />
+                                        {/* Under the owner, because the pair is the
+                                            sentence: recipient above, sender below. */}
+                                        <SentByStamp
+                                            assignedBy={row.assigned_by}
+                                            currentOwnerId={row.current_owner_id}
                                         />
                                     </td>
                                     <td className="px-4 py-3 text-gray-700 align-top text-xs">
