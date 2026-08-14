@@ -14,6 +14,11 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 import { INTENT_BUCKETS, type IntentBucket } from "@/lib/leads/intentBucket";
+import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
+import type { CampaignFacet } from "@/lib/leads/leadCampaign";
+// Value import, so it must come from the dependency-free module — this file
+// pulls in `db` and can never be reachable from a client component.
+import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
 
 // Shared with the API route. Both ends of a created-at range must look like a
 // calendar date before it goes near SQL.
@@ -56,11 +61,28 @@ export type LeadListFilters = {
     ownerId?: string | null;
     asmId?: string | null;
     source?: string | null;
+    /**
+     * Only leads that are with the NeoDove calling team (E-224 sync state), NOT
+     * `source = 'neodove'` — see the note on LeadFilters.neodove.
+     */
+    neodoveOnly?: boolean;
     state?: string | null;
     city?: string | null;
     search?: string | null;
     /** Display bucket over final_intent_score. See intentBucket.ts. */
     intent?: IntentBucket | null;
+    /**
+     * Explicit inclusive score range — the same axis as `intent`, expressed
+     * exactly rather than in bands.
+     *
+     * The UI keeps these mutually exclusive with `intent` because a bucket IS a
+     * score range: holding both is either redundant ("Hot" + 75–100) or a
+     * contradiction ("Hot" + 0–30) that returns nothing and reads as a broken
+     * filter. They are still ANDed here, so a hand-built URL carrying both gets
+     * the honest intersection rather than one silently winning.
+     */
+    scoreMin?: number | null;
+    scoreMax?: number | null;
     /** created_at calendar-date range, inclusive both ends (YYYY-MM-DD). */
     from?: string | null;
     to?: string | null;
@@ -74,6 +96,25 @@ export type LeadListFilters = {
     dispositionBucket?: string | null;
     /** L3 — the disposition label, exact match. */
     disposition?: string | null;
+    // ── Idle age ─────────────────────────────────────────────────────────
+    // Inclusive day bounds over the SAME basis the Idle column displays —
+    // COALESCE(last_touchpoint_at, created_at). Matching that basis is not
+    // cosmetic: filtering on last_touchpoint_at alone would exclude the 2,440
+    // never-touched leads that the column shows as 85d, and a filter that
+    // disagrees with the number on screen is indistinguishable from a bug.
+    idleMinDays?: number | null;
+    idleMaxDays?: number | null;
+    /** Only leads with no touchpoint at all. */
+    idleNeverTouched?: boolean;
+    // ── Campaign ─────────────────────────────────────────────────────────
+    /** A campaign id from either system, or CAMPAIGN_NONE for "not in one". */
+    campaign?: string | null;
+    /**
+     * Whether the NeoDove tables exist here. Passed in rather than probed
+     * because buildWhere is synchronous and a missing RELATION fails at parse
+     * time — see neodoveTablesPresent().
+     */
+    hasNeodoveTables?: boolean;
 };
 
 export type LeadListFacets = {
@@ -87,6 +128,13 @@ export type LeadListFacets = {
         bucket: string | null;
         connect_status: string | null;
     }[];
+    /**
+     * Campaigns with at least one lead, both systems. Populated by the API
+     * route from fetchCampaignFacets() — it lives in leadCampaign.ts because
+     * the NeoDove half must be allowed to fail independently, which this
+     * module's single-statement facets query cannot express.
+     */
+    campaigns?: CampaignFacet[];
 };
 
 export type LeadListStats = {
@@ -100,6 +148,60 @@ export type LeadListStats = {
 
 // Latest lead_visits row per lead — drives the visit_status / visit_outcome
 // column. LATERAL keeps it to one row even when a lead has several visits.
+// ⚠ to_jsonb, not a bare column reference — same reasoning as the E-236 note in
+// buildWhere, taken one step further. E-236's columns are read only when their
+// filter is set, so a database without the migration keeps serving the list to
+// everyone who doesn't use them. That is not enough here: the four call sites
+// this predicate reaches include the CSV export and the "select all N matching"
+// id query, and a parse-time failure in any of them is a 500 on a database that
+// simply has no NeoDove leads. Reading through to_jsonb makes that case an empty
+// result, which is the truth there.
+const NEODOVE_STATUS = sql`to_jsonb(dl) ->> 'neodove_sync_status'`;
+const NEODOVE_LINKED_LIST = sql.raw(
+    NEODOVE_LINKED_SYNC_STATUSES.map((s) => `'${s}'`).join(", "),
+);
+
+// The age basis, identical to the Idle column's (see idleDays()).
+const IDLE_BASIS = sql`COALESCE(dl.last_touchpoint_at, dl.created_at)`;
+
+/**
+ * Membership predicates for the campaign filter.
+ *
+ * The NeoDove half is emitted only when `hasNeodoveTables` — omitted entirely,
+ * not guarded at runtime, because naming an absent relation fails at PARSE time.
+ * The dialer half needs no guard: dialer_campaigns is in schema.ts and predates
+ * this feature everywhere.
+ */
+function inDialerCampaign(campaignId: string) {
+    return sql`EXISTS (
+        SELECT 1 FROM dialer_campaign_leads dcl
+         WHERE dcl.lead_id = dl.id AND dcl.campaign_id = ${campaignId}
+    )`;
+}
+
+function inNeodoveCampaign(campaignId: string) {
+    // Same push_status cut as the Campaign column: a refused or deduped push
+    // never reached the campaign, so those leads are not IN it.
+    return sql`EXISTS (
+        SELECT 1 FROM neodove_lead_links nll
+         WHERE nll.dealer_lead_id = dl.id
+           AND nll.neodove_campaign_id = ${campaignId}
+           AND nll.push_status IN ('pushed', 'pending')
+    )`;
+}
+
+function inAnyDialerCampaign() {
+    return sql`EXISTS (SELECT 1 FROM dialer_campaign_leads dcl WHERE dcl.lead_id = dl.id)`;
+}
+
+function inAnyNeodoveCampaign() {
+    return sql`EXISTS (
+        SELECT 1 FROM neodove_lead_links nll
+         WHERE nll.dealer_lead_id = dl.id
+           AND nll.push_status IN ('pushed', 'pending')
+    )`;
+}
+
 const LATEST_VISIT_JOIN = sql`
     LEFT JOIN LATERAL (
         SELECT visit_status, visit_outcome
@@ -122,10 +224,33 @@ function intentPredicate(bucket: IntentBucket) {
 }
 
 /**
- * `opts.ignoreIntent` omits the intent-bucket clause. Used by the stats query so
- * the Hot/Warm/Cold cards keep showing all three counts while one of them is the
- * active filter — otherwise selecting "Hot" would zero the Warm and Cold cards
- * and the segmented control would destroy itself on first click.
+ * The whole intent-score selection — bucket AND explicit range — as one
+ * predicate, or TRUE when neither is set.
+ *
+ * Both live here rather than beside the other filters because both are cuts
+ * through the SAME column, and the stats query has to be able to lift the two of
+ * them together (see ignoreIntent).
+ */
+function intentSelection(f: LeadListFilters) {
+    const score = sql`COALESCE(dl.final_intent_score, 0)`;
+    const parts = [];
+    if (f.intent) parts.push(intentPredicate(f.intent));
+    // Inclusive at both ends: "0 to 30" must admit a lead scoring exactly 30,
+    // which matters here because computeBand.ts emits the band constants
+    // 0/30/60/90 rather than a continuous score — an exclusive bound would drop
+    // an entire band.
+    if (typeof f.scoreMin === "number") parts.push(sql`${score} >= ${f.scoreMin}`);
+    if (typeof f.scoreMax === "number") parts.push(sql`${score} <= ${f.scoreMax}`);
+    return parts.length ? sql.join(parts, sql` AND `) : sql`TRUE`;
+}
+
+/**
+ * `opts.ignoreIntent` omits the intent-bucket clause AND the explicit score
+ * range. Used by the stats query so the Hot/Warm/Cold cards keep showing all
+ * three counts while one of them is the active filter — otherwise selecting
+ * "Hot" would zero the Warm and Cold cards and the segmented control would
+ * destroy itself on first click. The score range is lifted with it for exactly
+ * the same reason: typing 75–100 must not blank the Cold card.
  */
 function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // Soft-delete aware. This is the merged base predicate: it replaces
@@ -140,6 +265,9 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.ownerId) conds.push(sql`dl.current_owner_id = ${f.ownerId}`);
     if (f.asmId) conds.push(sql`dl.asm_id = ${f.asmId}`);
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
+    if (f.neodoveOnly) {
+        conds.push(sql`${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
+    }
     if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
     if (f.city) conds.push(sql`dl.city ILIKE ${`%${f.city}%`}`);
     // E-236. Emitted ONLY when the filter is set, which is what lets a database
@@ -155,7 +283,46 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.disposition) {
         conds.push(sql`dl.last_disposition = ${f.disposition}`);
     }
-    if (f.intent && !opts?.ignoreIntent) conds.push(intentPredicate(f.intent));
+    // ── Idle age ─────────────────────────────────────────────────────────
+    // "at least N days idle" = the basis is at or before N days ago. The max
+    // bound uses max+1 with a strict > so the band is inclusive at both ends:
+    // 30–59 must admit exactly 59 days and exclude exactly 60.
+    if (f.idleNeverTouched) {
+        conds.push(sql`dl.last_touchpoint_at IS NULL`);
+    }
+    if (typeof f.idleMinDays === "number") {
+        conds.push(
+            sql`${IDLE_BASIS} <= NOW() - make_interval(days => ${f.idleMinDays})`,
+        );
+    }
+    if (typeof f.idleMaxDays === "number") {
+        conds.push(
+            sql`${IDLE_BASIS} > NOW() - make_interval(days => ${f.idleMaxDays + 1})`,
+        );
+    }
+
+    // ── Campaign ─────────────────────────────────────────────────────────
+    if (f.campaign === CAMPAIGN_NONE) {
+        const notIn = [sql`NOT ${inAnyDialerCampaign()}`];
+        if (f.hasNeodoveTables) notIn.push(sql`NOT ${inAnyNeodoveCampaign()}`);
+        conds.push(sql.join(notIn, sql` AND `));
+    } else if (f.campaign) {
+        // The id is matched against BOTH systems rather than being routed by
+        // its shape: ids are opaque strings and guessing the system from a
+        // `camp_` / `NDC-` prefix would break the day either convention changes.
+        // Only one can ever match — the id spaces do not overlap.
+        const anyOf = [inDialerCampaign(f.campaign)];
+        if (f.hasNeodoveTables) anyOf.push(inNeodoveCampaign(f.campaign));
+        conds.push(sql`(${sql.join(anyOf, sql` OR `)})`);
+    }
+
+    if (!opts?.ignoreIntent) {
+        const selection = intentSelection(f);
+        // Skip the no-op TRUE so an unfiltered WHERE stays readable in logs.
+        if (f.intent || typeof f.scoreMin === "number" || typeof f.scoreMax === "number") {
+            conds.push(selection);
+        }
+    }
     if (f.from && ISO_DATE_RE.test(f.from)) {
         conds.push(sql`dl.created_at::date >= ${f.from}`);
     }
@@ -276,9 +443,11 @@ export async function fetchLeadListStats(
     f: LeadListFilters,
 ): Promise<LeadListStats> {
     const where = buildWhere(f, { ignoreIntent: true });
-    // When no intent bucket is selected, "matches the intent filter" is TRUE for
-    // every row, so `total` collapses to a plain COUNT(*).
-    const inBucket = f.intent ? intentPredicate(f.intent) : sql`TRUE`;
+    // Re-applied per aggregate rather than in the WHERE, so `total` matches the
+    // list's real row count while the three bucket cards stay computed without
+    // it. Covers the explicit range too — otherwise Total would ignore a score
+    // filter the list is honouring and the header would contradict the table.
+    const inBucket = intentSelection(f);
     const rows = await db.execute<{
         total: string;
         hot: string;

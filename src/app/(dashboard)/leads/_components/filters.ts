@@ -9,15 +9,40 @@ import {
     type DispositionBucket,
 } from "@/lib/leads/dispositions";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
+import { isIdleRangeKey } from "@/lib/leads/idle";
 
 export type LeadFilters = {
     search: string;
     /** lead_status pipeline stage, or UNASSIGNED_FILTER. Labelled "Qualification". */
     status: string;
     intent: "" | IntentBucket;
+    /**
+     * Explicit intent-score bounds, held as strings because they are bound to
+     * number <input>s — "" is a cleared box, which `0` would not distinguish
+     * from a real lower bound of zero.
+     *
+     * Mutually exclusive with `intent` in the UI: a bucket IS a score range, so
+     * holding both is either redundant or self-contradicting.
+     */
+    scoreMin: string;
+    scoreMax: string;
     ownerId: string;
     asmId: string;
     source: string;
+    /**
+     * "1" = only leads handed to the NeoDove calling team.
+     *
+     * Separate from `source` on purpose. `dealer_leads.source` says where a lead
+     * came FROM and is only ever "neodove" for leads NeoDove itself created, so
+     * filtering on it would hide every scraped or uploaded lead we later pushed
+     * — which is the bulk of what is actually in NeoDove. See
+     * NEODOVE_LINKED_SYNC_STATUSES.
+     */
+    neodove: "" | "1";
+    /** Idle band key — see IDLE_RANGES. "" = any. */
+    idle: string;
+    /** Campaign id from either system, or CAMPAIGN_NONE. "" = any. */
+    campaign: string;
     state: string;
     city: string;
     /** created_at range, YYYY-MM-DD. */
@@ -41,9 +66,14 @@ export const EMPTY_FILTERS: LeadFilters = {
     search: "",
     status: "",
     intent: "",
+    scoreMin: "",
+    scoreMax: "",
     ownerId: "",
     asmId: "",
     source: "",
+    neodove: "",
+    idle: "",
+    campaign: "",
     state: "",
     city: "",
     from: "",
@@ -55,9 +85,14 @@ export const EMPTY_FILTERS: LeadFilters = {
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
 // a filter that is doing work can never be invisible.
+// `neodove` is NOT here: it lives in the primary row beside the search box, for
+// the same reason it does on the Inside Sales queue — a filter that silently
+// removes most of the list should not be one disclosure away from invisible.
 export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
     "asmId",
     "source",
+    "idle",
+    "campaign",
     "state",
     "city",
     "connectStatus",
@@ -95,9 +130,14 @@ export function toSearchParams(
     if (f.search) p.set("search", f.search);
     if (f.status) p.set("status", f.status);
     if (f.intent) p.set("intent", f.intent);
+    if (f.scoreMin) p.set("score_min", f.scoreMin);
+    if (f.scoreMax) p.set("score_max", f.scoreMax);
     if (f.ownerId) p.set("owner_id", f.ownerId);
     if (f.asmId) p.set("asm_id", f.asmId);
     if (f.source) p.set("source", f.source);
+    if (f.neodove) p.set("neodove", f.neodove);
+    if (f.idle) p.set("idle", f.idle);
+    if (f.campaign) p.set("campaign", f.campaign);
     if (f.state) p.set("state", f.state);
     if (f.city) p.set("city", f.city);
     if (f.from) p.set("from", f.from);
@@ -119,9 +159,20 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         status: sp.get("status") ?? "",
         intent:
             intent === "hot" || intent === "warm" || intent === "cold" ? intent : "",
+        scoreMin: sp.get("score_min") ?? "",
+        scoreMax: sp.get("score_max") ?? "",
         ownerId: sp.get("owner_id") ?? "",
         asmId: sp.get("asm_id") ?? "",
         source: sp.get("source") ?? "",
+        neodove: sp.get("neodove") === "1" ? "1" : "",
+        // Validated against the closed band vocabulary, like connectStatus: an
+        // unrecognised value would seed a <select> with no matching option and
+        // render as a blank selection that silently filters nothing.
+        idle: isIdleRangeKey(sp.get("idle")) ? (sp.get("idle") as string) : "",
+        // NOT validated — campaign ids are opaque and the facet list is data,
+        // not a fixed vocabulary. An unknown id matches nothing, which is the
+        // truthful answer for a campaign this database does not have.
+        campaign: sp.get("campaign") ?? "",
         state: sp.get("state") ?? "",
         city: sp.get("city") ?? "",
         from: sp.get("from") ?? "",

@@ -1,4 +1,4 @@
-// GET /api/inside-sales/queue?tab=...&page=...&limit=...&q=...
+// GET /api/inside-sales/queue?tab=...&page=...&limit=...&q=...&neodove=1
 // Paginated rows for one queue tab (BRD §0.5).
 
 import { NextRequest } from "next/server";
@@ -24,6 +24,10 @@ const QuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(25),
     q: z.string().trim().min(1).max(120).optional(),
+    // "1" only. A tri-state (neodove | not_neodove | all) was considered and
+    // dropped: "leads NOT with the calling team" is not a question anyone asks,
+    // and an absent param already means "all".
+    neodove: z.literal("1").optional(),
 });
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -34,7 +38,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         page: url.searchParams.get("page") ?? undefined,
         limit: url.searchParams.get("limit") ?? undefined,
         q: url.searchParams.get("q") ?? undefined,
+        neodove: url.searchParams.get("neodove") ?? undefined,
     });
+    const neodoveOnly = parsed.neodove === "1";
 
     const [rows, total] = await Promise.all([
         fetchQueueRows({
@@ -43,8 +49,14 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             page: parsed.page,
             limit: parsed.limit,
             q: parsed.q ?? null,
+            neodoveOnly,
         }),
-        countQueueRows({ tab: parsed.tab, userId: user.id, q: parsed.q ?? null }),
+        countQueueRows({
+            tab: parsed.tab,
+            userId: user.id,
+            q: parsed.q ?? null,
+            neodoveOnly,
+        }),
     ]);
 
     const body: QueueResponse = {

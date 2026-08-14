@@ -23,7 +23,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { errorMessage } from "@/lib/api-utils";
 import { parseInboundEvent } from "@/lib/neodove/mapper";
-import { handleNeodoveEvent } from "@/lib/neodove/inbound";
+import { handleNeodoveEvent, resolveInboundLead } from "@/lib/neodove/inbound";
 import {
     NeodoveWebhookInvalidError,
     NeodoveWebhookSecretMissingError,
@@ -70,6 +70,35 @@ export async function POST(req: Request): Promise<Response> {
 
     const event = parseInboundEvent(parsedBody);
 
+    // WHOSE LEAD THIS IS, RESOLVED BEFORE THE CLAIM.
+    //
+    // The handler resolves this too, and stamps it back onto the ledger row when
+    // it finishes (attachEventContext). That stamp is not durable: it runs in
+    // after(), several statements past the touchpoint write, so a deploy, a dev
+    // restart or a crash in that window leaves a row whose payload names the
+    // dealer but whose LEAD column reads "—" forever. Observed 2026-08-13 on a
+    // disposition whose touchpoint landed 37ms after the claim and whose ledger
+    // row still had dealer_lead_id NULL.
+    //
+    // Doing it here makes the identity part of the same INSERT that gives replay
+    // protection, so it cannot be lost. It costs one indexed SELECT before the
+    // ack, and it deliberately calls the SAME matcher the handler uses rather
+    // than re-deriving one in SQL — a second phone matcher drifting from the
+    // first is how this data got inconsistent before.
+    //
+    // Null here is normal, not a failure: a number we have never seen resolves
+    // to nothing until handleDisposition auto-creates the lead, and the after()
+    // stamp COALESCEs it in at that point.
+    let preResolvedLeadId: string | null = null;
+    try {
+        preResolvedLeadId = await resolveInboundLead(event);
+    } catch (err) {
+        // Never let identification block the claim — an unclaimed event is
+        // redelivered and reprocessed, which is strictly worse than an unlabelled
+        // ledger row that the handler will label anyway.
+        console.warn("[NeoDove/webhook] pre-resolve failed:", errorMessage(err));
+    }
+
     // Idempotency claim. The partial unique index on
     // (external_event_id) WHERE direction='inbound' makes this atomic: a
     // duplicate delivery inserts zero rows and we skip the work entirely.
@@ -78,8 +107,8 @@ export async function POST(req: Request): Promise<Response> {
         const rows = await db.execute<{ id: string }>(sql`
             INSERT INTO neodove_sync_events
                 (direction, event_type, dealer_lead_id, external_event_id, request_payload)
-            VALUES ('inbound', ${event.eventType}, NULL, ${event.externalEventId},
-                    ${rawBody}::jsonb)
+            VALUES ('inbound', ${event.eventType}, ${preResolvedLeadId},
+                    ${event.externalEventId}, ${rawBody}::jsonb)
             ON CONFLICT (external_event_id)
                 WHERE direction = 'inbound' AND external_event_id IS NOT NULL
                 DO NOTHING

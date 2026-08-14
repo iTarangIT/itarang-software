@@ -19,9 +19,15 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
-import { isIntentBucket } from "@/lib/leads/intentBucket";
+import {
+    isIntentBucket,
+    normalizeScoreRange,
+    parseScoreBound,
+} from "@/lib/leads/intentBucket";
 import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
 import { buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
+import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
+import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,6 +103,14 @@ export const GET = withErrorHandler(async (req: Request) => {
     const intentParam = searchParams.get("intent");
     const connectStatusParam = searchParams.get("connect_status");
     const bucketParam = searchParams.get("disposition_bucket");
+    const idleParam = searchParams.get("idle");
+    const idleRange = isIdleRangeKey(idleParam) ? IDLE_RANGES[idleParam] : null;
+    const campaignParam = searchParams.get("campaign")?.trim() || null;
+    const scoreRange = normalizeScoreRange(
+        parseScoreBound(searchParams.get("score_min")),
+        parseScoreBound(searchParams.get("score_max")),
+    );
+    const hasNeodoveTables = campaignParam ? await neodoveTablesPresent() : false;
 
     // Parsed EXACTLY as GET /api/dealer-leads parses it — including the
     // owner/ASM tiering, so a role that cannot see who owns a lead on screen
@@ -104,7 +118,17 @@ export const GET = withErrorHandler(async (req: Request) => {
     const filters: LeadListFilters = {
         status: searchParams.get("status") || null,
         intent: isIntentBucket(intentParam) ? intentParam : null,
+        scoreMin: scoreRange.min,
+        scoreMax: scoreRange.max,
         source: searchParams.get("source") || null,
+        neodoveOnly: searchParams.get("neodove") === "1",
+        // Same idle band and campaign filter as the list — this route exists so
+        // the CSV and the screen can never disagree about which leads matched.
+        idleMinDays: idleRange?.min ?? null,
+        idleMaxDays: idleRange?.max ?? null,
+        idleNeverTouched: searchParams.get("idle") === "never",
+        campaign: campaignParam,
+        hasNeodoveTables,
         state: searchParams.get("state")?.trim() || null,
         city: searchParams.get("city")?.trim() || null,
         search: searchParams.get("search")?.trim() || null,

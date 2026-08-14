@@ -41,9 +41,18 @@ type PushResult = {
 export function NeodovePushPanel({
     campaignId,
     isWired,
+    audienceCount,
 }: {
     campaignId: string;
     isWired: boolean;
+    /**
+     * The campaign's audience as the detail route already resolved it. Passed in
+     * so this panel can show the number BEFORE anyone clicks Preview — which is
+     * what let the page drop its separate "Audience" stat card. The two were the
+     * same figure rendered twice, a few hundred pixels apart, and a number
+     * repeated is a number that can appear to disagree with itself.
+     */
+    audienceCount?: number | null;
 }) {
     const queryClient = useQueryClient();
     const [preview, setPreview] = useState<Preview | null>(null);
@@ -156,14 +165,33 @@ export function NeodovePushPanel({
                 </p>
             )}
 
+            {/* ONE number, not four. Hot/Warm/Cold were three full-size cards
+                whose values are almost always overwhelmingly cold (3 / 11 /
+                3230 on this campaign) — a distribution, not three headline
+                figures, so it reads as one line. Shown before any preview using
+                the count the page already has. */}
+            <div className="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-[11px] uppercase tracking-wide text-gray-500">
+                    Will be sent
+                </span>
+                <span className="text-2xl font-bold tabular-nums text-gray-900">
+                    {preview?.total ?? audienceCount ?? "—"}
+                </span>
+                {preview ? (
+                    <span className="text-xs text-gray-500">
+                        {preview.counts.hot} hot · {preview.counts.warm} warm ·{" "}
+                        {preview.counts.cold} cold
+                    </span>
+                ) : (
+                    <span className="text-xs text-gray-400">
+                        leads this campaign&apos;s filter targets right now — preview
+                        for the segment split and a sample
+                    </span>
+                )}
+            </div>
+
             {preview && (
-                <div className="mt-4">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <Cell label="Will be sent" value={preview.total} strong />
-                        <Cell label="Hot" value={preview.counts.hot} />
-                        <Cell label="Warm" value={preview.counts.warm} />
-                        <Cell label="Cold" value={preview.counts.cold} />
-                    </div>
+                <div className="mt-3">
 
                     {preview.excluded.total > 0 && (
                         <p className="mt-3 text-xs text-gray-500">
@@ -259,29 +287,6 @@ export function NeodovePushPanel({
     );
 }
 
-function Cell({
-    label,
-    value,
-    strong,
-}: {
-    label: string;
-    value: number;
-    strong?: boolean;
-}) {
-    return (
-        <div className="rounded-lg border border-gray-200 px-3 py-2.5">
-            <p className="text-[11px] uppercase tracking-wide text-gray-500">
-                {label}
-            </p>
-            <p
-                className={`mt-0.5 tabular-nums ${
-                    strong
-                        ? "text-xl font-bold text-gray-900"
-                        : "text-base font-semibold text-gray-700"
-                }`}
-            >
-                {value}
-            </p>
-        </div>
-    );
-}
+// `Cell` lived here and rendered the Will-be-sent / Hot / Warm / Cold grid. That
+// grid is now one headline number plus an inline segment line, so nothing is
+// left that needs a card.

@@ -20,6 +20,7 @@ import CoBorrowerPanel, {
 import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
 import RequestMoreDocsModal from "./step3/RequestMoreDocsModal";
 import NbfcKycVerificationCard from "./NbfcKycVerificationCard";
+import OfferNegotiationsPanel from "./OfferNegotiationsPanel";
 
 interface CrossMatchResult {
   overallPass: boolean;
@@ -1348,7 +1349,12 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           (per-doc verdicts + notes + attachments, correction / additional-doc /
           co-borrower requests, manual-consent uploads, direct messages). */}
       {activeTab === "nbfc" && (
-        <NbfcKycVerificationCard leadId={leadId} />
+        <>
+          <NbfcKycVerificationCard leadId={leadId} />
+          {/* E-238 — read-only record of the dealer <-> NBFC haggling over the
+              firm offer. Self-hides when nobody negotiated. */}
+          <OfferNegotiationsPanel leadId={leadId} />
+        </>
       )}
 
       {/* Step 3 — Panel 3: Co-Borrower KYC Review (BRD §2.9.3) */}
