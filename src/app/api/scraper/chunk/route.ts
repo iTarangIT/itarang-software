@@ -50,7 +50,11 @@ export async function POST(req: Request) {
     );
   }
 
-  let payload: { chunkId?: string };
+  // maxResults is E-241's per-job cap, carried on the message instead of on
+  // scraper_run_chunks (see the comment at the publish site). Absent on
+  // messages published before E-241 and on every single-query run, where the
+  // chunk handler falls back to its own defaults.
+  let payload: { chunkId?: string; maxResults?: number | null };
   try {
     payload = JSON.parse(rawBody);
   } catch {
@@ -68,7 +72,10 @@ export async function POST(req: Request) {
   }
 
   try {
-    await executeChunk(payload.chunkId);
+    await executeChunk(payload.chunkId, {
+      maxResults:
+        typeof payload.maxResults === "number" ? payload.maxResults : null,
+    });
   } catch (err: any) {
     console.error(`[scraper:chunk] executeChunk threw for ${payload.chunkId}`, err);
     // Return 500 so QStash retries the message according to its retry policy.
