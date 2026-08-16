@@ -5,6 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, AlertCircle, CheckCircle } from "lucide-react";
 import { ScraperRunsTable } from "./ScraperRunsTable";
 import { QueryManager } from "./QueryManager";
+import { BatchScrapeForm } from "./BatchScrapeForm";
+import { ScraperQueuePanel } from "./ScraperQueuePanel";
 import { ScraperRunProgress } from "./ScraperRunProgress";
 import { DownloadScrapedLeadsButton } from "./DownloadScrapedLeadsButton";
 
@@ -31,7 +33,12 @@ export function ScraperDashboard({
     msg: string;
   } | null>(null);
 
-  const [tab, setTab] = useState<"history" | "queries">("history");
+  const [tab, setTab] = useState<"history" | "batches">("history");
+
+  // [E-241] Single keeps the original one-query form byte for byte; Batch adds
+  // the multi-command / Excel / scheduled path. Defaults to Single so the
+  // existing workflow is unchanged for anyone who never opens the toggle.
+  const [mode, setMode] = useState<"single" | "batch">("single");
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
@@ -83,6 +90,20 @@ export function ScraperDashboard({
     showToast("success", "Scraper started — tracking progress below");
   };
 
+  // [E-241] A batch is queued, not started. Say so plainly: the operator has
+  // just handed over work that may not begin for another 30 seconds, and
+  // "started" would have them staring at Run History waiting for a row that
+  // has not been created yet. The Batches tab is where the answer lives, so
+  // switch to it.
+  const handleBatchQueued = (batchId: string, queued: number) => {
+    setTab("batches");
+    queryClient.invalidateQueries({ queryKey: ["scraper-batches"] });
+    showToast(
+      "success",
+      `${queued} job${queued === 1 ? "" : "s"} queued — they run one at a time, tracked below.`,
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -102,18 +123,50 @@ export function ScraperDashboard({
           <DownloadScrapedLeadsButton />
         </div>
 
-        <QueryManager
-          disabled={
-            !!activeRunId &&
-            !!runsList?.data?.find(
-              (r: any) =>
-                r.id === activeRunId &&
-                (r.status === "running" || r.status === "cancelling"),
-            )
-          }
-          onRunStarted={handleRunStarted}
-          onError={(msg) => showToast("error", msg)}
-        />
+        {/* [E-241] Mode toggle */}
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+          {(
+            [
+              ["single", "Single"],
+              ["batch", "Batch"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setMode(value)}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium ${
+                mode === value
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "text-gray-500"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "single" ? (
+          <QueryManager
+            disabled={
+              !!activeRunId &&
+              !!runsList?.data?.find(
+                (r: any) =>
+                  r.id === activeRunId &&
+                  (r.status === "running" || r.status === "cancelling"),
+              )
+            }
+            onRunStarted={handleRunStarted}
+            onError={(msg) => showToast("error", msg)}
+          />
+        ) : (
+          // No `disabled` here: a batch is QUEUED, not started, so submitting
+          // while a run is in flight is correct — the dispatcher picks it up
+          // once the current run ends. That is the whole point of the queue.
+          <BatchScrapeForm
+            onSubmitted={handleBatchQueued}
+            onError={(msg) => showToast("error", msg)}
+          />
+        )}
       </div>
 
       {/* Live progress for active run */}
@@ -181,16 +234,24 @@ export function ScraperDashboard({
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
-        <button
-          onClick={() => setTab("history")}
-          className={`px-4 py-1.5 rounded-md text-sm font-medium ${
-            tab === "history"
-              ? "bg-white text-gray-900 shadow-sm"
-              : "text-gray-500"
-          }`}
-        >
-          Run History
-        </button>
+        {(
+          [
+            ["history", "Run History"],
+            ["batches", "Batches"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            onClick={() => setTab(value)}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium ${
+              tab === value
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-500"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Tab Content */}
@@ -203,6 +264,13 @@ export function ScraperDashboard({
             detailBasePath={detailBasePath}
             onSelectRun={onSelectRun}
           />
+        </div>
+      )}
+
+      {tab === "batches" && (
+        <div>
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">Batches</h2>
+          <ScraperQueuePanel detailBasePath={detailBasePath} />
         </div>
       )}
     </div>
