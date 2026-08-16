@@ -3324,6 +3324,83 @@ export const scraperRunChunks = pgTable(
   }),
 );
 
+// E-241 — the scraper batch job queue. One row = one (query, city) pair waiting
+// to become a scraper_runs row. The dispatcher ticker
+// (startScraperQueueTicker in src/instrumentation-node.ts →
+// jobQueue.dispatchOnce()) claims the oldest eligible row, creates an ordinary
+// scraper_runs row for it, and calls the existing startChunkedRun().
+//
+// Safe to mirror in full — unlike the scrapeRuns landmine above, this table is
+// brand new, so there is no pre-existing statement an extra column could break.
+// On a database without E-241 the /api/scraper/batch routes 500 loudly and the
+// single-query scraper keeps working; that is the whole reason the queue is its
+// own relation rather than seven more columns on scraper_runs.
+export const scraperJobQueue = pgTable(
+  "scraper_job_queue",
+  {
+    id: text().primaryKey().notNull(),
+    // Groups the rows of one submission. A LABEL for the UI only — there is no
+    // batch entity and nothing rolls up through it.
+    batch_id: text("batch_id").notNull(),
+    // Position within the batch, 0-based. Dispatch orders by
+    // (created_at, seq) — created_at FIRST: a whole submission is inserted in
+    // one statement and shares created_at exactly, so that reads as "oldest
+    // batch first, then the operator's own row order" and batches drain FIFO.
+    // seq alone cannot express order (shared timestamp), and seq FIRST would
+    // round-robin across batches because seq restarts at 0 for each one.
+    seq: integer().default(0).notNull(),
+    query_text: text("query_text").notNull(),
+    // NULL = no city list supplied, so generateCitiesForQuery() picks them,
+    // i.e. exactly the pre-E-241 single-query behaviour.
+    city: text(),
+    max_results: integer("max_results"),
+    // false (the default, and the UI default) = use query_text literally, one
+    // chunk per job. true = expand into ~15 Gemini variations first.
+    expand_with_ai: boolean("expand_with_ai").default(false).notNull(),
+    // queued | running | done | failed | cancelled. No CHECK, no pgEnum — the
+    // vocabulary lives in src/lib/scraper/jobQueue.ts and is enforced by zod at
+    // the write path, per this table family's convention.
+    status: varchar({ length: 16 }).default('queued').notNull(),
+    // Soft FK to scraper_runs.id — no DB-level constraint on purpose.
+    run_id: varchar("run_id", { length: 255 }),
+    attempts: integer().default(0).notNull(),
+    last_error: text("last_error"),
+    // now | once | daily. See E-241's header — 'daily' is the whole of the
+    // recurring model and needs no pause/resume state: queued rows just sit
+    // here while the window is shut.
+    schedule_mode: varchar("schedule_mode", { length: 16 })
+      .default('now')
+      .notNull(),
+    run_after: timestamp("run_after", { withTimezone: true }),
+    // 'HH:MM' IST. Same shape as dialer_campaigns.window_start (E-228) and
+    // assignment_config.working_hours_start (E-120). window_end < window_start
+    // is legal and means an overnight window; the reader handles the wrap.
+    window_start: varchar("window_start", { length: 5 }),
+    window_end: varchar("window_end", { length: 5 }),
+    // ["mon","tue",…]; NULL = every day. Same vocabulary as
+    // assignment_config.working_days and dialer_campaigns.window_days.
+    window_days: jsonb("window_days"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatched_at: timestamp("dispatched_at", { withTimezone: true }),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    // Copied off scraper_runs.new_leads_promoted by reconcileFinishedJobs() so
+    // batch totals need no join.
+    leads_promoted: integer("leads_promoted").default(0).notNull(),
+  },
+  (t) => ({
+    // Serves dispatchOnce()'s claim. PARTIAL (WHERE status = 'queued') in the
+    // migration — Drizzle's index builder has no WHERE syntax, so E-241 is the
+    // source of truth for the predicate.
+    claimIdx: index("idx_scraper_job_queue_claim").on(t.created_at, t.seq),
+    batchIdx: index("idx_scraper_job_queue_batch").on(t.batch_id, t.seq),
+    // Also PARTIAL in the migration (WHERE run_id IS NOT NULL) — same caveat.
+    runIdx: index("idx_scraper_job_queue_run").on(t.run_id),
+  }),
+);
+
 export const scraperLeads = pgTable("scraper_leads", {
   id: text().primaryKey().notNull(),
   name: text(),
