@@ -76,6 +76,10 @@ const EXPECTED = {
 };
 
 async function main() {
+  // The defaults exactly as they ship — no logo, no signature block, no
+  // commercialTerms. The eyeball comparison against ITPI-35 is now about layout
+  // and numbers only: our document deliberately carries neither of its images,
+  // and is headed "Quotation" rather than "Proforma Invoice".
   const view = buildQuotationView({
     quoteNumber: "ITQ-2026-0001",
     quoteDate: new Date("2026-08-13T06:00:00.000Z"),
@@ -94,6 +98,11 @@ async function main() {
   };
 
   console.log("Reference document: docs/ITPI-35 (1).pdf\n");
+  // Both deliberately absent — asserted so a re-added default is caught here
+  // rather than on a document already with a dealer.
+  check("No letterhead image", view.seller.logoDataUri, null);
+  check("No signature block", view.signatureDataUri, null);
+  check("Document title", view.documentTitle, "Quotation");
   check("Sub Total", view.subTotal, EXPECTED.subTotal);
   check("IGST18 (18%)", view.taxRows[0]?.amount, EXPECTED.igst18);
   check("IGST5 (5%)", view.taxRows[1]?.amount, EXPECTED.igst5);

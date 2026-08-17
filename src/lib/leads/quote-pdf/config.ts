@@ -35,6 +35,13 @@ export interface QuotationDocConfig {
   seller: SellerBlock;
   bank: BankBlock;
   signatory: string | null;
+  /**
+   * The authorised signature block as a data: URI — the scanned image, which
+   * on ITPI-35 already carries the company line and the signatory's title. NULL
+   * here for the same reason as SellerBlock.logoDataUri: reading a file is I/O
+   * and this module is pure. ./config-store fills it from ./assets.
+   */
+  signatureDataUri: string | null;
   notes: string[];
   terms: string[];
   /** Prefix of the quotation number series, e.g. "ITQ". */
@@ -47,7 +54,12 @@ export interface QuotationDocConfig {
  * app_settings row says otherwise.
  */
 export const DEFAULT_QUOTATION_CONFIG: QuotationDocConfig = {
-  documentTitle: "Proforma Invoice",
+  // ITPI-35 is headed "Proforma Invoice"; this document is headed "Quotation"
+  // by decision on 2026-08-17. The two are different instruments — a proforma
+  // invoice is a demand to pay against, a quotation is an offer — and this one
+  // is issued before anything is agreed, so it is the latter. The LAYOUT still
+  // follows ITPI-35, which is why the module is still called proforma-template.
+  documentTitle: "Quotation",
   seller: {
     legalName: "ITARANG TECHNOLOGIES LLP",
     addressLines: [
@@ -63,6 +75,11 @@ export const DEFAULT_QUOTATION_CONFIG: QuotationDocConfig = {
     // which is where resolveQuotationConfig() re-derives it from.
     stateCode: "06",
     stateName: "Haryana",
+    // NO LETTERHEAD MARK by decision on 2026-08-17: the document leads with the
+    // legal name instead. The field stays because the capability is worth
+    // keeping one app_settings row away, but nothing is bundled — an
+    // unconfigured environment prints no image.
+    logoDataUri: null,
   },
   bank: {
     bank: "IDFC First Bank",
@@ -71,10 +88,19 @@ export const DEFAULT_QUOTATION_CONFIG: QuotationDocConfig = {
     ifsc: "IDFB0022462",
     branch: "GURGAON SECTOR 58",
   },
-  signatory: "Chirag Garg",
+  // NO SIGNATURE BLOCK AT ALL — not a name, not a rule, not a caption, and not
+  // a scan (2026-08-17). A quotation is an offer, and signing an offer before
+  // the dealer has accepted anything says more than the document means to. With
+  // both of these null the template omits the block entirely rather than
+  // printing an empty box; see __tests__/commercial-terms.test.ts.
+  signatory: null,
+  signatureDataUri: null,
   notes: ["Looking forward for your business."],
   terms: [
-    "This is a Proforma Invoice. Goods will be dispatched upon receipt of 100% payment / purchase order.",
+    // Follows the title. Leaving ITPI-35's wording would put "This is a
+    // Proforma Invoice" on a page headed "Quotation" — a contradiction a dealer
+    // reads before we do.
+    "This is a quotation. Goods will be dispatched upon receipt of 100% payment / purchase order.",
     "Payment due within 30 days.",
     "Goods once sold will not be taken back.",
     "Interest @24% p.a. will be charged if payment is delayed beyond due date.",
@@ -105,6 +131,12 @@ function asStringArray(v: unknown): string[] | null {
 
 function asString(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+/** See SellerBlock.logoDataUri — anything the browser must fetch is refused. */
+function asDataUri(v: unknown): string | null {
+  const s = asString(v);
+  return s && /^data:image\//i.test(s.trim()) ? s.trim() : null;
 }
 
 /**
@@ -142,6 +174,10 @@ export function mergeQuotationConfig(
       stateCodeFromGstin(gstin) ??
       base.seller.stateCode,
     stateName: asString(sellerPatch.stateName) ?? base.seller.stateName,
+    // Only a data: URI is accepted. A configured http(s) URL would not load
+    // under setContent() and would print a broken image on a dealer's document,
+    // so it is rejected here rather than discovered there.
+    logoDataUri: asDataUri(sellerPatch.logoDataUri) ?? base.seller.logoDataUri,
   };
 
   return {
@@ -155,6 +191,7 @@ export function mergeQuotationConfig(
       branch: asString(bankPatch.branch) ?? base.bank.branch,
     },
     signatory: asString(p.signatory) ?? base.signatory,
+    signatureDataUri: asDataUri(p.signatureDataUri) ?? base.signatureDataUri,
     notes: asStringArray(p.notes) ?? base.notes,
     terms: asStringArray(p.terms) ?? base.terms,
     numberPrefix: asString(p.numberPrefix) ?? base.numberPrefix,
