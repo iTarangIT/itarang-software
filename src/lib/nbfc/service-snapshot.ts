@@ -5,7 +5,7 @@
  * snapshotted — only the behavioural toggles that decide which tracks run —
  * because credentials must stay live-read and rotatable.
  *
- * Extracted from submit-product-selection when E-241 added a second writer of
+ * Extracted from submit-product-selection when E-245 added a second writer of
  * nbfc_lead_assignments (reselect-financing). Two copies of this would drift the
  * first time a toggle is added, and a lead routed by the second path would then
  * carry a snapshot missing the field every reader expects.

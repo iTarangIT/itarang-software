@@ -255,7 +255,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                 // /admin/kyc-review queue. Idempotent: re-syncing won't dup-insert.
                 if (newStatus === 'esign_completed' || newStatus === 'admin_review_pending') {
                     await ensureAdminKycQueueEntry(leadId);
-                    // E-243 — start the auto-verify clock on the signed
+                    // E-247 — start the auto-verify clock on the signed
                     // consent; the sweep verifies it when the window closes.
                     // Best-effort: the sync result must not depend on it.
                     stampConsentAutoVerifyDeadline(leadId, record.id).catch(() => {});

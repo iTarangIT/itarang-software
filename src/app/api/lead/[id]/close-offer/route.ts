@@ -1,7 +1,7 @@
 /**
  * POST /api/lead/[id]/close-offer
  *
- * E-241 — the dealer (customer-present) CLOSES the deal with one lender.
+ * E-245 — the dealer (customer-present) CLOSES the deal with one lender.
  *
  * This is the opposite of `select-winner`, not a variant of it: closing ends the
  * conversation with this NBFC and frees the lead to be routed to a different one

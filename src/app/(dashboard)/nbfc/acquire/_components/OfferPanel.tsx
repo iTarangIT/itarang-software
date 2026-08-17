@@ -12,7 +12,7 @@
  * could still change afterwards would not be fixed in any sense the dealer could
  * rely on.
  *
- * E-241 — the dealer's ask is now free text, not six proposed numbers, so this
+ * E-245 — the dealer's ask is now free text, not six proposed numbers, so this
  * panel shows what they WROTE and the officer re-prices from it. Pricing lives
  * on this side of the conversation; the dealer only ever supplies the reason.
  * The dealer can also close the deal outright, which lands the assignment on
@@ -232,7 +232,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         </p>
       )}
 
-      {/* E-238/E-241 — the dealer is waiting on us. The ask is what they wrote,
+      {/* E-238/E-245 — the dealer is waiting on us. The ask is what they wrote,
           so the message IS the content of this block; re-pricing it is our job. */}
       {latestCounter && !edit && (
         <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
@@ -257,7 +257,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         </div>
       )}
 
-      {/* E-241 — the dealer closed the deal. Terminal; nothing below is actionable. */}
+      {/* E-245 — the dealer closed the deal. Terminal; nothing below is actionable. */}
       {closedByDealer && (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50/60 p-3">
           <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">

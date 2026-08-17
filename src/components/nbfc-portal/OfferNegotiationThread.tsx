@@ -48,9 +48,9 @@ const PARTY_STYLE: Record<string, string> = {
 
 const KIND_LABEL: Record<string, string> = {
   offer: "Offer",
-  // Since E-241 a dealer round carries a message, never moved numbers — calling
+  // Since E-245 a dealer round carries a message, never moved numbers — calling
   // it a "counter-offer" would promise a diff that is never there. The stored
-  // `kind` stays 'counter' so pre-E-241 history renders under the same label.
+  // `kind` stays 'counter' so pre-E-245 history renders under the same label.
   counter: "Negotiation request",
   fix: "Terms fixed",
   close: "Deal closed",

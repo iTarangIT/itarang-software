@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------------
--- E-242: KYC auto-approval SLA — time-boxed automation of the admin KYC review.
+-- E-246: KYC auto-approval SLA — time-boxed automation of the admin KYC review.
 --
 -- WHAT THIS ADDS, AND WHY.
 --
@@ -128,19 +128,19 @@ END; $do$;
 -- make adding a third source value a migration rather than a code change.
 DO $do$ BEGIN
     EXECUTE $c$COMMENT ON COLUMN kyc_verifications.admin_action_source IS
-        'Who produced admin_action: ''admin'' (a human clicked Accept/Reject) | ''system'' (E-242 SLA sweep auto-accepted it WITHOUT calling the provider). Defaults to ''admin'' so every pre-E-242 row reads as human-actioned. Never infer this from a NULL admin_action_by — that is also NULL on legacy rows.'$c$;
+        'Who produced admin_action: ''admin'' (a human clicked Accept/Reject) | ''system'' (E-246 SLA sweep auto-accepted it WITHOUT calling the provider). Defaults to ''admin'' so every pre-E-246 row reads as human-actioned. Never infer this from a NULL admin_action_by — that is also NULL on legacy rows.'$c$;
     EXECUTE $c$COMMENT ON COLUMN other_document_requests.review_source IS
-        'Who set upload_status: ''admin'' | ''system'' (E-242 SLA sweep). Defaults to ''admin''.'$c$;
+        'Who set upload_status: ''admin'' | ''system'' (E-246 SLA sweep). Defaults to ''admin''.'$c$;
     EXECUTE $c$COMMENT ON COLUMN consent_records.verification_source IS
-        'Who set consent_status to verified: ''admin'' (KYC review panel) | ''system'' (E-242 auto-verify on signature). Defaults to ''admin''. Note the OTP path has auto-completed consent since E-180 and predates this column, so older OTP rows read ''admin''.'$c$;
+        'Who set consent_status to verified: ''admin'' (KYC review panel) | ''system'' (E-246 auto-verify on signature). Defaults to ''admin''. Note the OTP path has auto-completed consent since E-180 and predates this column, so older OTP rows read ''admin''.'$c$;
     EXECUTE $c$COMMENT ON COLUMN kyc_verification_metadata.final_decision_source IS
-        'Who made final_decision: ''admin'' | ''system'' (E-242 SLA sweep). Defaults to ''admin''.'$c$;
+        'Who made final_decision: ''admin'' | ''system'' (E-246 SLA sweep). Defaults to ''admin''.'$c$;
     EXECUTE $c$COMMENT ON COLUMN admin_verification_queue.sla_due_at IS
-        'E-242. When the KYC auto-approval sweep may act on this case: submitted_at + app_settings.kyc_auto_approval.slaHours, stamped at dealer submit. NULL means never auto-approve — the state of every row that predates E-242, and of every row submitted while the feature is disabled.'$c$;
+        'E-246. When the KYC auto-approval sweep may act on this case: submitted_at + app_settings.kyc_auto_approval.slaHours, stamped at dealer submit. NULL means never auto-approve — the state of every row that predates E-246, and of every row submitted while the feature is disabled.'$c$;
     EXECUTE $c$COMMENT ON COLUMN admin_verification_queue.auto_approved_at IS
-        'E-242. When the sweep processed this case. Non-NULL is the idempotency guard: a row is claimed at most once regardless of outcome, so a blocked case is never retried.'$c$;
+        'E-246. When the sweep processed this case. Non-NULL is the idempotency guard: a row is claimed at most once regardless of outcome, so a blocked case is never retried.'$c$;
     EXECUTE $c$COMMENT ON COLUMN admin_verification_queue.auto_approval_result IS
-        'E-242 outcome: ''approved'' (final decision written, Step 4 unlocked) | ''blocked'' (an admin had already rejected a card, so the approve gate legitimately refused and the case stays with the admin) | ''skipped_disabled''. No CHECK — see the file header.'$c$;
+        'E-246 outcome: ''approved'' (final decision written, Step 4 unlocked) | ''blocked'' (an admin had already rejected a card, so the approve gate legitimately refused and the case stays with the admin) | ''skipped_disabled''. No CHECK — see the file header.'$c$;
 EXCEPTION WHEN undefined_table OR undefined_column THEN
     RAISE NOTICE 'skip: comments (a target table/column is absent)';
 END; $do$;

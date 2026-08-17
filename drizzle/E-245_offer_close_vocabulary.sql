@@ -1,14 +1,14 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- E-241 — "Close deal" + message-only negotiation: vocabulary documentation
+-- E-245 — "Close deal" + message-only negotiation: vocabulary documentation
 -- ═══════════════════════════════════════════════════════════════════════════
 --
 -- THIS MIGRATION IS **OPTIONAL**. It contains no DDL — only COMMENT ON COLUMN
 -- refreshes. Read that sentence again before you skip the rest of this header,
 -- because it is the opposite of E-238 and E-239, which fail loudly when
--- unapplied. Nothing in the E-241 application code depends on this file.
+-- unapplied. Nothing in the E-245 application code depends on this file.
 --
 -- WHY THERE IS NO DDL
---   E-241 writes four values that did not exist before:
+--   E-245 writes four values that did not exist before:
 --
 --     nbfc_offer_negotiations.kind            = 'close'
 --     nbfc_financing_offers.negotiation_status = 'closed'
@@ -24,7 +24,7 @@
 --     'closed' were added.
 --   * 'withdrawn' has been permitted by nbfc_lead_assignments' CHECK since
 --     E-131 and by nbfc_financing_offers' CHECK since E-140. Both were written
---     with the later phases in mind and never had a writer until now — E-241 is
+--     with the later phases in mind and never had a writer until now — E-245 is
 --     the FIRST code anywhere in the repo that sets either column to it.
 --
 --   So the DB is already correct. What is stale is its self-documentation: the
@@ -38,16 +38,16 @@
 BEGIN;
 
 COMMENT ON COLUMN nbfc_offer_negotiations.kind IS
-  'E-238/E-241: offer (NBFC submitted/revised) | counter (dealer asked for a '
+  'E-238/E-245: offer (NBFC submitted/revised) | counter (dealer asked for a '
   'revision) | fix (NBFC froze the terms) | close (dealer ended the deal with '
-  'this lender). No CHECK — enforced in the route layer. Since E-241 a '
+  'this lender). No CHECK — enforced in the route layer. Since E-245 a '
   '''counter'' round carries a MESSAGE and never moved numbers: the dealer '
   'states what the customer needs and the NBFC re-prices, so consecutive '
-  'dealer rounds diff to nothing by design. Pre-E-241 counters still hold the '
+  'dealer rounds diff to nothing by design. Pre-E-245 counters still hold the '
   'dealer''s proposed terms and render as a diff exactly as before.';
 
 COMMENT ON COLUMN nbfc_financing_offers.negotiation_status IS
-  'E-238/E-241: open (terms stand; dealer may ask for a revision) | '
+  'E-238/E-245: open (terms stand; dealer may ask for a revision) | '
   'dealer_countered (dealer asked, NBFC to respond) | fixed (NBFC froze the '
   'terms — NEITHER side can change them and the dealer''s Negotiate action '
   'disappears; winner selection is deliberately still allowed) | closed (the '
@@ -57,13 +57,13 @@ COMMENT ON COLUMN nbfc_financing_offers.negotiation_status IS
   'numbers, it does not oblige the customer to buy.';
 
 COMMENT ON COLUMN nbfc_financing_offers.status IS
-  'E-140/E-241: active | withdrawn. CHECK-constrained to those two since E-140. '
-  '''withdrawn'' had no writer until E-241''s POST /api/lead/[id]/close-offer.';
+  'E-140/E-245: active | withdrawn. CHECK-constrained to those two since E-140. '
+  '''withdrawn'' had no writer until E-245''s POST /api/lead/[id]/close-offer.';
 
 COMMENT ON COLUMN nbfc_lead_assignments.status IS
   'Lifecycle: pending → in_progress → offer_submitted → selected | not_selected '
   '| declined | withdrawn. A1 only writes pending; later phases drive the rest. '
-  'E-241: ''withdrawn'' means the DEALER closed the deal with this lender '
+  'E-245: ''withdrawn'' means the DEALER closed the deal with this lender '
   '(decision_reason=''dealer_closed_deal''), which frees one of the two lender '
   'slots so the lead can be re-routed via POST /api/lead/[id]/reselect-financing. '
   'It is NOT the same as ''not_selected'' (lost to a chosen winner), and '

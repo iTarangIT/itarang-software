@@ -1048,9 +1048,9 @@ export async function notifyOfferSubmitted(p: {
 }
 
 /**
- * E-238 / E-241 — the dealer asked an NBFC to revise its firm offer.
+ * E-238 / E-245 — the dealer asked an NBFC to revise its firm offer.
  *
- * The ask is free text (E-241 dropped the six editable term fields), so the
+ * The ask is free text (E-245 dropped the six editable term fields), so the
  * message IS the notification body — there is nothing else to summarise.
  *
  * Only the NBFC being negotiated with hears about it. The other lender on the
@@ -1084,7 +1084,7 @@ export async function notifyOfferNegotiated(p: {
 }
 
 /**
- * E-241 — the dealer closed the deal with this lender.
+ * E-245 — the dealer closed the deal with this lender.
  *
  * Terminal for this assignment: the offer goes 'withdrawn' and the dealer is
  * free to route the lead to a different lender. Scoped the same way as
@@ -1152,7 +1152,7 @@ export async function notifyOfferFixed(p: {
 }
 
 /**
- * E-241 — after closing a deal the dealer routed the lead to a DIFFERENT lender.
+ * E-245 — after closing a deal the dealer routed the lead to a DIFFERENT lender.
  *
  * Deliberately not notifyProductSubmitted: that fans out via toLeadNbfcs, which
  * would tell the lender the dealer just closed that a "new application" had been
@@ -1462,7 +1462,7 @@ export async function notifyOemPricesMissing(p: {
 }
 
 /**
- * The E-242 SLA sweep acted on a KYC case that no admin had touched.
+ * The E-246 SLA sweep acted on a KYC case that no admin had touched.
  *
  * Emitted on BOTH outcomes on purpose. `approved` is an FYI — the dealer has
  * already been told Step 4 is open by `applyKycFinalDecision`, and this is the

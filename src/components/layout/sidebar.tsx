@@ -245,7 +245,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           href: "/admin/settings",
         },
         {
-          // E-242 — its own entry rather than a tab inside Notifications.
+          // E-246 — its own entry rather than a tab inside Notifications.
           // getActiveItemId() is longest-href-wins, so this beats
           // /admin/settings (which in turn beats /admin) when it is active.
           id: "sh-kyc-automation",
@@ -782,7 +782,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/settings",
         },
         {
-          // E-242 — own entry, not a tab. See the sales_head block above.
+          // E-246 — own entry, not a tab. See the sales_head block above.
           id: "admin-kyc-automation",
           label: "KYC Automation",
           icon: ShieldCheck,

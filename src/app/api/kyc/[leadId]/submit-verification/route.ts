@@ -273,7 +273,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // entry instead of inserting duplicates.
         const existingQueueEntry = await getOpenQueueEntryForLead(leadId);
         if (!existingQueueEntry) {
-            // E-242 — start the auto-approval SLA clock. Resolved here, at
+            // E-246 — start the auto-approval SLA clock. Resolved here, at
             // submit, rather than read by the sweep at expiry, so the deadline a
             // case was admitted under cannot be changed retroactively by editing
             // the setting. Null while the feature is off, and the sweep skips
@@ -289,7 +289,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 submitted_by: null,
                 status: 'pending_itarang_verification',
                 submitted_at: now,
-                // E-244 — case deadline, per-card snapshot and the sweep's
+                // E-248 — case deadline, per-card snapshot and the sweep's
                 // pointer, all resolved together so they cannot disagree.
                 ...slaStampFor(now, autoApproval),
                 created_at: now,
@@ -307,7 +307,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 dealerName: await dealerDisplayName(lead[0].dealer_id),
             });
         } else if (!existingQueueEntry.sla_due_at) {
-            // E-242 gap: the queue row usually already exists by now. Consent
+            // E-246 gap: the queue row usually already exists by now. Consent
             // finalisation creates one through `ensureAdminKycQueueEntry()` so
             // the case is visible to admins before the dealer submits, and that
             // helper cannot stamp a deadline — at consent time there are no

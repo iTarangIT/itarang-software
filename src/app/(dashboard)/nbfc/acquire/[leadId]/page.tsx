@@ -48,7 +48,7 @@ const STATUS_LABEL: Record<string, string> = {
   selected: "Selected",
   not_selected: "Not selected",
   declined: "Declined",
-  // E-241 — 'withdrawn' has exactly one writer: the dealer's Close deal action.
+  // E-245 — 'withdrawn' has exactly one writer: the dealer's Close deal action.
   // "Withdrawn" reads like an internal state change of unknown origin; this is a
   // customer decision and the panel should say whose it was.
   withdrawn: "Deal closed by customer",
@@ -224,7 +224,7 @@ export default async function AcquireLeadDetailPage({
     "offer_submitted",
     "selected",
     "not_selected",
-    // E-241 — closing takes the assignment straight from 'offer_submitted' to
+    // E-245 — closing takes the assignment straight from 'offer_submitted' to
     // 'withdrawn'. Without this the Offer step reads "pending · Locked" while
     // the submitted offer sits rendered directly underneath it, and Verification
     // (which keys off the same flag) reverts to "review dossier".
@@ -259,7 +259,7 @@ export default async function AcquireLeadDetailPage({
   function nodeOffer(): StepperStage["state"] {
     // FI / Video KYC now live inside the Offer step and only unlock once won, so
     // the Offer step itself is reachable straight after the dossier review.
-    // Closed outranks submitted. E-241 made offerSubmitted true for 'withdrawn'
+    // Closed outranks submitted. E-245 made offerSubmitted true for 'withdrawn'
     // — the offer really was submitted, and Verification upstream must stay
     // done — but a green Completed check over a deal the customer walked away
     // from reads as a win. Locked + the red badge is the honest pair.
@@ -529,7 +529,7 @@ export default async function AcquireLeadDetailPage({
     >
       {won
         ? `Selected as the winning lender by the customer — proceed to ${STEP_LABEL[nextLiveStep("offer")]}.`
-        : // E-241 — the customer ended this conversation. Distinct from `lost`:
+        : // E-245 — the customer ended this conversation. Distinct from `lost`:
           // nobody outbid you, the deal itself was closed.
           status === "withdrawn"
           ? "Deal closed by the customer — this offer is withdrawn and can no longer be revised or fixed. Their reason is on the offer above."
@@ -639,7 +639,7 @@ export default async function AcquireLeadDetailPage({
               ? "submitted · awaiting decision"
               : "pending",
       state: nodeOffer(),
-      // E-241 — "Completed" would read as a won deal; this one ended.
+      // E-245 — "Completed" would read as a won deal; this one ended.
       badge:
         status === "withdrawn"
           ? {

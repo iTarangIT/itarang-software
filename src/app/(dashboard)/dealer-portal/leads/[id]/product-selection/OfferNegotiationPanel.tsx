@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * E-238 / E-241 — the dealer's message box against a financing offer.
+ * E-238 / E-245 — the dealer's message box against a financing offer.
  *
- * E-238 shipped this as six editable term fields (`current → your ask`). E-241
+ * E-238 shipped this as six editable term fields (`current → your ask`). E-245
  * removed them: the dealer is not the party that prices a loan, so inviting them
  * to type an ROI produced asks the lender could not act on and rounds whose
  * "diff" was noise. The dealer now says what the customer needs in words, and

@@ -135,7 +135,7 @@ export async function GET(
         .from(coBorrowerRequests)
         .where(eq(coBorrowerRequests.lead_id, leadId))
         .orderBy(desc(coBorrowerRequests.attempt_number)),
-      // E-243 — the automation's own settings. The consent card draws a
+      // E-247 — the automation's own settings. The consent card draws a
       // timeline, not just a number, and a timeline needs the length of the
       // window as well as its end: the clock started at
       // `auto_verify_due_at - slaMinutes`. Reading it here also lets the card
@@ -173,7 +173,7 @@ export async function GET(
       retryCount: v.retry_count,
       adminAction: v.admin_action,
       adminActionNotes: v.admin_action_notes,
-      // E-242 — 'system' means the SLA sweep accepted this card without the
+      // E-246 — 'system' means the SLA sweep accepted this card without the
       // provider ever being called. The UI must not present it as a verified
       // result.
       adminActionSource: v.admin_action_source ?? "admin",
@@ -321,7 +321,7 @@ export async function GET(
             signedConsentUrl: signedUrl,
             signedAt,
             verifiedAt: c.verified_at,
-            // E-243 — when the sweep will verify this consent. Null means it
+            // E-247 — when the sweep will verify this consent. Null means it
             // never will (signed before the feature, or while it was off).
             autoVerifyDueAt: c.auto_verify_due_at ?? null,
             verificationSource: c.verification_source ?? "admin",
@@ -380,22 +380,22 @@ export async function GET(
               submittedAt: queueEntry.submitted_at,
               reviewedAt: queueEntry.reviewed_at,
               slaAge: sla,
-              // E-242 — the auto-approval clock. slaDueAt null means this case
+              // E-246 — the auto-approval clock. slaDueAt null means this case
               // will never auto-approve (submitted before the feature, or while
               // it was off); autoApprovedAt non-null means the sweep has already
               // had its one attempt, and autoApprovalResult says how it went.
               slaDueAt: queueEntry.sla_due_at ?? null,
               autoApprovedAt: queueEntry.auto_approved_at ?? null,
               autoApprovalResult: queueEntry.auto_approval_result ?? null,
-              // E-244 — each card's own deadline, as snapshotted at submit.
-              // Null (a pre-E-244 case) means every card falls back to
+              // E-248 — each card's own deadline, as snapshotted at submit.
+              // Null (a pre-E-248 case) means every card falls back to
               // `slaDueAt`, which is what the review screen then shows.
               cardSlaDueAt:
                 (queueEntry.sla_card_due_at as Record<string, string> | null) ?? null,
               slaNextDueAt: queueEntry.sla_next_due_at ?? null,
             }
           : null,
-        // E-243 — what the automation is currently configured to do, so the
+        // E-247 — what the automation is currently configured to do, so the
         // consent timeline can show the length of the window it is counting
         // down (a bare deadline gives an end but no start) and can explain an
         // absent countdown rather than silently showing nothing. Deliberately

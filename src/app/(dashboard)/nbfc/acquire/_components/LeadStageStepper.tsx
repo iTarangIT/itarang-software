@@ -40,7 +40,7 @@ export interface StepperStage {
   state: NodeState;
   /**
    * Overrides the generic state badge on the open stage's header. For outcomes
-   * the NodeState cannot express — E-241's dealer-closed deal is `done` as far
+   * the NodeState cannot express — E-245's dealer-closed deal is `done` as far
    * as the step machine is concerned, but "Completed" is the wrong word for it.
    */
   badge?: { label: string; cls: string };

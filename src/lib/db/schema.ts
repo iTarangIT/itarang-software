@@ -1556,7 +1556,7 @@ export const kycVerifications = pgTable(
     admin_action_by: uuid("admin_action_by"),
     admin_action_at: timestamp("admin_action_at", { withTimezone: true }),
     admin_action_notes: text("admin_action_notes"),
-    // E-242 — 'admin' (a human clicked Accept/Reject) | 'system' (the KYC
+    // E-246 — 'admin' (a human clicked Accept/Reject) | 'system' (the KYC
     // auto-approval SLA sweep accepted it WITHOUT calling the provider).
     // admin_action_by is NULL for a system action, but NULL is also what
     // legacy rows carry, so this is the only reliable discriminator.
@@ -1656,9 +1656,9 @@ export const consentRecords = pgTable("consent_records", {
   signed_consent_url: text("signed_consent_url"),
   verified_by: uuid("verified_by"),
   verified_at: timestamp("verified_at", { withTimezone: true }),
-  // E-242 — 'admin' (KYC review panel) | 'system' (auto-verified by the sweep).
+  // E-246 — 'admin' (KYC review panel) | 'system' (auto-verified by the sweep).
   verification_source: varchar("verification_source", { length: 16 }).default('admin'),
-  // E-243 — the consent auto-verify deadline, STAMPED when the consent enters a
+  // E-247 — the consent auto-verify deadline, STAMPED when the consent enters a
   // signed-but-unverified state. NULL = never auto-verify, which is what stops
   // enabling the feature from reaching back over old consents. Do not backfill.
   // NOTE the sweep's partial index (consent_records_auto_verify_due_idx) is
@@ -1916,7 +1916,7 @@ export const otherDocumentRequests = pgTable("other_document_requests", {
   rejection_reason: text("rejection_reason"),
   reviewed_by: uuid("reviewed_by"),
   reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
-  // E-242 — 'admin' | 'system' (KYC auto-approval SLA sweep).
+  // E-246 — 'admin' | 'system' (KYC auto-approval SLA sweep).
   review_source: varchar("review_source", { length: 16 }).default('admin'),
   document_name: text("document_name"),
   document_url: text("document_url"),
@@ -2144,9 +2144,9 @@ export const adminVerificationQueue = pgTable(
     reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-    // E-242 — the KYC auto-approval SLA clock. `sla_due_at` is stamped at
+    // E-246 — the KYC auto-approval SLA clock. `sla_due_at` is stamped at
     // dealer submit as submitted_at + the configured window; NULL means never
-    // auto-approve (every pre-E-242 row, and anything submitted while the
+    // auto-approve (every pre-E-246 row, and anything submitted while the
     // feature is off). `auto_approved_at` is the idempotency guard — a row is
     // claimed at most once, whatever the outcome.
     // NOTE the sweep's partial index (admin_verification_queue_sla_due_idx) is
@@ -2154,10 +2154,10 @@ export const adminVerificationQueue = pgTable(
     sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
     auto_approved_at: timestamp("auto_approved_at", { withTimezone: true }),
     auto_approval_result: varchar("auto_approval_result", { length: 24 }),
-    // E-244 — per-card windows. `sla_card_due_at` is the snapshot of each
+    // E-248 — per-card windows. `sla_card_due_at` is the snapshot of each
     // card's own deadline taken at submit ({aadhaar: ISO, …}); `sla_next_due_at`
     // is the earliest deadline still to act on, which the sweep selects by and
-    // advances as cards mature. Both NULL on pre-E-244 rows, which fall back to
+    // advances as cards mature. Both NULL on pre-E-248 rows, which fall back to
     // `sla_due_at` — never backfill either.
     sla_card_due_at: jsonb("sla_card_due_at"),
     sla_next_due_at: timestamp("sla_next_due_at", { withTimezone: true }),
@@ -2196,7 +2196,7 @@ export const kycVerificationMetadata = pgTable(
     final_decision_at: timestamp("final_decision_at", { withTimezone: true }),
     final_decision_by: uuid("final_decision_by"),
     final_decision_notes: text("final_decision_notes"),
-    // E-242 — 'admin' | 'system' (KYC auto-approval SLA sweep).
+    // E-246 — 'admin' | 'system' (KYC auto-approval SLA sweep).
     final_decision_source: varchar("final_decision_source", { length: 16 }).default('admin'),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -4148,7 +4148,7 @@ export const nbfcLeadAssignments = pgTable(
     // Lifecycle: pending → in_progress → offer_submitted → selected |
     // not_selected | declined | withdrawn. A1 only writes 'pending'; later
     // phases drive the rest. CHECK constraint lives on the DB side (E-131).
-    // E-241: 'withdrawn' = the DEALER closed the deal with this lender
+    // E-245: 'withdrawn' = the DEALER closed the deal with this lender
     // (decision_reason='dealer_closed_deal'), freeing one of the two lender
     // slots so the lead can be re-routed. Distinct from 'not_selected', which
     // means it lost to a chosen winner.
@@ -4218,7 +4218,7 @@ export const nbfcFinancingOffers = pgTable(
     // negotiation_status: open (dealer may ask for a revision) | dealer_countered
     // (NBFC to respond) | fixed (NBFC froze the terms — neither side can change
     // them and the dealer's Negotiate action disappears; winner selection still
-    // allowed) | closed (E-241: the dealer ended the deal — terminal, set with
+    // allowed) | closed (E-245: the dealer ended the deal — terminal, set with
     // status='withdrawn' here and on the assignment). A fixed offer can still be
     // closed: fixing freezes the numbers, not the customer's decision.
     negotiation_status: varchar("negotiation_status", { length: 16 }).default("open").notNull(),

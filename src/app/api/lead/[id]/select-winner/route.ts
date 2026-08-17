@@ -109,7 +109,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           and(
             eq(nbfcLeadAssignments.lead_id, leadId),
             ne(nbfcLeadAssignments.nbfc_id, chosenNbfcId),
-            // E-241 — a lender the dealer already CLOSED (or that declined) did
+            // E-245 — a lender the dealer already CLOSED (or that declined) did
             // not lose to this winner, and overwriting it with 'not_selected'
             // would erase the only record of why that conversation ended.
             notInArray(nbfcLeadAssignments.status, ["withdrawn", "declined"]),

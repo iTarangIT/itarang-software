@@ -1,10 +1,10 @@
-// Applies drizzle/E-241_offer_close_vocabulary.sql to whatever DATABASE_URL
+// Applies drizzle/E-245_offer_close_vocabulary.sql to whatever DATABASE_URL
 // points at in .env.local. Idempotent — safe to re-run:
-//   node scripts/apply-e241.mjs
+//   node scripts/apply-e245.mjs
 //
 // What breaks without it, and how loudly:
 //
-//   NOTHING. This is the quiet one in the series. E-241 is COMMENT-ONLY — no
+//   NOTHING. This is the quiet one in the series. E-245 is COMMENT-ONLY — no
 //   DDL, no data, no constraint. The four values its feature introduces
 //   (nbfc_offer_negotiations.kind='close', negotiation_status='closed', and
 //   'withdrawn' on both nbfc_financing_offers.status and
@@ -20,7 +20,7 @@
 //
 // Verified below rather than trusted, because a comment-only migration has no
 // other observable effect: the four COMMENTs are read back out of
-// obj_description/col_description and checked for the E-241 marker. The CHECK
+// obj_description/col_description and checked for the E-245 marker. The CHECK
 // constraints the feature relies on are asserted too — if a database somehow
 // lacks 'withdrawn' in either, the close flow would 23514 at runtime, and this
 // is the cheapest place to find that out.
@@ -31,7 +31,7 @@
 // is a coin flip about which one you are altering. Pass an explicit target to
 // remove the guess:
 //
-//   DATABASE_URL=postgresql://…database-1… node scripts/apply-e241.mjs
+//   DATABASE_URL=postgresql://…database-1… node scripts/apply-e245.mjs
 //
 // An explicit process.env.DATABASE_URL wins over the file. The host is printed
 // before anything is written either way — read it before trusting the run.
@@ -47,13 +47,13 @@ function resolveUrl() {
 }
 
 const { url, from } = resolveUrl();
-const ddl = readFileSync("drizzle/E-241_offer_close_vocabulary.sql", "utf8");
+const ddl = readFileSync("drizzle/E-245_offer_close_vocabulary.sql", "utf8");
 
 /** The four columns this migration re-documents, and what must appear in each. */
 const EXPECTED_COMMENTS = [
   { table: "nbfc_offer_negotiations", column: "kind", needle: "close (dealer ended the deal" },
   { table: "nbfc_financing_offers", column: "negotiation_status", needle: "closed (the dealer ended the deal" },
-  { table: "nbfc_financing_offers", column: "status", needle: "E-140/E-241" },
+  { table: "nbfc_financing_offers", column: "status", needle: "E-140/E-245" },
   { table: "nbfc_lead_assignments", column: "status", needle: "dealer_closed_deal" },
 ];
 
@@ -96,7 +96,7 @@ try {
     const ok = typeof row?.comment === "string" && row.comment.includes(needle);
     console.log(
       ok
-        ? `OK — ${table}.${column} COMMENT carries the E-241 wording.`
+        ? `OK — ${table}.${column} COMMENT carries the E-245 wording.`
         : `FAILED — ${table}.${column} COMMENT is missing "${needle}" (got: ${row?.comment ?? "NULL"}).`,
     );
     if (!ok) failed = true;
@@ -114,14 +114,14 @@ try {
     const ok = row?.ok === true;
     console.log(
       ok
-        ? `OK — ${table}.${column} CHECK permits '${value}' (pre-existing; E-241 adds no constraint).`
+        ? `OK — ${table}.${column} CHECK permits '${value}' (pre-existing; E-245 adds no constraint).`
         : `FAILED — ${table}.${column} CHECK does NOT permit '${value}'. The Close deal flow will 23514 on this DB.`,
     );
     if (!ok) failed = true;
   }
 
   if (failed) process.exit(1);
-  console.log("\nE-241 applied. Comment-only — no DDL ran, no rows changed.");
+  console.log("\nE-245 applied. Comment-only — no DDL ran, no rows changed.");
 } finally {
   await sql.end();
 }

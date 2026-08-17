@@ -21,13 +21,13 @@ interface BankCardProps {
     id: string;
     status: string;
     adminAction?: string | null;
-    // E-242 — 'system' when the SLA sweep accepted this without a provider call.
+    // E-246 — 'system' when the SLA sweep accepted this without a provider call.
     adminActionSource?: string | null;
     adminActionNotes?: string | null;
     matchScore?: string | null;
     apiResponse?: Record<string, unknown> | null;
   } | null;
-  // E-243 — the case-level auto-approval clock, rendered as one row under the
+  // E-247 — the case-level auto-approval clock, rendered as one row under the
   // card header. Omitted by callers that have no queue row (the NBFC mirror),
   // in which case nothing renders.
   autoAccept?: {
@@ -237,7 +237,7 @@ export default function BankCard({
         })()}
       </div>
 
-      {/* E-243 — case SLA countdown. Deliberately a single ~22px row: five of
+      {/* E-247 — case SLA countdown. Deliberately a single ~22px row: five of
           these are on screen at once and the fields below are the real work. */}
       <AutoAcceptTimeline
         dueAt={autoAccept?.dueAt}

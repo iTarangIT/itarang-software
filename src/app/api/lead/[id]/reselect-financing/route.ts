@@ -1,7 +1,7 @@
 /**
  * POST /api/lead/[id]/reselect-financing
  *
- * E-241 — route this lead to ANOTHER lender after the dealer closed a deal
+ * E-245 — route this lead to ANOTHER lender after the dealer closed a deal
  * (POST /api/lead/[id]/close-offer).
  *
  * Step 4 is read-only once submitted (`step-4-access` returns readOnly), and it

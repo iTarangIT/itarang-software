@@ -84,7 +84,7 @@ interface VerificationCard {
   retryCount: number;
   adminAction: string | null;
   adminActionNotes: string | null;
-  // E-242 — 'admin' | 'system'. 'system' means the SLA sweep accepted this card
+  // E-246 — 'admin' | 'system'. 'system' means the SLA sweep accepted this card
   // without the verification provider ever being called.
   adminActionSource: string | null;
   submittedAt: string | null;
@@ -103,7 +103,7 @@ interface Consent {
   signedConsentUrl: string | null;
   signedAt: string | null;
   verifiedAt: string | null;
-  // E-243 — when the sweep will auto-verify this consent; null = never.
+  // E-247 — when the sweep will auto-verify this consent; null = never.
   autoVerifyDueAt: string | null;
   verificationSource: string | null;
   adminViewedBy: string | null;
@@ -137,18 +137,18 @@ interface QueueEntry {
   submittedAt: string | null;
   reviewedAt: string | null;
   slaAge: string | null;
-  // E-242 auto-approval clock. slaDueAt null = this case never auto-approves.
+  // E-246 auto-approval clock. slaDueAt null = this case never auto-approves.
   slaDueAt?: string | null;
   autoApprovedAt?: string | null;
   autoApprovalResult?: string | null;
-  // E-244 — per-card deadlines snapshotted at submit, keyed by verification
-  // type. Absent on a pre-E-244 case, where every card uses slaDueAt.
+  // E-248 — per-card deadlines snapshotted at submit, keyed by verification
+  // type. Absent on a pre-E-248 case, where every card uses slaDueAt.
   cardSlaDueAt?: Record<string, string> | null;
   slaNextDueAt?: string | null;
 }
 
 /**
- * E-242 — how long is left before the SLA sweep clears this case itself.
+ * E-246 — how long is left before the SLA sweep clears this case itself.
  * Returns null when there is nothing to count down to: no deadline stamped, or
  * the sweep has already had its (single) attempt.
  */
@@ -197,7 +197,7 @@ function formatClockTime(iso: string | null): string | null {
 }
 
 /**
- * E-243 — the KYC automation timeline on a consent card.
+ * E-247 — the KYC automation timeline on a consent card.
  *
  * A bare "auto-verifies in 1m 30s" line answered only one of the questions an
  * admin looking at this card actually has. This answers all four: whether the
@@ -395,7 +395,7 @@ interface CaseData {
   digilocker: DigilockerEntry[];
   supportingDocs: SupportingDoc[];
   coBorrower: CoBorrowerData | CoBorrowerGated | null;
-  // E-243 — a read-only echo of /admin/settings, used to draw the consent
+  // E-247 — a read-only echo of /admin/settings, used to draw the consent
   // timeline and to explain a countdown that is not running.
   kycAutomation?: KycAutomation | null;
 }
@@ -478,7 +478,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [autoFetchAttempted, setAutoFetchAttempted] = useState<Set<string>>(new Set());
   const [consentExpanded, setConsentExpanded] = useState(false);
 
-  // E-243 — drive the auto-approval countdowns (case header + each consent row).
+  // E-247 — drive the auto-approval countdowns (case header + each consent row).
   // A one-second re-render of already-fetched state; deliberately NOT a refetch,
   // so watching a deadline tick down costs nothing on the server.
   //
@@ -702,7 +702,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // E-243 — refetch when an automation window closes.
+  // E-247 — refetch when an automation window closes.
   //
   // The countdown is a pure re-render of already-fetched state, so it reaches
   // zero and then sits there: the sweep does its work server-side and this
@@ -945,7 +945,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   const { lead, personalDetails: pd, documents, metadata, queueEntry, consent: rawConsent } = data;
 
-  // E-243 — the SLA row every verification card carries. Present for any case
+  // E-247 — the SLA row every verification card carries. Present for any case
   // that has reached the admin queue, whether or not a countdown is running:
   // a card with no row at all is indistinguishable from a broken feature, and
   // "how long has this been waiting" is worth saying on its own.
@@ -960,9 +960,9 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const cardAutomationOn = Boolean(
     data.kycAutomation?.enabled && data.kycAutomation.autoApproveCards,
   );
-  // E-244 — each card counts down to ITS OWN deadline. The map is the snapshot
+  // E-248 — each card counts down to ITS OWN deadline. The map is the snapshot
   // taken at submit, so it keeps the windows the case was admitted under even
-  // if an admin edits them afterwards; a case stamped before E-244 has no map
+  // if an admin edits them afterwards; a case stamped before E-248 has no map
   // and every card falls back to the case deadline, which is exactly how it
   // behaved then.
   const cardAutoAcceptFor = (type: string) => {
@@ -1150,7 +1150,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                   SLA {queueEntry.slaAge}
                 </span>
               )}
-              {/* E-242 — the auto-approval clock. Only one of these can show:
+              {/* E-246 — the auto-approval clock. Only one of these can show:
                   either the sweep has already run (autoApprovedAt) or it is
                   still counting down (slaDueAt). Absent entirely on cases that
                   will never auto-approve. */}
@@ -1486,7 +1486,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                                   Approved by admin {verifiedRelative}
                                 </p>
                               )}
-                              {/* E-243 — the automation timeline. Replaces the
+                              {/* E-247 — the automation timeline. Replaces the
                                   bare countdown line: it also covers the states
                                   where no clock is running, which is what made
                                   the automation look absent from this card. */}

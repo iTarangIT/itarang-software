@@ -1,7 +1,7 @@
-// Applies drizzle/E-244_kyc_card_sla_windows.sql and then PROVES it landed.
+// Applies drizzle/E-248_kyc_card_sla_windows.sql and then PROVES it landed.
 //
-// Usage:  DATABASE_URL=postgresql://…database-1… node scripts/apply-e244.mjs
-//         DATABASE_URL=postgresql://…database-1… node scripts/apply-e244.mjs --dry-run
+// Usage:  DATABASE_URL=postgresql://…database-1… node scripts/apply-e248.mjs
+//         DATABASE_URL=postgresql://…database-1… node scripts/apply-e248.mjs --dry-run
 //
 // TARGET SELECTION — READ THIS BEFORE RUNNING.
 // An explicit process.env.DATABASE_URL always wins. Falling back to .env.local
@@ -10,7 +10,7 @@
 // and the two databases drift. The host is printed, together with which
 // environment that host IS, before a single byte is written.
 //
-// WHAT E-244 DOES. Two columns on admin_verification_queue —
+// WHAT E-248 DOES. Two columns on admin_verification_queue —
 // `sla_card_due_at jsonb` (the per-card deadline snapshot taken at dealer
 // submit) and `sla_next_due_at timestamptz` (the sweep's pointer at the
 // earliest deadline still to act on) — plus one PARTIAL index. It backs
@@ -36,7 +36,7 @@ import { readFileSync } from "node:fs";
 import postgres from "postgres";
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const FILE = "drizzle/E-244_kyc_card_sla_windows.sql";
+const FILE = "drizzle/E-248_kyc_card_sla_windows.sql";
 
 function resolveUrl() {
     if (process.env.DATABASE_URL) {
@@ -115,16 +115,16 @@ try {
     }
     console.log(`OK — all ${PREREQ_TABLES.length} target table(s) present.`);
 
-    // E-244 extends E-242's clock. Without E-242 the sweep has no sla_due_at to
+    // E-248 extends E-246's clock. Without E-246 the sweep has no sla_due_at to
     // fall back to and the code stays broken on the other tables — say so.
-    const [e242] = await sql`
+    const [e246] = await sql`
         SELECT 1 AS present FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'admin_verification_queue'
            AND column_name = 'sla_due_at'`;
     console.log(
-        e242
-            ? "OK — E-242 is already applied on this DB (admin_verification_queue.sla_due_at present)."
-            : "WARNING — E-242 does NOT look applied here. Run scripts/apply-e242.mjs first, or this half has nothing to extend.",
+        e246
+            ? "OK — E-246 is already applied on this DB (admin_verification_queue.sla_due_at present)."
+            : "WARNING — E-246 does NOT look applied here. Run scripts/apply-e246.mjs first, or this half has nothing to extend.",
     );
 
     let beforeCount = 0;
@@ -154,7 +154,7 @@ try {
             failed = true;
             continue;
         }
-        // Nullable is not incidental: NULL is the "pre-E-244 case, fall back to
+        // Nullable is not incidental: NULL is the "pre-E-248 case, fall back to
         // sla_due_at" marker every existing row relies on.
         const ok = row.data_type === expectedType && row.is_nullable === "YES";
         console.log(
@@ -202,10 +202,10 @@ try {
     );
 
     if (failed) {
-        console.log("\nE-244 FAILED verification. Investigate before deploying the code.");
+        console.log("\nE-248 FAILED verification. Investigate before deploying the code.");
         process.exit(1);
     }
-    console.log("\nE-244 applied and verified. Pure additive DDL — no row was read or written.");
+    console.log("\nE-248 applied and verified. Pure additive DDL — no row was read or written.");
     console.log("Per-card windows stay unused until an admin sets one in /admin/settings/kyc-automation.");
 } catch (err) {
     console.error("\nERROR:", err?.message ?? err);
