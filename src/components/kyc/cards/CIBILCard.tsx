@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { verdictSentence } from "./verdictLabel";
+import AutoAcceptTimeline from "./AutoAcceptTimeline";
 import RequestCoBorrowerModal from "../step3/RequestCoBorrowerModal";
 
 interface CIBILCardProps {
@@ -22,8 +24,19 @@ interface CIBILCardProps {
     status: string;
     matchScore?: string | null;
     adminAction?: string | null;
+    // E-246 — 'system' when the SLA sweep accepted this without a provider call.
+    adminActionSource?: string | null;
     adminActionNotes?: string | null;
     apiResponse?: Record<string, unknown> | null;
+  } | null;
+  // E-247 — the case-level auto-approval clock, rendered as one row under the
+  // card header. Omitted by callers that have no queue row (the NBFC mirror),
+  // in which case nothing renders.
+  autoAccept?: {
+    dueAt: string | null;
+    startAt: string | null;
+    now: number;
+    automationEnabled: boolean;
   } | null;
   onActionComplete?: () => void;
 }
@@ -60,6 +73,7 @@ export default function CIBILCard({
   hideCoBorrowerRequest,
   existingVerification,
   onActionComplete,
+  autoAccept,
 }: CIBILCardProps) {
   const base = kycBase ?? `/api/admin/kyc/${leadId}`;
   const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
@@ -253,6 +267,16 @@ export default function CIBILCard({
           );
         })()}
       </div>
+
+      {/* E-247 — case SLA countdown. Deliberately a single ~22px row: five of
+          these are on screen at once and the fields below are the real work. */}
+      <AutoAcceptTimeline
+        dueAt={autoAccept?.dueAt}
+        startAt={autoAccept?.startAt}
+        now={autoAccept?.now ?? 0}
+        settled={Boolean(existingVerification?.adminAction)}
+        automationEnabled={autoAccept?.automationEnabled}
+      />
 
       <div className="p-5 space-y-5">
         {/* INPUT DATA (From Lead) */}
@@ -509,7 +533,10 @@ export default function CIBILCard({
         <div className="space-y-3 pt-4 border-t border-gray-200">
           {existingVerification?.adminAction === "accepted" && (
             <div className="rounded-lg p-3 text-sm font-medium bg-green-50 border border-green-200 text-green-700">
-              Previously accepted{existingVerification.adminActionNotes ? ` — "${existingVerification.adminActionNotes}"` : ""}. You can update this decision below.
+              {existingVerification.adminActionSource === "system"
+                ? verdictSentence("Credit verification", "accepted", "system")
+                : "Previously accepted"}
+              {existingVerification.adminActionNotes ? ` — "${existingVerification.adminActionNotes}"` : ""}. You can update this decision below.
             </div>
           )}
           {existingVerification?.adminAction === "rejected" && (

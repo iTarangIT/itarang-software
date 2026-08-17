@@ -49,6 +49,7 @@ import {
 } from "@/lib/digio/aadhaar-match";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
+import { stampConsentAutoVerifyDeadline } from "@/lib/kyc/auto-approval";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
 import { uploadFileToStorage } from "@/lib/storage";
 import {
@@ -649,6 +650,12 @@ export async function storeSignedConsent(opts: {
 
   await syncApplicantStatus(role, opts.leadId, "admin_review_pending", now);
   await ensureAdminKycQueueEntry(opts.leadId);
+
+  // E-247 — the customer has signed, so start the auto-verify clock. The sweep
+  // verifies it once the window closes, which leaves the admin time to reject.
+  // Fire-and-forget: a consent that saved must never fail because the
+  // automation did. Without this stamp the sweep can never see the record.
+  stampConsentAutoVerifyDeadline(opts.leadId).catch(() => {});
 
   return { ok: true, fileUrl: signedConsentUrl };
 }
@@ -1282,6 +1289,10 @@ export async function getSignedConsentForLead(
     await syncApplicantStatus(role, leadId, "esign_completed", now);
   }
   await ensureAdminKycQueueEntry(leadId);
+
+  // E-247 — see storeSignedConsent: start the auto-verify clock on the signed
+  // consent. Best-effort; the sweep does the verifying once it expires.
+  stampConsentAutoVerifyDeadline(leadId).catch(() => {});
 
   // Download the bytes so WhatsApp can send the PDF by upload (its storage URL
   // may not be publicly reachable).

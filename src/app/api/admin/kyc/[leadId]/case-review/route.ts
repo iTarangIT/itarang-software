@@ -22,6 +22,10 @@ import {
   formatSlaAge,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
+import {
+  formatSlaWindow,
+  getKycAutoApprovalSettings,
+} from "@/lib/kyc/auto-approval-settings";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 import { syncConsentStatusFromDigio } from "@/lib/digio/sync-consent-status";
 import { sanitizeDbError } from "@/lib/error-utils";
@@ -63,6 +67,7 @@ export async function GET(
       coBorrowerRows,
       coBorrowerDocRows,
       coBorrowerRequestRows,
+      automationSettings,
     ] = await Promise.all([
       db
         .select()
@@ -130,6 +135,14 @@ export async function GET(
         .from(coBorrowerRequests)
         .where(eq(coBorrowerRequests.lead_id, leadId))
         .orderBy(desc(coBorrowerRequests.attempt_number)),
+      // E-247 — the automation's own settings. The consent card draws a
+      // timeline, not just a number, and a timeline needs the length of the
+      // window as well as its end: the clock started at
+      // `auto_verify_due_at - slaMinutes`. Reading it here also lets the card
+      // say WHY no countdown is running (feature off / consent half off /
+      // this consent never admitted) instead of rendering nothing.
+      // Never throws — it fails closed to `enabled: false`.
+      getKycAutoApprovalSettings(),
     ]);
 
     const lead = leadRows[0];
@@ -160,6 +173,10 @@ export async function GET(
       retryCount: v.retry_count,
       adminAction: v.admin_action,
       adminActionNotes: v.admin_action_notes,
+      // E-246 — 'system' means the SLA sweep accepted this card without the
+      // provider ever being called. The UI must not present it as a verified
+      // result.
+      adminActionSource: v.admin_action_source ?? "admin",
       submittedAt: v.submitted_at,
       completedAt: v.completed_at,
       apiRequest: v.api_request,
@@ -304,6 +321,10 @@ export async function GET(
             signedConsentUrl: signedUrl,
             signedAt,
             verifiedAt: c.verified_at,
+            // E-247 — when the sweep will verify this consent. Null means it
+            // never will (signed before the feature, or while it was off).
+            autoVerifyDueAt: c.auto_verify_due_at ?? null,
+            verificationSource: c.verification_source ?? "admin",
             adminViewedBy: c.admin_viewed_by,
             adminViewedAt: c.admin_viewed_at,
             // Surface which Aadhaar actually signed, Digio's name-match score, and
@@ -359,8 +380,36 @@ export async function GET(
               submittedAt: queueEntry.submitted_at,
               reviewedAt: queueEntry.reviewed_at,
               slaAge: sla,
+              // E-246 — the auto-approval clock. slaDueAt null means this case
+              // will never auto-approve (submitted before the feature, or while
+              // it was off); autoApprovedAt non-null means the sweep has already
+              // had its one attempt, and autoApprovalResult says how it went.
+              slaDueAt: queueEntry.sla_due_at ?? null,
+              autoApprovedAt: queueEntry.auto_approved_at ?? null,
+              autoApprovalResult: queueEntry.auto_approval_result ?? null,
+              // E-248 — each card's own deadline, as snapshotted at submit.
+              // Null (a pre-E-248 case) means every card falls back to
+              // `slaDueAt`, which is what the review screen then shows.
+              cardSlaDueAt:
+                (queueEntry.sla_card_due_at as Record<string, string> | null) ?? null,
+              slaNextDueAt: queueEntry.sla_next_due_at ?? null,
             }
           : null,
+        // E-247 — what the automation is currently configured to do, so the
+        // consent timeline can show the length of the window it is counting
+        // down (a bare deadline gives an end but no start) and can explain an
+        // absent countdown rather than silently showing nothing. Deliberately
+        // only the fields the review screen renders — this is a read-only echo
+        // of /admin/settings, not a second place to change it.
+        kycAutomation: {
+          enabled: automationSettings.enabled,
+          slaMinutes: automationSettings.slaMinutes,
+          slaWindowLabel: formatSlaWindow(automationSettings.slaMinutes),
+          autoVerifyConsent: automationSettings.autoVerifyConsent,
+          // Drives the same clock on the verification cards, which count down
+          // to the CASE deadline rather than a per-record one.
+          autoApproveCards: automationSettings.autoApproveCards,
+        },
         reviews: reviewRows.map((r) => ({
           id: r.id,
           documentId: r.document_id,

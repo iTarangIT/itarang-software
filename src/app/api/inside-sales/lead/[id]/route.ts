@@ -155,8 +155,23 @@ export const GET = withErrorHandler(
         // in the detail header.
         const assignedBy = await fetchAssignedByForLeads([id]);
 
+        // Any campaign this lead has been dialled in, newest first. The AI Call
+        // History tab needs one only as a route parameter: the transcript
+        // endpoint it calls returns every attempt ACROSS all campaigns for the
+        // lead, so which campaign we hand it does not change the answer. Null
+        // when the lead was never dialled — the tab renders its empty state.
+        // Covered by idx_dialer_campaign_leads_lead_status.
+        const campaignRows = await db.execute<{ campaign_id: string }>(sql`
+            SELECT campaign_id
+            FROM dialer_campaign_leads
+            WHERE lead_id = ${id}
+            ORDER BY started_at DESC NULLS LAST
+            LIMIT 1
+        `);
+
         const bundle: LeadDetailBundle = {
             lead: { ...(lead as LeadDetailLead), assigned_by: assignedBy[id] ?? null },
+            latest_campaign_id: campaignRows[0]?.campaign_id ?? null,
             current_commercials:
                 (commercialsHistory as LeadDetailCommercials[]).find((c) => c.is_current) ?? null,
             commercials_history: commercialsHistory as LeadDetailCommercials[],

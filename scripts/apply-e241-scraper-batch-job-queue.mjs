@@ -1,7 +1,28 @@
 // Applies drizzle/E-241_scraper_batch_job_queue.sql and then PROVES it landed.
 //
-// Usage:  node --env-file=.env.local scripts/apply-e241.mjs
-//         node --env-file=.env.local scripts/apply-e241.mjs --dry-run
+// Usage:  node --env-file=.env.local scripts/apply-e241-scraper-batch-job-queue.mjs
+//         node --env-file=.env.local scripts/apply-e241-scraper-batch-job-queue.mjs --dry-run
+//
+// WHY THE LONG NAME. Two unrelated migrations both claimed E-241 — the
+// offer-close-vocabulary one and this branch's
+// `E-241_scraper_batch_job_queue.sql` — and their appliers collided on
+// `scripts/apply-e241.mjs`, leaving that file with unresolved merge markers.
+// One .mjs cannot be both scripts (both declare `url`, `sql` and a top-level
+// try block), so the newcomer moved, exactly as E-240 moved when main merged a
+// conflicting E-239 while that branch was open.
+//
+// SINCE THEN the other side renumbered: on 2026-08-17 the offer-close file
+// became `E-245_offer_close_vocabulary.sql` with `scripts/apply-e245.mjs`, so
+// the collision this long name was invented to dodge no longer exists and
+// `scripts/apply-e241.mjs` is now a free path. THIS FILE KEEPS ITS NAME anyway:
+// it is referenced by that name in MIGRATION_CHECKLIST.md and in the runbook,
+// and churning it a second time would cost more than the tidiness is worth.
+//
+// This .sql keeps E-241 for the reason the renumber did not apply to it: it was
+// already applied to db-1/sandbox under the E-241 name on 2026-08-16 AND it is
+// the file `main` merged first, so E-241 is legitimately its number. Renaming
+// it would buy nothing (there is no ledger in the database) while invalidating
+// the apply record. See the note in MIGRATION_CHECKLIST.md.
 //
 // The file is additive and idempotent (CREATE TABLE / CREATE INDEX IF NOT
 // EXISTS), so a second run is a no-op — but "no exception was thrown" is not
