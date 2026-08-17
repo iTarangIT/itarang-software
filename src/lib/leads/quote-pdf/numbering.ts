@@ -38,3 +38,26 @@ export function quotationFileName(quoteNumber: string): string {
 export function quoteNumberRoot(quoteNumber: string): string {
   return quoteNumber.replace(/-R\d+$/, "");
 }
+
+/**
+ * The document number for one version of a revision chain.
+ *
+ * VERSION 1 CARRIES THE BARE ROOT; every later version carries "-R<version>".
+ * Tying the suffix to the version number rather than to allocation order is
+ * what keeps the chain readable, because numbers are minted at APPROVAL and
+ * approvals do not arrive in version order.
+ *
+ * The bug this replaces: a rep raised v1 below the OEM reference (pending, so
+ * unnumbered) and immediately raised v2 above it (auto-approved, numbered
+ * ITQ-2026-0001). When the CEO approved v1 an hour later it inherited that root
+ * and became ITQ-2026-0001-R1 — the OLDER, cheaper, superseded quote wearing a
+ * suffix that reads to a dealer as the newer one. Now v1 would be
+ * ITQ-2026-0001 and v2 ITQ-2026-0001-R2, whichever is approved first.
+ *
+ * A consequence worth stating: if v1 is never approved, no document carries the
+ * bare root. That is honest — the bare root is version 1, and version 1 was
+ * never released.
+ */
+export function quoteNumberForVersion(root: string, versionNo: number): string {
+  return versionNo <= 1 ? root : `${root}-R${versionNo}`;
+}

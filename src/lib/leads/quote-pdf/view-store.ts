@@ -1,17 +1,20 @@
 /**
- * The two database lookups a quotation view needs, kept out of ./view so the
- * mapper stays pure and unit-testable. Same split as ./config vs ./config-store.
+ * The database lookup a quotation view needs, kept out of ./view so the mapper
+ * stays pure and unit-testable. Same split as ./config vs ./config-store.
  *
- * Both are BEST-EFFORT by design. They run downstream of an approval that has
- * already committed, so neither may throw: a missing product master or an
- * unresolvable state degrades the document (a line marked "rate not set", a
- * place of supply printed without its code) rather than preventing the
- * quotation from existing.
+ * BEST-EFFORT by design. It runs downstream of an approval that has already
+ * committed, so it may not throw: a missing product master degrades the
+ * document (a line marked "rate not set") rather than preventing the quotation
+ * from existing.
+ *
+ * Place of supply used to live here too, resolved against the `states` table.
+ * It doesn't any more — that table's `code` column holds alpha codes, not GST
+ * codes, and the mismatch mis-taxed every intra-state quote. See ./gst-states.
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
-import { taxRefKey, type LineTaxRef, type PlaceOfSupply } from "./view";
+import { taxRefKey, type LineTaxRef } from "./view";
 
 /** Which product-master table an asset_type names. Mirrors oemPrices.ts. */
 const MASTER_TABLES: Record<string, string> = {
@@ -72,33 +75,4 @@ export async function loadLineTaxRefs(
   }
 
   return out;
-}
-
-/**
- * The dealer's state, as a code and as the document's label.
- *
- * dealer_leads.state holds a free-text state NAME, so this resolves it against
- * the `states` table to get the numeric GST state code that decides IGST vs
- * CGST+SGST. An unmatched state still prints its name — that is useful to a
- * reader — but yields no code, and computeTotals then treats the supply as
- * inter-state. See the reasoning there.
- */
-export async function resolvePlaceOfSupply(
-  stateName: string | null | undefined,
-): Promise<PlaceOfSupply> {
-  const name = (stateName ?? "").trim();
-  if (!name) return { stateCode: null, label: null };
-
-  try {
-    const rows = await db.execute<{ code: string; name: string }>(sql`
-      SELECT code, name FROM states WHERE LOWER(name) = LOWER(${name}) LIMIT 1
-    `);
-    const row = (rows as unknown as Record<string, unknown>[])[0];
-    if (!row) return { stateCode: null, label: name };
-    const code = String(row.code);
-    return { stateCode: code, label: `${String(row.name)} (${code})` };
-  } catch (e) {
-    console.error("[quote-pdf/view-store] place of supply lookup failed", e);
-    return { stateCode: null, label: name };
-  }
 }

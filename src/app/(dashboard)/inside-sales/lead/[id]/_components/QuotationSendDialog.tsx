@@ -64,6 +64,15 @@ interface SendState {
   dispatches: DispatchRow[];
 }
 
+/** The subset of a commercials row that prints on the dealer's document. */
+export interface QuotationTerms {
+  payment_method: string | null;
+  credit_terms: string | null;
+  delivery_terms: string | null;
+  warranty_terms: string | null;
+  deal_notes: string | null;
+}
+
 interface Outcome {
   channel: Channel;
   recipient: string;
@@ -84,13 +93,29 @@ function fmt(iso: string): string {
 export function QuotationSendDialog({
   leadId,
   commercialId,
+  terms,
   onClose,
 }: {
   leadId: string;
   commercialId: string;
+  /**
+   * The commercials row's terms, passed in rather than re-fetched: the pane
+   * already holds the version this dialog was opened for.
+   */
+  terms?: QuotationTerms | null;
   onClose: () => void;
 }) {
   const base = `/api/inside-sales/lead/${leadId}/commercials/${commercialId}`;
+
+  const termRows = (
+    [
+      ["Payment", terms?.payment_method],
+      ["Credit", terms?.credit_terms],
+      ["Delivery", terms?.delivery_terms],
+      ["Warranty", terms?.warranty_terms],
+      ["Notes", terms?.deal_notes],
+    ] as [string, string | null | undefined][]
+  ).filter((r): r is [string, string] => !!r[1]);
 
   const [state, setState] = React.useState<SendState | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -319,6 +344,28 @@ export function QuotationSendDialog({
                   )}
                 </div>
               </div>
+
+              {/*
+                * What the document commits us to, in front of whoever presses
+                * Send. These print on the dealer's copy — including the deal
+                * notes — and the send is the last point at which a wrong term
+                * costs nothing to catch.
+                */}
+              {termRows.length > 0 && (
+                <div className="mb-4 rounded-lg border border-gray-200 px-3 py-2.5">
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                    Terms on this quotation
+                  </div>
+                  <div className="space-y-0.5">
+                    {termRows.map(([k, v]) => (
+                      <div key={k} className="flex gap-2 text-xs">
+                        <span className="w-24 shrink-0 text-gray-500">{k}</span>
+                        <span className="min-w-0 flex-1 whitespace-pre-wrap text-gray-800">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Channels + recipients. */}
               <fieldset disabled={!state?.sendable} className="space-y-3 disabled:opacity-60">
