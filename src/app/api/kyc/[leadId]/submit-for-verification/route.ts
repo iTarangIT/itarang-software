@@ -19,6 +19,10 @@ import {
   requireDealerAppUser,
   requiredDocumentCount,
 } from "@/lib/kyc/admin-workflow";
+import {
+  getKycAutoApprovalSettings,
+  slaStampFor,
+} from "@/lib/kyc/auto-approval-settings";
 
 const DEFAULT_ESTIMATED_REVIEW_TIME = "10-12 hours";
 
@@ -154,6 +158,12 @@ export async function POST(
     const openQueueCount = Number(queueCountRows[0]?.count ?? 0);
     const queuePosition = openQueueCount + 1;
 
+    // E-242 — start the auto-approval SLA clock. Resolved at submit rather than
+    // read by the sweep at expiry, so the deadline a case was admitted under
+    // cannot change retroactively. Null while the feature is off, and the sweep
+    // skips null, so enabling it never reaches back to older cases.
+    const autoApproval = await getKycAutoApprovalSettings();
+
     await db.transaction(async (tx) => {
       await tx.insert(adminVerificationQueue).values({
         id: queueId,
@@ -164,6 +174,9 @@ export async function POST(
         submitted_by: appUser.id,
         status: "pending_itarang_verification",
         submitted_at: now,
+        // E-244 — case deadline, per-card snapshot and the sweep's pointer, all
+        // resolved together so they cannot disagree.
+        ...slaStampFor(now, autoApproval),
         created_at: now,
         updated_at: now,
       });

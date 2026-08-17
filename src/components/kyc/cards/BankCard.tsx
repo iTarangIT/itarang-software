@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { verdictSentence } from "./verdictLabel";
+import AutoAcceptTimeline from "./AutoAcceptTimeline";
 import OcrAutofillButton from "./OcrAutofillButton";
 
 interface BankCardProps {
@@ -19,9 +21,20 @@ interface BankCardProps {
     id: string;
     status: string;
     adminAction?: string | null;
+    // E-242 — 'system' when the SLA sweep accepted this without a provider call.
+    adminActionSource?: string | null;
     adminActionNotes?: string | null;
     matchScore?: string | null;
     apiResponse?: Record<string, unknown> | null;
+  } | null;
+  // E-243 — the case-level auto-approval clock, rendered as one row under the
+  // card header. Omitted by callers that have no queue row (the NBFC mirror),
+  // in which case nothing renders.
+  autoAccept?: {
+    dueAt: string | null;
+    startAt: string | null;
+    now: number;
+    automationEnabled: boolean;
   } | null;
   onActionComplete?: () => void;
 }
@@ -41,6 +54,7 @@ export default function BankCard({
   kycBase,
   existingVerification,
   onActionComplete,
+  autoAccept,
 }: BankCardProps) {
   const base = kycBase ?? `/api/admin/kyc/${leadId}`;
   const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
@@ -222,6 +236,16 @@ export default function BankCard({
           );
         })()}
       </div>
+
+      {/* E-243 — case SLA countdown. Deliberately a single ~22px row: five of
+          these are on screen at once and the fields below are the real work. */}
+      <AutoAcceptTimeline
+        dueAt={autoAccept?.dueAt}
+        startAt={autoAccept?.startAt}
+        now={autoAccept?.now ?? 0}
+        settled={Boolean(existingVerification?.adminAction)}
+        automationEnabled={autoAccept?.automationEnabled}
+      />
 
       <div className="p-5 space-y-5">
         {/* Input Fields */}
@@ -481,7 +505,7 @@ export default function BankCard({
                     : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                   }
                 </svg>
-                {actionResult?.message || `Bank verification ${existingVerification?.adminAction} by admin.`}
+                {actionResult?.message || verdictSentence("Bank verification", existingVerification?.adminAction, existingVerification?.adminActionSource)}
               </div>
             )}
             <div>

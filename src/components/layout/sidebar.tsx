@@ -47,6 +47,7 @@ import {
   Radar,
   ChevronDown,
   Gavel,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -236,12 +237,21 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
       items: [
         {
           // id and href keep their old "settings" spelling on purpose — the id
-          // backs `data-testid="nav-sh-settings"` and the route is unchanged.
-          // Only the label the user reads was renamed.
+          // backs `data-testid="nav-sh-settings"` and the badge mapping below,
+          // and the route is unchanged. Only the label the user reads differs.
           id: "sh-settings",
           label: "Notifications",
           icon: Bell,
           href: "/admin/settings",
+        },
+        {
+          // E-242 — its own entry rather than a tab inside Notifications.
+          // getActiveItemId() is longest-href-wins, so this beats
+          // /admin/settings (which in turn beats /admin) when it is active.
+          id: "sh-kyc-automation",
+          label: "KYC Automation",
+          icon: ShieldCheck,
+          href: "/admin/settings/kyc-automation",
         },
       ],
     },
@@ -776,6 +786,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Notifications",
           icon: Bell,
           href: "/admin/settings",
+        },
+        {
+          // E-242 — own entry, not a tab. See the sales_head block above.
+          id: "admin-kyc-automation",
+          label: "KYC Automation",
+          icon: ShieldCheck,
+          href: "/admin/settings/kyc-automation",
         },
       ],
     },

@@ -224,6 +224,13 @@ CRON_SECRET=<same value as the app's env>
 0  0 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/nbfc/compute-cds       >> /var/log/itarang-cron.log 2>&1
 15 0 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/nbfc/compute-pci       >> /var/log/itarang-cron.log 2>&1
 30 1 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/nbfc/risk-analysis     >> /var/log/itarang-cron.log 2>&1
+
+# KYC auto-approval SLA sweep (E-242). OPTIONAL — the in-process ticker in
+# instrumentation-node.ts already runs this every 60s and is the primary path.
+# Add this line only as a belt-and-braces backstop if the web process is being
+# restarted often enough to miss ticks. Safe to run alongside the ticker: each
+# case is claimed FOR UPDATE SKIP LOCKED, so the two split work, never duplicate.
+# */5 * * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/kyc-auto-approval  >> /var/log/itarang-cron.log 2>&1
 ```
 
 `risk-analysis` (E-187) sweeps every active tenant sequentially. It is safe to

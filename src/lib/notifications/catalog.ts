@@ -119,6 +119,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "kyc.coborrower_requested": "KYC & Consent",
   "kyc.docs_shared": "KYC & Consent",
   "kyc.final_decision": "KYC & Consent",
+  "kyc.auto_approved": "KYC & Consent",
   "consent.sent": "KYC & Consent",
   "consent.signed": "KYC & Consent",
   "consent.verified": "KYC & Consent",
