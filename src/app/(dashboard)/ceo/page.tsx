@@ -337,8 +337,11 @@ export default function CEODashboard() {
             </div>
           </div>
 
-          {/* Full expense ledger — every tracked expense, read-only */}
-          <ExpenseLedgerPanel rows={m.ai_expenses || []} />
+          {/* Full expense ledger — every tracked expense, read-only. Takes the
+              page window rather than a row array: it fetches, filters and
+              totals server-side so its figures answer the period selected
+              above instead of the newest 200 invoices ever recorded. */}
+          <ExpenseLedgerPanel params={windowParams.toString()} />
         </div>
 
         {/* Right rail: quotation approvals + financial snapshot + signing queue */}
