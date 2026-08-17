@@ -107,7 +107,18 @@ export const GET = withErrorHandler(
                     credit_terms, delivery_terms, warranty_terms,
                     final_price::text, payment_method, deal_notes,
                     COALESCE(product_lines, '[]'::jsonb) AS product_lines, notes,
-                    created_by, created_at, withdrawn_at
+                    created_by, created_at, withdrawn_at,
+                    -- E-221/E-226 approval state. Selected since E-242: the rep
+                    -- raising a quote could previously never see what happened
+                    -- to it — the columns existed and this projection omitted
+                    -- them, so rejection_reason in particular was written by the
+                    -- CEO and read by nothing.
+                    approval_status, approval_mode, approved_at, rejection_reason,
+                    -- E-242 generated draft.
+                    quote_number, quote_pdf_url, quote_pdf_generated_at, quote_pdf_error,
+                    -- E-243 the dealer's own answer.
+                    dealer_decision, dealer_decision_at, dealer_decision_via,
+                    dealer_decision_note
                 FROM dealer_lead_commercials
                 WHERE dealer_lead_id = ${id}
                 ORDER BY version_no DESC
@@ -144,8 +155,23 @@ export const GET = withErrorHandler(
         // in the detail header.
         const assignedBy = await fetchAssignedByForLeads([id]);
 
+        // Any campaign this lead has been dialled in, newest first. The AI Call
+        // History tab needs one only as a route parameter: the transcript
+        // endpoint it calls returns every attempt ACROSS all campaigns for the
+        // lead, so which campaign we hand it does not change the answer. Null
+        // when the lead was never dialled — the tab renders its empty state.
+        // Covered by idx_dialer_campaign_leads_lead_status.
+        const campaignRows = await db.execute<{ campaign_id: string }>(sql`
+            SELECT campaign_id
+            FROM dialer_campaign_leads
+            WHERE lead_id = ${id}
+            ORDER BY started_at DESC NULLS LAST
+            LIMIT 1
+        `);
+
         const bundle: LeadDetailBundle = {
             lead: { ...(lead as LeadDetailLead), assigned_by: assignedBy[id] ?? null },
+            latest_campaign_id: campaignRows[0]?.campaign_id ?? null,
             current_commercials:
                 (commercialsHistory as LeadDetailCommercials[]).find((c) => c.is_current) ?? null,
             commercials_history: commercialsHistory as LeadDetailCommercials[],

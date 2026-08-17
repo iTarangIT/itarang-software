@@ -10,7 +10,8 @@ import {
     BadgeInfo,
     History,
 } from "lucide-react";
-import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import type { LeadDetailBundle, LeadDetailCommercials } from "@/lib/inside-sales/types";
+import { QuotationSendDialog } from "./QuotationSendDialog";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -30,6 +31,128 @@ type Props = {
 function fmtDate(iso: string | null | undefined): string {
     if (!iso) return "—";
     return new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+}
+
+/** The two event types E-221 gates. Everything else is born approved. */
+function isGatedQuote(eventType: string): boolean {
+    return eventType === "quote_issue" || eventType === "quote_revision";
+}
+
+/**
+ * E-242 — approval outcome, generated draft, and the way to send it.
+ *
+ * The Send button is only rendered once the quote is approved AND a document
+ * exists, matching what the send route will actually accept. A pending or
+ * rejected quote shows why instead — the rejection reason in particular, which
+ * until now was stored and never displayed anywhere.
+ */
+function QuoteApprovalBlock({
+    cc,
+    onSend,
+}: {
+    cc: LeadDetailCommercials;
+    onSend: () => void;
+}) {
+    const status = cc.approval_status ?? "approved";
+    const tone =
+        status === "approved"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+            : status === "rejected"
+              ? "border-rose-200 bg-rose-50 text-rose-900"
+              : "border-amber-200 bg-amber-50 text-amber-900";
+
+    const label =
+        status === "approved"
+            ? cc.approval_mode === "auto"
+                ? "Auto-approved (at or above OEM reference)"
+                : "Approved"
+            : status === "rejected"
+              ? "Rejected"
+              : "Awaiting CEO approval";
+
+    return (
+        <div className={`rounded-lg border px-3 py-2.5 text-xs ${tone}`}>
+            <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{label}</span>
+                {cc.approved_at && (
+                    <span className="tabular-nums opacity-70">{fmtDate(cc.approved_at)}</span>
+                )}
+            </div>
+
+            {status === "rejected" && cc.rejection_reason && (
+                <p className="mt-1.5 whitespace-pre-wrap opacity-90">
+                    <span className="font-medium">Reason:</span> {cc.rejection_reason}
+                </p>
+            )}
+
+            {status === "approved" && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {cc.quote_number && (
+                        <span className="rounded bg-white/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold">
+                            {cc.quote_number}
+                        </span>
+                    )}
+                    {cc.quote_pdf_url ? (
+                        <a
+                            href={cc.quote_pdf_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium underline underline-offset-2"
+                        >
+                            Preview draft
+                        </a>
+                    ) : (
+                        <span className="opacity-80">
+                            {cc.quote_pdf_error
+                                ? "Draft generation failed — open Send to retry."
+                                : "Draft not generated yet."}
+                        </span>
+                    )}
+                    <button
+                        onClick={onSend}
+                        className="ml-auto rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700"
+                    >
+                        {cc.dealer_decision ? "Resend / view" : "Send to dealer"}
+                    </button>
+                </div>
+            )}
+
+            {/*
+              * E-243 — what the DEALER said back. Separate from the block above
+              * because they answer different questions: that one is whether
+              * iTarang released the number, this one is whether the dealer
+              * accepted it. A quote can be approved by us and declined by them.
+              */}
+            {status === "approved" && cc.dealer_decision && (
+                <div
+                    className={`mt-2 rounded-md border px-2 py-1.5 text-[11px] ${
+                        cc.dealer_decision === "approved"
+                            ? "border-emerald-300 bg-emerald-100/60 text-emerald-900"
+                            : "border-slate-300 bg-slate-100 text-slate-700"
+                    }`}
+                >
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold">
+                            Dealer {cc.dealer_decision === "approved" ? "approved" : "declined"}
+                            {cc.dealer_decision_via
+                                ? ` · via ${cc.dealer_decision_via === "whatsapp" ? "WhatsApp" : "approval link"}`
+                                : ""}
+                        </span>
+                        {cc.dealer_decision_at && (
+                            <span className="tabular-nums opacity-70">
+                                {fmtDate(cc.dealer_decision_at)}
+                            </span>
+                        )}
+                    </div>
+                    {cc.dealer_decision_note && (
+                        <p className="mt-1 whitespace-pre-wrap opacity-90">
+                            &ldquo;{cc.dealer_decision_note}&rdquo;
+                        </p>
+                    )}
+                </div>
+            )}
+        </div>
+    );
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -52,6 +175,9 @@ export function LeadDetailRightPane({ bundle }: Props) {
         attribution: false,
         ownership: false,
     });
+
+    // E-242 — which quotation the send dialog is open for, if any.
+    const [sendFor, setSendFor] = useState<string | null>(null);
 
     const lead = bundle.lead;
     const cc = bundle.current_commercials;
@@ -165,10 +291,26 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                         <div className="col-span-2">
                                                             <Field label="Deal Notes" value={cc.deal_notes ? <p className="whitespace-pre-wrap">{cc.deal_notes}</p> : null} />
                                                         </div>
+                                                        {/*
+                                                          * E-242 — the approval outcome and the generated draft.
+                                                          *
+                                                          * Before this, the rep who raised a quote was told nothing:
+                                                          * approval_status was never selected by the lead route and
+                                                          * rejection_reason was written by the CEO and read by
+                                                          * nothing at all. Both now surface where the quote lives.
+                                                          */}
+                                                        {isGatedQuote(cc.event_type) && (
+                                                            <div className="col-span-2">
+                                                                <QuoteApprovalBlock
+                                                                    cc={cc}
+                                                                    onSend={() => setSendFor(cc.commercial_id)}
+                                                                />
+                                                            </div>
+                                                        )}
                                                         {cc.quote_document_url && (
                                                             <div className="col-span-2">
                                                                 <Field
-                                                                    label="Quote Document"
+                                                                    label="Quote Document (attached by rep)"
                                                                     value={
                                                                         <a href={cc.quote_document_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-sm">
                                                                             Open quote
@@ -265,6 +407,14 @@ export function LeadDetailRightPane({ bundle }: Props) {
                     );
                 })}
             </div>
+
+            {sendFor && (
+                <QuotationSendDialog
+                    leadId={lead.id}
+                    commercialId={sendFor}
+                    onClose={() => setSendFor(null)}
+                />
+            )}
         </div>
     );
 }

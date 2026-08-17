@@ -19,7 +19,25 @@ export const TOUCHPOINT_TYPE = [
   "neodove_dial_request",
   // Commercials / collateral
   "brochure_sent",
+  // `quote_sent` means RELEASED — the quote cleared the approval gate. It has
+  // meant that since E-221 and is written by both approval paths.
   "quote_sent",
+  // E-242 registers three values that were already being WRITTEN and were never
+  // listed here. `quote_submitted` (inside-sales commercials route) and
+  // `quote_rejected` (CEO decision route) have been written since E-221 while
+  // TOUCHPOINT_TYPE knew only `quote_sent`, so every one of them rendered with
+  // the fallback icon and label. `quote_dispatched` is new: it is the moment
+  // the document actually reached the dealer over WhatsApp or email, which is a
+  // different event from clearing approval and must not reuse `quote_sent`.
+  "quote_submitted",
+  "quote_rejected",
+  "quote_dispatched",
+  // E-243 — the DEALER's answer, which is a different actor from every other
+  // value in this list. These are the only touchpoints not performed by an
+  // iTarang user, so the remark names who actually acted while performed_by
+  // carries the owner the entry belongs to.
+  "quote_dealer_approved",
+  "quote_dealer_declined",
   // Status transitions
   "status_change_note",
   // Ownership lifecycle

@@ -94,6 +94,12 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.discarded": "Leads",
   "lead.closed": "Leads",
   "lead.qualified": "Leads",
+  // E-242 — filed under Leads, not Inventory, because the recipient is the rep
+  // or sales manager working the lead and the action is "review and send this
+  // to your dealer". The OEM price types sit under Inventory for the mirror
+  // reason: there the recipient maintains the catalogue.
+  "quote.approved": "Leads",
+  "quote.dealer_decision": "Leads",
 
   // --- Dealer onboarding (portal + WhatsApp) ---
   "onboarding.chat_started": "Onboarding",
@@ -119,6 +125,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "kyc.coborrower_requested": "KYC & Consent",
   "kyc.docs_shared": "KYC & Consent",
   "kyc.final_decision": "KYC & Consent",
+  "kyc.auto_approved": "KYC & Consent",
   "consent.sent": "KYC & Consent",
   "consent.signed": "KYC & Consent",
   "consent.verified": "KYC & Consent",
@@ -186,6 +193,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // E-238 — the dealer<->NBFC negotiation over a firm offer.
   "loan.offer_negotiated": "Loan & Sanction",
   "loan.offer_fixed": "Loan & Sanction",
+  // E-245 — the dealer ended the conversation with one lender, then routed the
+  // lead to another.
+  "loan.offer_closed": "Loan & Sanction",
+  "loan.lead_rerouted": "Loan & Sanction",
   "loan.winner_selected": "Loan & Sanction",
   "loan.not_selected": "Loan & Sanction",
   "loan.sanctioned": "Loan & Sanction",
@@ -291,6 +302,10 @@ const WARNING = new Set([
   // which is the definition of amber here. `loan.offer_fixed` is deliberately
   // NOT amber: it closes an action rather than opening one.
   "loan.offer_negotiated",
+  // E-245 — a re-routed lead is an application waiting on a decision that has
+  // not been made yet. `loan.offer_closed` is NOT amber: nothing the lender can
+  // do about it, same reasoning as `auction.lost`.
+  "loan.lead_rerouted",
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",
@@ -299,6 +314,11 @@ const WARNING = new Set([
   // model to the CEO, which is why it has to be visible BEFORE it happens.
   "oem.price_expiring",
   "oem.price_missing",
+  // E-238 — amber because the case that matters is a DECLINE: the deal is
+  // stalling and somebody has to answer it today. An approval riding the same
+  // type is good news that can wait, and splitting them into two types to give
+  // each its own colour would mean two entries everywhere for one event.
+  "quote.dealer_decision",
   // You are no longer winning, and the window is finite — both are "act now or
   // lose it", which is the definition of amber. `auction.lost` is NOT here: by
   // the time it arrives there is nothing left to act on.

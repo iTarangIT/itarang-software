@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { verdictSentence } from "./verdictLabel";
+import AutoAcceptTimeline from "./AutoAcceptTimeline";
 
 interface AadhaarCardProps {
   leadId: string;
@@ -25,6 +27,8 @@ interface AadhaarCardProps {
     id: string;
     status: string;
     adminAction?: string | null;
+    // E-246 — 'system' when the SLA sweep accepted this without a provider call.
+    adminActionSource?: string | null;
     adminActionNotes?: string | null;
     // Co-borrower DigiLocker sessions store the URL / SMS state inside
     // kyc_verifications.api_response.data instead of digilockerTransactions
@@ -32,6 +36,15 @@ interface AadhaarCardProps {
     // we forward the raw response and hydrate from it on mount when applicant
     // is co_borrower. Primary continues to use the existingTransaction prop.
     apiResponse?: Record<string, unknown> | null;
+  } | null;
+  // E-247 — the case-level auto-approval clock, rendered as one row under the
+  // card header. Omitted by callers that have no queue row (the NBFC mirror),
+  // in which case nothing renders.
+  autoAccept?: {
+    dueAt: string | null;
+    startAt: string | null;
+    now: number;
+    automationEnabled: boolean;
   } | null;
   onActionComplete?: () => void;
 }
@@ -285,6 +298,7 @@ export default function AadhaarCard({
   existingTransaction,
   existingVerification,
   onActionComplete,
+  autoAccept,
 }: AadhaarCardProps) {
   const base = kycBase ?? `/api/admin/kyc/${leadId}`;
   const apiBase = applicant === "co_borrower" ? `${base}/coborrower` : base;
@@ -635,6 +649,16 @@ export default function AadhaarCard({
         })()}
       </div>
 
+      {/* E-247 — case SLA countdown. Deliberately a single ~22px row: five of
+          these are on screen at once and the fields below are the real work. */}
+      <AutoAcceptTimeline
+        dueAt={autoAccept?.dueAt}
+        startAt={autoAccept?.startAt}
+        now={autoAccept?.now ?? 0}
+        settled={Boolean(existingVerification?.adminAction)}
+        automationEnabled={autoAccept?.automationEnabled}
+      />
+
       <div className="p-5 space-y-5">
         {/* Pending / Expired: Show initiate */}
         {(cardStatus === "pending" || cardStatus === "expired") && (
@@ -959,7 +983,7 @@ export default function AadhaarCard({
                     : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                   }
                 </svg>
-                {actionResult?.message || `Aadhaar verification ${existingVerification?.adminAction} by admin.`}
+                {actionResult?.message || verdictSentence("Aadhaar verification", existingVerification?.adminAction, existingVerification?.adminActionSource)}
               </div>
             )}
             <div>

@@ -705,3 +705,149 @@ export async function startAuctionTicker() {
 
   console.log("[instrumentation] auction scheduler (15s) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Scraper batch queue — drain scraper_job_queue one job at a time.
+// ---------------------------------------------------------------------------
+// [E-241] This is the only thing that makes a batch move. A submission writes
+// N rows to scraper_job_queue and returns; nothing else in the system would
+// ever look at them again. Same reasoning as startAuctionTicker above and for
+// the same three reasons: BullMQ is dead code here (`callQueue.add()` is never
+// invoked and the sandbox worker is deliberately dormant), Vercel crons do not
+// fire on the pm2 boxes, and an in-process ticker demonstrably runs in both.
+//
+// It is also what makes "recurring" work. A daily-window batch is not a
+// schedule the app remembers — it is a pile of queued rows plus this tick
+// asking, every 30 seconds, whether the window happens to be open right now. So
+// the queue survives a pm2 restart, a deploy, and the end of the working day
+// with no state to restore: the rows are on disk and the clock is Postgres's.
+//
+// 30s because the work behind one tick is one indexed claim query against a
+// partial index (idx_scraper_job_queue_claim WHERE status='queued') plus a
+// reconcile join, and the thing being waited for is a scrape that takes
+// minutes. Ticking faster would only find the same run still running.
+//
+// runQueueTick() starts AT MOST ONE job and only when no run is in flight, so
+// this cannot stack work no matter how long a scrape takes — the strictly
+// serial behaviour the batch feature was specified with.
+export async function startScraperQueueTicker() {
+  // Skip on Vercel — a cron entry in vercel.json would own it there, and
+  // /api/cron/scraper-queue/tick exists for exactly that.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process competing. (It would not
+  // corrupt anything — the FOR UPDATE SKIP LOCKED claim is the real guard —
+  // but one draining process is easier to reason about in logs.)
+  if (process.env.ENABLE_SCRAPER_QUEUE === "0") return;
+
+  const TICK_INTERVAL_MS =
+    Number(process.env.SCRAPER_QUEUE_INTERVAL_MS || "") || 30_000;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow dispatch must not stack ticks
+    inFlight = true;
+    try {
+      const { runQueueTick } = await import("@/lib/scraper/jobQueue");
+      const r = await runQueueTick();
+
+      // Log only when something happened. An empty queue is the steady state
+      // and must not write a line every 30 seconds forever.
+      if (r.dispatched) {
+        console.log(
+          `[instrumentation:scraper-queue] dispatched job ${r.dispatched.jobId} as run ${r.dispatched.runId}` +
+            (r.reconciled > 0 ? ` (reconciled ${r.reconciled})` : ""),
+        );
+      }
+    } catch (err) {
+      // Never let one bad tick kill the ticker — the jobs are still queued and
+      // the next tick retries them. The most likely cause by far is a database
+      // without E-241, where every tick throws "relation scraper_job_queue does
+      // not exist" and the pre-existing single-query scraper carries on fine.
+      console.error(
+        "[instrumentation:scraper-queue] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Last in the staggered kickoff queue — dialer (5s), Zoho (20s), dispatch
+  // (35s), gateway (45s), auction (45s), dedup (60s), drive (90s), oem-price
+  // (120s). Nothing here is urgent to the minute and a batch that waits an
+  // extra two minutes on boot is indistinguishable from one that did not.
+  const kickoff = setTimeout(tick, 135_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] scraper batch queue (${Math.round(
+      TICK_INTERVAL_MS / 1000,
+    )}s, serial) started in-process`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// KYC auto-approval SLA sweep — approve cases no admin acted on in time.
+// ---------------------------------------------------------------------------
+// [E-246] This is the only thing that makes the SLA expire. `submit-verification`
+// stamps `admin_verification_queue.sla_due_at` and returns; without this tick
+// the deadline is a column nobody reads. Same reasoning as startAuctionTicker
+// and startScraperQueueTicker, and for the same three reasons: BullMQ is dead
+// code here, the crons in vercel.json do not fire on the pm2 boxes, and an
+// in-process ticker demonstrably runs in both environments.
+//
+// 60s because the unit being waited for is hours. The claim behind one tick is
+// a single indexed UPDATE against a partial index
+// (admin_verification_queue_sla_due_idx WHERE auto_approved_at IS NULL AND
+// status='pending_itarang_verification'), so an idle tick is nearly free, and a
+// case auto-approving up to a minute after its deadline is indistinguishable
+// from one that did not.
+//
+// runKycAutoApprovalTick() returns immediately when the feature is disabled,
+// which is the shipped default — so this ticker is inert until an admin turns
+// it on at /admin/settings → KYC Automation.
+export async function startKycAutoApprovalTicker() {
+  // Skip on Vercel — /api/cron/kyc-auto-approval owns it there.
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60_000;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { runKycAutoApprovalTick } = await import("@/lib/kyc/auto-approval");
+      await runKycAutoApprovalTick();
+      // The tick logs its own counts when it did something; a quiet tick — the
+      // overwhelmingly common case — says nothing.
+    } catch (err) {
+      // Never let one bad tick kill the ticker. The likeliest cause is a
+      // database without E-246, where every tick throws "column sla_due_at does
+      // not exist" and the manual KYC review carries on untouched.
+      console.error(
+        "[instrumentation:kyc-auto-approval] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Behind the scraper queue (135s) in the staggered kickoff — nothing here is
+  // urgent to the minute and a case whose SLA expired hours ago can wait for
+  // boot to settle.
+  const kickoff = setTimeout(tick, 150_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] KYC auto-approval SLA sweep (60s) started in-process");
+}

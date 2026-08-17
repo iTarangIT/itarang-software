@@ -1,8 +1,62 @@
 import { db } from "@/lib/db";
 import { scrapeRuns } from "@/lib/db/schema";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 
+// Legacy fallback threshold — total run age, used only where E-227's
+// last_progress_at column is missing. See reapStuckRuns() below.
 const STUCK_RUN_THRESHOLD_MS = 10 * 60 * 1000;
+
+// E-227 reap-on-silence threshold. Generous on purpose: it is now measured
+// from the last chunk that finished, not from the start of the run, so a
+// 20-minute gap means the run really has stopped moving.
+const SILENCE_THRESHOLD_MINUTES = 20;
+
+const TIMEOUT_MESSAGE = "Run timed out (no chunk progress)";
+
+// `last_progress_at` is E-227 and is NOT declared on the scrapeRuns drizzle
+// object — deliberately, see the 26-line comment at schema.ts:~3246. It is
+// therefore read and written only by raw sql``, and every such statement has
+// to survive a database where E-227 has not been applied. We detect the
+// undefined-column SQLSTATE once, latch it, and fall back for the rest of the
+// process rather than paying a failed round-trip on every chunk.
+//
+// Drizzle wraps the driver error, so the pg error (and its `code`) lands on
+// `.cause` — checking only the top-level `code` would silently never match.
+let heartbeatColumnMissing = false;
+
+function isUndefinedColumn(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "42703" || e?.cause?.code === "42703";
+}
+
+// Liveness heartbeat. Called by executeChunk() every time a chunk reaches a
+// terminal state, so a long but healthy run keeps proving it is alive.
+//
+// Best-effort by construction: this is a SECOND statement, issued after the
+// chunk accounting has already committed, so a database without E-227 loses
+// the heartbeat and nothing else. Making it part of the counter bump would
+// mean an unapplied E-227 stopped completed_chunks from advancing, and the
+// run would never finalize — strictly worse than the reaper being coarse.
+export async function touchRunProgress(runId: string) {
+  if (heartbeatColumnMissing) return;
+  try {
+    await db.execute(
+      sql`UPDATE scraper_runs SET last_progress_at = now() WHERE id = ${runId}`,
+    );
+  } catch (err) {
+    if (!isUndefinedColumn(err)) {
+      // Not a schema problem — a transient DB error on a heartbeat is not
+      // worth failing the chunk over, but it should be visible.
+      console.warn(`[SCRAPER][${runId}] progress heartbeat failed`, err);
+      return;
+    }
+    heartbeatColumnMissing = true;
+    console.warn(
+      "[SCRAPER] scraper_runs.last_progress_at is missing — apply drizzle/E-227_scraper_multi_query.sql. " +
+        "Until then long runs are reaped on total age (10m), not on silence.",
+    );
+  }
+}
 
 export async function markRunStarted(
   runId: string,
@@ -100,8 +154,46 @@ export async function markRunCancelled(
 }
 
 // Serverless functions can be terminated before the scraper finishes, leaving
-// rows stuck at status='running' forever. Reap any that exceed the threshold.
+// rows stuck at status='running' forever. Reap any that have gone quiet.
+//
+// This reaps on SILENCE, not on total run age. The original version failed any
+// run whose started_at was more than 10 minutes old, which was survivable while
+// every run came from a human clicking Run and finished in a couple of minutes.
+// E-241's dispatcher calls this on every 30s tick, and a batch job with AI
+// expansion fans out to ~15 chunks that legitimately take longer than that — so
+// age-based reaping would kill a perfectly healthy run at minute 11 and then
+// immediately claim the next queued job on top of it.
+//
+// COALESCE(last_progress_at, started_at) is what makes both true at once: a run
+// that keeps completing chunks keeps pushing its own cutoff forward, and a run
+// that dies before its first chunk still falls back to started_at and is reaped.
+//
+// The comparison is against Postgres now() rather than a JS Date — the rule
+// src/lib/nbfc/auction/scheduler.ts records after clock skew on the pm2 VPS.
 export async function reapStuckRuns() {
+  if (!heartbeatColumnMissing) {
+    try {
+      await db.execute(sql`
+        UPDATE scraper_runs
+           SET status = 'failed',
+               error_message = ${TIMEOUT_MESSAGE},
+               completed_at = now()
+         WHERE status = 'running'
+           AND COALESCE(last_progress_at, started_at)
+                 < now() - (${SILENCE_THRESHOLD_MINUTES}::text || ' minutes')::interval
+      `);
+      return;
+    } catch (err) {
+      if (!isUndefinedColumn(err)) throw err;
+      heartbeatColumnMissing = true;
+      console.warn(
+        "[SCRAPER] scraper_runs.last_progress_at is missing — apply drizzle/E-227_scraper_multi_query.sql. " +
+          "Falling back to age-based reaping, which can kill long batch runs.",
+      );
+    }
+  }
+
+  // Pre-E-227 behaviour, unchanged.
   const cutoff = new Date(Date.now() - STUCK_RUN_THRESHOLD_MS);
 
   await db
