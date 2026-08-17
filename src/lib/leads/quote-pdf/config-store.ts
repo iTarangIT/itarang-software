@@ -31,6 +31,11 @@ export {
  * approval that has already committed, so a missing or malformed settings row
  * must degrade to the document the business signed off rather than block a
  * quotation from existing at all.
+ *
+ * The document carries no bundled images. A logo or a signature is possible —
+ * both are fields on the config — but only by putting a data: URI in the
+ * app_settings row, never by dropping a file in the repo. See the note on
+ * SellerBlock.logoDataUri for why nothing else works under this renderer.
  */
 export async function resolveQuotationConfig(): Promise<QuotationDocConfig> {
   try {

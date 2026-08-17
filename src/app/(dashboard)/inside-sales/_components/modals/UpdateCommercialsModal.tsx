@@ -435,6 +435,15 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                         onChange={(e) => setDealNotes(e.target.value)}
                         placeholder="Any context not captured by the product list above"
                     />
+                    {/*
+                      * This field prints on the quotation PDF the dealer
+                      * receives. It reads as an internal field and is not one,
+                      * and the only thing standing between an internal remark
+                      * and a dealer's inbox is the author knowing that.
+                      */}
+                    <p className="mt-1 text-[11px] text-amber-700">
+                        Printed on the quotation the dealer receives — keep internal remarks in Version notes below.
+                    </p>
                 </div>
                 <div>
                     <Label>Version notes (this commercial event)</Label>
