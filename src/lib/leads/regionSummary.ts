@@ -9,6 +9,19 @@
 // `groupNames` is optional — the server may snapshot it at start time so
 // historical campaigns survive group renames; if missing, we fall back to a
 // neutral "Saved group" placeholder.
+//
+// It also renders the two non-region keys added since: `filters` (the lead-state
+// narrowing) and `kind: "scrape_run"`. Teaching THIS function is what makes them
+// visible at all — displayCampaignName() deliberately ignores the stored
+// dialer_campaigns.name and recomputes from here, so a key this function does not
+// know about is invisible in the Campaigns table however it was named at
+// creation time.
+
+import {
+  sanitizeLeadStateFilters,
+  summarizeLeadStateFilters,
+  describeLeadStateFilters,
+} from "@/lib/leads/leadStateFilters";
 
 export function summarizeRegion(region: unknown): string {
   if (!region || typeof region !== "object") return "All regions";
@@ -19,6 +32,9 @@ export function summarizeRegion(region: unknown): string {
     groupIds?: unknown;
     groupNames?: unknown;
     recall?: unknown;
+    kind?: unknown;
+    runId?: unknown;
+    filters?: unknown;
   };
 
   const states = Array.isArray(r.states) ? (r.states as string[]) : [];
@@ -68,13 +84,31 @@ export function summarizeRegion(region: unknown): string {
     parts.push(`${pincodes.length} pincode${pincodes.length === 1 ? "" : "s"}`);
   }
 
+  // Lead-state narrowing, appended as at most ONE clause. First non-empty wins
+  // (see summarizeLeadStateFilters) so this one-liner cannot grow unbounded as
+  // filters are added — it is rendered inside a table cell.
+  const filterChip = summarizeLeadStateFilters(
+    sanitizeLeadStateFilters((r as { filters?: unknown }).filters),
+  );
+  if (filterChip) parts.push(filterChip);
+
   // A "Retry failed leads" campaign carries recall:true in its region_filter.
   // Prefix the label so the list/detail clearly read as a retry while keeping
-  // the inherited region context.
+  // the inherited region context. Checked BEFORE the scrape-run prefix: a retry
+  // of a run-scoped campaign should still read as a retry.
   if (r.recall === true) {
     return parts.length > 0
       ? `Retry · ${parts.join(" · ")}`
       : "Retry · previous campaign";
+  }
+
+  // A campaign started from a finished scrape run. The short run hash is enough
+  // to find it — the full SCRAPE-YYYYMMDD-xxxxxxxx id would eat the cell.
+  if (r.kind === "scrape_run") {
+    const runId = typeof r.runId === "string" ? r.runId : "";
+    const short = runId ? runId.slice(-8) : "";
+    const prefix = short ? `Run ${short}` : "Scrape run";
+    return parts.length > 0 ? `${prefix} · ${parts.join(" · ")}` : prefix;
   }
 
   return parts.length > 0 ? parts.join(" · ") : "All regions";
@@ -161,6 +195,22 @@ export function describeRegion(region: unknown): string {
 
   if (pincodes.length > 0) {
     segments.push(`Pincodes: ${pincodes.join(", ")}`);
+  }
+
+  // The long form of the lead-state filters — every set clause, unlike
+  // summarizeRegion's one-clause chip. There is room for it in a page header.
+  const filterText = describeLeadStateFilters(
+    sanitizeLeadStateFilters((r as { filters?: unknown }).filters),
+  );
+  if (filterText) segments.push(`Filters: ${filterText}`);
+
+  if ((r as { kind?: unknown }).kind === "scrape_run") {
+    const runId = (r as { runId?: unknown }).runId;
+    segments.unshift(
+      typeof runId === "string" && runId
+        ? `Scrape run: ${runId}`
+        : "Scrape run",
+    );
   }
 
   // Retry campaign (see summarizeRegion) — make the detail header read as a

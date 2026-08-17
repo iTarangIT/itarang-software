@@ -27,6 +27,11 @@ import {
     IN_LIVE_DIALER_QUEUE_SQL,
 } from "@/lib/ai-dialer/exclusionFilter";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+import {
+    sanitizeLeadStateFilters,
+    type LeadStateFilters,
+} from "@/lib/leads/leadStateFilters";
+import { leadStatePredicates } from "@/lib/leads/leadStateSql";
 
 type RegionEntry = { state: string; cities?: string[] };
 
@@ -55,6 +60,16 @@ export type AudienceSelection = {
     excludeAiConnected?: boolean;
     /** AI-DIALER ONLY — drop leads already pending/calling in a live campaign. */
     excludeQueuedInLiveCampaign?: boolean;
+    /**
+     * Lead-state narrowing: AI call state, attempt count, and the E-236
+     * L1/L2/L3 disposition. Applies to both purposes.
+     *
+     * NARROWING, not exclusion — these go into the SQL WHERE rather than the JS
+     * tally loop, so they never appear in excluded.byReason. "N excluded because
+     * you asked for never-called" is not a fact anyone wants reported; the
+     * hot/warm/cold bar should describe the audience the user actually selected.
+     */
+    filters?: LeadStateFilters;
 };
 
 export type AudienceRow = {
@@ -162,6 +177,16 @@ export async function resolveAudience(
         states.length > 0 || cities.length > 0 || pincodes.length > 0;
 
     // JSONB params rather than variadic IN-lists; drizzle parameterises sql``.
+    // Narrowing predicates, appended to the resolved CTE's WHERE. Sanitised
+    // first: `filters` can arrive straight off the wire, and only `disposition`
+    // is free text (parameterised below, never interpolated).
+    const stateFilters = leadStatePredicates(
+        sanitizeLeadStateFilters(selection.filters),
+    );
+    const filterClause = stateFilters.length
+        ? sql` AND ${sql.join(stateFilters, sql` AND `)}`
+        : sql``;
+
     const statesJson = JSON.stringify(states);
     const cityPairsJson = JSON.stringify(
         cities.map((c) => ({ state: c.state, city: c.city })),
@@ -195,6 +220,7 @@ export async function resolveAudience(
         WHERE dl.phone IS NOT NULL AND dl.phone <> ''
           -- BRD §0.2 — never queue a lead Inside Sales / ASM are working.
           AND ${AI_DIALABLE_SQL}
+          ${filterClause}
       ),
       bucketed AS (
         SELECT

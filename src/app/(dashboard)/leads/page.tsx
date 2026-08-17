@@ -1684,7 +1684,7 @@ export default function LeadsUnifiedPage() {
   // (advanceDialerToNextLead). The modal already filtered the queue by
   // region + segment server-side, so we use it directly.
   const confirmDialerStart = useCallback(
-    async ({ provider, category, region, queue }: DialerStartPayload) => {
+    async ({ provider, category, region, filters, queue }: DialerStartPayload) => {
       if (queue.length === 0) return;
 
       stopRef.current = false;
@@ -1705,7 +1705,15 @@ export default function LeadsUnifiedPage() {
           category,
           // Audit/telemetry only — the server still trusts queueIds as
           // the authoritative list. See /api/ai-dialer/start/route.ts.
-          region,
+          //
+          // `filters` rides inside `region` because that whole blob is what
+          // gets stored verbatim as dialer_campaigns.region_filter, and the
+          // column has carried non-region keys (kind, recall, groupNames) since
+          // E-109. Adding a real audience_filter column would be better naming
+          // but would make the migration a hard deploy prerequisite —
+          // dialer_campaigns IS mirrored in schema.ts, so a database without it
+          // fails on every campaign INSERT.
+          region: { ...region, filters },
         }),
       });
       try {
