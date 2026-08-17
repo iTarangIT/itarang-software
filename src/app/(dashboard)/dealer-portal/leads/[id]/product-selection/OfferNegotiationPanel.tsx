@@ -1,115 +1,114 @@
 "use client";
 
 /**
- * E-238 — the dealer's counter-offer form, opened from a financing offer card.
+ * E-238 / E-245 — the dealer's message box against a financing offer.
  *
- * Each of the six terms is shown as `current → [your ask]`, prefilled with the
- * NBFC's standing value, so the dealer edits a number in place rather than
- * restating the whole offer. Only the fields that actually MOVED are sent as
- * asks; the rest carry through unchanged on the server side, which is what
- * keeps every round a complete snapshot without making the dealer retype it.
+ * E-238 shipped this as six editable term fields (`current → your ask`). E-245
+ * removed them: the dealer is not the party that prices a loan, so inviting them
+ * to type an ROI produced asks the lender could not act on and rounds whose
+ * "diff" was noise. The dealer now says what the customer needs in words, and
+ * the NBFC revises the numbers on its own side.
  *
- * Submit is blocked until something has changed or a message has been written —
- * an empty counter would burn a round and notify the NBFC about nothing.
+ * Both dealer-side actions are the same shape — write something, send it — so
+ * one component serves both via `mode`:
+ *   negotiate → POST /api/lead/[id]/negotiate-offer (asks for revised terms)
+ *   close     → POST /api/lead/[id]/close-offer     (walks away from this lender)
+ * The message is REQUIRED in both. Closing especially: the NBFC's only record of
+ * why it lost the deal is what the dealer typed here.
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { confirmDialog } from "@/components/ui/confirm-dialog";
-import { MAX_MESSAGE_LENGTH, NEGOTIABLE_FIELDS, FIELD_LABEL, sameTerm } from "@/lib/nbfc/offer-negotiation";
-import type { NegotiableField } from "@/lib/nbfc/offer-negotiation";
+import { MAX_MESSAGE_LENGTH } from "@/lib/nbfc/offer-negotiation";
 
-export interface NegotiableOffer {
-  loan_amount: string | null;
-  roi_pct: string | null;
-  emi_amount: string | null;
-  tenure_months: number | null;
-  down_payment: string | null;
-  processing_fee: string | null;
-}
+export type NegotiationPanelMode = "negotiate" | "close";
 
-const SUFFIX: Partial<Record<NegotiableField, string>> = { roi_pct: "%", tenure_months: "mo" };
-const PREFIX: Partial<Record<NegotiableField, string>> = {
-  loan_amount: "₹",
-  emi_amount: "₹",
-  down_payment: "₹",
-  processing_fee: "₹",
+const COPY: Record<
+  NegotiationPanelMode,
+  {
+    heading: string;
+    hint: string;
+    label: string;
+    placeholder: string;
+    submit: string;
+    busy: string;
+    endpoint: (leadId: string) => string;
+    confirmTitle: string;
+    confirmMessage: string;
+    confirmText: string;
+    danger?: boolean;
+  }
+> = {
+  negotiate: {
+    heading: "Negotiate",
+    hint: "Tell the NBFC what the customer needs. They will review it and revise the offer.",
+    label: "Message to the NBFC",
+    placeholder:
+      "e.g. Customer can manage a higher down payment if the ROI comes down…",
+    submit: "Send message",
+    busy: "Sending…",
+    endpoint: (leadId) => `/api/lead/${leadId}/negotiate-offer`,
+    confirmTitle: "Send this to the NBFC?",
+    confirmMessage:
+      "The NBFC will see your message against this offer and can revise its terms in response.",
+    confirmText: "Send message",
+  },
+  close: {
+    heading: "Close deal",
+    hint: "Tell the NBFC why the customer is closing this deal. This cannot be undone.",
+    label: "Message to the NBFC",
+    placeholder:
+      "e.g. Customer is going ahead with another lender — the EMI here is above budget.",
+    submit: "Close deal",
+    busy: "Closing…",
+    endpoint: (leadId) => `/api/lead/${leadId}/close-offer`,
+    confirmTitle: "Close this deal?",
+    confirmMessage:
+      "This ends the conversation with this lender for good — you will not be able to select them or negotiate again. You can then pick a different lender for this lead.",
+    confirmText: "Close deal",
+    danger: true,
+  },
 };
-
-const shown = (v: string | number | null): string =>
-  v == null || v === "" ? "—" : `${v}`;
 
 export default function OfferNegotiationPanel({
   leadId,
   nbfcId,
-  offer,
+  mode = "negotiate",
   onSent,
   onDirtyChange,
   onCancel,
 }: {
   leadId: string;
   nbfcId: number;
-  offer: NegotiableOffer;
+  mode?: NegotiationPanelMode;
   onSent: () => void | Promise<void>;
   /** Lets the parent pause polling so a refetch cannot clobber typed input. */
   onDirtyChange?: (dirty: boolean) => void;
   onCancel: () => void;
 }) {
-  const initial = useMemo(
-    () =>
-      Object.fromEntries(
-        NEGOTIABLE_FIELDS.map((f) => [f, offer[f] == null ? "" : String(offer[f])]),
-      ) as Record<NegotiableField, string>,
-    [offer],
-  );
-
-  const [form, setForm] = useState<Record<NegotiableField, string>>(initial);
+  const copy = COPY[mode];
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const moved = NEGOTIABLE_FIELDS.filter(
-    (f) => form[f].trim() !== "" && !sameTerm(offer[f], form[f].trim()),
-  );
-  const invalid = NEGOTIABLE_FIELDS.filter(
-    (f) => form[f].trim() !== "" && Number.isNaN(Number(form[f].trim())),
-  );
-  const canSend = (moved.length > 0 || message.trim() !== "") && invalid.length === 0 && !busy;
-
-  function setField(f: NegotiableField, v: string) {
-    setForm((s) => {
-      const next = { ...s, [f]: v };
-      onDirtyChange?.(
-        NEGOTIABLE_FIELDS.some((k) => next[k].trim() !== (initial[k] ?? "")) || message.trim() !== "",
-      );
-      return next;
-    });
-  }
+  const canSend = message.trim() !== "" && !busy;
 
   async function send() {
-    const summary = moved
-      .map((f) => `${FIELD_LABEL[f]}: ${shown(offer[f])} → ${form[f].trim()}`)
-      .join("\n");
     const ok = await confirmDialog({
-      title: "Send counter-offer?",
-      message: summary
-        ? `The NBFC will be asked to revise its terms:\n\n${summary}`
-        : "The NBFC will receive your message against this offer.",
-      confirmText: "Send counter-offer",
+      title: copy.confirmTitle,
+      message: `${copy.confirmMessage}\n\n"${message.trim()}"`,
+      confirmText: copy.confirmText,
+      ...(copy.danger ? { variant: "danger" as const } : {}),
     });
     if (!ok) return;
 
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/lead/${leadId}/negotiate-offer`, {
+      const res = await fetch(copy.endpoint(leadId), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          nbfcId,
-          // Send only what moved. Unchanged terms are carried through server-side.
-          ...Object.fromEntries(moved.map((f) => [f, form[f].trim()])),
-          message: message.trim() || null,
-        }),
+        body: JSON.stringify({ nbfcId, message: message.trim() }),
       });
       const j = (await res.json().catch(() => ({}))) as {
         success?: boolean;
@@ -125,58 +124,29 @@ export default function OfferNegotiationPanel({
     }
   }
 
-  return (
-    <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50/40 p-3">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-violet-800">Negotiate</p>
-      <p className="mt-0.5 text-[11px] text-slate-600">
-        Change what the customer is asking for. Leave a field as-is to accept it.
-      </p>
+  const accent =
+    mode === "close"
+      ? { box: "border-red-200 bg-red-50/40", heading: "text-red-800" }
+      : { box: "border-violet-200 bg-violet-50/40", heading: "text-violet-800" };
 
-      <div className="mt-2.5 space-y-1.5">
-        {NEGOTIABLE_FIELDS.map((f) => {
-          const changed = moved.includes(f);
-          const isBad = invalid.includes(f);
-          return (
-            <label key={f} className="flex items-center gap-2 text-[11px]">
-              <span className="w-24 shrink-0 font-semibold text-slate-500">{FIELD_LABEL[f]}</span>
-              <span className="w-20 shrink-0 text-right text-slate-400">
-                {PREFIX[f] ?? ""}
-                {shown(offer[f])}
-                {SUFFIX[f] ? ` ${SUFFIX[f]}` : ""}
-              </span>
-              <span className="shrink-0 text-slate-300">→</span>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={form[f]}
-                onChange={(e) => setField(f, e.target.value)}
-                className={`w-full rounded-md border px-2 py-1 text-xs ${
-                  isBad
-                    ? "border-red-300 bg-red-50"
-                    : changed
-                      ? "border-violet-300 bg-white font-semibold text-slate-900"
-                      : "border-slate-200 bg-white text-slate-600"
-                }`}
-              />
-            </label>
-          );
-        })}
-      </div>
+  return (
+    <div className={`mt-3 rounded-lg border p-3 ${accent.box}`}>
+      <p className={`text-[10px] font-bold uppercase tracking-wider ${accent.heading}`}>
+        {copy.heading}
+      </p>
+      <p className="mt-0.5 text-[11px] text-slate-600">{copy.hint}</p>
 
       <label className="mt-2.5 block text-[11px] font-semibold text-slate-500">
-        Message to the NBFC <span className="font-normal text-slate-400">(optional)</span>
+        {copy.label} <span className="text-red-500">*</span>
         <textarea
           value={message}
-          rows={2}
+          rows={3}
           maxLength={MAX_MESSAGE_LENGTH}
           onChange={(e) => {
             setMessage(e.target.value);
-            onDirtyChange?.(
-              e.target.value.trim() !== "" ||
-                NEGOTIABLE_FIELDS.some((k) => form[k].trim() !== (initial[k] ?? "")),
-            );
+            onDirtyChange?.(e.target.value.trim() !== "");
           }}
-          placeholder="e.g. Customer can manage a higher down payment if the ROI comes down…"
+          placeholder={copy.placeholder}
           className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs font-normal"
         />
       </label>
@@ -188,16 +158,12 @@ export default function OfferNegotiationPanel({
           type="button"
           onClick={send}
           disabled={!canSend}
-          title={
-            !canSend && !busy
-              ? invalid.length > 0
-                ? "Some values are not numbers"
-                : "Change a term or write a message first"
-              : undefined
-          }
-          className="rounded-md bg-[color:var(--color-brand-navy)] px-3 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+          title={!canSend && !busy ? "Write a message first" : undefined}
+          className={`rounded-md px-3 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+            mode === "close" ? "bg-red-600" : "bg-[color:var(--color-brand-navy)]"
+          }`}
         >
-          {busy ? "Sending…" : "Send counter-offer"}
+          {busy ? copy.busy : copy.submit}
         </button>
         <button
           type="button"
@@ -210,11 +176,9 @@ export default function OfferNegotiationPanel({
         >
           Cancel
         </button>
-        {moved.length > 0 && (
-          <span className="text-[11px] text-slate-500">
-            {moved.length} term{moved.length === 1 ? "" : "s"} changed
-          </span>
-        )}
+        <span className="ml-auto text-[10px] text-slate-400">
+          {message.trim().length}/{MAX_MESSAGE_LENGTH}
+        </span>
       </div>
     </div>
   );

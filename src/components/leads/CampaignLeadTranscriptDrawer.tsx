@@ -129,7 +129,7 @@ type RawTurn = {
 
 // One dialer attempt for this lead, across the original + every recall
 // campaign. Ordered chronologically by the transcript route.
-type Attempt = {
+export type Attempt = {
   attempt: number;
   campaignId: string;
   campaignName: string | null;
@@ -782,7 +782,19 @@ function RecordingPlayer({
 // Cross-campaign attempt timeline. Answers "how many times was this lead
 // dialed, and which attempt converted it?" — including attempts made in earlier
 // (original / prior recall) campaigns, not just the one this drawer opened from.
-function AttemptsTab({ data }: { data: TranscriptPayload }) {
+/**
+ * The per-attempt timeline. Exported because the inside-sales and ASM lead
+ * detail pages show the same history in an "AI Call History" tab — a second
+ * implementation of these cards would drift from this one within a release.
+ *
+ * Props are narrowed to the two fields it actually reads, so a caller that has
+ * only the attempts (and not a whole TranscriptPayload) can render it.
+ */
+export function AttemptsTab({
+  data,
+}: {
+  data: Pick<TranscriptPayload, "attempts" | "convertedOnAttempt">;
+}) {
   const attempts = data.attempts ?? [];
   if (attempts.length === 0) {
     return (

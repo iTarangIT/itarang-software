@@ -790,3 +790,64 @@ export async function startScraperQueueTicker() {
     )}s, serial) started in-process`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// KYC auto-approval SLA sweep — approve cases no admin acted on in time.
+// ---------------------------------------------------------------------------
+// [E-246] This is the only thing that makes the SLA expire. `submit-verification`
+// stamps `admin_verification_queue.sla_due_at` and returns; without this tick
+// the deadline is a column nobody reads. Same reasoning as startAuctionTicker
+// and startScraperQueueTicker, and for the same three reasons: BullMQ is dead
+// code here, the crons in vercel.json do not fire on the pm2 boxes, and an
+// in-process ticker demonstrably runs in both environments.
+//
+// 60s because the unit being waited for is hours. The claim behind one tick is
+// a single indexed UPDATE against a partial index
+// (admin_verification_queue_sla_due_idx WHERE auto_approved_at IS NULL AND
+// status='pending_itarang_verification'), so an idle tick is nearly free, and a
+// case auto-approving up to a minute after its deadline is indistinguishable
+// from one that did not.
+//
+// runKycAutoApprovalTick() returns immediately when the feature is disabled,
+// which is the shipped default — so this ticker is inert until an admin turns
+// it on at /admin/settings → KYC Automation.
+export async function startKycAutoApprovalTicker() {
+  // Skip on Vercel — /api/cron/kyc-auto-approval owns it there.
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60_000;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { runKycAutoApprovalTick } = await import("@/lib/kyc/auto-approval");
+      await runKycAutoApprovalTick();
+      // The tick logs its own counts when it did something; a quiet tick — the
+      // overwhelmingly common case — says nothing.
+    } catch (err) {
+      // Never let one bad tick kill the ticker. The likeliest cause is a
+      // database without E-246, where every tick throws "column sla_due_at does
+      // not exist" and the manual KYC review carries on untouched.
+      console.error(
+        "[instrumentation:kyc-auto-approval] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Behind the scraper queue (135s) in the staggered kickoff — nothing here is
+  // urgent to the minute and a case whose SLA expired hours ago can wait for
+  // boot to settle.
+  const kickoff = setTimeout(tick, 150_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] KYC auto-approval SLA sweep (60s) started in-process");
+}

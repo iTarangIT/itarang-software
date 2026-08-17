@@ -27,6 +27,7 @@ export async function register() {
       startOemPriceSweepTicker,
       startAuctionTicker,
       startScraperQueueTicker,
+      startKycAutoApprovalTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -37,5 +38,6 @@ export async function register() {
     await startOemPriceSweepTicker();
     await startAuctionTicker();
     await startScraperQueueTicker();
+    await startKycAutoApprovalTicker();
   }
 }
