@@ -284,6 +284,27 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     return;
   }
 
+  // E-243 — a dealer tapping Approve / Decline on a quotation.
+  //
+  // FIRST, ahead of every other gate including the operator check and the
+  // session itself. The sender may be an approved dealer (who would land in the
+  // lead console), a lead who was never onboarded (who would land in the
+  // onboarding state machine), or neither — and in all three cases the answer
+  // to a quotation is what the message means. Feeding `quote_approve:<uuid>`
+  // into "what is your company name?" would both lose the decision and corrupt
+  // a draft.
+  //
+  // It only ever claims a message carrying one of the two button IDs we mint,
+  // so free text is untouched and every existing flow behaves exactly as
+  // before. Wrapped because a failure here must not swallow the dealer's
+  // message — on error we fall through to the normal flow.
+  try {
+    const { handleQuotationReply } = await import("./quotationReply");
+    if (await handleQuotationReply(event)) return;
+  } catch (err) {
+    console.error("[WhatsApp/orchestrator] quotation-reply gate failed:", err);
+  }
+
   // E-170 — dealer self-service fork. DISABLED: this WIP simpler flow
   // (dealer-orchestrator.ts: name→mobile→email→address→"finish in portal")
   // was intercepting approved dealers before they reached the complete

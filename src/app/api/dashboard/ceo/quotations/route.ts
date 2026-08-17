@@ -125,18 +125,35 @@ export async function GET(req: NextRequest) {
     // Anything unrecognised falls back to the queue rather than 400ing. This is
     // a read on a dashboard panel; a typo in a query string should not blank the
     // CEO's screen.
-    const approved = req.nextUrl.searchParams.get("status") === "approved";
+    const statusParam = req.nextUrl.searchParams.get("status");
+    const approved = statusParam === "approved";
+    // E-242 — the decision log. Approvals AND rejections together, because the
+    // requirement is "what he approved and what he rejected" and splitting them
+    // across two tabs would make the common question ("what did I do with the
+    // Sharma quote?") a two-place search.
+    const history = statusParam === "history";
+    // `mine=true` narrows to the caller's own decisions. Auto-approved rows have
+    // approved_by NULL, so they drop out of a personal history by construction —
+    // nobody decided them.
+    const mineOnly = req.nextUrl.searchParams.get("mine") === "true";
 
-    const where = approved
+    // WITHOUT THIS the list is not "quotes" but "every commercials row ever
+    // written": approval_status DEFAULTS to 'approved', so every brochure
+    // share, terms update and pre-E-221 row carries it. Only the two gated
+    // events were ever a quote somebody could have refused.
+    const gatedOnly = inArray(dealerLeadCommercials.event_type, [
+      ...GATED_QUOTE_EVENTS,
+    ]);
+
+    const where = history
       ? and(
-          eq(dealerLeadCommercials.approval_status, "approved"),
-          // WITHOUT THIS the tab is not "approved quotes" but "every commercials
-          // row ever written": the column DEFAULTS to 'approved', so every
-          // brochure share, terms update and pre-E-221 row carries it. Only the
-          // two gated events were ever a quote somebody could have refused.
-          inArray(dealerLeadCommercials.event_type, [...GATED_QUOTE_EVENTS]),
+          inArray(dealerLeadCommercials.approval_status, ["approved", "rejected"]),
+          gatedOnly,
+          ...(mineOnly ? [eq(dealerLeadCommercials.approved_by, user.id)] : []),
         )
-      : eq(dealerLeadCommercials.approval_status, "pending");
+      : approved
+        ? and(eq(dealerLeadCommercials.approval_status, "approved"), gatedOnly)
+        : eq(dealerLeadCommercials.approval_status, "pending");
 
     const rows = await db
       .select({
@@ -154,6 +171,17 @@ export async function GET(req: NextRequest) {
         approved_at: dealerLeadCommercials.approved_at,
         approved_by: dealerLeadCommercials.approved_by,
         approved_by_name: approver.name,
+        // E-242 — the decision log needs the outcome and the stated reason.
+        // rejection_reason has been written by the decision route since E-221
+        // and, until this line, was selected by nothing anywhere in the app.
+        approval_status: dealerLeadCommercials.approval_status,
+        rejection_reason: dealerLeadCommercials.rejection_reason,
+        quote_number: dealerLeadCommercials.quote_number,
+        quote_pdf_url: dealerLeadCommercials.quote_pdf_url,
+        // E-243 — what came back. On the released tab this is the difference
+        // between "we sent a number" and "they took it".
+        dealer_decision: dealerLeadCommercials.dealer_decision,
+        dealer_decision_at: dealerLeadCommercials.dealer_decision_at,
         raised_by: users.name,
         dealer_name: dealerLeads.dealer_name,
         city: dealerLeads.city,
@@ -169,10 +197,14 @@ export async function GET(req: NextRequest) {
       .leftJoin(approver, sql`${approver.id}::text = ${dealerLeadCommercials.approved_by}`)
       .where(where)
       // Pending is oldest first: the queue is worked front to back, and the
-      // thing that has waited longest is the thing blocking a rep. Released is
-      // newest first — it is a record, not a queue, and the question it answers
-      // is "what just went out".
-      .orderBy(approved ? desc(decidedAt) : asc(dealerLeadCommercials.created_at))
+      // thing that has waited longest is the thing blocking a rep. Released and
+      // history are newest first — they are records, not queues, and the
+      // question they answer is "what just happened".
+      .orderBy(
+        approved || history
+          ? desc(decidedAt)
+          : asc(dealerLeadCommercials.created_at),
+      )
       .limit(CAP);
 
     // One aggregate over the whole set, not over the capped page. The released
@@ -183,6 +215,9 @@ export async function GET(req: NextRequest) {
         n: sql<number>`COUNT(*)`,
         auto: sql<number>`COUNT(*) FILTER (WHERE ${dealerLeadCommercials.approval_mode} = 'auto')`,
         value: sql<number>`COALESCE(SUM(${quoteValue}), 0)`,
+        // E-242 — the history tab's headline is the approve/reject split, which
+        // is the question "show me what I decided" is really asking.
+        rejected: sql<number>`COUNT(*) FILTER (WHERE ${dealerLeadCommercials.approval_status} = 'rejected')`,
       })
       .from(dealerLeadCommercials)
       .where(where);
@@ -192,15 +227,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       data: {
-        status: approved ? "approved" : "pending",
+        status: history ? "history" : approved ? "approved" : "pending",
         // The true count, which can exceed the rows returned — the panel must
         // not imply the list is shorter than it is.
         total,
         capped: total > CAP,
         // Only meaningful on the released tab, where the split between "the
         // rule released this" and "I released this" is the whole point.
-        auto_count: approved ? Number(totals?.auto || 0) : 0,
+        auto_count: approved || history ? Number(totals?.auto || 0) : 0,
         value_total: approved ? Number(totals?.value || 0) : 0,
+        rejected_count: history ? Number(totals?.rejected || 0) : 0,
+        mine: history ? mineOnly : false,
         quotations: rows.map((r) => ({
           commercial_id: r.commercial_id,
           dealer_lead_id: r.dealer_lead_id,
@@ -219,6 +256,13 @@ export async function GET(req: NextRequest) {
           approval_route: approvalRoute(r.approval_mode, r.approved_by),
           approved_by_name: r.approved_by_name ?? null,
           approved_at: r.approved_at,
+          // E-242 — what was decided, why, and the document it produced.
+          approval_status: r.approval_status ?? "approved",
+          rejection_reason: r.rejection_reason ?? null,
+          quote_number: r.quote_number ?? null,
+          quote_pdf_url: r.quote_pdf_url ?? null,
+          dealer_decision: r.dealer_decision ?? null,
+          dealer_decision_at: r.dealer_decision_at ?? null,
         })),
       },
     });

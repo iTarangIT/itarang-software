@@ -388,6 +388,124 @@ export async function listOemPriceHistory(
     return (rows as unknown as Record<string, unknown>[]).map(toPriceRow);
 }
 
+/**
+ * E-242 — the COMPLETE price history, across every model rather than one
+ * product at a time.
+ *
+ * listOemPriceHistory above answers "what has this product cost?" and is what
+ * the per-product drawer opens. This answers the question the requirement
+ * actually asked — "which price was applied to which Model ID, and when was it
+ * changed?" — which cannot be assembled by opening products one by one.
+ *
+ * WHY THE PREVIOUS PRICE IS COMPUTED, NOT STORED
+ *   The table is append-only, so the row before this one for the same product
+ *   IS the previous price; storing it again would be a second copy of a fact
+ *   already on disk, and one that could disagree after a backfill. LAG() over
+ *   (asset_type, product_id) ORDER BY effective_from reads it directly.
+ *   Ordering by effective_from and not created_at matters: a scheduled
+ *   successor is INSERTED before it takes effect, so created_at order would
+ *   report the change as having happened on the day somebody typed it.
+ *
+ * No migration: every column this reads has existed since E-226/E-230.
+ */
+export interface OemPriceHistoryRow extends OemPriceRow {
+    /** The price this line replaced, or null when it is the first for its product. */
+    previous_price: number | null;
+    /** oem_price - previous_price. Null on a first line — not zero, which would read as "no change". */
+    delta: number | null;
+    /** Percentage move, rounded to 2dp. Null on a first line or a zero previous price. */
+    delta_pct: number | null;
+}
+
+export interface ListAllOemPriceHistoryOptions {
+    assetType?: OemAssetType | null;
+    /** Case-insensitive substring match on model_id or product_name. */
+    search?: string | null;
+    /** Only lines whose window starts on or after this instant. */
+    from?: Date | null;
+    /** Only lines whose window starts on or before this instant. */
+    to?: Date | null;
+    limit?: number;
+    offset?: number;
+}
+
+export const OEM_HISTORY_MAX_LIMIT = 200;
+
+export async function listAllOemPriceHistory(
+    options: ListAllOemPriceHistoryOptions = {},
+): Promise<{ rows: OemPriceHistoryRow[]; total: number }> {
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), OEM_HISTORY_MAX_LIMIT);
+    const offset = Math.max(options.offset ?? 0, 0);
+
+    const assetType = options.assetType ?? null;
+    const search = options.search?.trim() ? `%${options.search.trim()}%` : null;
+    // ISO strings, never Date objects: a raw sql`` template is serialised by
+    // postgres.js unsafe() with no column type and throws on a Date.
+    const from = options.from ? options.from.toISOString() : null;
+    const to = options.to ? options.to.toISOString() : null;
+
+    // The window function must see EVERY row of a product to know what preceded
+    // the ones being shown, so LAG runs in an inner query over the unfiltered
+    // table and the filters apply outside it. Filtering first would make the
+    // first row of any filtered page report "no previous price".
+    const rows = await db.execute<Record<string, unknown>>(sql`
+        WITH ranked AS (
+            SELECT p.price_id::text AS price_id, p.asset_type, p.product_id,
+                   p.model_id, p.product_name, p.oem_price::text AS oem_price,
+                   p.effective_from, p.effective_to, p.valid_until, p.note,
+                   p.created_by, p.created_at,
+                   LAG(p.oem_price) OVER (
+                       PARTITION BY p.asset_type, p.product_id
+                       ORDER BY p.effective_from, p.created_at
+                   )::text AS previous_price
+              FROM oem_reference_prices p
+        )
+        SELECT r.*, u.name AS created_by_name
+          FROM ranked r
+          -- created_by is text and users.id is uuid — cast the uuid, never the
+          -- text, so a non-uuid created_by cannot take the whole ledger down.
+          LEFT JOIN users u ON u.id::text = r.created_by
+         WHERE (${assetType}::text IS NULL OR r.asset_type = ${assetType})
+           AND (${search}::text IS NULL
+                OR r.model_id ILIKE ${search} OR r.product_name ILIKE ${search})
+           AND (${from}::timestamptz IS NULL OR r.effective_from >= ${from}::timestamptz)
+           AND (${to}::timestamptz IS NULL OR r.effective_from <= ${to}::timestamptz)
+         ORDER BY r.effective_from DESC, r.created_at DESC
+         LIMIT ${limit} OFFSET ${offset}
+    `);
+
+    const counted = await db.execute<{ n: string }>(sql`
+        SELECT COUNT(*)::text AS n
+          FROM oem_reference_prices p
+         WHERE (${assetType}::text IS NULL OR p.asset_type = ${assetType})
+           AND (${search}::text IS NULL
+                OR p.model_id ILIKE ${search} OR p.product_name ILIKE ${search})
+           AND (${from}::timestamptz IS NULL OR p.effective_from >= ${from}::timestamptz)
+           AND (${to}::timestamptz IS NULL OR p.effective_from <= ${to}::timestamptz)
+    `);
+
+    const total = Number((counted as unknown as Record<string, unknown>[])[0]?.n ?? 0);
+
+    return {
+        rows: (rows as unknown as Record<string, unknown>[]).map((r) => {
+            const base = toPriceRow(r);
+            const prev = r.previous_price == null ? null : Number(r.previous_price);
+            const previous_price = prev != null && Number.isFinite(prev) ? prev : null;
+            const delta = previous_price == null ? null : base.oem_price - previous_price;
+            return {
+                ...base,
+                previous_price,
+                delta,
+                delta_pct:
+                    previous_price == null || previous_price === 0 || delta == null
+                        ? null
+                        : Math.round((delta / previous_price) * 10000) / 100,
+            };
+        }),
+        total,
+    };
+}
+
 function toPriceRow(r: Record<string, unknown>): OemPriceRow {
     return {
         price_id: String(r.price_id),

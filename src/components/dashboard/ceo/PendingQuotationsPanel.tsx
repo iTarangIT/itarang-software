@@ -48,11 +48,16 @@ import Link from "next/link";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
 
-type Tab = "pending" | "approved";
+// E-242 — "history" is the decision log: approvals AND rejections together.
+// Kept as a third tab rather than a page of its own because every row primitive
+// is already shared, and a separate screen would be a second door to data this
+// panel is already showing.
+type Tab = "pending" | "approved" | "history";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "pending", label: "Pending" },
   { key: "approved", label: "Approved" },
+  { key: "history", label: "History" },
 ];
 
 interface OemLine {
@@ -90,6 +95,15 @@ interface Quotation {
   approval_route: "auto" | "manual" | null;
   approved_by_name: string | null;
   approved_at: string | null;
+  /** E-242 — 'approved' | 'rejected' | 'pending'. */
+  approval_status: string;
+  /** E-242 — mandatory on a rejection, and until now displayed nowhere. */
+  rejection_reason: string | null;
+  quote_number: string | null;
+  quote_pdf_url: string | null;
+  /** E-243 — the DEALER's answer, not iTarang's. Null until they respond. */
+  dealer_decision: "approved" | "declined" | null;
+  dealer_decision_at: string | null;
 }
 
 interface QueueResponse {
@@ -98,6 +112,9 @@ interface QueueResponse {
   capped: boolean;
   auto_count: number;
   value_total: number;
+  /** History tab only. */
+  rejected_count: number;
+  mine: boolean;
   quotations: Quotation[];
 }
 
@@ -261,6 +278,43 @@ function ReleaseBadge({ q }: { q: Quotation }) {
   );
 }
 
+/**
+ * E-242 — "everything" vs "my decisions" on the History tab.
+ *
+ * `mine` filters on approved_by, which auto-approved rows leave NULL. So the
+ * personal view excludes them by construction rather than by a second rule —
+ * nobody decided them, so they are not anybody's decisions.
+ */
+function HistoryFilter({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 mb-3">
+      {[
+        { v: false, label: "All decisions" },
+        { v: true, label: "Mine only" },
+      ].map((o) => (
+        <button
+          key={String(o.v)}
+          type="button"
+          onClick={() => onChange(o.v)}
+          className={`h-6 px-2.5 rounded-md text-[11px] font-semibold transition ${
+            value === o.v
+              ? "bg-gray-900 text-white"
+              : "text-gray-500 hover:bg-gray-100"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function QuotationApprovalsPanel() {
   const qc = useQueryClient();
   const [tab, setTab] = React.useState<Tab>("pending");
@@ -268,11 +322,15 @@ export function QuotationApprovalsPanel() {
   const [reason, setReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<string | null>(null);
+  // E-242 — History only. Off by default so the tab opens on the whole record;
+  // an auto-approved quote has no decider, so "mine" excludes them by nature.
+  const [mineOnly, setMineOnly] = React.useState(false);
 
   const { data, isLoading, isError } = useQuery<QueueResponse>({
-    queryKey: ["ceo-quotations", tab],
+    queryKey: ["ceo-quotations", tab, mineOnly],
     queryFn: async () => {
-      const r = await fetch(`/api/dashboard/ceo/quotations?status=${tab}`, {
+      const mine = tab === "history" && mineOnly ? "&mine=true" : "";
+      const r = await fetch(`/api/dashboard/ceo/quotations?status=${tab}${mine}`, {
         cache: "no-store",
       });
       if (!r.ok) throw new Error("Failed to load quotations");
@@ -360,19 +418,45 @@ export function QuotationApprovalsPanel() {
   if (quotations.length === 0) {
     return (
       <Shell header={header}>
+        {tab === "history" && <HistoryFilter value={mineOnly} onChange={setMineOnly} />}
         <p className="text-sm text-gray-400 italic py-6 text-center">
           {tab === "pending"
             ? "No quotations waiting for approval."
-            : "No quotations released yet."}
+            : tab === "history"
+              ? mineOnly
+                ? "You haven't decided any quotations yet."
+                : "No decisions recorded yet."
+              : "No quotations released yet."}
         </p>
       </Shell>
     );
   }
 
   const approved = tab === "approved";
+  const history = tab === "history";
+  // Both are records rather than queues: nothing on either is decidable, and
+  // both order newest-decision-first.
+  const decided = approved || history;
 
   return (
     <Shell header={header}>
+      {history && <HistoryFilter value={mineOnly} onChange={setMineOnly} />}
+      {history && data && (
+        <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mb-3">
+          <span className="font-semibold text-gray-700">
+            {data.total} decision{data.total === 1 ? "" : "s"}
+          </span>
+          {" · "}
+          <span className="text-emerald-700 font-medium">
+            {data.total - data.rejected_count} approved
+          </span>
+          {" · "}
+          <span className="text-rose-700 font-medium">
+            {data.rejected_count} rejected
+          </span>
+          {!mineOnly && data.auto_count > 0 && ` · ${data.auto_count} auto-approved`}
+        </p>
+      )}
       {approved && data && (
         <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mb-3">
           <span className="font-semibold text-gray-700">
@@ -399,7 +483,16 @@ export function QuotationApprovalsPanel() {
         {paged.pageItems.map((q) => {
           const isRejecting = rejecting === q.commercial_id;
           const busy = decide.isPending && decide.variables?.id === q.commercial_id;
-          const cause = approved ? releaseCause(q) : q.oem ? oemCause(q.oem) : null;
+          const rejected = q.approval_status === "rejected";
+          // On History a rejected row keeps the OEM cause that sent it to the
+          // queue in the first place — that is the number the decision was
+          // about — while an approved one reads as a release.
+          const cause =
+            approved || (history && !rejected)
+              ? releaseCause(q)
+              : q.oem
+                ? oemCause(q.oem)
+                : null;
           const overridden =
             approved && q.oem != null && q.oem.reason !== "at_or_above_reference";
           return (
@@ -414,6 +507,38 @@ export function QuotationApprovalsPanel() {
                       {q.dealer_name}
                     </Link>
                     {approved && <ReleaseBadge q={q} />}
+                    {history &&
+                      (rejected ? (
+                        <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700">
+                          Rejected
+                        </span>
+                      ) : (
+                        <ReleaseBadge q={q} />
+                      ))}
+                    {q.quote_number && (
+                      <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                        {q.quote_number}
+                      </span>
+                    )}
+                    {/* E-243 — the outcome that actually matters commercially:
+                        a released quote the dealer took. Shown on both records
+                        tabs; a pending quote cannot have one. */}
+                    {decided && q.dealer_decision && (
+                      <span
+                        className={`text-[11px] font-medium px-1.5 py-0.5 rounded-md ${
+                          q.dealer_decision === "approved"
+                            ? "bg-emerald-600 text-white"
+                            : "bg-slate-200 text-slate-700"
+                        }`}
+                        title={
+                          q.dealer_decision_at
+                            ? `Dealer responded ${waitedFor(q.dealer_decision_at)} ago`
+                            : undefined
+                        }
+                      >
+                        Dealer {q.dealer_decision === "approved" ? "approved" : "declined"}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     {q.city ? `${q.city} · ` : ""}
@@ -429,14 +554,18 @@ export function QuotationApprovalsPanel() {
                   >
                     {q.value > 0 ? formatINRCompact(q.value) : "—"}
                   </p>
-                  {approved ? (
+                  {decided ? (
                     <p className="text-[11px] font-medium text-gray-400">
-                      released {waitedFor(q.approved_at ?? q.created_at)} ago
+                      {history && rejected ? "rejected" : "released"}{" "}
+                      {waitedFor(q.approved_at ?? q.created_at)} ago
                     </p>
                   ) : (
                     <p className="text-[11px] font-medium text-amber-600">
                       waiting {waitedFor(q.created_at)}
                     </p>
+                  )}
+                  {history && q.approved_by_name && (
+                    <p className="text-[11px] text-gray-400">by {q.approved_by_name}</p>
                   )}
                 </div>
               </div>
@@ -469,7 +598,26 @@ export function QuotationApprovalsPanel() {
                 </div>
               )}
 
+              {/* E-242 — the stated reason. Mandatory on every rejection since
+                  E-221, written by the decision route, and displayed nowhere at
+                  all until this line. */}
+              {history && rejected && q.rejection_reason && (
+                <p className="mt-1.5 text-[11px] text-rose-800 bg-rose-50 border border-rose-100 rounded-lg px-2 py-1.5 whitespace-pre-wrap">
+                  <span className="font-semibold">Reason:</span> {q.rejection_reason}
+                </p>
+              )}
+
               <div className="flex items-center gap-2 mt-2 flex-wrap">
+                {q.quote_pdf_url && (
+                  <a
+                    href={q.quote_pdf_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-700 hover:underline"
+                  >
+                    <FileText className="w-3 h-3" /> Draft
+                  </a>
+                )}
                 {q.quote_document_url && (
                   <a
                     href={q.quote_document_url}
@@ -485,7 +633,7 @@ export function QuotationApprovalsPanel() {
                     row ends at the document link. Rejecting after release
                     would need to unsend what the dealer already has, which is
                     a different operation than refusing to send it. */}
-                {!approved && !isRejecting && (
+                {!decided && !isRejecting && (
                   <>
                     <button
                       type="button"
@@ -513,7 +661,7 @@ export function QuotationApprovalsPanel() {
                 )}
               </div>
 
-              {!approved && isRejecting && (
+              {!decided && isRejecting && (
                 <div className="mt-2 flex items-center gap-2 flex-wrap">
                   <input
                     autoFocus

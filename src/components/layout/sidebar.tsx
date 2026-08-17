@@ -334,15 +334,9 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "intellicar",
-          label: "Intellicar Dashboard",
+          label: "IoT Dashboard",
           icon: Battery,
           href: "/ceo/intellicar",
-        },
-        {
-          id: "ai-dialer",
-          label: "AI Dialer (Bolna)",
-          icon: Phone,
-          href: "/ceo/ai-dialer",
         },
       ],
     },

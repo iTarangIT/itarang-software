@@ -18,6 +18,11 @@ import {
     UserMinus2,
     Activity,
     Sparkles,
+    Send,
+    FileCheck2,
+    FileX2,
+    ThumbsUp,
+    ThumbsDown,
 } from "lucide-react";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 
@@ -30,6 +35,11 @@ export const TOUCHPOINT_ICONS: Record<TouchpointType | "default", TouchpointIcon
     whatsapp: MessageSquare,
     brochure_sent: FileText,
     quote_sent: Receipt,
+    quote_submitted: FileCheck2,
+    quote_rejected: FileX2,
+    quote_dispatched: Send,
+    quote_dealer_approved: ThumbsUp,
+    quote_dealer_declined: ThumbsDown,
     status_change_note: Activity,
     lead_assigned: UserPlus2,
     lead_claimed: UserPlus2,
@@ -58,7 +68,14 @@ export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
     neodove_dial_request: "Priority dial requested",
     whatsapp: "WhatsApp",
     brochure_sent: "Brochure sent",
-    quote_sent: "Quote sent",
+    // "Released", not "Delivered": this is the quote clearing the approval gate.
+    // Whether it reached the dealer is `quote_dispatched`.
+    quote_sent: "Quote approved & released",
+    quote_submitted: "Quote sent for approval",
+    quote_rejected: "Quote rejected",
+    quote_dispatched: "Quote sent to dealer",
+    quote_dealer_approved: "Dealer approved quote",
+    quote_dealer_declined: "Dealer declined quote",
     status_change_note: "Status update",
     lead_assigned: "Assigned",
     lead_claimed: "Claimed",
