@@ -119,16 +119,18 @@ describe("renderProformaHtml", () => {
     expect(html).toContain("₹9,80,295.00");
   });
 
-  it("prints the letterhead, bill-to, signatory, bank and terms", () => {
+  it("prints the letterhead, bill-to, bank and terms", () => {
     expect(html).toContain("ITARANG TECHNOLOGIES LLP");
     expect(html).toContain("GSTIN 06AALFI7813E1ZE");
     expect(html).toContain("Himadri Enterprises");
     expect(html).toContain("GSTIN 05EAUPB2253Q1Z8");
-    expect(html).toContain("Chirag Garg");
-    expect(html).toContain("Authorized Signature");
     expect(html).toContain("IDFB0022462");
     expect(html).toContain("Subject to Gurugram jurisdiction.");
-    expect(html).toContain("Proforma Invoice");
+    // Headed "Quotation", not "Proforma Invoice": the layout follows ITPI-35,
+    // the instrument does not. A quotation is an offer; a proforma invoice is
+    // something to pay against.
+    expect(html).toContain("Quotation");
+    expect(html).not.toContain("Proforma Invoice");
   });
 
   it("is self-contained — no external stylesheet, script or image", () => {

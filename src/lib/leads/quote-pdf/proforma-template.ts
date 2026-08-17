@@ -1,6 +1,12 @@
 /**
  * The dealer quotation document, laid out to match docs/ITPI-35 (1).pdf.
  *
+ * The file and function keep the "proforma" name because the LAYOUT is
+ * ITPI-35's. The document itself is headed "Quotation" as of 2026-08-17 — an
+ * offer, not an instrument to pay against — and the heading is config, not code
+ * (QuotationDocConfig.documentTitle), so it can change again without touching
+ * this file.
+ *
  * A PURE template: QuotationView in, HTML out. No DB, no config lookup, no
  * rendering engine, no I/O of any kind. Everything it prints was decided by
  * toQuotationView() and computeTotals(); this file chooses only where things sit
@@ -105,6 +111,24 @@ export function renderProformaHtml(view: QuotationView): string {
     .map((t) => `<li>${esc(t)}</li>`)
     .join("");
 
+  // What was agreed with THIS dealer, as opposed to the standing small print
+  // in `terms` below. Same filter-then-map shape as the bank block: a term
+  // nobody set prints no row, so a quote raised before these were carried on
+  // the document renders exactly as it did.
+  const dealTermRows = [
+    ["Payment", view.commercialTerms.paymentMethod],
+    ["Credit period", view.commercialTerms.creditTerms],
+    ["Delivery", view.commercialTerms.deliveryTerms],
+    ["Warranty", view.commercialTerms.warranty],
+    ["Notes", view.commercialTerms.dealNotes],
+  ]
+    .filter(([, v]) => !!v)
+    .map(
+      ([k, v]) =>
+        `<div class="dealterm"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>`,
+    )
+    .join("");
+
   const bankRows = [
     ["Bank", view.bank.bank],
     ["Name", view.bank.accountName],
@@ -128,6 +152,10 @@ export function renderProformaHtml(view: QuotationView): string {
 
   .head { display: flex; justify-content: space-between; align-items: flex-start;
           border-bottom: 2px solid #0B2239; padding-bottom: 14px; margin-bottom: 16px; }
+  /* Height-constrained, width auto: the mark keeps its aspect ratio whatever
+     file is configured, and a taller replacement cannot push the letterhead
+     off the first page. */
+  .logo { height: 34px; width: auto; display: block; margin-bottom: 7px; }
   .brand { font-size: 16px; font-weight: 800; color: #0B2239; letter-spacing: -.2px; }
   .addr { font-size: 10px; color: #475569; line-height: 1.65; margin-top: 5px; }
   .addr .gst { color: #0F172A; font-weight: 600; margin-top: 4px; }
@@ -186,6 +214,9 @@ export function renderProformaHtml(view: QuotationView): string {
   .signname { font-size: 11.5px; font-weight: 600; }
   .signrule { border-top: 1px solid #CBD5E1; width: 175px; margin: 26px 0 4px auto; }
   .signlbl { font-size: 9.5px; color: #64748B; }
+  /* Height-constrained like the letterhead mark, so replacing the scan with a
+     differently-proportioned one cannot shove the terms onto a second page. */
+  .signimg { height: 62px; width: auto; display: inline-block; margin-bottom: 2px; }
 
   .foot { display: flex; gap: 22px; border-top: 1px solid #E5E7EB; padding-top: 12px; }
   .foot > div { flex: 1; }
@@ -196,10 +227,23 @@ export function renderProformaHtml(view: QuotationView): string {
   ol.terms li { font-size: 9.8px; color: #334155; line-height: 1.55; margin-bottom: 2px; }
   .sectlbl { font-size: 9px; font-weight: 700; color: #94A3B8;
              text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+
+  /* This deal's terms. Bordered and above the signature so they read as part
+     of the offer being signed, not as more small print. */
+  .dealterms { border: 1px solid #E5E7EB; border-radius: 4px;
+               padding: 9px 11px; margin-bottom: 12px; }
+  .dealterm { font-size: 10.5px; color: #0F172A; line-height: 1.7;
+              display: flex; gap: 8px; }
+  .dealterm .k { color: #475569; min-width: 96px; }
 </style>
 
 <div class="head">
   <div>
+    ${
+      view.seller.logoDataUri
+        ? `<img class="logo" src="${esc(view.seller.logoDataUri)}" alt="${esc(view.seller.legalName)}"/>`
+        : ""
+    }
     <div class="brand">${esc(view.seller.legalName)}</div>
     <div class="addr">
       ${view.seller.addressLines.map((l) => esc(l)).join("<br/>")}
@@ -270,13 +314,36 @@ ${
 </div>
 
 ${
-  view.signatory
-    ? `<div class="sign">
-         <div class="signrule"></div>
-         <div class="signname">${esc(view.signatory)}</div>
-         <div class="signlbl">Authorized Signature</div>
+  dealTermRows
+    ? `<div class="dealterms">
+         <div class="sectlbl">Terms Of This Quotation</div>
+         ${dealTermRows}
        </div>`
     : ""
+}
+
+${
+  /*
+   * The scanned block when there is one, the typed fallback otherwise.
+   *
+   * The scan already reads "For ITARANG TECHNOLOGIES LLP … Designated Partner",
+   * so the rule and the "Authorized Signature" caption are dropped with it —
+   * printing both gives the document two titles for one signatory. The name is
+   * still printed underneath, because the signature itself does not spell it
+   * and a document should say who signed it.
+   */
+  view.signatureDataUri
+    ? `<div class="sign">
+         <img class="signimg" src="${esc(view.signatureDataUri)}" alt="${esc(view.signatory ?? "Authorized signature")}"/>
+         ${view.signatory ? `<div class="signname">${esc(view.signatory)}</div>` : ""}
+       </div>`
+    : view.signatory
+      ? `<div class="sign">
+           <div class="signrule"></div>
+           <div class="signname">${esc(view.signatory)}</div>
+           <div class="signlbl">Authorized Signature</div>
+         </div>`
+      : ""
 }
 
 <div class="foot">

@@ -166,6 +166,16 @@ export async function GET(req: NextRequest) {
         quote_document_url: dealerLeadCommercials.quote_document_url,
         product_lines: dealerLeadCommercials.product_lines,
         oem_evaluation: dealerLeadCommercials.oem_evaluation,
+        // The terms the rep agreed. Until this line the queue showed a price
+        // and a per-line reference comparison and NOTHING ELSE — Sanchit was
+        // asked to release a quotation without seeing the credit period,
+        // warranty or delivery it commits us to. They print on the dealer's
+        // document, so they belong in front of whoever approves it.
+        payment_method: dealerLeadCommercials.payment_method,
+        credit_terms: dealerLeadCommercials.credit_terms,
+        delivery_terms: dealerLeadCommercials.delivery_terms,
+        warranty_terms: dealerLeadCommercials.warranty_terms,
+        deal_notes: dealerLeadCommercials.deal_notes,
         created_at: dealerLeadCommercials.created_at,
         approval_mode: dealerLeadCommercials.approval_mode,
         approved_at: dealerLeadCommercials.approved_at,
@@ -246,9 +256,20 @@ export async function GET(req: NextRequest) {
           // final_price is the product roll-up and wins when present; the two
           // disagree on revisions where only lines changed.
           value: Number(r.final_price ?? r.price_quoted ?? 0),
+          // Both, not just the winner: when they disagree the approver should
+          // see that a roll-up replaced a typed figure, not silently get one.
+          price_quoted: r.price_quoted == null ? null : Number(r.price_quoted),
+          final_price: r.final_price == null ? null : Number(r.final_price),
           quote_document_url: r.quote_document_url,
           line_count: Array.isArray(r.product_lines) ? r.product_lines.length : 0,
           oem: summariseEvaluation(r.oem_evaluation),
+          terms: {
+            payment_method: r.payment_method ?? null,
+            credit_terms: r.credit_terms ?? null,
+            delivery_terms: r.delivery_terms ?? null,
+            warranty_terms: r.warranty_terms ?? null,
+            deal_notes: r.deal_notes ?? null,
+          },
           raised_by: r.raised_by ?? "(unknown)",
           dealer_name: r.dealer_name ?? "(unnamed lead)",
           city: r.city,

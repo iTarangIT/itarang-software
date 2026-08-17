@@ -64,6 +64,15 @@ export interface SellerBlock {
   /** State the goods ship FROM. Decides IGST vs CGST+SGST. */
   stateCode: string;
   stateName: string;
+  /**
+   * The letterhead mark, as a `data:` URI — never a path or an https URL.
+   *
+   * renderPdfFromHtml calls setContent() with no base URL and waits only for
+   * domcontentloaded, so anything the browser would have to FETCH renders as a
+   * broken image, silently, on a document that has already gone to a dealer.
+   * NULL prints no image at all, which is the honest degradation.
+   */
+  logoDataUri: string | null;
 }
 
 export interface BillToBlock {
@@ -78,6 +87,31 @@ export interface BankBlock {
   accountNo: string | null;
   ifsc: string | null;
   branch: string | null;
+}
+
+/**
+ * What the rep agreed with THIS dealer, as opposed to `QuotationView.terms`,
+ * which is iTarang's standing small print and is the same on every document.
+ *
+ * Free text, printed as entered. `credit_terms` says "120" on one quote and
+ * "120 days" on the next because the field takes whatever the rep types; the
+ * document must not pretend to a precision the data does not have, so nothing
+ * here is parsed or unit-suffixed.
+ *
+ * Every field is nullable and a null one prints no row. A quote raised before
+ * this existed therefore renders exactly as it did.
+ */
+export interface CommercialTerms {
+  paymentMethod: string | null;
+  creditTerms: string | null;
+  deliveryTerms: string | null;
+  warranty: string | null;
+  /**
+   * INTERNAL FIELD, PRINTED TO THE DEALER by explicit decision. The modal that
+   * captures it says so, because the only thing that stops an internal remark
+   * reaching a dealer is the author knowing where it goes.
+   */
+  dealNotes: string | null;
 }
 
 export interface QuotationView {
@@ -109,7 +143,17 @@ export interface QuotationView {
   /** True when the tax is CGST+SGST rather than IGST — intra-state supply. */
   isIntraState: boolean;
 
+  /** This deal's terms. Distinct from `terms` below, which is the small print. */
+  commercialTerms: CommercialTerms;
+
   signatory: string | null;
+  /**
+   * The scanned signature block, as a data: URI. It already carries the company
+   * line and the signatory's title, so the template drops its own rule and
+   * "Authorized Signature" caption when this is present — a document with two
+   * titles for one signatory reads as a mistake.
+   */
+  signatureDataUri: string | null;
   notes: string[];
   bank: BankBlock;
   terms: string[];
