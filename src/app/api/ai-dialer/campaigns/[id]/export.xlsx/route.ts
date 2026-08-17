@@ -59,6 +59,10 @@ export const GET = withErrorHandler(
       "sales_manager",
       "sales_executive",
       "admin",
+      // Same reason as the advance route: the Export Excel button ships with
+      // the campaign detail view, which these two dashboards now mount.
+      "inside_sales_rep",
+      "asm",
     ]);
 
     const { id } = await params;

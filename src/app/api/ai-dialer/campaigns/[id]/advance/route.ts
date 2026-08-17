@@ -25,6 +25,12 @@ const ALLOWED_ROLES = [
   "business_head",
   "sales_head",
   "sales_manager",
+  // The campaign detail view is now mounted on the inside-sales and ASM
+  // dashboards too, and it renders Call next unconditionally. Without these two
+  // the button is visible to the people who actually work these leads and 403s
+  // when they press it, which is worse than not offering it at all.
+  "inside_sales_rep",
+  "asm",
 ] as const;
 
 export const POST = withErrorHandler(

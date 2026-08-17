@@ -269,7 +269,9 @@ export async function notifyKycFinalDecision(params: {
   decision: string; // approved, rejected
   notes?: string | null;
   rejectionReason?: string | null;
-  adminId: string;
+  // Nullable since E-246: the SLA sweep makes this decision with no human
+  // actor. Not read in the body — the dealer-facing copy never names the admin.
+  adminId: string | null;
   leadStatus?: string | null; // step_3_cleared, kyc_approved, kyc_rejected
 }) {
   if (params.decision === "approved") {

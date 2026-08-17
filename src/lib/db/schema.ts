@@ -118,6 +118,11 @@ export const productMasterBatteries = pgTable(
     warranty_months: integer("warranty_months").default(0).notNull(),
     iot_compatible: boolean("iot_compatible").default(false).notNull(),
     compatible_charger_models: jsonb("compatible_charger_models").default([]).notNull(),
+    // E-242 — what the GST proforma quotation prints per line. Nullable with no
+    // backfill: a guessed rate is a wrong number on a tax document, so NULL
+    // means "not set yet" and the renderer shows it as unset, never as zero.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -141,6 +146,9 @@ export const productMasterChargers = pgTable(
     compatible_battery_models: jsonb("compatible_battery_models").default([]).notNull(),
     base_price: numeric("base_price", { precision: 12, scale: 2 }),
     warranty_months: integer("warranty_months").default(0).notNull(),
+    // E-242 — see product_master_batteries.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -161,6 +169,9 @@ export const productMasterParaphernalia = pgTable(
     compatible_categories: jsonb("compatible_categories").default([]).notNull(),
     max_qty_per_lead: integer("max_qty_per_lead").default(0).notNull(),
     harness_variant: boolean("harness_variant").default(false).notNull(),
+    // E-242 — see product_master_batteries.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -1545,6 +1556,11 @@ export const kycVerifications = pgTable(
     admin_action_by: uuid("admin_action_by"),
     admin_action_at: timestamp("admin_action_at", { withTimezone: true }),
     admin_action_notes: text("admin_action_notes"),
+    // E-246 — 'admin' (a human clicked Accept/Reject) | 'system' (the KYC
+    // auto-approval SLA sweep accepted it WITHOUT calling the provider).
+    // admin_action_by is NULL for a system action, but NULL is also what
+    // legacy rows carry, so this is the only reliable discriminator.
+    admin_action_source: varchar("admin_action_source", { length: 16 }).default('admin'),
     verification_for: varchar("verification_for", { length: 20 }).default('customer').notNull(),
     applicant: varchar({ length: 20 }).default('primary').notNull(),
   },
@@ -1640,6 +1656,14 @@ export const consentRecords = pgTable("consent_records", {
   signed_consent_url: text("signed_consent_url"),
   verified_by: uuid("verified_by"),
   verified_at: timestamp("verified_at", { withTimezone: true }),
+  // E-246 — 'admin' (KYC review panel) | 'system' (auto-verified by the sweep).
+  verification_source: varchar("verification_source", { length: 16 }).default('admin'),
+  // E-247 — the consent auto-verify deadline, STAMPED when the consent enters a
+  // signed-but-unverified state. NULL = never auto-verify, which is what stops
+  // enabling the feature from reaching back over old consents. Do not backfill.
+  // NOTE the sweep's partial index (consent_records_auto_verify_due_idx) is
+  // migration-only; drizzle's index builder has no WHERE clause.
+  auto_verify_due_at: timestamp("auto_verify_due_at", { withTimezone: true }),
   consent_link_expires_at: timestamp("consent_link_expires_at", { withTimezone: true }),
   consent_delivery_channel: varchar("consent_delivery_channel", { length: 20 }),
   sign_method: varchar("sign_method", { length: 30 }),
@@ -1892,6 +1916,8 @@ export const otherDocumentRequests = pgTable("other_document_requests", {
   rejection_reason: text("rejection_reason"),
   reviewed_by: uuid("reviewed_by"),
   reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+  // E-246 — 'admin' | 'system' (KYC auto-approval SLA sweep).
+  review_source: varchar("review_source", { length: 16 }).default('admin'),
   document_name: text("document_name"),
   document_url: text("document_url"),
   status: varchar({ length: 20 }).default('pending'),
@@ -2118,6 +2144,23 @@ export const adminVerificationQueue = pgTable(
     reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-246 — the KYC auto-approval SLA clock. `sla_due_at` is stamped at
+    // dealer submit as submitted_at + the configured window; NULL means never
+    // auto-approve (every pre-E-246 row, and anything submitted while the
+    // feature is off). `auto_approved_at` is the idempotency guard — a row is
+    // claimed at most once, whatever the outcome.
+    // NOTE the sweep's partial index (admin_verification_queue_sla_due_idx) is
+    // migration-only; drizzle's index builder has no WHERE clause.
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    auto_approved_at: timestamp("auto_approved_at", { withTimezone: true }),
+    auto_approval_result: varchar("auto_approval_result", { length: 24 }),
+    // E-248 — per-card windows. `sla_card_due_at` is the snapshot of each
+    // card's own deadline taken at submit ({aadhaar: ISO, …}); `sla_next_due_at`
+    // is the earliest deadline still to act on, which the sweep selects by and
+    // advances as cards mature. Both NULL on pre-E-248 rows, which fall back to
+    // `sla_due_at` — never backfill either.
+    sla_card_due_at: jsonb("sla_card_due_at"),
+    sla_next_due_at: timestamp("sla_next_due_at", { withTimezone: true }),
   },
   (table) => ({
     adminVerificationQueueLeadIdx: index(
@@ -2153,6 +2196,8 @@ export const kycVerificationMetadata = pgTable(
     final_decision_at: timestamp("final_decision_at", { withTimezone: true }),
     final_decision_by: uuid("final_decision_by"),
     final_decision_notes: text("final_decision_notes"),
+    // E-246 — 'admin' | 'system' (KYC auto-approval SLA sweep).
+    final_decision_source: varchar("final_decision_source", { length: 16 }).default('admin'),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3324,6 +3369,83 @@ export const scraperRunChunks = pgTable(
   }),
 );
 
+// E-241 — the scraper batch job queue. One row = one (query, city) pair waiting
+// to become a scraper_runs row. The dispatcher ticker
+// (startScraperQueueTicker in src/instrumentation-node.ts →
+// jobQueue.dispatchOnce()) claims the oldest eligible row, creates an ordinary
+// scraper_runs row for it, and calls the existing startChunkedRun().
+//
+// Safe to mirror in full — unlike the scrapeRuns landmine above, this table is
+// brand new, so there is no pre-existing statement an extra column could break.
+// On a database without E-241 the /api/scraper/batch routes 500 loudly and the
+// single-query scraper keeps working; that is the whole reason the queue is its
+// own relation rather than seven more columns on scraper_runs.
+export const scraperJobQueue = pgTable(
+  "scraper_job_queue",
+  {
+    id: text().primaryKey().notNull(),
+    // Groups the rows of one submission. A LABEL for the UI only — there is no
+    // batch entity and nothing rolls up through it.
+    batch_id: text("batch_id").notNull(),
+    // Position within the batch, 0-based. Dispatch orders by
+    // (created_at, seq) — created_at FIRST: a whole submission is inserted in
+    // one statement and shares created_at exactly, so that reads as "oldest
+    // batch first, then the operator's own row order" and batches drain FIFO.
+    // seq alone cannot express order (shared timestamp), and seq FIRST would
+    // round-robin across batches because seq restarts at 0 for each one.
+    seq: integer().default(0).notNull(),
+    query_text: text("query_text").notNull(),
+    // NULL = no city list supplied, so generateCitiesForQuery() picks them,
+    // i.e. exactly the pre-E-241 single-query behaviour.
+    city: text(),
+    max_results: integer("max_results"),
+    // false (the default, and the UI default) = use query_text literally, one
+    // chunk per job. true = expand into ~15 Gemini variations first.
+    expand_with_ai: boolean("expand_with_ai").default(false).notNull(),
+    // queued | running | done | failed | cancelled. No CHECK, no pgEnum — the
+    // vocabulary lives in src/lib/scraper/jobQueue.ts and is enforced by zod at
+    // the write path, per this table family's convention.
+    status: varchar({ length: 16 }).default('queued').notNull(),
+    // Soft FK to scraper_runs.id — no DB-level constraint on purpose.
+    run_id: varchar("run_id", { length: 255 }),
+    attempts: integer().default(0).notNull(),
+    last_error: text("last_error"),
+    // now | once | daily. See E-241's header — 'daily' is the whole of the
+    // recurring model and needs no pause/resume state: queued rows just sit
+    // here while the window is shut.
+    schedule_mode: varchar("schedule_mode", { length: 16 })
+      .default('now')
+      .notNull(),
+    run_after: timestamp("run_after", { withTimezone: true }),
+    // 'HH:MM' IST. Same shape as dialer_campaigns.window_start (E-228) and
+    // assignment_config.working_hours_start (E-120). window_end < window_start
+    // is legal and means an overnight window; the reader handles the wrap.
+    window_start: varchar("window_start", { length: 5 }),
+    window_end: varchar("window_end", { length: 5 }),
+    // ["mon","tue",…]; NULL = every day. Same vocabulary as
+    // assignment_config.working_days and dialer_campaigns.window_days.
+    window_days: jsonb("window_days"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatched_at: timestamp("dispatched_at", { withTimezone: true }),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    // Copied off scraper_runs.new_leads_promoted by reconcileFinishedJobs() so
+    // batch totals need no join.
+    leads_promoted: integer("leads_promoted").default(0).notNull(),
+  },
+  (t) => ({
+    // Serves dispatchOnce()'s claim. PARTIAL (WHERE status = 'queued') in the
+    // migration — Drizzle's index builder has no WHERE syntax, so E-241 is the
+    // source of truth for the predicate.
+    claimIdx: index("idx_scraper_job_queue_claim").on(t.created_at, t.seq),
+    batchIdx: index("idx_scraper_job_queue_batch").on(t.batch_id, t.seq),
+    // Also PARTIAL in the migration (WHERE run_id IS NOT NULL) — same caveat.
+    runIdx: index("idx_scraper_job_queue_run").on(t.run_id),
+  }),
+);
+
 export const scraperLeads = pgTable("scraper_leads", {
   id: text().primaryKey().notNull(),
   name: text(),
@@ -3351,6 +3473,17 @@ export const dealerLeads = pgTable("dealer_leads", {
   // to conflict on. The constraint already exists in the DB (migration
   // 0002_cute_devos.sql); mirror it here so future `db:push` runs preserve it.
   phone: text().unique("dealer_leads_phone_unique"),
+  // E-242 adds `contact_email` and `gstin` to this table and they are
+  // DELIBERATELY ABSENT HERE, exactly as E-224's and E-236's columns are.
+  //
+  // Drizzle names every column of a table object in a bare
+  // `db.select().from(dealerLeads)`, and there are ~20 of those across the
+  // leads list, the AI dialer, the CEO overview and the dashboards. Listing a
+  // column here therefore hard-fails all of them at PARSE time on any database
+  // without the migration — the whole leads screen goes down to add an email
+  // field. The quotation code reads both columns by name in raw `sql``
+  // projections instead (quoteDraft.ts, the send route), so an unapplied E-242
+  // costs the quotation feature and nothing else.
   language: text(),
   follow_up_history: jsonb("follow_up_history").default([]),
   current_status: text("current_status"),
@@ -4015,6 +4148,10 @@ export const nbfcLeadAssignments = pgTable(
     // Lifecycle: pending → in_progress → offer_submitted → selected |
     // not_selected | declined | withdrawn. A1 only writes 'pending'; later
     // phases drive the rest. CHECK constraint lives on the DB side (E-131).
+    // E-245: 'withdrawn' = the DEALER closed the deal with this lender
+    // (decision_reason='dealer_closed_deal'), freeing one of the two lender
+    // slots so the lead can be re-routed. Distinct from 'not_selected', which
+    // means it lost to a chosen winner.
     status: varchar({ length: 30 }).default("pending").notNull(),
     assigned_at: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
     decided_at: timestamp("decided_at", { withTimezone: true }),
@@ -4078,9 +4215,12 @@ export const nbfcFinancingOffers = pgTable(
     submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     // E-238 — dealer <-> NBFC negotiation state for THIS offer. The round-by-round
     // history lives in nbfcOfferNegotiations; these four are the current state.
-    // negotiation_status: open (dealer may counter) | dealer_countered (NBFC to
-    // respond) | fixed (NBFC froze the terms — neither side can change them and
-    // the dealer's Negotiate action disappears; winner selection still allowed).
+    // negotiation_status: open (dealer may ask for a revision) | dealer_countered
+    // (NBFC to respond) | fixed (NBFC froze the terms — neither side can change
+    // them and the dealer's Negotiate action disappears; winner selection still
+    // allowed) | closed (E-245: the dealer ended the deal — terminal, set with
+    // status='withdrawn' here and on the assignment). A fixed offer can still be
+    // closed: fixing freezes the numbers, not the customer's decision.
     negotiation_status: varchar("negotiation_status", { length: 16 }).default("open").notNull(),
     negotiation_round: integer("negotiation_round").default(0).notNull(),
     fixed_at: timestamp("fixed_at", { withTimezone: true }),
@@ -7870,6 +8010,31 @@ export const dealerLeadCommercials = pgTable(
     // quote stays auditable after the price book moves on.
     approval_mode: varchar("approval_mode", { length: 16 }),
     oem_evaluation: jsonb("oem_evaluation"),
+    // E-242 — the generated quotation draft. Distinct from quote_document_url,
+    // which is whatever file the rep attached by hand; these are written only
+    // by generateQuotationDraft() and only after approval. quote_snapshot is
+    // the view the PDF was rendered from, kept for the same reason as
+    // oem_evaluation: the masters and the price book move, the document must
+    // not. quote_pdf_error records a render that failed after the approval
+    // transaction had already committed.
+    quote_number: varchar("quote_number", { length: 40 }),
+    quote_pdf_url: text("quote_pdf_url"),
+    quote_pdf_generated_at: timestamp("quote_pdf_generated_at", {
+      withTimezone: true,
+    }),
+    quote_pdf_error: text("quote_pdf_error"),
+    quote_snapshot: jsonb("quote_snapshot"),
+    // E-243 — the DEALER's answer, orthogonal to approval_status above. That
+    // column is iTarang's internal gate; this is what the dealer said about the
+    // quotation we released. A quote can be approved by us and declined by
+    // them, and both facts have to be readable at once. NULL = no answer yet.
+    // `via` and `actor` carry the evidence, because this is a claim about
+    // somebody outside the company.
+    dealer_decision: varchar("dealer_decision", { length: 16 }),
+    dealer_decision_at: timestamp("dealer_decision_at", { withTimezone: true }),
+    dealer_decision_via: varchar("dealer_decision_via", { length: 20 }),
+    dealer_decision_actor: text("dealer_decision_actor"),
+    dealer_decision_note: text("dealer_decision_note"),
   },
   (t) => ({
     leadVersionUniq: uniqueIndex(
@@ -7880,6 +8045,48 @@ export const dealerLeadCommercials = pgTable(
     ).on(t.dealer_lead_id, t.version_no),
     currentIdx: index("dealer_lead_commercials_current_idx").on(
       t.dealer_lead_id,
+    ),
+  }),
+);
+
+// E-242 — one row per channel per send attempt of a quotation draft.
+//
+// Append-only: a resend is a new row, never an update, so "we sent this three
+// times and the first two bounced" stays answerable. The two channels are
+// dispatched independently — WhatsApp failing must not undo a delivered email —
+// so a single send can write one `sent` row and one `failed` row.
+//
+// Not buyback_notification_events, which is the closest existing thing but is
+// NOT NULL on request_id with an FK to buyback_requests. No FKs here, matching
+// dealer_lead_commercials.
+export const quotationDispatches = pgTable(
+  "quotation_dispatches",
+  {
+    dispatch_id: uuid("dispatch_id").primaryKey().defaultRandom(),
+    commercial_id: uuid("commercial_id").notNull(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    // email | whatsapp — free text, vocabulary in src/lib/leads/quoteDispatch.ts
+    channel: varchar("channel", { length: 20 }).notNull(),
+    // The address or number actually used, snapshotted: the lead's email can be
+    // corrected later, this stays what the message went to.
+    recipient: text("recipient").notNull(),
+    // sent | failed
+    status: varchar("status", { length: 20 }).notNull(),
+    provider_message_id: text("provider_message_id"),
+    error: text("error"),
+    sent_by: text("sent_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    commercialIdx: index("quotation_dispatches_commercial_idx").on(
+      t.commercial_id,
+      t.created_at,
+    ),
+    leadIdx: index("quotation_dispatches_lead_idx").on(
+      t.dealer_lead_id,
+      t.created_at,
     ),
   }),
 );

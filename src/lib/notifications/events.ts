@@ -1048,7 +1048,10 @@ export async function notifyOfferSubmitted(p: {
 }
 
 /**
- * E-238 — the dealer countered an NBFC's firm offer with specific terms.
+ * E-238 / E-245 — the dealer asked an NBFC to revise its firm offer.
+ *
+ * The ask is free text (E-245 dropped the six editable term fields), so the
+ * message IS the notification body — there is nothing else to summarise.
  *
  * Only the NBFC being negotiated with hears about it. The other lender on the
  * lead is a competitor mid-race, and telling it what the customer is asking for
@@ -1058,38 +1061,57 @@ export async function notifyOfferNegotiated(p: {
   leadId: string;
   nbfcTenantId: string;
   nbfcName: string;
-  asks: Record<string, string | number | null>;
-  message?: string | null;
+  message: string;
 }) {
   const who = await leadLabel(p.leadId);
-  const ASK_LABEL: Record<string, (v: string | number) => string> = {
-    loan_amount: (v) => `loan ₹${v}`,
-    roi_pct: (v) => `ROI ${v}%`,
-    emi_amount: (v) => `EMI ₹${v}`,
-    tenure_months: (v) => `${v} months`,
-    down_payment: (v) => `down payment ₹${v}`,
-    processing_fee: (v) => `processing fee ₹${v}`,
-  };
-  const asked = Object.entries(p.asks)
-    .filter(([, v]) => v != null && v !== "")
-    .map(([k, v]) => (ASK_LABEL[k] ? ASK_LABEL[k](v as string | number) : `${k} ${v}`))
-    .join(" · ");
   await emit({
     type: "loan.offer_negotiated",
-    title: "Customer countered your offer",
-    message: `${who} asked for revised terms${asked ? ` — ${asked}` : ""}.${
-      p.message ? ` "${p.message}"` : ""
-    }`,
+    title: "Customer asked you to revise your offer",
+    message: `${who} sent a negotiation request: "${p.message}"`,
     leadId: p.leadId,
     stage: "Step 4 · Offers",
     from: customerParty(who),
-    data: { asks: p.asks, message: p.message ?? null },
+    data: { message: p.message },
     to: [
       toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId, "#offer") }),
       toAdmins({
         href: adminLead(p.leadId, "#offers"),
-        title: "Dealer countered a financing offer",
-        message: `${who} asked ${p.nbfcName} for revised terms${asked ? ` — ${asked}` : ""}.`,
+        title: "Dealer sent a negotiation request",
+        message: `${who} asked ${p.nbfcName} to revise its offer: "${p.message}"`,
+      }),
+    ],
+  });
+}
+
+/**
+ * E-245 — the dealer closed the deal with this lender.
+ *
+ * Terminal for this assignment: the offer goes 'withdrawn' and the dealer is
+ * free to route the lead to a different lender. Scoped the same way as
+ * notifyOfferNegotiated — the competing lender is not told that a rival just
+ * lost the lead, because that is the rival's position, not news about this one.
+ */
+export async function notifyOfferClosed(p: {
+  leadId: string;
+  nbfcTenantId: string;
+  nbfcName: string;
+  message: string;
+}) {
+  const who = await leadLabel(p.leadId);
+  await emit({
+    type: "loan.offer_closed",
+    title: "Customer closed the deal",
+    message: `${who} closed the deal on your financing offer: "${p.message}"`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: customerParty(who),
+    data: { message: p.message },
+    to: [
+      toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId, "#offer") }),
+      toAdmins({
+        href: adminLead(p.leadId, "#offers"),
+        title: "Dealer closed a financing offer",
+        message: `${who} closed the deal with ${p.nbfcName}: "${p.message}"`,
       }),
     ],
   });
@@ -1125,6 +1147,41 @@ export async function notifyOfferFixed(p: {
     to: [
       toAdmins({ href: adminLead(p.leadId, "#offers") }),
       toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") }),
+    ],
+  });
+}
+
+/**
+ * E-245 — after closing a deal the dealer routed the lead to a DIFFERENT lender.
+ *
+ * Deliberately not notifyProductSubmitted: that fans out via toLeadNbfcs, which
+ * would tell the lender the dealer just closed that a "new application" had been
+ * routed to it. Only the newly picked lender and the admins hear about this.
+ */
+export async function notifyLeadRerouted(p: {
+  leadId: string;
+  nbfcTenantId: string;
+  nbfcName: string;
+  loanProduct?: string | null;
+  dealerName?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const product = p.loanProduct ? ` (${p.loanProduct})` : "";
+  await emit({
+    type: "loan.lead_rerouted",
+    title: "New application routed to you",
+    message: `${who} selected your financing${product} after closing a deal with another lender.`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: p.dealerName ? dealerParty(p.dealerName) : customerParty(who),
+    data: { loan_product: p.loanProduct ?? null },
+    to: [
+      toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId) }),
+      toAdmins({
+        href: adminLead(p.leadId, "#offers"),
+        title: "Lead re-routed to another lender",
+        message: `${p.dealerName ?? "The dealer"} routed ${who} to ${p.nbfcName}${product} after closing a deal.`,
+      }),
     ],
   });
 }
@@ -1401,6 +1458,207 @@ export async function notifyOemPricesMissing(p: {
     from: ADMIN_PARTY,
     data: { total: p.total, lapsed: p.lapsed, examples: p.examples.slice(0, 20) },
     to: [PRICE_KEEPERS],
+  });
+}
+
+/**
+ * The E-246 SLA sweep acted on a KYC case that no admin had touched.
+ *
+ * Emitted on BOTH outcomes on purpose. `approved` is an FYI — the dealer has
+ * already been told Step 4 is open by `applyKycFinalDecision`, and this is the
+ * admin's record that it happened without them. `blocked` is the one that
+ * matters: it means a card was already rejected, so the approve gate refused
+ * and the case is now waiting on a human with nothing else to surface it.
+ */
+export async function notifyKycAutoApproved(p: {
+  leadId: string;
+  result: "approved" | "blocked";
+  slaWindow: string;
+  cardsAccepted?: number;
+  blockers?: string[] | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const approved = p.result === "approved";
+  const message = approved
+    ? `No admin action within the ${p.slaWindow} SLA, so the system accepted ${p.cardsAccepted ?? 0} pending card(s) and approved KYC for ${who}. Product Selection is now unlocked. The verification providers were not called.`
+    : `The ${p.slaWindow} SLA elapsed for ${who}, but KYC could not be auto-approved: ${(p.blockers ?? []).join("; ") || "the approve gate refused"}. This case still needs you.`;
+
+  await emit({
+    type: "kyc.auto_approved",
+    title: approved
+      ? "KYC auto-approved by system"
+      : "KYC auto-approval blocked — action needed",
+    message,
+    stage: "Step 3 · KYC",
+    leadId: p.leadId,
+    from: ADMIN_PARTY,
+    data: {
+      result: p.result,
+      sla_window: p.slaWindow,
+      cards_accepted: p.cardsAccepted ?? 0,
+      blockers: p.blockers ?? null,
+      providers_called: false,
+    },
+    to: [toAdmins({ href: adminLead(p.leadId) })],
+  });
+}
+
+/**
+ * E-242 — a quotation cleared approval and its draft is ready to send.
+ *
+ * WHO IS TOLD, AND WHY BOTH
+ *   - The LEAD OWNER (dealer_leads.current_owner_id). This is the person who
+ *     raised the quote and the only one who can act on it. Until now they were
+ *     told nothing at all: the decision route wrote a touchpoint and stopped, so
+ *     a rep learned their quote had been approved by going and looking.
+ *   - Everyone with role `sales_manager`, per the requirement ("whoever the
+ *     sales manager is gets a notification that it's approved"). They oversee
+ *     the deal but do not own the lead, so they get the leads list rather than
+ *     the owner's lead page.
+ *
+ * Both land on a page that opens the draft, because the next step is a human
+ * reading the document before it goes to a dealer — the notification is the
+ * start of a review, not just an announcement.
+ *
+ * The auto/manual distinction is in the copy on purpose. "Approved by the
+ * pricing rule" and "approved by the CEO" mean different things about how much
+ * scrutiny the number has had, and the person about to send it to a dealer
+ * should not have to go and find out which happened.
+ */
+export async function notifyQuotationApproved(p: {
+  leadId: string;
+  commercialId: string;
+  ownerUserId: string | null;
+  dealerName: string | null;
+  quoteNumber: string | null;
+  value: number;
+  /** 'auto' when the OEM price rule released it, 'manual' when a human did. */
+  mode: "auto" | "manual";
+  approverName?: string | null;
+  /** False when the PDF could not be produced — say so rather than imply a draft exists. */
+  draftReady: boolean;
+}) {
+  const dealer = p.dealerName?.trim() || "a dealer";
+  const money = p.value > 0 ? ` for ₹${p.value.toLocaleString("en-IN")}` : "";
+  const ref = p.quoteNumber ? ` (${p.quoteNumber})` : "";
+
+  const how =
+    p.mode === "auto"
+      ? "auto-approved — every line was at or above its OEM reference price"
+      : `approved by ${p.approverName?.trim() || "the CEO"}`;
+
+  const tail = p.draftReady
+    ? "The quotation draft is ready to review and send to the dealer."
+    : "The draft could not be generated — open the quote and retry before sending.";
+
+  const message = `The quotation for ${dealer}${money}${ref} was ${how}. ${tail}`;
+
+  await emit({
+    type: "quote.approved",
+    title: "Quotation approved",
+    message,
+    leadId: p.leadId,
+    stage: "Quotation",
+    from: ADMIN_PARTY,
+    data: {
+      commercialId: p.commercialId,
+      quoteNumber: p.quoteNumber,
+      value: p.value,
+      mode: p.mode,
+      draftReady: p.draftReady,
+    },
+    to: [
+      // The owner may be unset on an orphaned lead; emit() skips an audience it
+      // cannot resolve rather than failing the batch, but filtering here keeps
+      // the intent explicit.
+      ...(p.ownerUserId
+        ? [
+            {
+              audience: { kind: "user" as const, userId: p.ownerUserId },
+              as: ADMIN_PARTY,
+              href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+            },
+          ]
+        : []),
+      {
+        audience: { kind: "roles" as const, roles: ["sales_manager"] },
+        as: ADMIN_PARTY,
+        href: `/leads?lead=${p.leadId}&quote=${p.commercialId}`,
+      },
+    ],
+  });
+}
+
+/**
+ * E-243 — the dealer answered a quotation.
+ *
+ * The other half of `quote.approved`. That one says we released a number; this
+ * one says what came back, and it is the first time the CRM has been able to
+ * say so at all — before E-243 the reply lived in a WhatsApp thread or an inbox
+ * and the lead owner found out by asking.
+ *
+ * DECLINED IS A WARNING, APPROVED IS NOT. A decline is the one that needs
+ * somebody to do something today: the deal is stalling and the reason, when the
+ * dealer gave one, is the most useful thing on the notification. An approval is
+ * good news that can wait for the next time the owner looks at the bell.
+ * `catalog.ts` files the type as Warning for that reason, so the copy leads
+ * with whichever it is.
+ */
+export async function notifyQuotationDealerDecision(p: {
+  leadId: string;
+  commercialId: string;
+  ownerUserId: string | null;
+  dealerName: string | null;
+  quoteNumber: string | null;
+  value: number;
+  decision: "approved" | "declined";
+  via: "link" | "whatsapp";
+  note?: string | null;
+}) {
+  const dealer = p.dealerName?.trim() || "The dealer";
+  const money = p.value > 0 ? ` (₹${p.value.toLocaleString("en-IN")})` : "";
+  const ref = p.quoteNumber ? ` ${p.quoteNumber}` : "";
+  const channel = p.via === "whatsapp" ? "over WhatsApp" : "using the approval link";
+
+  const message =
+    p.decision === "approved"
+      ? `${dealer} APPROVED quotation${ref}${money} ${channel}. Take it forward in the CRM — ` +
+        `nothing has been moved automatically.`
+      : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
+        (p.note ? ` They said: "${p.note}"` : "") +
+        ` Follow up or raise a revision.`;
+
+  await emit({
+    type: "quote.dealer_decision",
+    title:
+      p.decision === "approved" ? "Dealer approved a quotation" : "Dealer declined a quotation",
+    message,
+    leadId: p.leadId,
+    stage: "Quotation",
+    from: ADMIN_PARTY,
+    data: {
+      commercialId: p.commercialId,
+      quoteNumber: p.quoteNumber,
+      decision: p.decision,
+      via: p.via,
+      value: p.value,
+    },
+    to: [
+      ...(p.ownerUserId
+        ? [
+            {
+              audience: { kind: "user" as const, userId: p.ownerUserId },
+              as: ADMIN_PARTY,
+              href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+            },
+          ]
+        : []),
+      {
+        audience: { kind: "roles" as const, roles: ["sales_manager"] },
+        as: ADMIN_PARTY,
+        href: `/leads?lead=${p.leadId}&quote=${p.commercialId}`,
+      },
+    ],
   });
 }
 

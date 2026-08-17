@@ -38,6 +38,12 @@ export interface StepperStage {
   /** Short status line under the label. */
   sub?: string;
   state: NodeState;
+  /**
+   * Overrides the generic state badge on the open stage's header. For outcomes
+   * the NodeState cannot express — E-245's dealer-closed deal is `done` as far
+   * as the step machine is concerned, but "Completed" is the wrong word for it.
+   */
+  badge?: { label: string; cls: string };
   /** Accordion body shown when this node is open. */
   content?: ReactNode;
 }
@@ -279,10 +285,10 @@ export default function LeadStageStepper({
             </div>
             <span
               className={`px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
-                STATE_BADGE[dispState(openStage)].cls
+                (openStage.badge ?? STATE_BADGE[dispState(openStage)]).cls
               }`}
             >
-              {STATE_BADGE[dispState(openStage)].label}
+              {(openStage.badge ?? STATE_BADGE[dispState(openStage)]).label}
             </span>
           </div>
 
