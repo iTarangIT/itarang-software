@@ -94,7 +94,7 @@ export const POST = withBotAuth(
     const baseName = (source.name ?? "").replace(/^(?:Retry · )+/, "").trim();
     const retryName = `Retry · ${baseName || "previous campaign"}`;
 
-    const newId = await createCampaign({
+    const { campaignId: newId, queued, blockedAiConnected } = await createCampaign({
       queueIds,
       provider,
       category: source.category,
@@ -104,13 +104,23 @@ export const POST = withBotAuth(
       name: retryName,
     });
 
+    // See the equivalent note in /api/ai-dialer/campaigns/[id]/recall-failed:
+    // the only failed leads that get scrubbed here are `needs_review` ones,
+    // whose call connected but could not be analysed.
+    if (!newId && blockedAiConnected.length > 0) {
+      return errorResponse(
+        "Every failed lead in this campaign has already been reached by the AI. They need manual follow-up.",
+        409,
+      );
+    }
     if (!newId) return errorResponse("Could not create retry campaign", 500);
 
     const result = await startDraftCampaign(newId, provider);
 
     return successResponse({
       campaignId: newId,
-      retryCount: queueIds.length,
+      retryCount: queued,
+      blockedAiConnected: blockedAiConnected.length,
       status: "running",
       firstCallPlaced: result.firstCallPlaced,
       firstCallError: result.firstCallError,
