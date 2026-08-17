@@ -31,11 +31,35 @@ type Executor = typeof db | Tx;
 export const NEGOTIATION_PARTIES = ["nbfc", "dealer"] as const;
 export type NegotiationParty = (typeof NEGOTIATION_PARTIES)[number];
 
-export const NEGOTIATION_KINDS = ["offer", "counter", "fix"] as const;
+export const NEGOTIATION_KINDS = ["offer", "counter", "fix", "close"] as const;
 export type NegotiationKind = (typeof NEGOTIATION_KINDS)[number];
 
-export const NEGOTIATION_STATUSES = ["open", "dealer_countered", "fixed"] as const;
+export const NEGOTIATION_STATUSES = [
+  "open",
+  "dealer_countered",
+  "fixed",
+  // The dealer walked away from this lender. Terminal: the assignment goes
+  // 'withdrawn' in the same transaction, so every guard below already refuses.
+  "closed",
+] as const;
 export type NegotiationStatus = (typeof NEGOTIATION_STATUSES)[number];
+
+/**
+ * Assignment states in which nothing more can happen to the offer — a winner
+ * was picked, this lender lost, the lender declined, or the dealer closed the
+ * deal. Four routes used to inline `=== "selected" || === "not_selected"`,
+ * which silently let a WITHDRAWN assignment keep negotiating.
+ */
+export const DECIDED_ASSIGNMENT_STATUSES = [
+  "selected",
+  "not_selected",
+  "declined",
+  "withdrawn",
+] as const;
+
+export function isAssignmentDecided(status: string | null | undefined): boolean {
+  return (DECIDED_ASSIGNMENT_STATUSES as readonly string[]).includes(status ?? "");
+}
 
 /**
  * The six terms either side can move. Order is the display order used by both

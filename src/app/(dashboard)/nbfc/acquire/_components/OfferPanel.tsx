@@ -6,19 +6,22 @@
  * (dealer-mediated) picks a winner the assignment locks and this becomes
  * read-only. Owned by the Credit / Underwriting role.
  *
- * E-238 — the dealer can now counter these terms instead of only taking or
- * leaving them. When they do, the ask lands here as a diff against the standing
- * offer and Revise prefills the form with it. `Fix offer` ends the negotiation:
- * the dealer loses Negotiate and this panel loses Edit, deliberately in the same
- * move, because terms the NBFC could still change afterwards would not be fixed
- * in any sense the dealer could rely on.
+ * E-238 — the dealer can now push back on these terms instead of only taking or
+ * leaving them. `Fix offer` ends the negotiation: the dealer loses Negotiate and
+ * this panel loses Edit, deliberately in the same move, because terms the NBFC
+ * could still change afterwards would not be fixed in any sense the dealer could
+ * rely on.
+ *
+ * E-241 — the dealer's ask is now free text, not six proposed numbers, so this
+ * panel shows what they WROTE and the officer re-prices from it. Pricing lives
+ * on this side of the conversation; the dealer only ever supplies the reason.
+ * The dealer can also close the deal outright, which lands the assignment on
+ * 'withdrawn' and makes everything here read-only via can_act.
  */
 import { useCallback, useEffect, useState } from "react";
 
 import OfferNegotiationThread from "@/components/nbfc-portal/OfferNegotiationThread";
 import type { NegotiationRound } from "@/components/nbfc-portal/OfferNegotiationThread";
-import { FIELD_LABEL, NEGOTIABLE_FIELDS, sameTerm } from "@/lib/nbfc/offer-negotiation";
-import type { NegotiableField } from "@/lib/nbfc/offer-negotiation";
 
 type Offer = {
   roi_pct: string | null;
@@ -160,6 +163,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
   const canAct = data?.can_act ?? false;
   const canFix = data?.can_fix ?? false;
   const decided = status === "selected" || status === "not_selected";
+  const closedByDealer = status === "withdrawn";
   const fixed = offer?.negotiation_status === "fixed";
 
   // The dealer's most recent ask, if the ball is currently in our court. Read
@@ -169,9 +173,11 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
     offer?.negotiation_status === "dealer_countered"
       ? [...rounds].reverse().find((r) => r.kind === "counter") ?? null
       : null;
-  const counterAsks: NegotiableField[] = latestCounter
-    ? NEGOTIABLE_FIELDS.filter((f) => !sameTerm(offer?.[f] ?? null, latestCounter[f]))
-    : [];
+  // Why the dealer walked, in their own words — the only record this NBFC has
+  // of losing the lead, so it stays on screen after the panel goes read-only.
+  const closeRound = closedByDealer
+    ? [...rounds].reverse().find((r) => r.kind === "close") ?? null
+    : null;
 
   // Every offer detail is mandatory (a real firm offer can't have blanks);
   // only Conditions/notes is optional. The numeric fields must carry a valid
@@ -182,21 +188,6 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
   });
   const validUntilFilled = (form.valid_until ?? "").trim() !== "";
   const canSubmit = numericFilled && validUntilFilled && !busy;
-
-  /** Open the edit form prefilled with what the dealer asked for. */
-  function reviseFromCounter() {
-    if (!latestCounter) return;
-    setForm((s) => ({
-      ...s,
-      ...Object.fromEntries(
-        NEGOTIABLE_FIELDS.map((f) => [
-          f,
-          latestCounter[f] == null ? (s[f] ?? "") : String(latestCounter[f]),
-        ]),
-      ),
-    }));
-    setEdit(true);
-  }
 
   return (
     <section className="border border-slate-200 rounded-xl bg-white p-5">
@@ -211,11 +202,14 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         {status === "not_selected" && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-200 text-slate-600">Not selected</span>
         )}
+        {closedByDealer && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-700">Deal closed by customer</span>
+        )}
         {!decided && fixed && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700">Fixed</span>
         )}
-        {!decided && offer?.negotiation_status === "dealer_countered" && (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-violet-100 text-violet-700">Customer countered</span>
+        {!decided && !closedByDealer && offer?.negotiation_status === "dealer_countered" && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-violet-100 text-violet-700">Revision requested</span>
         )}
         {offer?.ceo_approval_status === "pending" && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700">Pending iTarang CEO approval</span>
@@ -238,44 +232,46 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         </p>
       )}
 
-      {/* E-238 — the dealer is waiting on us. Show what they asked for as a diff
-          against the standing offer, so the change is readable at a glance
-          rather than as six numbers to compare by eye. */}
+      {/* E-238/E-241 — the dealer is waiting on us. The ask is what they wrote,
+          so the message IS the content of this block; re-pricing it is our job. */}
       {latestCounter && !edit && (
         <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
           <p className="text-[10px] font-bold uppercase tracking-wider text-violet-800">
-            Customer requested revised terms
+            Customer asked you to revise this offer
           </p>
-          {counterAsks.length > 0 ? (
-            <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
-              {counterAsks.map((f) => (
-                <div key={f}>
-                  <dt className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
-                    {FIELD_LABEL[f]}
-                  </dt>
-                  <dd className="text-xs">
-                    <span className="mr-1 text-slate-400 line-through">{offer?.[f] ?? "—"}</span>
-                    <span className="font-semibold text-slate-900">{latestCounter[f] ?? "—"}</span>
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : (
-            <p className="mt-1 text-xs text-slate-600">No change to the numbers — see the note below.</p>
-          )}
-          {latestCounter.message && (
-            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-xs text-slate-700">
+          {latestCounter.message ? (
+            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
               {latestCounter.message}
             </p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-600">No message was left with the request.</p>
           )}
           {canAct && (
             <button
-              onClick={reviseFromCounter}
+              onClick={() => setEdit(true)}
               className="mt-2.5 rounded-md bg-[color:var(--color-brand-navy)] px-3 py-1.5 text-xs font-semibold text-white"
             >
-              Revise offer with these terms
+              Revise offer
             </button>
           )}
+        </div>
+      )}
+
+      {/* E-241 — the dealer closed the deal. Terminal; nothing below is actionable. */}
+      {closedByDealer && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50/60 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">
+            Deal closed by customer
+          </p>
+          {closeRound?.message && (
+            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
+              {closeRound.message}
+            </p>
+          )}
+          <p className="mt-2 text-[11px] text-red-700">
+            This offer is withdrawn and can no longer be revised or fixed. The lead may be routed
+            to another lender.
+          </p>
         </div>
       )}
 

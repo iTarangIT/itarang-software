@@ -82,7 +82,18 @@ function providerChip(p: string) {
   );
 }
 
-export function CampaignsTable() {
+export function CampaignsTable({
+  /**
+   * Where an AI-dialer row links to. Defaults to the admin console. The inside
+   * sales and ASM dashboards mount this same table under their OWN prefix so
+   * middleware keeps gating each dashboard to its role — a shared `/leads/*`
+   * link would work, but its Back button lands the rep on the admin console.
+   * NeoDove rows are unaffected: they have no per-dashboard detail view.
+   */
+  basePath = "/leads/campaigns",
+}: {
+  basePath?: string;
+} = {}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
@@ -186,7 +197,7 @@ export function CampaignsTable() {
               // half-empty version of the AI-dialer one.
               const href = isNeodove
                 ? `/leads/neodove-campaigns/${c.id}`
-                : `/leads/campaigns/${c.id}`;
+                : `${basePath}/${c.id}`;
               const startedLabel = c.startedAt
                 ? new Date(c.startedAt).toLocaleString("en-IN", {
                     day: "2-digit",

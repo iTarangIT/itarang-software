@@ -21,7 +21,12 @@ import { dualApprovalRequests, nbfcFinancingOffers, nbfcLeadAssignments, nbfcLoa
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { createDualApprovalRequest, FINANCING_OFFER_DEVIATION_ACTION } from "@/lib/nbfc/dual-approval/service";
 import { computeOfferDeviation, type DeviationResult } from "@/lib/nbfc/offer-deviation";
-import { appendRound, listRounds, seedOpeningRoundIfMissing } from "@/lib/nbfc/offer-negotiation";
+import {
+  appendRound,
+  isAssignmentDecided,
+  listRounds,
+  seedOpeningRoundIfMissing,
+} from "@/lib/nbfc/offer-negotiation";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { notifyOfferSubmitted } from "@/lib/notifications/events";
 import { tenantDisplayName } from "@/lib/notifications/emit";
@@ -90,7 +95,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       .where(eq(nbfcFinancingOffers.assignment_id, assignment.id))
       .limit(1);
     const canAct = actor.role === "credit_underwriting" || actor.role === "nbfc_admin";
-    const locked = assignment.status === "selected" || assignment.status === "not_selected";
+    // Includes 'withdrawn' — the dealer closing the deal locks this panel just
+    // as a decided winner does.
+    const locked = isAssignmentDecided(assignment.status);
     // E-238 — a fixed offer is frozen for the NBFC too, so it drops can_act
     // exactly as a decided one does.
     const fixed = offer?.negotiation_status === "fixed";
@@ -143,9 +150,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     if (!assignment) {
       return NextResponse.json({ ok: false, error: "BAD_REQUEST: no assignment for this lead under this tenant" }, { status: 400 });
     }
-    if (assignment.status === "selected" || assignment.status === "not_selected") {
+    if (isAssignmentDecided(assignment.status)) {
       return NextResponse.json(
-        { ok: false, error: `BAD_REQUEST: a winner has already been decided (status '${assignment.status}') — offer is locked` },
+        {
+          ok: false,
+          error:
+            assignment.status === "withdrawn"
+              ? "BAD_REQUEST: the customer closed this deal — the offer is locked"
+              : `BAD_REQUEST: a winner has already been decided (status '${assignment.status}') — offer is locked`,
+        },
         { status: 400 },
       );
     }

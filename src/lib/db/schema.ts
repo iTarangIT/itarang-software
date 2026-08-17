@@ -4015,6 +4015,10 @@ export const nbfcLeadAssignments = pgTable(
     // Lifecycle: pending → in_progress → offer_submitted → selected |
     // not_selected | declined | withdrawn. A1 only writes 'pending'; later
     // phases drive the rest. CHECK constraint lives on the DB side (E-131).
+    // E-241: 'withdrawn' = the DEALER closed the deal with this lender
+    // (decision_reason='dealer_closed_deal'), freeing one of the two lender
+    // slots so the lead can be re-routed. Distinct from 'not_selected', which
+    // means it lost to a chosen winner.
     status: varchar({ length: 30 }).default("pending").notNull(),
     assigned_at: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
     decided_at: timestamp("decided_at", { withTimezone: true }),
@@ -4078,9 +4082,12 @@ export const nbfcFinancingOffers = pgTable(
     submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     // E-238 — dealer <-> NBFC negotiation state for THIS offer. The round-by-round
     // history lives in nbfcOfferNegotiations; these four are the current state.
-    // negotiation_status: open (dealer may counter) | dealer_countered (NBFC to
-    // respond) | fixed (NBFC froze the terms — neither side can change them and
-    // the dealer's Negotiate action disappears; winner selection still allowed).
+    // negotiation_status: open (dealer may ask for a revision) | dealer_countered
+    // (NBFC to respond) | fixed (NBFC froze the terms — neither side can change
+    // them and the dealer's Negotiate action disappears; winner selection still
+    // allowed) | closed (E-241: the dealer ended the deal — terminal, set with
+    // status='withdrawn' here and on the assignment). A fixed offer can still be
+    // closed: fixing freezes the numbers, not the customer's decision.
     negotiation_status: varchar("negotiation_status", { length: 16 }).default("open").notNull(),
     negotiation_round: integer("negotiation_round").default(0).notNull(),
     fixed_at: timestamp("fixed_at", { withTimezone: true }),

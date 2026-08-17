@@ -230,6 +230,13 @@ export const TYPE_LABELS: Record<string, string> = {
 
   // --- Loan & sanction ---
   "loan.offer_submitted": "NBFC submitted a financing offer",
+  // E-238 shipped these two in CATEGORY_BY_TYPE without a label here, so the
+  // Notification Access UI fell back to the raw type string.
+  "loan.offer_negotiated": "Dealer asked an NBFC to revise its offer",
+  "loan.offer_fixed": "NBFC fixed its financing terms",
+  // E-241
+  "loan.offer_closed": "Dealer closed a financing deal",
+  "loan.lead_rerouted": "Lead re-routed to another NBFC",
   "loan.winner_selected": "Winning NBFC selected",
   "loan.not_selected": "NBFC was not selected",
   "loan.sanctioned": "Loan sanctioned",
