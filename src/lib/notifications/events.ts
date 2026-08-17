@@ -1048,7 +1048,10 @@ export async function notifyOfferSubmitted(p: {
 }
 
 /**
- * E-238 — the dealer countered an NBFC's firm offer with specific terms.
+ * E-238 / E-241 — the dealer asked an NBFC to revise its firm offer.
+ *
+ * The ask is free text (E-241 dropped the six editable term fields), so the
+ * message IS the notification body — there is nothing else to summarise.
  *
  * Only the NBFC being negotiated with hears about it. The other lender on the
  * lead is a competitor mid-race, and telling it what the customer is asking for
@@ -1058,38 +1061,57 @@ export async function notifyOfferNegotiated(p: {
   leadId: string;
   nbfcTenantId: string;
   nbfcName: string;
-  asks: Record<string, string | number | null>;
-  message?: string | null;
+  message: string;
 }) {
   const who = await leadLabel(p.leadId);
-  const ASK_LABEL: Record<string, (v: string | number) => string> = {
-    loan_amount: (v) => `loan ₹${v}`,
-    roi_pct: (v) => `ROI ${v}%`,
-    emi_amount: (v) => `EMI ₹${v}`,
-    tenure_months: (v) => `${v} months`,
-    down_payment: (v) => `down payment ₹${v}`,
-    processing_fee: (v) => `processing fee ₹${v}`,
-  };
-  const asked = Object.entries(p.asks)
-    .filter(([, v]) => v != null && v !== "")
-    .map(([k, v]) => (ASK_LABEL[k] ? ASK_LABEL[k](v as string | number) : `${k} ${v}`))
-    .join(" · ");
   await emit({
     type: "loan.offer_negotiated",
-    title: "Customer countered your offer",
-    message: `${who} asked for revised terms${asked ? ` — ${asked}` : ""}.${
-      p.message ? ` "${p.message}"` : ""
-    }`,
+    title: "Customer asked you to revise your offer",
+    message: `${who} sent a negotiation request: "${p.message}"`,
     leadId: p.leadId,
     stage: "Step 4 · Offers",
     from: customerParty(who),
-    data: { asks: p.asks, message: p.message ?? null },
+    data: { message: p.message },
     to: [
       toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId, "#offer") }),
       toAdmins({
         href: adminLead(p.leadId, "#offers"),
-        title: "Dealer countered a financing offer",
-        message: `${who} asked ${p.nbfcName} for revised terms${asked ? ` — ${asked}` : ""}.`,
+        title: "Dealer sent a negotiation request",
+        message: `${who} asked ${p.nbfcName} to revise its offer: "${p.message}"`,
+      }),
+    ],
+  });
+}
+
+/**
+ * E-241 — the dealer closed the deal with this lender.
+ *
+ * Terminal for this assignment: the offer goes 'withdrawn' and the dealer is
+ * free to route the lead to a different lender. Scoped the same way as
+ * notifyOfferNegotiated — the competing lender is not told that a rival just
+ * lost the lead, because that is the rival's position, not news about this one.
+ */
+export async function notifyOfferClosed(p: {
+  leadId: string;
+  nbfcTenantId: string;
+  nbfcName: string;
+  message: string;
+}) {
+  const who = await leadLabel(p.leadId);
+  await emit({
+    type: "loan.offer_closed",
+    title: "Customer closed the deal",
+    message: `${who} closed the deal on your financing offer: "${p.message}"`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: customerParty(who),
+    data: { message: p.message },
+    to: [
+      toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId, "#offer") }),
+      toAdmins({
+        href: adminLead(p.leadId, "#offers"),
+        title: "Dealer closed a financing offer",
+        message: `${who} closed the deal with ${p.nbfcName}: "${p.message}"`,
       }),
     ],
   });
@@ -1125,6 +1147,41 @@ export async function notifyOfferFixed(p: {
     to: [
       toAdmins({ href: adminLead(p.leadId, "#offers") }),
       toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") }),
+    ],
+  });
+}
+
+/**
+ * E-241 — after closing a deal the dealer routed the lead to a DIFFERENT lender.
+ *
+ * Deliberately not notifyProductSubmitted: that fans out via toLeadNbfcs, which
+ * would tell the lender the dealer just closed that a "new application" had been
+ * routed to it. Only the newly picked lender and the admins hear about this.
+ */
+export async function notifyLeadRerouted(p: {
+  leadId: string;
+  nbfcTenantId: string;
+  nbfcName: string;
+  loanProduct?: string | null;
+  dealerName?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const product = p.loanProduct ? ` (${p.loanProduct})` : "";
+  await emit({
+    type: "loan.lead_rerouted",
+    title: "New application routed to you",
+    message: `${who} selected your financing${product} after closing a deal with another lender.`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: p.dealerName ? dealerParty(p.dealerName) : customerParty(who),
+    data: { loan_product: p.loanProduct ?? null },
+    to: [
+      toNbfc(p.nbfcTenantId, p.nbfcName, { href: nbfcLead(p.leadId) }),
+      toAdmins({
+        href: adminLead(p.leadId, "#offers"),
+        title: "Lead re-routed to another lender",
+        message: `${p.dealerName ?? "The dealer"} routed ${who} to ${p.nbfcName}${product} after closing a deal.`,
+      }),
     ],
   });
 }

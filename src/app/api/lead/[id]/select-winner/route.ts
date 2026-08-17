@@ -13,7 +13,7 @@
  * Role: dealer (customer-present). Body: { nbfcId: number }.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, notInArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { leads, nbfc, nbfcLeadAssignments } from "@/lib/db/schema";
@@ -82,7 +82,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const now = new Date();
     const loserNbfcIds = assignments
-      .filter((a) => a.nbfc_id !== chosenNbfcId)
+      .filter(
+        (a) =>
+          a.nbfc_id !== chosenNbfcId &&
+          // Already told they were out — see the notInArray in the sweep below.
+          a.status !== "withdrawn" &&
+          a.status !== "declined",
+      )
       .map((a) => a.nbfc_id);
 
     await db.transaction(async (tx) => {
@@ -103,6 +109,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           and(
             eq(nbfcLeadAssignments.lead_id, leadId),
             ne(nbfcLeadAssignments.nbfc_id, chosenNbfcId),
+            // E-241 — a lender the dealer already CLOSED (or that declined) did
+            // not lose to this winner, and overwriting it with 'not_selected'
+            // would erase the only record of why that conversation ended.
+            notInArray(nbfcLeadAssignments.status, ["withdrawn", "declined"]),
           ),
         );
 

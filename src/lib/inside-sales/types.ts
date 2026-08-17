@@ -195,6 +195,12 @@ export type LeadDetailBundle = {
     commercials_history: LeadDetailCommercials[];
     touchpoints: LeadDetailTouchpoint[];
     status_history: LeadDetailStatusHistory[];
+    /**
+     * Newest dialer campaign this lead appeared in, or null if it was never
+     * dialled. Used only as a route parameter by the AI Call History tab — the
+     * transcript endpoint returns attempts across ALL campaigns regardless.
+     */
+    latest_campaign_id: string | null;
 };
 
 // ───────────────────────────── action payloads ────────────────────────────

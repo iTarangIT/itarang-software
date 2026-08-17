@@ -48,7 +48,10 @@ const STATUS_LABEL: Record<string, string> = {
   selected: "Selected",
   not_selected: "Not selected",
   declined: "Declined",
-  withdrawn: "Withdrawn",
+  // E-241 — 'withdrawn' has exactly one writer: the dealer's Close deal action.
+  // "Withdrawn" reads like an internal state change of unknown origin; this is a
+  // customer decision and the panel should say whose it was.
+  withdrawn: "Deal closed by customer",
 };
 
 function fmtInr(v: string | number | null | undefined): string {
@@ -217,9 +220,16 @@ export default async function AcquireLeadDetailPage({
   // step. `lead` already exists (guarded above), so this is non-null.
   const dossier = await getCustomerDossier(leadId);
 
-  const offerSubmitted = ["offer_submitted", "selected", "not_selected"].includes(
-    status,
-  );
+  const offerSubmitted = [
+    "offer_submitted",
+    "selected",
+    "not_selected",
+    // E-241 — closing takes the assignment straight from 'offer_submitted' to
+    // 'withdrawn'. Without this the Offer step reads "pending · Locked" while
+    // the submitted offer sits rendered directly underneath it, and Verification
+    // (which keys off the same flag) reverts to "review dossier".
+    "withdrawn",
+  ].includes(status);
   // E-238 — negotiation state of this NBFC's offer, for the Next banner. The
   // Offer node's own state is unchanged: it stays `active` throughout a
   // negotiation, which is already what offerSubmitted gives it.
@@ -249,8 +259,12 @@ export default async function AcquireLeadDetailPage({
   function nodeOffer(): StepperStage["state"] {
     // FI / Video KYC now live inside the Offer step and only unlock once won, so
     // the Offer step itself is reachable straight after the dossier review.
-    if (offerSubmitted) return "done";
+    // Closed outranks submitted. E-241 made offerSubmitted true for 'withdrawn'
+    // — the offer really was submitted, and Verification upstream must stay
+    // done — but a green Completed check over a deal the customer walked away
+    // from reads as a win. Locked + the red badge is the honest pair.
     if (closed) return "locked";
+    if (offerSubmitted) return "done";
     return "active";
   }
   function nodeFivkyc(): StepperStage["state"] {
@@ -506,18 +520,24 @@ export default async function AcquireLeadDetailPage({
       className={`rounded-lg border px-3 py-2.5 text-xs font-medium leading-relaxed ${
         won
           ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-          : lost
-            ? "border-slate-200 bg-slate-50 text-slate-600"
-            : "border-sky-200 bg-sky-50 text-sky-800"
+          : status === "withdrawn"
+            ? "border-red-200 bg-red-50 text-red-800"
+            : lost
+              ? "border-slate-200 bg-slate-50 text-slate-600"
+              : "border-sky-200 bg-sky-50 text-sky-800"
       }`}
     >
       {won
         ? `Selected as the winning lender by the customer — proceed to ${STEP_LABEL[nextLiveStep("offer")]}.`
-        : lost
-          ? "Not selected — a competing offer won. No further action."
-          : status === "offer_submitted"
-            ? "Offer submitted — awaiting the customer's decision between competing offers."
-            : "Submit your financing offer first; the customer then picks the winner across competing NBFCs."}
+        : // E-241 — the customer ended this conversation. Distinct from `lost`:
+          // nobody outbid you, the deal itself was closed.
+          status === "withdrawn"
+          ? "Deal closed by the customer — this offer is withdrawn and can no longer be revised or fixed. Their reason is on the offer above."
+          : lost
+            ? "Not selected — a competing offer won. No further action."
+            : status === "offer_submitted"
+              ? "Offer submitted — awaiting the customer's decision between competing offers."
+              : "Submit your financing offer first; the customer then picks the winner across competing NBFCs."}
     </div>
   );
 
@@ -613,10 +633,20 @@ export default async function AcquireLeadDetailPage({
         ? "selected"
         : lost
           ? "not selected"
-          : offerSubmitted
-            ? "submitted · awaiting decision"
-            : "pending",
+          : status === "withdrawn"
+            ? "deal closed by customer"
+            : offerSubmitted
+              ? "submitted · awaiting decision"
+              : "pending",
       state: nodeOffer(),
+      // E-241 — "Completed" would read as a won deal; this one ended.
+      badge:
+        status === "withdrawn"
+          ? {
+              label: "Deal closed by customer",
+              cls: "bg-red-50 text-red-700 border-red-200",
+            }
+          : undefined,
       content: offerContent,
     },
     {
@@ -679,6 +709,11 @@ export default async function AcquireLeadDetailPage({
       return {
         tone: "muted",
         text: "This NBFC was not selected by the customer — a competing offer won. No further action.",
+      };
+    if (status === "withdrawn")
+      return {
+        tone: "muted",
+        text: "Deal closed by the customer — they ended this conversation and the offer is withdrawn. See the reason on the offer above. No further action.",
       };
     if (closed)
       return {

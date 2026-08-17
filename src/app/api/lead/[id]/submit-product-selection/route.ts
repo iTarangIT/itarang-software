@@ -10,6 +10,7 @@ import { notifyProductSelectionSubmitted } from "@/lib/notifications";
 import { notifyProductSubmitted } from "@/lib/notifications/events";
 import { dealerDisplayName } from "@/lib/notifications/emit";
 import { InventoryLifecycleError, reserveInventorySerial } from "@/lib/inventory/lifecycle";
+import { buildServiceSnapshot } from "@/lib/nbfc/service-snapshot";
 
 // BRD V2 §2.4 — finance path submit for Step 4.
 // Reserves battery + charger inventory, stores product selection, advances
@@ -84,30 +85,6 @@ const BodySchema = z.object({
 });
 
 const FINANCE_UNLOCKED = new Set(["step_3_cleared", "kyc_approved"]);
-
-// E-133 / Addendum V0.2 §7.4 — freeze the NBFC's service-opt-in toggles at the
-// moment the lead binds, so a later config edit cannot retroactively change an
-// in-flight lead. Endpoint URLs/integration secrets are intentionally NOT
-// snapshotted — only the behavioural toggles that decide which tracks run.
-type ServiceConfigRow = typeof nbfcServiceConfig.$inferSelect;
-function buildServiceSnapshot(cfg: ServiceConfigRow | undefined, capturedAt: Date) {
-  return {
-    fi_enabled: cfg?.fi_enabled ?? false,
-    vkyc_enabled: cfg?.vkyc_enabled ?? false,
-    vkyc_mode: cfg?.vkyc_mode ?? null,
-    enach_enabled: cfg?.enach_enabled ?? false,
-    enach_handoff_method: cfg?.enach_handoff_method ?? null,
-    doc_agreement_method: cfg?.doc_agreement_method ?? null,
-    // E-166 — which e-sign provider this lead's agreement uses (snapshotted;
-    // credentials are read live). NULL ⇒ iTarang's global Digio account.
-    esign_provider: cfg?.esign_provider ?? null,
-    store_sanction_letter: cfg?.store_sanction_letter ?? false,
-    store_loan_agreement: cfg?.store_loan_agreement ?? false,
-    track_completion_gate: cfg?.track_completion_gate ?? true,
-    track_failure_halts: cfg?.track_failure_halts ?? false,
-    captured_at: capturedAt.toISOString(),
-  };
-}
 
 export async function POST(
   req: NextRequest,
