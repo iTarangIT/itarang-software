@@ -231,8 +231,12 @@ export const TYPE_LABELS: Record<string, string> = {
 
   // --- Loan & sanction ---
   "loan.offer_submitted": "NBFC submitted a financing offer",
-  // E-238 shipped these two in CATEGORY_BY_TYPE without a label here, so the
-  // Notification Access UI fell back to the raw type string.
+  // E-238_offer_negotiation added these two to the catalogue and to events.ts
+  // but not here, which left `assertRegistryComplete` failing on a clean tree
+  // and both rows rendering as raw snake_case on the Notification Access
+  // screen — the exact gap the test at the top of __tests__/registry.test.ts
+  // exists to catch. Wording follows E-241, which made the dealer's ask
+  // message-only rather than a counter-offer with numbers.
   "loan.offer_negotiated": "Dealer asked an NBFC to revise its offer",
   "loan.offer_fixed": "NBFC fixed its financing terms",
   // E-241
@@ -287,6 +291,12 @@ export const TYPE_LABELS: Record<string, string> = {
   // notifyOemPricesExpiring() are the producers now.
   "oem.price_missing": "Models with no OEM reference price",
   "oem.price_expiring": "OEM prices about to lapse",
+  // E-242. Fires once a quotation clears the gate — by the CEO or by the OEM
+  // price rule — and its draft has been generated.
+  "quote.approved": "Quotation approved",
+  // E-243. The dealer's own answer, captured from the approval link or a
+  // tapped WhatsApp button.
+  "quote.dealer_decision": "Dealer responded to a quotation",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

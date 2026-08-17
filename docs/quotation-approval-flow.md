@@ -176,3 +176,135 @@ guessed wrong:
 | **Missing-price notification** | **Added — E-230** |
 | "OEM Inventory Pricing" on the OEM tab | **Added — `/oem-pricing`** |
 | Approval-ageing escalation | Not built — not specified |
+
+---
+
+## 7. After the decision (call of 2026-08-13)
+
+The gate above decides. Everything below is what happens once it has, and none
+of it existed before E-242: the approve branch wrote a `quote_sent` touchpoint
+whose own comment claimed the quote was "actually released to the dealer", and
+then nothing was generated and nothing was sent. The only quote document in the
+system was `quote_document_url` — a URL a rep typed into a modal by hand.
+
+> **Kartik (08:12)** — "If it is approved by Sanchit or if it is auto-approved,
+> then it will be made into a quotation. For that we need a quotation format…
+> In that format, we will make a draft. After that the sales manager will get a
+> notification that it has been approved. After that draft, he can send it to
+> the dealer via WhatsApp or email."
+
+```
+approved (by the CEO, or by the rule)
+   ↓  generateQuotationDraft — after the transaction commits
+Quotation Draft, in the business format
+   ↓  notifyQuotationApproved
+Lead owner + every sales_manager are told
+   ↓  review, then send
+WhatsApp / Email, PDF attached
+   ↓
+[unchanged] mark-converted → onboarding
+```
+
+| Requirement | State |
+|---|---|
+| Draft generated on approval, both paths | Built — `src/lib/leads/quoteDraft.ts` (E-242) |
+| The business quotation format | Built — `src/lib/leads/quote-pdf/`, from `docs/ITPI-35 (1).pdf` |
+| Format maintainable rather than hardcoded | Built — `app_settings` key `quotation_document`; ITPI-35 values are the defaults |
+| Sales-manager notification | Built — `quote.approved`, to the lead owner and `sales_manager` |
+| Send to dealer over WhatsApp + Email | Built — `POST .../commercials/:id/send` |
+| Complete OEM price history, model-wise | Built — `/oem-pricing` history section (no migration; the table was always append-only) |
+| Sanchit's approval/rejection history | Built — History tab on the CEO panel; surfaces `rejection_reason` for the first time |
+| Dealer approving over WhatsApp/email | Built — E-243, see §8 |
+| Conversion after quotation | Unchanged — `mark-converted` and the `LEAD_STATUS` machine were not touched |
+
+### Three decisions worth stating
+
+- **The document is a GST proforma, not a bare price list.** The supplied format
+  carries HSN/SAC and a per-line rate (ITPI-35 has both 18% and 5% on one page),
+  neither of which existed anywhere — the three `product_master_*` tables had no
+  tax columns at all. E-242 adds them nullable and does **not** backfill: a
+  guessed rate is a wrong number on a tax document, so an unset rate renders as
+  unset and the document says so on its face.
+
+- **The number series is `ITQ-<FY>-<nnnn>`, not `ITPI-nn`.** Zoho Invoice still
+  mints ITPI numbers at invoicing time. Two systems advancing one series
+  eventually issue two documents with the same number, and the one that loses is
+  already in a dealer's inbox.
+
+- **A draft exists only for an approved quote, and the send route re-checks.**
+  §4's "a stage must not be skippable" is enforced twice over:
+  `generateQuotationDraft` refuses a quote that is not approved, so a pending one
+  has no `quote_pdf_url`, and the send route requires both. The two agree by
+  construction rather than by both being remembered.
+
+Verify the format after any template change with `npm run verify:quotation-pdf`,
+which renders ITPI-35's own data through the real pipeline and asserts its four
+totals.
+
+---
+
+## 8. The dealer's answer (E-243)
+
+The half §7 originally deferred. Until this, the CRM could say a quotation went
+out and never say what came back — the reply lived in a WhatsApp thread, an
+inbox, or a phone call nobody logged.
+
+> **Kartik (08:51)** — "If the dealer approves it on WhatsApp or email, then if
+> we can bring that into our system, that would be great."
+
+```
+quotation sent (E-242)
+   ├── email    → "Review & respond" → /quote/<signed token>
+   └── whatsapp → PDF + [Approve] [Not right now]   (link also in the caption)
+                          ↓
+              recordDealerDecision — ONE writer, both paths
+                          ↓
+     dealer_decision + _at + _via + _actor on the quotation
+                          ↓
+        touchpoint  +  quote.dealer_decision notification
+                          ↓
+              lead_status UNCHANGED — a human converts
+```
+
+### The five decisions
+
+- **A click, not a reply.** There is no inbound mail route in this app, and
+  parsing replies means guessing whether "ok", "haan" or "ok but what about the
+  charger" is an approval — a wrong guess records a dealer approving a price
+  they never approved. WhatsApp acts **only** on a tapped button whose ID we
+  minted; free text falls through to the normal orchestrator untouched.
+
+- **Two credentials, one per channel.** The link path is authorised by an HMAC
+  over `(commercial_id, version_no)` (`src/lib/leads/quoteToken.ts`). The
+  WhatsApp path is authorised against `quotation_dispatches` — this quotation
+  must actually have been sent to *this* number, `status = 'sent'`. A button ID
+  travels in a message body, so it is never authority by itself; the check reads
+  a row we wrote. It fails closed.
+
+- **First answer wins, enforced in SQL.** The UPDATE carries
+  `WHERE dealer_decision IS NULL`. A forwarded email, a double-tap, a link
+  opened on two devices — all find zero rows updated and are reported as
+  "already answered". That is what makes the token safe to be stateless: single
+  use is a property of the answer, not of the link, so there is no token table
+  to write on send or clean up when a quotation goes unanswered.
+
+- **The lead is not moved.** A dealer is an outside party; letting one drive the
+  internal state machine means a mis-tap silently rewrites pipeline reporting.
+  The decision is recorded and the owner notified — a human still converts. §6's
+  conversion flow is untouched.
+
+- **`dealer_decision` is orthogonal to `approval_status`.** That one is
+  iTarang's gate; this is what the dealer said about the number we released. A
+  quote we approved can be declined by them, and both facts stay readable.
+
+### Where it shows up
+
+`/quote/<token>` (public, no login) · the Send dialog and the commercials block
+on the lead · the Approved and History tabs on the CEO panel · a
+`quote.dealer_decision` bell notification to the lead owner and every
+`sales_manager`, filed amber because the case that needs acting on is a decline.
+
+**Requires `QUOTE_TOKEN_SECRET`** (falls back to `SUPABASE_SERVICE_ROLE_KEY`,
+then `NEXTAUTH_SECRET`). There is no hardcoded default — a predictable secret
+would let anyone mint a link approving any quotation. If none is set the
+quotation still sends, without a response link.

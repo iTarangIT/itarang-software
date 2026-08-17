@@ -28,6 +28,8 @@ import { requireAuth } from "@/lib/auth-utils";
 import { isNextRedirectError } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { rollbackTarget, type CommercialVersion } from "@/lib/leads/quoteApproval";
+import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
+import { notifyQuotationApproved } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,6 +81,11 @@ export async function POST(
          FOR UPDATE
       `);
       const row = locked[0];
+
+      // NOTE: the lead is read WITHOUT a lock and is NOT part of the decision —
+      // it only supplies who to notify and what to call the dealer. Locking it
+      // here would put every quotation decision behind the same row as every
+      // ownership change on that lead, for two display fields.
       if (!row) return { status: 404 as const, message: "Quotation not found." };
       if (row.approval_status !== "pending") {
         // Already decided — by another CEO, or a double-click.
@@ -98,6 +105,17 @@ export async function POST(
       // message and drops the `cause` that names the real error.
       const nowIso = new Date().toISOString();
 
+      const leadRows = await tx.execute<{
+        current_owner_id: string | null;
+        dealer_name: string | null;
+      }>(sql`
+        SELECT current_owner_id, dealer_name
+          FROM dealer_leads
+         WHERE id = ${row.dealer_lead_id}
+         LIMIT 1
+      `);
+      const lead = leadRows[0] ?? { current_owner_id: null, dealer_name: null };
+
       if (body.decision === "approve") {
         await tx.execute(sql`
           UPDATE dealer_lead_commercials
@@ -113,6 +131,8 @@ export async function POST(
           leadId: row.dealer_lead_id,
           value: Number(row.final_price ?? row.price_quoted ?? 0),
           quoteUrl: row.quote_document_url,
+          ownerId: lead.current_owner_id,
+          dealerName: lead.dealer_name,
         };
       }
 
@@ -165,14 +185,42 @@ export async function POST(
     const money =
       outcome.value > 0 ? ` — ₹${outcome.value.toLocaleString("en-IN")}` : "";
     if (outcome.decision === "approved") {
+      // E-242 — the approval is committed; now produce the document it entitles
+      // the dealer to. Deliberately AFTER the transaction: rendering a PDF
+      // launches a browser, and neither its latency nor its failure modes may
+      // hold a row lock or undo a decision the CEO has already made.
+      // tryGenerateQuotationDraft never throws — a failure lands in
+      // quote_pdf_error and is reported to the sales manager as "retry".
+      const draft = await tryGenerateQuotationDraft(commercialId);
+
       await writeTouchpoint({
         dealerLeadId: outcome.leadId,
         touchpointType: "quote_sent",
         performedBy: user.id,
-        remarks: `Quote approved by CEO and released${money}`,
-        attachments: outcome.quoteUrl
-          ? [{ url: outcome.quoteUrl, type: "quote" }]
-          : [],
+        remarks:
+          `Quote approved by CEO and released${money}` +
+          (draft ? ` — draft ${draft.quote_number}` : " — draft generation failed"),
+        attachments: [
+          ...(draft ? [{ url: draft.quote_pdf_url, type: "quote" }] : []),
+          // The rep's own attachment, when there is one. Kept alongside rather
+          // than replaced by the generated draft: they are different documents.
+          ...(outcome.quoteUrl ? [{ url: outcome.quoteUrl, type: "quote" }] : []),
+        ],
+      });
+
+      // Tell the people who have to act on it. Until E-242 nobody was told at
+      // all — the rep who raised the quote learned the outcome by going and
+      // looking. emit() never throws, so this cannot fail the decision.
+      await notifyQuotationApproved({
+        leadId: outcome.leadId,
+        commercialId,
+        ownerUserId: outcome.ownerId,
+        dealerName: outcome.dealerName,
+        quoteNumber: draft?.quote_number ?? null,
+        value: outcome.value,
+        mode: "manual",
+        approverName: user.name,
+        draftReady: !!draft,
       });
     } else {
       await writeTouchpoint({
