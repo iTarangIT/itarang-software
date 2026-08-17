@@ -6,7 +6,7 @@ import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailHeader";
-import { TouchpointHistoryPane } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/TouchpointHistoryPane";
+import { LeadActivityPanes } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadActivityPanes";
 import { LeadDetailRightPane } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailRightPane";
 import { ConcurrencyBanner } from "@/app/(dashboard)/inside-sales/_components/ConcurrencyBanner";
 import { LogTouchpointModal } from "@/app/(dashboard)/inside-sales/_components/modals/LogTouchpointModal";
@@ -145,7 +145,10 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
             )}
 
             <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
-                <TouchpointHistoryPane touchpoints={bundle.touchpoints} statusHistory={bundle.status_history} />
+                {/* leadId now reaches the pane, which it did not before — the
+                    Export-to-Excel href in Touchpoint History was being built
+                    against `undefined` on this view. */}
+                <LeadActivityPanes leadId={leadId} bundle={bundle} />
                 <LeadDetailRightPane bundle={bundle} />
             </div>
 

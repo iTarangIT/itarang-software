@@ -1,9 +1,16 @@
 /**
  * POST /api/lead/[id]/negotiate-offer
  *
- * E-238 — the dealer (customer-present) counters an NBFC's firm financing offer
- * with specific proposed terms plus a note, instead of the previous
- * take-it-or-leave-it choice between `Select as winner` and nothing.
+ * E-238 — the dealer (customer-present) asks an NBFC to revise its firm
+ * financing offer, instead of the previous take-it-or-leave-it choice between
+ * `Select as winner` and nothing.
+ *
+ * E-245 — the ask is now a MESSAGE, not a set of numbers. The dealer is not the
+ * party that prices a loan; six editable term fields invited asks the lender
+ * could not act on and produced rounds whose "diff" was noise. The dealer says
+ * what they need in words, the NBFC re-prices and resubmits, and the numbers
+ * only ever move on the lender's side. The round still stores a FULL snapshot of
+ * the standing terms so the history stays self-describing.
  *
  * This is an extension beyond Addendum V0.3.1 §13.3.1, which specifies a single
  * firm offer with no back-and-forth. It is layered AROUND nbfc_financing_offers
@@ -12,7 +19,7 @@
  * nbfc_offer_negotiations. Winner selection (§14.2) is untouched — a dealer may
  * accept the standing offer at any point, including mid-negotiation.
  *
- * Role: dealer, owning this lead. Body: { nbfcId, <any of the six terms>, message }.
+ * Role: dealer, owning this lead. Body: { nbfcId, message }.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
@@ -32,7 +39,7 @@ import {
   MAX_NEGOTIATION_ROUNDS,
   NEGOTIABLE_FIELDS,
   appendRound,
-  sameTerm,
+  isAssignmentDecided,
   seedOpeningRoundIfMissing,
 } from "@/lib/nbfc/offer-negotiation";
 import { notifyOfferNegotiated } from "@/lib/notifications/events";
@@ -40,17 +47,19 @@ import { notifyOfferNegotiated } from "@/lib/notifications/events";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const numeric = z.union([z.number(), z.string()]).optional().nullable();
-
 const Body = z.object({
   nbfcId: z.union([z.number(), z.string()]),
-  loan_amount: numeric,
-  roi_pct: numeric,
-  emi_amount: numeric,
-  tenure_months: numeric,
-  down_payment: numeric,
-  processing_fee: numeric,
-  message: z.string().max(MAX_MESSAGE_LENGTH).optional().nullable(),
+  // Required since E-245 — the message IS the counter now, so an empty one has
+  // nothing to send. Trimmed before the length check so whitespace can't pass.
+  message: z
+    .string()
+    .transform((s) => s.trim())
+    .pipe(
+      z
+        .string()
+        .min(1, "Write a message to the NBFC before sending.")
+        .max(MAX_MESSAGE_LENGTH),
+    ),
 });
 
 const bad = (message: string, status = 400) =>
@@ -99,8 +108,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       )
       .limit(1);
     if (!assignment) return bad("That NBFC is not among this lead's routed NBFCs");
-    if (assignment.status === "selected" || assignment.status === "not_selected") {
-      return bad("A winner has already been decided for this lead; the offer is closed.");
+    if (isAssignmentDecided(assignment.status)) {
+      return bad(
+        assignment.status === "withdrawn"
+          ? "You closed this deal; it can no longer be negotiated."
+          : "A winner has already been decided for this lead; the offer is closed.",
+      );
     }
 
     const [offer] = await db
@@ -127,23 +140,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       );
     }
 
-    // A counter has to actually say something: either move a number or carry a
-    // message. Without this an empty submit would burn a round and notify the
-    // NBFC about nothing.
-    const asks: Record<string, string | number | null> = {};
-    let movedAny = false;
-    for (const f of NEGOTIABLE_FIELDS) {
-      const v = d[f];
-      if (v == null || String(v).trim() === "") continue;
-      if (Number.isNaN(Number(v))) return bad(`${f} must be a number`);
-      asks[f] = f === "tenure_months" ? Number(v) : String(v);
-      if (!sameTerm(offer[f], asks[f] as string | number)) movedAny = true;
-    }
-    const message = d.message?.trim() ?? "";
-    if (!movedAny && message === "") {
-      return bad("Change at least one term or add a message before sending a counter-offer.");
-    }
-
+    const message = d.message;
     const now = new Date();
     const before = Object.fromEntries(NEGOTIABLE_FIELDS.map((f) => [f, offer[f]]));
 
@@ -162,10 +159,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         round,
         party: "dealer",
         kind: "counter",
-        // Unmoved fields carry the standing value, so a round is always a full
-        // snapshot and can be read on its own years later.
-        terms: { ...before, ...asks },
-        message: message || null,
+        // The dealer moves no numbers (E-245), so the round carries the standing
+        // terms verbatim — a round is always a full snapshot and can be read on
+        // its own years later. The thread renders it as "no change to the terms"
+        // plus the message, which is exactly what happened.
+        terms: before,
+        message,
         created_by: user.id,
         created_at: now,
       });
@@ -199,8 +198,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           lead_id: leadId,
           nbfc_id: assignment.nbfc_id,
           round,
-          terms: { ...before, ...asks },
-          message: message || null,
+          terms: before,
+          message,
         },
         created_at: now,
       });
@@ -218,10 +217,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         leadId,
         nbfcTenantId: assignment.tenant_id,
         nbfcName: row?.short_name || row?.legal_name || "the lender",
-        asks: Object.fromEntries(
-          Object.entries(asks).filter(([f]) => !sameTerm(before[f] ?? null, asks[f])),
-        ),
-        message: message || null,
+        message,
       });
     } catch (err) {
       console.error("[negotiate-offer] notification failed:", err);

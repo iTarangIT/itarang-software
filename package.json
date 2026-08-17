@@ -21,7 +21,7 @@
     "test:oem-pricing": "node --import tsx --env-file=.env.local scripts/test-oem-pricing-flow.ts",
     "verify:quotation-pdf": "tsx scripts/verify-quotation-pdf.ts",
     "verify:scraper-queue": "node --env-file=.env.local scripts/verify-e241-queue-sql.mjs",
-    "apply:e241": "node --env-file=.env.local scripts/apply-e241.mjs",
+    "apply:e245": "node --env-file=.env.local scripts/apply-e245.mjs",
     "test:watch": "vitest",
     "db:push": "drizzle-kit push",
     "db:update-passwords": "node scripts/update-passwords.js",

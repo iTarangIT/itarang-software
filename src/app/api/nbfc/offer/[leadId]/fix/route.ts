@@ -25,6 +25,7 @@ import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import {
   NEGOTIABLE_FIELDS,
   appendRound,
+  isAssignmentDecided,
   seedOpeningRoundIfMissing,
 } from "@/lib/nbfc/offer-negotiation";
 import { notifyOfferFixed } from "@/lib/notifications/events";
@@ -62,11 +63,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         { status: 400 },
       );
     }
-    if (assignment.status === "selected" || assignment.status === "not_selected") {
+    if (isAssignmentDecided(assignment.status)) {
       return NextResponse.json(
         {
           ok: false,
-          error: `BAD_REQUEST: a winner has already been decided (status '${assignment.status}') — nothing left to fix`,
+          error:
+            assignment.status === "withdrawn"
+              ? "BAD_REQUEST: the customer closed this deal — nothing left to fix"
+              : `BAD_REQUEST: a winner has already been decided (status '${assignment.status}') — nothing left to fix`,
         },
         { status: 400 },
       );

@@ -123,6 +123,30 @@ export async function rehostRecording(opts: {
  * audio can lag the transcript by a few seconds after a call ends; a later
  * poll/backfill re-running finalize will pick it up.
  */
+/**
+ * Short-lived "the key is not going to work" latch.
+ *
+ * A 401/403 from ElevenLabs is a CONFIG fault — a revoked key, or one issued
+ * without the `convai_read` permission — and it stays broken until a human
+ * rotates it. Every other failure here (audio still encoding, network blip) is
+ * transient and self-heals on the next poll.
+ *
+ * Without this latch the two are indistinguishable at the call site, and the
+ * cost is real: the Attempts timeline renders one player per attempt, so a lead
+ * with 15 attempts fires 15 requests that each hang ~9s before failing, on every
+ * open, from every dashboard that shows the tab. The latch collapses that to one
+ * probe per window while still letting a freshly-rotated key recover on its own.
+ */
+const AUTH_FAIL_TTL_MS = 5 * 60_000;
+let elevenLabsAuthFailedUntil = 0;
+let elevenLabsAuthFailReason = "";
+
+/** Cleared by a successful call, so a rotated key takes effect immediately. */
+function noteElevenLabsAuthOk() {
+  elevenLabsAuthFailedUntil = 0;
+  elevenLabsAuthFailReason = "";
+}
+
 export async function rehostElevenLabsRecording(
   conversationId: string,
 ): Promise<string> {
@@ -136,6 +160,13 @@ export async function rehostElevenLabsRecording(
     return "";
   }
 
+  if (Date.now() < elevenLabsAuthFailedUntil) {
+    console.warn(
+      `[recordingStore] skipping ElevenLabs audio fetch for ${conversationId} — ${elevenLabsAuthFailReason} (retrying after ${new Date(elevenLabsAuthFailedUntil).toISOString()})`,
+    );
+    return "";
+  }
+
   const url = `${ELEVENLABS_BASE}/v1/convai/conversations/${encodeURIComponent(
     conversationId,
   )}/audio`;
@@ -144,9 +175,26 @@ export async function rehostElevenLabsRecording(
     const res = await fetch(url, {
       headers: { "xi-api-key": apiKey, accept: "audio/mpeg" },
     });
+    if (res.status === 401 || res.status === 403) {
+      // Read the body: ElevenLabs distinguishes `invalid_api_key` (revoked or
+      // mistyped) from `missing_permissions` (valid key, wrong scope), and those
+      // are two different things for whoever has to fix it.
+      const body = await res.text().catch(() => "");
+      const detail =
+        /missing the permission (\w+)/.exec(body)?.[0] ??
+        (/invalid_api_key/.test(body) ? "ElevenLabs rejected the key as invalid" : "");
+      elevenLabsAuthFailReason =
+        `ELEVENLABS_API_KEY rejected (HTTP ${res.status})${detail ? `: ${detail}` : ""}`;
+      elevenLabsAuthFailedUntil = Date.now() + AUTH_FAIL_TTL_MS;
+      console.error(
+        `[recordingStore] ${elevenLabsAuthFailReason}. Recordings stay unavailable until the key is replaced with one that has the convai_read permission.`,
+      );
+      return "";
+    }
     if (!res.ok) {
       throw new Error(`audio fetch failed: HTTP ${res.status}`);
     }
+    noteElevenLabsAuthOk();
 
     const contentType =
       res.headers.get("content-type")?.split(";")[0]?.trim() || "audio/mpeg";
