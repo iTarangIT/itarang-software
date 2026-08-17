@@ -63,6 +63,10 @@
     {
       "path": "/api/cron/nbfc/run-emi-autodebit",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/kyc-auto-approval",
+      "schedule": "*/5 * * * *"
     }
   ],
   "functions": {

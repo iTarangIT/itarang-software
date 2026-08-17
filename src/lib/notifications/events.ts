@@ -1461,5 +1461,47 @@ export async function notifyOemPricesMissing(p: {
   });
 }
 
+/**
+ * The E-242 SLA sweep acted on a KYC case that no admin had touched.
+ *
+ * Emitted on BOTH outcomes on purpose. `approved` is an FYI — the dealer has
+ * already been told Step 4 is open by `applyKycFinalDecision`, and this is the
+ * admin's record that it happened without them. `blocked` is the one that
+ * matters: it means a card was already rejected, so the approve gate refused
+ * and the case is now waiting on a human with nothing else to surface it.
+ */
+export async function notifyKycAutoApproved(p: {
+  leadId: string;
+  result: "approved" | "blocked";
+  slaWindow: string;
+  cardsAccepted?: number;
+  blockers?: string[] | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const approved = p.result === "approved";
+  const message = approved
+    ? `No admin action within the ${p.slaWindow} SLA, so the system accepted ${p.cardsAccepted ?? 0} pending card(s) and approved KYC for ${who}. Product Selection is now unlocked. The verification providers were not called.`
+    : `The ${p.slaWindow} SLA elapsed for ${who}, but KYC could not be auto-approved: ${(p.blockers ?? []).join("; ") || "the approve gate refused"}. This case still needs you.`;
+
+  await emit({
+    type: "kyc.auto_approved",
+    title: approved
+      ? "KYC auto-approved by system"
+      : "KYC auto-approval blocked — action needed",
+    message,
+    stage: "Step 3 · KYC",
+    leadId: p.leadId,
+    from: ADMIN_PARTY,
+    data: {
+      result: p.result,
+      sla_window: p.slaWindow,
+      cards_accepted: p.cardsAccepted ?? 0,
+      blockers: p.blockers ?? null,
+      providers_called: false,
+    },
+    to: [toAdmins({ href: adminLead(p.leadId) })],
+  });
+}
+
 /** Re-exported so routes need only one import. */
 export { ADMIN_AUDIENCE_ROLES };

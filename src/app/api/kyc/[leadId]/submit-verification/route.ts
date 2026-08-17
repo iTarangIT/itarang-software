@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue, consentRecords, kycVerificationMetadata } from '@/lib/db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, isNull } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
 import { createWorkflowId, determineCaseType, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
 import { notifyKycSubmitted } from '@/lib/notifications/events';
 import { dealerDisplayName } from '@/lib/notifications/emit';
+import { getKycAutoApprovalSettings, slaStampFor } from '@/lib/kyc/auto-approval-settings';
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -272,6 +273,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // entry instead of inserting duplicates.
         const existingQueueEntry = await getOpenQueueEntryForLead(leadId);
         if (!existingQueueEntry) {
+            // E-242 — start the auto-approval SLA clock. Resolved here, at
+            // submit, rather than read by the sweep at expiry, so the deadline a
+            // case was admitted under cannot be changed retroactively by editing
+            // the setting. Null while the feature is off, and the sweep skips
+            // null, so turning it on never reaches back to older cases.
+            const autoApproval = await getKycAutoApprovalSettings();
+
             await db.insert(adminVerificationQueue).values({
                 id: createWorkflowId('ADMQ', now),
                 queue_type: 'kyc_verification',
@@ -281,6 +289,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 submitted_by: null,
                 status: 'pending_itarang_verification',
                 submitted_at: now,
+                // E-244 — case deadline, per-card snapshot and the sweep's
+                // pointer, all resolved together so they cannot disagree.
+                ...slaStampFor(now, autoApproval),
                 created_at: now,
                 updated_at: now,
             });
@@ -295,6 +306,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 customerName: lead[0].owner_name?.trim() || null,
                 dealerName: await dealerDisplayName(lead[0].dealer_id),
             });
+        } else if (!existingQueueEntry.sla_due_at) {
+            // E-242 gap: the queue row usually already exists by now. Consent
+            // finalisation creates one through `ensureAdminKycQueueEntry()` so
+            // the case is visible to admins before the dealer submits, and that
+            // helper cannot stamp a deadline — at consent time there are no
+            // documents yet, and a clock started there could expire before the
+            // dealer has finished. The insert above therefore almost never runs
+            // and, until this branch, real cases reached the queue with
+            // `sla_due_at` NULL: the sweep skips NULL, so the card half of the
+            // automation silently never armed for anybody.
+            //
+            // THIS is the moment the SLA is meant to start — the dealer has
+            // submitted. Stamped only when still NULL, so a resubmission cannot
+            // push an already-running deadline out, and `slaDueAtFrom` still
+            // returns null while the feature is off, which keeps "enabling it
+            // never reaches back to older cases" true.
+            const autoApproval = await getKycAutoApprovalSettings();
+            const stamp = slaStampFor(now, autoApproval);
+            if (stamp.sla_due_at) {
+                await db
+                    .update(adminVerificationQueue)
+                    .set({ ...stamp, updated_at: now })
+                    .where(
+                        and(
+                            eq(adminVerificationQueue.id, existingQueueEntry.id),
+                            isNull(adminVerificationQueue.sla_due_at),
+                        ),
+                    );
+            }
         }
 
         // Return current verification state

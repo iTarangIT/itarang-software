@@ -172,6 +172,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "kyc.coborrower_requested": "Co-borrower requested",
   "kyc.docs_shared": "KYC documents shared",
   "kyc.final_decision": "Final KYC decision recorded",
+  "kyc.auto_approved": "KYC auto-approved by system (SLA)",
   "consent.sent": "DPDP consent link sent",
   "consent.signed": "DPDP consent signed",
   "consent.verified": "DPDP consent verified",

@@ -4,9 +4,10 @@ import { SettingsView } from "./_components/SettingsView";
 export const dynamic = "force-dynamic";
 
 // Admin-only configuration. Now just per-dashboard notification access (E-231):
-// the BRD §0.11/§0.12 tabs for assignment rules, the holiday calendar and ASM
-// territory mapping were removed from the tab strip on request — see the note in
-// SettingsView for what still exists behind them.
+// KYC auto-approval (E-242) has its own route at /admin/settings/kyc-automation
+// and its own sidebar entry. The BRD §0.11/§0.12 tabs for assignment rules, the
+// holiday calendar and ASM territory mapping were removed from the tab strip on
+// request — see the note in SettingsView for what still exists behind them.
 //
 // NOTE middleware admits `ceo` to /admin but this gate does not, so a CEO who
 // clicks through gets a 403. That predates E-231 and is left alone deliberately.
