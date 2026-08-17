@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { FileText } from "lucide-react";
@@ -84,6 +84,9 @@ interface VerificationCard {
   retryCount: number;
   adminAction: string | null;
   adminActionNotes: string | null;
+  // E-246 — 'admin' | 'system'. 'system' means the SLA sweep accepted this card
+  // without the verification provider ever being called.
+  adminActionSource: string | null;
   submittedAt: string | null;
   completedAt: string | null;
   apiRequest: Record<string, unknown> | null;
@@ -100,6 +103,9 @@ interface Consent {
   signedConsentUrl: string | null;
   signedAt: string | null;
   verifiedAt: string | null;
+  // E-247 — when the sweep will auto-verify this consent; null = never.
+  autoVerifyDueAt: string | null;
+  verificationSource: string | null;
   adminViewedBy: string | null;
   adminViewedAt: string | null;
   signerAadhaarMasked: string | null;
@@ -131,6 +137,239 @@ interface QueueEntry {
   submittedAt: string | null;
   reviewedAt: string | null;
   slaAge: string | null;
+  // E-246 auto-approval clock. slaDueAt null = this case never auto-approves.
+  slaDueAt?: string | null;
+  autoApprovedAt?: string | null;
+  autoApprovalResult?: string | null;
+  // E-248 — per-card deadlines snapshotted at submit, keyed by verification
+  // type. Absent on a pre-E-248 case, where every card uses slaDueAt.
+  cardSlaDueAt?: Record<string, string> | null;
+  slaNextDueAt?: string | null;
+}
+
+/**
+ * E-246 — how long is left before the SLA sweep clears this case itself.
+ * Returns null when there is nothing to count down to: no deadline stamped, or
+ * the sweep has already had its (single) attempt.
+ */
+function formatAutoApproveCountdown(
+  dueAtIso: string,
+  /** Pass the caller's tick so the text and any bar beside it agree exactly. */
+  now: number = Date.now(),
+): string | null {
+  const remainingMs = new Date(dueAtIso).getTime() - now;
+  if (!Number.isFinite(remainingMs)) return null;
+  if (remainingMs <= 0) return "any moment now";
+
+  const totalMinutes = Math.floor(remainingMs / 60_000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  // Under an hour, show seconds too — the windows short enough to sit and watch
+  // (and the ones used for testing) are measured in minutes, and "1m" frozen on
+  // screen for sixty seconds reads as broken.
+  const seconds = Math.floor((remainingMs % 60_000) / 1000);
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+/**
+ * Consent states the sweep is allowed to act on. Mirrors CONSENT_AWAITING_ADMIN
+ * in `src/lib/kyc/auto-approval.ts` — the two must agree, or this screen
+ * promises a countdown the server will never honour.
+ */
+const CONSENT_AWAITING_ADMIN = new Set([
+  "esign_completed",
+  "admin_review_pending",
+  "manual_uploaded",
+]);
+
+function formatClockTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return new Date(t).toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * E-247 — the KYC automation timeline on a consent card.
+ *
+ * A bare "auto-verifies in 1m 30s" line answered only one of the questions an
+ * admin looking at this card actually has. This answers all four: whether the
+ * automation is running on THIS consent, how much of its window is gone, when
+ * it started and ends, and — the case that used to render nothing at all —
+ * why no clock is running when there isn't one.
+ *
+ * WHERE THE START OF THE BAR COMES FROM. `auto_verify_due_at` is an end, not a
+ * span, so the window length has to come from the settings echo in the payload
+ * (`kycAutomation.slaMinutes`, stamped as `signed + slaMinutes`). Falling back
+ * to `signedAt` is deliberate but second choice: an admin who changes the SLA
+ * while a consent is already on the clock would otherwise see a bar computed
+ * against the NEW window and a deadline stamped from the old one, i.e. a bar
+ * that does not reach the end when the countdown does. `signedAt` is what the
+ * deadline was actually measured from, so it keeps the two consistent.
+ *
+ * The countdown re-renders every second off the parent's tick — this component
+ * holds no timer of its own and never refetches.
+ */
+function ConsentAutomationTimeline({
+  consent,
+  automation,
+  now,
+}: {
+  consent: Consent;
+  automation: KycAutomation | null | undefined;
+  /** Supplied by the parent's one-second tick — see `countdownNow`. */
+  now: number;
+}) {
+  const status = consent.consentStatus;
+  const isVerified = status === "verified";
+  const isRejected = status === "rejected" || status === "admin_rejected";
+  const actionable = CONSENT_AWAITING_ADMIN.has(status);
+
+  // An admin who has already decided owns this record; the automation is out of
+  // the picture and a timeline would just be noise next to their own verdict.
+  if (isRejected) return null;
+  if (isVerified && consent.verificationSource !== "system") return null;
+  // Not signed yet, or in a terminal e-sign failure — there is no window to
+  // draw, and a stale deadline on a record that later failed must not be shown
+  // as if it were still counting down.
+  if (!actionable && !isVerified) return null;
+
+  const dueMs = consent.autoVerifyDueAt
+    ? new Date(consent.autoVerifyDueAt).getTime()
+    : NaN;
+  const hasDeadline = Number.isFinite(dueMs);
+  const signedMs = consent.signedAt ? new Date(consent.signedAt).getTime() : NaN;
+
+  // ---- The states with no clock running. These used to render nothing at all,
+  // which reads as "the automation forgot about this one".
+  if (!hasDeadline && !isVerified) {
+    const armed = Boolean(automation?.enabled && automation.autoVerifyConsent);
+    // The stamp is fired from the consent save path and deliberately not
+    // awaited (it must never fail a save), so a page opened in the same instant
+    // the customer signed can legitimately arrive a beat before the deadline
+    // lands. Saying "this consent will never auto-verify" then would be a
+    // confident lie about a race, so a just-signed consent gets an explicitly
+    // provisional state instead — the parent refetches and it resolves itself.
+    if (armed && Number.isFinite(signedMs) && now - signedMs < 60_000) {
+      return (
+        <div className="mt-2 rounded-lg border border-violet-200 bg-violet-50/70 px-2.5 py-1.5">
+          <p className="text-[9px] leading-snug text-violet-700">
+            Starting the automation clock…
+          </p>
+        </div>
+      );
+    }
+    const reason = !automation || !automation.enabled
+      ? "KYC automation is off — this consent needs an admin decision."
+      : !automation.autoVerifyConsent
+        ? "KYC automation is on, but consent auto-verification is switched off — this one needs an admin decision."
+        : "Not on the automation clock — no auto-verify deadline was stamped for this consent (it was signed before the feature was switched on), so it needs an admin decision.";
+    return (
+      <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5">
+        <p className="text-[9px] leading-snug text-gray-500">{reason}</p>
+      </div>
+    );
+  }
+
+  const windowMs = automation ? automation.slaMinutes * 60_000 : NaN;
+  const startMs = Number.isFinite(signedMs)
+    ? signedMs
+    : Number.isFinite(windowMs)
+      ? dueMs - windowMs
+      : NaN;
+
+  const spanMs = Number.isFinite(startMs) ? dueMs - startMs : NaN;
+  const pct =
+    isVerified || !Number.isFinite(spanMs) || spanMs <= 0
+      ? 100
+      : Math.min(100, Math.max(0, ((now - startMs) / spanMs) * 100));
+
+  const left = hasDeadline
+    ? formatAutoApproveCountdown(consent.autoVerifyDueAt!, now)
+    : null;
+  const overdue = hasDeadline && dueMs <= now;
+
+  // ---- Done: the sweep verified it. Keep the timeline rather than dropping to
+  // a line of text, so the completed run reads as the same object that was
+  // counting down a moment ago.
+  const tone = isVerified
+    ? {
+        wrap: "border-emerald-200 bg-emerald-50/70",
+        label: "text-emerald-700",
+        track: "bg-emerald-100",
+        fill: "bg-emerald-500",
+        foot: "text-emerald-700/80",
+      }
+    : {
+        wrap: "border-violet-200 bg-violet-50/70",
+        label: "text-violet-700",
+        track: "bg-violet-100",
+        fill: overdue ? "bg-violet-500 animate-pulse" : "bg-violet-500",
+        foot: "text-violet-700/80",
+      };
+
+  const chip = isVerified
+    ? "Auto-verified"
+    : overdue
+      ? "any moment now"
+      : `${left} left`;
+
+  const note = isVerified
+    ? "Nobody objected inside the window, so the system verified it. The verification provider was not called."
+    : overdue
+      ? "The window has closed. The sweep runs every 60 seconds — this card will update itself."
+      : "No action needed for this to complete. Approving it now finishes it early; rejecting it stops the automation.";
+
+  const startLabel = formatClockTime(consent.signedAt);
+  const endLabel = formatClockTime(
+    isVerified ? consent.verifiedAt ?? consent.autoVerifyDueAt : consent.autoVerifyDueAt,
+  );
+
+  return (
+    <div className={`mt-2 rounded-lg border px-2.5 py-2 ${tone.wrap}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide ${tone.label}`}>
+          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          KYC automation
+        </span>
+        <span className={`text-[10px] font-semibold tabular-nums ${tone.label}`}>{chip}</span>
+      </div>
+
+      {/* The bar itself. `transition-all` is intentionally NOT used: the parent
+          re-renders this every second, and a 1s CSS transition on top of a 1s
+          data tick makes the fill lag a full step behind the number beside it. */}
+      <div className={`mt-1.5 h-1.5 w-full rounded-full overflow-hidden ${tone.track}`}>
+        <div className={`h-full rounded-full ${tone.fill}`} style={{ width: `${pct}%` }} />
+      </div>
+
+      <div className={`mt-1 flex items-center justify-between gap-2 text-[9px] ${tone.foot}`}>
+        <span>{startLabel ? `Signed ${startLabel}` : "Signed"}</span>
+        {automation && !isVerified && (
+          <span className="opacity-70">{automation.slaWindowLabel} window</span>
+        )}
+        <span>
+          {isVerified
+            ? endLabel
+              ? `Verified ${endLabel}`
+              : "Verified"
+            : endLabel
+              ? `Auto-verify ${endLabel}`
+              : "Auto-verify"}
+        </span>
+      </div>
+
+      <p className={`mt-1 text-[9px] leading-snug ${tone.foot}`}>{note}</p>
+    </div>
+  );
 }
 
 interface DigilockerEntry {
@@ -156,6 +395,17 @@ interface CaseData {
   digilocker: DigilockerEntry[];
   supportingDocs: SupportingDoc[];
   coBorrower: CoBorrowerData | CoBorrowerGated | null;
+  // E-247 — a read-only echo of /admin/settings, used to draw the consent
+  // timeline and to explain a countdown that is not running.
+  kycAutomation?: KycAutomation | null;
+}
+
+interface KycAutomation {
+  enabled: boolean;
+  slaMinutes: number;
+  slaWindowLabel: string;
+  autoVerifyConsent: boolean;
+  autoApproveCards: boolean;
 }
 
 function formatRelativeTime(isoString: string | null): string | null {
@@ -227,6 +477,22 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   // signed PDF" manually to retry.
   const [autoFetchAttempted, setAutoFetchAttempted] = useState<Set<string>>(new Set());
   const [consentExpanded, setConsentExpanded] = useState(false);
+
+  // E-247 — drive the auto-approval countdowns (case header + each consent row).
+  // A one-second re-render of already-fetched state; deliberately NOT a refetch,
+  // so watching a deadline tick down costs nothing on the server.
+  //
+  // The tick carries the CLOCK, not just a counter: the consent timeline needs
+  // "now" to size its progress bar, and reading it with `Date.now()` inside the
+  // render would be an impure call whose value nothing can re-render on. Passed
+  // as state, the bar and the number beside it are computed from the same
+  // instant. `useState(Date.now)` is the lazy initialiser — the reference, not
+  // a call.
+  const [countdownNow, setCountdownNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setCountdownNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
   const [showGlobalDocsModal, setShowGlobalDocsModal] = useState(false);
   // Transient toast for admin actions that succeed but have no obvious UI
@@ -436,6 +702,78 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // E-247 — refetch when an automation window closes.
+  //
+  // The countdown is a pure re-render of already-fetched state, so it reaches
+  // zero and then sits there: the sweep does its work server-side and this
+  // screen kept claiming "Admin Review Pending" until somebody pressed Refresh.
+  // Schedule one refetch just after the earliest deadline, then a few short
+  // follow-ups while a past-due record is still unresolved — the tick that acts
+  // on it can be up to 60s behind the deadline.
+  //
+  // BOUNDED ON PURPOSE. A past-due record that never resolves is a real state,
+  // not a bug: the sweep refuses to touch a case an admin has already engaged
+  // with and records it `blocked`. Polling that forever would turn every such
+  // screen into a permanent 20s poller for nobody's benefit, so it stops after
+  // MAX_SWEEP_POLLS and the Refresh button takes over.
+  const sweepPollRef = useRef<{ key: string; polls: number }>({ key: "", polls: 0 });
+  useEffect(() => {
+    if (!data) return;
+    const MAX_SWEEP_POLLS = 6;
+
+    const deadlines: string[] = [];
+    // A consent signed seconds ago whose deadline has not appeared yet: the
+    // stamp is fired from the save path and not awaited, so it can land just
+    // after this payload was built. One short refetch resolves it; the card
+    // shows "Starting the automation clock…" until it does.
+    let awaitingStamp = false;
+    for (const c of data.consent ?? []) {
+      if (!CONSENT_AWAITING_ADMIN.has(c.consentStatus)) continue;
+      if (c.autoVerifyDueAt) {
+        deadlines.push(c.autoVerifyDueAt);
+      } else if (
+        data.kycAutomation?.enabled &&
+        data.kycAutomation.autoVerifyConsent &&
+        c.signedAt &&
+        Date.now() - new Date(c.signedAt).getTime() < 60_000
+      ) {
+        awaitingStamp = true;
+      }
+    }
+    if (awaitingStamp) {
+      const t = setTimeout(() => { void fetchData(); }, 5_000);
+      return () => clearTimeout(t);
+    }
+    const q = data.queueEntry;
+    if (q?.slaDueAt && !q.autoApprovedAt && q.status === "pending_itarang_verification") {
+      deadlines.push(q.slaDueAt);
+    }
+    if (deadlines.length === 0) return;
+
+    const now = Date.now();
+    const times = deadlines
+      .map((d) => new Date(d).getTime())
+      .filter((t) => Number.isFinite(t));
+
+    const future = times.filter((t) => t > now);
+    if (future.length > 0) {
+      // +4s: the ticker compares against Postgres now(), and a refetch that
+      // lands a hair early just shows the same pending row again.
+      const wait = Math.min(...future) - now + 4_000;
+      const t = setTimeout(() => { void fetchData(); }, wait);
+      return () => clearTimeout(t);
+    }
+
+    const key = times.slice().sort().join("|");
+    if (sweepPollRef.current.key !== key) sweepPollRef.current = { key, polls: 0 };
+    if (sweepPollRef.current.polls >= MAX_SWEEP_POLLS) return;
+    const t = setTimeout(() => {
+      sweepPollRef.current.polls += 1;
+      void fetchData();
+    }, 20_000);
+    return () => clearTimeout(t);
+  }, [data, fetchData]);
+
   // Auto-fetch signed PDF from DigiO whenever we have a pending eSign
   // transaction but no signed URL cached yet. Covers the webhook-didn't-fire
   // case so admins don't need to click "Fetch" manually. Skips terminal
@@ -606,6 +944,41 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   }
 
   const { lead, personalDetails: pd, documents, metadata, queueEntry, consent: rawConsent } = data;
+
+  // E-247 — the SLA row every verification card carries. Present for any case
+  // that has reached the admin queue, whether or not a countdown is running:
+  // a card with no row at all is indistinguishable from a broken feature, and
+  // "how long has this been waiting" is worth saying on its own.
+  //
+  // `dueAt` is the CASE deadline, not a per-card one — when it passes the sweep
+  // accepts every card still without an admin verdict, so all five share this
+  // object and each decides for itself whether it is still eligible
+  // (`settled`). It is null unless the automation would actually act: switched
+  // on, cards included, a deadline stamped, the sweep not already run, and the
+  // case still sitting in the queue. Null ⇒ the row shows elapsed SLA instead
+  // of a countdown, which is the honest reading of an unstamped case.
+  const cardAutomationOn = Boolean(
+    data.kycAutomation?.enabled && data.kycAutomation.autoApproveCards,
+  );
+  // E-248 — each card counts down to ITS OWN deadline. The map is the snapshot
+  // taken at submit, so it keeps the windows the case was admitted under even
+  // if an admin edits them afterwards; a case stamped before E-248 has no map
+  // and every card falls back to the case deadline, which is exactly how it
+  // behaved then.
+  const cardAutoAcceptFor = (type: string) => {
+    if (!queueEntry) return null;
+    const armed =
+      cardAutomationOn &&
+      !queueEntry.autoApprovedAt &&
+      queueEntry.status === "pending_itarang_verification";
+    const dueAt = queueEntry.cardSlaDueAt?.[type] ?? queueEntry.slaDueAt ?? null;
+    return {
+      dueAt: armed ? dueAt : null,
+      startAt: queueEntry.submittedAt ?? null,
+      now: countdownNow,
+      automationEnabled: cardAutomationOn,
+    };
+  };
   // Dedupe consent rows to at most one per applicant. The send-consent route
   // used to INSERT on every call, leaving duplicate consent_records — admins
   // were seeing two "Primary Consent" cards. The backend is now idempotent,
@@ -777,6 +1150,42 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                   SLA {queueEntry.slaAge}
                 </span>
               )}
+              {/* E-246 — the auto-approval clock. Only one of these can show:
+                  either the sweep has already run (autoApprovedAt) or it is
+                  still counting down (slaDueAt). Absent entirely on cases that
+                  will never auto-approve. */}
+              {queueEntry?.autoApprovedAt ? (
+                <span
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium ring-1 ring-inset ${
+                    queueEntry.autoApprovalResult === "approved"
+                      ? "bg-violet-50 text-violet-700 ring-violet-600/20"
+                      : "bg-amber-50 text-amber-800 ring-amber-600/20"
+                  }`}
+                  title={
+                    queueEntry.autoApprovalResult === "approved"
+                      ? "The SLA window elapsed with no admin action, so the system accepted the pending cards and approved this case. The verification providers were NOT called."
+                      : "The SLA window elapsed but this case could not be auto-approved — an existing rejection blocks the approve gate. It needs you."
+                  }
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  {queueEntry.autoApprovalResult === "approved"
+                    ? "Auto-approved by system"
+                    : "Auto-approval blocked"}
+                </span>
+              ) : queueEntry?.slaDueAt ? (
+                (() => {
+                  const left = formatAutoApproveCountdown(queueEntry.slaDueAt);
+                  return left ? (
+                    <span
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-violet-50 text-violet-700 ring-1 ring-inset ring-violet-600/20"
+                      title="If nobody reviews this case before the window closes, the system will accept the pending cards and approve it — without calling the verification providers. Rejecting any card stops that."
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      Auto-approves in {left}
+                    </span>
+                  ) : null;
+                })()
+              ) : null}
               {metadata?.finalDecision && (
                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ring-1 ring-inset ${
                   metadata.finalDecision === "approved"
@@ -1068,9 +1477,24 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                               {metaParts.length > 0 && (
                                 <p className="text-[10px] text-gray-500 truncate">{metaParts.join(" · ")}</p>
                               )}
-                              {isVerified && verifiedRelative && (
-                                <p className="text-[10px] text-green-700">Approved by admin {verifiedRelative}</p>
+                              {/* A system verification is described by the
+                                  timeline below, which shows the window it sat
+                                  out as well as the outcome — saying it twice
+                                  in two different shapes just crowds the card. */}
+                              {isVerified && verifiedRelative && c.verificationSource !== "system" && (
+                                <p className="text-[10px] text-green-700">
+                                  Approved by admin {verifiedRelative}
+                                </p>
                               )}
+                              {/* E-247 — the automation timeline. Replaces the
+                                  bare countdown line: it also covers the states
+                                  where no clock is running, which is what made
+                                  the automation look absent from this card. */}
+                              <ConsentAutomationTimeline
+                                consent={c}
+                                automation={data?.kycAutomation}
+                                now={countdownNow}
+                              />
                               {isRejected && verifiedRelative && (
                                 <p className="text-[10px] text-red-700">Rejected by admin {verifiedRelative}</p>
                               )}
@@ -1246,7 +1670,9 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               status: getVerification("aadhaar")!.status,
               adminAction: getVerification("aadhaar")!.adminAction,
               adminActionNotes: getVerification("aadhaar")!.adminActionNotes,
+              adminActionSource: getVerification("aadhaar")!.adminActionSource,
             } : null}
+            autoAccept={cardAutoAcceptFor("aadhaar")}
             onActionComplete={fetchData}
           />
 
@@ -1262,9 +1688,11 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               status: getVerification("pan")!.status,
               adminAction: getVerification("pan")!.adminAction,
               adminActionNotes: getVerification("pan")!.adminActionNotes,
+              adminActionSource: getVerification("pan")!.adminActionSource,
               matchScore: getVerification("pan")!.matchScore,
               apiResponse: getVerification("pan")!.apiResponse,
             } : null}
+            autoAccept={cardAutoAcceptFor("pan")}
             onActionComplete={fetchData}
           />
 
@@ -1282,9 +1710,11 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               status: getVerification("bank")!.status,
               adminAction: getVerification("bank")!.adminAction,
               adminActionNotes: getVerification("bank")!.adminActionNotes,
+              adminActionSource: getVerification("bank")!.adminActionSource,
               matchScore: getVerification("bank")!.matchScore,
               apiResponse: getVerification("bank")!.apiResponse,
             } : null}
+            autoAccept={cardAutoAcceptFor("bank")}
             onActionComplete={fetchData}
           />
 
@@ -1307,8 +1737,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               matchScore: getVerification("cibil")!.matchScore,
               adminAction: getVerification("cibil")!.adminAction,
               adminActionNotes: getVerification("cibil")!.adminActionNotes,
+              adminActionSource: getVerification("cibil")!.adminActionSource,
               apiResponse: getVerification("cibil")!.apiResponse,
             } : null}
+            autoAccept={cardAutoAcceptFor("cibil")}
             onActionComplete={fetchData}
           />
 
@@ -1322,8 +1754,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               status: getVerification("rc")!.status,
               adminAction: getVerification("rc")!.adminAction,
               adminActionNotes: getVerification("rc")!.adminActionNotes,
+              adminActionSource: getVerification("rc")!.adminActionSource,
               apiResponse: getVerification("rc")!.apiResponse,
             } : null}
+            autoAccept={cardAutoAcceptFor("rc")}
             onActionComplete={fetchData}
           />
 

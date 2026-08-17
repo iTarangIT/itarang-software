@@ -6,7 +6,7 @@ import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "./LeadDetailHeader";
-import { TouchpointHistoryPane } from "./TouchpointHistoryPane";
+import { LeadActivityPanes } from "./LeadActivityPanes";
 import { LeadDetailRightPane } from "./LeadDetailRightPane";
 import { LeadActionBar } from "./LeadActionBar";
 import { ConcurrencyBanner } from "../../../_components/ConcurrencyBanner";
@@ -126,7 +126,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
             )}
 
             <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
-                <TouchpointHistoryPane leadId={leadId} touchpoints={bundle.touchpoints} statusHistory={bundle.status_history} />
+                <LeadActivityPanes leadId={leadId} bundle={bundle} />
                 <LeadDetailRightPane bundle={bundle} />
             </div>
 
