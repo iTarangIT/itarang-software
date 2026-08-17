@@ -18,18 +18,46 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { resolveAudience, type AudienceSelection } from "@/lib/ai-dialer/audience";
+import {
+  resolveDialerAudience,
+  type AudienceSelection,
+} from "@/lib/ai-dialer/audience";
+import { requireRole } from "@/lib/auth-utils";
+import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
 
 export async function POST(req: NextRequest) {
   try {
+    // ⚠ SECURITY: this route had NO auth check of any kind, and middleware does
+    // not gate /api/*. It returns every matching dealer's name, shop and PHONE
+    // for an arbitrary region, with no limit — i.e. the whole prospect list to
+    // anyone who can reach the host. Same hole, same fix, same roles as
+    // /api/ai-dialer/start.
+    await requireRole([...LEADS_OVERSIGHT_ROLES]);
+
     const body = (await req.json().catch(() => ({}))) as AudienceSelection;
-    const result = await resolveAudience(body ?? {});
+
+    // Take only the audience fields off the wire. The exclusion flags are NOT
+    // client input: they are what makes this the AI-dialer view of the
+    // audience, and a crafted POST setting excludeAiConnected:false would
+    // otherwise resurrect leads the hard block exists to remove. Enrolment is
+    // scrubbed again in createCampaign regardless, but the displayed counts
+    // should not be forgeable either.
+    const selection: AudienceSelection = {
+      states: body?.states,
+      cities: body?.cities,
+      pincodes: body?.pincodes,
+      groupIds: body?.groupIds,
+      category: body?.category,
+    };
+
+    const result = await resolveDialerAudience(selection);
 
     return NextResponse.json({
       success: true,
       counts: result.counts,
       excluded: result.excluded,
       totalWithPhone: result.totalWithPhone,
+      aiConnectedCount: result.aiConnectedCount,
       queueIds: result.queueIds,
       queue: result.queue.map((r) => ({
         id: r.id,

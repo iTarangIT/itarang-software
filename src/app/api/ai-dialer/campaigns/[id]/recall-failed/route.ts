@@ -120,7 +120,7 @@ export const POST = withErrorHandler(
     const retryName = `Retry · ${baseName || "previous campaign"}`;
 
     // Create the retry as a draft, then start it (same sequence as List start).
-    const newId = await createCampaign({
+    const { campaignId: newId, queued, blockedAiConnected } = await createCampaign({
       queueIds,
       provider,
       category: source.category,
@@ -130,6 +130,19 @@ export const POST = withErrorHandler(
       name: retryName,
     });
 
+    // Worth understanding rather than treating as an odd edge case: a retry
+    // re-queues leads whose PREVIOUS attempt failed, and a failed attempt
+    // usually means no transcript, so almost nothing gets scrubbed here. The
+    // exception is a `needs_review` row — the call connected and produced a
+    // transcript, but the analyzer could not read it. Those are AI-connected by
+    // the locked definition and are now permanently out of the AI's reach, even
+    // though what failed was our extraction, not the conversation.
+    if (!newId && blockedAiConnected.length > 0) {
+      return errorResponse(
+        "Every failed lead in this campaign has already been reached by the AI (their calls connected but could not be analysed). They need manual follow-up.",
+        409,
+      );
+    }
     if (!newId) return errorResponse("Could not create retry campaign", 500);
 
     // Flip to running, tag leads, seed the session, place the first call.
@@ -137,7 +150,8 @@ export const POST = withErrorHandler(
 
     return successResponse({
       campaignId: newId,
-      retryCount: queueIds.length,
+      retryCount: queued,
+      blockedAiConnected: blockedAiConnected.length,
       status: "running",
       firstCallPlaced: result.firstCallPlaced,
       firstCallError: result.firstCallError,
