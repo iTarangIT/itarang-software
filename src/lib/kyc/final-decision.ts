@@ -1,7 +1,7 @@
 /**
  * The Step 3 final decision — approve / reject / dealer-action-required.
  *
- * Lifted verbatim out of `POST /api/admin/kyc/[leadId]/final-decision` (E-242)
+ * Lifted verbatim out of `POST /api/admin/kyc/[leadId]/final-decision` (E-246)
  * so that the KYC auto-approval sweep and the admin's button run *the same*
  * code rather than two implementations of the same gate. This mirrors what
  * `closeLotNow()` does for the auction scheduler: one entry point that the
@@ -53,7 +53,7 @@ export type KycDecision = (typeof VALID_DECISIONS)[number];
  * upstream/customer flows and have no Accept/Reject UI for the admin to act
  * on, so they must not block the final decision.
  *
- * Exported so the E-242 auto-approval sweep accepts exactly the set this gate
+ * Exported so the E-246 auto-approval sweep accepts exactly the set this gate
  * checks — if the two lists drifted, the sweep would approve cards the gate
  * ignores while leaving cards it blocks on untouched, and every auto-approval
  * would come back `blocked`.
@@ -77,7 +77,7 @@ export function isAdminCardType(t: string | null | undefined): boolean {
 /**
  * Who is making the decision. `id` is NULL for the SLA sweep — every actor
  * column on this path is nullable — and `source` is what actually distinguishes
- * a system decision from a human one downstream (see E-242).
+ * a system decision from a human one downstream (see E-246).
  */
 export type KycDecisionActor = {
     id: string | null;

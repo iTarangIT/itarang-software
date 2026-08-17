@@ -1,5 +1,5 @@
 /**
- * KYC auto-approval settings (E-242).
+ * KYC auto-approval settings (E-246).
  *
  * Stored as one jsonb blob under the `kyc_auto_approval` key in `app_settings`
  * — the same generic key/value store used by `ai_caller_enabled`,
@@ -21,7 +21,7 @@
  * `slaHours` is still READ for backward compatibility — any row saved before
  * this change carries it and must keep meaning what it meant.
  *
- * DEFAULTS ARE OFF. Deploying E-242 plus this code changes no behaviour until
+ * DEFAULTS ARE OFF. Deploying E-246 plus this code changes no behaviour until
  * an admin explicitly turns it on at /admin/settings/kyc-automation. That is
  * deliberate: the sweep accepts identity cards without calling the verification
  * providers, so it must never switch itself on as a side effect of a deploy.
@@ -49,7 +49,7 @@ export const SLA_PRESETS_MINUTES = [
 ] as const;
 
 /**
- * The verification cards an admin can give their own window (E-244). Mirrors
+ * The verification cards an admin can give their own window (E-248). Mirrors
  * `ADMIN_CARD_VERIFICATION_TYPES` in `final-decision.ts` — the sweep accepts
  * exactly these, so offering a window for anything else would be a setting that
  * does nothing.
@@ -72,7 +72,7 @@ export type KycAutoApprovalSettings = {
     /** Whole minutes from dealer submission before the sweep may act. */
     slaMinutes: number;
     /**
-     * Per-card overrides of `slaMinutes`, in whole minutes (E-244). A card
+     * Per-card overrides of `slaMinutes`, in whole minutes (E-248). A card
      * absent from this map inherits `slaMinutes`, which is why the map is
      * partial rather than a complete record defaulted to the global value —
      * "inherit" has to survive a later change to the global window, and a
@@ -99,7 +99,7 @@ export const DEFAULT_KYC_AUTO_APPROVAL_SETTINGS: KycAutoApprovalSettings = {
     enabled: false,
     slaMinutes: 240, // 4 hours
     // Empty = every card inherits the global window, which is exactly how the
-    // feature behaved before E-244.
+    // feature behaved before E-248.
     cardSlaMinutes: {},
     autoVerifyConsent: true,
     autoApproveCards: true,
@@ -149,7 +149,7 @@ export function formatSlaWindow(minutes: number): string {
  * meaning exactly what it meant.
  */
 /**
- * Normalise the per-card window map (E-244).
+ * Normalise the per-card window map (E-248).
  *
  * Absent, null, empty string and unparseable all mean the SAME thing — "inherit
  * the global window" — and are dropped rather than stored, so the map only ever
@@ -290,7 +290,7 @@ export function cardSlaDueAtFrom(
 }
 
 /**
- * Everything the queue row needs stamping at dealer submit (E-244).
+ * Everything the queue row needs stamping at dealer submit (E-248).
  *
  * ONE FUNCTION BECAUSE THE THREE VALUES MUST AGREE. `sla_due_at` is the case
  * deadline, `sla_card_due_at` is the per-card snapshot, and `sla_next_due_at`

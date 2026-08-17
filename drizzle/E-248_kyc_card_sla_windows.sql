@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
--- E-244: per-card SLA windows for the KYC auto-approval sweep.
+-- E-248: per-card SLA windows for the KYC auto-approval sweep.
 --
--- WHAT CHANGES. E-242 gave a case ONE deadline: `admin_verification_queue
+-- WHAT CHANGES. E-246 gave a case ONE deadline: `admin_verification_queue
 -- .sla_due_at`, stamped at dealer submit, and when it passed the sweep accepted
 -- every pending verification card at once. Admins want the windows to differ by
 -- card — 20 minutes is plenty for Aadhaar, an Equifax pull deserves an hour —
@@ -27,14 +27,14 @@
 --   still has to act on. Stamped at submit as the minimum of the case deadline
 --   and every card deadline, then advanced by the sweep as each card matures.
 --   A case now needs visiting several times (once per distinct window) where
---   E-242 visited it exactly once, and this is what keeps that selection on an
+--   E-246 visited it exactly once, and this is what keeps that selection on an
 --   index instead of a scan of every open queue row on every 60-second tick.
 --
 -- NULL IS STILL "NEVER". Both columns are NULL for every row that predates this
 -- file and for everything submitted while the feature is off. The sweep skips
--- NULL and falls back to `sla_due_at`, so a pre-E-244 case keeps behaving
--- exactly as E-242 left it: all its cards mature together on the case deadline.
--- There is deliberately NO BACKFILL — same reason as E-243.
+-- NULL and falls back to `sla_due_at`, so a pre-E-248 case keeps behaving
+-- exactly as E-246 left it: all its cards mature together on the case deadline.
+-- There is deliberately NO BACKFILL — same reason as E-247.
 --
 -- REQUIRED BEFORE THE CODE DEPLOYS. `admin_verification_queue` is mirrored in
 -- schema.ts and read with bare `db.select()`, and Drizzle names every column of
@@ -85,14 +85,14 @@ END; $do$;
 -- 4. Self-documentation ------------------------------------------------------
 DO $do$ BEGIN
     EXECUTE $c$COMMENT ON COLUMN admin_verification_queue.sla_card_due_at IS
-        'E-244. Snapshot of the per-card auto-accept deadlines resolved at dealer submit, keyed by verification_type (aadhaar/pan/bank/cibil/rc), ISO-8601 values. A snapshot, not a lookup: a later change to the per-card windows must not move the deadlines of a case already in the queue. NULL means every card falls back to sla_due_at, which is how every pre-E-244 case behaves; do NOT backfill.'$c$;
+        'E-248. Snapshot of the per-card auto-accept deadlines resolved at dealer submit, keyed by verification_type (aadhaar/pan/bank/cibil/rc), ISO-8601 values. A snapshot, not a lookup: a later change to the per-card windows must not move the deadlines of a case already in the queue. NULL means every card falls back to sla_due_at, which is how every pre-E-248 case behaves; do NOT backfill.'$c$;
 EXCEPTION WHEN undefined_table OR undefined_column THEN
     RAISE NOTICE 'skip: comment (target table/column absent)';
 END; $do$;
 
 DO $do$ BEGIN
     EXECUTE $c$COMMENT ON COLUMN admin_verification_queue.sla_next_due_at IS
-        'E-244. The earliest deadline this queue row still has to act on — the minimum of sla_due_at and the unmatured entries of sla_card_due_at. The sweep selects on this and advances it as each card matures, which is what lets one case be visited once per distinct window without scanning the whole queue. NULL falls back to sla_due_at (pre-E-244 rows); do NOT backfill.'$c$;
+        'E-248. The earliest deadline this queue row still has to act on — the minimum of sla_due_at and the unmatured entries of sla_card_due_at. The sweep selects on this and advances it as each card matures, which is what lets one case be visited once per distinct window without scanning the whole queue. NULL falls back to sla_due_at (pre-E-248 rows); do NOT backfill.'$c$;
 EXCEPTION WHEN undefined_table OR undefined_column THEN
     RAISE NOTICE 'skip: comment (target table/column absent)';
 END; $do$;

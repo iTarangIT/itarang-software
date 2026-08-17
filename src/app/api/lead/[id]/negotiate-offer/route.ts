@@ -5,7 +5,7 @@
  * financing offer, instead of the previous take-it-or-leave-it choice between
  * `Select as winner` and nothing.
  *
- * E-241 — the ask is now a MESSAGE, not a set of numbers. The dealer is not the
+ * E-245 — the ask is now a MESSAGE, not a set of numbers. The dealer is not the
  * party that prices a loan; six editable term fields invited asks the lender
  * could not act on and produced rounds whose "diff" was noise. The dealer says
  * what they need in words, the NBFC re-prices and resubmits, and the numbers
@@ -49,7 +49,7 @@ export const dynamic = "force-dynamic";
 
 const Body = z.object({
   nbfcId: z.union([z.number(), z.string()]),
-  // Required since E-241 — the message IS the counter now, so an empty one has
+  // Required since E-245 — the message IS the counter now, so an empty one has
   // nothing to send. Trimmed before the length check so whitespace can't pass.
   message: z
     .string()
@@ -159,7 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         round,
         party: "dealer",
         kind: "counter",
-        // The dealer moves no numbers (E-241), so the round carries the standing
+        // The dealer moves no numbers (E-245), so the round carries the standing
         // terms verbatim — a round is always a full snapshot and can be read on
         // its own years later. The thread renders it as "no change to the terms"
         // plus the message, which is exactly what happened.

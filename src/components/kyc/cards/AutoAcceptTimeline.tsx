@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-243 — the SLA row inside a verification card.
+ * E-247 — the SLA row inside a verification card.
  *
  * ALWAYS RENDERS ONCE THE CASE IS IN THE ADMIN QUEUE, even when no automation
  * clock is running. The first cut only drew the countdown, so a case whose

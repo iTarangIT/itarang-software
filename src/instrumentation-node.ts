@@ -794,7 +794,7 @@ export async function startScraperQueueTicker() {
 // ---------------------------------------------------------------------------
 // KYC auto-approval SLA sweep — approve cases no admin acted on in time.
 // ---------------------------------------------------------------------------
-// [E-242] This is the only thing that makes the SLA expire. `submit-verification`
+// [E-246] This is the only thing that makes the SLA expire. `submit-verification`
 // stamps `admin_verification_queue.sla_due_at` and returns; without this tick
 // the deadline is a column nobody reads. Same reasoning as startAuctionTicker
 // and startScraperQueueTicker, and for the same three reasons: BullMQ is dead
@@ -829,7 +829,7 @@ export async function startKycAutoApprovalTicker() {
       // overwhelmingly common case — says nothing.
     } catch (err) {
       // Never let one bad tick kill the ticker. The likeliest cause is a
-      // database without E-242, where every tick throws "column sla_due_at does
+      // database without E-246, where every tick throws "column sla_due_at does
       // not exist" and the manual KYC review carries on untouched.
       console.error(
         "[instrumentation:kyc-auto-approval] tick failed:",

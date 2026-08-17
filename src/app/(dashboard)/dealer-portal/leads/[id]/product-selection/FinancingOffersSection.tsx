@@ -10,7 +10,7 @@
  * revise its offer instead of only taking or leaving it, until the NBFC fixes
  * the offer. Selecting a winner stays available throughout.
  *
- * E-241 makes that ask a plain message (the NBFC does the pricing) and adds
+ * E-245 makes that ask a plain message (the NBFC does the pricing) and adds
  * Close deal — the dealer walks away from one lender, with a mandatory note
  * explaining why. A closed card is terminal, and once anything on this lead is
  * closed the re-pick card below offers the remaining eligible lenders.
@@ -430,7 +430,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
         })}
       </div>
 
-      {/* E-241 — a closed deal frees a lender slot, so offer the remaining
+      {/* E-245 — a closed deal frees a lender slot, so offer the remaining
           eligible loan products straight away rather than leaving the dealer on
           a card with nothing left to click. */}
       {!decided && anyClosed && (

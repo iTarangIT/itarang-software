@@ -3,11 +3,11 @@ import { KycAutomationForm } from "../_components/KycAutomationForm";
 
 export const dynamic = "force-dynamic";
 
-// E-242 — KYC auto-approval, on its own route so it can be its own sidebar
+// E-246 — KYC auto-approval, on its own route so it can be its own sidebar
 // entry beside Notifications rather than a tab inside it.
 //
 // Same gate as /admin/settings: middleware admits `ceo` to /admin but this does
-// not, so a CEO who clicks through gets a 403. That predates E-242 and is left
+// not, so a CEO who clicks through gets a 403. That predates E-246 and is left
 // alone deliberately — widening it here would hand CEOs a switch that accepts
 // identity documents without calling the verification providers.
 export default async function KycAutomationSettingsPage() {

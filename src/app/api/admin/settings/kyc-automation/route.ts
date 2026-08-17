@@ -1,5 +1,5 @@
 /**
- * GET / PUT the KYC auto-approval settings (E-242).
+ * GET / PUT the KYC auto-approval settings (E-246).
  *
  * Kept out of the `/api/admin/settings` bundle for the same reason
  * `/api/admin/notification-access` is: the bundle is the BRD §0.11/§0.12
@@ -26,7 +26,7 @@ const EDITOR_ROLES = ["admin", "sales_head"];
 // over the current value. slaMinutes is bounded here as well as clamped in the
 // store — a 400 tells the admin their input was rejected, where a silent clamp
 // would leave the form showing a number the server did not keep.
-// Per-card window (E-244). `null` is meaningful and must survive validation —
+// Per-card window (E-248). `null` is meaningful and must survive validation —
 // it is how the form clears one card back to the global window; the store drops
 // it rather than storing a null. Bounds match the global window exactly, so a
 // card cannot be given a window the case itself could not have.

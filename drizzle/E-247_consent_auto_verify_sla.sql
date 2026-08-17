@@ -1,18 +1,18 @@
 ------------------------------------------------------------------------------
--- E-243: put customer consent on the KYC auto-approval SLA clock.
+-- E-247: put customer consent on the KYC auto-approval SLA clock.
 --
 -- WHAT CHANGES, AND WHY.
 --
--- E-242 shipped consent auto-verification as an IMMEDIATE action: the moment a
+-- E-246 shipped consent auto-verification as an IMMEDIATE action: the moment a
 -- consent reached a signed-but-unverified state it was marked verified, with no
 -- waiting period. Two problems surfaced the first time it ran for real.
 --
 -- 1. NO WINDOW TO OBJECT IN. An admin who wanted to reject a bad consent had no
 --    opportunity — it was already verified before the review screen could be
---    opened. Every other half of E-242 gives the human a window first; consent
+--    opened. Every other half of E-246 gives the human a window first; consent
 --    was the odd one out.
 --
--- 2. THE SWEEP HAD NO SCOPE GUARD — this is the serious one. E-242's card sweep
+-- 2. THE SWEEP HAD NO SCOPE GUARD — this is the serious one. E-246's card sweep
 --    is opt-in per case: it only ever claims a queue row whose `sla_due_at` was
 --    stamped AT SUBMISSION, so switching the feature on cannot reach backwards.
 --    The consent backstop had no equivalent; it selected on `consent_status`
@@ -77,7 +77,7 @@ END; $do$;
 -- 3. Self-documentation ------------------------------------------------------
 DO $do$ BEGIN
     EXECUTE $c$COMMENT ON COLUMN consent_records.auto_verify_due_at IS
-        'E-243. When the KYC auto-approval sweep may verify this consent: stamped as the moment it entered a signed-but-unverified state plus app_settings.kyc_auto_approval.slaMinutes. NULL means never auto-verify — the state of every consent predating E-243 and of every consent signed while the feature is off. The sweep skips NULL, which is what makes enabling the feature unable to reach backwards; do NOT backfill this column.'$c$;
+        'E-247. When the KYC auto-approval sweep may verify this consent: stamped as the moment it entered a signed-but-unverified state plus app_settings.kyc_auto_approval.slaMinutes. NULL means never auto-verify — the state of every consent predating E-247 and of every consent signed while the feature is off. The sweep skips NULL, which is what makes enabling the feature unable to reach backwards; do NOT backfill this column.'$c$;
 EXCEPTION WHEN undefined_table OR undefined_column THEN
     RAISE NOTICE 'skip: comment (target table/column absent)';
 END; $do$;

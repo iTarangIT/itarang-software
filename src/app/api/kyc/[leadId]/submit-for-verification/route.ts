@@ -158,7 +158,7 @@ export async function POST(
     const openQueueCount = Number(queueCountRows[0]?.count ?? 0);
     const queuePosition = openQueueCount + 1;
 
-    // E-242 — start the auto-approval SLA clock. Resolved at submit rather than
+    // E-246 — start the auto-approval SLA clock. Resolved at submit rather than
     // read by the sweep at expiry, so the deadline a case was admitted under
     // cannot change retroactively. Null while the feature is off, and the sweep
     // skips null, so enabling it never reaches back to older cases.
@@ -174,7 +174,7 @@ export async function POST(
         submitted_by: appUser.id,
         status: "pending_itarang_verification",
         submitted_at: now,
-        // E-244 — case deadline, per-card snapshot and the sweep's pointer, all
+        // E-248 — case deadline, per-card snapshot and the sweep's pointer, all
         // resolved together so they cannot disagree.
         ...slaStampFor(now, autoApproval),
         created_at: now,

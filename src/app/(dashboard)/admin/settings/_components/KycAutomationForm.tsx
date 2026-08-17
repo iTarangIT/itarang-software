@@ -1,6 +1,6 @@
 "use client";
 
-// E-242 — KYC auto-approval SLA. Lets an admin decide how long a submitted case
+// E-246 — KYC auto-approval SLA. Lets an admin decide how long a submitted case
 // waits for a human before the system clears it itself.
 
 import { useEffect, useState } from "react";
@@ -11,7 +11,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-/** E-244 — the cards that can carry their own window. Order = the review screen. */
+/** E-248 — the cards that can carry their own window. Order = the review screen. */
 const CARD_TYPES = ["aadhaar", "pan", "bank", "cibil", "rc"] as const;
 type CardType = (typeof CARD_TYPES)[number];
 
@@ -28,7 +28,7 @@ type Settings = {
     /** Whole minutes. See the note on units in lib/kyc/auto-approval-settings. */
     slaMinutes: number;
     /**
-     * E-244 — per-card overrides in whole minutes. A card absent from the map
+     * E-248 — per-card overrides in whole minutes. A card absent from the map
      * (or set to null on the way to the server) inherits `slaMinutes`, so the
      * default keeps tracking a later change to the global window.
      */
@@ -107,7 +107,7 @@ export function KycAutomationForm() {
     const [customValue, setCustomValue] = useState("30");
     const [customUnit, setCustomUnit] = useState<UnitKey>("minutes");
 
-    // Same idea per card (E-244), plus which cards are showing the custom
+    // Same idea per card (E-248), plus which cards are showing the custom
     // controls at all — a card can hold 20 minutes while the dropdown is on a
     // preset, so "is custom" cannot be derived from the value alone.
     const [cardCustomOpen, setCardCustomOpen] = useState<Partial<Record<CardType, boolean>>>({});
@@ -350,7 +350,7 @@ export function KycAutomationForm() {
                 </p>
             </div>
 
-            {/* Per-card windows (E-244) */}
+            {/* Per-card windows (E-248) */}
             <div className="space-y-2">
                 <label className="block text-sm font-medium text-ink">
                     Per-card windows

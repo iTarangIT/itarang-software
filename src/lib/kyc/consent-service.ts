@@ -651,7 +651,7 @@ export async function storeSignedConsent(opts: {
   await syncApplicantStatus(role, opts.leadId, "admin_review_pending", now);
   await ensureAdminKycQueueEntry(opts.leadId);
 
-  // E-243 — the customer has signed, so start the auto-verify clock. The sweep
+  // E-247 — the customer has signed, so start the auto-verify clock. The sweep
   // verifies it once the window closes, which leaves the admin time to reject.
   // Fire-and-forget: a consent that saved must never fail because the
   // automation did. Without this stamp the sweep can never see the record.
@@ -1290,7 +1290,7 @@ export async function getSignedConsentForLead(
   }
   await ensureAdminKycQueueEntry(leadId);
 
-  // E-243 — see storeSignedConsent: start the auto-verify clock on the signed
+  // E-247 — see storeSignedConsent: start the auto-verify clock on the signed
   // consent. Best-effort; the sweep does the verifying once it expires.
   stampConsentAutoVerifyDeadline(leadId).catch(() => {});
 

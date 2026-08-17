@@ -1,6 +1,6 @@
 /**
  * KYC auto-approval SLA sweep — the external-cron mirror of the in-process
- * ticker (E-242).
+ * ticker (E-246).
  *
  * The ticker in `src/instrumentation-node.ts` is the primary path and the one
  * that demonstrably runs on the pm2/Hostinger boxes; this route exists so the

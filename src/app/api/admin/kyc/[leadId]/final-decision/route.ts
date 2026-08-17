@@ -12,7 +12,7 @@ import {
 //
 // The decision itself — the approve gate, the lead-status derivation and every
 // database write — lives in `@/lib/kyc/final-decision`. It was lifted out in
-// E-242 so the KYC auto-approval SLA sweep runs exactly this logic instead of a
+// E-246 so the KYC auto-approval SLA sweep runs exactly this logic instead of a
 // second copy of it; this route is now auth, body parsing and HTTP shaping.
 
 export async function POST(

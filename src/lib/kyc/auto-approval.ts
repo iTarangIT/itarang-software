@@ -1,5 +1,5 @@
 /**
- * KYC auto-approval — the E-242 SLA sweep.
+ * KYC auto-approval — the E-246 SLA sweep.
  *
  * WHAT THIS DOES. When a dealer submits documents + coupon, a deadline is
  * stamped on the `admin_verification_queue` row. If that deadline passes with
@@ -10,7 +10,7 @@
  *   3. runs the ordinary final-decision path,
  *
  * which writes `leads.kyc_status = 'step_3_cleared'` and unlocks the dealer's
- * Step 4. Customer consent runs on the same clock (E-243): signing stamps
+ * Step 4. Customer consent runs on the same clock (E-247): signing stamps
  * `consent_records.auto_verify_due_at`, and the sweep verifies it once that
  * passes, so the admin gets a window to reject in.
  *
@@ -18,7 +18,7 @@
  * are opt-in per record — a queue row without `sla_due_at`, or a consent without
  * `auto_verify_due_at`, is invisible to the sweep. That is what makes enabling
  * the feature unable to reach backwards over existing work, and it is not
- * decoration: E-242 shipped the consent half without that guard and the first
+ * decoration: E-246 shipped the consent half without that guard and the first
  * real tick verified 14 consents signed months earlier. Never widen those
  * predicates, and never backfill either column.
  *
@@ -70,7 +70,7 @@ import {
 import { notifyKycAutoApproved } from "@/lib/notifications/events";
 
 /**
- * Compile-time guard (E-244): the settings screen offers a per-card window for
+ * Compile-time guard (E-248): the settings screen offers a per-card window for
  * exactly the cards this sweep accepts. Add a card type to one list and not the
  * other and this object stops the build — better than shipping either a setting
  * that does nothing or a card the sweep silently never reaches. Both directions
@@ -122,7 +122,7 @@ function clockOf(now?: Date) {
 // ---------------------------------------------------------------------------
 
 /**
- * Start the consent SLA clock (E-243).
+ * Start the consent SLA clock (E-247).
  *
  * Called from the consent save paths the moment a consent reaches a
  * signed-but-unverified state. Stamps `auto_verify_due_at` = now + the
@@ -130,7 +130,7 @@ function clockOf(now?: Date) {
  * sweep — and, just as importantly, is what stops the sweep from ever reaching
  * a consent this function did not admit.
  *
- * E-242 verified consent immediately here instead. That gave the admin no
+ * E-246 verified consent immediately here instead. That gave the admin no
  * window to reject in, and the sweep that backed it selected on
  * `consent_status` alone, so switching the feature on verified every pending
  * consent in the database retroactively. Stamping a deadline fixes both: the
@@ -266,7 +266,7 @@ export async function autoVerifyConsentIfEnabled(
 export type AutoApproveOutcome = {
     leadId: string;
     /**
-     * `waiting` (E-244) is not a failure: the cards whose windows had closed
+     * `waiting` (E-248) is not a failure: the cards whose windows had closed
      * were accepted and the case is due back when the next one closes. The
      * caller must leave `auto_approved_at` NULL for it and move the pointer on.
      */
@@ -279,10 +279,10 @@ export type AutoApproveOutcome = {
 };
 
 /**
- * The deadlines one queue row is working to (E-244). Read off the row rather
+ * The deadlines one queue row is working to (E-248). Read off the row rather
  * than resolved from the settings, so a case keeps the windows it was admitted
- * under. `cardDueAt` is empty for a pre-E-244 row, and every card then falls
- * back to `caseDueAt` — exactly the single-deadline behaviour E-242 shipped.
+ * under. `cardDueAt` is empty for a pre-E-248 row, and every card then falls
+ * back to `caseDueAt` — exactly the single-deadline behaviour E-246 shipped.
  */
 export type CaseSlaWindows = {
     caseDueAt: Date | null;
@@ -303,7 +303,7 @@ export function parseCardDueAt(raw: unknown): Partial<Record<CardSlaType, Date>>
     return out;
 }
 
-/** The deadline that applies to one card, with the pre-E-244 fallback. */
+/** The deadline that applies to one card, with the pre-E-248 fallback. */
 function dueAtForCard(type: CardSlaType, windows: CaseSlaWindows): Date | null {
     return windows.cardDueAt[type] ?? windows.caseDueAt;
 }
@@ -313,7 +313,7 @@ function dueAtForCard(type: CardSlaType, windows: CaseSlaWindows): Date | null {
  * to have already claimed the queue row (see `runKycAutoApprovalTick`), so this
  * does not re-check the deadline.
  *
- * With per-card windows (E-244) this can be called several times for the same
+ * With per-card windows (E-248) this can be called several times for the same
  * case — once per distinct window — and returns `waiting` until the last one has
  * closed. It is written to be safe to re-enter: every write is guarded on the
  * row still being untouched by a human, so a card accepted on an earlier visit
@@ -328,8 +328,8 @@ export async function autoApproveLeadKyc(
     let cardsAccepted = 0;
     let docsVerified = 0;
 
-    // No windows passed (older callers, and any case stamped before E-244):
-    // treat every card as due now, which is what E-242 did once the case
+    // No windows passed (older callers, and any case stamped before E-248):
+    // treat every card as due now, which is what E-246 did once the case
     // deadline had passed.
     const slaWindows: CaseSlaWindows = windows ?? { caseDueAt: null, cardDueAt: {} };
     const isCardDue = (type: CardSlaType) => {
@@ -366,7 +366,7 @@ export async function autoApproveLeadKyc(
             .where(
                 and(
                     eq(kycVerifications.lead_id, leadId),
-                    // E-244 — only the cards whose OWN window has closed. A card
+                    // E-248 — only the cards whose OWN window has closed. A card
                     // still inside its window is left for the human it belongs
                     // to; the sweep comes back for it when that window closes.
                     inArray(
@@ -441,7 +441,7 @@ export async function autoApproveLeadKyc(
         }
     }
 
-    // 1c. E-244 — is anything still inside its own window? If so, stop here:
+    // 1c. E-248 — is anything still inside its own window? If so, stop here:
     // the cards that matured have been accepted, and the case comes back when
     // the next window closes. Approving now would finalise a case while a card
     // an admin still owns is sitting in its review window, which is exactly
@@ -536,7 +536,7 @@ export type KycAutoApprovalTickResult = {
     processed: number;
     approved: number;
     blocked: number;
-    /** E-244 — visited, cards accepted, but still inside another card's window. */
+    /** E-248 — visited, cards accepted, but still inside another card's window. */
     waiting: number;
     consentsVerified: number;
 };
@@ -574,9 +574,9 @@ export async function runKycAutoApprovalTick(
     let blocked = 0;
     let waiting = 0;
 
-    // E-244 — rows are claimed by MOVING THE POINTER, not by stamping
+    // E-248 — rows are claimed by MOVING THE POINTER, not by stamping
     // `auto_approved_at`. A case with per-card windows has to be visited once
-    // per window, so stamping the finality marker up front (as E-242 did) would
+    // per window, so stamping the finality marker up front (as E-246 did) would
     // end the case at its first, shortest window. Pushing `sla_next_due_at` a
     // minute into the future instead takes the row out of the selection for
     // this tick and any concurrent one, and the row comes back either when its
@@ -664,8 +664,8 @@ export async function runKycAutoApprovalTick(
                 err,
             );
             // Close the case out — do not retry a lead that threw, or a
-            // deterministic failure becomes an every-tick loop. Under E-244 the
-            // pointer claim only holds the row for a minute, so unlike E-242
+            // deterministic failure becomes an every-tick loop. Under E-248 the
+            // pointer claim only holds the row for a minute, so unlike E-246
             // this write is what stops the retry, not just a label: it has to
             // stamp `auto_approved_at` and clear the pointer.
             try {
@@ -727,13 +727,13 @@ async function recordAudit(
 }
 
 /**
- * Verify consents whose SLA window has closed (E-243).
+ * Verify consents whose SLA window has closed (E-247).
  *
  * THE `auto_verify_due_at IS NOT NULL` PREDICATE IS LOAD-BEARING. It is the
  * only thing standing between this sweep and every pending consent in the
- * database. Until E-243 this function selected on `consent_status` alone, and
+ * database. Until E-247 this function selected on `consent_status` alone, and
  * the first time it ran with the feature enabled it verified 14 real consents
- * signed months earlier — the retroactive sweep the rest of E-242 was carefully
+ * signed months earlier — the retroactive sweep the rest of E-246 was carefully
  * designed to make impossible. A consent is eligible ONLY if
  * `stampConsentAutoVerifyDeadline` admitted it, which it only does while the
  * feature is on. Never widen this WHERE clause, and never backfill the column.

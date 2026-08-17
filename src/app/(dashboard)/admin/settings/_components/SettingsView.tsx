@@ -4,7 +4,7 @@ import { NotificationAccessManager } from "./NotificationAccessManager";
 
 // Notification Access (E-231) is the only section on this page.
 //
-// KYC Automation (E-242) briefly lived here as a second tab, and was moved out
+// KYC Automation (E-246) briefly lived here as a second tab, and was moved out
 // to its own route (/admin/settings/kyc-automation) and its own sidebar entry —
 // so the tab strip went away again with it. A one-item tab bar is dead chrome.
 //

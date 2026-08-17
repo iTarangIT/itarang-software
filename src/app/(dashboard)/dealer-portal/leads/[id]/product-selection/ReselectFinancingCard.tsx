@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-241 — pick another lender after closing a deal.
+ * E-245 — pick another lender after closing a deal.
  *
  * Reads the SAME BRE-matched list Section G renders at Step 4
  * (GET /api/lead/[id]/section-g-options), so the dealer sees the loan products

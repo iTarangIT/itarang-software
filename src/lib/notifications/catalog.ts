@@ -193,7 +193,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // E-238 — the dealer<->NBFC negotiation over a firm offer.
   "loan.offer_negotiated": "Loan & Sanction",
   "loan.offer_fixed": "Loan & Sanction",
-  // E-241 — the dealer ended the conversation with one lender, then routed the
+  // E-245 — the dealer ended the conversation with one lender, then routed the
   // lead to another.
   "loan.offer_closed": "Loan & Sanction",
   "loan.lead_rerouted": "Loan & Sanction",
@@ -302,7 +302,7 @@ const WARNING = new Set([
   // which is the definition of amber here. `loan.offer_fixed` is deliberately
   // NOT amber: it closes an action rather than opening one.
   "loan.offer_negotiated",
-  // E-241 — a re-routed lead is an application waiting on a decision that has
+  // E-245 — a re-routed lead is an application waiting on a decision that has
   // not been made yet. `loan.offer_closed` is NOT amber: nothing the lender can
   // do about it, same reasoning as `auction.lost`.
   "loan.lead_rerouted",

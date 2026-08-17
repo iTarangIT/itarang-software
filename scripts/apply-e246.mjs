@@ -1,7 +1,7 @@
-// Applies drizzle/E-243_consent_auto_verify_sla.sql and then PROVES it landed.
+// Applies drizzle/E-246_kyc_auto_approval_sla.sql and then PROVES it landed.
 //
-// Usage:  DATABASE_URL=postgresql://…database-1… node scripts/apply-e243.mjs
-//         DATABASE_URL=postgresql://…database-1… node scripts/apply-e243.mjs --dry-run
+// Usage:  DATABASE_URL=postgresql://…database-2… node scripts/apply-e246.mjs
+//         DATABASE_URL=postgresql://…database-2… node scripts/apply-e246.mjs --dry-run
 //
 // TARGET SELECTION — READ THIS BEFORE RUNNING.
 // An explicit process.env.DATABASE_URL always wins. Falling back to .env.local
@@ -10,33 +10,34 @@
 // and the two databases drift. The host is printed, together with which
 // environment that host IS, before a single byte is written.
 //
-// WHAT E-243 DOES. One column — consent_records.auto_verify_due_at — plus one
-// PARTIAL index over it. It is the consent half of the E-242 KYC auto-approval
-// SLA: a consent is only ever swept once this deadline has been stamped at
-// signing time and has passed. Consents that predate the file keep NULL and are
-// structurally unreachable by the sweep, which is why there is NO BACKFILL.
+// WHAT E-246 DOES. Four varchar(16) DEFAULT 'admin' provenance columns
+// (kyc_verifications.admin_action_source, other_document_requests.review_source,
+// consent_records.verification_source,
+// kyc_verification_metadata.final_decision_source), three columns on
+// admin_verification_queue (sla_due_at, auto_approved_at, auto_approval_result),
+// and one PARTIAL index. It backs the KYC auto-approval SLA sweep.
 //
-// It is REQUIRED before the code deploys. consent_records is mirrored in
-// schema.ts and read with a bare db.select() (the admin KYC case-review route
-// among them), and Drizzle names every column of a mirrored table in its
-// generated SQL — so without this file the consent panel fails on its first
-// read with `column "auto_verify_due_at" does not exist`, and the 60s sweep
-// throws every tick. The automation itself stays inert regardless:
-// app_settings key 'kyc_auto_approval' ships enabled=false.
+// It is REQUIRED before the code deploys — all five tables are mirrored in
+// schema.ts and several are read with a bare db.select(), and Drizzle names
+// every column of a mirrored table in its generated SQL. Without this file the
+// admin KYC review page fails on its first read with
+// `column "admin_action_source" does not exist`. The automation itself stays
+// inert regardless: app_settings key 'kyc_auto_approval' ships enabled=false, so
+// applying this alone changes no behaviour at all.
 //
 // Verified rather than trusted: "no exception was thrown" is not evidence, so
-// the column is read back out of information_schema and the index predicate out
-// of pg_indexes. That last check earns its keep — Drizzle's index builder
+// every column is read back out of information_schema and the index predicate
+// out of pg_indexes. That last check earns its keep — Drizzle's index builder
 // cannot express a WHERE clause, so this migration is the ONLY source of the
 // predicate, and an index created without it would still satisfy a name-only
-// check while scanning every consent row on every 60s tick. Worse,
+// check while scanning the whole queue on every 60s tick. Worse,
 // `CREATE INDEX IF NOT EXISTS` could never repair it afterwards: the name
 // already exists, so a re-run is a no-op and it would have to be dropped by hand.
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const FILE = "drizzle/E-243_consent_auto_verify_sla.sql";
+const FILE = "drizzle/E-246_kyc_auto_approval_sla.sql";
 
 function resolveUrl() {
     if (process.env.DATABASE_URL) {
@@ -48,13 +49,27 @@ function resolveUrl() {
     return { url: m[1].trim().replace(/^["']|["']$/g, ""), from: ".env.local (NOT explicit — check the host below)" };
 }
 
-/** Tables E-243 alters. A missing one means an out-of-order or wrong database. */
-const PREREQ_TABLES = ["consent_records"];
+/** Tables E-246 alters. A missing one means an out-of-order or wrong database. */
+const PREREQ_TABLES = [
+    "kyc_verifications",
+    "other_document_requests",
+    "consent_records",
+    "kyc_verification_metadata",
+    "admin_verification_queue",
+];
 
 /** Every column this file must add. */
-const EXPECTED_COLUMNS = [["consent_records", "auto_verify_due_at", "timestamp with time zone"]];
+const EXPECTED_COLUMNS = [
+    ["kyc_verifications", "admin_action_source", "character varying"],
+    ["other_document_requests", "review_source", "character varying"],
+    ["consent_records", "verification_source", "character varying"],
+    ["kyc_verification_metadata", "final_decision_source", "character varying"],
+    ["admin_verification_queue", "sla_due_at", "timestamp with time zone"],
+    ["admin_verification_queue", "auto_approved_at", "timestamp with time zone"],
+    ["admin_verification_queue", "auto_approval_result", "character varying"],
+];
 
-const INDEX_NAME = "consent_records_auto_verify_due_idx";
+const INDEX_NAME = "admin_verification_queue_sla_due_idx";
 
 /**
  * Refuse to run a file that mutates data or narrows a type. Strips `--` line
@@ -113,20 +128,7 @@ try {
             process.exit(1);
         }
     }
-    console.log(`OK — all ${PREREQ_TABLES.length} target table(s) present.`);
-
-    // E-243 is the consent half of E-242's SLA and reads its settings key. If
-    // E-242 never landed here, applying this alone leaves the code still broken
-    // on the other four tables — say so rather than report a false success.
-    const [e242] = await sql`
-        SELECT 1 AS present FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'consent_records'
-           AND column_name = 'verification_source'`;
-    console.log(
-        e242
-            ? "OK — E-242 is already applied on this DB (consent_records.verification_source present)."
-            : "WARNING — E-242 does NOT look applied here. Run scripts/apply-e242.mjs as well, or the KYC pages stay broken.",
-    );
+    console.log(`OK — all ${PREREQ_TABLES.length} target tables present.`);
 
     // Snapshot before, so the run can report what it actually changed rather
     // than just what is present at the end (a re-run should add 0).
@@ -158,16 +160,13 @@ try {
             failed = true;
             continue;
         }
-        // Nullable is not incidental here: NULL is the "never auto-verify"
-        // marker every pre-E-243 consent relies on.
         const typeOk = row.data_type === expectedType;
-        const nullableOk = row.is_nullable === "YES";
         console.log(
-            typeOk && nullableOk
-                ? `OK — ${table}.${column} (${row.data_type}, nullable)`
-                : `FAILED — ${table}.${column} is ${row.data_type}/${row.is_nullable}, expected ${expectedType}/YES.`,
+            typeOk
+                ? `OK — ${table}.${column} (${row.data_type}${row.column_default ? `, default ${row.column_default}` : ""})`
+                : `FAILED — ${table}.${column} is ${row.data_type}, expected ${expectedType}.`,
         );
-        if (!(typeOk && nullableOk)) failed = true;
+        if (!typeOk) failed = true;
     }
 
     // The index must exist AND be genuinely partial — see the header.
@@ -178,10 +177,8 @@ try {
     } else {
         const isPartial = /\bWHERE\b/i.test(idx.indexdef);
         const guardsSweep =
-            /auto_verify_due_at IS NOT NULL/i.test(idx.indexdef) &&
-            /esign_completed/i.test(idx.indexdef) &&
-            /admin_review_pending/i.test(idx.indexdef) &&
-            /manual_uploaded/i.test(idx.indexdef);
+            /auto_approved_at IS NULL/i.test(idx.indexdef) &&
+            /pending_itarang_verification/i.test(idx.indexdef);
         console.log(
             isPartial && guardsSweep
                 ? `OK — ${INDEX_NAME} exists and is genuinely PARTIAL.`
@@ -190,33 +187,31 @@ try {
         if (!(isPartial && guardsSweep)) failed = true;
     }
 
-    // No backfill ships with this file, on purpose: auto_verify_due_at must stay
-    // NULL on pre-existing rows so no consent signed before E-243 can be swept.
-    // A non-zero `stamped` on a DB that has only just received the column would
-    // mean someone backfilled it — that is the failure this reports.
+    // No backfill ships with this file, on purpose: sla_due_at must stay NULL on
+    // pre-existing rows so nothing submitted before E-246 can retro-auto-approve.
     const [{ open_rows, stamped }] = await sql`
         SELECT count(*)::int AS open_rows,
-               count(auto_verify_due_at)::int AS stamped
-          FROM consent_records
-         WHERE consent_status IN ('esign_completed', 'admin_review_pending', 'manual_uploaded')`;
+               count(sla_due_at)::int AS stamped
+          FROM admin_verification_queue
+         WHERE status = 'pending_itarang_verification'`;
     console.log(
-        `\nSigned-but-unverified consents on this DB: ${open_rows}; carrying an auto-verify deadline: ${stamped}.`,
+        `\nOpen KYC queue rows on this DB: ${open_rows}; carrying an SLA deadline: ${stamped}.`,
     );
     if (stamped > 0) {
         console.log(
-            "  NOTE — a non-zero count here means consents were signed AFTER the app code shipped (or someone backfilled, which this file forbids).",
+            "  NOTE — a non-zero count here means rows were submitted AFTER the app code shipped.",
         );
     } else {
         console.log(
-            "  Expected: 0. No pre-existing consent can auto-verify, which is the intended safe state.",
+            "  Expected: 0. No pre-existing case can auto-approve, which is the intended safe state.",
         );
     }
 
     if (failed) {
-        console.log("\nE-243 FAILED verification. Investigate before deploying the code.");
+        console.log("\nE-246 FAILED verification. Investigate before deploying the code.");
         process.exit(1);
     }
-    console.log("\nE-243 applied and verified. Pure additive DDL — no row was read or written.");
+    console.log("\nE-246 applied and verified. Pure additive DDL — no row was read or written.");
     console.log("The automation remains OFF until an admin enables it in /admin/settings.");
 } catch (err) {
     console.error("\nERROR:", err?.message ?? err);

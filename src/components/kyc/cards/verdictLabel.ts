@@ -1,7 +1,7 @@
 /**
  * The sentence each verification card shows once a verdict exists.
  *
- * Shared because E-242 introduced a second kind of "accepted" and all five
+ * Shared because E-246 introduced a second kind of "accepted" and all five
  * cards (Aadhaar, PAN, Bank, CIBIL, RC) had their own copy of the string. A
  * card auto-accepted by the SLA sweep must NOT read "accepted by admin": no
  * admin saw it, and — more importantly — the verification provider was never
