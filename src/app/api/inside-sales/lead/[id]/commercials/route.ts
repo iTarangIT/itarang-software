@@ -4,15 +4,17 @@
 // quote_issue/quote_revision, also writes a touchpoint of type 'quote_sent';
 // if brochure_share, sets dealer_leads.brochure_sent_at on first event.
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { dealerLeadCommercials } from "@/lib/db/schema";
+import { dealerLeadCommercials, dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
 import { initialApprovalStatus, isGatedQuoteEvent } from "@/lib/leads/quoteApproval";
+import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
+import { notifyQuotationApproved } from "@/lib/notifications/events";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import {
     evaluateAgainstOemPrices,
@@ -184,17 +186,58 @@ export const POST = withErrorHandler(
             const total = body.final_price ?? body.price_quoted;
             const verb = body.event_type === "quote_issue" ? "issued" : "revised";
             const money = total != null ? ` — ₹${total.toLocaleString("en-IN")}` : "";
+
+            // E-242 — an auto-approved quote is released HERE, so this is where
+            // its document is produced. Same contract as the CEO decision
+            // route: after the transaction, never throwing, so a rendering
+            // failure cannot undo an approval the rule has already granted.
+            // A pending quote gets NO draft — a document that could be sent
+            // must not exist before the gate has been passed (§4).
+            const draft =
+                outcome.autoApproved && outcome.commercialId
+                    ? await tryGenerateQuotationDraft(outcome.commercialId)
+                    : null;
+
             await writeTouchpoint({
                 dealerLeadId: id,
                 touchpointType: outcome.autoApproved ? "quote_sent" : "quote_submitted",
                 performedBy: user.id,
                 remarks: outcome.autoApproved
-                    ? `Quote ${verb}${money} — auto-approved and released (at or above OEM reference)`
+                    ? `Quote ${verb}${money} — auto-approved and released (at or above OEM reference)` +
+                      (draft ? ` — draft ${draft.quote_number}` : "")
                     : `Quote ${verb}${money} — awaiting CEO approval`,
-                attachments: body.quote_document_url
-                    ? [{ url: body.quote_document_url, type: "quote" }]
-                    : [],
+                attachments: [
+                    ...(draft ? [{ url: draft.quote_pdf_url, type: "quote" }] : []),
+                    ...(body.quote_document_url
+                        ? [{ url: body.quote_document_url, type: "quote" }]
+                        : []),
+                ],
             });
+
+            if (outcome.autoApproved && outcome.commercialId) {
+                // The rule released this with no human in the loop, so the
+                // notification is the ONLY signal anyone gets that a quotation
+                // is waiting to be sent.
+                const [lead] = await db
+                    .select({
+                        owner: dealerLeads.current_owner_id,
+                        dealerName: dealerLeads.dealer_name,
+                    })
+                    .from(dealerLeads)
+                    .where(eq(dealerLeads.id, id))
+                    .limit(1);
+
+                await notifyQuotationApproved({
+                    leadId: id,
+                    commercialId: outcome.commercialId,
+                    ownerUserId: lead?.owner ?? null,
+                    dealerName: lead?.dealerName ?? null,
+                    quoteNumber: draft?.quote_number ?? null,
+                    value: Number(total ?? 0),
+                    mode: "auto",
+                    draftReady: !!draft,
+                });
+            }
         } else if (body.event_type === "brochure_share") {
             await writeTouchpoint({
                 dealerLeadId: id,
