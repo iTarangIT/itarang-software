@@ -22,6 +22,7 @@
 
 import React from "react";
 import { OemInventoryPricing } from "@/components/dashboard/oem/OemInventoryPricing";
+import { OemPriceHistory } from "@/components/dashboard/oem/OemPriceHistory";
 
 export default function OemPricingPage() {
     return (
@@ -42,6 +43,14 @@ export default function OemPricingPage() {
             </div>
 
             <OemInventoryPricing />
+
+            {/*
+              * E-242 — the full ledger, under the register that writes it.
+              * Same screen on purpose: the register and its history are one
+              * subject, and a separate page would be the second door the same
+              * call complained about.
+              */}
+            <OemPriceHistory />
         </div>
     );
 }

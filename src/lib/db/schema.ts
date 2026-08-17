@@ -118,6 +118,11 @@ export const productMasterBatteries = pgTable(
     warranty_months: integer("warranty_months").default(0).notNull(),
     iot_compatible: boolean("iot_compatible").default(false).notNull(),
     compatible_charger_models: jsonb("compatible_charger_models").default([]).notNull(),
+    // E-242 — what the GST proforma quotation prints per line. Nullable with no
+    // backfill: a guessed rate is a wrong number on a tax document, so NULL
+    // means "not set yet" and the renderer shows it as unset, never as zero.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -141,6 +146,9 @@ export const productMasterChargers = pgTable(
     compatible_battery_models: jsonb("compatible_battery_models").default([]).notNull(),
     base_price: numeric("base_price", { precision: 12, scale: 2 }),
     warranty_months: integer("warranty_months").default(0).notNull(),
+    // E-242 — see product_master_batteries.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -161,6 +169,9 @@ export const productMasterParaphernalia = pgTable(
     compatible_categories: jsonb("compatible_categories").default([]).notNull(),
     max_qty_per_lead: integer("max_qty_per_lead").default(0).notNull(),
     harness_variant: boolean("harness_variant").default(false).notNull(),
+    // E-242 — see product_master_batteries.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3428,6 +3439,17 @@ export const dealerLeads = pgTable("dealer_leads", {
   // to conflict on. The constraint already exists in the DB (migration
   // 0002_cute_devos.sql); mirror it here so future `db:push` runs preserve it.
   phone: text().unique("dealer_leads_phone_unique"),
+  // E-242 adds `contact_email` and `gstin` to this table and they are
+  // DELIBERATELY ABSENT HERE, exactly as E-224's and E-236's columns are.
+  //
+  // Drizzle names every column of a table object in a bare
+  // `db.select().from(dealerLeads)`, and there are ~20 of those across the
+  // leads list, the AI dialer, the CEO overview and the dashboards. Listing a
+  // column here therefore hard-fails all of them at PARSE time on any database
+  // without the migration — the whole leads screen goes down to add an email
+  // field. The quotation code reads both columns by name in raw `sql``
+  // projections instead (quoteDraft.ts, the send route), so an unapplied E-242
+  // costs the quotation feature and nothing else.
   language: text(),
   follow_up_history: jsonb("follow_up_history").default([]),
   current_status: text("current_status"),
@@ -7947,6 +7969,31 @@ export const dealerLeadCommercials = pgTable(
     // quote stays auditable after the price book moves on.
     approval_mode: varchar("approval_mode", { length: 16 }),
     oem_evaluation: jsonb("oem_evaluation"),
+    // E-242 — the generated quotation draft. Distinct from quote_document_url,
+    // which is whatever file the rep attached by hand; these are written only
+    // by generateQuotationDraft() and only after approval. quote_snapshot is
+    // the view the PDF was rendered from, kept for the same reason as
+    // oem_evaluation: the masters and the price book move, the document must
+    // not. quote_pdf_error records a render that failed after the approval
+    // transaction had already committed.
+    quote_number: varchar("quote_number", { length: 40 }),
+    quote_pdf_url: text("quote_pdf_url"),
+    quote_pdf_generated_at: timestamp("quote_pdf_generated_at", {
+      withTimezone: true,
+    }),
+    quote_pdf_error: text("quote_pdf_error"),
+    quote_snapshot: jsonb("quote_snapshot"),
+    // E-243 — the DEALER's answer, orthogonal to approval_status above. That
+    // column is iTarang's internal gate; this is what the dealer said about the
+    // quotation we released. A quote can be approved by us and declined by
+    // them, and both facts have to be readable at once. NULL = no answer yet.
+    // `via` and `actor` carry the evidence, because this is a claim about
+    // somebody outside the company.
+    dealer_decision: varchar("dealer_decision", { length: 16 }),
+    dealer_decision_at: timestamp("dealer_decision_at", { withTimezone: true }),
+    dealer_decision_via: varchar("dealer_decision_via", { length: 20 }),
+    dealer_decision_actor: text("dealer_decision_actor"),
+    dealer_decision_note: text("dealer_decision_note"),
   },
   (t) => ({
     leadVersionUniq: uniqueIndex(
@@ -7957,6 +8004,48 @@ export const dealerLeadCommercials = pgTable(
     ).on(t.dealer_lead_id, t.version_no),
     currentIdx: index("dealer_lead_commercials_current_idx").on(
       t.dealer_lead_id,
+    ),
+  }),
+);
+
+// E-242 — one row per channel per send attempt of a quotation draft.
+//
+// Append-only: a resend is a new row, never an update, so "we sent this three
+// times and the first two bounced" stays answerable. The two channels are
+// dispatched independently — WhatsApp failing must not undo a delivered email —
+// so a single send can write one `sent` row and one `failed` row.
+//
+// Not buyback_notification_events, which is the closest existing thing but is
+// NOT NULL on request_id with an FK to buyback_requests. No FKs here, matching
+// dealer_lead_commercials.
+export const quotationDispatches = pgTable(
+  "quotation_dispatches",
+  {
+    dispatch_id: uuid("dispatch_id").primaryKey().defaultRandom(),
+    commercial_id: uuid("commercial_id").notNull(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    // email | whatsapp — free text, vocabulary in src/lib/leads/quoteDispatch.ts
+    channel: varchar("channel", { length: 20 }).notNull(),
+    // The address or number actually used, snapshotted: the lead's email can be
+    // corrected later, this stays what the message went to.
+    recipient: text("recipient").notNull(),
+    // sent | failed
+    status: varchar("status", { length: 20 }).notNull(),
+    provider_message_id: text("provider_message_id"),
+    error: text("error"),
+    sent_by: text("sent_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    commercialIdx: index("quotation_dispatches_commercial_idx").on(
+      t.commercial_id,
+      t.created_at,
+    ),
+    leadIdx: index("quotation_dispatches_lead_idx").on(
+      t.dealer_lead_id,
+      t.created_at,
     ),
   }),
 );

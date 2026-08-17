@@ -230,6 +230,14 @@ export const TYPE_LABELS: Record<string, string> = {
 
   // --- Loan & sanction ---
   "loan.offer_submitted": "NBFC submitted a financing offer",
+  // E-238_offer_negotiation added these two to the catalogue and to events.ts
+  // but not here, which left `assertRegistryComplete` failing on a clean tree
+  // and both rows rendering as raw snake_case on the Notification Access
+  // screen — the exact gap the test at the top of __tests__/registry.test.ts
+  // exists to catch. Labelled from the notifyOfferNegotiated /
+  // notifyOfferFixed docblocks.
+  "loan.offer_negotiated": "Dealer countered a financing offer",
+  "loan.offer_fixed": "NBFC fixed its final terms",
   "loan.winner_selected": "Winning NBFC selected",
   "loan.not_selected": "NBFC was not selected",
   "loan.sanctioned": "Loan sanctioned",
@@ -279,6 +287,12 @@ export const TYPE_LABELS: Record<string, string> = {
   // notifyOemPricesExpiring() are the producers now.
   "oem.price_missing": "Models with no OEM reference price",
   "oem.price_expiring": "OEM prices about to lapse",
+  // E-242. Fires once a quotation clears the gate — by the CEO or by the OEM
+  // price rule — and its draft has been generated.
+  "quote.approved": "Quotation approved",
+  // E-243. The dealer's own answer, captured from the approval link or a
+  // tapped WhatsApp button.
+  "quote.dealer_decision": "Dealer responded to a quotation",
 
   // --- Buyback: negotiation ---
   "buyback.negotiate": "Buyback price negotiation opened",

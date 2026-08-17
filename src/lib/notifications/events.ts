@@ -1404,5 +1404,164 @@ export async function notifyOemPricesMissing(p: {
   });
 }
 
+/**
+ * E-242 — a quotation cleared approval and its draft is ready to send.
+ *
+ * WHO IS TOLD, AND WHY BOTH
+ *   - The LEAD OWNER (dealer_leads.current_owner_id). This is the person who
+ *     raised the quote and the only one who can act on it. Until now they were
+ *     told nothing at all: the decision route wrote a touchpoint and stopped, so
+ *     a rep learned their quote had been approved by going and looking.
+ *   - Everyone with role `sales_manager`, per the requirement ("whoever the
+ *     sales manager is gets a notification that it's approved"). They oversee
+ *     the deal but do not own the lead, so they get the leads list rather than
+ *     the owner's lead page.
+ *
+ * Both land on a page that opens the draft, because the next step is a human
+ * reading the document before it goes to a dealer — the notification is the
+ * start of a review, not just an announcement.
+ *
+ * The auto/manual distinction is in the copy on purpose. "Approved by the
+ * pricing rule" and "approved by the CEO" mean different things about how much
+ * scrutiny the number has had, and the person about to send it to a dealer
+ * should not have to go and find out which happened.
+ */
+export async function notifyQuotationApproved(p: {
+  leadId: string;
+  commercialId: string;
+  ownerUserId: string | null;
+  dealerName: string | null;
+  quoteNumber: string | null;
+  value: number;
+  /** 'auto' when the OEM price rule released it, 'manual' when a human did. */
+  mode: "auto" | "manual";
+  approverName?: string | null;
+  /** False when the PDF could not be produced — say so rather than imply a draft exists. */
+  draftReady: boolean;
+}) {
+  const dealer = p.dealerName?.trim() || "a dealer";
+  const money = p.value > 0 ? ` for ₹${p.value.toLocaleString("en-IN")}` : "";
+  const ref = p.quoteNumber ? ` (${p.quoteNumber})` : "";
+
+  const how =
+    p.mode === "auto"
+      ? "auto-approved — every line was at or above its OEM reference price"
+      : `approved by ${p.approverName?.trim() || "the CEO"}`;
+
+  const tail = p.draftReady
+    ? "The quotation draft is ready to review and send to the dealer."
+    : "The draft could not be generated — open the quote and retry before sending.";
+
+  const message = `The quotation for ${dealer}${money}${ref} was ${how}. ${tail}`;
+
+  await emit({
+    type: "quote.approved",
+    title: "Quotation approved",
+    message,
+    leadId: p.leadId,
+    stage: "Quotation",
+    from: ADMIN_PARTY,
+    data: {
+      commercialId: p.commercialId,
+      quoteNumber: p.quoteNumber,
+      value: p.value,
+      mode: p.mode,
+      draftReady: p.draftReady,
+    },
+    to: [
+      // The owner may be unset on an orphaned lead; emit() skips an audience it
+      // cannot resolve rather than failing the batch, but filtering here keeps
+      // the intent explicit.
+      ...(p.ownerUserId
+        ? [
+            {
+              audience: { kind: "user" as const, userId: p.ownerUserId },
+              as: ADMIN_PARTY,
+              href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+            },
+          ]
+        : []),
+      {
+        audience: { kind: "roles" as const, roles: ["sales_manager"] },
+        as: ADMIN_PARTY,
+        href: `/leads?lead=${p.leadId}&quote=${p.commercialId}`,
+      },
+    ],
+  });
+}
+
+/**
+ * E-243 — the dealer answered a quotation.
+ *
+ * The other half of `quote.approved`. That one says we released a number; this
+ * one says what came back, and it is the first time the CRM has been able to
+ * say so at all — before E-243 the reply lived in a WhatsApp thread or an inbox
+ * and the lead owner found out by asking.
+ *
+ * DECLINED IS A WARNING, APPROVED IS NOT. A decline is the one that needs
+ * somebody to do something today: the deal is stalling and the reason, when the
+ * dealer gave one, is the most useful thing on the notification. An approval is
+ * good news that can wait for the next time the owner looks at the bell.
+ * `catalog.ts` files the type as Warning for that reason, so the copy leads
+ * with whichever it is.
+ */
+export async function notifyQuotationDealerDecision(p: {
+  leadId: string;
+  commercialId: string;
+  ownerUserId: string | null;
+  dealerName: string | null;
+  quoteNumber: string | null;
+  value: number;
+  decision: "approved" | "declined";
+  via: "link" | "whatsapp";
+  note?: string | null;
+}) {
+  const dealer = p.dealerName?.trim() || "The dealer";
+  const money = p.value > 0 ? ` (₹${p.value.toLocaleString("en-IN")})` : "";
+  const ref = p.quoteNumber ? ` ${p.quoteNumber}` : "";
+  const channel = p.via === "whatsapp" ? "over WhatsApp" : "using the approval link";
+
+  const message =
+    p.decision === "approved"
+      ? `${dealer} APPROVED quotation${ref}${money} ${channel}. Take it forward in the CRM — ` +
+        `nothing has been moved automatically.`
+      : `${dealer} DECLINED quotation${ref}${money} ${channel}.` +
+        (p.note ? ` They said: "${p.note}"` : "") +
+        ` Follow up or raise a revision.`;
+
+  await emit({
+    type: "quote.dealer_decision",
+    title:
+      p.decision === "approved" ? "Dealer approved a quotation" : "Dealer declined a quotation",
+    message,
+    leadId: p.leadId,
+    stage: "Quotation",
+    from: ADMIN_PARTY,
+    data: {
+      commercialId: p.commercialId,
+      quoteNumber: p.quoteNumber,
+      decision: p.decision,
+      via: p.via,
+      value: p.value,
+    },
+    to: [
+      ...(p.ownerUserId
+        ? [
+            {
+              audience: { kind: "user" as const, userId: p.ownerUserId },
+              as: ADMIN_PARTY,
+              href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+            },
+          ]
+        : []),
+      {
+        audience: { kind: "roles" as const, roles: ["sales_manager"] },
+        as: ADMIN_PARTY,
+        href: `/leads?lead=${p.leadId}&quote=${p.commercialId}`,
+      },
+    ],
+  });
+}
+
 /** Re-exported so routes need only one import. */
 export { ADMIN_AUDIENCE_ROLES };
