@@ -466,9 +466,18 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
         connected AS (
             -- "Connected" is a property of the outreach, not of the lead, so it
             -- is counted from the touchpoints themselves.
+            --
+            -- performed_by IS NOT NULL is stated rather than inherited. This is
+            -- a per-OWNER report, and AI touchpoints carry a null performer, so
+            -- they were already excluded — but only as a side effect of the
+            -- c.performed_by = w.performed_by join below being false for NULL.
+            -- Now that the AI writes touchpoints with call_status='connected',
+            -- relying on that accident is one refactor away from double-counting
+            -- the robot's calls against whichever rep owns the lead.
             SELECT DISTINCT t.performed_by, t.dealer_lead_id
             FROM lead_touchpoints t
             WHERE (t.call_status = 'connected' OR t.is_engaged IS TRUE)
+              AND t.performed_by IS NOT NULL
               ${dateRange("t.performed_at", f)}
         )
         SELECT COALESCE(u.name, '(unknown)') AS person,

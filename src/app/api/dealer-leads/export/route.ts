@@ -199,7 +199,17 @@ export const GET = withErrorHandler(async (req: Request) => {
                    t.call_status,
                    t.remarks,
                    t.next_action_at,
-                   COALESCE(u.name, to_jsonb(t) ->> 'external_agent_name') AS by_name
+                   -- The 'ai_call' arm of the type filter below has matched
+                   -- ZERO rows since it was written, because the AI dialer never
+                   -- wrote a touchpoint. Now that it does, this column would go
+                   -- BLANK on those rows — performed_by is null by design and
+                   -- there is no external agent — next to a populated "Last Call
+                   -- At", which reads as data loss rather than as a robot call.
+                   COALESCE(
+                       u.name,
+                       to_jsonb(t) ->> 'external_agent_name',
+                       CASE WHEN t.touchpoint_type = 'ai_call' THEN 'AI Dialer' END
+                   ) AS by_name
               FROM lead_touchpoints t
               LEFT JOIN users u ON u.id::text = t.performed_by
              WHERE t.dealer_lead_id = dl.id

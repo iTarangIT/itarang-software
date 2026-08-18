@@ -13,6 +13,7 @@ import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
 import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import {
   rehostRecording,
   rehostElevenLabsRecording,
@@ -121,6 +122,18 @@ export async function finalizeElevenLabsCall(
       // Even failed calls (initiation_failure, busy, no-answer) accrue
       // partial cost on ElevenLabs. Best-effort fetch; backfill retries.
       await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+      // Record it in the CC team's vocabulary. See the Bolna twin for why this
+      // sits after the log exists and before completeCampaignLead.
+      await writeAiCallTouchpoint({
+        leadId: leadForPhone.id,
+        provider: "elevenlabs",
+        callId: conversationId,
+        transcript: null,
+        providerStatus: status || "failed",
+        durationSec: duration ?? null,
+        recordingUrl,
+      });
 
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
@@ -282,6 +295,22 @@ export async function finalizeElevenLabsCall(
     });
 
     await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+    // A transcript exists, so this is CONNECTED — Cold / Short Hang up.
+    await writeAiCallTouchpoint({
+      leadId: lead.id,
+      provider: "elevenlabs",
+      callId: conversationId,
+      transcript,
+      providerStatus: status || "completed",
+      bandCallStatus: "dropped_empty",
+      band: null,
+      infoSignalsCount: 0,
+      durationSec: duration ?? null,
+      recordingUrl,
+      summary: analysis.memory?.intent_summary ?? null,
+    });
+
     // dropped_empty connected and produced a transcript — the line just dropped
     // before any qualifying info was captured. It is NOT a telephony failure, so
     // the campaign row is marked completed ("Done"), not failed. The Outcome
@@ -375,6 +404,27 @@ export async function finalizeElevenLabsCall(
   // Capture per-call cost from ElevenLabs /v1/convai/conversations/{id}.
   // Best-effort: backfill cron is the recovery path on race or 5xx.
   await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+  // The scored path. The band rides on external_tag rather than deciding the L2
+  // bucket — an AI call cannot reach the sheet's Hot bucket. See aiDisposition.ts.
+  await writeAiCallTouchpoint({
+    leadId: lead.id,
+    provider: "elevenlabs",
+    callId: conversationId,
+    transcript,
+    providerStatus: status || "completed",
+    band: analysis.band,
+    bandCallStatus: analysis.call_status,
+    infoSignalsCount: analysis.info_signals_count,
+    disqualifier: analysis.signals?.disqualifier ?? null,
+    callbackAgreed: analysis.signals?.callback_agreed === "yes",
+    relevantDealer: analysis.signals?.relevant_dealer === "yes",
+    pitchHeard: analysis.signals?.pitch_heard === "yes",
+    durationSec: duration ?? null,
+    recordingUrl,
+    summary: analysis.memory?.intent_summary ?? null,
+    nextCallAt: nextCallAt ?? null,
+  });
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
@@ -593,6 +643,19 @@ async function markLeadNeedsReview(opts: {
   });
 
   await fetchAndPersistCallCost("elevenlabs", opts.callId);
+
+  // Connected with a NULL L3: the dealer WAS reached, but the failure is ours.
+  // See the Bolna twin — that null is the extraction-failure measurement.
+  await writeAiCallTouchpoint({
+    leadId: opts.leadId,
+    provider: "elevenlabs",
+    callId: opts.callId,
+    transcript: opts.transcript,
+    providerStatus: opts.status || "needs_review",
+    analysisFailed: true,
+    durationSec: opts.duration,
+    recordingUrl: opts.recordingUrl,
+  });
 
   const r = await completeCampaignLead({
     leadId: opts.leadId,
