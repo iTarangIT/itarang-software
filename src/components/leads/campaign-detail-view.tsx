@@ -58,6 +58,15 @@ type Lead = {
   queuePosition: number;
   status: string;
   callOutcome: string | null;
+  /** Derived server-side — see src/lib/ai-dialer/failureReason.ts. */
+  failureReason?: {
+    code: string;
+    label: string;
+    hint: string;
+    detail: string | null;
+    retryable: boolean;
+    ourFault: boolean;
+  } | null;
   intentScore: number | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -188,7 +197,10 @@ function LeadRow({
         <CampaignLeadStatusBadge status={row.status} />
       </td>
       <td className="px-3 py-2.5">
-        <CampaignOutcomeBadge outcome={row.callOutcome} />
+        <CampaignOutcomeBadge
+          outcome={row.callOutcome}
+          failureReason={row.failureReason}
+        />
       </td>
       <td className="px-3 py-2.5 text-xs">
         {row.intentScore != null ? (
