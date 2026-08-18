@@ -134,9 +134,22 @@ const selectShape = {
   )`,
   // Whether a human has corrected this lead's intent score in any attempt
   // (intent_score_feedback, E-159). Lead-level — drives the "Corrected" flag.
+  //
+  // E-250: excludes rows imported from the retired Campaign_Call_Review sheet
+  // whose free text named no band. Those are preserved as commentary, not
+  // verdicts, and lighting a "Corrected" pill for them would claim a decision
+  // nobody made.
+  //
+  // Filters on corrected_status rather than the more obvious review_kind on
+  // purpose: review_kind is an E-250 column, and naming it here would make this
+  // whole query — and with it the campaign leads table — fail with a 42703 on
+  // any database where E-250 has not been applied yet. corrected_status has
+  // existed since E-159, and the importer writes the 'none' sentinel into it
+  // for exactly this reason.
   corrected: sql<boolean>`exists (
     select 1 from intent_score_feedback f
     where f.lead_id = ${dialerCampaignLeads.lead_id}
+      and f.corrected_status <> 'none'
   )`,
 };
 

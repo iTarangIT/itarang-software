@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { aiCallLogs } from "@/lib/db/schema";
 import { or, eq, sql, desc } from "drizzle-orm";
-import { requireAuth } from "@/lib/auth-utils";
+import { requireRole } from "@/lib/auth-utils";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
 import { redirect } from "next/navigation";
@@ -18,7 +19,14 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function LeadDetailPage({ params }: any) {
-  const user = await requireAuth();
+  // Was a bare requireAuth(), which only asked "is anyone signed in". /leads is
+  // in no `sharedRouteAccess` entry and matches no `roleDashboards` prefix, so
+  // middleware never role-gates it either (src/middleware.ts) — meaning every
+  // signed-in dealer, scrap_vendor, nbfc_partner and service_engineer could
+  // render this page and read a prospect's name, phone and full call history.
+  // Its own /leads/[id]/edit sibling has always used this gate; the view page
+  // simply never caught up.
+  const user = await requireRole([...LEADS_PAGE_ROLES]);
   if (!user) redirect("/login");
 
   const { id } = await params;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AiSignalsCard } from "@/components/leads/AiSignalsCard";
+import { IntentReviewCard } from "@/components/leads/intent-review/IntentReviewCard";
 import {
     ChevronDown,
     User2,
@@ -58,7 +58,7 @@ export function LeadDetailRightPane({ bundle }: Props) {
                     the AI already learned inside a closed accordion is how it
                     stayed invisible to the rep who has to act on it. Renders
                     nothing when the AI has never called this lead. */}
-                <AiSignalsCard leadId={lead.id} />
+                <IntentReviewCard leadId={lead.id} />
 
                 {GROUPS.map((g) => {
                     const Icon = g.icon;

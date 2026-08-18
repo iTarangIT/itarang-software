@@ -102,11 +102,20 @@ export const CALIBRATION_EXAMPLES: CalibrationExample[] = [
   },
 ];
 
-// Renders the calibration set as text appended to the extraction prompt. Empty
+// Renders a calibration set as text appended to the extraction prompt. Empty
 // string when the set is empty (so the prompt is unchanged with no examples).
-export function renderCalibrationExamples(): string {
-  if (CALIBRATION_EXAMPLES.length === 0) return "";
-  const blocks = CALIBRATION_EXAMPLES.map((ex, i) => {
+//
+// E-250: takes the set as an ARGUMENT rather than reading the module constant.
+// The active set now lives in the intent_calibration_examples table and is
+// loaded at request time by calibrationStore.ts, so an admin can teach the
+// model without a code edit or a deploy. This function stays a pure renderer —
+// it must not know where the examples came from, so the DB path and the seed
+// fallback produce byte-identical prompt text.
+export function renderCalibrationExamples(
+  examples: CalibrationExample[] = CALIBRATION_EXAMPLES,
+): string {
+  if (examples.length === 0) return "";
+  const blocks = examples.map((ex, i) => {
     return `EXAMPLE ${i + 1} — ${ex.why}
 CONVERSATION:
 """
