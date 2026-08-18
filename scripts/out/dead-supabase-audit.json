@@ -1,0 +1,207 @@
+{
+  "summary": {
+    "dealer_onboarding_documents.file_url": {
+      "total": 150,
+      "inS3": 93,
+      "missing": 57,
+      "missingKeys": [
+        "dealer-documents/upload-gst-certificate/1781703981432-c9c50137-b7f4-4f15-871a-861e7f5f9b2c-REG-CERTIFICATE.pdf",
+        "dealer-documents/upload-company-pan/1781704043126-9a72609d-5037-4538-b91c-b729d8e96835-WhatsApp-Image-2026-06-17-at-7.17.04-PM.jpeg",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781704066629-db7dda22-26f7-4fb4-9193-cdaaf4ffbd38-ITR-2025-26.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781765476926-e229f8c2-8876-456e-9562-2d4cddcaf6ce-bank-statement.pdf",
+        "dealer-documents/upload-gst-certificate/1781865385028-b2f52928-c124-415f-9200-16ddceb63476-Ayansh-engineering-GST-Certificate.pdf",
+        "dealer-documents/upload-company-pan/1781865388427-63d6b149-f96d-487a-9476-c29e67df2659-Pan_Card.pdf",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781865400624-6159aa70-53dc-4339-ba5c-9fd1d8ed9c46-ITR-Certificate.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781865405629-29106fb1-2784-4e51-9461-48040a04fc9c-Bank-Statement_unlocked.pdf",
+        "dealer-documents/4-undated-cheques/1781865414130-601b43f4-b7df-4bc4-9e25-c27fe962100c-Cheque.pdf",
+        "dealer-documents/passport-size-photograph/1781865417528-aa867ec6-25d6-4bd2-9910-417130377be8-WhatsApp-Image-2026-06-19-at-3.07.26-PM.jpeg",
+        "dealer-documents/upload-gst-certificate/1781703981432-c9c50137-b7f4-4f15-871a-861e7f5f9b2c-REG-CERTIFICATE.pdf",
+        "dealer-documents/upload-company-pan/1781704043126-9a72609d-5037-4538-b91c-b729d8e96835-WhatsApp-Image-2026-06-17-at-7.17.04-PM.jpeg",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781704066629-db7dda22-26f7-4fb4-9193-cdaaf4ffbd38-ITR-2025-26.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781765476926-e229f8c2-8876-456e-9562-2d4cddcaf6ce-bank-statement.pdf",
+        "dealer-documents/4-undated-cheques/1781765483726-f9fd65d8-644f-4257-81f3-88d4652453ba-cheque.pdf",
+        "dealer-documents/passport-size-photograph/1781765701825-089b77d3-e0ea-488f-832f-4a170daa19c4-WhatsApp-Image-2025-11-05-at-15.41.05_ff1c67c0.jpg",
+        "dealer-documents/udyam-registration-certificate/1781765523619-f8fe9488-b90f-45ea-a7be-13c5fee8cbf4-Print-_-Udyam-Registration-Certificate-WITH-ANNEXURE.pdf",
+        "dealer-documents/upload-gst-certificate/1781769232521-99542c2d-2964-416a-aa3d-44d898e2c86e-GST.pdf",
+        "dealer-documents/upload-company-pan/1781769247625-4d84ec92-7236-402a-a998-5fa3235df726-pan-card.pdf",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781769557924-9d88bd4d-6ecc-431b-abcf-2e68f004a1e1-ITR-cERTIFICATE.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781769564226-6b70f12e-4397-453e-9f79-f17241d9969b-bank-statement.pdf",
+        "dealer-documents/4-undated-cheques/1781769571027-0de1d8b8-5714-4218-ada0-21433c128f48-cheque.pdf",
+        "dealer-documents/passport-size-photograph/1781769582831-f768e257-76b1-408b-9f60-a6dd0c6e9c97-photoes.pdf",
+        "dealer-documents/udyam-registration-certificate/1781769856521-ef9f01e4-f59b-4b33-bc31-c74b99c84216-udhyam-certificate.pdf",
+        "dealer-documents/owner-photograph/1781769970222-bdd6dd15-bd35-48ea-afb2-2c7c9733ad8d-photoes.pdf",
+        "dealer-documents/upload-company-pan/1781769247625-4d84ec92-7236-402a-a998-5fa3235df726-pan-card.pdf",
+        "dealer-documents/upload-gst-certificate/1781783185334-09ac1288-d28d-4485-9048-973db83a8895-gst-certificate-alishan-motors.pdf",
+        "dealer-documents/upload-company-pan/1781783189628-0a0e091d-0536-43d0-bb42-d81217c60549-WhatsApp-Image-2026-06-18-at-4.53.57-PM.jpeg",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781783214023-edaaaa3a-39ca-4464-bf45-19bf550a64e5-ITR-2023-24.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781783219433-77a3ed1d-fd75-4e06-afe7-5243526a7eea-bank-statement.pdf",
+        "dealer-documents/4-undated-cheques/1781783239828-5fc7f9ca-0be1-478d-9464-95413907844f-Cheque.jpeg",
+        "dealer-documents/passport-size-photograph/1781783245226-c069b2ab-8e45-4556-9917-c3b51ea0a55f-WhatsApp-Image-2026-06-18-at-4.53.34-PM.jpeg",
+        "dealer-documents/udyam-registration-certificate/1781783256925-897c9b65-6e7b-4050-9365-6ebf76fc0206-ALISHAN-MOTORS-UDYAM.pdf",
+        "dealer-documents/owner-photograph/1781783372928-d936d3bc-9f2d-49e8-914c-7bb55405a33c-WhatsApp-Image-2026-06-18-at-4.53.34-PM.jpeg",
+        "dealer-documents/upload-company-pan/1781783189628-0a0e091d-0536-43d0-bb42-d81217c60549-WhatsApp-Image-2026-06-18-at-4.53.57-PM.jpeg",
+        "dealer-documents/upload-gst-certificate/1781787627629-fdc3c8e3-eab1-4e4d-95cb-c1b2e7b95106-GST-Certificate.pdf",
+        "dealer-documents/upload-company-pan/1781787631728-f5582d78-f60d-4e28-bbdb-9018808aa0c9-pan-card.pdf",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781787642132-9db130fc-ceac-47f9-a748-8c9a4b30f046-ITR.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781787648125-ea61ba91-7aae-4784-b6a0-d03fe8352023-bank-Statement.pdf",
+        "dealer-documents/4-undated-cheques/1781787671727-308cc8ea-e944-4a54-94ab-1af2b3e0040e-CHEQUE.jpeg",
+        "dealer-documents/passport-size-photograph/1781787676432-b4f8155d-c6da-45b5-b9f2-c26800d23865-photoes.pdf",
+        "dealer-documents/udyam-registration-certificate/1781787682332-20936eb1-afdc-4345-8a07-14b13f3e4e00-Udhyam-certificate.pdf",
+        "dealer-documents/owner-photograph/1781787812225-027d3b9f-5a0d-4f78-9903-f1981a025667-photoes.pdf",
+        "dealer-documents/upload-company-pan/1781787631728-f5582d78-f60d-4e28-bbdb-9018808aa0c9-pan-card.pdf",
+        "documents/whatsapp/2b3ae8fb-a2ec-4a60-b4ce-9f0561004f27/bank_statement/1781858451525-facad3ef-dbea-44b6-98fc-3a2f88273452.pdf",
+        "dealer-documents/udyam-registration-certificate/1781865424131-4824718e-5d28-40a1-bc35-d8786c562d9d-AYANSH-ENGI-UDYAM.pdf",
+        "dealer-documents/owner-photograph/1781865592726-fc1faaf5-c43d-466c-9a6c-f5cd1213da77-WhatsApp-Image-2026-06-19-at-3.07.26-PM.jpeg",
+        "dealer-documents/upload-company-pan/1781865388427-63d6b149-f96d-487a-9476-c29e67df2659-Pan_Card.pdf",
+        "dealer-documents/upload-gst-certificate/1781943519725-faf87ff0-8c48-4f44-a187-1d8e4a4bd191-GST-Certificate.pdf",
+        "dealer-documents/upload-company-pan/1781943523724-1ad5bbfc-ba89-4e45-95a1-525560e4b473-Pan-Card.pdf",
+        "dealer-documents/last-3-years-company-income-tax-returns-itr/1781943535428-955533bc-3993-481a-83c1-4e0619b5e7ae-ITR-Certificate.pdf",
+        "dealer-documents/last-3-months-company-bank-statement/1781943539431-5bd419fb-1dfe-453f-b812-c6e25074d7bd-Bank-statement.pdf",
+        "dealer-documents/4-undated-cheques/1781943546428-394151de-b09f-4434-a29d-4fe15f94c0f2-Cheque.pdf",
+        "dealer-documents/passport-size-photograph/1781943551230-0fc77cf4-356b-4f8a-9fc8-9042f029a356-Passport-photo.pdf",
+        "dealer-documents/udyam-registration-certificate/1781943559323-368aa727-cc00-4d75-8444-7d7bb892e7e6-Udhyam-Certificate.pdf",
+        "dealer-documents/owner-photograph/1781943754831-a648a01f-1372-4b56-beb1-c7eba61f5bb8-Passport-photo.pdf",
+        "dealer-documents/upload-company-pan/1781943523724-1ad5bbfc-ba89-4e45-95a1-525560e4b473-Pan-Card.pdf"
+      ]
+    },
+    "ai_call_logs.recording_url": {
+      "total": 100,
+      "inS3": 100,
+      "missing": 0
+    },
+    "kyc_documents.file_url": {
+      "total": 11,
+      "inS3": 11,
+      "missing": 0
+    },
+    "dealer_onboarding_applications.audit_trail_url": {
+      "total": 8,
+      "inS3": 8,
+      "missing": 0
+    },
+    "dealer_onboarding_applications.signed_agreement_url": {
+      "total": 7,
+      "inS3": 7,
+      "missing": 0
+    },
+    "expense_submissions.bill_url": {
+      "total": 5,
+      "inS3": 0,
+      "missing": 5,
+      "missingKeys": [
+        "documents/expenses/95875fbc-efc3-4c8c-9ea8-1f8bc905722e/1782720499184-17885108-db07-45a9-b378-f9965758e47a.pdf",
+        "documents/expenses/95875fbc-efc3-4c8c-9ea8-1f8bc905722e/1782720503707-158bcacc-61c6-4a1a-8def-d6394182fcea.pdf",
+        "documents/expenses/95875fbc-efc3-4c8c-9ea8-1f8bc905722e/1782720510701-a00cd62a-9cc2-4ef0-9aed-35f5f4829c5e.pdf",
+        "documents/expenses/95875fbc-efc3-4c8c-9ea8-1f8bc905722e/1782720507180-44018e7d-493b-4619-ab6b-8b2fb3786c48.pdf",
+        "documents/expenses/95875fbc-efc3-4c8c-9ea8-1f8bc905722e/1784976422596-da6f279f-783e-4ad0-94cd-ecbb01b1e53e.pdf"
+      ]
+    },
+    "consent_records.generated_pdf_url": {
+      "total": 1,
+      "inS3": 1,
+      "missing": 0
+    },
+    "consent_records.signed_consent_url": {
+      "total": 1,
+      "inS3": 1,
+      "missing": 0
+    },
+    "other_document_requests.file_url": {
+      "total": 1,
+      "inS3": 1,
+      "missing": 0
+    }
+  },
+  "apps": [
+    {
+      "id": "0b006ddf-4274-4143-ae02-cbae3cb551e1",
+      "company_name": "ALISHAN MOTORS",
+      "docs": 9
+    },
+    {
+      "id": "5bee5c7f-d638-4468-a94e-c05f041f105c",
+      "company_name": "AYANSH ENGINEERING",
+      "docs": 9
+    },
+    {
+      "id": "1d2137ab-62ee-4da4-95da-7b30622e10fb",
+      "company_name": "DHANRANI INDUSTRIES PRIVATE LIMITED",
+      "docs": 7
+    },
+    {
+      "id": "b4846be7-deb9-4830-bffb-a47624f4f3db",
+      "company_name": "EXNON",
+      "docs": 8
+    },
+    {
+      "id": "438c86b4-3908-44d8-931e-ef2e4a9edbc0",
+      "company_name": "Khatu Shyam Automobile",
+      "docs": 9
+    },
+    {
+      "id": "4de51b0d-7298-43ab-83c5-d645782b14a7",
+      "company_name": "MAA PITAMBARA ENTERPRISES",
+      "docs": 9
+    },
+    {
+      "id": "8f9c7191-3fdb-4dfc-a88d-0947ce7234a6",
+      "company_name": "Madhav Enterprises",
+      "docs": 9
+    },
+    {
+      "id": "8698f321-f8ab-4a0c-86ca-b6d2817c5543",
+      "company_name": "Megatron EVTech",
+      "docs": 9
+    },
+    {
+      "id": "77967653-45b2-445c-900c-e82e92f1ecee",
+      "company_name": "M.S. ELECTRICIAN",
+      "docs": 4
+    },
+    {
+      "id": "efb45da0-8800-40d4-bf9e-f7e3b9c9a0c2",
+      "company_name": "M.S. ELECTRICIAN",
+      "docs": 7
+    },
+    {
+      "id": "92a9904b-9dcf-4b10-8d61-b8b3310da6d8",
+      "company_name": "M/S S K AUTO",
+      "docs": 9
+    },
+    {
+      "id": "2b3ae8fb-a2ec-4a60-b4ce-9f0561004f27",
+      "company_name": "PURAN KRIPA TRADERS",
+      "docs": 10
+    },
+    {
+      "id": "979e83bb-dd0d-4e50-8b53-0be2fe87fad7",
+      "company_name": "Rushikesh TEST DEMO",
+      "docs": 7
+    },
+    {
+      "id": "ab5daa19-db0e-47d7-929a-2ee50340ad34",
+      "company_name": "Rushikesh TEST DEMO A",
+      "docs": 7
+    },
+    {
+      "id": "fc17cc32-5d4d-4567-be3e-0d295afbfd73",
+      "company_name": "Shree Balaji E-Mobility Solutions",
+      "docs": 10
+    },
+    {
+      "id": "28591bd1-f7ad-4456-a4bd-38f10179146f",
+      "company_name": "UTKARSH AUTOMOBILE & SPARE PARTS",
+      "docs": 9
+    },
+    {
+      "id": "36b37aa9-3263-41c2-a4d5-cfa85379d1ac",
+      "company_name": "VEDANTA ENTERPRISES",
+      "docs": 9
+    },
+    {
+      "id": "acfc1128-b766-4e4a-9965-e0e450ef4ce7",
+      "company_name": "YOGENDRA ENTERPRISES",
+      "docs": 9
+    }
+  ]
+}

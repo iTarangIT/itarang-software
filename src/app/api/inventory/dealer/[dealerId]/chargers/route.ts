@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -48,11 +48,22 @@ export async function GET(
 
     const { searchParams } = new URL(req.url);
     const category = searchParams.get("category");
+    // See the batteries route: keeps an already-reserved charger visible in
+    // the picker instead of silently dropping the dealer's existing choice.
+    const includeSerials = (searchParams.get("includeSerials") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
       or(eq(inventory.asset_type, "Charger"), eq(inventory.asset_type, "charger"))!,
-      eq(inventory.status, "available"),
+      includeSerials.length > 0
+        ? or(
+            eq(inventory.status, "available"),
+            inArray(inventory.serial_number, includeSerials),
+          )!
+        : eq(inventory.status, "available"),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);

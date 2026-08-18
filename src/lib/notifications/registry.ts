@@ -102,13 +102,14 @@ export function isKnownDashboard(value: string): boolean {
  * admin / ceo get everything. sales_head gets its own reporting line plus the
  * CEO dashboard and the Dealer Portal.
  *
- * ON THE TWO ADDITIONS. They were deliberately excluded at first, on the
+ * ON THE THREE ADDITIONS. They were deliberately excluded at first, on the
  * reasoning that a sales head should not be able to silence their own
  * supervisor's alerts, and that the external-facing portals carry contractual
  * weight — muting Dealer Portal changes what your dealers are told, not just
- * what your own team sees. Both were added back on request; the risk is
- * accepted, not overlooked. `admin`, `it`, `nbfc_partner` and `scrap_vendor`
- * remain out of scope.
+ * what your own team sees. The same caveat applies to NBFC Partner Portal, and
+ * more broadly: that one gate covers EVERY NBFC tenant and seat at once. All
+ * three were added back on request; the risk is accepted, not overlooked.
+ * `admin`, `it` and `scrap_vendor` remain out of scope.
  *
  * This rule lives here, once. The API applies it on BOTH read and write.
  */
@@ -121,6 +122,7 @@ const SALES_HEAD_SCOPE = [
   "inside_sales_rep",
   "sales_insight",
   "dealer",
+  "nbfc_partner",
 ];
 
 export function editableDashboardsFor(role: string | null | undefined): string[] {
@@ -274,6 +276,12 @@ export const TYPE_LABELS: Record<string, string> = {
   "auction.ending_soon": "A lot you bid on is ending within the hour",
   "auction.won": "You won a battery lot",
   "auction.lost": "A lot you bid on closed with someone else",
+  // A lot an admin froze, un-froze or pulled. `pauseAuction()` has always
+  // RETURNED a count of the bidders it would notify and sent nothing — a
+  // bidder watching a countdown had no way to learn the auction had stopped.
+  "auction.paused": "An auction you bid on was paused",
+  "auction.resumed": "An auction you bid on has resumed",
+  "auction.cancelled": "An auction you bid on was cancelled",
 
   // --- Escalations ---
   escalation_raised: "Escalation raised (legacy)",

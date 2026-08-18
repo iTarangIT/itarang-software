@@ -72,7 +72,20 @@ export async function requireAuthWithSupabaseUser() {
       // Same key set as the real row above (minus the DB-only timestamps), so
       // callers that read e.g. vendor_entity_id off this result see null
       // rather than undefined.
+      //
+      // `role: "user"` here is a PLACEHOLDER, not a fact — it means "this
+      // database has no row for you", which happens routinely because
+      // DATABASE_URL flips between database-1 (sandbox) and database-2 (prod)
+      // and the two hold almost disjoint user sets. `synthesized: true` says
+      // so out loud. Never persist this role anywhere: /api/user/profile used
+      // to sync it into the Supabase `app_metadata.role` that middleware and
+      // getSessionUser both read FIRST, which permanently overwrote the
+      // account's real role with the placeholder — in a store shared by BOTH
+      // environments, so pointing local dev at one database demoted the
+      // accounts that only exist in the other. Five accounts were locked out
+      // of their own portals that way.
       return {
+        synthesized: true as const,
         dbUser: {
           id: user.id,
           name: user.email?.split("@")[0] || "User",
@@ -89,7 +102,7 @@ export async function requireAuthWithSupabaseUser() {
       };
     }
 
-    return { dbUser, authUser: user };
+    return { synthesized: false as const, dbUser, authUser: user };
   } catch (dbErr) {
     console.error("[Auth] Database error in requireAuth:", dbErr);
     throw dbErr;

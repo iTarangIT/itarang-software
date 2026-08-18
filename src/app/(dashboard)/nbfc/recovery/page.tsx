@@ -12,6 +12,9 @@
  * nbfc_buyback_requests and dual-approval immobilisation rows directly. Card
  * transitions, bidding and the evaluation wizard are wired client-side.
  */
+// The auction theme is opt-in per route segment. The marketplace and
+// settlement sections on this page render inside `.auction-sheet`.
+import "@/app/auction-theme.css";
 import { db } from "@/lib/db";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import {
@@ -30,9 +33,9 @@ import {
   auctionLots,
   auctionBids,
   auctionSettlements,
-  auctionAutoBids,
   nbfcBuybackRequests,
   nbfcTenants,
+  accounts,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { getVehicleStates } from "@/lib/db/iot-queries";
@@ -146,6 +149,11 @@ export default async function RecoveryPage() {
     .select({
       id: nbfcRecoveryPipeline.id,
       battery_serial: nbfcRecoveryPipeline.battery_serial,
+      // [E-232] The link to the battery master. Needed so the inspection
+      // wizard can attach photographs to a real battery row rather than to a
+      // case file — `recovery_batteries.image_urls` is what the dealer lot
+      // gallery reads.
+      battery_id: nbfcRecoveryPipeline.battery_id,
       stage: nbfcRecoveryPipeline.stage,
       estimated_recovery_value: nbfcRecoveryPipeline.estimated_recovery_value,
       created_at: nbfcRecoveryPipeline.created_at,
@@ -194,7 +202,7 @@ export default async function RecoveryPage() {
       : [];
   const ctxByVehicle = new Map(ctx.map((c) => [c.vehicleno, c]));
 
-  // 3. Live SOH per battery from VPS (best-effort).
+  // 3. Live SOH per battery from VPS (best-effort). DISPLAY ONLY — see step 3b.
   let sohByVehicle = new Map<string, number>();
   try {
     const states = await getVehicleStates(serials);
@@ -205,6 +213,49 @@ export default async function RecoveryPage() {
     );
   } catch {
     /* VPS unreachable — render without live SOH */
+  }
+
+  // 3b. MEASURED SOH — the latest evaluation's `step1.soh_percent` per pipeline
+  //     row. This, not the telemetry reading above, is what gates a stage move.
+  //
+  //     transitionStage() in src/lib/nbfc/recovery/stages.ts enforces the E-233
+  //     SOH bands against the most recent nbfc_battery_evaluations row and
+  //     nothing else. The Kanban used to disable its buttons off `live_soh_pct`
+  //     instead, so the two disagreed: a battery with no IoT device on the VPS
+  //     — which is most of them, telemetry only covers deployed packs — showed
+  //     a permanently greyed-out "→ Ready for auction" reading "record an
+  //     evaluation first" even when a completed evaluation sat in the table and
+  //     the server would have accepted the move. Same source on both sides now.
+  //
+  //     DISTINCT ON takes the newest per pipeline: a battery re-inspected after
+  //     refurbishment has two rows, and the pre-repair figure would block the
+  //     very promotion the repair was for.
+  const pipelineIds = rows.map((r) => r.id);
+  const evalSohByPipeline = new Map<string, number>();
+  if (pipelineIds.length > 0) {
+    const evalRows = (await db.execute(sql`
+      SELECT DISTINCT ON (recovery_pipeline_id)
+             recovery_pipeline_id,
+             (step1 ->> 'soh_percent') AS soh_percent
+        FROM nbfc_battery_evaluations
+       WHERE tenant_id = ${tenant.id}
+         AND recovery_pipeline_id IN (${sql.join(
+           pipelineIds.map((id) => sql`${id}::uuid`),
+           sql`, `,
+         )})
+       ORDER BY recovery_pipeline_id, created_at DESC
+    `)) as unknown as Array<{
+      recovery_pipeline_id: string;
+      soh_percent: string | null;
+    }>;
+    for (const e of evalRows) {
+      // `->>` yields NULL when step1 has no soh_percent, and Number(null) is 0
+      // — which would read as a 0% battery rather than an unmeasured one, and
+      // block it behind the scrap floor with the wrong reason. Reject it first.
+      if (e.soh_percent == null || e.soh_percent === "") continue;
+      const soh = Number(e.soh_percent);
+      if (Number.isFinite(soh)) evalSohByPipeline.set(e.recovery_pipeline_id, soh);
+    }
   }
 
   // 4. Pending immobilisation requests + executed actions for status pills.
@@ -261,6 +312,8 @@ export default async function RecoveryPage() {
         c?.outstanding_amount != null ? Number(c.outstanding_amount) : null,
       imei: c?.imei ?? null,
       live_soh_pct: sohByVehicle.get(r.battery_serial) ?? null,
+      eval_soh_pct: evalSohByPipeline.get(r.id) ?? null,
+      battery_id: r.battery_id ?? null,
       age_days: ageDays,
     };
   });
@@ -298,9 +351,17 @@ export default async function RecoveryPage() {
       borrower_name: r.borrower_name,
       live_soh_pct: r.live_soh_pct,
       age_days: r.age_days,
+      battery_id: r.battery_id,
     }));
 
-  // 6. Auction Marketplace — live lots with current bid + bidder count.
+  // 6. Auction Marketplace — THIS tenant's live lots, with current bid and
+  //    bidder count.
+  //
+  //    [FIX] The `seller_tenant_id` predicate below is new. Every other query
+  //    on this page is tenant-scoped; this one was not, so every NBFC saw every
+  //    other NBFC's live lots — including their stock, their pricing and how
+  //    many bidders they had attracted. `seller_tenant_id` has existed since
+  //    E-232 and this query was simply never updated to use it.
   const lotRows = await db
     .select({
       id: auctionLots.id,
@@ -313,55 +374,31 @@ export default async function RecoveryPage() {
       bid_increment: auctionLots.bid_increment,
       ends_at: auctionLots.ends_at,
       max_bid: sql<string | null>`MAX(${auctionBids.amount})`,
-      bidder_count: sql<string>`COUNT(DISTINCT ${auctionBids.tenant_id})`,
+      // [FIX] Counted DISTINCT tenant_id, which on a dealer bid carries the
+      // SELLER's tenant — so a lot with twenty competing dealers reported one
+      // bidder. Count the dealer, falling back to the tenant for the legacy
+      // NBFC-to-NBFC rows that predate the E-232 re-point.
+      bidder_count: sql<string>`COUNT(DISTINCT COALESCE(${auctionBids.bidder_dealer_id}, ${auctionBids.tenant_id}::text))`,
     })
     .from(auctionLots)
     .leftJoin(auctionBids, eq(auctionBids.lot_id, auctionLots.id))
     .where(
-      and(eq(auctionLots.status, "live"), gt(auctionLots.ends_at, new Date())),
+      and(
+        eq(auctionLots.seller_tenant_id, tenant.id),
+        eq(auctionLots.status, "live"),
+        gt(auctionLots.ends_at, new Date()),
+      ),
     )
     .groupBy(auctionLots.id)
     .orderBy(auctionLots.ends_at)
     .limit(50);
 
-  // BRD §6.1.7 — per-tenant max bid and active auto-bid max, keyed by lot.
-  const lotIds = lotRows.map((l) => l.id);
-  let yourBidByLot = new Map<string, number>();
-  let autoBidByLot = new Map<string, number>();
-  if (lotIds.length > 0) {
-    const [myBids, myAutoBids] = await Promise.all([
-      db
-        .select({
-          lot_id: auctionBids.lot_id,
-          my_max: sql<string>`MAX(${auctionBids.amount})`,
-        })
-        .from(auctionBids)
-        .where(
-          and(
-            eq(auctionBids.tenant_id, tenant.id),
-            inArray(auctionBids.lot_id, lotIds),
-          ),
-        )
-        .groupBy(auctionBids.lot_id),
-      db
-        .select({
-          lot_id: auctionAutoBids.lot_id,
-          max_amount: auctionAutoBids.max_amount,
-        })
-        .from(auctionAutoBids)
-        .where(
-          and(
-            eq(auctionAutoBids.tenant_id, tenant.id),
-            eq(auctionAutoBids.status, "active"),
-            inArray(auctionAutoBids.lot_id, lotIds),
-          ),
-        ),
-    ]);
-    yourBidByLot = new Map(myBids.map((b) => [b.lot_id, Number(b.my_max)]));
-    autoBidByLot = new Map(
-      myAutoBids.map((b) => [b.lot_id, Number(b.max_amount)]),
-    );
-  }
+  // [FIX] The "your last bid" and "your standing maximum" lookups that used to
+  // sit here read `auction_bids` / `auction_auto_bids` filtered by TENANT — the
+  // NBFC's own bids on its own lots. Since the E-232 bidder re-point an NBFC
+  // cannot bid at all (the route 403s by design, BRD §9), so those two queries
+  // could only ever return the historical rows of a flow that no longer exists.
+  // They have been removed along with the bidding UI they fed.
 
   const lots: AuctionLot[] = lotRows.map((l) => {
     const basePrice = Number(l.base_price);
@@ -377,8 +414,6 @@ export default async function RecoveryPage() {
       current_bid: l.max_bid != null ? Number(l.max_bid) : basePrice,
       bidder_count: l.bidder_count != null ? Number(l.bidder_count) : 0,
       ends_at: l.ends_at.toISOString(),
-      your_last_bid: yourBidByLot.get(l.id) ?? null,
-      your_auto_bid_max: autoBidByLot.get(l.id) ?? null,
     };
   });
 
@@ -390,29 +425,45 @@ export default async function RecoveryPage() {
       base_price: auctionLots.base_price,
       final_price: auctionSettlements.final_price,
       winner_tenant_id: auctionSettlements.winner_tenant_id,
-      winner_name: nbfcTenants.display_name,
+      winner_dealer_id: auctionSettlements.winner_dealer_id,
+      tenant_name: nbfcTenants.display_name,
+      dealer_name: accounts.business_entity_name,
       status: auctionSettlements.status,
       updated_at: auctionSettlements.updated_at,
     })
     .from(auctionSettlements)
     .innerJoin(auctionLots, eq(auctionLots.id, auctionSettlements.lot_id))
-    .innerJoin(
+    // [FIX] These were INNER joins on nbfc_tenants alone. On a dealer win —
+    // which is every win since the E-232 bidder re-point — `winner_tenant_id`
+    // carries the SELLER's tenant, so the row either vanished or displayed the
+    // seller's own name in the Winner column. The buyer's identity lives in
+    // `winner_dealer_id`, and no read path had ever selected it.
+    .leftJoin(
       nbfcTenants,
       eq(nbfcTenants.id, auctionSettlements.winner_tenant_id),
     )
+    .leftJoin(accounts, eq(accounts.id, auctionSettlements.winner_dealer_id))
     .where(eq(auctionSettlements.seller_tenant_id, tenant.id))
     .orderBy(desc(auctionSettlements.updated_at))
     .limit(50);
 
-  const settlements: SettlementRow[] = settlementRows.map((s) => ({
-    id: s.id,
-    lot_id: s.lot_code,
-    final_price: Number(s.final_price),
-    winner_tenant_id: s.winner_tenant_id,
-    winner_name: s.winner_name,
-    status: s.status as SettlementStatus,
-    updated_at: s.updated_at.toISOString(),
-  }));
+  const settlements: SettlementRow[] = settlementRows.map((s) => {
+    const isDealerWin = s.winner_dealer_id != null;
+    return {
+      id: s.id,
+      lot_id: s.lot_code,
+      lot_code: s.lot_code,
+      final_price: Number(s.final_price),
+      winner_tenant_id: s.winner_tenant_id,
+      winner_dealer_id: s.winner_dealer_id ?? null,
+      winner_name: isDealerWin
+        ? (s.dealer_name ?? s.winner_dealer_id ?? "")
+        : (s.tenant_name ?? ""),
+      winner_kind: isDealerWin ? "dealer" : "nbfc",
+      status: s.status as SettlementStatus,
+      updated_at: s.updated_at.toISOString(),
+    };
+  });
 
   // Post-auction settlement headline metrics.
   const sumFinal = settlementRows.reduce(

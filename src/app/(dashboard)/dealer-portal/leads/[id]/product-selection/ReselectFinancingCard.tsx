@@ -120,15 +120,15 @@ export default function ReselectFinancingCard({
         Choose another lender
       </h4>
       <p className="mt-1 text-xs text-slate-500">
-        You closed a deal, which frees a lender slot on this lead. These are the other loan
-        products this customer qualifies for.
+        You deleted a loan product, which frees a lender slot on this lead. These are the other
+        loan products this customer qualifies for.
       </p>
 
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
 
       {slotsFree <= 0 ? (
         <p className="mt-3 text-xs text-slate-500">
-          This lead is already with two lenders. Close one of those deals to free a slot.
+          This lead is already with two lenders. Delete one of those loan products to free a slot.
         </p>
       ) : available.length === 0 ? (
         <p className="mt-3 text-xs text-slate-500">

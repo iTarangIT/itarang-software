@@ -100,7 +100,7 @@ describe("notification registry", () => {
       expect(editableDashboardsFor("ceo")).toHaveLength(DASHBOARDS.length);
     });
 
-    it("gives sales_head its reporting line plus CEO and Dealer", () => {
+    it("gives sales_head its reporting line plus CEO, Dealer and NBFC", () => {
       const scope = editableDashboardsFor("sales_head");
       expect(scope).toContain("sales_head");
       expect(scope).toContain("asm");
@@ -108,10 +108,10 @@ describe("notification registry", () => {
       // SALES_HEAD_SCOPE — asserted so re-tightening is a deliberate edit.
       expect(scope).toContain("ceo");
       expect(scope).toContain("dealer");
+      expect(scope).toContain("nbfc_partner");
       // Still out of scope.
       expect(scope).not.toContain("admin");
       expect(scope).not.toContain("it");
-      expect(scope).not.toContain("nbfc_partner");
       expect(scope).not.toContain("scrap_vendor");
     });
 

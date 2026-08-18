@@ -93,6 +93,8 @@ async function makeSettlement(opts: {
   lotId: string;
   finalPrice: number;
   status?: 'payment_pending' | 'in_transit' | 'delivered';
+  /** Leave unpaid to exercise the E-249 money-before-goods gate. */
+  paid?: boolean;
 }): Promise<string> {
   const [row] = await db
     .insert(schema.auctionSettlements)
@@ -102,6 +104,15 @@ async function makeSettlement(opts: {
       winner_tenant_id: ctx.winnerTenantId,
       final_price: String(opts.finalPrice),
       status: opts.status ?? 'payment_pending',
+      // [E-249] `payment_pending -> in_transit` now requires evidence that the
+      // money moved. It used to be a bare status flip, which meant the status
+      // was the only record of payment and it was self-certified. Fixtures that
+      // want to exercise the ladder must be paid; the default is paid so every
+      // existing assertion keeps testing what it meant to test, and the gate
+      // itself gets its own case below.
+      ...(opts.paid === false
+        ? {}
+        : { paid_at: new Date(), payment_provider: 'offline', payment_ref: 'TEST-UTR' }),
     })
     .returning();
   createdSettlementIds.push(row.id);
@@ -225,6 +236,38 @@ test.describe('E-039 — Post-auction settlement table', () => {
       .where(eq(schema.auctionSettlements.id, id));
     expect(rows.length).toBe(1);
     expect(rows[0].status).toBe('in_transit');
+  });
+
+  test('E-249: an unpaid settlement cannot be marked in transit', async ({
+    request,
+  }) => {
+    // The gate this asserts is the whole point of E-249: before it, a seller
+    // could dispatch a battery against a settlement nobody had paid for, and
+    // nothing in the row would ever say so.
+    const lot = await makeLot();
+    const id = await makeSettlement({
+      lotId: lot.id,
+      finalPrice: 64000,
+      status: 'payment_pending',
+      paid: false,
+    });
+
+    const res = await request.patch(`/api/nbfc/auction/settlements/${id}`, {
+      headers: bypassHeaders({
+        tenantId: ctx.sellerTenantId,
+        userId: randomUUID(),
+        role: NBFC_USER_ROLE,
+      }),
+      data: { status: 'in_transit' },
+    });
+    expect(res.status()).toBe(409);
+
+    // And the row must not have moved.
+    const rows = await db
+      .select()
+      .from(schema.auctionSettlements)
+      .where(eq(schema.auctionSettlements.id, id));
+    expect(rows[0].status).toBe('payment_pending');
   });
 
   test('AC3: invalid settlement transition is rejected with 400', async ({

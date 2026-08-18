@@ -969,7 +969,12 @@ export async function notifyProductSubmitted(p: {
   leadId: string;
   productSelectionId: string;
   paymentMode: "cash" | "finance";
-  finalPrice: number | string;
+  /**
+   * Null on a finance lead since the Step-4/Step-5 split — the file goes to
+   * the lenders before any stock is picked, so there is no price yet. Every
+   * message below drops the amount rather than printing "₹undefined".
+   */
+  finalPrice: number | string | null;
   nbfcNames?: string[];
   loanProduct?: string | null;
   dealerName?: string | null;
@@ -982,14 +987,15 @@ export async function notifyProductSubmitted(p: {
   ]
     .filter(Boolean)
     .join(", ");
+  const at = p.finalPrice != null ? ` at ₹${p.finalPrice}` : "";
 
   await emit({
     type: "product.submitted",
     title: p.paymentMode === "cash" ? "Cash sale submitted" : "Step 4 submitted for approval",
     message:
       p.paymentMode === "cash"
-        ? `${p.dealerName ?? "The dealer"} confirmed a cash sale for ${who} at ₹${p.finalPrice}.`
-        : `${p.dealerName ?? "The dealer"} submitted product selection for ${who} at ₹${p.finalPrice}${
+        ? `${p.dealerName ?? "The dealer"} confirmed a cash sale for ${who}${at}.`
+        : `${p.dealerName ?? "The dealer"} submitted product selection for ${who}${at}${
             financeBits ? ` — ${financeBits}` : ""
           }.`,
     leadId: p.leadId,
@@ -1007,7 +1013,9 @@ export async function notifyProductSubmitted(p: {
       toLeadNbfcs(p.leadId, {
         href: nbfcLead(p.leadId),
         title: "New application routed to you",
-        message: `${who} selected your financing${p.loanProduct ? ` (${p.loanProduct})` : ""}. Value ₹${p.finalPrice}.`,
+        message: `${who} selected your financing${p.loanProduct ? ` (${p.loanProduct})` : ""}.${
+          p.finalPrice != null ? ` Value ₹${p.finalPrice}.` : ""
+        }`,
       }),
     ],
   });
