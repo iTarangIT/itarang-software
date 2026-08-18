@@ -20,14 +20,8 @@ import {
     INTENT_SCORE_MAX,
     INTENT_SCORE_MIN,
 } from "@/lib/leads/intentBucket";
-import {
-    CONNECTED_DISPOSITIONS,
-    CONNECT_STATUS,
-    CONNECT_STATUS_LABEL,
-    DISPOSITION_BUCKETS,
-    NOT_CONNECTED_REASONS,
-    isKnownDisposition,
-} from "@/lib/leads/dispositions";
+import { isKnownDisposition } from "@/lib/leads/dispositions";
+import { DispositionPicker } from "@/components/leads/DispositionPicker";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 // ⚠ TYPE-ONLY from leadListQuery — it imports `db`, and a VALUE import here
 // drags the postgres driver into the browser bundle ("Can't resolve 'fs'").
@@ -150,20 +144,8 @@ export function LeadsFilterBar({
             ...(value ? { intent: "" as const } : {}),
         });
 
-    // Picking a level clears the narrower ones, so the three selects can never
-    // encode an impossible combination — "Not Connected + Hot" would return
-    // nothing and look like a bug rather than a contradiction.
-    const setConnectStatus = (value: string) =>
-        onPatch({
-            connectStatus: value as LeadFilters["connectStatus"],
-            dispositionBucket: "",
-            disposition: "",
-        });
-    const setBucket = (value: string) =>
-        onPatch({
-            dispositionBucket: value as LeadFilters["dispositionBucket"],
-            disposition: "",
-        });
+    // The "picking a level clears the narrower ones" cascade now lives inside
+    // DispositionPicker, which owns it for every consumer.
 
     // "This month" / "Last month" — offset 0 and -1. Ported from the date row
     // the Leads tab used before the merge.
@@ -500,89 +482,28 @@ export function LeadsFilterBar({
                         <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                             Call disposition
                         </p>
-                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                            <select
-                                aria-label="Call outcome"
-                                className={`${SELECT_CLASS} w-full`}
-                                value={draft.connectStatus}
-                                onChange={(e) => setConnectStatus(e.target.value)}
-                            >
-                                <option value="">Any call outcome</option>
-                                {CONNECT_STATUS.map((s) => (
-                                    <option key={s} value={s}>
-                                        {CONNECT_STATUS_LABEL[s]}
-                                    </option>
-                                ))}
-                            </select>
-
-                            {/* Hidden, not disabled, when the call did not connect:
-                                the sheet gives those reasons no bucket at all, so
-                                there is nothing to choose rather than nothing
-                                currently choosable. */}
-                            {draft.connectStatus !== "not_connected" && (
-                                <select
-                                    aria-label="Disposition bucket"
-                                    className={`${SELECT_CLASS} w-full`}
-                                    value={draft.dispositionBucket}
-                                    onChange={(e) => setBucket(e.target.value)}
-                                >
-                                    <option value="">Any bucket</option>
-                                    {DISPOSITION_BUCKETS.map((b) => (
-                                        <option key={b} value={b}>
-                                            {b}
-                                        </option>
-                                    ))}
-                                </select>
-                            )}
-
-                            <select
-                                aria-label="Disposition"
-                                className={`${SELECT_CLASS} col-span-2 w-full`}
-                                value={draft.disposition}
-                                onChange={(e) => onChange("disposition", e.target.value)}
-                            >
-                                <option value="">Any disposition</option>
-
-                                {draft.connectStatus !== "not_connected" &&
-                                    DISPOSITION_BUCKETS.filter(
-                                        (b) =>
-                                            !draft.dispositionBucket ||
-                                            draft.dispositionBucket === b,
-                                    ).map((b) => (
-                                        <optgroup key={b} label={`Connected › ${b}`}>
-                                            {CONNECTED_DISPOSITIONS[b].map((d) => (
-                                                <option key={`${b}:${d}`} value={d}>
-                                                    {d}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    ))}
-
-                                {/* A bucket is a CONNECTED concept, so once one is
-                                    picked the not-connected reasons cannot apply. */}
-                                {draft.connectStatus !== "connected" &&
-                                    !draft.dispositionBucket && (
-                                        <optgroup label="Not connected">
-                                            {NOT_CONNECTED_REASONS.map((d) => (
-                                                <option key={d} value={d}>
-                                                    {d}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-
-                                {extraDispositions.length > 0 &&
-                                    !draft.dispositionBucket && (
-                                        <optgroup label="Other (seen in NeoDove)">
-                                            {extraDispositions.map((d) => (
-                                                <option key={d} value={d}>
-                                                    {d}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                            </select>
-                        </div>
+                        {/* The cascade itself lives in DispositionPicker so the
+                            campaign builder and the rep's Log Touchpoint form use
+                            the identical control — including the rule that the
+                            bucket select disappears under Not Connected. */}
+                        <DispositionPicker
+                            mode="filter"
+                            extraDispositions={extraDispositions}
+                            value={{
+                                connectStatus: draft.connectStatus,
+                                bucket: draft.dispositionBucket,
+                                disposition: draft.disposition,
+                            }}
+                            onChange={(next) =>
+                                onPatch({
+                                    connectStatus:
+                                        next.connectStatus as LeadFilters["connectStatus"],
+                                    dispositionBucket:
+                                        next.bucket as LeadFilters["dispositionBucket"],
+                                    disposition: next.disposition,
+                                })
+                            }
+                        />
                     </div>
                 </div>
             )}

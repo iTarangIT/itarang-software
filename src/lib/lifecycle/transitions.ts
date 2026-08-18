@@ -1,7 +1,10 @@
 // Part 0 BRD lifecycle engine — pure TypeScript, no DB calls.
-// Source of truth for status transitions, hard/soft validation, and the
-// list of high-impact Lost reasons that need a confirmation modal.
-// BRD refs: §0.7 (Status Lifecycle), §0.10 (Commercials hard validation).
+// Source of truth for the status vocabulary and the list of high-impact Lost
+// reasons that need a confirmation modal.
+//
+// Transition VALIDATION was removed (2026-08-18): Inside Sales and ASM reps set
+// whatever status the conversation actually reached. See canTransition.
+// BRD refs: §0.7 (Status Lifecycle), §0.10 (Commercials).
 
 export const LEAD_STATUS = [
   "New_Unassigned",
@@ -53,17 +56,19 @@ export const HIGH_IMPACT_LOST_REASONS = [
 
 export type Severity = "hard" | "soft";
 
+// Context the callers still gather and pass. Nothing reads it any more — the
+// fields are kept so the call sites stay untouched, and reinstating a rule means
+// reading a field here again, nowhere else.
 export type TransitionCtx = {
-  // Engaged touchpoints already on the lead (BRD §0.7: Assigned_Not_Contacted
-  // → Under_Discussion requires ≥1 is_engaged = true touchpoint).
+  // Engaged touchpoints on the lead, including the one being written.
   engagedTouchpointCount?: number;
-  // Current dealer_lead_commercials row's final_price (BRD §0.10 hard validation).
+  // Current dealer_lead_commercials row's final_price.
   finalPrice?: number | null;
-  // Whether a commercials row exists at all (for soft warning on Commercials_Explained).
+  // Whether a commercials row exists at all.
   hasCommercialsRow?: boolean;
   // The reason being recorded with a Lost transition.
   lostReason?: LostReason;
-  // Acting user's role — Converted → Lost is admin-only (onboarding-dropout loopback).
+  // Acting user's role.
   actorRole?: string;
 };
 
@@ -71,155 +76,33 @@ export type TransitionResult =
   | { ok: true }
   | { ok: false; severity: Severity; reason: string };
 
-// BRD §0.7 Status Transition Map. Each entry lists every legal target from
-// the from-state. Reactivation (Lost → Assigned_Not_Contacted) is handled
-// via the unified procedure in BRD §0.9 — modeled here as a legal transition.
-// "Converted" is reachable from every open status: a deal can close on the
-// first call without walking the full funnel, so the team can mark a lead
-// Converted immediately rather than stepping it through Commercials_Finalised.
-export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = {
-  New_Unassigned: ["Assigned_Not_Contacted", "Converted"],
-  Assigned_Not_Contacted: ["Under_Discussion", "Converted", "Lost"],
-  Under_Discussion: [
-    "Commercials_Explained",
-    "Awaiting_Customer_Decision",
-    "Transferred_to_ASM",
-    "Converted",
-    "Lost",
-  ],
-  Commercials_Explained: [
-    "Commercials_Finalised",
-    "Under_Discussion",
-    "Awaiting_Customer_Decision",
-    "Transferred_to_ASM",
-    "Converted",
-    "Lost",
-  ],
-  Commercials_Finalised: ["Transferred_to_ASM", "Converted", "Lost"],
-  Awaiting_Customer_Decision: [
-    "Under_Discussion",
-    "Commercials_Explained",
-    "Commercials_Finalised",
-    "Converted",
-    "Lost",
-  ],
-  Transferred_to_ASM: ["Converted", "Lost"],
-  Lost: ["Assigned_Not_Contacted"],
-  Converted: ["Lost"],
-};
+// The transition map is now PERMISSIVE: every status is reachable from every
+// other one. Product decision (2026-08-18) — reps kept hitting "X → Y is not an
+// allowed transition" on moves the conversation had genuinely made
+// (Transferred_to_ASM → Under_Discussion after a visit reopened the deal,
+// Under_Discussion → Commercials_Explained before the commercials were typed
+// up), with no way forward. The team owns the funnel; what the reporting reads
+// is the audit trail — a dealer_lead_status_history row plus a touchpoint per
+// change — and that is unchanged.
+//
+// Still a map, and still excluding self-transitions, because the UI reads it to
+// build the "Update lead status" menu (LeadStatusEditor). To reinstate a
+// restricted funnel, put the per-status lists back here and read TransitionCtx
+// in canTransition again; every caller still handles a hard-failure verdict.
+export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = Object.fromEntries(
+  LEAD_STATUS.map((from) => [from, LEAD_STATUS.filter((to) => to !== from)]),
+) as Record<LeadStatus, LeadStatus[]>;
 
-// Targets that the BRD soft-warns on when reached from specific predecessors,
-// regardless of whether they're hard-allowed. Returned with severity='soft'.
-const SOFT_WARNINGS: Array<{
-  from: LeadStatus;
-  to: LeadStatus;
-  predicate: (ctx: TransitionCtx) => string | null;
-}> = [
-  {
-    from: "Under_Discussion",
-    to: "Commercials_Explained",
-    predicate: (ctx) =>
-      ctx.hasCommercialsRow === false
-        ? "You haven't logged commercials yet. Continue anyway?"
-        : null,
-  },
-  {
-    from: "Commercials_Explained",
-    to: "Commercials_Finalised",
-    predicate: (_ctx) => null, // hard-validated below; no extra soft warning
-  },
-  {
-    from: "Under_Discussion",
-    to: "Commercials_Finalised",
-    predicate: () =>
-      "You're skipping the Commercials_Explained step. Confirm?",
-  },
-];
-
+// Every transition is allowed, for every actor, with no preconditions: no
+// transition map, no engaged-touchpoint gate, no final_price gate, no admin-only
+// reopen, no soft warnings. Signature and return type are deliberately unchanged
+// so the call sites keep compiling and re-tightening is a one-file change.
 export function canTransition(
-  from: LeadStatus,
-  to: LeadStatus,
+  _from: LeadStatus,
+  _to: LeadStatus,
   ctx: TransitionCtx = {},
 ): TransitionResult {
-  // 1. Target must be a legal successor.
-  const legalTargets = TRANSITION_MAP[from];
-  if (!legalTargets || !legalTargets.includes(to)) {
-    return {
-      ok: false,
-      severity: "hard",
-      reason: `${from} → ${to} is not an allowed transition.`,
-    };
-  }
-
-  // 2. Mark Lost requires a lost_reason.
-  if (to === "Lost" && !ctx.lostReason) {
-    return {
-      ok: false,
-      severity: "hard",
-      reason: "Mark Lost requires a lost_reason.",
-    };
-  }
-
-  // 3. onboarding_dropout is set only via admin loopback (Converted → Lost).
-  if (ctx.lostReason === "onboarding_dropout" && ctx.actorRole !== "admin") {
-    return {
-      ok: false,
-      severity: "hard",
-      reason:
-        "onboarding_dropout is set only via admin onboarding-dropout loopback (BRD §0.11).",
-    };
-  }
-
-  // 4. Converted → Lost is admin-only.
-  if (from === "Converted" && to === "Lost" && ctx.actorRole !== "admin") {
-    return {
-      ok: false,
-      severity: "hard",
-      reason:
-        "Converted → Lost is admin-only (onboarding-dropout loopback per BRD §0.11).",
-    };
-  }
-
-  // 5. Assigned_Not_Contacted → Under_Discussion needs ≥1 engaged touchpoint.
-  if (
-    from === "Assigned_Not_Contacted" &&
-    to === "Under_Discussion" &&
-    (ctx.engagedTouchpointCount ?? 0) < 1
-  ) {
-    return {
-      ok: false,
-      severity: "hard",
-      reason:
-        "Under_Discussion requires at least one engaged touchpoint (BRD §0.7).",
-    };
-  }
-
-  // 6. Commercials_Finalised requires final_price on the current row.
-  //    Converted no longer does — a deal can be marked won on the first call
-  //    before any commercials are logged; final_price then flows from the
-  //    product roll-up if/when commercials are added.
-  if (
-    to === "Commercials_Finalised" &&
-    (ctx.finalPrice === null || ctx.finalPrice === undefined)
-  ) {
-    return {
-      ok: false,
-      severity: "hard",
-      reason: `${to} requires final_price on the current commercials row (BRD §0.10).`,
-    };
-  }
-
-  // 7. Soft warnings — return ok=false with severity='soft' so callers can
-  //    show the confirm dialog and re-call with an override flag.
-  for (const rule of SOFT_WARNINGS) {
-    if (rule.from === from && rule.to === to) {
-      const msg = rule.predicate(ctx);
-      if (msg) {
-        return { ok: false, severity: "soft", reason: msg };
-      }
-    }
-  }
-
+  void ctx;
   return { ok: true };
 }
 

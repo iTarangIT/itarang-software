@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
+import { aiConnectedSet } from "@/lib/ai-dialer/aiConnection";
 
 export const maxDuration = 60;
 
@@ -68,6 +69,24 @@ export async function POST(req: Request) {
       { success: false, error: "phone required" },
       { status: 400 },
     );
+  }
+
+  // The AI-connected hard block. This is the delivery leg of the scheduled
+  // follow-up loop, so it inherits the scheduler's decision — but it needs its
+  // own check because a QStash message enqueued BEFORE the lead connected can
+  // still arrive after, and it would otherwise slip past the scheduler guard.
+  if (payload.leadId) {
+    const connected = await aiConnectedSet([payload.leadId]);
+    if (connected.size > 0) {
+      console.warn(
+        `[bolna/dispatch-call] dropping AI follow-up for ${payload.leadId}: already connected`,
+      );
+      return NextResponse.json({
+        success: false,
+        code: "ai_already_connected",
+        error: "The AI has already spoken with this dealer.",
+      });
+    }
   }
 
   const result = await triggerBolnaCall({

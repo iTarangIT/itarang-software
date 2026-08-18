@@ -59,10 +59,10 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
         );
     }
 
-    // Owner action bar.
-    const canTransferAsm = open && status !== "Transferred_to_ASM";
-    // A lead can be marked Converted from any open status (no funnel/price gate).
-    const canMarkConverted = open;
+    // Owner action bar. Converted / Lost / Transfer are not gated on the current
+    // status — a rep can reopen a lead closed by mistake or re-transfer one, the
+    // same freedom the status dropdown gives. Escalate stays open-only because
+    // its route refuses a closed lead.
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
@@ -75,8 +75,6 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
             <ActionButton
                 icon={Send}
                 onClick={() => onAction("transfer_asm")}
-                disabled={!canTransferAsm}
-                disabledReason={!open ? "Lead is closed" : "Already transferred"}
             >
                 Transfer to ASM
             </ActionButton>
@@ -84,8 +82,6 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
                 icon={CheckCircle2}
                 tone="emerald"
                 onClick={() => onAction("mark_converted")}
-                disabled={!canMarkConverted}
-                disabledReason={!canMarkConverted ? "Lead is already closed" : undefined}
             >
                 Mark Converted
             </ActionButton>
@@ -93,8 +89,6 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
                 icon={XCircle}
                 tone="rose"
                 onClick={() => onAction("mark_lost")}
-                disabled={!open}
-                disabledReason={!open ? "Lead is already terminal" : undefined}
             >
                 Mark Lost
             </ActionButton>

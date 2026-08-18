@@ -8,6 +8,7 @@ import { scraperRuns, scrapedDealerLeads, scraperDedupLogs, users } from '@/lib/
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { eq, desc } from 'drizzle-orm';
+import { resolveRunCities } from '@/lib/scraper/runAudience';
 
 export const GET = withErrorHandler(
     async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
@@ -68,6 +69,20 @@ export const GET = withErrorHandler(
             .where(eq(scraperDedupLogs.scraper_run_id, id))
             .orderBy(desc(scraperDedupLogs.created_at));
 
-        return successResponse({ run, leads: scrapeLeads, dedup_logs: dedupLogs });
+        // The cheap gate for the Run Campaign button. One extra query on a page
+        // that already runs three, so the detail view can render the button
+        // enabled — or disabled with a reason — from data it already fetches,
+        // with no extra round trip. The expensive part (counting the audience)
+        // stays behind ./campaign-preview, which only runs when the sheet opens.
+        const { cities, unresolvedRaw, source } = await resolveRunCities(id);
+
+        return successResponse({
+            run,
+            leads: scrapeLeads,
+            dedup_logs: dedupLogs,
+            campaign_cities: cities,
+            campaign_cities_unresolved: unresolvedRaw,
+            campaign_city_source: source,
+        });
     }
 );
