@@ -50,10 +50,15 @@ export async function POST(req: Request) {
 
     const sessionId = body!.session_id as string;
 
-    // Two INDEPENDENT writes, not one call that does both, because they do not
-    // cover the same people: recordHeartbeat excludes external roles (it stores
-    // a user_id), while recordModuleUsage includes them (it cannot). Chaining
-    // them would have made the narrower rule silently govern both.
+    // Two INDEPENDENT writes, not one call that does both, because they still do
+    // not cover the same people: recordHeartbeat excludes external roles, while
+    // recordModuleUsage includes them. Chaining them would make the narrower
+    // rule silently govern both.
+    //
+    // Since E-216 BOTH take a user id, but they mean different things by it —
+    // recordHeartbeat owns a session row and rejects a mismatched owner, while
+    // recordModuleUsage attributes a module ping and applies no such guard. The
+    // id comes from requireAuth() in both cases and never from the body.
     //
     // `module` is passed through unvalidated on purpose — normaliseModule()
     // owns that, so the allow-list is enforced in one place rather than once
@@ -65,6 +70,7 @@ export async function POST(req: Request) {
         sessionId,
       }),
       recordModuleUsage({
+        userId: user.id,
         role: user.role,
         sessionId,
         module: body!.module,

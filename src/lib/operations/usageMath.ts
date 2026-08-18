@@ -7,6 +7,21 @@
  * function over plain data and is covered by __tests__/usageMath.test.ts.
  */
 
+import { MODULES, MODULE_OTHER } from "@/lib/usage/constants";
+
+/**
+ * What `?module=` may legally contain: the allow-list plus 'other'.
+ *
+ * Importing from usage/constants keeps ONE definition of what a module is — the
+ * browser, the write path and this filter all read the same list, so a module
+ * added there becomes drillable here with no second edit. constants.ts has no
+ * @/lib/db import, so this file stays pure and testable.
+ */
+const MODULE_FILTER_VALUES: ReadonlySet<string> = new Set<string>([
+  ...MODULES,
+  MODULE_OTHER,
+]);
+
 /** Windows the login history offers. Anything else is rejected, not clamped. */
 export const USAGE_DAY_WINDOWS = [1, 7, 30, 90] as const;
 export const DEFAULT_USAGE_DAYS = 7;
@@ -30,6 +45,14 @@ export interface UsageFilters {
   days: number;
   /** Narrow the history to one person. Undefined = everyone. */
   user?: string;
+  /**
+   * Drill into one module's daily breakdown. Undefined = the summary table only.
+   *
+   * Unlike `user` this narrows NOTHING else on the page: module_usage_daily has
+   * no user id, so the drill-down is an extra aggregate view rather than a
+   * filter, and the login history beneath it is unaffected.
+   */
+  module?: string;
   /** True when the view shows per-person rows, which is what gets audited. */
   perPerson: boolean;
 }
@@ -62,7 +85,19 @@ export function parseUsageFilters(
   const userRaw = one("user");
   const user = isUuid(userRaw) ? userRaw : undefined;
 
-  return { days, user, perPerson: true };
+  // Allow-listed against the same closed set the write path enforces, for the
+  // same reason `days` is: an unrecognised value becomes "no selection" and the
+  // URL stays honest, rather than reaching SQL as a module nobody can have.
+  // normaliseModule() is not reused here — it maps everything unknown onto
+  // 'other', which would silently drill into the wrong row.
+  // Named `selectedModule`, not `module`: assigning to a bare `module` shadows
+  // the CJS global and @next/next/no-assign-module-variable rejects it.
+  const moduleRaw = one("module")?.trim().toLowerCase();
+  const selectedModule = MODULE_FILTER_VALUES.has(moduleRaw ?? "")
+    ? moduleRaw
+    : undefined;
+
+  return { days, user, module: selectedModule, perPerson: true };
 }
 
 /**

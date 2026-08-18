@@ -137,3 +137,179 @@ export function rollUpModules(
   // rather than whatever Map iteration happened to produce.
   return rows.sort((a, b) => b.pings - a.pings);
 }
+
+/** One person's rolled-up rows from module_usage_user_daily (E-216). */
+export interface ModuleUserRaw {
+  user_id: string;
+  name: string;
+  role_at_ping: string | null;
+  role_bucket: string;
+  pings: number;
+  sessions: number;
+  last_day: string | null;
+  days_active: number;
+}
+
+export interface ModuleUserRow {
+  user_id: string;
+  name: string;
+  role: string;
+  bucket: "internal" | "external";
+  pings: number;
+  sessions: number;
+  minutes: number;
+  last_day: string | null;
+  days_active: number;
+}
+
+/**
+ * Shape the per-user rows for the drill-down (E-216).
+ *
+ * Busiest first, because "who is actually in this module" is the question, and
+ * a name at the top of a list is the answer to it.
+ *
+ * Does NOT invent anyone. A module with no per-user rows returns an empty array
+ * and the page says so — it must never fall back to guessing a user from a
+ * session, which is what module_visit_keys would do and get wrong.
+ */
+export function rollUpModuleUsers(
+  raw: ModuleUserRaw[],
+  heartbeatSeconds = 300,
+): ModuleUserRow[] {
+  return raw
+    .map((r): ModuleUserRow => {
+      const pings = Number(r.pings);
+      const sessions = Number(r.sessions);
+      const safePings = Number.isFinite(pings) ? pings : 0;
+      return {
+        user_id: String(r.user_id),
+        // The SQL COALESCEs to 'unknown'; this guards the empty string too, so
+        // a blank name never renders as a nameless row the reader cannot act on.
+        name: r.name?.trim() ? r.name : "unknown",
+        // 'unknown' rather than '—': the role was genuinely not resolved at ping
+        // time, which is different from us declining to show it.
+        role: r.role_at_ping?.trim() ? r.role_at_ping : "unknown",
+        bucket: r.role_bucket === "external" ? "external" : "internal",
+        pings: safePings,
+        sessions: Number.isFinite(sessions) ? sessions : 0,
+        minutes: Math.round((safePings * heartbeatSeconds) / 60),
+        last_day: r.last_day ?? null,
+        days_active: Number.isFinite(Number(r.days_active))
+          ? Number(r.days_active)
+          : 0,
+      };
+    })
+    .sort((a, b) => b.pings - a.pings || a.name.localeCompare(b.name));
+}
+
+/** One (day, role_bucket) row of module_usage_daily for a single module. */
+export interface ModuleDayRaw {
+  day: string;
+  role_bucket: string;
+  pings: number;
+  sessions: number;
+}
+
+export interface ModuleDayPoint {
+  /** YYYY-MM-DD, IST — the same day key the rows were written under. */
+  day: string;
+  pings: number;
+  sessions: number;
+  internal_sessions: number;
+  external_sessions: number;
+  minutes: number;
+}
+
+export interface ModuleDetail {
+  module: string;
+  label: string;
+  /** One entry per day that carried data, oldest first. Gaps are NOT filled. */
+  days: ModuleDayPoint[];
+  pings: number;
+  sessions: number;
+  internal_sessions: number;
+  external_sessions: number;
+  minutes: number;
+  /** Earliest and latest day with any activity, or null when there is none. */
+  first_day: string | null;
+  /** Day granularity — the table stores no finer timestamp. */
+  last_day: string | null;
+  /** Nothing at all in the window. Distinct from `unavailable` upstream. */
+  empty: boolean;
+}
+
+/**
+ * Fold one module's per-day rows into the drill-down view model.
+ *
+ * DELIBERATELY DOES NOT FILL GAPS, unlike fillLoginDays() next door. The login
+ * trend is a bar chart where a missing day must read as an explicit zero or the
+ * chart lies about its own x-axis. This is a table of days that had activity,
+ * and inventing rows for the other 25 days of a 30-day window would bury the
+ * three that matter. The caller renders the chart from `days` and can zero-fill
+ * there if it ever needs to.
+ *
+ * `minutes` is derived per day rather than by dividing the total, so the column
+ * sums to the header figure instead of drifting by a rounding step per row.
+ *
+ * Pure and total: an empty input is a valid module that nobody has opened, which
+ * is a real answer and renders as such.
+ */
+export function rollUpModuleDetail(
+  module: string,
+  raw: ModuleDayRaw[],
+  heartbeatSeconds = 300,
+): ModuleDetail {
+  const byDay = new Map<string, ModuleDayPoint>();
+
+  for (const row of raw) {
+    const day = String(row.day);
+    const pings = Number(row.pings);
+    const sessions = Number(row.sessions);
+    // Same guard as rollUpModules: one non-finite value would turn every total
+    // below into NaN, which renders as "—" and reads as an outage.
+    const safePings = Number.isFinite(pings) ? pings : 0;
+    const safeSessions = Number.isFinite(sessions) ? sessions : 0;
+
+    let point = byDay.get(day);
+    if (!point) {
+      point = {
+        day,
+        pings: 0,
+        sessions: 0,
+        internal_sessions: 0,
+        external_sessions: 0,
+        minutes: 0,
+      };
+      byDay.set(day, point);
+    }
+
+    point.pings += safePings;
+    point.sessions += safeSessions;
+    if (row.role_bucket === "external") point.external_sessions += safeSessions;
+    else point.internal_sessions += safeSessions;
+    point.minutes = Math.round((point.pings * heartbeatSeconds) / 60);
+  }
+
+  // Oldest first: this feeds a left-to-right time axis, and the summary table
+  // above is the place for busiest-first ordering.
+  const days = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+
+  const sum = (pick: (p: ModuleDayPoint) => number) =>
+    days.reduce((total, p) => total + pick(p), 0);
+
+  const pings = sum((p) => p.pings);
+
+  return {
+    module,
+    label: moduleLabel(module),
+    days,
+    pings,
+    sessions: sum((p) => p.sessions),
+    internal_sessions: sum((p) => p.internal_sessions),
+    external_sessions: sum((p) => p.external_sessions),
+    minutes: Math.round((pings * heartbeatSeconds) / 60),
+    first_day: days[0]?.day ?? null,
+    last_day: days[days.length - 1]?.day ?? null,
+    empty: days.length === 0,
+  };
+}

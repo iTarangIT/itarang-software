@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import { useAuth } from "@/components/auth/AuthProvider";
 import {
   HEARTBEAT_MS,
   IDLE_MS,
@@ -54,6 +55,20 @@ export function UsageHeartbeat() {
   const lastPingRef = useRef(0);
   const tabIdRef = useRef<string>("");
 
+  // WHO the current session belongs to. A ref and NOT a dependency — see the
+  // note on the main effect's empty deps at the bottom of this file. The ping
+  // path reads it at ping time, exactly as it reads window.location.pathname.
+  const userIdRef = useRef<string | null>(null);
+  const { user } = useAuth();
+
+  // The ONLY effect allowed to depend on identity, and it starts no timers and
+  // registers no listeners — it just keeps the ref current. Putting user.id on
+  // the main effect instead would tear down and rebuild the five-minute timer
+  // every time the profile resolved or refreshed.
+  useEffect(() => {
+    userIdRef.current = user?.id ?? null;
+  }, [user?.id]);
+
   useEffect(() => {
     // BUILD-TIME GATE. When off, no effect body runs at all: no timers, no
     // listeners, no requests. Flipping this needs a rebuild, which is the price
@@ -100,7 +115,10 @@ export function UsageHeartbeat() {
     // ---- session ----------------------------------------------------------
     const mintSession = () => {
       const id = crypto.randomUUID();
-      write(LS_SESSION, JSON.stringify({ id, startedAt: now() }));
+      write(
+        LS_SESSION,
+        JSON.stringify({ id, startedAt: now(), uid: userIdRef.current }),
+      );
       sessionRef.current = id;
       return id;
     };
@@ -109,13 +127,38 @@ export function UsageHeartbeat() {
       const raw = read(LS_SESSION);
       if (raw) {
         try {
-          const parsed = JSON.parse(raw) as { id: string; startedAt: number };
+          const parsed = JSON.parse(raw) as {
+            id: string;
+            startedAt: number;
+            uid?: string | null;
+          };
           const tooOld = now() - parsed.startedAt > MAX_SESSION_MS;
+
+          // A DIFFERENT PERSON IS NOW SIGNED IN on this browser. localStorage is
+          // per-origin and survives logout, so without this the next account
+          // inherits the previous one's session id — which made module rows
+          // untraceable to the account that produced them and made
+          // recordHeartbeat's ownership guard silently discard the newcomer's
+          // session. A fresh id is the whole fix.
+          //
+          // Compared only when the ref is populated: on the first paint the
+          // profile has not resolved yet, and treating "not known yet" as
+          // "somebody else" would roll a new session on every hard navigation.
+          const switched =
+            userIdRef.current != null &&
+            parsed.uid != null &&
+            parsed.uid !== userIdRef.current;
+
           // A session that has run past the ceiling is a machine left logged in,
           // not a working day. Rolling it stops one 70-hour "session" destroying
           // the p90 for everybody else.
-          if (parsed.id && !tooOld) {
+          if (parsed.id && !tooOld && !switched) {
             sessionRef.current = parsed.id;
+            // Backfills the owner for a session minted before the profile had
+            // loaded, so the check above can work on the next call.
+            if (parsed.uid == null && userIdRef.current != null) {
+              write(LS_SESSION, JSON.stringify({ ...parsed, uid: userIdRef.current }));
+            }
             return parsed.id;
           }
         } catch {
@@ -172,7 +215,12 @@ export function UsageHeartbeat() {
 
       if (!hasLock && !leaseIsMine()) return;
 
-      const sessionId = sessionRef.current ?? currentSession();
+      // ALWAYS through currentSession(), never the cached ref. It is the one
+      // place that notices the three reasons an id must be rolled — idle gap,
+      // the 16-hour ceiling, and a change of signed-in user — and reading the
+      // ref directly would skip all three for the life of the tab. One
+      // localStorage read per five minutes is not a cost worth optimising.
+      const sessionId = currentSession();
       lastPingRef.current = now();
 
       try {

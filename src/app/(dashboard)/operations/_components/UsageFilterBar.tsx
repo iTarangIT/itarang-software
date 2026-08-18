@@ -33,6 +33,15 @@ export function UsageFilterBar({
       action="/operations/usage"
       className="flex flex-wrap items-end gap-2"
     >
+      {/* Drilling into one module is a selection like any other, so it rides in
+          a hidden field and survives a re-submit of this form — the same trick
+          LogFilterBar uses to keep a chosen error group while the window
+          changes. Without it, changing the window would silently close the
+          drill-down. */}
+      {filters.module && (
+        <input type="hidden" name="module" value={filters.module} />
+      )}
+
       <label className="flex flex-col gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
           Window
@@ -75,7 +84,7 @@ export function UsageFilterBar({
         Apply
       </button>
 
-      {(filters.user || filters.days !== 7) && (
+      {(filters.user || filters.module || filters.days !== 7) && (
         <Link
           href="/operations/usage"
           className="h-8 self-end text-xs font-semibold leading-8 text-ink-muted underline-offset-2 hover:text-brand-700 hover:underline"

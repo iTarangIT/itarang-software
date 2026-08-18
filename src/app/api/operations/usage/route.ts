@@ -44,6 +44,9 @@ export async function GET(req: Request) {
       subjectId: filters.user ?? null,
       days: filters.days,
       surface: "api",
+      // Same reasoning as the page: ?module= returns the per-person breakdown,
+      // so it is part of what was read.
+      module: filters.module ?? null,
     });
   });
 

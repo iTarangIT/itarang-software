@@ -249,6 +249,11 @@ export function roleBucket(role: string | null | undefined): "internal" | "exter
  * Never throws.
  */
 export async function recordModuleUsage(params: {
+  /**
+   * From requireAuth(), never the request body. E-216 stores this, so a
+   * client-asserted id would let anyone write history against a colleague.
+   */
+  userId: string;
   role: string | null | undefined;
   sessionId: string;
   module: unknown;
@@ -262,6 +267,28 @@ export async function recordModuleUsage(params: {
     await db.execute(sql`
       WITH d AS (
         SELECT (NOW() AT TIME ZONE 'Asia/Kolkata')::date AS day
+      ),
+      -- DOES THIS PING COUNT AS TIME? Decided ONCE, here, and read by both
+      -- writes below.
+      --
+      -- The first version inferred it after the fact, from whether last_ping_at
+      -- came back equal to NOW(). That works only because separate pings land in
+      -- separate transactions with different NOW() values — and it silently
+      -- broke the moment two pings shared one transaction, which is exactly what
+      -- a test harness does. A decision that depends on transaction boundaries
+      -- to be correct is a decision waiting to be wrong; this one does not.
+      --
+      -- No row yet means the first ping of the day for this person and module,
+      -- which always counts.
+      g AS (
+        SELECT COALESCE(
+          (SELECT m.last_ping_at < NOW() - INTERVAL '240 seconds'
+             FROM module_usage_user_daily m
+            WHERE m.day     = (SELECT day FROM d)
+              AND m.module  = ${moduleName}::varchar
+              AND m.user_id = ${params.userId}::uuid),
+          true
+        ) AS counted
       ),
       -- First visit for this (session, module) today? The INSERT returns a row
       -- only when the key is new, so COUNT(*) below is exactly 0 or 1. The
@@ -281,19 +308,52 @@ export async function recordModuleUsage(params: {
         FROM d
         ON CONFLICT (visit_key) DO NOTHING
         RETURNING 1
+      ),
+      -- E-216. The per-user row. Both counters read the g CTE above, so this
+      -- table and the aggregate below can never disagree about whether the
+      -- ping counted.
+      u AS (
+        INSERT INTO module_usage_user_daily (
+          day, module, user_id, role_at_ping, role_bucket,
+          pings, sessions, last_ping_at
+        )
+        SELECT d.day, ${moduleName}::varchar, ${params.userId}::uuid,
+               ${params.role ?? null}, ${bucket}::varchar,
+               1, (SELECT COUNT(*) FROM k)::int, NOW()
+        FROM d
+        ON CONFLICT (day, module, user_id) DO UPDATE SET
+          -- Throttled: time must not inflate.
+          pings = module_usage_user_daily.pings
+                  + CASE WHEN (SELECT counted FROM g) THEN 1 ELSE 0 END,
+          -- NOT throttled: a genuinely new session on the same module the same
+          -- day is a real session, and swallowing it in a ping window would
+          -- undercount exactly the thing the sessions column exists to count.
+          sessions = module_usage_user_daily.sessions + EXCLUDED.sessions,
+          -- Only moves when the ping counted, or the guard would never expire.
+          last_ping_at = CASE WHEN (SELECT counted FROM g)
+                              THEN NOW()
+                              ELSE module_usage_user_daily.last_ping_at END,
+          -- Refreshed so a role change is reflected from the ping it took
+          -- effect, without rewriting earlier days.
+          role_at_ping = EXCLUDED.role_at_ping,
+          role_bucket  = EXCLUDED.role_bucket,
+          updated_at   = NOW()
       )
       INSERT INTO module_usage_daily (day, module, role_bucket, pings, sessions)
-      SELECT d.day, ${moduleName}::varchar, ${bucket}::varchar, 1,
+      SELECT d.day, ${moduleName}::varchar, ${bucket}::varchar,
+             CASE WHEN (SELECT counted FROM g) THEN 1 ELSE 0 END,
              (SELECT COUNT(*) FROM k)::int
       FROM d
       ON CONFLICT (day, module, role_bucket) DO UPDATE SET
-        pings      = module_usage_daily.pings + 1,
+        -- EXCLUDED.pings, not a literal 1 — that is what carries the guard's
+        -- decision through to the aggregate.
+        pings      = module_usage_daily.pings + EXCLUDED.pings,
         sessions   = module_usage_daily.sessions + EXCLUDED.sessions,
         updated_at = NOW()
     `);
   } catch (e) {
-    // Swallowed like every other write here. If E-215 is unapplied this log is
-    // the only signal, since the dashboard would otherwise just read empty.
+    // Swallowed like every other write here. If E-215 or E-216 is unapplied this
+    // log is the only signal, since the dashboard would otherwise read empty.
     console.error("[usage] recordModuleUsage failed:", e);
   }
 }

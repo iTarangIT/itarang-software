@@ -51,6 +51,21 @@ export const LOGIN_RETENTION_DAYS = 90;
  */
 export const MODULE_VISIT_KEY_RETENTION_DAYS = 2;
 
+/**
+ * Per-user module usage (E-216). A privacy retention figure like the E-214 pair
+ * above, NOT a housekeeping one — module_usage_user_daily names individuals.
+ *
+ * Deliberately 30, matching SESSION_RETENTION_DAYS rather than the aggregate's
+ * permanent retention: this table says WHERE a named person went, which is a
+ * stronger claim than user_activity_sessions' "for how long", so it must not
+ * outlive it. The aggregate module_usage_daily is untouched by this prune and
+ * remains the only thing that can answer a question about last quarter.
+ *
+ * Promised in the E-216 header and in the notice on /operations/usage. Changing
+ * it means changing both.
+ */
+export const MODULE_USER_RETENTION_DAYS = 30;
+
 export interface DailySnapshotResult {
   snapshot_date: string;
   snapshots_written: number;
@@ -59,6 +74,7 @@ export interface DailySnapshotResult {
   sessions_pruned: number;
   login_events_pruned: number;
   module_visit_keys_pruned: number;
+  module_user_rows_pruned: number;
 }
 
 /** Today's date in IST as YYYY-MM-DD. */
@@ -198,6 +214,19 @@ export async function runDailySnapshot(
     `,
   );
 
+  // E-216, newest of all, so the same undefined_table guard applies. Deletes by
+  // `day` (an IST date) for the same reason module_visit_keys does — comparing
+  // an IST day against a UTC NOW() would shift the boundary by 5h30.
+  const moduleUsersPruned = await pruneQuietly(
+    "module_usage_user_daily",
+    sql`
+      DELETE FROM module_usage_user_daily
+      WHERE day < ((NOW() AT TIME ZONE 'Asia/Kolkata')::date
+                   - ${MODULE_USER_RETENTION_DAYS}::int)
+      RETURNING user_id
+    `,
+  );
+
   const result: DailySnapshotResult = {
     snapshot_date: snapshotDate,
     snapshots_written: snapshotsWritten,
@@ -206,13 +235,15 @@ export async function runDailySnapshot(
     sessions_pruned: sessionsPruned,
     login_events_pruned: loginEventsPruned,
     module_visit_keys_pruned: moduleVisitKeysPruned,
+    module_user_rows_pruned: moduleUsersPruned,
   };
 
   log.info(
     `[ops] daily rollup ${snapshotDate}: ${snapshotsWritten} snapshots, ` +
       `pruned ${result.samples_pruned} samples / ${result.logs_pruned} logs / ` +
       `${result.sessions_pruned} sessions / ${result.login_events_pruned} logins / ` +
-      `${result.module_visit_keys_pruned} module keys`,
+      `${result.module_visit_keys_pruned} module keys / ` +
+      `${result.module_user_rows_pruned} module-user rows`,
   );
 
   return result;

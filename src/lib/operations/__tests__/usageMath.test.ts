@@ -8,6 +8,7 @@ import {
   parseUsageFilters,
   percentile,
 } from "../usageMath";
+import { MODULES, MODULE_OTHER } from "@/lib/usage/constants";
 
 /**
  * The claims /operations/usage makes about people, and the arithmetic behind
@@ -146,5 +147,34 @@ describe("parseUsageFilters", () => {
   it("caps the history at a reviewable size", () => {
     // The per-person view should answer a question, not export a dataset.
     expect(MAX_USAGE_ROWS).toBeLessThanOrEqual(500);
+  });
+
+  it("accepts every drillable module, including 'other'", () => {
+    for (const m of [...MODULES, MODULE_OTHER]) {
+      expect(parseUsageFilters({ module: m }).module).toBe(m);
+    }
+  });
+
+  it("drops an unknown module instead of drilling into nothing", () => {
+    // Allow-listed like `days`, NOT coerced like normaliseModule() — coercing
+    // would silently open the 'other' row when somebody typed a module name
+    // that no longer exists, which reads as data loss rather than a typo.
+    for (const bad of ["leads", "operations", "nbfcx", "../etc", "", "1"]) {
+      expect(parseUsageFilters({ module: bad }).module).toBeUndefined();
+    }
+    expect(parseUsageFilters({}).module).toBeUndefined();
+  });
+
+  it("normalises casing and whitespace on the module param", () => {
+    expect(parseUsageFilters({ module: "  NBFC " }).module).toBe("nbfc");
+    expect(parseUsageFilters({ module: "Sales-Head" }).module).toBe("sales-head");
+  });
+
+  it("does not let a module selection disturb the other filters", () => {
+    // The drill-down is an extra aggregate view, not a narrowing filter — the
+    // login history below it must keep showing everyone.
+    const user = "41b185f9-fa65-4b73-9f8c-ee6d3006916e";
+    const f = parseUsageFilters({ module: "asm", days: "30", user });
+    expect(f).toEqual({ days: 30, user, module: "asm", perPerson: true });
   });
 });
