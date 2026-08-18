@@ -60,6 +60,15 @@ export type LeadFilters = {
     dispositionBucket: "" | DispositionBucket;
     /** L3 — the disposition itself. Free text: values outside the sheet are filterable too. */
     disposition: string;
+    // ── AI call state + signals ───────────────────────────────────────────
+    /** "" | connected | attempted | never. Actually CALLED, not merely queued. */
+    aiCalled: string;
+    /** "" | Qualified | Warm | Cold | Disqualified. */
+    aiBand: string;
+    /** "" | "1".."5" — at least N of the five info signals disclosed. */
+    signalsMin: string;
+    /** "1" = the dealer asked to be called back, per either system. */
+    callback: "" | "1";
 };
 
 export const EMPTY_FILTERS: LeadFilters = {
@@ -81,6 +90,10 @@ export const EMPTY_FILTERS: LeadFilters = {
     connectStatus: "",
     dispositionBucket: "",
     disposition: "",
+    aiCalled: "",
+    aiBand: "",
+    signalsMin: "",
+    callback: "",
 };
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
@@ -98,7 +111,14 @@ export const SECONDARY_KEYS: (keyof LeadFilters)[] = [
     "connectStatus",
     "dispositionBucket",
     "disposition",
+    "aiCalled",
+    "aiBand",
+    "signalsMin",
 ];
+// `callback` is deliberately NOT secondary. Same argument as `neodove` above: it
+// is an ACTION filter — "who asked us to call back" — not a refinement, and the
+// leads it surfaces need a human today. One disclosure away from invisible is
+// the wrong place for it.
 
 export function isFilterSet(f: LeadFilters, key: keyof LeadFilters): boolean {
     return f[key] !== "";
@@ -145,6 +165,10 @@ export function toSearchParams(
     if (f.connectStatus) p.set("connect_status", f.connectStatus);
     if (f.dispositionBucket) p.set("disposition_bucket", f.dispositionBucket);
     if (f.disposition) p.set("disposition", f.disposition);
+    if (f.aiCalled) p.set("ai_called", f.aiCalled);
+    if (f.aiBand) p.set("ai_band", f.aiBand);
+    if (f.signalsMin) p.set("signals_min", f.signalsMin);
+    if (f.callback) p.set("callback", f.callback);
     return p;
 }
 
@@ -186,5 +210,20 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         connectStatus: isConnectStatus(connectStatus) ? connectStatus : "",
         dispositionBucket: isDispositionBucket(bucket) ? bucket : "",
         disposition: sp.get("disposition") ?? "",
+        // Validated against their closed vocabularies: an unrecognised value
+        // would seed a <select> with no matching option and render as a blank
+        // selection that silently filters nothing.
+        aiCalled: ["connected", "attempted", "never"].includes(sp.get("ai_called") ?? "")
+            ? (sp.get("ai_called") as string)
+            : "",
+        aiBand: ["Qualified", "Warm", "Cold", "Disqualified"].includes(
+            sp.get("ai_band") ?? "",
+        )
+            ? (sp.get("ai_band") as string)
+            : "",
+        signalsMin: ["1", "2", "3", "4", "5"].includes(sp.get("signals_min") ?? "")
+            ? (sp.get("signals_min") as string)
+            : "",
+        callback: sp.get("callback") === "1" ? "1" : "",
     };
 }

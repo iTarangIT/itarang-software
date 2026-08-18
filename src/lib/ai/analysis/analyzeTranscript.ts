@@ -34,6 +34,13 @@ export interface AnalysisOk {
   hard_negative: boolean;
   score_breakdown: SignalLine[];
   scoring_version: string;
+  // E-250 — which PROMPT read the transcript. scoring_version above records
+  // which BAND RULE ran; these record the extraction side, so an audit can tell
+  // whether a shift came from a new rule or from new teaching. The hash is
+  // needed because the calibration set now lives in the DB and changes without
+  // a deploy, so the version string alone no longer identifies the prompt.
+  extraction_version: string;
+  calibration_set_hash: string;
   // ── Derived back-compat shapes ──
   outcome: LegacyOutcome;
   memory: LegacyMemory;
@@ -73,6 +80,8 @@ export async function analyzeTranscript(transcript: string): Promise<AnalysisRes
     hard_negative: result.hard_negative,
     score_breakdown: result.score_breakdown,
     scoring_version: result.scoring_version,
+    extraction_version: extraction.extractionVersion,
+    calibration_set_hash: extraction.calibrationSetHash,
     outcome: deriveOutcome(signals),
     memory: toLegacyMemory(signals),
     callback_time: null,

@@ -40,7 +40,8 @@
  * ── IDEMPOTENCY ───────────────────────────────────────────────────────────
  *
  * ON CONFLICT DO NOTHING against lead_touchpoints_external_uniq (E-113), keyed
- * on (external_system, external_event_id) = (provider, ai_call_logs.call_id).
+ * on (external_system, external_event_id) = (provider, ai_call_logs.call_id). That
+ * index is PARTIAL, so the ON CONFLICT clause repeats its WHERE predicate.
  * Re-running inserts nothing; and a LIVE call for the same id later also no-ops,
  * so the backfill can never race the real writer into a duplicate.
  *
@@ -179,7 +180,14 @@ async function main() {
                     ${d.disposition}, ${d.bucket}, ${d.connectStatus},
                     ${r.status}, ${aiExternalTag(input)}, ${r.recording_url}
                 )
-                ON CONFLICT (external_system, external_event_id) DO NOTHING
+                -- The unique index is PARTIAL (E-113:
+                -- ... WHERE external_event_id IS NOT NULL), so the ON CONFLICT
+                -- target must repeat that predicate. Without it Postgres refuses
+                -- with "no unique or exclusion constraint matching the ON
+                -- CONFLICT specification" and every row fails.
+                ON CONFLICT (external_system, external_event_id)
+                    WHERE external_event_id IS NOT NULL
+                DO NOTHING
             `);
             inserted += 1;
         } catch (err) {

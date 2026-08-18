@@ -8,6 +8,7 @@
 // (shop_name, dealer_name, phone, score). Soft FK — no DB constraint, so a
 // LEFT JOIN handles the case where a lead row was deleted post-campaign.
 
+import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
 import { db } from "@/lib/db";
 import { dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -68,6 +69,16 @@ function shapeRow(r: any) {
     durationSeconds: deriveDuration(r.callDuration, r.startedAt, r.completedAt),
     // True when a reviewer has manually corrected this lead's intent score.
     corrected: Boolean(r.corrected),
+    // Why this call produced no conversation, in words the sales team can act
+    // on — null when it succeeded. Derived server-side so the table, the export
+    // and the retry filter can never disagree about what happened.
+    failureReason: deriveFailureReason({
+      status: r.status,
+      callOutcome: r.callOutcome,
+      hasTranscript: r.hasTranscript,
+      providerStatus: r.logStatus,
+      bandCallStatus: r.logCallStatus,
+    }),
     // Cross-campaign attempt tracking (only populated on the detail query).
     attemptCount: Number(r.attemptCount ?? 0),
     convertedOnAttempt:
@@ -100,11 +111,45 @@ const selectShape = {
     where call_id = ${dialerCampaignLeads.bolna_call_id}
     limit 1
   )`,
+  // The evidence behind the failure reason. Same correlated-subquery pattern as
+  // callDuration above, on the same already-indexed ai_call_logs.call_id.
+  //
+  // hasTranscript is the important one: it OUTRANKS call_outcome, because a
+  // transcript is proof the call happened. That is how a row could read
+  // "Trigger failed" while its own drawer played back a recording.
+  hasTranscript: sql<boolean>`(
+    select transcript is not null from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
+  logStatus: sql<string | null>`(
+    select status from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
+  logCallStatus: sql<string | null>`(
+    select call_status from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
   // Whether a human has corrected this lead's intent score in any attempt
   // (intent_score_feedback, E-159). Lead-level — drives the "Corrected" flag.
+  //
+  // E-250: excludes rows imported from the retired Campaign_Call_Review sheet
+  // whose free text named no band. Those are preserved as commentary, not
+  // verdicts, and lighting a "Corrected" pill for them would claim a decision
+  // nobody made.
+  //
+  // Filters on corrected_status rather than the more obvious review_kind on
+  // purpose: review_kind is an E-250 column, and naming it here would make this
+  // whole query — and with it the campaign leads table — fail with a 42703 on
+  // any database where E-250 has not been applied yet. corrected_status has
+  // existed since E-159, and the importer writes the 'none' sentinel into it
+  // for exactly this reason.
   corrected: sql<boolean>`exists (
     select 1 from intent_score_feedback f
     where f.lead_id = ${dialerCampaignLeads.lead_id}
+      and f.corrected_status <> 'none'
   )`,
 };
 

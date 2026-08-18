@@ -61,6 +61,12 @@ async function fetchFromTarget(target: DbTarget): Promise<GoldenCase[]> {
     `) as unknown as Row[];
 
     return rows
+      // Also the E-250 note filter, and deliberately expressed this way. Rows
+      // imported from the retired Campaign_Call_Review sheet whose free text
+      // named no band carry corrected_status='none', so this existing predicate
+      // already excludes them. Naming review_kind here instead would 42703 on
+      // any database without E-250 and skip that whole environment's
+      // corrections — a much worse failure than the one it would guard against.
       .filter((r) => LEAD_STATUSES.includes(r.corrected_status as LeadStatus))
       .map((r) => ({
         callId: r.call_id,

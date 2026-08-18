@@ -69,6 +69,14 @@ export async function POST(req: NextRequest) {
       })),
     });
   } catch (err) {
+    // requireRole() signals "not allowed" by THROWING a Next redirect, and this
+    // route's own try/catch would otherwise flatten that into a 500 body reading
+    // `{"error":"NEXT_REDIRECT"}` — which is what an unauthenticated caller
+    // actually saw. Re-throw so Next can perform the redirect, exactly as
+    // withErrorHandler does for every route that uses it.
+    if ((err as { digest?: string })?.digest?.startsWith("NEXT_REDIRECT")) {
+      throw err;
+    }
     console.error("[AI DIALER] preview error:", err);
     return NextResponse.json(
       { success: false, error: (err as Error)?.message ?? "Preview failed" },

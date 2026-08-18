@@ -509,6 +509,103 @@ function colWidth(
 // from the post-call pipeline. Reviewer feedback columns are left blank for
 // reviewers to fill in. Swallows all errors so a Sheets outage never breaks
 // call finalization or campaign advancement.
+/**
+ * Is the Campaign_Call_Review sheet still being written?
+ *
+ * E-250 moved call review into the CRM: reviewers now correct a band from the
+ * lead-detail screen or the campaign drawer, and the correction lands in
+ * intent_score_feedback where it BOTH moves the lead and trains the model.
+ * The sheet could do neither — nothing in this repository has ever read the tab
+ * back, so seven named reviewers were filing feedback into a write-only sink.
+ *
+ * Default OFF. Set CALL_REVIEW_SHEET_ENABLED=1 to keep mirroring to the sheet
+ * during a transition; the code stays in place so that is a config change, not
+ * a revert. Run scripts/intent/importSheetReviews.ts first to bring the
+ * existing feedback across.
+ */
+export function callReviewSheetEnabled(): boolean {
+  return process.env.CALL_REVIEW_SHEET_ENABLED === "1";
+}
+
+/**
+ * Read the Campaign_Call_Review tab back.
+ *
+ * The counterpart that never existed. Used once, by
+ * scripts/intent/importSheetReviews.ts, to migrate the reviewers' accumulated
+ * feedback into intent_score_feedback before the sheet is switched off.
+ *
+ * Returns raw rows keyed by reviewer — parsing the prose in each cell into a
+ * band is the importer's job, not this module's.
+ */
+export async function readCallReviews(): Promise<
+  Array<{
+    uuid: string;
+    campaign: string;
+    companyName: string;
+    dealerName: string;
+    recordingUrl: string;
+    transcript: string;
+    feedback: Array<{ reviewer: string; text: string }>;
+  }>
+> {
+  const sheets = await getSheetsClient();
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID!;
+  const lastCol = colLetter(CALL_REVIEW_HEADERS.length);
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${SHEETS.CALL_REVIEW}!A:${lastCol}`,
+  });
+
+  const rows: string[][] = (res.data.values as string[][]) ?? [];
+  if (rows.length <= 1) return [];
+
+  // Read reviewer columns BY HEADER NAME, not by position. CALL_REVIEWERS has
+  // changed before and will again; a positional read would silently attribute
+  // one person's feedback to another the first time somebody is added in the
+  // middle of the list.
+  const header = rows[0].map((h) => (h ?? "").trim());
+  const idxOf = (name: string) => header.indexOf(name);
+
+  const reviewerCols = CALL_REVIEWERS.map((name) => ({
+    name,
+    idx: idxOf(name),
+  })).filter((c) => c.idx >= 0);
+
+  const cell = (r: string[], i: number) => (i >= 0 ? (r[i] ?? "").trim() : "");
+
+  const iUuid = idxOf("UUID");
+  const iCampaign = idxOf("Campaign");
+  const iCompany = idxOf("Company Name");
+  const iDealer = idxOf("Dealer Name");
+  const iRecording = idxOf("Call Recording");
+  const iTranscript = idxOf("Transcript");
+
+  return rows.slice(1).flatMap((r) => {
+    const uuid = cell(r, iUuid);
+    if (!uuid) return [];
+
+    const feedback = reviewerCols
+      .map(({ name, idx }) => ({ reviewer: name, text: cell(r, idx) }))
+      .filter((f) => f.text.length > 0);
+
+    // A row nobody reviewed carries no information worth importing.
+    if (feedback.length === 0) return [];
+
+    return [
+      {
+        uuid,
+        campaign: cell(r, iCampaign),
+        companyName: cell(r, iCompany),
+        dealerName: cell(r, iDealer),
+        recordingUrl: cell(r, iRecording),
+        transcript: cell(r, iTranscript),
+        feedback,
+      },
+    ];
+  });
+}
+
 export async function appendCallReview(review: {
   uuid: string;
   campaign: string;

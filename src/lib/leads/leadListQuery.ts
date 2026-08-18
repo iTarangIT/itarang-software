@@ -115,6 +115,22 @@ export type LeadListFilters = {
      * time — see neodoveTablesPresent().
      */
     hasNeodoveTables?: boolean;
+    // ── AI call state + signals ──────────────────────────────────────────
+    // Read through a LATERAL onto the LATEST ai_call_logs row, NEVER through the
+    // dealer_leads rollups: intent_band is populated on 4 of 3,941 rows and
+    // info_signals_count on 2, so a rollup-backed filter would return a handful
+    // of leads and read as a bug rather than as an answer.
+    /** Qualified | Warm | Cold | Disqualified — the latest call's band. */
+    aiBand?: string | null;
+    /** At least N of the five info signals disclosed on the latest call. */
+    signalsMin?: number | null;
+    /** connected | attempted | never. */
+    aiCalled?: string | null;
+    /**
+     * The dealer asked to be called back — from EITHER system, because a rep
+     * asking "who wants a callback" does not care who recorded it.
+     */
+    callback?: boolean;
 };
 
 export type LeadListFacets = {
@@ -135,6 +151,23 @@ export type LeadListFacets = {
      * module's single-statement facets query cannot express.
      */
     campaigns?: CampaignFacet[];
+    /**
+     * How far the AI dialer has actually got.
+     *
+     * The filter group renders these as its denominator and as a count beside
+     * every option, and disables any option that would match zero. That is the
+     * single most effective anti-"looks broken" move here: on database-1 only
+     * 119 of 3,941 leads have ever been dialled and 27 calls produced signals,
+     * so most of these filters legitimately match almost nothing — and nobody
+     * can select a filter that cannot match.
+     */
+    aiSignals?: {
+        totalLeads: number;
+        leadsCalled: number;
+        leadsConnected: number;
+        leadsCallback: number;
+        band: Record<string, number>;
+    };
 };
 
 export type LeadListStats = {
@@ -252,6 +285,35 @@ function intentSelection(f: LeadListFilters) {
  * destroy itself on first click. The score range is lifted with it for exactly
  * the same reason: typing 75–100 must not blank the Cold card.
  */
+/** Is any AI-backed filter set? Drives whether the LATERAL is emitted at all. */
+function hasAiFilter(f: LeadListFilters): boolean {
+    return Boolean(
+        f.aiBand || f.aiCalled || f.callback || typeof f.signalsMin === "number",
+    );
+}
+
+/**
+ * Latest AI call per lead.
+ *
+ * Emitted ONLY when an AI filter is set, so an unfiltered list produces exactly
+ * the SQL it produced before this feature — no new join, no behaviour change,
+ * nothing to regress on the hot path.
+ */
+export function aiSignalsJoin(f: LeadListFilters) {
+    if (!hasAiFilter(f)) return sql``;
+    return sql`
+        LEFT JOIN LATERAL (
+            SELECT a.band,
+                   a.info_signals_count,
+                   a.transcript IS NOT NULL           AS connected,
+                   a.signals ->> 'callback_agreed'    AS callback_agreed
+              FROM ai_call_logs a
+             WHERE a.lead_id = dl.id
+             ORDER BY a.created_at DESC
+             LIMIT 1
+        ) ai ON true`;
+}
+
 function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // Soft-delete aware. This is the merged base predicate: it replaces
     // /leads' old `phone IS NOT NULL` (which also let deleted leads through).
@@ -314,6 +376,36 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         const anyOf = [inDialerCampaign(f.campaign)];
         if (f.hasNeodoveTables) anyOf.push(inNeodoveCampaign(f.campaign));
         conds.push(sql`(${sql.join(anyOf, sql` OR `)})`);
+    }
+
+    // ── AI call state ────────────────────────────────────────────────────
+    // `attempted` counts ai_call_logs rows, NEVER dialer_campaign_leads. 1,500
+    // leads have been in a campaign and only 119 have a call log — campaign
+    // membership means QUEUED, not called, and using it as a proxy would
+    // over-report the AI's reach by 12x. The existing "Campaign" filter says
+    // in-a-campaign; this one says actually-called, and they must stay distinct.
+    if (f.aiCalled === "connected") {
+        conds.push(sql`ai.connected IS TRUE`);
+    } else if (f.aiCalled === "attempted") {
+        conds.push(
+            sql`EXISTS (SELECT 1 FROM ai_call_logs a WHERE a.lead_id = dl.id)`,
+        );
+    } else if (f.aiCalled === "never") {
+        conds.push(
+            sql`NOT EXISTS (SELECT 1 FROM ai_call_logs a WHERE a.lead_id = dl.id)`,
+        );
+    }
+    if (f.aiBand) conds.push(sql`ai.band = ${f.aiBand}`);
+    if (typeof f.signalsMin === "number") {
+        conds.push(sql`COALESCE(ai.info_signals_count, 0) >= ${f.signalsMin}`);
+    }
+    // One filter spanning both systems. The dl.last_disposition disjunct is a
+    // migration-gated column, so it is named ONLY inside this predicate — i.e.
+    // only when the filter is set — exactly as the E-236 filters above do.
+    if (f.callback) {
+        conds.push(
+            sql`(ai.callback_agreed = 'yes' OR dl.last_disposition = 'As to Call Back')`,
+        );
     }
 
     if (!opts?.ignoreIntent) {
@@ -391,6 +483,7 @@ export async function fetchLeadListRows(
             dl.total_attempts,
             dl.follow_up_history
         FROM dealer_leads dl
+        ${aiSignalsJoin(f)}
         ${LATEST_VISIT_JOIN}
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users asm ON asm.id::text = dl.asm_id
@@ -424,6 +517,7 @@ export async function fetchLeadListIds(
     const rows = await db.execute<{ id: string }>(sql`
         SELECT dl.id
         FROM dealer_leads dl
+        ${aiSignalsJoin(f)}
         WHERE ${where}
         ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
         LIMIT ${cap}
@@ -464,6 +558,7 @@ export async function fetchLeadListStats(
             COUNT(*) FILTER (WHERE dl.current_owner_id IS NULL AND ${inBucket})::text AS unassigned,
             COUNT(*) FILTER (WHERE dl.next_call_at IS NOT NULL AND ${inBucket})::text AS scheduled
         FROM dealer_leads dl
+        ${aiSignalsJoin(f)}
         WHERE ${where}
     `);
     const r = rows[0] as unknown as Record<string, string> | undefined;
@@ -527,11 +622,64 @@ export async function fetchLeadListFacets(): Promise<LeadListFacets> {
         // E-236 not applied here — the filter offers the sheet's values only.
     }
 
+    // Its own statement and its own try/catch, same discipline as the
+    // disposition facets above: a failure here must cost the AI filter group,
+    // not the whole filter bar.
+    let aiSignals: LeadListFacets["aiSignals"];
+    try {
+        const rows = await db.execute<{
+            total_leads: string;
+            leads_called: string;
+            leads_connected: string;
+            leads_callback: string;
+            band_qualified: string;
+            band_warm: string;
+            band_cold: string;
+            band_disqualified: string;
+        }>(sql`
+            SELECT
+                (SELECT COUNT(*)::text FROM dealer_leads WHERE is_active IS NOT FALSE)
+                    AS total_leads,
+                COUNT(DISTINCT lead_id)::text AS leads_called,
+                COUNT(DISTINCT lead_id) FILTER (WHERE transcript IS NOT NULL)::text
+                    AS leads_connected,
+                COUNT(DISTINCT lead_id) FILTER (WHERE signals ->> 'callback_agreed' = 'yes')::text
+                    AS leads_callback,
+                COUNT(DISTINCT lead_id) FILTER (WHERE band = 'Qualified')::text
+                    AS band_qualified,
+                COUNT(DISTINCT lead_id) FILTER (WHERE band = 'Warm')::text
+                    AS band_warm,
+                COUNT(DISTINCT lead_id) FILTER (WHERE band = 'Cold')::text
+                    AS band_cold,
+                COUNT(DISTINCT lead_id) FILTER (WHERE band = 'Disqualified')::text
+                    AS band_disqualified
+              FROM ai_call_logs
+        `);
+        const r = (rows as unknown as Record<string, string>[])[0];
+        if (r) {
+            aiSignals = {
+                totalLeads: Number(r.total_leads ?? 0),
+                leadsCalled: Number(r.leads_called ?? 0),
+                leadsConnected: Number(r.leads_connected ?? 0),
+                leadsCallback: Number(r.leads_callback ?? 0),
+                band: {
+                    Qualified: Number(r.band_qualified ?? 0),
+                    Warm: Number(r.band_warm ?? 0),
+                    Cold: Number(r.band_cold ?? 0),
+                    Disqualified: Number(r.band_disqualified ?? 0),
+                },
+            };
+        }
+    } catch {
+        // No ai_call_logs here — the AI filter group renders without counts.
+    }
+
     return {
         owners: owners as unknown as LeadListFacets["owners"],
         asms: asms as unknown as LeadListFacets["asms"],
         sources: (sources as unknown as { source: string }[]).map((r) => r.source),
         dispositions,
+        aiSignals,
     };
 }
 
