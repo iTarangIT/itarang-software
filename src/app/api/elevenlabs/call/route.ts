@@ -5,6 +5,7 @@ import {
   attachBolnaCallId,
   markCampaignLeadCalling,
 } from "@/lib/queue/campaignTracker";
+import { fetchAiConnection } from "@/lib/ai-dialer/aiConnection";
 
 // ElevenLabs calls are billed per-minute. Without auth, any anonymous POST
 // could burn provider credit and harass leads. Restrict to sales staff and
@@ -38,6 +39,22 @@ export async function POST(req: NextRequest) {
         { success: false, error: "phone is required" },
         { status: 400 },
       );
+    }
+
+    // The AI-connected hard block — identical to /api/bolna/call, same reasoning.
+    if (body.leadId) {
+      const connection = await fetchAiConnection(String(body.leadId));
+      if (connection.connected) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "ai_already_connected",
+            error: "The AI has already spoken with this dealer.",
+            connection,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const result = await triggerElevenLabsCall({

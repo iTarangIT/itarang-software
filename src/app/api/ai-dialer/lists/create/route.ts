@@ -80,7 +80,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     );
   }
 
-  const campaignId = await createCampaign({
+  const { campaignId, queued, blockedAiConnected } = await createCampaign({
     queueIds: summary.queueIds,
     // Placeholder — the real provider is chosen when the user presses Start.
     provider: "bolna",
@@ -102,6 +102,16 @@ export const POST = withErrorHandler(async (req: Request) => {
     name,
   });
 
+  // An uploaded list can legitimately be all previously-dialled dealers, and
+  // that is worth its own message — "failed to create" would send the user
+  // looking for a bug that isn't there.
+  if (!campaignId && blockedAiConnected.length > 0) {
+    return errorResponse(
+      `All ${blockedAiConnected.length} dealers in this list have already been contacted by the AI. They need manual follow-up.`,
+      409,
+    );
+  }
+
   if (!campaignId) {
     return errorResponse("Failed to create the campaign. Please try again.", 500);
   }
@@ -114,6 +124,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     reused: summary.reused,
     updated: summary.updated,
     invalid: summary.invalid,
-    queued: summary.queueIds.length,
+    queued,
+    blockedAiConnected: blockedAiConnected.length,
   });
 });

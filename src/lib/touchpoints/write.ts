@@ -21,7 +21,7 @@ import {
   dealerLeadStatusHistory,
   leadTouchpoints,
 } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type {
   CallStatus,
   NextAction,
@@ -31,7 +31,9 @@ import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import { isTerminal } from "@/lib/lifecycle/transitions";
 
 export type StatusChange = {
-  from: LeadStatus;
+  // null = the lead had no status at all (legacy / lift-in rows). from_status
+  // is nullable in dealer_lead_status_history, so the audit row still writes.
+  from: LeadStatus | null;
   to: LeadStatus;
   fromLostReason?: LostReason | null;
   toLostReason?: LostReason | null;
@@ -56,6 +58,28 @@ export type WriteTouchpointInput = {
   externalSystem?: string | null;
   externalEventId?: string | null;
   syncMethod?: "manual" | "api" | "system" | "reconciliation";
+  /**
+   * The CC team's L1/L2/L3 disposition for this call (E-236).
+   *
+   * Written by raw UPDATEs INSIDE this transaction, unlike the NeoDove webhook
+   * and the AI dialer, which both write theirs post-commit. The trade differs by
+   * actor: an inbound event cannot be re-fetched, so losing the TOUCHPOINT to a
+   * database missing E-236 would be unacceptable while losing the LABEL is
+   * merely bad. A rep watched themselves pick "Price High" from a dropdown — a
+   * save that silently dropped it is a lie on screen, and their submission is
+   * retryable.
+   *
+   * The columns are NOT in schema.ts (see its header), so the statements are raw
+   * and are emitted ONLY when this field is set — no existing caller runs a
+   * single extra statement.
+   */
+  disposition?: {
+    label: string;
+    bucket: string | null;
+    connectStatus: string;
+  } | null;
+  /** 'inside_sales' | 'neodove' | 'ai_dialer'. Defaults to 'inside_sales'. */
+  dispositionSource?: string | null;
   statusChange?: StatusChange;
 };
 
@@ -98,6 +122,38 @@ export async function writeTouchpoint(
         sync_method: input.syncMethod ?? "manual",
       })
       .returning({ touchpoint_id: leadTouchpoints.touchpoint_id });
+
+    // 1b. The disposition, when one was picked. Two raw statements: the
+    //     dealer_leads one cannot go through the Drizzle object because naming
+    //     these columns there would hard-fail ~20 bare selects on any database
+    //     without E-236.
+    if (input.disposition) {
+      const d = input.disposition;
+      const at = performedAt.toISOString();
+
+      await tx.execute(sql`
+        UPDATE lead_touchpoints
+           SET disposition        = ${d.label},
+               disposition_bucket = ${d.bucket},
+               connect_status     = ${d.connectStatus}
+         WHERE touchpoint_id = ${touchpoint!.touchpoint_id}::uuid
+      `);
+
+      await tx.execute(sql`
+        UPDATE dealer_leads
+           SET last_disposition        = ${d.label},
+               last_disposition_bucket = ${d.bucket},
+               last_connect_status     = ${d.connectStatus},
+               last_disposition_at     = ${at}::timestamptz,
+               last_disposition_source = ${input.dispositionSource ?? "inside_sales"}
+         WHERE id = ${input.dealerLeadId}
+           -- The LATER CALL owns the row, whichever system observed it. Same
+           -- guard the NeoDove and AI writers use; there is deliberately no
+           -- source precedence.
+           AND (last_disposition_at IS NULL
+                OR last_disposition_at <= ${at}::timestamptz)
+      `);
+    }
 
     let historyId: string | null = null;
 

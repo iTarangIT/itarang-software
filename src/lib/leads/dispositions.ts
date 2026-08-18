@@ -31,6 +31,10 @@
 // UI hides the bucket select once Not Connected is chosen: there is nothing to
 // choose.
 
+// Type-only: touchpointTypes.ts imports nothing, so this cannot cycle and stays
+// safe in a client bundle.
+import type { CallStatus as TouchpointCallStatus } from "@/lib/lifecycle/touchpointTypes";
+
 export const CONNECT_STATUS = ["connected", "not_connected"] as const;
 export type ConnectStatus = (typeof CONNECT_STATUS)[number];
 
@@ -270,6 +274,12 @@ export function classifyDisposition(
 /**
  * Settle a label that sits in more than one bucket.
  *
+ * Exported because a caller that KNOWS the bucket can settle it honestly. The
+ * inbound webhook cannot — there is no user to ask, so it accepts the Warm
+ * default described below. A rep picking "Commercials Explained" from a dropdown
+ * under Hot has told us which one they mean, and storing Warm for them would
+ * make the Hot filter under-count on purpose.
+ *
  * Only "Commercials Explained" (Warm and Hot) reaches the ambiguous branch
  * today. NeoDove's stage decides when it disambiguates; otherwise the sheet's
  * first occurrence wins, which is Warm. The consequence, deliberately chosen
@@ -277,7 +287,7 @@ export function classifyDisposition(
  * rather than the Warm and Hot filters both over-counting it and their totals
  * exceeding the row count.
  */
-function resolveBucket(
+export function resolveBucket(
     label: string,
     fallback: DispositionBucket | null,
     hints: DispositionHints,
@@ -326,6 +336,65 @@ export function isKnownDisposition(v: string | null | undefined): boolean {
 /** Canonical casing for a known label; the input unchanged otherwise. */
 export function canonicalDisposition(v: string): string {
     return INDEX.get(normalizeDispositionKey(v))?.label ?? v;
+}
+
+// ── The 5-value touchpoint vocabulary implied by a disposition ────────────
+//
+// lead_touchpoints.call_status has its own, older, five-value vocabulary
+// (CALL_STATUS in src/lib/lifecycle/touchpointTypes.ts). Every writer of a
+// touchpoint needs to derive one from the other, and there are three of them
+// now — the NeoDove webhook, the AI dialer, and the rep's Log Touchpoint form.
+// This table used to be private to src/lib/neodove/mapper.ts, which made it
+// look NeoDove-specific. It is not: it is a property of the sheet.
+//
+// Typed over the NOT_CONNECTED_REASONS tuple, so adding a reason to the sheet
+// without deciding its call status is a compile error rather than a silent
+// `undefined` that falls through to "not_responding".
+//
+// The connected side needs no table: a disposition the sheet files under
+// Connected means the call connected, by definition.
+//
+// Note "Short Hang up" is deliberately absent — the sheet files it under
+// Connected › Cold, and rightly so. A hang-up after one second is still a
+// connected call, and counting it as not_responding would understate the
+// connect rate.
+
+export const NOT_CONNECTED_TO_CALL_STATUS: Record<
+    (typeof NOT_CONNECTED_REASONS)[number],
+    TouchpointCallStatus
+> = {
+    "Did not pick": "not_responding",
+    "Busy in another call": "not_responding",
+    "User disconnected the call": "not_responding",
+    "Call not connected / can not be completed": "not_responding",
+    "Other reason": "not_responding",
+    "Switch off": "not_reachable",
+    "Out of Coverage area / Network issue": "not_reachable",
+    "Number not in use / does not exist / out of service": "not_reachable",
+    "Incorrect / Invalid number": "incorrect_number",
+    "Incoming calls not available": "no_incoming",
+};
+
+/**
+ * The touchpoint call_status implied by a classified disposition.
+ *
+ * Returns null when there is nothing to imply — no disposition, or one outside
+ * the sheet whose connect status is unknown. Callers fall back to their own
+ * evidence (NeoDove's stock-vocabulary map, or a rep's explicit choice).
+ */
+export function callStatusForDisposition(
+    d: Pick<ClassifiedDisposition, "label" | "connectStatus"> | null | undefined,
+): TouchpointCallStatus | null {
+    if (!d) return null;
+    if (d.connectStatus === "connected") return "connected";
+    if (d.connectStatus === "not_connected") {
+        return (
+            NOT_CONNECTED_TO_CALL_STATUS[
+                d.label as (typeof NOT_CONNECTED_REASONS)[number]
+            ] ?? null
+        );
+    }
+    return null;
 }
 
 // ── Display ───────────────────────────────────────────────────────────────

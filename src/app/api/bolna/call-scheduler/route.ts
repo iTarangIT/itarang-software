@@ -5,6 +5,8 @@ import { quotaCircuit } from "@/lib/queue/connection";
 import { log } from "@/lib/log";
 import { not, inArray, eq, isNotNull, isNull, and, or, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { AI_FOLLOWUP_LOOP_RETIRES_CONNECTED } from "@/lib/ai-dialer/exclusionFilter";
+import { retireAiConnectedFollowUps } from "@/lib/ai-dialer/aiConnection";
 
 export const maxDuration = 60;
 
@@ -37,14 +39,33 @@ export async function GET(req: Request) {
         ),
       );
 
-    const leadsToCall = allLeads.filter(
+    const dueLeads = allLeads.filter(
       (r) => r.next_call_at && new Date(r.next_call_at) <= now,
     );
+
+    // The AI-connected hard block, applied to the AI's own follow-up loop.
+    //
+    // next_call_at is written only by resolveNextCallAt() on the transcript
+    // path, so effectively everything this scheduler sees is a dealer the AI has
+    // already spoken to. Blocking here retires the Warm-band nurture loop and
+    // hands those dealers to Inside Sales — intended, per the hard-block
+    // decision, but a real behaviour change rather than a skip. next_call_at is
+    // cleared at the same time so the cron does not re-select them every minute.
+    //
+    // Deliberately NOT done by adding a computed column to the query above: it
+    // is a bare db.select().from(dealerLeads), and naming a column there is the
+    // schema.ts mirroring landmine.
+    const { dialable: leadsToCall, retired: retiredAiConnected } =
+      await retireAiConnectedFollowUps(dueLeads, {
+        enabled: AI_FOLLOWUP_LOOP_RETIRES_CONNECTED,
+        source: "bolna/call-scheduler",
+      });
 
     if (leadsToCall.length === 0) {
       return NextResponse.json({
         success: true,
         message: "No leads to call",
+        retiredAiConnected,
         checked_at: now.toISOString(),
       });
     }
@@ -120,6 +141,7 @@ export async function GET(req: Request) {
       success: true,
       processed: results.length,
       totalCandidates: leadsToCall.length,
+      retiredAiConnected,
       bailedOn,
       checked_at: now.toISOString(),
       results,

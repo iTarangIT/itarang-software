@@ -21,7 +21,7 @@ import { errorMessage } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { classifyAgainstExisting, loadExistingByPhone } from "@/lib/leads/dedupe";
-import { canTransition, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import {
     callStatusFor,
     dispositionFor,
@@ -199,34 +199,25 @@ async function handleDisposition(
     const dealerLeadId = resolved.id;
 
     // Only attempt a status change when the NeoDove stage maps to one AND the
-    // transition is legal from where the lead actually is. An illegal one is
-    // recorded as a plain touchpoint — the call still happened, we just don't
-    // let a remote system drive our funnel into an invalid state.
+    // lead is not already closed. Reps now set any status they like (see
+    // canTransition), but a REMOTE system must not silently reopen a lead the
+    // team marked Converted / Lost — that is recorded as a plain touchpoint
+    // instead: the call still happened.
     const target = leadStatusFor(event);
     let statusChange: Parameters<typeof writeTouchpoint>[0]["statusChange"];
 
     if (target) {
-        const current = await db.execute<{
-            lead_status: string | null;
-            engaged: string;
-        }>(sql`
-            SELECT dl.lead_status,
-                   (SELECT COUNT(*) FROM lead_touchpoints t
-                     WHERE t.dealer_lead_id = dl.id AND t.is_engaged) ::text AS engaged
-            FROM dealer_leads dl WHERE dl.id = ${dealerLeadId} LIMIT 1
+        const current = await db.execute<{ lead_status: string | null }>(sql`
+            SELECT lead_status FROM dealer_leads WHERE id = ${dealerLeadId} LIMIT 1
         `);
         const from = (current[0]?.lead_status ?? null) as LeadStatus | null;
         if (from && from !== target) {
-            const verdict = canTransition(from, target, {
-                engagedTouchpointCount: Number(current[0]?.engaged ?? 0),
-                actorRole: "system",
-            });
-            if (verdict.ok) {
-                statusChange = { from, to: target, closingRole: "system" };
-            } else {
+            if (isTerminal(from)) {
                 console.warn(
-                    `[NeoDove/inbound] refused ${from} → ${target} for ${dealerLeadId}: ${verdict.reason}`,
+                    `[NeoDove/inbound] refused ${from} → ${target} for ${dealerLeadId}: lead is already closed`,
                 );
+            } else {
+                statusChange = { from, to: target, closingRole: "system" };
             }
         }
     }

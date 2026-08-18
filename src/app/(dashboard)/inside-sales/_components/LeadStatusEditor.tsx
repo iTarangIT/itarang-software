@@ -1,12 +1,13 @@
 "use client";
 
 // Editable lead-status chip in the lead-detail header (replaces the old
-// temperature editor there). Offers only the legal next statuses per the BRD
-// §0.7 transition map. Intermediate statuses are saved as a
-// status_change_note touchpoint so canTransition validation and status
-// history stay server-side; Converted / Lost / Transferred_to_ASM have
-// dedicated flows (onboarding, lost reason, ASM pick) and delegate to the
-// parent view's existing modals via onModalAction.
+// temperature editor there). Offers EVERY other status — there is no transition
+// gate any more, so a rep can move a lead wherever the conversation went,
+// including reopening a closed one. Intermediate statuses are saved as a
+// status_change_note touchpoint so the status history stays server-side;
+// Converted / Lost / Transferred_to_ASM have dedicated flows (onboarding, lost
+// reason, ASM pick) and delegate to the parent view's existing modals via
+// onModalAction.
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -22,9 +23,11 @@ const MODAL_TARGETS: Partial<Record<LeadStatus, StatusModalAction>> = {
     Transferred_to_ASM: "transfer_asm",
 };
 
-// Statuses settable directly from the header. Assigned_Not_Contacted is
-// excluded — claim / assignment / reactivation set it through their own routes.
+// Statuses settable directly from the header. New_Unassigned is excluded — it
+// is the pre-assignment state, and setting it on an owned lead would strand it
+// outside every queue; claim / assignment set it through their own routes.
 const DIRECT_TARGETS: LeadStatus[] = [
+    "Assigned_Not_Contacted",
     "Under_Discussion",
     "Commercials_Explained",
     "Commercials_Finalised",
