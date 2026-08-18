@@ -125,10 +125,9 @@ export async function writeAiCallTouchpoint(
                     callStatus: d.callStatus,
                     callDurationSec: input.durationSec ?? null,
                     // ALWAYS false. BRD §0.1 defines engagement as a HUMAN
-                    // interaction, and canTransition gates
-                    // Assigned_Not_Contacted → Under_Discussion on
-                    // engagedTouchpointCount >= 1. Letting a robot satisfy that
-                    // would silently change what Under_Discussion certifies.
+                    // interaction, and is_engaged is what the touched/engaged
+                    // reporting counts. Letting a robot set it would silently
+                    // change what those figures certify.
                     isEngaged: false,
                     remarks: buildRemarks(input, connected),
                     // "api" means an external system called US; we called the
