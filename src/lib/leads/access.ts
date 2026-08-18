@@ -96,11 +96,68 @@ export const LEAD_ASSIGNEE_ROLES = [
   "sales_head",
 ] as const;
 
+/**
+ * Roles that may REVIEW an AI call and OVERRIDE its intent band — open the
+ * transcript, play or attach a recording, and correct Qualified/Warm/Cold/
+ * Disqualified.
+ *
+ * ⚠ This list is the ONLY gate on the override. Correcting a band now writes
+ * through to dealer_leads.intent_band and final_intent_score, so it moves the
+ * lead in every queue, filter and dashboard — it is a mutation, not a comment.
+ * Before E-250 the feedback route had NO role check on POST and no auth check
+ * at all on GET, and middleware early-exits on every /api path
+ * (src/middleware.ts), so any signed-in user of any role could write to it.
+ * Enforcing this list on both handlers is what actually closes that.
+ *
+ * Membership rationale:
+ *   admin, ceo, sales_head, asm  — the reviewers this was built for; each
+ *                                  already reaches the lead-detail screen where
+ *                                  the panel lives
+ *   inside_sales_rep             — THE "sales insight" persona. Note the trap:
+ *                                  a separate `sales_insight` role also exists
+ *                                  (middleware roleDashboards, its own
+ *                                  /sales-insight dashboard), but it is held by
+ *                                  NO user on either database — the people the
+ *                                  team calls "sales insight" sign in as
+ *                                  inside_sales_rep. Reading the role name
+ *                                  literally gates the feature to nobody.
+ *
+ * Deliberately NARROWER than LEADS_PAGE_ROLES: business_head, sales_manager,
+ * sales_executive and finance_controller can read the leads list but have no
+ * reason to retrain the scoring model.
+ */
+export const INTENT_REVIEW_ROLES = [
+  "admin",
+  "ceo",
+  "sales_head",
+  "asm",
+  "inside_sales_rep",
+] as const;
+
+/**
+ * Roles that may promote a correction into the extraction prompt — the
+ * /admin/ai-intent console.
+ *
+ * Kept to the three oversight roles on purpose. A promoted example is a
+ * few-shot the LLM reads on EVERY subsequent call, so one careless promotion
+ * degrades scoring for the whole pipeline. That is the entire reason the
+ * learning loop is curated rather than automatic: everyone in
+ * INTENT_REVIEW_ROLES can teach by correcting, but only these three decide
+ * which corrections become instructions.
+ *
+ * ⚠ Must stay a subset of the roles middleware admits to "/admin"
+ * (sharedRouteAccess: admin, sales_head, ceo). Adding a role here that
+ * middleware bounces would render a console the user can never reach.
+ */
+export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head"] as const;
+
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
   canBulkAct: boolean;
   canSendToNeodove: boolean;
   canSeeCostAnalytics: boolean;
+  canReviewIntent: boolean;
+  canCurateIntent: boolean;
 };
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
@@ -129,6 +186,8 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canBulkAct: (LEADS_BULK_ROLES as readonly string[]).includes(r),
     canSendToNeodove: NEODOVE_ROLES.includes(r),
     canSeeCostAnalytics: COST_ANALYTICS_ROLES.includes(r),
+    canReviewIntent: (INTENT_REVIEW_ROLES as readonly string[]).includes(r),
+    canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
   };
 }
 
@@ -138,4 +197,6 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canBulkAct: false,
   canSendToNeodove: false,
   canSeeCostAnalytics: false,
+  canReviewIntent: false,
+  canCurateIntent: false,
 };

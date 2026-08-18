@@ -851,3 +851,96 @@ export async function startKycAutoApprovalTicker() {
 
   console.log("[instrumentation] KYC auto-approval SLA sweep (60s) started in-process");
 }
+
+/**
+ * Drain the attached-recording transcription queue.
+ *
+ * WHY AN IN-PROCESS TICKER AND NOT BullMQ
+ *   The verdict is already recorded near the top of this file: BullMQ is dead
+ *   code here (no worker in production, a deliberately dormant one in sandbox,
+ *   callQueue.add() never called), and Vercel crons do not fire on the pm2 VPS.
+ *   A ticker is the only mechanism that demonstrably runs in BOTH environments.
+ *
+ * WHY THE INTERVAL IS SHORTER THAN THE OTHERS
+ *   Every other ticker here services background bookkeeping nobody is waiting
+ *   on. This one services a person who just uploaded a recording and is
+ *   watching a spinner. 15 seconds keeps that wait honest without meaningfully
+ *   adding load — the claim query is a partial-index probe that matches nothing
+ *   when the queue is empty, which is almost always.
+ */
+export async function startRecordingTranscriptionTicker() {
+  // A cron entry would own it on Vercel.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out. Worth having: transcription is the one ticker in this
+  // file that spends money per item, so an operator needs a way to stop it
+  // without a deploy.
+  if (process.env.ENABLE_RECORDING_TRANSCRIPTION === "0") return;
+
+  const TICK_INTERVAL_MS =
+    Number(process.env.RECORDING_TRANSCRIPTION_INTERVAL_MS || "") || 15_000;
+
+  let inFlight = false;
+  let tickCount = 0;
+
+  const tick = async () => {
+    // A 25 MB transcription can take the better part of a minute; without this
+    // the 15s interval would stack four concurrent batches on one slow file.
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runTranscriptionTick, reapStuckRecordings } = await import(
+        "@/lib/ai/transcription/recordingQueue"
+      );
+
+      // Free rows whose process died mid-transcription. Only occasionally —
+      // it is a full-predicate scan and a pm2 restart is a rare event, but
+      // without it a row killed mid-claim stays 'running' forever and shows
+      // the reviewer a spinner that never resolves.
+      if (tickCount % 20 === 0) {
+        const reaped = await reapStuckRecordings();
+        if (reaped > 0) {
+          console.log(
+            `[instrumentation:transcription] requeued ${reaped} interrupted recording(s)`,
+          );
+        }
+      }
+      tickCount += 1;
+
+      const processed = await runTranscriptionTick();
+
+      // Log only when something happened. An empty queue is the steady state
+      // and must not write a line every 15 seconds forever.
+      if (processed > 0) {
+        console.log(
+          `[instrumentation:transcription] processed ${processed} recording(s)`,
+        );
+      }
+    } catch (err) {
+      // Never let one bad tick kill the ticker. The likeliest cause by far is a
+      // database without E-250, where every tick throws "relation
+      // lead_call_recordings does not exist" — and everything else in the CRM,
+      // including the AI dialer, carries on unaffected.
+      console.error(
+        "[instrumentation:transcription] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered kickoff, after the scraper queue (135s) so boot is not a
+  // thundering herd. Nothing here is urgent to the second on startup.
+  const kickoff = setTimeout(tick, 150_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] recording transcription (${Math.round(
+      TICK_INTERVAL_MS / 1000,
+    )}s) started in-process`,
+  );
+}

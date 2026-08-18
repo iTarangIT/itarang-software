@@ -13,9 +13,21 @@ import {
   DISQUALIFIERS,
 } from "@/lib/ai/scoring";
 import { renderCalibrationExamples } from "./calibrationExamples";
+import { loadActiveCalibrationExamples } from "./calibrationStore";
+import { EXTRACTION_VERSION } from "@/lib/ai/scoring/version";
 
 export type ExtractionResult =
-  | { status: "ok"; signals: QualificationSignals }
+  | {
+      status: "ok";
+      signals: QualificationSignals;
+      // WHICH prompt produced these signals. EXTRACTION_VERSION alone no longer
+      // identifies it: since E-250 the calibration examples live in the DB and
+      // can change without a deploy, so two calls can share a version and have
+      // been read by different examples. The hash closes that gap and is
+      // persisted on ai_call_logs so a past score stays reproducible.
+      extractionVersion: string;
+      calibrationSetHash: string;
+    }
   | { status: "failed"; reason: string };
 
 function cleanJSON(text: string) {
@@ -23,7 +35,11 @@ function cleanJSON(text: string) {
   return match ? match[0] : "";
 }
 
-function buildPrompt(transcript: string, now: string): string {
+function buildPrompt(
+  transcript: string,
+  now: string,
+  calibrationBlock: string,
+): string {
   return `You are analysing a transcript of an outbound sales call between iTarang's
 AI agent ("Priya") and a battery dealer. The agent pitched EV / lithium-ion
 batteries and an EMI financing scheme to e-rickshaw / EV battery dealers across
@@ -105,13 +121,22 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "language": "hindi" | "english" | "hinglish" | "unknown",
   "call_summary": "..."
 }
-${renderCalibrationExamples()}
+${calibrationBlock}
 Return ONLY the JSON object.`;
 }
 
 export async function extractSignals(transcript: string): Promise<ExtractionResult> {
   const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-  const prompt = buildPrompt(transcript, now);
+
+  // The active few-shot set: the built-in seed plus any admin-promoted
+  // examples. Never throws — a DB problem degrades to the seed set rather than
+  // failing the extraction.
+  const calibration = await loadActiveCalibrationExamples();
+  const prompt = buildPrompt(
+    transcript,
+    now,
+    renderCalibrationExamples(calibration.examples),
+  );
 
   const MAX_RETRIES = 3;
 
@@ -186,7 +211,12 @@ export async function extractSignals(transcript: string): Promise<ExtractionResu
         return { status: "failed", reason: "schema_validation_error" };
       }
 
-      return { status: "ok", signals: parsed.data };
+      return {
+        status: "ok",
+        signals: parsed.data,
+        extractionVersion: EXTRACTION_VERSION,
+        calibrationSetHash: calibration.hash,
+      };
     } catch (err) {
       console.error(`[OPENAI] API error (attempt ${attempt}/${MAX_RETRIES}):`, err);
       if (attempt < MAX_RETRIES) {

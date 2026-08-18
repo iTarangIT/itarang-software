@@ -23,6 +23,7 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import { readIntentProvenance } from "@/lib/leads/intentOverride";
 
 type LatestCallRow = {
   call_id: string | null;
@@ -107,6 +108,9 @@ export const GET = withErrorHandler(
 
     const row = rowsOf<LatestCallRow>(result)[0];
 
+    // Never throws — falls back to { source: 'ai' } on an unapplied E-250.
+    const provenance = await readIntentProvenance(id);
+
     if (!row) {
       return successResponse({
         hasAiCall: false,
@@ -114,6 +118,7 @@ export const GET = withErrorHandler(
         connectedAttemptCount: 0,
         connected: false,
         latest: null,
+        provenance,
       });
     }
 
@@ -150,6 +155,12 @@ export const GET = withErrorHandler(
         campaignId: row.campaign_id,
         campaignName: row.campaign_name,
       },
+      // E-250 — is the lead's LIVE band the AI's or a human's? The `latest`
+      // block above describes the CALL and always reports what the AI
+      // concluded; after an override the lead routes on something else, and a
+      // panel that shows one without the other is how a corrected lead turns
+      // into a support ticket. Degrades to 'ai' when E-250 is unapplied.
+      provenance,
     });
   },
 );

@@ -22,6 +22,7 @@ import {
   Battery,
   Wrench,
   CreditCard,
+  GraduationCap,
   Megaphone,
   Shield,
   TrendingUp,
@@ -437,6 +438,20 @@ const roleNavigation: Record<string, any[]> = {
           href: "/leads",
         },
         {
+          id: "sh-ai-intent",
+          label: "AI Intent Learning",
+          icon: GraduationCap,
+          href: "/admin/ai-intent",
+        },
+        {
+          id: "sh-ai-campaigns",
+          label: "AI Campaigns",
+          icon: Megaphone,
+          href: "/sales-head/campaigns",
+          // Not `exact` — the detail route /sales-head/campaigns/[id] must
+          // keep this item lit, same as the ASM twin.
+        },
+        {
           id: "sh-escalations",
           label: "Escalations",
           icon: AlertTriangle,
@@ -780,6 +795,15 @@ const roleNavigation: Record<string, any[]> = {
           label: "Notifications",
           icon: Bell,
           href: "/admin/settings",
+        },
+        {
+          // E-250 — where AI-call corrections become model instructions.
+          // Curator-only (admin / ceo / sales_head), unlike the correcting
+          // itself, which every reviewer role can do from a lead.
+          id: "admin-ai-intent",
+          label: "AI Intent Learning",
+          icon: GraduationCap,
+          href: "/admin/ai-intent",
         },
         {
           // E-246 — own entry, not a tab. See the sales_head block above.
