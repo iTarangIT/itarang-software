@@ -19,7 +19,11 @@ import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleCall } from "@/lib/queue/scheduler";
-import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
+import {
+  appendSalesCallLog,
+  appendCallReview,
+  callReviewSheetEnabled,
+} from "@/lib/google/sheet";
 import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
@@ -170,6 +174,11 @@ export async function finalizeBolnaCall(
             .limit(1);
           campaign = c[0]?.name ?? reviewCampaignId;
         }
+        // E-250 — the Campaign_Call_Review sheet is retired by default. The
+        // guard sits ABOVE rehostRecording because that call downloads the
+        // audio and re-uploads it purely so the sheet has a playable link;
+        // with the sheet off, that is a wasted round-trip on every call.
+        if (!callReviewSheetEnabled()) return;
         const playableUrl = await rehostRecording({
           provider: "bolna",
           callId,
@@ -299,6 +308,8 @@ export async function finalizeBolnaCall(
       intentReason: null,
       nextAction: "auto_retry",
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       band: null,
@@ -366,6 +377,8 @@ export async function finalizeBolnaCall(
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       hardNegative,
     },
   );
@@ -416,6 +429,8 @@ export async function finalizeBolnaCall(
     intentReason: analysis.memory?.intent_summary ?? null,
     nextAction: action ?? null,
     scoringVersion: analysis.scoring_version,
+    extractionVersion: analysis.extraction_version,
+    calibrationSetHash: analysis.calibration_set_hash,
     signals: analysis.signals,
     scoreBreakdown: analysis.score_breakdown,
     band: analysis.band,
@@ -505,6 +520,8 @@ export async function finalizeBolnaCall(
         .limit(1);
       campaign = c[0]?.name ?? reviewCampaignId;
     }
+    // E-250 — see the note on the sibling closure above.
+    if (!callReviewSheetEnabled()) return;
     const playableUrl = await rehostRecording({
       provider: "bolna",
       callId,
@@ -591,6 +608,12 @@ async function upsertAiCallLog(opts: {
   intentReason: string | null;
   nextAction: string | null;
   scoringVersion?: string | null;
+  // E-250 — which PROMPT read the transcript, alongside which band rule scored
+  // it. The hash is required because the calibration set now lives in the DB
+  // and changes without a deploy, so EXTRACTION_VERSION alone stops identifying
+  // the prompt that produced these signals.
+  extractionVersion?: string | null;
+  calibrationSetHash?: string | null;
   signals?: unknown;
   scoreBreakdown?: unknown;
   band?: string | null;
@@ -621,6 +644,8 @@ async function upsertAiCallLog(opts: {
           intent_reason: opts.intentReason,
           next_action: opts.nextAction,
           scoring_version: opts.scoringVersion ?? null,
+          extraction_version: opts.extractionVersion ?? null,
+          calibration_set_hash: opts.calibrationSetHash ?? null,
           signals: opts.signals ?? null,
           score_breakdown: opts.scoreBreakdown ?? null,
           band: opts.band ?? null,
@@ -649,6 +674,8 @@ async function upsertAiCallLog(opts: {
       intent_reason: opts.intentReason,
       next_action: opts.nextAction,
       scoring_version: opts.scoringVersion ?? null,
+      extraction_version: opts.extractionVersion ?? null,
+      calibration_set_hash: opts.calibrationSetHash ?? null,
       signals: opts.signals ?? null,
       score_breakdown: opts.scoreBreakdown ?? null,
       band: opts.band ?? null,

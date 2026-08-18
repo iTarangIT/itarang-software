@@ -160,7 +160,55 @@ const OUTCOME_STYLES: Record<string, { bg: string; text: string; label: string }
   },
 };
 
-export function CampaignOutcomeBadge({ outcome }: { outcome: string | null }) {
+export function CampaignOutcomeBadge({
+  outcome,
+  failureReason,
+}: {
+  outcome: string | null;
+  /**
+   * The derived reason this call produced no conversation, from
+   * src/lib/ai-dialer/failureReason.ts. When present it REPLACES the raw
+   * outcome chip: "Trigger failed" was covering a busy line, a voicemail, a
+   * silent call and — in the largest bucket by far — our own dialer
+   * misconfiguration, all under one word.
+   */
+  failureReason?: {
+    code: string;
+    label: string;
+    hint: string;
+    detail: string | null;
+    retryable: boolean;
+    ourFault: boolean;
+  } | null;
+}) {
+  if (failureReason) {
+    // Our own fault gets its own colour. Amber rather than red because the row
+    // is not a bad lead — it is a broken dialer, and it should not be read as
+    // "this dealer is unreachable".
+    const tone = failureReason.ourFault
+      ? "bg-amber-50 text-amber-800 border border-amber-200"
+      : failureReason.retryable
+        ? "bg-rose-50 text-rose-700"
+        : "bg-zinc-100 text-zinc-600";
+    const title = [
+      failureReason.hint,
+      failureReason.detail ? `
+
+Provider said: ${failureReason.detail}` : "",
+    ]
+      .join("")
+      .trim();
+    return (
+      <span
+        title={title}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium cursor-help ${tone}`}
+      >
+        {failureReason.label}
+        {failureReason.detail ? " ⓘ" : ""}
+      </span>
+    );
+  }
+
   if (!outcome) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-500">

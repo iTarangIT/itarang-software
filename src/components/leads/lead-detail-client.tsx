@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { IntentReviewCard } from "@/components/leads/intent-review/IntentReviewCard";
 import {
   Phone,
   TrendingUp,
@@ -460,6 +461,10 @@ export function LeadDetailClient({ calls, lead }: Props) {
   return (
     <div className="space-y-4">
       <SummaryBlock calls={calls} />
+      {/* What the AI extracted on the latest call — the same panel the campaign
+          drawer renders, so the two cannot drift. Renders nothing when the AI
+          has never called this lead. */}
+      <IntentReviewCard leadId={lead.id} />
       <OverallSummary calls={calls} lead={lead} />
       <CallHistory calls={calls} />
     </div>
