@@ -29,6 +29,8 @@ const QuerySchema = z.object({
     // dropped: "leads NOT with the calling team" is not a question anyone asks,
     // and an absent param already means "all".
     neodove: z.literal("1").optional(),
+    // Leads who asked to be called back — the AI cannot, so they need a person.
+    callback: z.literal("1").optional(),
 });
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -40,8 +42,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         limit: url.searchParams.get("limit") ?? undefined,
         q: url.searchParams.get("q") ?? undefined,
         neodove: url.searchParams.get("neodove") ?? undefined,
+        callback: url.searchParams.get("callback") ?? undefined,
     });
     const neodoveOnly = parsed.neodove === "1";
+    const callbackOnly = parsed.callback === "1";
 
     const [rows, total] = await Promise.all([
         fetchQueueRows({
@@ -51,12 +55,14 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             limit: parsed.limit,
             q: parsed.q ?? null,
             neodoveOnly,
+            callbackOnly,
         }),
         countQueueRows({
             tab: parsed.tab,
             userId: user.id,
             q: parsed.q ?? null,
             neodoveOnly,
+            callbackOnly,
         }),
     ]);
 
