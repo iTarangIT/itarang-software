@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AiSignalsCard } from "@/components/leads/AiSignalsCard";
 import {
     ChevronDown,
     User2,
@@ -53,6 +54,12 @@ export function LeadDetailRightPane({ bundle }: Props) {
     return (
         <div className="overflow-y-auto bg-gray-50/30">
             <div className="px-5 py-4 space-y-3">
+                {/* Always visible, not behind a collapsible group: burying what
+                    the AI already learned inside a closed accordion is how it
+                    stayed invisible to the rep who has to act on it. Renders
+                    nothing when the AI has never called this lead. */}
+                <AiSignalsCard leadId={lead.id} />
+
                 {GROUPS.map((g) => {
                     const Icon = g.icon;
                     const isOpen = open[g.key];
