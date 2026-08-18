@@ -67,7 +67,21 @@ export const OFF_CACHE_MS = 6 * 60 * 60 * 1000;
  * localStorage and NOT sessionStorage: sessionStorage is per-tab, so one person
  * with three tabs would be counted as three concurrent sessions.
  */
-export const LS_SESSION = "itarang.usage.sid.v1";
+/**
+ * v2 because the stored shape gained `uid` — the id of the signed-in user the
+ * session belongs to. See the versioning note above: this is a rename, not a
+ * migration, and a stale v1 value is simply never read again.
+ *
+ * WHY THE SHAPE CHANGED. localStorage is per-ORIGIN, so a session id minted for
+ * one account survived a logout and was reused by the next person to sign in on
+ * that browser. Two things then went wrong at once: the module rows recorded
+ * against that id could no longer be traced to the account that produced them,
+ * and recordHeartbeat's `WHERE user_id = EXCLUDED.user_id` guard silently
+ * dropped the second user's session entirely — no update, and no INSERT either,
+ * because the conflict had already fired. Storing the owner alongside the id is
+ * what lets currentSession() notice and mint a fresh one.
+ */
+export const LS_SESSION = "itarang.usage.sid.v2";
 export const LS_LAST_ACTIVE = "itarang.usage.last.v1";
 export const LS_LEADER = "itarang.usage.leader.v1";
 export const LS_OFF_UNTIL = "itarang.usage.off.v1";

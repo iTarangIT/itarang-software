@@ -51,19 +51,40 @@ export async function recordUsageView(params: {
   days: number;
   /** Where it was read from — the page or the JSON API. */
   surface: "page" | "api";
+  /**
+   * The module whose per-user breakdown was opened (E-216), if any.
+   *
+   * Recorded because that drill-down names individuals. Before E-216 the module
+   * table was aggregate and deliberately unaudited (see the note above); the
+   * moment it can say "Anirudh was in sales-head" it belongs in the same trail
+   * as the login history.
+   *
+   * It also widens the dedupe key: reading two different modules in one hour is
+   * two distinct things to have looked at, and collapsing them into one row
+   * would hide the second.
+   */
+  module?: string | null;
 }): Promise<void> {
   const entityId = params.subjectId ?? "all";
+  // Distinct entity_id per module so the hourly dedupe does not swallow a
+  // second module's view, while the plain per-person view keeps its existing
+  // 'all' / user-id key and its existing rows stay comparable.
+  const auditKey = params.module ? `${entityId}:module:${params.module}` : entityId;
 
   try {
     const id = await generateId("AUDIT");
     await db.execute(sql`
       INSERT INTO audit_logs (id, entity_type, entity_id, action, performed_by, new_data)
-      SELECT ${id}, ${ENTITY_TYPE}, ${entityId}, 'view', ${params.viewerId}::uuid,
-             ${JSON.stringify({ days: params.days, surface: params.surface })}::jsonb
+      SELECT ${id}, ${ENTITY_TYPE}, ${auditKey}, 'view', ${params.viewerId}::uuid,
+             ${JSON.stringify({
+               days: params.days,
+               surface: params.surface,
+               ...(params.module ? { module: params.module } : {}),
+             })}::jsonb
       WHERE NOT EXISTS (
         SELECT 1 FROM audit_logs
         WHERE entity_type = ${ENTITY_TYPE}
-          AND entity_id   = ${entityId}
+          AND entity_id   = ${auditKey}
           AND performed_by = ${params.viewerId}::uuid
           AND created_at  > NOW() - INTERVAL '1 hour'
       )

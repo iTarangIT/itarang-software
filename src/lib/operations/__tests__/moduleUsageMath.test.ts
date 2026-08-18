@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   MODULE_LABELS,
   moduleLabel,
+  rollUpModuleDetail,
+  rollUpModuleUsers,
   rollUpModules,
+  type ModuleDayRaw,
   type ModuleUsageRaw,
+  type ModuleUserRaw,
 } from "../moduleUsageMath";
 import {
   MODULES,
@@ -223,5 +227,167 @@ describe("labels", () => {
   it("falls back to the raw value for an unknown module", () => {
     // A label map miss must not render "undefined" in the table.
     expect(moduleLabel("brand-new-module")).toBe("brand-new-module");
+  });
+});
+
+describe("rollUpModuleDetail", () => {
+  const day = (
+    day: string,
+    role_bucket: string,
+    pings: number,
+    sessions: number,
+  ): ModuleDayRaw => ({ day, role_bucket, pings, sessions });
+
+  it("merges both buckets of one day into a single row", () => {
+    const d = rollUpModuleDetail("dealer-portal", [
+      day("2026-08-17", "internal", 3, 1),
+      day("2026-08-17", "external", 5, 2),
+    ]);
+
+    expect(d.days).toHaveLength(1);
+    expect(d.days[0]!.pings).toBe(8);
+    expect(d.days[0]!.sessions).toBe(3);
+    expect(d.days[0]!.internal_sessions).toBe(1);
+    expect(d.days[0]!.external_sessions).toBe(2);
+  });
+
+  it("returns days oldest-first regardless of input order", () => {
+    // The chart draws a left-to-right time axis; unsorted input would render
+    // the month backwards without any error to notice.
+    const d = rollUpModuleDetail("asm", [
+      day("2026-08-17", "internal", 1, 1),
+      day("2026-08-11", "internal", 1, 1),
+      day("2026-08-14", "internal", 1, 1),
+    ]);
+    expect(d.days.map((p) => p.day)).toEqual([
+      "2026-08-11",
+      "2026-08-14",
+      "2026-08-17",
+    ]);
+    expect(d.first_day).toBe("2026-08-11");
+    expect(d.last_day).toBe("2026-08-17");
+  });
+
+  it("leaves gaps unfilled — this is a table of days that had activity", () => {
+    // Deliberately unlike fillLoginDays(): inventing 27 empty rows would bury
+    // the three days that carried anything.
+    const d = rollUpModuleDetail("ceo", [
+      day("2026-08-11", "internal", 2, 1),
+      day("2026-08-17", "internal", 2, 1),
+    ]);
+    expect(d.days).toHaveLength(2);
+  });
+
+  it("sums the per-day minutes to the header figure", () => {
+    // Deriving each row from its own pings and the header from the total keeps
+    // the column adding up instead of drifting by a rounding step per row.
+    const d = rollUpModuleDetail("nbfc", [
+      day("2026-08-16", "internal", 3, 1),
+      day("2026-08-17", "internal", 4, 1),
+    ]);
+    expect(d.minutes).toBe(35);
+    expect(d.days.reduce((t, p) => t + p.minutes, 0)).toBe(35);
+  });
+
+  it("reports an unused module as empty rather than throwing", () => {
+    const d = rollUpModuleDetail("sales-head", []);
+    expect(d.empty).toBe(true);
+    expect(d.days).toEqual([]);
+    expect(d.sessions).toBe(0);
+    expect(d.minutes).toBe(0);
+    expect(d.first_day).toBeNull();
+    expect(d.last_day).toBeNull();
+    expect(d.label).toBe("Sales Head");
+  });
+
+  it("survives a non-finite counter without poisoning every total", () => {
+    // One bad row must not turn the whole card into "—", which reads as an
+    // outage rather than as a single corrupt value.
+    const d = rollUpModuleDetail("asm", [
+      day("2026-08-17", "internal", Number.NaN, 1),
+      day("2026-08-17", "internal", 4, Number.POSITIVE_INFINITY),
+    ]);
+    expect(Number.isFinite(d.pings)).toBe(true);
+    expect(Number.isFinite(d.minutes)).toBe(true);
+    expect(d.pings).toBe(4);
+    expect(d.sessions).toBe(1);
+  });
+
+  it("carries the module through even when it is not on the allow-list", () => {
+    // 'other' is drillable, and a module retired from MODULES still has rows.
+    expect(rollUpModuleDetail(MODULE_OTHER, []).module).toBe(MODULE_OTHER);
+    expect(rollUpModuleDetail(MODULE_OTHER, []).label).toBe("Other / untracked");
+  });
+});
+
+describe("rollUpModuleUsers", () => {
+  const user = (
+    over: Partial<ModuleUserRaw> & { user_id: string },
+  ): ModuleUserRaw => ({
+    name: "Someone",
+    role_at_ping: "sales_head",
+    role_bucket: "internal",
+    pings: 1,
+    sessions: 1,
+    last_day: "2026-08-17",
+    days_active: 1,
+    ...over,
+  });
+
+  it("names nobody when E-216 has recorded nobody", () => {
+    // THE property that matters most: an empty result must stay empty. Inferring
+    // a person from a session is what module_visit_keys would do, and it was
+    // wrong for every row tested on live data.
+    expect(rollUpModuleUsers([])).toEqual([]);
+  });
+
+  it("orders by usage, breaking ties by name for a stable table", () => {
+    const rows = rollUpModuleUsers([
+      user({ user_id: "a", name: "Zoe", pings: 2 }),
+      user({ user_id: "b", name: "Anirudh", pings: 9 }),
+      user({ user_id: "c", name: "Nidhi", pings: 2 }),
+    ]);
+    expect(rows.map((r) => r.name)).toEqual(["Anirudh", "Nidhi", "Zoe"]);
+  });
+
+  it("converts pings to minutes at the heartbeat rate", () => {
+    const [row] = rollUpModuleUsers([user({ user_id: "a", pings: 7 })]);
+    expect(row!.minutes).toBe(35);
+  });
+
+  it("keeps external accounts external", () => {
+    // Dealers and NBFC partners must never be re-labelled internal by a read
+    // path — the bucket was decided at ping time and is stored, not re-derived.
+    const [row] = rollUpModuleUsers([
+      user({ user_id: "d", role_at_ping: "dealer", role_bucket: "external" }),
+    ]);
+    expect(row!.bucket).toBe("external");
+    expect(row!.role).toBe("dealer");
+  });
+
+  it("treats any unrecognised bucket as internal rather than dropping the row", () => {
+    const [row] = rollUpModuleUsers([
+      user({ user_id: "x", role_bucket: "" }),
+    ]);
+    expect(row!.bucket).toBe("internal");
+  });
+
+  it("renders a missing name or role as 'unknown', never blank", () => {
+    // An auth user with no `users` row is real (one exists in the live data).
+    // A nameless row the reader cannot act on is worse than an explicit unknown.
+    const [row] = rollUpModuleUsers([
+      user({ user_id: "n", name: "  ", role_at_ping: null }),
+    ]);
+    expect(row!.name).toBe("unknown");
+    expect(row!.role).toBe("unknown");
+  });
+
+  it("survives non-finite counters without poisoning the row", () => {
+    const [row] = rollUpModuleUsers([
+      user({ user_id: "a", pings: Number.NaN, sessions: Number.NaN }),
+    ]);
+    expect(row!.pings).toBe(0);
+    expect(row!.sessions).toBe(0);
+    expect(Number.isFinite(row!.minutes)).toBe(true);
   });
 });

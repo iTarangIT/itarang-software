@@ -21,7 +21,14 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { usageHeartbeatEnabled } from "@/lib/usage/track";
 
-import { getModuleUsage, type ModuleUsageView } from "./moduleUsage";
+import {
+  getModuleDetail,
+  getModuleUsage,
+  getModuleUsers,
+  type ModuleDetailView,
+  type ModuleUsageView,
+  type ModuleUsersView,
+} from "./moduleUsage";
 import { getMetric, type MetricDef } from "./registry";
 import { bySourceKey, latestSamples, seriesFor, type SeriesPoint } from "./samples";
 import { MAX_USAGE_ROWS, type UsageFilters } from "./usageMath";
@@ -111,6 +118,23 @@ export interface UsageView {
    * as company-wide so that is not read as a bug.
    */
   modules: ModuleUsageView;
+  /**
+   * The selected module's day-by-day breakdown, or null when none is selected.
+   *
+   * Null rather than an empty detail so the page can tell "nothing chosen" from
+   * "chosen, and nobody used it" — the same distinction `never_seen` draws in
+   * the summary table, and for the same reason.
+   */
+  module_detail: ModuleDetailView | null;
+  /**
+   * Who used the selected module (E-216), or null when none is selected.
+   *
+   * The ONLY per-person module data on this page. Its presence is what makes the
+   * drill-down an audited surface — see recordUsageView in the page and the API
+   * route. Null and empty mean different things: null is "no module chosen",
+   * empty is "chosen, and E-216 has recorded nobody on it yet".
+   */
+  module_users: ModuleUsersView | null;
   /** Distinct people who entered a credential in the window. */
   people_in_window: number;
   logins_in_window: number;
@@ -141,6 +165,8 @@ export async function getUsageView(
     historyRows,
     sessionRows,
     modules,
+    moduleDetail,
+    moduleUsers,
   ] = await Promise.all([
       // 48 hours, matching the other module views: the collector runs every 15
       // minutes, so a 24h window would still show a number after a long outage
@@ -214,6 +240,20 @@ export async function getUsageView(
       // never rejects, so an unapplied E-215 cannot turn this whole page into an
       // error card; it reports `unavailable` and the page says so.
       getModuleUsage(days),
+
+      // Only when a module is actually selected — the default page must not pay
+      // for a drill-down nobody opened. Resolves to null otherwise, which is the
+      // "nothing chosen" state the page distinguishes from an empty result.
+      filters.module
+        ? getModuleDetail(filters.module, days)
+        : Promise.resolve(null),
+
+      // Same condition, deliberately a separate query rather than a join: the
+      // aggregate detail must still render if E-216 is missing, and joining
+      // them would let one absent table blank the other.
+      filters.module
+        ? getModuleUsers(filters.module, days)
+        : Promise.resolve(null),
     ]);
 
   const index = bySourceKey(samples);
@@ -272,6 +312,8 @@ export async function getUsageView(
     heartbeat_enabled: usageHeartbeatEnabled(),
     login_trend: fillLoginDays(found, days),
     modules,
+    module_detail: moduleDetail,
+    module_users: moduleUsers,
     people_in_window: Number(totals?.people ?? 0),
     logins_in_window: Number(totals?.logins ?? 0),
     history,

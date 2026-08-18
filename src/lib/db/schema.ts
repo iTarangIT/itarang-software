@@ -9224,11 +9224,72 @@ export const moduleUsageDaily = pgTable(
 );
 
 /**
+ * E-216. Per-user module usage — grain (day, module, user_id).
+ *
+ * The per-person counterpart to moduleUsageDaily, which it does NOT replace:
+ * the aggregate is permanent, this is pruned to 30 days, so only the aggregate
+ * can answer a question about last quarter. Both are written by ONE statement in
+ * recordModuleUsage() so they cannot disagree.
+ *
+ * This reverses E-215's no-user_id design by explicit product decision — read
+ * the E-216 header before extending it. It is read-audited via recordUsageView()
+ * and pruned by runDailySnapshot(), matching the userActivitySessions
+ * conventions rather than the aggregate's.
+ *
+ * Storage parameters (fillfactor 70 + autovacuum tuning) are set by the
+ * migration and cannot be expressed in Drizzle — expected, not drift.
+ */
+export const moduleUsageUserDaily = pgTable(
+  "module_usage_user_daily",
+  {
+    /** IST, matching moduleUsageDaily so the two join on `day` directly. */
+    day: date().notNull(),
+    /** One of MODULES in src/lib/usage/constants.ts, or 'other'. */
+    module: varchar({ length: 32 }).notNull(),
+    /** No FK — same convention as auditLogs.performed_by. */
+    user_id: uuid("user_id").notNull(),
+    /** Role AT PING TIME, so a later promotion cannot rewrite history. */
+    role_at_ping: varchar("role_at_ping", { length: 48 }),
+    /** 'internal' | 'external', stored so it cannot drift from the aggregate. */
+    role_bucket: varchar("role_bucket", { length: 16 }).notNull(),
+    /** Heartbeats attributed to this person here. pings * 300 ≈ seconds. */
+    pings: integer().default(0).notNull(),
+    /** Distinct sessions, deduped via moduleVisitKeys. */
+    sessions: integer().default(0).notNull(),
+    /** Anchor for the 240s guard that E-215's write path lacked. */
+    last_ping_at: timestamp("last_ping_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.day, table.module, table.user_id] }),
+    dayIdx: index("module_usage_user_daily_day_idx").on(table.day),
+    moduleIdx: index("module_usage_user_daily_module_idx").on(
+      table.module,
+      table.day,
+    ),
+    userIdx: index("module_usage_user_daily_user_idx").on(
+      table.user_id,
+      table.day,
+    ),
+  }),
+);
+
+/**
  * E-215. Two-day dedupe behind moduleUsageDaily.sessions.
  *
  * Holds md5(session_id, module, day) and nothing else. Not anonymised — see the
  * "RESIDUAL EXPOSURE" note in the migration header before describing it as
  * such. Pruned by runDailySnapshot().
+ *
+ * NOT an attribution source. It resolves only to a session's owner, which on
+ * live data was wrong for every row tested — see the E-216 header.
  */
 export const moduleVisitKeys = pgTable(
   "module_visit_keys",
