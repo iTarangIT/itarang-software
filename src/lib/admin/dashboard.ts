@@ -74,8 +74,14 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                     (SELECT COUNT(*) FROM dealer_leads dl
                        WHERE dl.lead_status = 'New_Unassigned'
                          AND dl.is_active IS NOT FALSE ${lf}) AS unassigned_queue,
+                    -- performed_by IS NOT NULL keeps this a HUMAN-activity
+                    -- figure. The AI dialer now writes ai_call touchpoints with
+                    -- a null performer; without this filter the card would
+                    -- silently start counting "worked by a human OR the robot"
+                    -- while still sitting in a team-activity block.
                     (SELECT COUNT(DISTINCT t.dealer_lead_id) FROM lead_touchpoints t
-                       WHERE t.performed_at::date = CURRENT_DATE) AS leads_worked_today,
+                       WHERE t.performed_at::date = CURRENT_DATE
+                         AND t.performed_by IS NOT NULL) AS leads_worked_today,
                     (SELECT COUNT(*) FROM lead_escalations
                        WHERE status = 'pending_review') AS pending_escalations
             `),
@@ -111,6 +117,12 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                   AND NOT EXISTS (
                     SELECT 1 FROM lead_touchpoints t
                     WHERE t.dealer_lead_id = h.dealer_lead_id
+                      -- Only a HUMAN touchpoint discharges a human's logging
+                      -- duty. This KPI is the stated reason the single-writer
+                      -- invariant exists (see touchpoints/write.ts); letting an
+                      -- AI call that happened to land within the hour satisfy a
+                      -- rep's hygiene check would quietly weaken it.
+                      AND t.performed_by IS NOT NULL
                       AND t.performed_at BETWEEN h.changed_at - INTERVAL '1 hour'
                                              AND h.changed_at + INTERVAL '1 hour'
                   )
