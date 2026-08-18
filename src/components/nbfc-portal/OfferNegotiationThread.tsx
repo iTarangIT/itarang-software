@@ -53,7 +53,7 @@ const KIND_LABEL: Record<string, string> = {
   // `kind` stays 'counter' so pre-E-245 history renders under the same label.
   counter: "Negotiation request",
   fix: "Terms fixed",
-  close: "Deal closed",
+  close: "Loan product deleted",
 };
 
 /** "You" wherever the viewer is the party — an NBFC officer reading "NBFC asked" is odd. */
@@ -152,7 +152,7 @@ export default function OfferNegotiationThread({
                     )}
                     {r.kind === "close" && (
                       <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700">
-                        Closed
+                        Deleted
                       </span>
                     )}
                   </div>

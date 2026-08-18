@@ -3,26 +3,41 @@
 /**
  * E-039 — Post-auction settlement table (BRD §6.1.7)
  *
- * Renders the seller-tenant view of post-auction settlements. Each row shows
- * Lot ID, Final Price, Winner, Status, and last-updated timestamp. Allowed
- * status transitions (payment_pending → in_transit → delivered) are exposed
- * as an inline action button per row.
+ * The seller's view of what they have sold and where each sale has got to.
+ *
+ * WHAT CHANGED
+ *   The winner column used to read a single name resolved by an INNER JOIN on
+ *   `nbfc_tenants.id = winner_tenant_id`. Since the E-232 bidder re-point every
+ *   winner is a DEALER, and on a dealer win that column carries the SELLER's
+ *   tenant — so the column showed the seller their own name as the buyer, or
+ *   dropped the row entirely. The row now carries `winner_kind` and the dealer
+ *   id, and says which kind of party it is showing.
+ *
+ *   It also renders as cards below the auction theme's 60rem line instead of a
+ *   table in a horizontal scroller, and drops the `dark:` classes, which are
+ *   inert app-wide (globals.css maps the dark variant to a selector that never
+ *   matches).
  */
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { toast } from "sonner";
 
-export type SettlementStatus =
-  | "payment_pending"
-  | "in_transit"
-  | "delivered";
+export type SettlementStatus = "payment_pending" | "in_transit" | "delivered";
 
 export interface SettlementRow {
   id: string;
+  /** Kept as the display code the seller recognises, not the uuid. */
   lot_id: string;
+  lot_code?: string;
   final_price: number;
   winner_tenant_id: string;
+  winner_dealer_id?: string | null;
   winner_name: string;
+  winner_kind?: "dealer" | "nbfc";
   status: SettlementStatus;
   updated_at: string;
+  /** E-249. Present once money has actually been captured. */
+  paid_at?: string | null;
+  payment_ref?: string | null;
 }
 
 interface AuctionSettlementsTableProps {
@@ -36,9 +51,15 @@ const NEXT_STATUS: Record<SettlementStatus, SettlementStatus | null> = {
 };
 
 const STATUS_LABEL: Record<SettlementStatus, string> = {
-  payment_pending: "Payment Pending",
-  in_transit: "In Transit",
+  payment_pending: "Payment pending",
+  in_transit: "In transit",
   delivered: "Delivered",
+};
+
+const STATUS_TONE: Record<SettlementStatus, string> = {
+  payment_pending: "muted",
+  in_transit: "warn",
+  delivered: "live",
 };
 
 function fmtINR(n: number): string {
@@ -49,41 +70,48 @@ function fmtINR(n: number): string {
   }).format(n);
 }
 
+function fmtWhen(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("en-IN");
+}
+
 export function AuctionSettlementsTable({
   rows,
 }: AuctionSettlementsTableProps) {
   const [localRows, setLocalRows] = useState<SettlementRow[]>(rows);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+
+  // The page is a server component: a refresh hands down new rows and the local
+  // copy must follow, or an optimistic update from a previous render sticks.
+  useEffect(() => setLocalRows(rows), [rows]);
 
   async function advanceStatus(row: SettlementRow) {
     const next = NEXT_STATUS[row.status];
     if (!next) return;
     setPendingId(row.id);
-    setError(null);
     try {
       const res = await fetch(`/api/nbfc/auction/settlements/${row.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: next }),
       });
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
         throw new Error(body?.error ?? `HTTP ${res.status}`);
       }
-      const updated = await res.json();
       startTransition(() => {
         setLocalRows((prev) =>
           prev.map((r) =>
             r.id === row.id
-              ? { ...r, status: updated.status, updated_at: updated.updated_at }
+              ? { ...r, status: body.status, updated_at: body.updated_at }
               : r,
           ),
         );
       });
+      toast.success(`Marked ${STATUS_LABEL[next].toLowerCase()}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setPendingId(null);
     }
@@ -91,76 +119,86 @@ export function AuctionSettlementsTable({
 
   if (localRows.length === 0) {
     return (
-      <div className="bg-white dark:bg-slate-900 border border-dashed border-slate-300 rounded-lg p-12 text-center text-sm text-slate-500">
-        No settlements yet.
+      <div className="auction-sheet">
+        <div className="auc-empty">
+          <p>No settlements yet.</p>
+          <p className="auc-empty-hint">
+            A settlement opens automatically when a lot closes above its reserve
+            and the winning bid is approved.
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
-      {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800 text-left">
+    <div className="auction-sheet">
+      {/* Desktop: the ledger table. */}
+      <div className="auc-only-wide auc-scroll-x">
+        <table className="auc-table">
+          <thead>
             <tr>
-              <th className="px-3 py-2 font-medium">Lot ID</th>
-              <th className="px-3 py-2 font-medium">Final Price</th>
-              <th className="px-3 py-2 font-medium">Winner</th>
-              <th className="px-3 py-2 font-medium">Status</th>
-              <th className="px-3 py-2 font-medium">Updated</th>
-              <th className="px-3 py-2 font-medium text-right">Action</th>
+              <th>Lot</th>
+              <th className="auc-num">Final price</th>
+              <th>Winner</th>
+              <th>Status</th>
+              <th>Updated</th>
+              <th className="auc-num">Action</th>
             </tr>
           </thead>
           <tbody>
             {localRows.map((row) => {
               const next = NEXT_STATUS[row.status];
               return (
-                <tr
-                  key={row.id}
-                  className="border-t border-slate-200 dark:border-slate-700"
-                >
-                  <td className="px-3 py-2 font-mono text-xs">
-                    {row.lot_id.slice(0, 8)}…
+                <tr key={row.id}>
+                  <td>
+                    <span className="auc-lotcode">
+                      {row.lot_code ?? row.lot_id}
+                    </span>
                   </td>
-                  <td className="px-3 py-2">{fmtINR(row.final_price)}</td>
-                  <td className="px-3 py-2">
-                    {row.winner_name || row.winner_tenant_id.slice(0, 8)}
+                  <td className="auc-num">{fmtINR(row.final_price)}</td>
+                  <td>
+                    <div className="auc-winner">
+                      <span>{row.winner_name || "—"}</span>
+                      <span
+                        className="auc-chip"
+                        data-tone={
+                          row.winner_kind === "nbfc" ? "muted" : "live"
+                        }
+                      >
+                        {row.winner_kind === "nbfc" ? "NBFC" : "Dealer"}
+                      </span>
+                    </div>
                   </td>
-                  <td className="px-3 py-2">
+                  <td>
                     <span
-                      className={
-                        row.status === "delivered"
-                          ? "rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800"
-                          : row.status === "in_transit"
-                            ? "rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-800"
-                            : "rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700"
-                      }
+                      className="auc-chip"
+                      data-tone={STATUS_TONE[row.status]}
                     >
                       {STATUS_LABEL[row.status]}
                     </span>
+                    {row.paid_at ? (
+                      <div className="auc-subtle">
+                        paid {fmtWhen(row.paid_at)}
+                      </div>
+                    ) : null}
                   </td>
-                  <td className="px-3 py-2 text-slate-500">
-                    {new Date(row.updated_at).toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="auc-subtle">{fmtWhen(row.updated_at)}</td>
+                  <td className="auc-num">
                     {next ? (
                       <button
                         type="button"
+                        className="auc-btn"
+                        data-variant="ghost"
                         disabled={pendingId === row.id}
                         onClick={() => advanceStatus(row)}
-                        className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
                       >
                         {pendingId === row.id
                           ? "Updating…"
-                          : `Mark ${STATUS_LABEL[next]}`}
+                          : `Mark ${STATUS_LABEL[next].toLowerCase()}`}
                       </button>
                     ) : (
-                      <span className="text-xs text-slate-400">—</span>
+                      <span className="auc-subtle">—</span>
                     )}
                   </td>
                 </tr>
@@ -169,6 +207,65 @@ export function AuctionSettlementsTable({
           </tbody>
         </table>
       </div>
+
+      {/* Mobile: one card per settlement. A six-column ledger in a horizontal
+          scroller is unreadable on a phone. */}
+      <div className="auc-only-narrow auc-stack">
+        {localRows.map((row) => {
+          const next = NEXT_STATUS[row.status];
+          return (
+            <article key={row.id} className="auc-mini-card">
+              <header>
+                <span className="auc-lotcode">
+                  {row.lot_code ?? row.lot_id}
+                </span>
+                <span className="auc-chip" data-tone={STATUS_TONE[row.status]}>
+                  {STATUS_LABEL[row.status]}
+                </span>
+              </header>
+              <dl className="auc-dl">
+                <div>
+                  <dt>Final price</dt>
+                  <dd>{fmtINR(row.final_price)}</dd>
+                </div>
+                <div>
+                  <dt>Winner</dt>
+                  <dd>
+                    {row.winner_name || "—"}
+                    <span className="auc-subtle">
+                      {row.winner_kind === "nbfc" ? " · NBFC" : " · Dealer"}
+                    </span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Updated</dt>
+                  <dd>{fmtWhen(row.updated_at)}</dd>
+                </div>
+                {row.paid_at ? (
+                  <div>
+                    <dt>Paid</dt>
+                    <dd>{fmtWhen(row.paid_at)}</dd>
+                  </div>
+                ) : null}
+              </dl>
+              {next ? (
+                <button
+                  type="button"
+                  className="auc-btn"
+                  disabled={pendingId === row.id}
+                  onClick={() => advanceStatus(row)}
+                >
+                  {pendingId === row.id
+                    ? "Updating…"
+                    : `Mark ${STATUS_LABEL[next].toLowerCase()}`}
+                </button>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 }
+
+export default AuctionSettlementsTable;

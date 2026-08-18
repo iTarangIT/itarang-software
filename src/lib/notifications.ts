@@ -395,17 +395,19 @@ export async function notifyProductSelectionSubmitted(params: {
   leadId: string;
   productSelectionId: string;
   paymentMode: "cash" | "finance";
-  finalPrice: number | string;
+  /** Null on finance — the price is settled on Step 5, after the lender quotes. */
+  finalPrice: number | string | null;
 }) {
+  const at = params.finalPrice != null ? ` (₹${params.finalPrice})` : "";
   await notifyDealerForLead({
     leadId: params.leadId,
     type: params.paymentMode === "cash" ? "cash_sale_confirmed" : "product_selection_submitted",
-    title: params.paymentMode === "cash" ? "Sale Confirmed" : "Submitted for Final Approval",
+    title: params.paymentMode === "cash" ? "Sale Confirmed" : "Sent to NBFC",
     stage: "Step 4 · Product Selection",
     message:
       params.paymentMode === "cash"
         ? `Sale confirmed for ₹${params.finalPrice}. Warranty activated.`
-        : `Product selection submitted for final approval (₹${params.finalPrice}). Awaiting admin decision.`,
+        : `Application sent to the selected lender(s)${at}. Awaiting their offer.`,
     data: {
       product_selection_id: params.productSelectionId,
       payment_mode: params.paymentMode,

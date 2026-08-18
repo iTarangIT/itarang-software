@@ -11,12 +11,28 @@
 -- ends_at is computed from now() so a re-run after the demo lots have expired
 -- naturally extends them again only if the lot_code rows are deleted first.
 
-INSERT INTO auction_lots
-  (lot_code,        capacity,    avg_soh, age_months, quantity, base_price, bid_increment, ends_at,                  status)
-VALUES
-  ('DEMO-LOT-001',  '60V / 30Ah', 88.50,  14,         1,        28500.00,   500.00,        now() + interval '7 days', 'live'),
-  ('DEMO-LOT-002',  '48V / 24Ah', 82.10,  22,         1,        18200.00,   500.00,        now() + interval '3 days', 'live'),
-  ('DEMO-LOT-003',  '72V / 40Ah', 79.40,  18,         2,        46000.00,  1000.00,        now() + interval '1 day',  'live'),
-  ('DEMO-LOT-004',  '60V / 30Ah', 74.20,  28,         1,        14800.00,   250.00,        now() + interval '12 hours','live'),
-  ('DEMO-LOT-005',  '48V / 20Ah', 91.30,  9,          3,        51000.00,  1000.00,        now() + interval '5 days', 'live')
-ON CONFLICT (lot_code) DO NOTHING;
+-- ---------------------------------------------------------------------------
+-- RETIRED 2026-08-18 — this seed is now a no-op. Do not re-enable.
+--
+-- E-250 deleted DEMO-LOT-001..005 and every row hanging off them. By then all
+-- five were `status='ended'`, expired between 23 and 30 May 2026, and held zero
+-- `auction_lot_items` — while still costing the scheduler an error on every
+-- tick ("closed with a winning bid but NO settlement", because they predate
+-- E-232 and carry no seller_tenant_id).
+--
+-- The INSERT below is commented out rather than the file deleted, so the
+-- migration folder still replays in order and the history of why these rows
+-- existed stays readable. Re-enabling it would reintroduce lots with no
+-- seller, no visibility, no audience and windows that breach the 48-hour
+-- maximum publishLot() enforces. The composer produces real lots now; use it.
+-- ---------------------------------------------------------------------------
+
+-- INSERT INTO auction_lots
+--   (lot_code,        capacity,    avg_soh, age_months, quantity, base_price, bid_increment, ends_at,                  status)
+-- VALUES
+--   ('DEMO-LOT-001',  '60V / 30Ah', 88.50,  14,         1,        28500.00,   500.00,        now() + interval '7 days', 'live'),
+--   ('DEMO-LOT-002',  '48V / 24Ah', 82.10,  22,         1,        18200.00,   500.00,        now() + interval '3 days', 'live'),
+--   ('DEMO-LOT-003',  '72V / 40Ah', 79.40,  18,         2,        46000.00,  1000.00,        now() + interval '1 day',  'live'),
+--   ('DEMO-LOT-004',  '60V / 30Ah', 74.20,  28,         1,        14800.00,   250.00,        now() + interval '12 hours','live'),
+--   ('DEMO-LOT-005',  '48V / 20Ah', 91.30,  9,          3,        51000.00,  1000.00,        now() + interval '5 days', 'live')
+-- ON CONFLICT (lot_code) DO NOTHING;

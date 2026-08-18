@@ -526,6 +526,16 @@ const roleNavigation: Record<string, any[]> = {
           icon: Gavel,
           href: "/admin/nbfc/auction",
         },
+        // BRD §19-adjacent: sell-through, realisation, and the scheduler health
+        // card. That ticker is the only thing that closes an auction and it has
+        // no other surface — if it stops, bidding runs past every deadline and
+        // nothing says so.
+        {
+          id: "nbfc-auction-analytics",
+          label: "Auction Performance",
+          icon: Gavel,
+          href: "/admin/nbfc/auction/analytics",
+        },
         {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",
@@ -1390,6 +1400,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Bids",
           icon: Gavel,
           href: "/dealer-portal/auctions/my-bids",
+        },
+        {
+          // The buyer's half of a settlement. Winning a lot used to be a dead
+          // end: "My Bids" said "won" and there was nowhere to pay.
+          id: "auction-purchases",
+          label: "Purchases",
+          icon: Gavel,
+          href: "/dealer-portal/auctions/purchases",
         },
       ],
     },

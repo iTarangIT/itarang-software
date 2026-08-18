@@ -245,7 +245,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
         {decided
           ? "The customer has selected a financing partner. The winning NBFC is now running E-NACH and agreement signing."
           : anyOffer
-            ? "Compare the firm offers below with the customer. Send a message to ask a lender to revise its terms, select the winning lender — the others will be marked Not Selected — or close the deal to drop a lender and pick another."
+            ? "Compare the firm offers below with the customer. Send a message to ask a lender to revise its terms, select the winning lender — the others will be marked Not Selected — or delete the loan product to drop a lender and pick another."
             : "Waiting for the selected NBFCs to submit firm offers. This updates as offers arrive."}
       </p>
 
@@ -286,7 +286,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
                 {isWinner && <span className="text-[10px] font-bold uppercase text-emerald-700">Selected</span>}
                 {isClosed && (
                   <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase text-red-700">
-                    Deal closed
+                    Product deleted
                   </span>
                 )}
                 {isLoser && !isClosed && (
@@ -351,8 +351,8 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
               {isClosed && showDetail && (
                 <>
                   <p className="mt-2 text-[11px] text-red-700">
-                    You closed this deal. This lender is out and cannot be selected — pick another
-                    one below.
+                    You deleted this loan product. This lender is out and cannot be selected — pick
+                    another one below.
                   </p>
                   <button
                     type="button"
@@ -401,7 +401,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
                     disabled={busy != null}
                     className="px-3 py-2 rounded-lg border border-red-300 text-red-700 text-xs font-bold disabled:opacity-50"
                   >
-                    {isComposing(item.nbfc_id, "close") ? "Cancel" : "Close deal"}
+                    {isComposing(item.nbfc_id, "close") ? "Cancel" : "Delete loan product"}
                   </button>
                 </div>
               )}

@@ -257,30 +257,104 @@ export async function listDealerLots(
   return {
     total: list.length > 0 ? Number(list[0].total_count) : 0,
     page,
-    items: list.map((r) => ({
-      lot_id: String(r.id),
-      lot_code: String(r.lot_code),
-      title: r.title ? String(r.title) : null,
-      status: String(r.status),
-      quantity: Number(r.quantity),
-      conditions: (r.conditions as string[] | null) ?? [],
-      capacity: r.capacity ? String(r.capacity) : null,
-      avg_soh: r.avg_soh === null ? null : Number(r.avg_soh),
-      base_price: Number(r.base_price),
-      bid_increment: Number(r.bid_increment),
-      current_bid: Number(r.current_bid),
-      bid_count: Number(r.bid_count),
-      starts_at: r.starts_at ? new Date(String(r.starts_at)).toISOString() : null,
-      ends_at: new Date(String(r.ends_at)).toISOString(),
-      auction_type: String(r.auction_type),
-      city: r.city ? String(r.city) : null,
-      state: r.state ? String(r.state) : null,
-      distance_km: r.distance_km === null ? null : Number(r.distance_km),
-      image_url: r.image_url ? String(r.image_url) : null,
-      you_are_leading: r.you_are_leading === true,
-      your_max_bid: r.my_max === null ? null : Number(r.my_max),
-    })),
+    items: list.map(mapDealerLotCard),
   };
+}
+
+/**
+ * Row → card. Extracted so the single-lot fetch below cannot drift away from
+ * the grid: two copies of this mapping is how a field ends up present on the
+ * card and missing on the detail page.
+ */
+function mapDealerLotCard(r: Record<string, unknown>): DealerLotCard {
+  return {
+    lot_id: String(r.id),
+    lot_code: String(r.lot_code),
+    title: r.title ? String(r.title) : null,
+    status: String(r.status),
+    quantity: Number(r.quantity),
+    conditions: (r.conditions as string[] | null) ?? [],
+    capacity: r.capacity ? String(r.capacity) : null,
+    avg_soh: r.avg_soh === null ? null : Number(r.avg_soh),
+    base_price: Number(r.base_price),
+    bid_increment: Number(r.bid_increment),
+    current_bid: Number(r.current_bid),
+    bid_count: Number(r.bid_count),
+    starts_at: r.starts_at ? new Date(String(r.starts_at)).toISOString() : null,
+    ends_at: new Date(String(r.ends_at)).toISOString(),
+    auction_type: String(r.auction_type),
+    city: r.city ? String(r.city) : null,
+    state: r.state ? String(r.state) : null,
+    distance_km: r.distance_km === null ? null : Number(r.distance_km),
+    image_url: r.image_url ? String(r.image_url) : null,
+    you_are_leading: r.you_are_leading === true,
+    your_max_bid: r.my_max === null ? null : Number(r.my_max),
+  };
+}
+
+/**
+ * One lot, by id, for a dealer who is in its frozen audience.
+ *
+ * The same shape as a grid card, fetched directly instead of by paging the grid
+ * and searching it — see the note in `getDealerLotDetail`. No status filter:
+ * if the dealer is in the audience they may see the lot whatever state it is
+ * in, including paused and cancelled, which is exactly when they most need to
+ * know.
+ */
+export async function getDealerLotCard(
+  dealer_id: string,
+  lot_id: string,
+): Promise<DealerLotCard | null> {
+  const rows = (await db.execute(sql`
+    WITH aud AS (
+      SELECT DISTINCT ON (lot_id) lot_id, distance_km, city, state
+        FROM auction_lot_audience
+       WHERE dealer_id = ${dealer_id} AND lot_id = ${lot_id}
+    ),
+    bids AS (
+      SELECT lot_id,
+             MAX(amount) AS max_amount,
+             COUNT(*)::int AS bid_count,
+             MAX(amount) FILTER (WHERE bidder_dealer_id = ${dealer_id}) AS my_max
+        FROM auction_bids
+       WHERE lot_id = ${lot_id}
+       GROUP BY lot_id
+    ),
+    leader AS (
+      SELECT DISTINCT ON (lot_id) lot_id, bidder_dealer_id
+        FROM auction_bids
+       WHERE lot_id = ${lot_id}
+       ORDER BY lot_id, amount DESC, placed_at ASC
+    ),
+    items AS (
+      SELECT i.lot_id,
+             array_agg(DISTINCT i.condition) AS conditions,
+             (array_agg(rb.image_urls[1]) FILTER (WHERE rb.image_urls[1] IS NOT NULL))[1] AS image_url
+        FROM auction_lot_items i
+        LEFT JOIN recovery_batteries rb ON rb.id = i.battery_id
+       WHERE i.lot_id = ${lot_id}
+       GROUP BY i.lot_id
+    )
+    SELECT l.id, l.lot_code, l.title, l.status, l.quantity, l.capacity,
+           l.avg_soh, l.base_price, l.bid_increment, l.starts_at, l.ends_at,
+           l.auction_type,
+           a.city, a.state, a.distance_km,
+           COALESCE(b.max_amount, 0) AS current_bid,
+           COALESCE(b.bid_count, 0)  AS bid_count,
+           b.my_max,
+           (ld.bidder_dealer_id = ${dealer_id}) AS you_are_leading,
+           it.conditions, it.image_url
+      FROM auction_lots l
+      JOIN aud a       ON a.lot_id = l.id
+      LEFT JOIN bids b ON b.lot_id = l.id
+      LEFT JOIN leader ld ON ld.lot_id = l.id
+      LEFT JOIN items it  ON it.lot_id = l.id
+     WHERE l.id = ${lot_id}
+     LIMIT 1
+  `)) as unknown as Array<Record<string, unknown>>;
+
+  if (rows.length === 0) return null;
+  return mapDealerLotCard(rows[0]);
 }
 
 export interface DealerLotDetail extends DealerLotCard {
@@ -302,10 +376,20 @@ export async function getDealerLotDetail(
   dealer_id: string,
   lot_id: string,
 ): Promise<DealerLotDetail | null> {
-  const base = await listDealerLots({ dealer_id, status: "all", pageSize: 60 });
-  const card = base.items.find((i) => i.lot_id === lot_id);
-  // Not in the frozen audience => 404, not 403. A dealer outside the visibility
-  // rule should not be able to learn that a lot exists at all.
+  // [FIX] This used to build the card by calling
+  // `listDealerLots({ status: "all", pageSize: 60 })` and `.find()`-ing the id.
+  // Two things were wrong with that. `pageSize` is clamped to 60 in
+  // `listDealerLots`, so a dealer in the audience of more than sixty lots got a
+  // spurious 404 for the sixty-first — and it was page ONE only, ordered by
+  // soonest-ending, so which lots were unreachable changed by the minute.
+  // Second, `status: "all"` there means `IN ('live','ended')`, so a paused or
+  // cancelled lot 404'd for a dealer who was legitimately in its audience and
+  // may well have money standing on it.
+  //
+  // The audience check is the same `EXISTS` guard `getLotLiveState()` uses, and
+  // it stays a 404 rather than a 403: a dealer outside the visibility rule
+  // should not be able to learn that the lot exists at all.
+  const card = await getDealerLotCard(dealer_id, lot_id);
   if (!card) return null;
 
   const itemRows = await db.execute(sql`

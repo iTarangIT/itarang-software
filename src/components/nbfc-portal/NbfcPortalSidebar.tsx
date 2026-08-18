@@ -15,16 +15,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BatteryCharging,
   Briefcase,
   CalendarClock,
   ChartLine,
   ClipboardList,
   Cog,
+  FilePlus2,
   FileText,
   Gavel,
   Layers,
   Search,
   Siren,
+  Wrench,
   X,
 } from "lucide-react";
 import { useNbfcWorkQueue } from "@/hooks/useNbfcWorkQueue";
@@ -80,16 +83,39 @@ const NAV_ITEMS: Array<{
     label: "Recovery & Auction",
     icon: ClipboardList,
   },
+  // [BRD §3, §5] The battery master and the workshop console. Both had APIs
+  // and no screen, so recovered stock could only be registered — and repairs
+  // only raised — with curl.
+  {
+    id: "recovery-batteries",
+    href: "/nbfc/recovery/batteries",
+    label: "Recovered Batteries",
+    icon: BatteryCharging,
+  },
+  {
+    id: "recovery-refurbishment",
+    href: "/nbfc/recovery/refurbishment",
+    label: "Refurbishment",
+    icon: Wrench,
+  },
   // [E-234] `/nbfc/auction` shipped with E-038 and was never linked from
-  // anywhere — an orphan page reachable only by typing the URL. Its content is
-  // partly duplicated inside /nbfc/recovery, which is why nobody noticed. It
-  // is the marketplace view (every lot, with bids); Recovery is the pipeline
-  // that feeds it, so they are listed as siblings rather than merged.
+  // anywhere — an orphan page reachable only by typing the URL. Recovery is the
+  // pipeline that feeds it, so they are siblings rather than merged.
+  //
+  // It was labelled "Auction Marketplace" while it still offered NBFCs a bid
+  // button. It does not: bidders are dealers, and an NBFC is the seller here.
+  // The label now says whose lots these are.
   {
     id: "auction",
     href: "/nbfc/auction",
-    label: "Auction Marketplace",
+    label: "Auction Lots",
     icon: Gavel,
+  },
+  {
+    id: "auction-drafts",
+    href: "/nbfc/auction/drafts",
+    label: "Draft Lots",
+    icon: FilePlus2,
   },
   {
     id: "audit",
@@ -156,10 +182,23 @@ function SidebarBody({
       <nav className="flex-1 overflow-y-auto py-6">
         <h3 className="sidebar-section-label px-5 mb-2">Portal</h3>
         <div>
+          {/* Longest matching href wins.
+              The old test — `pathname === href || pathname.startsWith(href + "/")`
+              — lit up EVERY ancestor, so /nbfc/auction/drafts highlighted both
+              "Auction Lots" and "Draft Lots" at once. Matching the deepest
+              entry is the same rule the main app sidebar uses. */}
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
+            const matches = (href: string) =>
+              pathname === href || pathname.startsWith(`${href}/`);
             const isActive =
-              pathname === item.href || pathname.startsWith(`${item.href}/`);
+              matches(item.href) &&
+              !NAV_ITEMS.some(
+                (other) =>
+                  other.id !== item.id &&
+                  other.href.length > item.href.length &&
+                  matches(other.href),
+              );
             return (
               <Link
                 key={item.id}

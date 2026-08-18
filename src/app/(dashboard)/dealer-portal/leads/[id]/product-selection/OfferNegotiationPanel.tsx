@@ -54,18 +54,18 @@ const COPY: Record<
     confirmText: "Send message",
   },
   close: {
-    heading: "Close deal",
-    hint: "Tell the NBFC why the customer is closing this deal. This cannot be undone.",
+    heading: "Delete loan product",
+    hint: "Tell the NBFC why the customer is dropping this loan product. This cannot be undone.",
     label: "Message to the NBFC",
     placeholder:
       "e.g. Customer is going ahead with another lender — the EMI here is above budget.",
-    submit: "Close deal",
-    busy: "Closing…",
+    submit: "Delete loan product",
+    busy: "Deleting…",
     endpoint: (leadId) => `/api/lead/${leadId}/close-offer`,
-    confirmTitle: "Close this deal?",
+    confirmTitle: "Delete this loan product?",
     confirmMessage:
       "This ends the conversation with this lender for good — you will not be able to select them or negotiate again. You can then pick a different lender for this lead.",
-    confirmText: "Close deal",
+    confirmText: "Delete loan product",
     danger: true,
   },
 };

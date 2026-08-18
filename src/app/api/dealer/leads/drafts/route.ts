@@ -81,6 +81,9 @@ export const GET = withErrorHandler(async (req: Request) => {
             ps_charger_serial: productSelections.charger_serial,
             ps_dealer_margin: productSelections.dealer_margin,
             ps_final_price: productSelections.final_price,
+            ps_selected_nbfcs: productSelections.selected_nbfcs,
+            ps_disclosure_ack: productSelections.customer_disclosure_ack,
+            ps_payment_mode: productSelections.payment_mode,
             ps_updated_at: productSelections.updated_at,
         })
         .from(productSelections)
@@ -143,11 +146,25 @@ export const GET = withErrorHandler(async (req: Request) => {
     const step4Mapped = step4DraftRows.map((r) => {
         // Step-4 progress: 70% baseline (Steps 1-3 must be done to reach Step 4)
         // + up to 30% based on which selections have been made.
+        //
+        // Scored differently per payment mode since the Step-4/Step-5 split.
+        // A cash lead still completes the whole cart here, so battery/charger/
+        // price are the right signals. A finance lead deliberately carries no
+        // product at Step 4 — it is scored on the NBFC picks and the customer
+        // disclosure instead, otherwise every finance draft would sit at 70%
+        // forever and read as half-finished when it is ready to send.
+        const isFinanceDraft = String(r.ps_payment_mode ?? '').toLowerCase() !== 'cash';
         let extra = 0;
-        if (r.ps_battery_serial) extra += 10;
-        if (r.ps_charger_serial) extra += 10;
-        if (r.ps_dealer_margin && Number(r.ps_dealer_margin) > 0) extra += 5;
-        if (r.ps_final_price && Number(r.ps_final_price) > 0) extra += 5;
+        if (isFinanceDraft) {
+            const picks = Array.isArray(r.ps_selected_nbfcs) ? r.ps_selected_nbfcs.length : 0;
+            if (picks >= 1) extra += 20;
+            if (r.ps_disclosure_ack) extra += 10;
+        } else {
+            if (r.ps_battery_serial) extra += 10;
+            if (r.ps_charger_serial) extra += 10;
+            if (r.ps_dealer_margin && Number(r.ps_dealer_margin) > 0) extra += 5;
+            if (r.ps_final_price && Number(r.ps_final_price) > 0) extra += 5;
+        }
         const percent = Math.min(100, 70 + extra);
 
         return {
