@@ -9,11 +9,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { TOUCHPOINT_TYPE, CALL_STATUS, NEXT_ACTION, shouldAutoEngage } from "@/lib/lifecycle/touchpointTypes";
-import {
-    canTransition,
-    LEAD_STATUS,
-    type LeadStatus,
-} from "@/lib/lifecycle/transitions";
+import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
     callStatusForDisposition,
@@ -67,18 +63,8 @@ export const POST = withErrorHandler(
         await assertOwner(id, user.id);
 
         // Read current state for transition validation.
-        const rows = await db.execute<{
-            lead_status: string | null;
-            engaged_count: string;
-            final_price: string | null;
-            commercials_exists: boolean;
-        }>(sql`
-            SELECT
-                dl.lead_status,
-                (SELECT COUNT(*)::text FROM lead_touchpoints t WHERE t.dealer_lead_id = dl.id AND t.is_engaged = true) AS engaged_count,
-                (SELECT final_price::text FROM dealer_lead_commercials c WHERE c.dealer_lead_id = dl.id AND c.is_current = true LIMIT 1) AS final_price,
-                EXISTS (SELECT 1 FROM dealer_lead_commercials c WHERE c.dealer_lead_id = dl.id) AS commercials_exists
-            FROM dealer_leads dl WHERE dl.id = ${id} LIMIT 1
+        const rows = await db.execute<{ lead_status: string | null }>(sql`
+            SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
         `);
         const state = rows[0];
         if (!state) return errorResponse("Lead not found", 404);
@@ -115,9 +101,8 @@ export const POST = withErrorHandler(
         // One vocabulary, derived server-side: the client can be stale, and the
         // rule belongs next to the sheet. call_status keeps being written with
         // exactly the same five values as before, because five things key off it
-        // — shouldAutoEngage → is_engaged → canTransition's engaged-count gate,
-        // two report figures and two dashboard timings — and 2,445 historical
-        // rows already have it.
+        // — shouldAutoEngage → is_engaged, two report figures and two dashboard
+        // timings — and 2,445 historical rows already have it.
         const derivedCallStatus =
             callStatusForDisposition(classified) ?? body.call_status ?? null;
 
@@ -129,26 +114,13 @@ export const POST = withErrorHandler(
                 visitOutcome: null,
             });
 
-        // If caller requested a status change, validate it BEFORE writing.
+        // Whatever status the rep picked is what the lead gets: no transition
+        // map, no engaged-touchpoint gate, no final_price gate (see the lifecycle
+        // engine), and a lead that never had a status can be given one —
+        // from_status is nullable on the history row. Every change still writes
+        // dealer_lead_status_history, which is what the reporting reads.
         let statusChange: Parameters<typeof writeTouchpoint>[0]["statusChange"];
         if (body.status_change) {
-            if (!fromStatus) {
-                return errorResponse(
-                    "Cannot change status — lead has no current status.",
-                    400,
-                );
-            }
-            // Engaged-count delta if this very touchpoint will be engaged.
-            const engagedAfter = Number(state.engaged_count ?? 0) + (isEngaged ? 1 : 0);
-            const t = canTransition(fromStatus, body.status_change.to, {
-                engagedTouchpointCount: engagedAfter,
-                finalPrice: state.final_price === null ? null : Number(state.final_price),
-                hasCommercialsRow: Boolean(state.commercials_exists),
-                actorRole: user.role,
-            });
-            if (!t.ok) {
-                return errorResponse(t.reason, t.severity === "soft" ? 422 : 400);
-            }
             statusChange = {
                 from: fromStatus,
                 to: body.status_change.to,

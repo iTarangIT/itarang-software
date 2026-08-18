@@ -46,8 +46,9 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
         );
     }
 
-    // A lead can be marked Converted from any open status (no funnel/price gate).
-    const canMarkConverted = open;
+    // Converted / Lost are not gated on the current status — an ASM can reopen a
+    // lead closed by mistake, the same freedom the status dropdown gives.
+    // Escalate stays open-only because its route refuses a closed lead.
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
@@ -64,8 +65,6 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
                 tone="emerald"
                 icon={CheckCircle2}
                 onClick={() => onAction("mark_converted")}
-                disabled={!canMarkConverted}
-                disabledReason={!canMarkConverted ? "Lead is already closed" : undefined}
             >
                 Mark Converted
             </Btn>
@@ -73,8 +72,6 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
                 tone="rose"
                 icon={XCircle}
                 onClick={() => onAction("mark_lost")}
-                disabled={!open}
-                disabledReason={!open ? "Lead is already terminal" : undefined}
             >
                 Mark Lost
             </Btn>
