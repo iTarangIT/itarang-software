@@ -116,6 +116,7 @@ export function LeadsFilterBar({
     busy,
 }: Props) {
     const moreCount = countSecondary(draft);
+    const aiFacets = facets?.aiSignals;
 
     // Dispositions present in the data but NOT in the CC sheet — a campaign
     // configured with NeoDove's stock vocabulary, or a value added in their
@@ -302,6 +303,39 @@ export function LeadsFilterBar({
                         }`}
                     />
                     NeoDove
+                </button>
+
+                {/* Callback requested. In the PRIMARY row, not behind "More
+                    filters", for the same reason NeoDove is: it is an ACTION
+                    filter — these dealers asked to be called back and the AI
+                    cannot do it — rather than a refinement, and it removes most
+                    of the list when on. Disabled at zero so nobody selects a
+                    filter that cannot match. */}
+                <button
+                    type="button"
+                    disabled={aiFacets?.leadsCallback === 0}
+                    onClick={() => onChange("callback", draft.callback ? "" : "1")}
+                    aria-pressed={draft.callback === "1"}
+                    title={
+                        aiFacets?.leadsCallback === 0
+                            ? "No lead has asked for a callback yet."
+                            : draft.callback
+                              ? "Showing only leads who asked to be called back — click to show all"
+                              : "Show only leads who asked to be called back. The AI cannot call them; they need a person."
+                    }
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                        draft.callback
+                            ? "border-amber-300 bg-amber-50 text-amber-700"
+                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                    }`}
+                >
+                    <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            draft.callback ? "bg-amber-500" : "bg-gray-300"
+                        }`}
+                    />
+                    Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
                 </button>
 
                 <button
@@ -504,6 +538,84 @@ export function LeadsFilterBar({
                                 })
                             }
                         />
+                    </div>
+
+                    {/* ── AI call state + signals ────────────────────────
+                        Every option carries its own count and is DISABLED at
+                        zero. The dialer has reached a small fraction of the
+                        pool, so most of these legitimately match almost
+                        nothing — and an option nobody can select is far better
+                        than one that silently returns an empty list. */}
+                    <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                            AI signals
+                            {aiFacets && (
+                                <span className="ml-2 font-normal normal-case tracking-normal text-gray-400">
+                                    {aiFacets.leadsCalled} of {aiFacets.totalLeads} leads
+                                    dialled · {aiFacets.leadsConnected} reached
+                                </span>
+                            )}
+                        </p>
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <select
+                                aria-label="AI dialled"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.aiCalled}
+                                onChange={(e) => onChange("aiCalled", e.target.value)}
+                            >
+                                <option value="">Any AI call state</option>
+                                <option
+                                    value="connected"
+                                    disabled={aiFacets?.leadsConnected === 0}
+                                >
+                                    AI reached them
+                                    {aiFacets ? ` (${aiFacets.leadsConnected})` : ""}
+                                </option>
+                                <option
+                                    value="attempted"
+                                    disabled={aiFacets?.leadsCalled === 0}
+                                >
+                                    AI called them
+                                    {aiFacets ? ` (${aiFacets.leadsCalled})` : ""}
+                                </option>
+                                <option value="never">Never called by AI</option>
+                            </select>
+
+                            <select
+                                aria-label="AI band"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.aiBand}
+                                onChange={(e) => onChange("aiBand", e.target.value)}
+                            >
+                                <option value="">Any AI band</option>
+                                {(["Qualified", "Warm", "Cold", "Disqualified"] as const).map(
+                                    (b) => (
+                                        <option
+                                            key={b}
+                                            value={b}
+                                            disabled={aiFacets?.band?.[b] === 0}
+                                        >
+                                            {b}
+                                            {aiFacets ? ` (${aiFacets.band?.[b] ?? 0})` : ""}
+                                        </option>
+                                    ),
+                                )}
+                            </select>
+
+                            <select
+                                aria-label="Minimum signals disclosed"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.signalsMin}
+                                onChange={(e) => onChange("signalsMin", e.target.value)}
+                            >
+                                <option value="">Any number of signals</option>
+                                {[1, 2, 3, 4, 5].map((n) => (
+                                    <option key={n} value={String(n)}>
+                                        {n}+ signals disclosed
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                 </div>
             )}
