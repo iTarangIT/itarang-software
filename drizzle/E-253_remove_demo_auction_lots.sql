@@ -1,4 +1,4 @@
--- E-250 — remove the five E-129 demo auction lots.
+-- E-253 — remove the five E-129 demo auction lots.
 --
 -- WHY THEY GO RATHER THAN GET REPAIRED
 --   E-129 inserted DEMO-LOT-001..005 straight into `auction_lots` so the

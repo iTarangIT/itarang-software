@@ -93,7 +93,7 @@ async function makeSettlement(opts: {
   lotId: string;
   finalPrice: number;
   status?: 'payment_pending' | 'in_transit' | 'delivered';
-  /** Leave unpaid to exercise the E-249 money-before-goods gate. */
+  /** Leave unpaid to exercise the E-252 money-before-goods gate. */
   paid?: boolean;
 }): Promise<string> {
   const [row] = await db
@@ -104,7 +104,7 @@ async function makeSettlement(opts: {
       winner_tenant_id: ctx.winnerTenantId,
       final_price: String(opts.finalPrice),
       status: opts.status ?? 'payment_pending',
-      // [E-249] `payment_pending -> in_transit` now requires evidence that the
+      // [E-252] `payment_pending -> in_transit` now requires evidence that the
       // money moved. It used to be a bare status flip, which meant the status
       // was the only record of payment and it was self-certified. Fixtures that
       // want to exercise the ladder must be paid; the default is paid so every
@@ -238,10 +238,10 @@ test.describe('E-039 — Post-auction settlement table', () => {
     expect(rows[0].status).toBe('in_transit');
   });
 
-  test('E-249: an unpaid settlement cannot be marked in transit', async ({
+  test('E-252: an unpaid settlement cannot be marked in transit', async ({
     request,
   }) => {
-    // The gate this asserts is the whole point of E-249: before it, a seller
+    // The gate this asserts is the whole point of E-252: before it, a seller
     // could dispatch a battery against a settlement nobody had paid for, and
     // nothing in the row would ever say so.
     const lot = await makeLot();

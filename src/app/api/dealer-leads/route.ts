@@ -251,6 +251,23 @@ export const GET = withErrorHandler(async (req: Request) => {
     connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,
     dispositionBucket: isDispositionBucket(bucketParam) ? bucketParam : null,
     disposition: dispositionParam,
+    // AI call state + signals. Validated against closed vocabularies; anything
+    // else is treated as unset rather than passed through to SQL.
+    aiCalled: ["connected", "attempted", "never"].includes(
+      searchParams.get("ai_called") ?? "",
+    )
+      ? searchParams.get("ai_called")
+      : null,
+    aiBand: ["Qualified", "Warm", "Cold", "Disqualified"].includes(
+      searchParams.get("ai_band") ?? "",
+    )
+      ? searchParams.get("ai_band")
+      : null,
+    signalsMin: (() => {
+      const n = Number(searchParams.get("signals_min"));
+      return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
+    })(),
+    callback: searchParams.get("callback") === "1",
     // Owner / ASM are oversight-only (they were visible solely on the
     // admin+sales_head-gated Leads Info page). The params are IGNORED rather
     // than merely hidden in the UI, so a hand-crafted request can't filter by a

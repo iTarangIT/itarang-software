@@ -5,6 +5,8 @@ import { quotaCircuit } from "@/lib/queue/connection";
 import { log } from "@/lib/log";
 import { not, inArray, eq, isNotNull, and } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { AI_FOLLOWUP_LOOP_RETIRES_CONNECTED } from "@/lib/ai-dialer/exclusionFilter";
+import { retireAiConnectedFollowUps } from "@/lib/ai-dialer/aiConnection";
 
 export const maxDuration = 60;
 
@@ -32,14 +34,25 @@ export async function GET(req: Request) {
         ),
       );
 
-    const leadsToCall = allLeads.filter(
+    const dueLeads = allLeads.filter(
       (r) => r.next_call_at && new Date(r.next_call_at) <= now,
     );
+
+    // Identical to the Bolna scheduler — see the long note there. next_call_at
+    // is only ever set after a connected call, so this retires the AI follow-up
+    // loop and hands those dealers to Inside Sales, clearing next_call_at so the
+    // cron does not re-select them on every tick.
+    const { dialable: leadsToCall, retired: retiredAiConnected } =
+      await retireAiConnectedFollowUps(dueLeads, {
+        enabled: AI_FOLLOWUP_LOOP_RETIRES_CONNECTED,
+        source: "elevenlabs/call-scheduler",
+      });
 
     if (leadsToCall.length === 0) {
       return NextResponse.json({
         success: true,
         message: "No leads to call",
+        retiredAiConnected,
         checked_at: now.toISOString(),
       });
     }
@@ -112,6 +125,7 @@ export async function GET(req: Request) {
       success: true,
       processed: results.length,
       totalCandidates: leadsToCall.length,
+      retiredAiConnected,
       bailedOn,
       checked_at: now.toISOString(),
       results,

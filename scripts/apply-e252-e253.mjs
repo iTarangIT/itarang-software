@@ -1,9 +1,9 @@
-// Applies drizzle/E-249_auction_settlement_payment_refinance.sql and
-// drizzle/E-250_remove_demo_auction_lots.sql, then PROVES both landed.
+// Applies drizzle/E-252_auction_settlement_payment_refinance.sql and
+// drizzle/E-253_remove_demo_auction_lots.sql, then PROVES both landed.
 //
-// Usage:  DATABASE_URL=postgresql://…database-1… node scripts/apply-e249-e250.mjs --dry-run
-//         DATABASE_URL=postgresql://…database-1… node scripts/apply-e249-e250.mjs
-//         DATABASE_URL=…                        node scripts/apply-e249-e250.mjs --only=249
+// Usage:  DATABASE_URL=postgresql://…database-1… node scripts/apply-e252-e253.mjs --dry-run
+//         DATABASE_URL=postgresql://…database-1… node scripts/apply-e252-e253.mjs
+//         DATABASE_URL=…                        node scripts/apply-e252-e253.mjs --only=249
 //
 // TARGET SELECTION — READ THIS BEFORE RUNNING.
 // An explicit process.env.DATABASE_URL always wins. Falling back to .env.local
@@ -14,11 +14,11 @@
 // with which environment that host IS, before a single byte is written.
 //
 // WHY THE TWO FILES SHIP IN ONE SCRIPT
-// They are one change: E-249 adds the money columns Phase 6 needs, E-250 clears
+// They are one change: E-252 adds the money columns Phase 6 needs, E-253 clears
 // the five E-129 demo lots out of the way of the same Phase 6 screens. They are
 // still executed as two independent transactions, and --only=<n> runs just one.
 //
-// E-250 WAS REVERSED ON 2026-08-18 — IT NOW DELETES, IT NO LONGER BACKFILLS.
+// E-253 WAS REVERSED ON 2026-08-18 — IT NOW DELETES, IT NO LONGER BACKFILLS.
 // The original file repaired the demo lots (seller + visibility + audience).
 // Probing database-1 killed that plan: all five rows are status='ended' and
 // expired between 23 and 30 May 2026, and hold ZERO auction_lot_items, so the
@@ -29,11 +29,11 @@
 // to match; the old ones asserted a backfill that no longer happens.
 //
 // THE TWO FILES ARE NOT THE SAME KIND OF FILE, AND THE GUARD KNOWS IT.
-//   E-249 is pure additive DDL — five nullable columns, two plain indexes. It
+//   E-252 is pure additive DDL — five nullable columns, two plain indexes. It
 //   is held to the strict repo rule: no DROP, no INSERT, no UPDATE, no
 //   SET NOT NULL, no ALTER TYPE. Anything else and this refuses to run.
 //
-//   E-250 is DATA REMOVAL and says so in its own header. It legitimately runs
+//   E-253 is DATA REMOVAL and says so in its own header. It legitimately runs
 //   DELETE, so the strict guard would reject a correct file. It gets a narrower
 //   guard instead: still no DROP/TRUNCATE/ALTER TYPE/RENAME, but every mutating
 //   statement must be scoped to `lot_code LIKE 'DEMO-LOT-%'` — checked here,
@@ -43,7 +43,7 @@
 //
 // Verified rather than trusted: "no exception was thrown" is not evidence. Both
 // files are read back out of information_schema / pg_indexes / the rows
-// themselves. E-250's verification is the one that earns its keep — auction_lots
+// themselves. E-253's verification is the one that earns its keep — auction_lots
 // has NO foreign keys pointing at it (verified against information_schema: the
 // constraint list is empty), so nothing cascades and a forgotten child table
 // leaves orphan rows that commit perfectly happily. Every table carrying a
@@ -55,8 +55,8 @@ import postgres from "postgres";
 const DRY_RUN = process.argv.includes("--dry-run");
 const ONLY = (process.argv.find((a) => a.startsWith("--only=")) ?? "").split("=")[1] ?? null;
 
-const F249 = "drizzle/E-249_auction_settlement_payment_refinance.sql";
-const F250 = "drizzle/E-250_remove_demo_auction_lots.sql";
+const F252 = "drizzle/E-252_auction_settlement_payment_refinance.sql";
+const F253 = "drizzle/E-253_remove_demo_auction_lots.sql";
 
 function resolveUrl() {
     if (process.env.DATABASE_URL) {
@@ -137,29 +137,29 @@ const LOT_CHILD_TABLES = [
     "nbfc_auction_lot_actions",
 ];
 
-const E249_COLUMNS = [
+const E252_COLUMNS = [
     ["auction_settlements", "payment_ref", "character varying"],
     ["auction_settlements", "payment_provider", "character varying"],
     ["auction_settlements", "paid_at", "timestamp with time zone"],
     ["auction_settlements", "refinance_loan_id", "character varying"],
     ["auction_settlements", "failure_reason", "text"],
 ];
-const E249_INDEXES = ["auction_settlements_payment_ref_idx", "auction_settlements_refinance_loan_idx"];
+const E252_INDEXES = ["auction_settlements_payment_ref_idx", "auction_settlements_refinance_loan_idx"];
 
 const { url, from } = resolveUrl();
-const ddl249 = readFileSync(F249, "utf8");
-const ddl250 = readFileSync(F250, "utf8");
+const ddl252 = readFileSync(F252, "utf8");
+const ddl253 = readFileSync(F253, "utf8");
 
-const run249 = ONLY === null || ONLY === "249";
-const run250 = ONLY === null || ONLY === "250";
-if (ONLY !== null && !run249 && !run250) {
+const run252 = ONLY === null || ONLY === "249";
+const run253 = ONLY === null || ONLY === "250";
+if (ONLY !== null && !run252 && !run253) {
     console.log(`--only=${ONLY} is not one of 249, 250.`);
     process.exit(1);
 }
 
 console.log("GUARDS");
-if (run249) { assertAdditive(ddl249, "E-249"); console.log("OK — E-249: pure additive DDL, no forbidden statement."); }
-if (run250) assertDemoScopedRemoval(ddl250, "E-250");
+if (run252) { assertAdditive(ddl252, "E-252"); console.log("OK — E-252: pure additive DDL, no forbidden statement."); }
+if (run253) assertDemoScopedRemoval(ddl253, "E-253");
 console.log();
 
 const sql = postgres(url, { ssl: "require", prepare: false, max: 1, connect_timeout: 20 });
@@ -176,13 +176,13 @@ try {
               : "  ^^ UNRECOGNISED HOST — stop and check before proceeding.",
     );
     console.log(DRY_RUN ? "MODE: dry run (nothing will be written)" : "MODE: APPLY");
-    console.log(`FILES: ${[run249 && "E-249", run250 && "E-250"].filter(Boolean).join(" + ")}\n`);
+    console.log(`FILES: ${[run252 && "E-252", run253 && "E-253"].filter(Boolean).join(" + ")}\n`);
 
     // ---- prerequisites -----------------------------------------------------
-    // E-249 needs E-232's auction_settlements; E-250 additionally needs E-234's
+    // E-252 needs E-232's auction_settlements; E-253 additionally needs E-234's
     // visibility/audience tables. Naming the missing one beats a bare 42P01
     // thrown from the middle of a file.
-    const prereq = run250
+    const prereq = run253
         ? ["auction_settlements", "auction_lots"]
         : ["auction_settlements"];
     for (const t of prereq) {
@@ -197,10 +197,10 @@ try {
     }
     console.log(`OK — all ${prereq.length} prerequisite table(s) present.`);
 
-    // E-250 no longer has an ON CONFLICT of any kind — it deletes. What it does
+    // E-253 no longer has an ON CONFLICT of any kind — it deletes. What it does
     // need is for every child table it names to exist, because a missing one
     // aborts the transaction halfway and leaves the parent rows behind.
-    if (run250) {
+    if (run253) {
         const missing = [];
         for (const t of LOT_CHILD_TABLES) {
             const [{ r }] = await sql`SELECT to_regclass(${t}) AS r`;
@@ -209,30 +209,30 @@ try {
         console.log(
             missing.length === 0
                 ? `OK — all ${LOT_CHILD_TABLES.length} lot child table(s) present.`
-                : `FAILED — missing child table(s): ${missing.join(", ")}. E-250 would abort mid-transaction.`,
+                : `FAILED — missing child table(s): ${missing.join(", ")}. E-253 would abort mid-transaction.`,
         );
         if (missing.length) process.exit(1);
     }
 
     // ---- before-state ------------------------------------------------------
-    let before249 = 0;
-    if (run249) {
-        for (const [table, column] of E249_COLUMNS) {
+    let before252 = 0;
+    if (run252) {
+        for (const [table, column] of E252_COLUMNS) {
             const [row] = await sql`
                 SELECT 1 AS present FROM information_schema.columns
                  WHERE table_schema = 'public' AND table_name = ${table} AND column_name = ${column}`;
-            if (row) before249++;
+            if (row) before252++;
         }
-        console.log(`E-249 columns already present before this run: ${before249}/${E249_COLUMNS.length}`);
+        console.log(`E-252 columns already present before this run: ${before252}/${E252_COLUMNS.length}`);
     }
 
     let realLotsBefore = 0;
-    if (run250) {
+    if (run253) {
         const [{ n: demoLots }] = await sql`SELECT count(*)::int AS n FROM auction_lots WHERE lot_code LIKE 'DEMO-LOT-%'`;
         const [{ n: realLots }] = await sql`SELECT count(*)::int AS n FROM auction_lots WHERE lot_code NOT LIKE 'DEMO-LOT-%'`;
         realLotsBefore = realLots;
-        console.log(`E-250 target rows: ${demoLots} demo lot(s). Real lots on this DB (must be untouched): ${realLots}`);
-        if (demoLots === 0) console.log("  NOTE — no DEMO-LOT-% rows here. E-250 will be a legitimate no-op.");
+        console.log(`E-253 target rows: ${demoLots} demo lot(s). Real lots on this DB (must be untouched): ${realLots}`);
+        if (demoLots === 0) console.log("  NOTE — no DEMO-LOT-% rows here. E-253 will be a legitimate no-op.");
         for (const t of LOT_CHILD_TABLES) {
             const [{ n }] = await sql.unsafe(
                 `SELECT count(*)::int AS n FROM ${t} t JOIN auction_lots l ON l.id = t.lot_id WHERE l.lot_code LIKE 'DEMO-LOT-%'`,
@@ -248,10 +248,10 @@ try {
     }
 
     // ---- apply -------------------------------------------------------------
-    if (run249) {
-        await sql.unsafe(ddl249);
-        console.log("\nE-249 executed. Verifying...");
-        for (const [table, column, expectedType] of E249_COLUMNS) {
+    if (run252) {
+        await sql.unsafe(ddl252);
+        console.log("\nE-252 executed. Verifying...");
+        for (const [table, column, expectedType] of E252_COLUMNS) {
             const [row] = await sql`
                 SELECT data_type, is_nullable FROM information_schema.columns
                  WHERE table_schema = 'public' AND table_name = ${table} AND column_name = ${column}`;
@@ -264,21 +264,21 @@ try {
                 : `  FAILED — ${table}.${column} is ${row.data_type}/${row.is_nullable}, expected ${expectedType}/YES.`);
             if (!ok) failed = true;
         }
-        for (const idx of E249_INDEXES) {
+        for (const idx of E252_INDEXES) {
             const [row] = await sql`SELECT indexdef FROM pg_indexes WHERE indexname = ${idx}`;
             console.log(row ? `  OK — index ${idx} present.` : `  FAILED — index ${idx} is MISSING.`);
             if (!row) failed = true;
         }
-        // No backfill ships with E-249, on purpose: every existing settlement
+        // No backfill ships with E-252, on purpose: every existing settlement
         // must stay NULL, which is the honest record that nothing proved payment.
         const [{ total, paid }] = await sql`
             SELECT count(*)::int AS total, count(paid_at)::int AS paid FROM auction_settlements`;
         console.log(`  Settlements on this DB: ${total}; carrying a paid_at: ${paid} (expected 0 immediately after apply).`);
     }
 
-    if (run250) {
-        await sql.unsafe(ddl250);
-        console.log("\nE-250 executed. Verifying...");
+    if (run253) {
+        await sql.unsafe(ddl253);
+        console.log("\nE-253 executed. Verifying...");
 
         const [{ n: leftover }] = await sql`
             SELECT count(*)::int AS n FROM auction_lots WHERE lot_code LIKE 'DEMO-LOT-%'`;
@@ -334,8 +334,8 @@ try {
         process.exit(1);
     }
     console.log("\nApplied and verified. Tick this DB's box in drizzle/MIGRATION_CHECKLIST.md.");
-    if (run249) console.log("  E-249 unblocks: settlement payment capture + the refinance link (Step 8 of the test plan).");
-    if (run250) console.log("  E-250 removed the five DEMO-LOT-* rows and every child row hanging off them.");
+    if (run252) console.log("  E-252 unblocks: settlement payment capture + the refinance link (Step 8 of the test plan).");
+    if (run253) console.log("  E-253 removed the five DEMO-LOT-* rows and every child row hanging off them.");
 } catch (err) {
     console.error("\nERROR:", err?.message ?? err);
     process.exitCode = 1;

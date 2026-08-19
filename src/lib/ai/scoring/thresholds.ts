@@ -45,3 +45,25 @@ export function bandToStatus(band: string | null): LeadStatus | null {
       return null;
   }
 }
+
+// Status label → canonical Band. The exact inverse of bandToStatus, and the
+// bridge the HUMAN OVERRIDE crosses: the correction UI speaks lowercase status
+// labels (the four buttons a reviewer clicks), while every persisted column and
+// every downstream reader speaks Band. Without this the override would have to
+// hand-roll the mapping and could silently drift from the AI path.
+export function statusToBand(
+  status: string | null,
+): "Qualified" | "Warm" | "Cold" | "Disqualified" | null {
+  switch ((status ?? "").toLowerCase()) {
+    case "qualified":
+      return "Qualified";
+    case "warm":
+      return "Warm";
+    case "cold":
+      return "Cold";
+    case "disqualified":
+      return "Disqualified";
+    default:
+      return null;
+  }
+}

@@ -83,8 +83,23 @@ interface Quotation {
   version_no: number;
   event_type: string;
   value: number;
+  /** Both figures, so a roll-up replacing a typed price is visible, not silent. */
+  price_quoted: number | null;
+  final_price: number | null;
   quote_document_url: string | null;
   line_count: number;
+  /**
+   * What the rep agreed with this dealer. These print on the dealer's document,
+   * so the approver has to see them before releasing it. Optional because a
+   * cached page may still hold a response from before they were selected.
+   */
+  terms?: {
+    payment_method: string | null;
+    credit_terms: string | null;
+    delivery_terms: string | null;
+    warranty_terms: string | null;
+    deal_notes: string | null;
+  } | null;
   /** null for quotes raised before E-226, which were gated unconditionally. */
   oem: OemSummary | null;
   raised_by: string;
@@ -194,6 +209,50 @@ const LINE_STATUS_LABEL: Record<OemLine["status"], string> = {
   no_reference: "no reference",
   unpriced: "unpriced",
 };
+
+/**
+ * The terms this quotation commits us to, shown WITHOUT a click.
+ *
+ * Deliberately not behind the expander the OEM breakdown uses. Approving a
+ * quotation releases these terms to a dealer; a credit period or a warranty
+ * that has to be discovered by clicking is one the approver will not read.
+ * Renders nothing at all when the rep set none, so the queue stays scannable.
+ */
+function TermsStrip({ terms }: { terms: Quotation["terms"] }) {
+  if (!terms) return null;
+  const chips = [
+    ["Payment", terms.payment_method],
+    ["Credit", terms.credit_terms],
+    ["Delivery", terms.delivery_terms],
+    ["Warranty", terms.warranty_terms],
+  ].filter(([, v]) => !!v) as [string, string][];
+
+  if (chips.length === 0 && !terms.deal_notes) return null;
+
+  return (
+    <div className="mt-1.5">
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {chips.map(([k, v]) => (
+            <span
+              key={k}
+              className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700"
+            >
+              <span className="text-gray-500">{k}</span>
+              <span className="font-medium">{v}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {terms.deal_notes && (
+        <p className="mt-1 text-[11px] text-gray-600 whitespace-pre-wrap">
+          <span className="text-gray-500">Notes: </span>
+          {terms.deal_notes}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function OemBreakdown({ oem }: { oem: OemSummary }) {
   if (oem.lines.length === 0) return null;
@@ -569,6 +628,8 @@ export function QuotationApprovalsPanel() {
                   )}
                 </div>
               </div>
+
+              <TermsStrip terms={q.terms} />
 
               {q.oem && cause && (
                 <div className="mt-1.5">

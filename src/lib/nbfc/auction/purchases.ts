@@ -11,7 +11,7 @@
  *   Worse, `payment_pending → in_transit` was a status flip the seller made by
  *   hand with nothing behind it. A settlement could be marked in transit
  *   without a rupee moving, and the schema had nowhere to record that it had.
- *   E-249 adds the columns; this is the code that fills them.
+ *   E-252 adds the columns; this is the code that fills them.
  *
  * THE OFFLINE ESCAPE HATCH
  *   `recordOfflinePayment()` exists because most of these settlements are, in

@@ -1081,6 +1081,23 @@ export const aiCallLogs = pgTable(
     band: varchar("band", { length: 20 }),
     call_status: varchar("call_status", { length: 20 }),
     info_signals_count: integer("info_signals_count"),
+    // E-168 ends here. --- E-250 below ---
+    // Which PROMPT produced `signals`. scoring_version already records which BAND
+    // RULE ran; this is its extraction-side counterpart, so an audit can tell
+    // whether a shift came from a new rule or from new teaching.
+    extraction_version: varchar("extraction_version", { length: 40 }),
+    // Hash of the active calibration examples at extraction time. Once that set
+    // lives in the DB and can change without a deploy, EXTRACTION_VERSION alone
+    // no longer identifies the prompt — two calls can share a version and have
+    // been scored by different examples.
+    calibration_set_hash: varchar("calibration_set_hash", { length: 64 }),
+    // The band a human reviewer says this call really was. Deliberately SEPARATE
+    // from `band`, which stays the AI's answer forever: overwriting it would let
+    // the eval harness replay the human's own correction as the AI's output and
+    // report perfect agreement on every corrected call.
+    human_band: varchar("human_band", { length: 20 }),
+    human_reviewed_by: uuid("human_reviewed_by"),
+    human_reviewed_at: timestamp("human_reviewed_at", { withTimezone: true }),
   },
   (table) => {
     return {
@@ -1127,11 +1144,182 @@ export const intentScoreFeedback = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // --- E-250 ---
+    // The AI's BAND at correction time. E-159 snapshotted original_intent_score
+    // but not the band, so "did the human agree" could only be reconstructed by
+    // re-deriving it from the score — which breaks the moment BAND_LEAD_SCORE
+    // changes.
+    ai_band: varchar("ai_band", { length: 20 }),
+    // The reviewer's role AT REVIEW TIME. Stored rather than joined because roles
+    // change: an ASM promoted to sales_head would otherwise retroactively rewrite
+    // the provenance of every correction they ever made.
+    reviewer_role: varchar("reviewer_role", { length: 50 }),
+    // 'correction' carries a real human label and is eligible for the golden set.
+    // 'note' is prose with no parseable band (the Google Sheet import). Every
+    // consumer filters to 'correction' so notes never fabricate ground truth.
+    review_kind: varchar("review_kind", { length: 20 }).default("correction").notNull(),
+    // 'app' | 'sheet_import'
+    source: varchar("source", { length: 20 }).default("app").notNull(),
+    // Idempotency key for imported rows: 'sheet:<call_id>:<reviewer>'. NULL for
+    // app corrections. ⚠ ON CONFLICT against its PARTIAL unique index must repeat
+    // the `WHERE external_key IS NOT NULL` predicate or Postgres won't match it.
+    external_key: text("external_key"),
+    // lead_call_recordings.id when the reviewer attached audio instead of typing.
+    recording_id: uuid("recording_id"),
+    // Did the human land on the same band as the AI. Stored so the disagreement
+    // queue is an index scan, not a case-expression over every row.
+    agreed: boolean("agreed"),
+    // Was this written THROUGH to dealer_leads, or recorded as training only.
+    // False for imported Sheet history — replaying months-old commentary onto
+    // live leads would rewrite the pipeline from an archive.
+    applied_to_lead: boolean("applied_to_lead").default(false).notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
   },
   (table) => ({
     callIdIdx: index("intent_score_feedback_call_id_idx").on(table.call_id),
     leadIdIdx: index("intent_score_feedback_lead_id_idx").on(table.lead_id),
     createdAtIdx: index("intent_score_feedback_created_at_idx").on(
+      table.created_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-250 — Attached call recordings.
+//
+// One audio file a reviewer attached to a dealer lead, plus its transcription
+// job and the signals/band derived from it. THIS TABLE IS ITS OWN QUEUE: one
+// recording is one transcription job, one-to-one, so a separate job table (the
+// shape E-241 needed for the scraper) would be a join with no cardinality
+// behind it. Drained by startRecordingTranscriptionTicker() in
+// src/instrumentation-node.ts, which claims with FOR UPDATE SKIP LOCKED.
+//
+// Attaching audio does NOT move the lead. The recording gets its own band; a
+// human still has to accept it by submitting a correction.
+// =============================================================================
+export const leadCallRecordings = pgTable(
+  "lead_call_recordings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // dealer_leads.id — soft FK, varchar to match that table's text id (same
+    // shape ai_call_logs.lead_id uses).
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    // ai_call_logs.call_id when this audio belongs to an existing AI call. NULL
+    // for a human follow-up the dialer never made.
+    call_id: varchar("call_id", { length: 255 }),
+    // human_call     — a follow-up the user recorded: transcribe and score it
+    //                  through the SAME analyzeTranscript() the dialer uses.
+    // ai_reanalysis  — the provider transcript was garbled; re-transcribe the
+    //                  stored audio rather than trusting its text.
+    // evidence       — stored and playable as proof behind a correction, never
+    //                  transcribed (goes straight to status 'skipped').
+    purpose: varchar("purpose", { length: 20 }).default("human_call").notNull(),
+
+    // Key under the 'call-recordings' LOGICAL bucket (a key prefix in the one
+    // physical AWS_S3_BUCKET — see src/lib/storage/s3.ts). Served back through
+    // /api/files/call-recordings/<key>, already an allowed AND auth-required
+    // bucket, so no new serving route was needed.
+    s3_key: text("s3_key").notNull(),
+    content_type: varchar("content_type", { length: 100 }),
+    // Capped at 25 MB on upload — not arbitrary: OpenAI's transcription endpoint
+    // rejects anything larger, so a bigger file could be stored but never
+    // transcribed. ~50 minutes at 64 kbps m4a.
+    size_bytes: bigint("size_bytes", { mode: "number" }),
+    duration_sec: integer("duration_sec"),
+    original_filename: text("original_filename"),
+
+    // ── Transcription lifecycle (the queue) ──
+    // pending | running | done | failed | skipped. No enum — the vocabulary lives
+    // in src/lib/ai/transcription/ and is enforced by zod at the write path.
+    status: varchar("status", { length: 20 }).default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    claimed_at: timestamp("claimed_at", { withTimezone: true }),
+    // ⚠ Always SET from now() + an interval IN SQL, never from a JS Date: pm2
+    // clock drift, and a JS Date in a raw drizzle sql`` template throws
+    // ERR_INVALID_ARG_TYPE at runtime.
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    error: text("error"),
+
+    // ── What came back ──
+    transcript: text("transcript"),
+    // Timestamped segments when the model returns them. NULL under the default
+    // gpt-4o-transcribe (text only); populated when INTENT_TRANSCRIBE_MODEL is
+    // whisper-1, which supports verbose_json.
+    transcript_segments: jsonb("transcript_segments"),
+    language: varchar("language", { length: 20 }),
+    transcribe_model: varchar("transcribe_model", { length: 50 }),
+
+    // ── What the scoring engine made of it ──
+    signals: jsonb("signals"),
+    score_breakdown: jsonb("score_breakdown"),
+    band: varchar("band", { length: 20 }),
+    intent_score: integer("intent_score"),
+    info_signals_count: integer("info_signals_count"),
+    call_summary: text("call_summary"),
+    scoring_version: varchar("scoring_version", { length: 20 }),
+    extraction_version: varchar("extraction_version", { length: 40 }),
+
+    uploaded_by: uuid("uploaded_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    transcribed_at: timestamp("transcribed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    claimIdx: index("lead_call_recordings_claim_idx").on(table.next_attempt_at),
+    leadIdx: index("lead_call_recordings_lead_idx").on(
+      table.lead_id,
+      table.created_at,
+    ),
+    callIdx: index("lead_call_recordings_call_idx").on(table.call_id),
+  }),
+);
+
+// =============================================================================
+// E-250 — DB-driven calibration examples.
+//
+// Admin-promoted few-shot examples injected into the extraction prompt AT
+// RUNTIME (src/lib/ai/analysis/calibrationStore.ts). This replaces the
+// hand-authored array in calibrationExamples.ts as the source of NEW teaching —
+// that array stays as the built-in SEED, and the loader falls back to it
+// whenever this table is empty or unreachable, so a DB problem degrades the
+// prompt to today's behaviour rather than sending an example-less prompt.
+// =============================================================================
+export const intentCalibrationExamples = pgTable(
+  "intent_calibration_examples",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Shown TO THE MODEL as the example's heading — part of the prompt, not an
+    // internal note. This is the sentence that actually does the teaching.
+    why: text("why").notNull(),
+    transcript: text("transcript").notNull(),
+    // The CORRECT QualificationSignals for this transcript, shaped like
+    // ai_call_logs.signals.
+    signals: jsonb("signals").notNull(),
+    // Only active rows enter the prompt. Deactivating is the instant undo for a
+    // bad example — effective on the next cache expiry, no deploy. That is the
+    // whole reason this set moved out of TypeScript.
+    active: boolean("active").default(true).notNull(),
+    // Prompt order, ascending. Few-shot examples are read in sequence and the
+    // last ones carry the most weight, so the curator controls which rule the
+    // model sees last.
+    sort_order: integer("sort_order").default(100).notNull(),
+    source_feedback_id: uuid("source_feedback_id"),
+    source_call_id: varchar("source_call_id", { length: 255 }),
+    extraction_version: varchar("extraction_version", { length: 20 }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    activeIdx: index("intent_calibration_examples_active_idx").on(
+      table.sort_order,
       table.created_at,
     ),
   }),
@@ -3531,6 +3719,19 @@ export const dealerLeads = pgTable("dealer_leads", {
   intent_band: varchar("intent_band", { length: 20 }),
   call_status: varchar("call_status", { length: 20 }),
   info_signals_count: integer("info_signals_count"),
+  // E-250 adds `intent_band_source`, `intent_overridden_by` and
+  // `intent_overridden_at` to this table, and they are DELIBERATELY ABSENT
+  // HERE — same reason as E-242's and E-224's columns above.
+  //
+  // The human override writes THROUGH to intent_band / final_intent_score
+  // (that is the whole design: every existing reader picks up the corrected
+  // value with no change). These three columns only record PROVENANCE, and are
+  // read by one panel and one API route. Listing them here would hard-fail
+  // every bare `db.select().from(dealerLeads)` at parse time on any database
+  // without E-250 applied — taking the leads screen, the AI dialer and the CEO
+  // overview down to add a label. Written and read via raw `sql` projections in
+  // src/lib/leads/intentOverride.ts instead, so an unapplied E-250 costs the
+  // intent-review feature and nothing else.
   preliminary_payment_intent: text("preliminary_payment_intent"),
   pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
   brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
@@ -7142,7 +7343,7 @@ export const auctionSettlements = pgTable(
     // carries the seller's tenant on a dealer win.
     winner_dealer_id: varchar("winner_dealer_id", { length: 255 }),
 
-    // [E-249] The money. Until these landed, the three-state ladder above
+    // [E-252] The money. Until these landed, the three-state ladder above
     // recorded no evidence that payment had happened — `in_transit` was a
     // manual flip by the seller. `paid_at` is now the gate on that transition.
     //
@@ -10492,5 +10693,42 @@ export const neodoveSyncEvents = pgTable(
       t.created_at,
     ),
     leadIdx: index("neodove_sync_events_lead_idx").on(t.dealer_lead_id, t.created_at),
+  }),
+);
+
+// ─── module_usage_user_daily (E-251) ────────────────────────────────────────
+// Per-user, per-module, per-day usage rollup.
+//
+// ⚠ NOTHING READS OR WRITES THIS TABLE. It is mirrored here only because
+// CLAUDE.md requires schema.ts to match the migration, and E-251 creates it on
+// production to close a sandbox→prod gap found by `npm run db:drift`. The table
+// exists on sandbox with 7 rows and no `E-*.sql` ever created it — an ad-hoc
+// db:push or hand-run statement — and a `git grep` across every remote branch
+// on 2026-08-18 found zero references to it outside these two files.
+//
+// Mirroring it is safe precisely BECAUSE nothing queries it: Drizzle only
+// expands a column list for tables the code actually selects from, so a model
+// with no call sites cannot 500 a route on a database that lacks the table.
+export const moduleUsageUserDaily = pgTable(
+  "module_usage_user_daily",
+  {
+    day: date("day").notNull(),
+    module: varchar("module", { length: 32 }).notNull(),
+    user_id: uuid("user_id").notNull(),
+    role_at_ping: varchar("role_at_ping", { length: 48 }),
+    role_bucket: varchar("role_bucket", { length: 16 }).notNull(),
+    pings: integer("pings").default(0).notNull(),
+    sessions: integer("sessions").default(0).notNull(),
+    last_ping_at: timestamp("last_ping_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // The grain: one row per user per module per day, which is what makes the
+    // writer an upsert rather than an append.
+    pk: primaryKey({ columns: [t.day, t.module, t.user_id] }),
+    dayIdx: index("module_usage_user_daily_day_idx").on(t.day),
+    moduleIdx: index("module_usage_user_daily_module_idx").on(t.module, t.day.desc()),
+    userIdx: index("module_usage_user_daily_user_idx").on(t.user_id, t.day.desc()),
   }),
 );

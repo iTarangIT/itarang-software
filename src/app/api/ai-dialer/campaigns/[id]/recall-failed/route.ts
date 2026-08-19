@@ -5,10 +5,15 @@
 // its stats are left completely untouched — each run stays a clean, separate
 // record for audit/cost history.
 //
-// Retryable = dialer_campaign_leads.status='failed' EXCEPT the outcomes that
-// can't or shouldn't be re-dialed:
-//   - no_phone               → there is no number to call
-//   - ineligible_active_lead → the lead is now owned by Inside Sales / ASM
+// Retryable is decided by deriveFailureReason() — the SAME function the campaign
+// table uses to label each row — so the button can never offer to retry
+// something the table calls non-retryable. It excludes:
+//   - no_phone / ineligible_*  → there is nothing to call, or the lead is now
+//                                owned by Inside Sales / ASM
+//   - silent_call / no_response → the dealer WAS reached. The AI-connected hard
+//                                block would refuse these anyway, so retrying
+//                                them is offering an action that silently does
+//                                nothing. They need a person.
 //
 // The new campaign carries recall:true in its region_filter, which makes
 // advanceCampaign bypass the once-per-day idempotency guard so the second dial
@@ -16,15 +21,15 @@
 
 import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
-import { and, asc, eq, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
+import { isRetryableFailure } from "@/lib/ai-dialer/failureReason";
 
-// Failure outcomes that should NOT be retried.
-const NON_RETRYABLE_OUTCOMES = ["no_phone", "ineligible_active_lead"];
+
 
 export const POST = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -66,18 +71,36 @@ export const POST = withErrorHandler(
       );
     }
 
-    // Retryable failed rows for the source campaign, in original queue order.
+    // Failed rows for the source campaign, in original queue order, with the
+    // evidence deriveFailureReason needs. Filtered in JS rather than SQL because
+    // the retryable rule lives in one shared function — duplicating it as a
+    // NOT IN list is how the button and the table would start disagreeing.
     const failed = await db
-      .select({ lead_id: dialerCampaignLeads.lead_id })
+      .select({
+        lead_id: dialerCampaignLeads.lead_id,
+        status: dialerCampaignLeads.status,
+        call_outcome: dialerCampaignLeads.call_outcome,
+        has_transcript: sql<boolean>`(
+          select transcript is not null from ai_call_logs
+          where call_id = ${dialerCampaignLeads.bolna_call_id}
+          limit 1
+        )`,
+        log_status: sql<string | null>`(
+          select status from ai_call_logs
+          where call_id = ${dialerCampaignLeads.bolna_call_id}
+          limit 1
+        )`,
+        log_call_status: sql<string | null>`(
+          select call_status from ai_call_logs
+          where call_id = ${dialerCampaignLeads.bolna_call_id}
+          limit 1
+        )`,
+      })
       .from(dialerCampaignLeads)
       .where(
         and(
           eq(dialerCampaignLeads.campaign_id, campaignId),
           eq(dialerCampaignLeads.status, "failed"),
-          or(
-            isNull(dialerCampaignLeads.call_outcome),
-            notInArray(dialerCampaignLeads.call_outcome, NON_RETRYABLE_OUTCOMES),
-          ),
         ),
       )
       .orderBy(asc(dialerCampaignLeads.queue_position));
@@ -86,7 +109,20 @@ export const POST = withErrorHandler(
     // failed row across earlier follow-ups within the same campaign).
     const seen = new Set<string>();
     const queueIds: string[] = [];
+    let skippedNonRetryable = 0;
     for (const r of failed) {
+      if (
+        !isRetryableFailure({
+          status: r.status,
+          callOutcome: r.call_outcome,
+          hasTranscript: r.has_transcript,
+          providerStatus: r.log_status,
+          bandCallStatus: r.log_call_status,
+        })
+      ) {
+        skippedNonRetryable += 1;
+        continue;
+      }
       if (!seen.has(r.lead_id)) {
         seen.add(r.lead_id);
         queueIds.push(r.lead_id);
@@ -94,7 +130,12 @@ export const POST = withErrorHandler(
     }
 
     if (queueIds.length === 0) {
-      return errorResponse("No failed leads to retry", 400);
+      return errorResponse(
+        skippedNonRetryable > 0
+          ? `None of the ${skippedNonRetryable} failed leads can be retried — the AI already reached them, or they were never eligible. They need manual follow-up.`
+          : "No failed leads to retry",
+        400,
+      );
     }
 
     // New campaign's region_filter: inherit the source region for display
@@ -120,7 +161,7 @@ export const POST = withErrorHandler(
     const retryName = `Retry · ${baseName || "previous campaign"}`;
 
     // Create the retry as a draft, then start it (same sequence as List start).
-    const newId = await createCampaign({
+    const { campaignId: newId, queued, blockedAiConnected } = await createCampaign({
       queueIds,
       provider,
       category: source.category,
@@ -130,6 +171,19 @@ export const POST = withErrorHandler(
       name: retryName,
     });
 
+    // Worth understanding rather than treating as an odd edge case: a retry
+    // re-queues leads whose PREVIOUS attempt failed, and a failed attempt
+    // usually means no transcript, so almost nothing gets scrubbed here. The
+    // exception is a `needs_review` row — the call connected and produced a
+    // transcript, but the analyzer could not read it. Those are AI-connected by
+    // the locked definition and are now permanently out of the AI's reach, even
+    // though what failed was our extraction, not the conversation.
+    if (!newId && blockedAiConnected.length > 0) {
+      return errorResponse(
+        "Every failed lead in this campaign has already been reached by the AI (their calls connected but could not be analysed). They need manual follow-up.",
+        409,
+      );
+    }
     if (!newId) return errorResponse("Could not create retry campaign", 500);
 
     // Flip to running, tag leads, seed the session, place the first call.
@@ -137,7 +191,9 @@ export const POST = withErrorHandler(
 
     return successResponse({
       campaignId: newId,
-      retryCount: queueIds.length,
+      retryCount: queued,
+      skippedNonRetryable,
+      blockedAiConnected: blockedAiConnected.length,
       status: "running",
       firstCallPlaced: result.firstCallPlaced,
       firstCallError: result.firstCallError,

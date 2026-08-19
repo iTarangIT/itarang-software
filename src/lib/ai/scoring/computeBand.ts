@@ -51,6 +51,29 @@ const BAND_ACTION: Record<Band, BandAction> = {
   Disqualified: "stop",
 };
 
+/**
+ * What a band means downstream: its numeric lead_score, its CRM interest level,
+ * and the action it routes to.
+ *
+ * Exported so the HUMAN OVERRIDE reads the SAME three tables the AI path does.
+ * When a reviewer corrects a call to Warm, the lead must land on exactly the
+ * score and interest level an AI-produced Warm would have — otherwise a
+ * corrected lead and an AI-scored lead of the same band sort differently in
+ * every queue, and any future edit to BAND_LEAD_SCORE fixes only one of them.
+ * The maps stay private; this is the only way to read them.
+ */
+export function bandOutcome(band: Band): {
+  lead_score: number;
+  interest_level: InterestLevel | null;
+  action: BandAction;
+} {
+  return {
+    lead_score: BAND_LEAD_SCORE[band],
+    interest_level: BAND_INTEREST_LEVEL[band],
+    action: BAND_ACTION[band],
+  };
+}
+
 // One audit row per decision-relevant signal — a truthful yes/no checklist (not
 // an additive score). `present` is the fact; `info` flags the five that feed
 // info_signals_count. Persisted to ai_call_logs.score_breakdown and rendered by

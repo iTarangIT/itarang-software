@@ -14,7 +14,7 @@
 -- ---------------------------------------------------------------------------
 -- RETIRED 2026-08-18 — this seed is now a no-op. Do not re-enable.
 --
--- E-250 deleted DEMO-LOT-001..005 and every row hanging off them. By then all
+-- E-253 deleted DEMO-LOT-001..005 and every row hanging off them. By then all
 -- five were `status='ended'`, expired between 23 and 30 May 2026, and held zero
 -- `auction_lot_items` — while still costing the scheduler an error on every
 -- tick ("closed with a winning bid but NO settlement", because they predate

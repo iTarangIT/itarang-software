@@ -37,10 +37,15 @@ import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { renderPdfFromHtml } from "@/lib/pdf/render-html";
 import { uploadFileToStorage } from "@/lib/storage";
 import { resolveQuotationConfig } from "./quote-pdf/config-store";
-import { financialYear, quoteNumberRoot } from "./quote-pdf/numbering";
+import {
+  financialYear,
+  quoteNumberForVersion,
+  quoteNumberRoot,
+} from "./quote-pdf/numbering";
 import { renderProformaHtml } from "./quote-pdf/proforma-template";
 import { buildQuotationView } from "./quote-pdf/view";
-import { loadLineTaxRefs, resolvePlaceOfSupply } from "./quote-pdf/view-store";
+import { resolvePlaceOfSupply } from "./quote-pdf/gst-states";
+import { loadLineTaxRefs } from "./quote-pdf/view-store";
 
 export interface QuotationDraft {
   commercial_id: string;
@@ -80,11 +85,15 @@ export async function nextQuoteNumber(
 /**
  * The number this quote should carry.
  *
- * A revision reuses the root of the first NUMBERED quote on the lead and adds
- * "-R<version>", so a dealer holding ITQ-2026-0007 recognises ITQ-2026-0007-R3
- * as the same conversation. A lead whose earlier versions were all rejected —
- * and so never numbered, because only approval mints one — starts a fresh root
- * rather than inheriting a suffix from a document nobody ever saw.
+ * Every version on a lead shares ONE root, so a dealer holding ITQ-2026-0007
+ * recognises ITQ-2026-0007-R3 as the same conversation. The root is minted the
+ * first time any version on the lead is numbered; which version that happens to
+ * be does not matter, because the suffix comes from the version number rather
+ * than from the order numbers were handed out. See quoteNumberForVersion.
+ *
+ * A lead whose earlier versions were all rejected — and so never numbered,
+ * because only approval mints one — starts a fresh root rather than inheriting
+ * a suffix from a document nobody ever saw.
  */
 async function allocateQuoteNumber(
   dealerLeadId: string,
@@ -100,9 +109,11 @@ async function allocateQuoteNumber(
      ORDER BY version_no ASC
      LIMIT 1
   `);
-  const root = (prior as unknown as Record<string, unknown>[])[0]?.quote_number;
-  if (root) return `${quoteNumberRoot(String(root))}-R${versionNo}`;
-  return nextQuoteNumber(prefix, at);
+  const existing = (prior as unknown as Record<string, unknown>[])[0]?.quote_number;
+  const root = existing
+    ? quoteNumberRoot(String(existing))
+    : await nextQuoteNumber(prefix, at);
+  return quoteNumberForVersion(root, versionNo);
 }
 
 interface CommercialRow {
@@ -113,6 +124,11 @@ interface CommercialRow {
   product_lines: unknown;
   quote_number: string | null;
   quote_pdf_url: string | null;
+  payment_method: string | null;
+  credit_terms: string | null;
+  delivery_terms: string | null;
+  warranty_terms: string | null;
+  deal_notes: string | null;
   dealer_name: string | null;
   dealer_gstin: string | null;
   dealer_state: string | null;
@@ -147,6 +163,14 @@ export async function generateQuotationDraft(
            c.product_lines,
            c.quote_number,
            c.quote_pdf_url,
+           -- The terms the rep agreed. They print on the document and land in
+           -- quote_snapshot with it, so a quote re-opened after the row changes
+           -- still shows the terms it was sent with.
+           c.payment_method,
+           c.credit_terms,
+           c.delivery_terms,
+           c.warranty_terms,
+           c.deal_notes,
            l.dealer_name,
            l.gstin  AS dealer_gstin,
            l.state  AS dealer_state,
@@ -196,10 +220,10 @@ export async function generateQuotationDraft(
       at,
     ));
 
-  const [taxRefs, placeOfSupply] = await Promise.all([
-    loadLineTaxRefs(lines),
-    resolvePlaceOfSupply(row.dealer_state),
-  ]);
+  const taxRefs = await loadLineTaxRefs(lines);
+  // Pure since the GST codes moved into ./quote-pdf/gst-states — no lookup, and
+  // the dealer's own GSTIN takes precedence over the lead's free-text state.
+  const placeOfSupply = resolvePlaceOfSupply(row.dealer_state, row.dealer_gstin);
 
   const view = buildQuotationView({
     quoteNumber,
@@ -212,6 +236,13 @@ export async function generateQuotationDraft(
       name: row.dealer_name,
       gstin: row.dealer_gstin,
       addressLines: row.dealer_city ? [row.dealer_city] : [],
+    },
+    commercialTerms: {
+      paymentMethod: row.payment_method,
+      creditTerms: row.credit_terms,
+      deliveryTerms: row.delivery_terms,
+      warranty: row.warranty_terms,
+      dealNotes: row.deal_notes,
     },
   });
 

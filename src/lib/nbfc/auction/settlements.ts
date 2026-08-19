@@ -196,7 +196,7 @@ export async function patchSettlementStatus(
     );
   }
 
-  // 3b. [E-249] Money before goods.
+  // 3b. [E-252] Money before goods.
   //
   //     `payment_pending -> in_transit` was a bare status flip: the seller
   //     pressed a button and the settlement claimed the battery was on its way,

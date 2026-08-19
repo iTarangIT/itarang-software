@@ -4,6 +4,7 @@
 // export pattern (src/app/api/scraper/runs/[id]/export.xlsx/route.ts) so
 // the user gets a consistent file format across the two history views.
 
+import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
 import { db } from "@/lib/db";
 import {
   dialerCampaigns,
@@ -45,6 +46,23 @@ function transcriptCell(t: string | null | undefined): string {
   return trimmed.length > TRANSCRIPT_CELL_MAX
     ? `${trimmed.slice(0, TRANSCRIPT_CELL_MAX)} …[truncated]`
     : trimmed;
+}
+
+// One place the export derives the reason, so the sheet and the screen agree.
+function failureReasonOf(r: {
+  status: string | null;
+  call_outcome: string | null;
+  transcript: string | null;
+  log_status: string | null;
+  log_call_status: string | null;
+}) {
+  return deriveFailureReason({
+    status: r.status,
+    callOutcome: r.call_outcome,
+    hasTranscript: r.transcript != null,
+    providerStatus: r.log_status,
+    bandCallStatus: r.log_call_status,
+  });
 }
 
 export const GET = withErrorHandler(
@@ -95,6 +113,9 @@ export const GET = withErrorHandler(
           // backfills transcripts for current AND previous campaigns from
           // whatever is already persisted in ai_call_logs.
           transcript: aiCallLogs.transcript,
+          // Same already-joined row — the evidence behind the failure reason.
+          log_status: aiCallLogs.status,
+          log_call_status: aiCallLogs.call_status,
         })
         .from(dialerCampaignLeads)
         .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
@@ -149,6 +170,11 @@ export const GET = withErrorHandler(
       { header: "State", key: "state", width: 16 },
       { header: "Status", key: "status", width: 14 },
       { header: "Call Outcome", key: "outcome", width: 22 },
+      // Why the call produced no conversation, in the same words the campaign
+      // table shows. The raw outcome column stays beside it: the derived reason
+      // is for reading, the raw string is for debugging.
+      { header: "Failure Reason", key: "failure_reason", width: 24 },
+      { header: "Retryable", key: "retryable", width: 11 },
       { header: "Intent Score", key: "intent_score", width: 14 },
       { header: "Lead Score", key: "final_intent_score", width: 14 },
       { header: "Current Status", key: "current_status", width: 16 },
@@ -168,6 +194,14 @@ export const GET = withErrorHandler(
         state: r.state ?? "—",
         status: r.status,
         outcome: r.call_outcome ?? "—",
+        failure_reason: failureReasonOf(r)?.label ?? "—",
+        // Blank rather than "No" for a successful call — "No" would read as
+        // "do not retry this", which is a different statement from "this one
+        // worked".
+        retryable: (() => {
+          const fr = failureReasonOf(r);
+          return fr ? (fr.retryable ? "Yes" : "No") : "—";
+        })(),
         intent_score: r.intent_score ?? "—",
         final_intent_score: r.final_intent_score ?? "—",
         current_status: r.current_status ?? "—",

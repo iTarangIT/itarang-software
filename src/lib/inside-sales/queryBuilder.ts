@@ -40,6 +40,8 @@ type BuildArgs = {
     q?: string | null;
     /** Restrict to leads that are with the NeoDove calling team. */
     neodoveOnly?: boolean;
+    /** Only leads who asked to be called back — from either system. */
+    callbackOnly?: boolean;
 };
 
 function tabFilter(tab: QueueTab, userId: string) {
@@ -73,7 +75,8 @@ function tabFilter(tab: QueueTab, userId: string) {
 function extraFilters({
     q,
     neodoveOnly,
-}: Pick<BuildArgs, "q" | "neodoveOnly">) {
+    callbackOnly,
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly">) {
     const parts: SQL[] = [];
     if (q) {
         const like = `%${q}%`;
@@ -83,6 +86,21 @@ function extraFilters({
     }
     if (neodoveOnly) {
         parts.push(sql` AND ${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
+    }
+    // "Who asked us to call back" — from EITHER system, because the rep asking
+    // does not care whether a robot or a telecaller recorded it.
+    //
+    // ⚠ The E-236 column goes through to_jsonb here, unlike on /leads where it
+    // is named directly. fetchAllTabCounts builds all five tab badges as five
+    // subqueries in ONE statement, so a parse-time failure on a database
+    // without E-236 would take the whole workspace down rather than one filter.
+    if (callbackOnly) {
+        parts.push(sql` AND (
+            EXISTS (SELECT 1 FROM ai_call_logs a
+                     WHERE a.lead_id = dl.id
+                       AND a.signals ->> 'callback_agreed' = 'yes')
+            OR to_jsonb(dl) ->> 'last_disposition' = 'As to Call Back'
+        )`);
     }
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
@@ -95,7 +113,16 @@ function tabOrder(tab: QueueTab) {
             // Band model: Qualified leads all share lead_score 90, so within a
             // band the queue is ordered by facts disclosed (info_signals_count
             // desc), per docs/intent_docs/intent_score.pdf §3.
-            return sql`ORDER BY dl.final_intent_score DESC NULLS LAST, dl.info_signals_count DESC NULLS LAST, dl.created_at DESC`;
+            // A callback request is time-sensitive in a way a score is not, so
+            // it sorts first: the dealer asked us to ring back, and the AI
+            // cannot, so the queue should surface them before anything else.
+            return sql`ORDER BY
+                EXISTS (SELECT 1 FROM ai_call_logs a
+                         WHERE a.lead_id = dl.id
+                           AND a.signals ->> 'callback_agreed' = 'yes') DESC,
+                dl.final_intent_score DESC NULLS LAST,
+                dl.info_signals_count DESC NULLS LAST,
+                dl.created_at DESC`;
         case "my_closed":
             return sql`ORDER BY dl.closed_at DESC NULLS LAST`;
         case "team":
@@ -112,11 +139,12 @@ export async function fetchQueueRows({
     limit,
     q,
     neodoveOnly,
+    callbackOnly,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId);
     const order = tabOrder(tab);
-    const search = extraFilters({ q, neodoveOnly });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -154,9 +182,13 @@ export async function countQueueRows({
     userId,
     q,
     neodoveOnly,
-}: Pick<BuildArgs, "tab" | "userId" | "q" | "neodoveOnly">): Promise<number> {
+    callbackOnly,
+}: Pick<
+    BuildArgs,
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly"
+>): Promise<number> {
     const where = tabFilter(tab, userId);
-    const search = extraFilters({ q, neodoveOnly });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -174,9 +206,12 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly">,
 ): Promise<Record<QueueTab, number>> {
-    const extra = extraFilters({ neodoveOnly: opts?.neodoveOnly });
+    const extra = extraFilters({
+        neodoveOnly: opts?.neodoveOnly,
+        callbackOnly: opts?.callbackOnly,
+    });
     const rows = await db.execute<{
         my_open: string;
         follow_ups: string;

@@ -9,6 +9,7 @@ import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { dialerSession, type DialerProvider } from "./dialerSession";
 import { summarizeRegion } from "@/lib/leads/regionSummary";
+import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
 // webhook the call is effectively orphaned — flip the row to failed and let
@@ -47,6 +48,15 @@ function autoName(opts: {
   return `${segment} · ${summarizeRegion(opts.region)} · ${ts}`;
 }
 
+export type CreateCampaignResult = {
+  /** null when the insert failed, or when nothing was left to dial. */
+  campaignId: string | null;
+  /** Rows actually inserted — never more than queueIds.length. */
+  queued: number;
+  /** Lead ids dropped because the AI has already had a connected call. */
+  blockedAiConnected: string[];
+};
+
 export async function createCampaign(opts: {
   queueIds: string[];
   provider: DialerProvider;
@@ -60,8 +70,36 @@ export async function createCampaign(opts: {
   // Explicit campaign name. Defaults to the auto-generated "Segment · Region ·
   // time" label. The List flow passes the user-typed list name.
   name?: string;
-}): Promise<string | null> {
+}): Promise<CreateCampaignResult> {
   try {
+    // THE HARD GUARANTEE for the AI-connected block.
+    //
+    // This is the single insert point for dialer_campaign_leads, so scrubbing
+    // here — unconditionally, for every caller — is what makes it impossible for
+    // a connected lead to be enrolled at all. It matters because
+    // /api/ai-dialer/start explicitly "trusts queueIds as authoritative": a modal
+    // left open for ten minutes, or a hand-crafted POST, would otherwise walk
+    // straight past the preview-time filter.
+    //
+    // Unconditional, not flag-driven: every caller of this function is an AI
+    // dialer campaign. The NeoDove human push does not come through here.
+    const { dialable: queueIds, blockedAiConnected } = await partitionAiConnected(
+      opts.queueIds,
+    );
+
+    if (blockedAiConnected.length > 0) {
+      console.warn(
+        `[campaignTracker.createCampaign] dropped ${blockedAiConnected.length} lead(s) the AI has already spoken to`,
+      );
+    }
+
+    // Nothing left to dial. Do NOT create the campaign — an empty queue would
+    // finalize on its first advance and leave a confusing zero-lead row in the
+    // history. The caller turns this into an honest error message.
+    if (queueIds.length === 0) {
+      return { campaignId: null, queued: 0, blockedAiConnected };
+    }
+
     const campaignId = newId("camp");
     const name =
       opts.name?.trim() ||
@@ -75,11 +113,11 @@ export async function createCampaign(opts: {
       category: opts.category ?? null,
       region_filter: opts.region ?? null,
       status: opts.status ?? "running",
-      total_leads: opts.queueIds.length,
+      total_leads: queueIds.length,
     });
 
-    if (opts.queueIds.length > 0) {
-      const rows = opts.queueIds.map((leadId, idx) => ({
+    if (queueIds.length > 0) {
+      const rows = queueIds.map((leadId, idx) => ({
         id: newId("cl"),
         campaign_id: campaignId,
         lead_id: leadId,
@@ -95,10 +133,10 @@ export async function createCampaign(opts: {
       }
     }
 
-    return campaignId;
+    return { campaignId, queued: queueIds.length, blockedAiConnected };
   } catch (err) {
     console.error("[campaignTracker.createCampaign] failed:", err);
-    return null;
+    return { campaignId: null, queued: 0, blockedAiConnected: [] };
   }
 }
 

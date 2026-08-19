@@ -47,6 +47,13 @@ interface CallUpdatePayload {
   signals?: unknown;
   scoreBreakdown?: unknown;
   scoringVersion?: string | null;
+  // E-250 — which PROMPT read this attempt's transcript. The per-attempt audit
+  // blob already records which BAND RULE scored it (scoringVersion); without
+  // the extraction side, a historical entry cannot be traced back to the
+  // calibration set that produced its signals, and that set now changes without
+  // a deploy.
+  extractionVersion?: string | null;
+  calibrationSetHash?: string | null;
   hardNegative?: boolean;
 }
 
@@ -104,6 +111,8 @@ export function updateLeadAfterCall(
     signals: payload?.signals ?? null,
     score_breakdown: payload?.scoreBreakdown ?? null,
     scoring_version: payload?.scoringVersion ?? null,
+    extraction_version: payload?.extractionVersion ?? null,
+    calibration_set_hash: payload?.calibrationSetHash ?? null,
     provider: payload?.provider || "bolna",
   };
 

@@ -21,8 +21,17 @@
 import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { inArray, sql } from "drizzle-orm";
-import { AI_DIALABLE_SQL } from "@/lib/ai-dialer/exclusionFilter";
+import {
+    AI_CONNECTED_SQL,
+    AI_DIALABLE_SQL,
+    IN_LIVE_DIALER_QUEUE_SQL,
+} from "@/lib/ai-dialer/exclusionFilter";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+import {
+    sanitizeLeadStateFilters,
+    type LeadStateFilters,
+} from "@/lib/leads/leadStateFilters";
+import { leadStatePredicates } from "@/lib/leads/leadStateSql";
 
 type RegionEntry = { state: string; cities?: string[] };
 
@@ -32,6 +41,35 @@ export type AudienceSelection = {
     pincodes?: string[];
     groupIds?: string[];
     category?: "hot" | "warm" | "cold" | "all";
+    /**
+     * AI-DIALER ONLY — drop leads the AI has already had a connected call with.
+     *
+     * DEFAULTS TO FALSE, and that is deliberate. This function is also the
+     * audience resolver for the NeoDove *human* calling push
+     * (/api/neodove/campaigns/[id]/{route,preview,push}), which MUST keep
+     * receiving those leads — handing them to a human is the whole point of
+     * blocking the robot. A default of true would force all three NeoDove routes
+     * to write `excludeAiConnected: false`, a double negative a reviewer has to
+     * decode as "yes, deliberately keep calling them".
+     *
+     * AI callers should never set this by hand — call resolveDialerAudience().
+     * And note the flag only governs the honesty of the DISPLAYED COUNT: the
+     * hard guarantee is the unconditional scrub in createCampaign(), so a caller
+     * that somehow bypasses this still cannot enrol a connected lead.
+     */
+    excludeAiConnected?: boolean;
+    /** AI-DIALER ONLY — drop leads already pending/calling in a live campaign. */
+    excludeQueuedInLiveCampaign?: boolean;
+    /**
+     * Lead-state narrowing: AI call state, attempt count, and the E-236
+     * L1/L2/L3 disposition. Applies to both purposes.
+     *
+     * NARROWING, not exclusion — these go into the SQL WHERE rather than the JS
+     * tally loop, so they never appear in excluded.byReason. "N excluded because
+     * you asked for never-called" is not a fact anyone wants reported; the
+     * hot/warm/cold bar should describe the audience the user actually selected.
+     */
+    filters?: LeadStateFilters;
 };
 
 export type AudienceRow = {
@@ -43,10 +81,23 @@ export type AudienceRow = {
     shop_name: string | null;
 };
 
+/** Same row plus the two projected booleans. Internal to the tally loop. */
+type AudienceRowWithFlags = AudienceRow & {
+    already_ai_connected: boolean | null;
+    already_queued: boolean | null;
+};
+
 export type AudienceResult = {
     counts: { hot: number; warm: number; cold: number; all: number };
     excluded: { total: number; byReason: Record<string, number> };
     totalWithPhone: number;
+    /**
+     * Leads in this region the AI has already spoken to. Populated for BOTH
+     * purposes: for the dialer it is the size of the hard block, and for the
+     * NeoDove preview it is a positive signal — those leads come with a
+     * transcript and a qualification read attached.
+     */
+    aiConnectedCount: number;
     queueIds: string[];
     queue: AudienceRow[];
 };
@@ -126,6 +177,16 @@ export async function resolveAudience(
         states.length > 0 || cities.length > 0 || pincodes.length > 0;
 
     // JSONB params rather than variadic IN-lists; drizzle parameterises sql``.
+    // Narrowing predicates, appended to the resolved CTE's WHERE. Sanitised
+    // first: `filters` can arrive straight off the wire, and only `disposition`
+    // is free text (parameterised below, never interpolated).
+    const stateFilters = leadStatePredicates(
+        sanitizeLeadStateFilters(selection.filters),
+    );
+    const filterClause = stateFilters.length
+        ? sql` AND ${sql.join(stateFilters, sql` AND `)}`
+        : sql``;
+
     const statesJson = JSON.stringify(states);
     const cityPairsJson = JSON.stringify(
         cities.map((c) => ({ state: c.state, city: c.city })),
@@ -142,6 +203,12 @@ export async function resolveAudience(
           dl.final_intent_score,
           dl.dealer_name,
           dl.shop_name,
+          -- PROJECTED, not filtered. A row removed in the WHERE never comes
+          -- back and therefore cannot be counted into excluded.byReason, which
+          -- is what the modal renders to explain the gap between "leads here"
+          -- and "leads we can dial".
+          ${AI_CONNECTED_SQL} AS already_ai_connected,
+          ${IN_LIVE_DIALER_QUEUE_SQL} AS already_queued,
           c.name AS canon_city,
           COALESCE(s_from_city.name, s_direct.name) AS canon_state,
           dl.city AS raw_city
@@ -153,16 +220,18 @@ export async function resolveAudience(
         WHERE dl.phone IS NOT NULL AND dl.phone <> ''
           -- BRD §0.2 — never queue a lead Inside Sales / ASM are working.
           AND ${AI_DIALABLE_SQL}
+          ${filterClause}
       ),
       bucketed AS (
         SELECT
           id, phone, pincode, current_status, final_intent_score,
-          dealer_name, shop_name,
+          dealer_name, shop_name, already_ai_connected, already_queued,
           COALESCE(canon_state, 'Unknown') AS state_bucket,
           COALESCE(canon_city, NULLIF(INITCAP(TRIM(raw_city)), ''), 'Unknown') AS city_bucket
         FROM resolved
       )
-      SELECT id, phone, current_status, final_intent_score, dealer_name, shop_name
+      SELECT id, phone, current_status, final_intent_score, dealer_name, shop_name,
+             already_ai_connected, already_queued
       FROM bucketed
       WHERE
         CASE
@@ -186,22 +255,41 @@ export async function resolveAudience(
         END
     `);
 
-    const rows: AudienceRow[] =
-        (result as { rows?: AudienceRow[] }).rows ??
-        (result as unknown as AudienceRow[]);
+    const rows: AudienceRowWithFlags[] =
+        (result as { rows?: AudienceRowWithFlags[] }).rows ??
+        (result as unknown as AudienceRowWithFlags[]);
 
     // Tally segments and apply the NO_CALL filter. Track excluded-by-reason so
     // the UI can explain the gap between "total leads with phone" and "dialable
     // leads" (e.g. 53 total vs 49 dialable for Haryana).
+    //
+    // Attribution is FIRST MATCH WINS, in the order below, so the buckets sum
+    // exactly to excluded.total and totalWithPhone - excluded.total === counts.all
+    // still holds. A converted lead that is also AI-connected is counted once,
+    // under already_ai_connected.
     const counts = { hot: 0, warm: 0, cold: 0, all: 0 };
     const excludedByReason: Record<string, number> = {
+        already_ai_connected: 0,
+        already_queued: 0,
         converted: 0,
         not_interested: 0,
         dnc: 0,
         blacklisted: 0,
     };
+    let aiConnectedCount = 0;
     const dialable: AudienceRow[] = [];
     for (const r of rows) {
+        // Counted for both purposes; only EXCLUDED for the AI dialer.
+        if (r.already_ai_connected) aiConnectedCount += 1;
+
+        if (selection.excludeAiConnected && r.already_ai_connected) {
+            excludedByReason.already_ai_connected += 1;
+            continue;
+        }
+        if (selection.excludeQueuedInLiveCampaign && r.already_queued) {
+            excludedByReason.already_queued += 1;
+            continue;
+        }
         const s = (r.current_status ?? "").toLowerCase().trim();
         if (NO_CALL_STATUSES.has(s)) {
             excludedByReason[s] = (excludedByReason[s] ?? 0) + 1;
@@ -231,7 +319,28 @@ export async function resolveAudience(
         counts,
         excluded: { total: excludedTotal, byReason: excludedByReason },
         totalWithPhone: rows.length,
+        aiConnectedCount,
         queueIds: filtered.map((r) => r.id),
         queue: filtered,
     };
+}
+
+/**
+ * The one entry point AI-dialer code should use.
+ *
+ * AI callers never see the exclusion flags, so they cannot forget them — which
+ * is why resolveAudience's defaults can stay false and the three NeoDove routes
+ * can stay untouched. See the note on AudienceSelection.excludeAiConnected.
+ */
+export async function resolveDialerAudience(
+    selection: Omit<
+        AudienceSelection,
+        "excludeAiConnected" | "excludeQueuedInLiveCampaign"
+    >,
+): Promise<AudienceResult> {
+    return resolveAudience({
+        ...selection,
+        excludeAiConnected: true,
+        excludeQueuedInLiveCampaign: true,
+    });
 }

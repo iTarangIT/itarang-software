@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import { aiConnectedSet } from "@/lib/ai-dialer/aiConnection";
 
 export const maxDuration = 60;
 
@@ -68,6 +69,22 @@ export async function POST(req: Request) {
       { success: false, error: "phone required" },
       { status: 400 },
     );
+  }
+
+  // The AI-connected hard block — see the note in the Bolna twin. A QStash
+  // message enqueued before the lead connected can arrive after it did.
+  if (payload.leadId) {
+    const connected = await aiConnectedSet([payload.leadId]);
+    if (connected.size > 0) {
+      console.warn(
+        `[elevenlabs/dispatch-call] dropping AI follow-up for ${payload.leadId}: already connected`,
+      );
+      return NextResponse.json({
+        success: false,
+        code: "ai_already_connected",
+        error: "The AI has already spoken with this dealer.",
+      });
+    }
   }
 
   const result = await triggerElevenLabsCall({

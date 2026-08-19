@@ -20,14 +20,8 @@ import {
     INTENT_SCORE_MAX,
     INTENT_SCORE_MIN,
 } from "@/lib/leads/intentBucket";
-import {
-    CONNECTED_DISPOSITIONS,
-    CONNECT_STATUS,
-    CONNECT_STATUS_LABEL,
-    DISPOSITION_BUCKETS,
-    NOT_CONNECTED_REASONS,
-    isKnownDisposition,
-} from "@/lib/leads/dispositions";
+import { isKnownDisposition } from "@/lib/leads/dispositions";
+import { DispositionPicker } from "@/components/leads/DispositionPicker";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 // ⚠ TYPE-ONLY from leadListQuery — it imports `db`, and a VALUE import here
 // drags the postgres driver into the browser bundle ("Can't resolve 'fs'").
@@ -122,6 +116,7 @@ export function LeadsFilterBar({
     busy,
 }: Props) {
     const moreCount = countSecondary(draft);
+    const aiFacets = facets?.aiSignals;
 
     // Dispositions present in the data but NOT in the CC sheet — a campaign
     // configured with NeoDove's stock vocabulary, or a value added in their
@@ -150,20 +145,8 @@ export function LeadsFilterBar({
             ...(value ? { intent: "" as const } : {}),
         });
 
-    // Picking a level clears the narrower ones, so the three selects can never
-    // encode an impossible combination — "Not Connected + Hot" would return
-    // nothing and look like a bug rather than a contradiction.
-    const setConnectStatus = (value: string) =>
-        onPatch({
-            connectStatus: value as LeadFilters["connectStatus"],
-            dispositionBucket: "",
-            disposition: "",
-        });
-    const setBucket = (value: string) =>
-        onPatch({
-            dispositionBucket: value as LeadFilters["dispositionBucket"],
-            disposition: "",
-        });
+    // The "picking a level clears the narrower ones" cascade now lives inside
+    // DispositionPicker, which owns it for every consumer.
 
     // "This month" / "Last month" — offset 0 and -1. Ported from the date row
     // the Leads tab used before the merge.
@@ -320,6 +303,39 @@ export function LeadsFilterBar({
                         }`}
                     />
                     NeoDove
+                </button>
+
+                {/* Callback requested. In the PRIMARY row, not behind "More
+                    filters", for the same reason NeoDove is: it is an ACTION
+                    filter — these dealers asked to be called back and the AI
+                    cannot do it — rather than a refinement, and it removes most
+                    of the list when on. Disabled at zero so nobody selects a
+                    filter that cannot match. */}
+                <button
+                    type="button"
+                    disabled={aiFacets?.leadsCallback === 0}
+                    onClick={() => onChange("callback", draft.callback ? "" : "1")}
+                    aria-pressed={draft.callback === "1"}
+                    title={
+                        aiFacets?.leadsCallback === 0
+                            ? "No lead has asked for a callback yet."
+                            : draft.callback
+                              ? "Showing only leads who asked to be called back — click to show all"
+                              : "Show only leads who asked to be called back. The AI cannot call them; they need a person."
+                    }
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                        draft.callback
+                            ? "border-amber-300 bg-amber-50 text-amber-700"
+                            : "border-gray-200 bg-white text-gray-600 hover:border-gray-400"
+                    }`}
+                >
+                    <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            draft.callback ? "bg-amber-500" : "bg-gray-300"
+                        }`}
+                    />
+                    Callback{aiFacets ? ` (${aiFacets.leadsCallback})` : ""}
                 </button>
 
                 <button
@@ -500,87 +516,104 @@ export function LeadsFilterBar({
                         <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                             Call disposition
                         </p>
+                        {/* The cascade itself lives in DispositionPicker so the
+                            campaign builder and the rep's Log Touchpoint form use
+                            the identical control — including the rule that the
+                            bucket select disappears under Not Connected. */}
+                        <DispositionPicker
+                            mode="filter"
+                            extraDispositions={extraDispositions}
+                            value={{
+                                connectStatus: draft.connectStatus,
+                                bucket: draft.dispositionBucket,
+                                disposition: draft.disposition,
+                            }}
+                            onChange={(next) =>
+                                onPatch({
+                                    connectStatus:
+                                        next.connectStatus as LeadFilters["connectStatus"],
+                                    dispositionBucket:
+                                        next.bucket as LeadFilters["dispositionBucket"],
+                                    disposition: next.disposition,
+                                })
+                            }
+                        />
+                    </div>
+
+                    {/* ── AI call state + signals ────────────────────────
+                        Every option carries its own count and is DISABLED at
+                        zero. The dialer has reached a small fraction of the
+                        pool, so most of these legitimately match almost
+                        nothing — and an option nobody can select is far better
+                        than one that silently returns an empty list. */}
+                    <div className="col-span-2 space-y-2 border-t border-gray-100 pt-3 md:col-span-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                            AI signals
+                            {aiFacets && (
+                                <span className="ml-2 font-normal normal-case tracking-normal text-gray-400">
+                                    {aiFacets.leadsCalled} of {aiFacets.totalLeads} leads
+                                    dialled · {aiFacets.leadsConnected} reached
+                                </span>
+                            )}
+                        </p>
                         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                             <select
-                                aria-label="Call outcome"
+                                aria-label="AI dialled"
                                 className={`${SELECT_CLASS} w-full`}
-                                value={draft.connectStatus}
-                                onChange={(e) => setConnectStatus(e.target.value)}
+                                value={draft.aiCalled}
+                                onChange={(e) => onChange("aiCalled", e.target.value)}
                             >
-                                <option value="">Any call outcome</option>
-                                {CONNECT_STATUS.map((s) => (
-                                    <option key={s} value={s}>
-                                        {CONNECT_STATUS_LABEL[s]}
-                                    </option>
-                                ))}
+                                <option value="">Any AI call state</option>
+                                <option
+                                    value="connected"
+                                    disabled={aiFacets?.leadsConnected === 0}
+                                >
+                                    AI reached them
+                                    {aiFacets ? ` (${aiFacets.leadsConnected})` : ""}
+                                </option>
+                                <option
+                                    value="attempted"
+                                    disabled={aiFacets?.leadsCalled === 0}
+                                >
+                                    AI called them
+                                    {aiFacets ? ` (${aiFacets.leadsCalled})` : ""}
+                                </option>
+                                <option value="never">Never called by AI</option>
                             </select>
 
-                            {/* Hidden, not disabled, when the call did not connect:
-                                the sheet gives those reasons no bucket at all, so
-                                there is nothing to choose rather than nothing
-                                currently choosable. */}
-                            {draft.connectStatus !== "not_connected" && (
-                                <select
-                                    aria-label="Disposition bucket"
-                                    className={`${SELECT_CLASS} w-full`}
-                                    value={draft.dispositionBucket}
-                                    onChange={(e) => setBucket(e.target.value)}
-                                >
-                                    <option value="">Any bucket</option>
-                                    {DISPOSITION_BUCKETS.map((b) => (
-                                        <option key={b} value={b}>
+                            <select
+                                aria-label="AI band"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.aiBand}
+                                onChange={(e) => onChange("aiBand", e.target.value)}
+                            >
+                                <option value="">Any AI band</option>
+                                {(["Qualified", "Warm", "Cold", "Disqualified"] as const).map(
+                                    (b) => (
+                                        <option
+                                            key={b}
+                                            value={b}
+                                            disabled={aiFacets?.band?.[b] === 0}
+                                        >
                                             {b}
+                                            {aiFacets ? ` (${aiFacets.band?.[b] ?? 0})` : ""}
                                         </option>
-                                    ))}
-                                </select>
-                            )}
+                                    ),
+                                )}
+                            </select>
 
                             <select
-                                aria-label="Disposition"
-                                className={`${SELECT_CLASS} col-span-2 w-full`}
-                                value={draft.disposition}
-                                onChange={(e) => onChange("disposition", e.target.value)}
+                                aria-label="Minimum signals disclosed"
+                                className={`${SELECT_CLASS} w-full`}
+                                value={draft.signalsMin}
+                                onChange={(e) => onChange("signalsMin", e.target.value)}
                             >
-                                <option value="">Any disposition</option>
-
-                                {draft.connectStatus !== "not_connected" &&
-                                    DISPOSITION_BUCKETS.filter(
-                                        (b) =>
-                                            !draft.dispositionBucket ||
-                                            draft.dispositionBucket === b,
-                                    ).map((b) => (
-                                        <optgroup key={b} label={`Connected › ${b}`}>
-                                            {CONNECTED_DISPOSITIONS[b].map((d) => (
-                                                <option key={`${b}:${d}`} value={d}>
-                                                    {d}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    ))}
-
-                                {/* A bucket is a CONNECTED concept, so once one is
-                                    picked the not-connected reasons cannot apply. */}
-                                {draft.connectStatus !== "connected" &&
-                                    !draft.dispositionBucket && (
-                                        <optgroup label="Not connected">
-                                            {NOT_CONNECTED_REASONS.map((d) => (
-                                                <option key={d} value={d}>
-                                                    {d}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-
-                                {extraDispositions.length > 0 &&
-                                    !draft.dispositionBucket && (
-                                        <optgroup label="Other (seen in NeoDove)">
-                                            {extraDispositions.map((d) => (
-                                                <option key={d} value={d}>
-                                                    {d}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
+                                <option value="">Any number of signals</option>
+                                {[1, 2, 3, 4, 5].map((n) => (
+                                    <option key={n} value={String(n)}>
+                                        {n}+ signals disclosed
+                                    </option>
+                                ))}
                             </select>
                         </div>
                     </div>
