@@ -24,6 +24,9 @@ import {
   StatusChip,
   formatINR,
 } from "@/components/auction/AuctionPrimitives";
+// Pure arithmetic, no database import — the same function the server raises the
+// sanction from, so what a dealer is quoted before bidding is what they get.
+import { refinanceSplit } from "@/lib/auction/refinance-split";
 
 interface LotItem {
   serial: string;
@@ -70,9 +73,22 @@ interface LiveState {
 
 export function LotDetail({ lotId }: { lotId: string }) {
   const qc = useQueryClient();
-  const [amount, setAmount] = useState("");
+  const [typedAmount, setAmount] = useState("");
+  const [touched, setTouched] = useState(false);
   const [autoMax, setAutoMax] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
+
+  // Lock the page behind the lightbox. Without this a phone scrolls the lot
+  // underneath the photograph, and closing lands the bidder somewhere else on
+  // the page than where they opened it.
+  useEffect(() => {
+    if (!lightbox) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [lightbox]);
 
   const detail = useQuery({
     queryKey: ["auction", "dealer", "detail", lotId],
@@ -114,10 +130,11 @@ export function LotDetail({ lotId }: { lotId: string }) {
   // Keep the input at the minimum until the bidder types over it. Once they
   // have, leave it alone — overwriting what someone is typing every 2s is the
   // fastest way to make a live form unusable.
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    if (!touched && minNext > 0) setAmount(String(minNext));
-  }, [minNext, touched]);
+  //
+  // DERIVED, not synced. This used to be a `useEffect` that called `setAmount`
+  // on every change to `minNext` — a cascading render twice a second, from a
+  // poll, for a value that is a pure function of state already in hand.
+  const amount = touched || minNext <= 0 ? typedAmount : String(minNext);
 
   const bid = useMutation({
     mutationFn: async (value: number) => {
@@ -288,52 +305,67 @@ export function LotDetail({ lotId }: { lotId: string }) {
           )}
 
           <div className="auc-eyebrow">What is in this lot</div>
-          <div className="auc-scroll-x">
-            <table style={{ inlineSize: "100%", borderCollapse: "collapse", fontSize: "0.8125rem" }}>
+
+          {/* Wide: the ledger table. The five columns were previously forced
+              into a horizontal scroller on every phone, which is the one place
+              a bidder is most likely to be standing. */}
+          <div className="auc-only-wide auc-scroll-x">
+            <table className="auc-table">
               <thead>
                 <tr>
-                  {["Serial", "Model", "Capacity", "Condition", "SOH"].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        textAlign: "left",
-                        padding: "0.5rem 0.75rem 0.5rem 0",
-                        borderBottom: "1px solid var(--auc-ink)",
-                        fontFamily: "var(--auc-mono)",
-                        fontSize: "0.5625rem",
-                        letterSpacing: "0.1em",
-                        textTransform: "uppercase",
-                        color: "var(--auc-ink-2)",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
+                  <th>Serial</th>
+                  <th>Model</th>
+                  <th>Capacity</th>
+                  <th>Condition</th>
+                  <th>SOH</th>
                 </tr>
               </thead>
               <tbody>
                 {lot.items.map((i) => (
                   <tr key={i.serial}>
-                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", borderBottom: "1px solid var(--auc-rule)", fontFamily: "var(--auc-mono)", fontSize: "0.75rem" }}>
-                      {i.serial}
+                    <td>
+                      <span className="auc-lotcode">{i.serial}</span>
                     </td>
-                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", borderBottom: "1px solid var(--auc-rule)" }}>
-                      {i.model ?? "—"}
-                    </td>
-                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", borderBottom: "1px solid var(--auc-rule)" }}>
-                      {i.capacity ?? "—"}
-                    </td>
-                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", borderBottom: "1px solid var(--auc-rule)" }}>
+                    <td>{i.model ?? "—"}</td>
+                    <td>{i.capacity ?? "—"}</td>
+                    <td>
                       <ConditionChip condition={i.condition} />
                     </td>
-                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", borderBottom: "1px solid var(--auc-rule)" }}>
+                    <td>
                       <SohBar soh={i.soh} />
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Narrow: one card per battery. */}
+          <div className="auc-only-narrow auc-stack">
+            {lot.items.map((i) => (
+              <article key={i.serial} className="auc-mini-card">
+                <header>
+                  <span className="auc-pick-serial">{i.serial}</span>
+                  <ConditionChip condition={i.condition} />
+                </header>
+                <dl className="auc-dl">
+                  <div>
+                    <dt>Model</dt>
+                    <dd>{i.model ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>Capacity</dt>
+                    <dd>{i.capacity ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>State of health</dt>
+                    <dd>
+                      <SohBar soh={i.soh} />
+                    </dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
           </div>
         </section>
 
@@ -368,6 +400,29 @@ export function LotDetail({ lotId }: { lotId: string }) {
                 </span>
               )}
             </div>
+
+            {/* [BRD §13/§14] What "cash + refinance" actually costs, shown
+                BEFORE the bid. The label has always been on the card; the
+                numbers behind it were only discoverable after winning, which
+                told a dealer the price of the lot but not the price of the
+                deal. Derived from the same pure function the sanction is
+                raised from, so the two can never disagree. */}
+            {lot.auction_type === "cash_refinance" ? (
+              (() => {
+                const split = refinanceSplit(minNext);
+                return (
+                  <div className="auc-reach" style={{ marginBlockEnd: "0.875rem" }}>
+                    <b>{formatINR(split.cash_due)} cash</b>
+                    <p>
+                      at the current minimum, with {formatINR(split.financed)}{" "}
+                      financed over {split.tenure_months} months — about{" "}
+                      {formatINR(split.indicative_emi)} a month. Indicative:
+                      the final split is fixed against your winning bid.
+                    </p>
+                  </div>
+                );
+              })()
+            ) : null}
 
             {isLive ? (
               <>
@@ -480,31 +535,33 @@ export function LotDetail({ lotId }: { lotId: string }) {
       </div>
 
       {lightbox && (
+        /* The `ref={(el) => el?.focus()}` this used to carry re-ran on EVERY
+           render, so the 2-second live-state poll stole focus back from
+           anything inside the dialog twice a second. Focus is taken once, on
+           mount, by the close button. */
         <div
+          className="auc-lightbox"
           onClick={() => setLightbox(null)}
           onKeyDown={(e) => e.key === "Escape" && setLightbox(null)}
           role="dialog"
           aria-modal="true"
           aria-label="Photograph"
           tabIndex={-1}
-          ref={(el) => el?.focus()}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 100,
-            background: "rgb(2 4 10 / 0.9)",
-            display: "grid",
-            placeItems: "center",
-            padding: "2rem",
-            cursor: "zoom-out",
-          }}
+          style={{ cursor: "zoom-out" }}
         >
+          <button
+            type="button"
+            className="auc-lightbox-x"
+            autoFocus
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightbox(null);
+            }}
+          >
+            Close
+          </button>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={lightbox}
-            alt=""
-            style={{ maxInlineSize: "100%", maxBlockSize: "100%", objectFit: "contain" }}
-          />
+          <img src={lightbox} alt="" />
         </div>
       )}
 

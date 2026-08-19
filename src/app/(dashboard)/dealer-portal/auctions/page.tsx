@@ -11,6 +11,7 @@
  * deliberately skips `/api`.
  */
 import "@/app/auction-theme.css";
+import { Suspense } from "react";
 import { AuctionBrowser } from "./_components/AuctionBrowser";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +22,23 @@ export const metadata = {
 
 export default function DealerAuctionsPage() {
   return (
-    <div className="p-6">
-      <AuctionBrowser />
+    // The browser reads its filters from the query string so a search can be
+    // bookmarked and shared. `useSearchParams` needs a Suspense boundary above
+    // it or the whole route opts out of static rendering with a build warning.
+    <div className="p-4 md:p-6">
+      <Suspense
+        fallback={
+          <div className="auction-sheet">
+            <div className="auc-skel" style={{ height: "3rem", width: "45%" }} />
+            <div
+              className="auc-skel"
+              style={{ height: "20rem", marginBlockStart: "1.5rem" }}
+            />
+          </div>
+        }
+      >
+        <AuctionBrowser />
+      </Suspense>
     </div>
   );
 }

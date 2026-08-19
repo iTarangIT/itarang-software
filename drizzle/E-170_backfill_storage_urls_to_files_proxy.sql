@@ -27,6 +27,26 @@
 -- Each statement is wrapped so a missing table/column on a divergent DB is
 -- skipped rather than aborting the whole migration.
 
+-- URGENCY (2026-08-18): this file was written but NEVER APPLIED — neither
+-- database-2 (prod) nor database-1 (sandbox). It has stopped being a tidy-up and
+-- become a live bug. The Supabase project these URLs name (`zziynfmqfvchkheqnqqr`)
+-- has since been DELETED, so its subdomain no longer resolves: a browser opening
+-- one of these links gets DNS_PROBE_FINISHED_NXDOMAIN, not a 404. That is what
+-- "an onboarded dealer's documents are not visible" looks like on the admin
+-- review page (284 rows on prod, 18 dealer applications).
+--
+-- Bucket scope is now explicit — only `documents`, `dealer-documents` and
+-- `call-recordings` are rewritten, because those are the three buckets
+-- /api/files accepts. A URL for any other bucket is left alone rather than
+-- turned into a link that 404s with "Unknown bucket". (Verified 2026-08-18: no
+-- other bucket appears in either database, so this is a guard, not a change.)
+--
+-- BYTES: 222 of the 284 prod rows have their object in S3 and start working the
+-- moment this runs. 62 do not (57 dealer documents across 6 dealers + 5 expense
+-- bills) — they were already missing from Supabase when the copy ran, so they are
+-- unrecoverable and must be re-uploaded. Rewriting them is still correct: the link
+-- then returns a readable "file no longer stored" 404 from our own domain.
+
 DO $do$
 DECLARE
   -- table, column, is_jsonb
@@ -40,6 +60,10 @@ DECLARE
     ARRAY['dealer_onboarding_documents',  'file_url',            'f'],
     ARRAY['kyc_documents',                'file_url',            'f'],
     ARRAY['other_document_requests',      'file_url',            'f'],
+    -- Added 2026-08-18 (see the URGENCY note above): both were missed by the
+    -- original enumeration and hold the same dead absolute URLs.
+    ARRAY['expense_submissions',          'bill_url',            'f'],
+    ARRAY['lead_touchpoints',             'recording_url',       'f'],
     ARRAY['product_selections',           'battery_photo_urls',  't'],
     ARRAY['product_selections',           'charger_photo_urls',  't']
   ];
@@ -51,12 +75,12 @@ BEGIN
     BEGIN
       IF is_json THEN
         EXECUTE format(
-          'UPDATE %I SET %I = regexp_replace(%I::text, ''https?://[^/]+/storage/v1/object/public/'', ''/api/files/'', ''g'')::jsonb
-             WHERE %I::text LIKE ''%%/storage/v1/object/public/%%''', t, c, c, c);
+          'UPDATE %I SET %I = regexp_replace(%I::text, ''https?://[^/]+/storage/v1/object/public/(documents|dealer-documents|call-recordings)/'', ''/api/files/\1/'', ''g'')::jsonb
+             WHERE %I::text ~ ''https?://[^/]+/storage/v1/object/public/(documents|dealer-documents|call-recordings)/''', t, c, c, c);
       ELSE
         EXECUTE format(
-          'UPDATE %I SET %I = regexp_replace(%I, ''https?://[^/]+/storage/v1/object/public/'', ''/api/files/'', ''g'')
-             WHERE %I LIKE ''%%/storage/v1/object/public/%%''', t, c, c, c);
+          'UPDATE %I SET %I = regexp_replace(%I, ''https?://[^/]+/storage/v1/object/public/(documents|dealer-documents|call-recordings)/'', ''/api/files/\1/'', ''g'')
+             WHERE %I ~ ''https?://[^/]+/storage/v1/object/public/(documents|dealer-documents|call-recordings)/''', t, c, c, c);
       END IF;
       RAISE NOTICE 'backfilled %.%', t, c;
     EXCEPTION

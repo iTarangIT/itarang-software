@@ -272,6 +272,45 @@ export async function listBatteries(input: ListBatteriesInput): Promise<{
 }
 
 /**
+ * Tenant-wide tallies for the register's summary strip.
+ *
+ * Deliberately IGNORES the caller's state/search filters: these are the "how
+ * much stock do I hold" numbers, and a count that shrank every time someone
+ * typed in the search box would be answering a different question. One
+ * grouped scan rather than nine `count(*)` round trips.
+ *
+ * `awaiting_photos` counts the batteries a dealer could not bid on today —
+ * the photographs are the whole auction listing, so a battery without them is
+ * stock that cannot be sold, which is the one number worth alarming on.
+ */
+export async function batteryCounts(tenant_id: string): Promise<{
+  total: number;
+  awaiting_photos: number;
+  by_state: Record<string, number>;
+}> {
+  const rows = await db
+    .select({
+      state_code: recoveryBatteries.state_code,
+      c: sql<number>`count(*)::int`,
+      no_photos: sql<number>`count(*) filter (where coalesce(array_length(${recoveryBatteries.image_urls}, 1), 0) = 0)::int`,
+    })
+    .from(recoveryBatteries)
+    .where(eq(recoveryBatteries.tenant_id, tenant_id))
+    .groupBy(recoveryBatteries.state_code);
+
+  const by_state: Record<string, number> = {};
+  let total = 0;
+  let awaiting_photos = 0;
+  for (const r of rows) {
+    const n = Number(r.c ?? 0);
+    by_state[r.state_code] = n;
+    total += n;
+    awaiting_photos += Number(r.no_photos ?? 0);
+  }
+  return { total, awaiting_photos, by_state };
+}
+
+/**
  * Appends photo paths to the battery.
  *
  * APPENDS, never replaces. Photos arrive one request per file from the intake
