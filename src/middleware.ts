@@ -414,8 +414,17 @@ export async function middleware(request: NextRequest) {
   // already falls through un-redirected today, but that is accidental rather
   // than intentional: listing it means a future isProtectedRoute widening can't
   // silently lock the only way back into a locked-out account.
+  // BRD §16 — /auctions is the public shop window for live battery lots, and
+  // the first deliberately unauthenticated surface in this app. It is listed
+  // here for the same reason /reset-password is: it falls through today because
+  // no protected prefix happens to match it, and accidental is not the same as
+  // intended. The route it renders carries no bidder data, no reserve and no
+  // live bid; bidding still requires a dealer login.
   const isPublicRoute =
-    path === "/login" || path === "/logout" || path === "/reset-password";
+    path === "/login" ||
+    path === "/logout" ||
+    path === "/reset-password" ||
+    path === "/auctions";
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>
@@ -460,8 +469,21 @@ export async function middleware(request: NextRequest) {
   // Role lives on AWS RDS, not Supabase — read it from app_metadata (synced by
   // /api/user/profile on each login). Fallbacks: user_metadata, Supabase users
   // table (legacy), default "user".
-  const appMetadataRole = (user.app_metadata as { role?: string } | undefined)?.role;
-  const userMetadataRole = (user.user_metadata as { role?: string } | undefined)?.role;
+  //
+  // A literal "user" in either metadata slot is a PLACEHOLDER, not a grant —
+  // it is what requireAuthWithSupabaseUser() synthesises when the active
+  // database has no row for the auth user, and it leaked into app_metadata via
+  // the profile sync. Treat it as absent so the fallbacks run; otherwise an
+  // account whose real role lives one slot down (user_metadata says
+  // nbfc_partner, app_metadata says user) is bounced off its own portal. Same
+  // rule as getSessionUser() in src/lib/nbfc/tenant.ts — keep them in step.
+  const notPlaceholder = (r?: string) => (r && r.toLowerCase() !== "user" ? r : undefined);
+  const appMetadataRole = notPlaceholder(
+    (user.app_metadata as { role?: string } | undefined)?.role,
+  );
+  const userMetadataRole = notPlaceholder(
+    (user.user_metadata as { role?: string } | undefined)?.role,
+  );
 
   let legacyRole: string | undefined;
   if (!appMetadataRole && !userMetadataRole) {

@@ -59,10 +59,22 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
   if (!user) return null;
 
   // Role is on app_metadata after login sync, with a DB fallback.
+  //
+  // "user" is NOT a role anyone is granted — it is the placeholder
+  // requireAuthWithSupabaseUser() synthesises when the active database has no
+  // row for the auth user, and /api/user/profile used to sync that placeholder
+  // into app_metadata. Because DATABASE_URL flips between database-1 and
+  // database-2 (near-disjoint user tables) while Supabase auth is shared, a
+  // genuine nbfc_partner who only exists in the other database came back here
+  // as "user" and was refused at requireNbfcAccess(). So a literal "user" in
+  // either metadata slot is treated as "unknown, keep looking", the same as
+  // an empty string — the profile route no longer writes it, but the accounts
+  // it already stamped still carry it.
   const appRole = (user.app_metadata as { role?: string } | undefined)?.role;
   const userMetaRole = (user.user_metadata as { role?: string } | undefined)?.role;
+  const real = (r?: string) => (r && r.toLowerCase() !== "user" ? r : undefined);
 
-  let role = (appRole ?? userMetaRole ?? "").toLowerCase();
+  let role = (real(appRole) ?? real(userMetaRole) ?? "").toLowerCase();
   if (!role) {
     const rows = await db
       .select({ role: users.role })

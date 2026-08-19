@@ -16,6 +16,7 @@ import {
 } from "@/lib/onboarding/correction-catalog";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
+import { viewableFileUrl } from "@/lib/storage/legacyUrl";
 import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
 import {
   agreementModeFor,
@@ -232,7 +233,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       id: doc.id,
       name: doc.file_name || doc.document_type,
       documentType: doc.document_type,
-      url: doc.file_url || "",
+      // Legacy rows hold an absolute URL on the now-deleted Supabase project;
+      // rewrite to the /api/files proxy so the link resolves (E-251 backfill
+      // does the same in the DB — this covers envs it has not reached yet).
+      url: viewableFileUrl(doc.file_url) || "",
       docStatus: doc.doc_status,
       verificationStatus: doc.verification_status,
       uploadedAt: doc.uploaded_at,
@@ -448,7 +452,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
               agreementRef: row.agreement_ref || null,
               agreementSignedOn: row.agreement_signed_on || null,
               copyUrl: row.provider_signing_url || null,
-              signedAgreementUrl: row.signed_agreement_url || null,
+              signedAgreementUrl: viewableFileUrl(row.signed_agreement_url) || null,
               requestId: row.request_id || null,
               stampStatus: row.stamp_status || "pending",
               completionStatus: row.completion_status || "pending",

@@ -31,7 +31,10 @@ interface Row {
   current_dpd: number | null;
   outstanding_amount: number | null;
   imei: string | null;
+  /** VPS telemetry reading. Display only — never gates a transition. */
   live_soh_pct: number | null;
+  /** `step1.soh_percent` from the latest evaluation. This is what gates a move. */
+  eval_soh_pct: number | null;
   age_days: number;
 }
 
@@ -188,6 +191,34 @@ export default function RecoveryKanban({
   );
 }
 
+/**
+ * Why a stage move is not offered — or null when it is.
+ *
+ * [E-233] Mirrors assertSohAllowsStage() in stages.ts, which is where this is
+ * actually enforced. Unknown SOH fails too — a missing reading is not evidence
+ * the battery clears anything.
+ *
+ * Reads the MEASURED figure, i.e. the latest evaluation's `step1.soh_percent`,
+ * because that is the only number the server checks. This used to read
+ * `live_soh_pct` (VPS telemetry), which is null for every battery without an
+ * IoT device on the VPS — so an inspected battery sat behind a disabled button
+ * whose tooltip asked for the evaluation that already existed.
+ */
+function blockedReasonFor(row: Row, n: Stage): string | null {
+  if (n !== "refurbishable" && n !== "ready_for_auction") return null;
+  const soh = row.eval_soh_pct;
+  if (soh == null) {
+    return "Record an evaluation first — no state of health on file";
+  }
+  if (soh < SOH_SCRAP_BELOW) {
+    return `SOH is ${soh}%, below the ${SOH_SCRAP_BELOW}% scrap floor — this battery can only be scrapped`;
+  }
+  if (n === "refurbishable" && soh < SOH_REFURBISHABLE_MIN) {
+    return `SOH is ${soh}%, below the ${SOH_REFURBISHABLE_MIN}% refurbishment threshold — send it straight to auction as partial working`;
+  }
+  return null;
+}
+
 function Card({
   row,
   busy,
@@ -215,8 +246,21 @@ function Card({
           </p>
         </div>
         <div className="text-right">
-          {row.live_soh_pct != null ? (
-            <p className="text-[11px] font-bold tabular-nums text-slate-700">
+          {/* Prefer the measured figure — it is the one the stage buttons and
+              the server both judge the battery on. Telemetry is the fallback
+              so a not-yet-inspected battery still shows something. */}
+          {row.eval_soh_pct != null ? (
+            <p
+              className="text-[11px] font-bold tabular-nums text-slate-700"
+              title="Measured at inspection"
+            >
+              SOH {Math.round(row.eval_soh_pct)}%
+            </p>
+          ) : row.live_soh_pct != null ? (
+            <p
+              className="text-[11px] font-bold tabular-nums text-slate-400"
+              title="Live telemetry — not an inspection reading"
+            >
               SOH {Math.round(row.live_soh_pct)}%
             </p>
           ) : null}
@@ -239,21 +283,7 @@ function Card({
       {next.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1">
           {next.map((n) => {
-            // [E-233] Mirrors assertSohAllowsStage() in stages.ts, which is
-            // where this is actually enforced. Unknown SOH fails too — a
-            // missing reading is not evidence the battery clears anything.
-            const soh = row.live_soh_pct;
-            const unknownSoh = soh == null;
-            let blockedReason: string | null = null;
-            if (n === "refurbishable" || n === "ready_for_auction") {
-              if (unknownSoh) {
-                blockedReason = "Record an evaluation first — no state of health on file";
-              } else if (soh < SOH_SCRAP_BELOW) {
-                blockedReason = `SOH is ${soh}%, below the ${SOH_SCRAP_BELOW}% scrap floor — this battery can only be scrapped`;
-              } else if (n === "refurbishable" && soh < SOH_REFURBISHABLE_MIN) {
-                blockedReason = `SOH is ${soh}%, below the ${SOH_REFURBISHABLE_MIN}% refurbishment threshold — send it straight to auction as partial working`;
-              }
-            }
+            const blockedReason = blockedReasonFor(row, n);
             const blocked = blockedReason !== null;
             return (
               <button
@@ -268,6 +298,36 @@ function Card({
             );
           })}
         </div>
+      ) : null}
+
+      {/* The gate, said out loud. A disabled button's tooltip only appears on
+          hover — and not at all on touch — so an operator saw two greyed-out
+          buttons and no way forward, while the wizard that unblocks them sat
+          in a different section higher up the page. When the block is the
+          missing evaluation, the card links straight to that wizard with this
+          battery preselected; the other SOH bands are terminal facts about
+          the battery, so they are stated rather than linked. */}
+      {row.stage === "needs_inspection" && row.eval_soh_pct == null ? (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded bg-amber-50 px-2 py-1.5">
+          <p className="text-[10px] leading-snug text-amber-800">
+            No state of health on file — inspect first to unlock refurbish /
+            auction.
+          </p>
+          <a
+            href={`?evaluate=${encodeURIComponent(row.id)}#battery-evaluation`}
+            className="shrink-0 rounded bg-amber-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-amber-700"
+          >
+            Evaluate →
+          </a>
+        </div>
+      ) : row.stage === "needs_inspection" &&
+        row.eval_soh_pct != null &&
+        row.eval_soh_pct < SOH_REFURBISHABLE_MIN ? (
+        <p className="mt-2 text-[10px] leading-snug text-slate-500">
+          {row.eval_soh_pct < SOH_SCRAP_BELOW
+            ? `SOH ${Math.round(row.eval_soh_pct)}% is below the ${SOH_SCRAP_BELOW}% floor — scrap only.`
+            : `SOH ${Math.round(row.eval_soh_pct)}% is below the ${SOH_REFURBISHABLE_MIN}% refurbishment threshold — goes to auction as partial working.`}
+        </p>
       ) : null}
 
       {row.imei && row.loan_application_id ? (

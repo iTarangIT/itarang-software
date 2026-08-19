@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -17,11 +17,17 @@ async function resolveCategoryName(input: string): Promise<string> {
   return cat?.name ?? input;
 }
 
-// BRD V2 §2.3 — dealer battery inventory list for Step 4.
+// BRD V2 §2.3 — dealer battery inventory list for the product picker.
 // Filters: dealer_id + asset_type=Battery + status=available.
-// Reserved/Dispatched/Sold are hidden — Step 4 only offers selectable stock.
-// Optional query params: category, subCategory.
+// Reserved/Dispatched/Sold are hidden — the picker only offers selectable stock.
+// Optional query params: category, subCategory, includeSerials.
 // Sort: oem_invoice_date ASC (oldest first — BRD ageing priority rule).
+//
+// `includeSerials` (comma-separated) widens the status filter to also return
+// those specific serials whatever state they are in. Without it, a lead whose
+// battery is already reserved renders an EMPTY picker and silently loses the
+// existing choice — which is exactly what leads submitted before the
+// Step-4/Step-5 split look like, since Step 4 used to reserve on submit.
 
 export async function GET(
   req: NextRequest,
@@ -42,11 +48,20 @@ export async function GET(
     const { searchParams } = new URL(req.url);
     const category = searchParams.get("category");
     const subCategory = searchParams.get("subCategory");
+    const includeSerials = (searchParams.get("includeSerials") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
       or(eq(inventory.asset_type, "Battery"), eq(inventory.asset_type, "battery"))!,
-      eq(inventory.status, "available"),
+      includeSerials.length > 0
+        ? or(
+            eq(inventory.status, "available"),
+            inArray(inventory.serial_number, includeSerials),
+          )!
+        : eq(inventory.status, "available"),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);

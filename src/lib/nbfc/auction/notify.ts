@@ -802,3 +802,70 @@ export async function runAuctionNotifications(): Promise<FanOutSummary[]> {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// 6. auction.paused / auction.resumed / auction.cancelled
+// ---------------------------------------------------------------------------
+/**
+ * Tells everyone who has bid that an admin froze, un-froze or pulled the lot.
+ *
+ * `pauseAuction()` has always RETURNED a `notified_bidders` count — of people
+ * it would have told — and sent nothing. From a bidder's side of the glass a
+ * paused auction is indistinguishable from a live one whose countdown has
+ * stopped moving, and a cancelled one simply disappears with their money
+ * committed. These are the three moments where silence is worst.
+ *
+ * Best-effort, like every other notifier here: a lot must never fail to pause
+ * because an email bounced.
+ */
+export async function notifyLotLifecycle(input: {
+  lot_id: string;
+  event: "paused" | "resumed" | "cancelled";
+  reason?: string | null;
+}): Promise<number> {
+  try {
+    const facts = await loadLotFacts(input.lot_id);
+    if (!facts) return 0;
+
+    const dealers = await biddersOn(input.lot_id);
+    if (dealers.length === 0) return 0;
+
+    const verb =
+      input.event === "paused"
+        ? "paused"
+        : input.event === "resumed"
+          ? "back open"
+          : "cancelled";
+
+    const body =
+      input.event === "paused"
+        ? `Bidding on ${headline(facts)} is on hold. Nothing you have bid is lost — you will be told the moment it reopens.`
+        : input.event === "resumed"
+          ? `Bidding on ${headline(facts)} has reopened. The deadline was pushed out by however long it was paused, so you have not lost time.`
+          : `${headline(facts)} has been withdrawn and will not be sold. No bid you placed on it stands.`;
+
+    await emit({
+      type: `auction.${input.event}` as const,
+      title: `Lot ${facts.lot_code} ${verb}`,
+      message: input.reason ? `${body} Reason: ${input.reason}` : body,
+      stage: "Auction",
+      from: SYSTEM_PARTY,
+      data: {
+        lot_id: facts.lot_id,
+        lot_code: facts.lot_code,
+        event: input.event,
+        reason: input.reason ?? null,
+      },
+      to: dealers.map((dealerId) => ({
+        audience: { kind: "dealer" as const, dealerId },
+        as: DEALER_PARTY,
+        href: lotHref(facts.lot_id),
+      })),
+    });
+
+    return dealers.length;
+  } catch (err) {
+    console.error(`[auction] ${input.event} notification failed:`, err);
+    return 0;
+  }
+}
