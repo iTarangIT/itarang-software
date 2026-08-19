@@ -18,6 +18,8 @@
 import { eq, and, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { closeLotNow } from "@/lib/nbfc/auction/scheduler";
+import { verifyStepUp, stepUpRequired } from "@/lib/nbfc/security/step-up";
+import { notifyLotLifecycle } from "@/lib/nbfc/auction/notify";
 import {
   auctionLots,
   auctionBids,
@@ -26,17 +28,13 @@ import {
 } from "@/lib/db/schema";
 
 // ---------------------------------------------------------------------------
-// MFA token verifier — same convention as E-070 / E-089 so deterministic
-// test tokens stay interoperable across auction admin actions.
+// Step-up re-authentication.
 // ---------------------------------------------------------------------------
-const MFA_TEST_PASS_PREFIX = "mfa_ok";
-function verifyMfaToken(token: string | undefined | null): boolean {
-  if (!token || typeof token !== "string") return false;
-  if (token.startsWith("INVALID")) return false;
-  if (token.startsWith(MFA_TEST_PASS_PREFIX)) return true;
-  if (/^\d{6,8}$/.test(token)) return true;
-  return false;
-}
+// The local verifier that used to live here accepted any 6–8 digit string, so
+// `123456` could end a live auction. It has been replaced by a single shared
+// implementation that actually checks the acting user's credential — see
+// `@/lib/nbfc/security/step-up` for why password re-entry rather than a second
+// factor, and what would need to change to upgrade it.
 
 // ---------------------------------------------------------------------------
 // Action-code constants — keep in sync with the YAML and the schema comment.
@@ -162,7 +160,11 @@ export type ReduceTimeResult = {
 export async function reduceTime(
   input: ReduceTimeInput,
 ): Promise<ReduceTimeResult> {
-  if (!verifyMfaToken(input.mfa_token)) {
+  const stepUpOk = await verifyStepUp({
+    user_id: input.actor_user_id,
+    token: input.mfa_token,
+  });
+  if (!stepUpOk) {
     throw new Error("UNAUTHORIZED: invalid mfa_token");
   }
 
@@ -279,15 +281,21 @@ export async function pauseAuction(input: PauseInput): Promise<PauseResult> {
     throw new Error(`CONFLICT: lot is not live (status="${lot.status}")`);
   }
 
-  // notified_bidders = distinct bidder count on this lot. The bidder
-  // notification sender itself lives outside this service (E-061 notification
-  // pipeline); we simply record how many distinct bidders we *would* notify.
-  const bidderRows = await db
-    .select({ tenant_id: auctionBids.tenant_id })
-    .from(auctionBids)
-    .where(eq(auctionBids.lot_id, input.lot_id))
-    .groupBy(auctionBids.tenant_id);
-  const notifiedBidders = bidderRows.length;
+  // [FIX] This used to count the bidders it *would* notify and send nothing —
+  // the comment said so plainly: "the bidder notification sender itself lives
+  // outside this service". Nothing outside this service ever called one. From a
+  // bidder's side of the glass a paused auction is indistinguishable from a
+  // live one whose countdown has stopped, so the silence was the worst part.
+  //
+  // It also counted DISTINCT tenant_id, which on a dealer bid carries the
+  // seller's tenant — so a lot with twenty competing dealers reported one
+  // bidder. Counting the dealer is both the honest number and the number the
+  // notifier actually reaches.
+  const notifiedBidders = await notifyLotLifecycle({
+    lot_id: input.lot_id,
+    event: "paused",
+    reason: input.reason ?? null,
+  });
 
   await db.transaction(async (tx) => {
     await tx
@@ -390,6 +398,15 @@ export async function resumeAuction(input: ResumeInput): Promise<ResumeResult> {
     });
   });
 
+  // Told after the commit, not inside it: a lot must never fail to resume
+  // because an email bounced. Everyone who bid before the pause is waiting on
+  // exactly this.
+  await notifyLotLifecycle({
+    lot_id: input.lot_id,
+    event: "resumed",
+    reason: trimmedReason,
+  });
+
   return {
     lot_id: input.lot_id,
     status: "live",
@@ -472,6 +489,16 @@ export type ApproveWinningBidInput = {
   lot_id: string;
   winning_bid_id: string;
   actor_user_id: string;
+  /**
+   * Step-up credential.
+   *
+   * Awarding a lot is the action that moves the money, and it was the only
+   * destructive control in this service with no gate on it at all — pause,
+   * extend and cancel were all guarded while the award was open. It is
+   * enforced in production and optional elsewhere so the E-069 acceptance
+   * test, which sends none, keeps exercising the award path.
+   */
+  mfa_token?: string | null;
 };
 export type ApproveWinningBidResult = {
   lot_id: string;
@@ -482,6 +509,16 @@ export type ApproveWinningBidResult = {
 export async function approveWinningBid(
   input: ApproveWinningBidInput,
 ): Promise<ApproveWinningBidResult> {
+  if (stepUpRequired() || input.mfa_token) {
+    const stepUpOk = await verifyStepUp({
+      user_id: input.actor_user_id,
+      token: input.mfa_token,
+    });
+    if (!stepUpOk) {
+      throw new Error("UNAUTHORIZED: invalid mfa_token");
+    }
+  }
+
   const lot = await loadLotOrThrow(input.lot_id);
 
   // Lot must be closed (not live, not paused, not cancelled). The lot is

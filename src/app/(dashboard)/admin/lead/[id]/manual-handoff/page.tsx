@@ -33,6 +33,7 @@ export default function ManualHandoffPage() {
   const [rows, setRows] = useState<Array<{ email: string; nbfc_name: string }>>([{ email: "", nbfc_name: "" }]);
   const [winner, setWinner] = useState("");
   const [outcomeNote, setOutcomeNote] = useState("");
+  const [loanAmount, setLoanAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deadEndCategory, setDeadEndCategory] = useState<"all_declined" | "no_match" | "handoff_unanswered">("all_declined");
@@ -180,6 +181,17 @@ export default function ManualHandoffPage() {
             placeholder="Winning NBFC name (for acceptance)"
             className="w-full text-sm border border-slate-200 rounded-md px-2 py-1.5"
           />
+          {/* The sanctioned amount has to be typed here: the lead reaches an
+              off-platform lender before any product is picked, so there is no
+              final price to infer it from. Blank falls back to the product
+              price on older leads that still carry one. */}
+          <input
+            value={loanAmount}
+            onChange={(e) => setLoanAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+            inputMode="decimal"
+            placeholder="Sanctioned loan amount ₹ (for acceptance)"
+            className="w-full text-sm border border-slate-200 rounded-md px-2 py-1.5"
+          />
           <textarea
             value={outcomeNote}
             onChange={(e) => setOutcomeNote(e.target.value)}
@@ -189,7 +201,15 @@ export default function ManualHandoffPage() {
           />
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => winner.trim() && call("/outcome", { result: "accepted", winning_nbfc_name: winner.trim(), outcome: outcomeNote || undefined })}
+              onClick={() =>
+                winner.trim() &&
+                call("/outcome", {
+                  result: "accepted",
+                  winning_nbfc_name: winner.trim(),
+                  outcome: outcomeNote || undefined,
+                  loan_amount: loanAmount.trim() ? Number(loanAmount) : undefined,
+                })
+              }
               disabled={busy || !winner.trim()}
               className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50"
             >

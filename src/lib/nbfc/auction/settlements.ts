@@ -19,8 +19,8 @@ import {
   auctionSettlements,
   auctionLots,
   nbfcTenants,
-  nbfcRecoveryPipeline,
   nbfcAuditLog,
+  accounts,
 } from "@/lib/db/schema";
 
 export type SettlementStatus =
@@ -37,9 +37,24 @@ const ALLOWED_TRANSITIONS: Record<SettlementStatus, SettlementStatus[]> = {
 export interface SettlementListItem {
   id: string;
   lot_id: string;
+  /** Human-facing code — the id is a uuid nobody can read off a screen. */
+  lot_code: string;
   final_price: number;
   winner_tenant_id: string;
+  /** Set when a DEALER won (the normal case since the E-232 bidder re-point). */
+  winner_dealer_id: string | null;
   winner_name: string;
+  /**
+   * Which kind of party the name belongs to.
+   *
+   * [FIX] This list used to inner-join `nbfc_tenants` on `winner_tenant_id` and
+   * call the result the winner. On a dealer win that column carries the
+   * SELLER's tenant — see the schema note on `auction_settlements` — so every
+   * dealer win rendered the seller's own name back at them as the buyer. The
+   * dealer's identity was in `winner_dealer_id` all along and no read path
+   * selected it.
+   */
+  winner_kind: "dealer" | "nbfc";
   status: SettlementStatus;
   updated_at: string;
 }
@@ -83,16 +98,26 @@ export async function listSettlements(
     .select({
       id: auctionSettlements.id,
       lot_id: auctionSettlements.lot_id,
+      lot_code: auctionLots.lot_code,
       final_price: auctionSettlements.final_price,
       winner_tenant_id: auctionSettlements.winner_tenant_id,
+      winner_dealer_id: auctionSettlements.winner_dealer_id,
       status: auctionSettlements.status,
       updated_at: auctionSettlements.updated_at,
-      winner_name: nbfcTenants.display_name,
+      tenant_name: nbfcTenants.display_name,
+      dealer_name: accounts.business_entity_name,
     })
     .from(auctionSettlements)
+    .leftJoin(auctionLots, eq(auctionLots.id, auctionSettlements.lot_id))
     .leftJoin(
       nbfcTenants,
       eq(nbfcTenants.id, auctionSettlements.winner_tenant_id),
+    )
+    // Dealer ids are application strings ("ACC-ITARANG-…"), not uuids, which is
+    // why `winner_dealer_id` is varchar and why this is a separate join.
+    .leftJoin(
+      accounts,
+      eq(accounts.id, auctionSettlements.winner_dealer_id),
     )
     .where(where)
     .orderBy(auctionSettlements.updated_at)
@@ -105,15 +130,25 @@ export async function listSettlements(
     .where(where);
   const total = Number(totalRows[0]?.c ?? 0);
 
-  const items: SettlementListItem[] = rows.map((r) => ({
-    id: r.id,
-    lot_id: r.lot_id,
-    final_price: toNumber(r.final_price),
-    winner_tenant_id: r.winner_tenant_id,
-    winner_name: r.winner_name ?? "",
-    status: r.status as SettlementStatus,
-    updated_at: (r.updated_at as Date).toISOString(),
-  }));
+  const items: SettlementListItem[] = rows.map((r) => {
+    const isDealerWin = r.winner_dealer_id != null;
+    return {
+      id: r.id,
+      lot_id: r.lot_id,
+      lot_code: r.lot_code ?? r.lot_id.slice(0, 8),
+      final_price: toNumber(r.final_price),
+      winner_tenant_id: r.winner_tenant_id,
+      winner_dealer_id: r.winner_dealer_id ?? null,
+      // Fall back to the raw id rather than an empty cell: an unresolvable
+      // winner is a data problem someone needs to see, not a blank.
+      winner_name: isDealerWin
+        ? (r.dealer_name ?? r.winner_dealer_id ?? "")
+        : (r.tenant_name ?? ""),
+      winner_kind: isDealerWin ? "dealer" : "nbfc",
+      status: r.status as SettlementStatus,
+      updated_at: (r.updated_at as Date).toISOString(),
+    };
+  });
 
   return { items, page: input.page, total };
 }
@@ -158,6 +193,23 @@ export async function patchSettlementStatus(
   if (!allowed.includes(toStatus)) {
     throw new Error(
       `BAD_REQUEST: invalid transition ${fromStatus} -> ${toStatus}`,
+    );
+  }
+
+  // 3b. [E-252] Money before goods.
+  //
+  //     `payment_pending -> in_transit` was a bare status flip: the seller
+  //     pressed a button and the settlement claimed the battery was on its way,
+  //     with nothing anywhere recording that a rupee had moved. The status was
+  //     the ONLY evidence of payment, and it was self-certified.
+  //
+  //     `paid_at` is now that evidence, and it is written by exactly two paths:
+  //     a signature-verified gateway capture, or an explicit, attributed,
+  //     reason-carrying offline record. Either is fine; neither is a click.
+  if (toStatus === "in_transit" && !current.paid_at) {
+    throw new Error(
+      "CONFLICT: this settlement has not been paid — capture the payment, or " +
+        "record an offline one against a reference, before dispatching",
     );
   }
 

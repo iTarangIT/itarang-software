@@ -11,6 +11,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { InventoryLifecycleError, reserveInventorySerial } from "@/lib/inventory/lifecycle";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
 import { projectDisbursedLoan } from "@/lib/nbfc/servicing/projectDisbursedLoan";
 import { toPaymentMode } from "@/lib/sales/payment-mode";
@@ -157,6 +158,41 @@ export async function POST(
         .set({ is_used: true, used_at: now, used_by: user.id })
         .where(eq(otpConfirmations.id, otpRecord.id));
 
+      // Reserve the stock. Since the Step-4/Step-5 split nothing is reserved
+      // when the file goes to the lender — the serial is picked here, so this
+      // is the first and only moment it is locked.
+      //
+      // This runs before finalizeSale on purpose. finalizeSale's 'dispatched'
+      // branch writes status='dispatched' with a bare update that never checks
+      // the current status and hard-codes fromStatus:'reserved' in its audit
+      // log. Going through reserveInventorySerial first keeps the CAS guard and
+      // the dealer-ownership check, and leaves an honest
+      // available → reserved → dispatched trail in inventory_events.
+      //
+      // A 409 here means another lead took the serial between the dealer's
+      // Step-5 save and this confirm — the oversell window that reserving late
+      // opens. InventoryLifecycleError is surfaced to the dealer verbatim.
+      await reserveInventorySerial({
+        tx,
+        serial: selection.battery_serial!,
+        dealerId: user.dealer_id,
+        leadId,
+        performedBy: user.id,
+        notes: "Step 5 dispatch confirm (battery)",
+        when: now,
+      });
+      if (selection.charger_serial) {
+        await reserveInventorySerial({
+          tx,
+          serial: selection.charger_serial,
+          dealerId: user.dealer_id,
+          leadId,
+          performedBy: user.id,
+          notes: "Step 5 dispatch confirm (charger)",
+          when: now,
+        });
+      }
+
       // Product selection → dealer_confirmed
       await tx
         .update(productSelections)
@@ -271,6 +307,16 @@ export async function POST(
     });
   } catch (error) {
     console.error("[Step 5 Confirm Dispatch] Error:", error);
+    // The serial was taken by another lead between the dealer's Step-5 save
+    // and this confirm. Surface the lifecycle message and its own status
+    // (409) so the dealer is told to pick different stock rather than seeing
+    // a generic dispatch failure.
+    if (error instanceof InventoryLifecycleError) {
+      return NextResponse.json(
+        { success: false, error: { message: error.message } },
+        { status: error.statusCode },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to confirm dispatch";
     // E-101: bad payment_method on the lead is a client-mappable input error,
     // not a server crash. Surface it as 400 so the dealer can be told to fix

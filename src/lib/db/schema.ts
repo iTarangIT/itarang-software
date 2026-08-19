@@ -7340,12 +7340,30 @@ export const auctionSettlements = pgTable(
       .notNull(),
     // [E-232] accounts.id of the winning DEALER, mirroring
     // auction_bids.bidder_dealer_id. winner_tenant_id stays NOT NULL and
-    // carries the seller's tenant on a dealer win. payment_ref and
-    // refinance_loan_id belong to Phase 6 and are deliberately not here.
+    // carries the seller's tenant on a dealer win.
     winner_dealer_id: varchar("winner_dealer_id", { length: 255 }),
+
+    // [E-252] The money. Until these landed, the three-state ladder above
+    // recorded no evidence that payment had happened — `in_transit` was a
+    // manual flip by the seller. `paid_at` is now the gate on that transition.
+    //
+    // `refinance_loan_id` is varchar, not uuid, because `loan_sanctions.id` is
+    // character varying. E-232 had to ship a correction block for exactly this
+    // mistake on `winner_dealer_id`.
+    payment_ref: varchar("payment_ref", { length: 120 }),
+    payment_provider: varchar("payment_provider", { length: 24 }),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    refinance_loan_id: varchar("refinance_loan_id", { length: 255 }),
+    failure_reason: text("failure_reason"),
   },
   (table) => ({
     lotIdx: index("auction_settlements_lot_idx").on(table.lot_id),
+    paymentRefIdx: index("auction_settlements_payment_ref_idx").on(
+      table.payment_ref,
+    ),
+    refinanceLoanIdx: index("auction_settlements_refinance_loan_idx").on(
+      table.refinance_loan_id,
+    ),
     sellerTenantIdx: index("auction_settlements_seller_tenant_idx").on(
       table.seller_tenant_id,
     ),

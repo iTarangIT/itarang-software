@@ -15,6 +15,7 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import {
   BATTERY_STATES,
+  batteryCounts,
   createRecoveryBattery,
   listBatteries,
 } from "@/lib/nbfc/recovery/battery";
@@ -73,15 +74,21 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const result = await listBatteries({
-      tenant_id: actor.tenant_id,
-      state_code: parsed.data.state,
-      warehouse: parsed.data.warehouse,
-      q: parsed.data.q,
-      page: parsed.data.page,
-    });
+    // The tallies are tenant-wide and filter-independent, so they ride along
+    // with every list response rather than costing the register a second
+    // round trip on each keystroke.
+    const [result, counts] = await Promise.all([
+      listBatteries({
+        tenant_id: actor.tenant_id,
+        state_code: parsed.data.state,
+        warehouse: parsed.data.warehouse,
+        q: parsed.data.q,
+        page: parsed.data.page,
+      }),
+      batteryCounts(actor.tenant_id),
+    ]);
 
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({ ok: true, ...result, counts });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(

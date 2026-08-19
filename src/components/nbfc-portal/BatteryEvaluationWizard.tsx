@@ -8,8 +8,21 @@
  * decision and checklist; Step 3 captures pricing and submits to
  * POST /api/nbfc/recovery/[id]/evaluation. The base auction price is computed
  * server-side and surfaced back in the result panel.
+ *
+ * [BRD §20] Step 1 now also captures PHOTOGRAPHS. The dealer lot page has
+ * always rendered a gallery headed "captured at inspection" and nothing in the
+ * product ever uploaded one, so that gallery could only ever be empty. Photos
+ * attach to the battery master (`recovery_batteries.image_urls`) rather than to
+ * the evaluation, because that is the row the auction reads.
+ *
+ * A pipeline row whose battery has never been registered has nowhere to put
+ * them; the panel offers to create the record from the serial it already knows,
+ * rather than sending the operator to a different screen and back.
  */
 import { useState } from "react";
+import { toast } from "sonner";
+import { nbfcFetch } from "@/lib/auction/client";
+import BatteryPhotoCapture from "@/components/nbfc-portal/BatteryPhotoCapture";
 
 interface Step1State {
   soh_percent: string;
@@ -41,14 +54,22 @@ interface EvaluationResult {
 
 interface Props {
   recoveryPipelineId: string;
+  /** The battery master row, when this case already has one. */
+  batteryId?: string | null;
+  /** Used to create that row on the spot when it does not. */
+  batterySerial?: string | null;
   onComplete?: (result: EvaluationResult) => void;
 }
 
 export function BatteryEvaluationWizard({
   recoveryPipelineId,
+  batteryId: initialBatteryId = null,
+  batterySerial = null,
   onComplete,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [batteryId, setBatteryId] = useState<string | null>(initialBatteryId);
+  const [registering, setRegistering] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<EvaluationResult | null>(null);
@@ -120,6 +141,34 @@ export function BatteryEvaluationWizard({
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  /**
+   * Creates the battery master row for this case so photographs have somewhere
+   * to live. The route is idempotent on serial: re-registering an existing
+   * battery returns it rather than failing.
+   */
+  async function registerBattery() {
+    if (!batterySerial) return;
+    setRegistering(true);
+    try {
+      const r = await nbfcFetch<{ battery: { id: string } }>(
+        "/api/nbfc/recovery/batteries",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            serial: batterySerial,
+            recovery_pipeline_id: recoveryPipelineId,
+          }),
+        },
+      );
+      setBatteryId(r.battery.id);
+      toast.success("Battery record created — you can add photographs now");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRegistering(false);
     }
   }
 
@@ -216,6 +265,31 @@ export function BatteryEvaluationWizard({
               className="mt-1 w-full rounded border px-2 py-1"
             />
           </label>
+          {/* BRD §20 — the photographs the dealer bids on. */}
+          <div className="auction-sheet">
+            {batteryId ? (
+              <BatteryPhotoCapture batteryId={batteryId} />
+            ) : (
+              <div className="auc-field">
+                <span className="auc-label">Photographs</span>
+                <div className="auc-inline-error">
+                  This case has no battery record yet, so there is nowhere to
+                  attach photographs. Create one from the serial
+                  {batterySerial ? ` (${batterySerial})` : ""} and the five
+                  capture slots appear here.
+                </div>
+                <button
+                  type="button"
+                  className="auc-btn"
+                  disabled={!batterySerial || registering}
+                  onClick={registerBattery}
+                >
+                  {registering ? "Creating…" : "Create battery record"}
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end">
             <button
               type="button"
