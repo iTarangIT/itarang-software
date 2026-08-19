@@ -219,7 +219,12 @@ WhatsApp / Email, PDF attached
 
 ### Three decisions worth stating
 
-- **The document is a GST proforma, not a bare price list.** The supplied format
+- **The document is a GST-shaped quotation, not a bare price list.** It follows
+  ITPI-35's layout but is headed **"Quotation"**, not "Proforma Invoice"
+  (2026-08-17): it is issued before anything is agreed, so it is an offer rather
+  than an instrument to pay against, and the first standing term says so. The
+  heading and the terms are both `app_settings` config, not code.
+  The supplied format
   carries HSN/SAC and a per-line rate (ITPI-35 has both 18% and 5% on one page),
   neither of which existed anywhere — the three `product_master_*` tables had no
   tax columns at all. E-242 adds them nullable and does **not** backfill: a

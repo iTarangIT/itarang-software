@@ -90,6 +90,20 @@ const COLUMNS: { header: string; key: string; date?: boolean }[] = [
     { header: "Last Call Outcome", key: "last_call_status" },
     { header: "Call Disposition", key: "disposition" },
     { header: "Disposition Bucket", key: "disposition_bucket" },
+    // Which system recorded it. With three writers now (NeoDove, the AI dialer,
+    // an inside-sales rep) the first person who needs the split can pivot in a
+    // spreadsheet instead of writing SQL and guessing.
+    { header: "Disposition Source", key: "disposition_source" },
+    // ── What the AI learned ──────────────────────────────────────────────
+    // TWO columns, not five. One Yes/No column per info signal would push "Last
+    // Call Discussion" — the column this sheet exists for — off the first
+    // screen; a count plus the list of what was actually disclosed carries the
+    // same information in a tenth of the width.
+    { header: "AI Last Called At", key: "ai_last_called_at", date: true },
+    { header: "AI Band", key: "ai_band" },
+    { header: "AI Signals (0-5)", key: "ai_info_signals" },
+    { header: "AI Signals Disclosed", key: "ai_signals_disclosed" },
+    { header: "AI Callback Requested", key: "ai_callback" },
     { header: "Next Follow-up At", key: "next_follow_up_at", date: true },
     { header: "Last Call Discussion", key: "last_call_remarks" },
     { header: "Created At", key: "created_at", date: true },
@@ -136,6 +150,25 @@ export const GET = withErrorHandler(async (req: Request) => {
         to: searchParams.get("to")?.trim() || null,
         connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,
         dispositionBucket: isDispositionBucket(bucketParam) ? bucketParam : null,
+        // The AI filters too — this route exists so the CSV and the screen can
+        // never disagree about which leads matched. The `ai` lateral below is
+        // unconditional here (the columns are always exported), so the
+        // predicates referencing it always resolve.
+        aiCalled: ["connected", "attempted", "never"].includes(
+            searchParams.get("ai_called") ?? "",
+        )
+            ? searchParams.get("ai_called")
+            : null,
+        aiBand: ["Qualified", "Warm", "Cold", "Disqualified"].includes(
+            searchParams.get("ai_band") ?? "",
+        )
+            ? searchParams.get("ai_band")
+            : null,
+        signalsMin: (() => {
+            const n = Number(searchParams.get("signals_min"));
+            return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
+        })(),
+        callback: searchParams.get("callback") === "1",
         disposition: searchParams.get("disposition")?.trim() || null,
         ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
         asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
@@ -185,6 +218,17 @@ export const GET = withErrorHandler(async (req: Request) => {
             -- cells blank.
             to_jsonb(dl) ->> 'last_disposition'        AS disposition,
             to_jsonb(dl) ->> 'last_disposition_bucket' AS disposition_bucket,
+            to_jsonb(dl) ->> 'last_disposition_source' AS disposition_source,
+            ai.called_at        AS ai_last_called_at,
+            ai.band             AS ai_band,
+            -- BLANK, not 0, when nothing was extracted. "0/5" means the dealer
+            -- disclosed nothing when asked; a call that was never scored is a
+            -- different claim, and COALESCE(...,0) here would assert the first
+            -- about 271 of 298 calls.
+            CASE WHEN ai.signals IS NOT NULL
+                 THEN COALESCE(ai.info_signals_count, 0)::text END AS ai_info_signals,
+            ai.signals_disclosed AS ai_signals_disclosed,
+            CASE WHEN ai.callback_agreed = 'yes' THEN 'Yes' END AS ai_callback,
             dl.created_at
         FROM dealer_leads dl
         LEFT JOIN users ow  ON ow.id::text  = dl.current_owner_id
@@ -199,7 +243,17 @@ export const GET = withErrorHandler(async (req: Request) => {
                    t.call_status,
                    t.remarks,
                    t.next_action_at,
-                   COALESCE(u.name, to_jsonb(t) ->> 'external_agent_name') AS by_name
+                   -- The 'ai_call' arm of the type filter below has matched
+                   -- ZERO rows since it was written, because the AI dialer never
+                   -- wrote a touchpoint. Now that it does, this column would go
+                   -- BLANK on those rows — performed_by is null by design and
+                   -- there is no external agent — next to a populated "Last Call
+                   -- At", which reads as data loss rather than as a robot call.
+                   COALESCE(
+                       u.name,
+                       to_jsonb(t) ->> 'external_agent_name',
+                       CASE WHEN t.touchpoint_type = 'ai_call' THEN 'AI Dialer' END
+                   ) AS by_name
               FROM lead_touchpoints t
               LEFT JOIN users u ON u.id::text = t.performed_by
              WHERE t.dealer_lead_id = dl.id
@@ -207,6 +261,23 @@ export const GET = withErrorHandler(async (req: Request) => {
              ORDER BY t.performed_at DESC
              LIMIT 1
         ) lc ON true
+        LEFT JOIN LATERAL (
+            SELECT a.band,
+                   a.info_signals_count,
+                   a.signals,
+                   COALESCE(a.ended_at, a.created_at) AS called_at,
+                   a.signals ->> 'callback_agreed'    AS callback_agreed,
+                   (SELECT string_agg(s.k, ', ' ORDER BY s.k)
+                      FROM jsonb_each_text(a.signals) AS s(k, v)
+                     WHERE s.v = 'yes'
+                       AND s.k IN ('battery_spec_shared','volume_shared',
+                                   'existing_financier_shared','financing_need_expressed',
+                                   'financing_value_acknowledged')) AS signals_disclosed
+              FROM ai_call_logs a
+             WHERE a.lead_id = dl.id
+             ORDER BY a.created_at DESC
+             LIMIT 1
+        ) ai ON true
         WHERE ${where}
         ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
         LIMIT ${EXPORT_ROW_CAP}

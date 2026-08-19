@@ -11,7 +11,7 @@ import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { amountInWords } from "./amount-in-words";
 import type { QuotationDocConfig } from "./config";
 import { computeTotals, lineGstAmount, toPaise } from "./tax";
-import type { QuotationLineView, QuotationView } from "./types";
+import type { CommercialTerms, QuotationLineView, QuotationView } from "./types";
 
 /** HSN + GST rate for one product, as held on its master row. */
 export interface LineTaxRef {
@@ -52,6 +52,24 @@ export interface BuildQuotationViewInput {
     gstin: string | null;
     addressLines?: string[];
   };
+  /**
+   * The deal's own terms, straight off the commercials row. Optional so a
+   * caller that has none — and every existing test — still compiles; absent
+   * behaves the same as all-null, which prints no terms block.
+   */
+  commercialTerms?: Partial<CommercialTerms>;
+}
+
+/**
+ * Blank-to-null, so " " and "" are the same as never-entered.
+ *
+ * The document draws a row per non-null term, and a row reading "Warranty: "
+ * looks like a term that was agreed and then lost rather than one that was
+ * never set.
+ */
+function term(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  return s === "" ? null : s;
 }
 
 /**
@@ -121,7 +139,15 @@ export function buildQuotationView(input: BuildQuotationViewInput): QuotationVie
     totalInWords: amountInWords(totals.total),
     hasUnsetTax: totals.hasUnsetTax,
     isIntraState: totals.isIntraState,
+    commercialTerms: {
+      paymentMethod: term(input.commercialTerms?.paymentMethod),
+      creditTerms: term(input.commercialTerms?.creditTerms),
+      deliveryTerms: term(input.commercialTerms?.deliveryTerms),
+      warranty: term(input.commercialTerms?.warranty),
+      dealNotes: term(input.commercialTerms?.dealNotes),
+    },
     signatory: config.signatory,
+    signatureDataUri: config.signatureDataUri,
     notes: config.notes,
     bank: config.bank,
     terms: config.terms,

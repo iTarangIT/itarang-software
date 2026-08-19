@@ -74,7 +74,7 @@ export const POST = withBotAuth(async (req: Request) => {
     );
   }
 
-  const campaignId = await createCampaign({
+  const { campaignId, queued, blockedAiConnected } = await createCampaign({
     queueIds: summary.queueIds,
     // Placeholder — the real provider is locked in when /start is called
     // (defaults to elevenlabs for bot campaigns).
@@ -98,6 +98,13 @@ export const POST = withBotAuth(async (req: Request) => {
     name,
   });
 
+  if (!campaignId && blockedAiConnected.length > 0) {
+    return errorResponse(
+      `All ${blockedAiConnected.length} dealers in this list have already been contacted by the AI. They need manual follow-up.`,
+      409,
+    );
+  }
+
   if (!campaignId) {
     return errorResponse("Failed to create the campaign. Please try again.", 500);
   }
@@ -111,6 +118,7 @@ export const POST = withBotAuth(async (req: Request) => {
     reused: summary.reused,
     updated: summary.updated,
     invalid: summary.invalid,
-    queued: summary.queueIds.length,
+    queued,
+    blockedAiConnected: blockedAiConnected.length,
   });
 });

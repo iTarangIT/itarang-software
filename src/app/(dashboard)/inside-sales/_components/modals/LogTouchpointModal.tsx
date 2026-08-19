@@ -6,11 +6,12 @@ import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { type TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import {
-    CALL_STATUS,
-    type TouchpointType,
-    type CallStatus,
-} from "@/lib/lifecycle/touchpointTypes";
+    DispositionPicker,
+    EMPTY_DISPOSITION_VALUE,
+    type DispositionValue,
+} from "@/components/leads/DispositionPicker";
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { LeadDetailLead } from "@/lib/inside-sales/types";
 import {
@@ -56,7 +57,14 @@ export function LogTouchpointModal({
     onVisitSuccess,
 }: Props) {
     const [type, setType] = useState<TouchpointType>("inside_sales_call");
-    const [callStatus, setCallStatus] = useState<CallStatus | "">("");
+    // The rep now picks the CC team's L1/L2/L3 disposition; call_status is
+    // derived from it server-side by the shared sheet-derived table, so the two
+    // can never disagree. Optional in v1 — it starts blank exactly as the old
+    // "— select —" call-status dropdown did, and adoption is measurable as
+    // COUNT(*) WHERE last_disposition_source = 'inside_sales'.
+    const [disposition, setDisposition] = useState<DispositionValue>(
+        EMPTY_DISPOSITION_VALUE,
+    );
     const [duration, setDuration] = useState("");
     const [remarks, setRemarks] = useState("");
     const [isEngaged, setIsEngaged] = useState(false);
@@ -72,16 +80,17 @@ export function LogTouchpointModal({
     const typeOptions: TouchpointType[] =
         context === "asm" ? [...REP_TYPES, "visit"] : REP_TYPES;
 
-    // Every lead status except New_Unassigned — the initial, pre-assignment
-    // state, which a lead can never transition back into. The server still
-    // validates the chosen transition against the BRD §0.7 map on save.
+    // Every lead status except New_Unassigned — the pre-assignment state,
+    // which would strand an owned lead outside every queue. Any of these can
+    // be picked from any current status: the server no longer validates the
+    // transition.
     const statusTargets: LeadStatus[] = LEAD_STATUS.filter(
         (s) => s !== "New_Unassigned",
     );
 
     const reset = () => {
         setType("inside_sales_call");
-        setCallStatus("");
+        setDisposition(EMPTY_DISPOSITION_VALUE);
         setDuration("");
         setRemarks("");
         setIsEngaged(false);
@@ -111,7 +120,17 @@ export function LogTouchpointModal({
                 touchpoint_type: type,
                 remarks: remarks.trim(),
             };
-            if (type === "inside_sales_call" && callStatus) body.call_status = callStatus;
+            if (type === "inside_sales_call" && disposition.disposition) {
+                // The bucket is sent EXPLICITLY. "Commercials Explained" sits in
+                // both Warm and Hot, and first-occurrence-wins would store Warm
+                // for a rep who deliberately chose Hot — a loss the webhook has
+                // to accept (no user to ask) but this form does not.
+                body.disposition = {
+                    connect_status: disposition.connectStatus,
+                    bucket: disposition.bucket || null,
+                    label: disposition.disposition,
+                };
+            }
             if (duration) body.call_duration_sec = Math.max(0, parseInt(duration, 10) || 0);
             if (isEngaged) body.is_engaged = true;
             if (changeStatus && toStatus) {
@@ -214,18 +233,16 @@ export function LogTouchpointModal({
                     <>
                         {type === "inside_sales_call" && (
                             <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <Label>Call status</Label>
-                                    <select
-                                        className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                                        value={callStatus}
-                                        onChange={(e) => setCallStatus(e.target.value as CallStatus | "")}
-                                    >
-                                        <option value="">— select —</option>
-                                        {CALL_STATUS.map((c) => (
-                                            <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
-                                        ))}
-                                    </select>
+                                <div className="col-span-2">
+                                    <Label>What happened on the call</Label>
+                                    <div className="mt-1">
+                                        <DispositionPicker
+                                            mode="form"
+                                            idPrefix="log-touchpoint"
+                                            value={disposition}
+                                            onChange={setDisposition}
+                                        />
+                                    </div>
                                 </div>
                                 <div>
                                     <Label>Duration (sec)</Label>
@@ -282,7 +299,7 @@ export function LogTouchpointModal({
                                     ))}
                                 </select>
                                 <p className="text-[11px] text-gray-500 mt-1">
-                                    Server validates against the transition map (BRD §0.7). Invalid transitions return an error.
+                                    Any status can be set from any other — no transition restrictions.
                                 </p>
                             </div>
                         )}

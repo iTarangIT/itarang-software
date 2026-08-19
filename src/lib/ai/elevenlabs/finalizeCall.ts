@@ -9,10 +9,15 @@ import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
-import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
+import {
+  appendSalesCallLog,
+  appendCallReview,
+  callReviewSheetEnabled,
+} from "@/lib/google/sheet";
 import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import {
   rehostRecording,
   rehostElevenLabsRecording,
@@ -122,6 +127,18 @@ export async function finalizeElevenLabsCall(
       // partial cost on ElevenLabs. Best-effort fetch; backfill retries.
       await fetchAndPersistCallCost("elevenlabs", conversationId);
 
+      // Record it in the CC team's vocabulary. See the Bolna twin for why this
+      // sits after the log exists and before completeCampaignLead.
+      await writeAiCallTouchpoint({
+        leadId: leadForPhone.id,
+        provider: "elevenlabs",
+        callId: conversationId,
+        transcript: null,
+        providerStatus: status || "failed",
+        durationSec: duration ?? null,
+        recordingUrl,
+      });
+
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
         success: false,
@@ -152,6 +169,11 @@ export async function finalizeElevenLabsCall(
             .limit(1);
           campaign = c[0]?.name ?? reviewCampaignId;
         }
+        // E-250 — the Campaign_Call_Review sheet is retired by default. The
+        // guard sits ABOVE the playable-URL resolve because that call pulls
+        // the conversation audio from ElevenLabs and re-hosts it purely so the
+        // sheet has a clickable link; with the sheet off it is wasted work.
+        if (!callReviewSheetEnabled()) return;
         const playableUrl = await resolveElevenLabsPlayableUrl(
           conversationId,
           recordingUrl,
@@ -274,6 +296,8 @@ export async function finalizeElevenLabsCall(
       intentReason: null,
       nextAction: "auto_retry",
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       band: null,
@@ -282,6 +306,22 @@ export async function finalizeElevenLabsCall(
     });
 
     await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+    // A transcript exists, so this is CONNECTED — Cold / Short Hang up.
+    await writeAiCallTouchpoint({
+      leadId: lead.id,
+      provider: "elevenlabs",
+      callId: conversationId,
+      transcript,
+      providerStatus: status || "completed",
+      bandCallStatus: "dropped_empty",
+      band: null,
+      infoSignalsCount: 0,
+      durationSec: duration ?? null,
+      recordingUrl,
+      summary: analysis.memory?.intent_summary ?? null,
+    });
+
     // dropped_empty connected and produced a transcript — the line just dropped
     // before any qualifying info was captured. It is NOT a telephony failure, so
     // the campaign row is marked completed ("Done"), not failed. The Outcome
@@ -327,6 +367,8 @@ export async function finalizeElevenLabsCall(
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       hardNegative,
     },
   );
@@ -365,6 +407,8 @@ export async function finalizeElevenLabsCall(
     intentReason: analysis.memory?.intent_summary ?? null,
     nextAction: action ?? null,
     scoringVersion: analysis.scoring_version,
+    extractionVersion: analysis.extraction_version,
+    calibrationSetHash: analysis.calibration_set_hash,
     signals: analysis.signals,
     scoreBreakdown: analysis.score_breakdown,
     band: analysis.band,
@@ -375,6 +419,27 @@ export async function finalizeElevenLabsCall(
   // Capture per-call cost from ElevenLabs /v1/convai/conversations/{id}.
   // Best-effort: backfill cron is the recovery path on race or 5xx.
   await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+  // The scored path. The band rides on external_tag rather than deciding the L2
+  // bucket — an AI call cannot reach the sheet's Hot bucket. See aiDisposition.ts.
+  await writeAiCallTouchpoint({
+    leadId: lead.id,
+    provider: "elevenlabs",
+    callId: conversationId,
+    transcript,
+    providerStatus: status || "completed",
+    band: analysis.band,
+    bandCallStatus: analysis.call_status,
+    infoSignalsCount: analysis.info_signals_count,
+    disqualifier: analysis.signals?.disqualifier ?? null,
+    callbackAgreed: analysis.signals?.callback_agreed === "yes",
+    relevantDealer: analysis.signals?.relevant_dealer === "yes",
+    pitchHeard: analysis.signals?.pitch_heard === "yes",
+    durationSec: duration ?? null,
+    recordingUrl,
+    summary: analysis.memory?.intent_summary ?? null,
+    nextCallAt: nextCallAt ?? null,
+  });
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
@@ -431,6 +496,8 @@ export async function finalizeElevenLabsCall(
         .limit(1);
       campaign = c[0]?.name ?? reviewCampaignId;
     }
+    // E-250 — see the note on the sibling closure above.
+    if (!callReviewSheetEnabled()) return;
     const playableUrl = await resolveElevenLabsPlayableUrl(
       conversationId,
       recordingUrl,
@@ -467,6 +534,12 @@ async function upsertAiCallLog(opts: {
   intentReason: string | null;
   nextAction: string | null;
   scoringVersion?: string | null;
+  // E-250 — which PROMPT read the transcript, alongside which band rule scored
+  // it. The hash is required because the calibration set now lives in the DB
+  // and changes without a deploy, so EXTRACTION_VERSION alone stops identifying
+  // the prompt that produced these signals.
+  extractionVersion?: string | null;
+  calibrationSetHash?: string | null;
   signals?: unknown;
   scoreBreakdown?: unknown;
   band?: string | null;
@@ -497,6 +570,8 @@ async function upsertAiCallLog(opts: {
           intent_reason: opts.intentReason,
           next_action: opts.nextAction,
           scoring_version: opts.scoringVersion ?? null,
+          extraction_version: opts.extractionVersion ?? null,
+          calibration_set_hash: opts.calibrationSetHash ?? null,
           signals: opts.signals ?? null,
           score_breakdown: opts.scoreBreakdown ?? null,
           band: opts.band ?? null,
@@ -525,6 +600,8 @@ async function upsertAiCallLog(opts: {
       intent_reason: opts.intentReason,
       next_action: opts.nextAction,
       scoring_version: opts.scoringVersion ?? null,
+      extraction_version: opts.extractionVersion ?? null,
+      calibration_set_hash: opts.calibrationSetHash ?? null,
       signals: opts.signals ?? null,
       score_breakdown: opts.scoreBreakdown ?? null,
       band: opts.band ?? null,
@@ -593,6 +670,19 @@ async function markLeadNeedsReview(opts: {
   });
 
   await fetchAndPersistCallCost("elevenlabs", opts.callId);
+
+  // Connected with a NULL L3: the dealer WAS reached, but the failure is ours.
+  // See the Bolna twin — that null is the extraction-failure measurement.
+  await writeAiCallTouchpoint({
+    leadId: opts.leadId,
+    provider: "elevenlabs",
+    callId: opts.callId,
+    transcript: opts.transcript,
+    providerStatus: opts.status || "needs_review",
+    analysisFailed: true,
+    durationSec: opts.duration,
+    recordingUrl: opts.recordingUrl,
+  });
 
   const r = await completeCampaignLead({
     leadId: opts.leadId,

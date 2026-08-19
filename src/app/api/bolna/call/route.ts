@@ -5,6 +5,7 @@ import {
   attachBolnaCallId,
   markCampaignLeadCalling,
 } from "@/lib/queue/campaignTracker";
+import { fetchAiConnection } from "@/lib/ai-dialer/aiConnection";
 
 // Bolna calls are billed per-minute. Without auth, any anonymous POST could
 // burn provider credit and harass leads. Restrict to sales staff and admins.
@@ -37,6 +38,29 @@ export async function POST(req: NextRequest) {
         { success: false, error: "phone is required" },
         { status: 400 },
       );
+    }
+
+    // The AI-connected hard block.
+    //
+    // This button fires the AI AGENT at the dealer, so it is the same harm the
+    // block exists to prevent — "follow up manually" means the human dials from
+    // their own phone, not that they press this. There is deliberately no
+    // override. The payload lets the UI render the "already contacted" notice
+    // inline, with the call summary and a transcript link, instead of a bare
+    // error toast.
+    if (body.leadId) {
+      const connection = await fetchAiConnection(String(body.leadId));
+      if (connection.connected) {
+        return NextResponse.json(
+          {
+            success: false,
+            code: "ai_already_connected",
+            error: "The AI has already spoken with this dealer.",
+            connection,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const result = await triggerBolnaCall({

@@ -35,7 +35,7 @@ export interface SettlementRow {
   winner_kind?: "dealer" | "nbfc";
   status: SettlementStatus;
   updated_at: string;
-  /** E-249. Present once money has actually been captured. */
+  /** E-252. Present once money has actually been captured. */
   paid_at?: string | null;
   payment_ref?: string | null;
 }

@@ -85,7 +85,7 @@ test.describe('E-101 headed — Canonical toPaymentMode() utility — collapse l
       status = res.status();
       try { body = await res.json(); } catch { body = await res.text(); }
     } catch (e) { body = String(e); }
-    expect(body?.signature).toBe('input: 'cash'|'finance'|'credit');
+    expect(body?.signature).toBe("input: 'cash'|'finance'|'credit'");
     expect(body?.unknown_input_behavior).toBe('does not throw');
     const html = `<!doctype html><html><body style="font:13px/1.4 ui-monospace,monospace;padding:12px"><h2 style="margin:0 0 8px">AC6 · POST /api/warranty/create</h2><div data-testid="api-status">HTTP ${status}</div><pre data-testid="api-response" style="background:#f4f4f4;padding:10px;white-space:pre-wrap">${typeof body === 'string' ? body : JSON.stringify(body, null, 2)}</pre></body></html>`;
     await page.setContent(html);

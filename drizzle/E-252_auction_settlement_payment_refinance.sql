@@ -1,4 +1,4 @@
--- E-249 — auction settlement: payment capture and the refinance link.
+-- E-252 — auction settlement: payment capture and the refinance link.
 --
 -- WHAT THIS UNBLOCKS
 --   `auction_settlements` has carried a three-state ladder since E-039 —

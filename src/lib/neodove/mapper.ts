@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 // re-exports it.
 import { normalizePhone } from "@/lib/leads/dedupe-rules";
 import {
+    callStatusForDisposition,
     classifyDisposition,
     type ClassifiedDisposition,
 } from "@/lib/leads/dispositions";
@@ -450,25 +451,13 @@ export function dispositionFor(
     return classifyDisposition(event.tag, hints);
 }
 
-// The sheet's ten Not Connected reasons → our CallStatus. The connected side
-// needs no table: a disposition the sheet files under Connected means the call
-// connected, by definition.
+// The sheet's ten Not Connected reasons → our CallStatus now lives in
+// src/lib/leads/dispositions.ts as NOT_CONNECTED_TO_CALL_STATUS, because it is a
+// property of the sheet rather than of NeoDove — the AI dialer and the rep's Log
+// Touchpoint form need the identical mapping. Imported above.
 //
-// Note "Short Hang up" is NOT here. The sheet files it under Connected › Cold,
-// and it is right to — a hang-up after one second is still a connected call,
-// and counting it as not_responding would understate the connect rate.
-const NOT_CONNECTED_TO_CALL_STATUS: Record<string, CallStatus> = {
-    "Did not pick": "not_responding",
-    "Busy in another call": "not_responding",
-    "User disconnected the call": "not_responding",
-    "Call not connected / can not be completed": "not_responding",
-    "Other reason": "not_responding",
-    "Switch off": "not_reachable",
-    "Out of Coverage area / Network issue": "not_reachable",
-    "Number not in use / does not exist / out of service": "not_reachable",
-    "Incorrect / Invalid number": "incorrect_number",
-    "Incoming calls not available": "no_incoming",
-};
+// DISPOSITION_TO_CALL_STATUS below stays here: it IS NeoDove-specific, covering
+// their factory vocabulary for values outside the sheet.
 
 // FALLBACK ONLY, for values outside the CC sheet — NeoDove's factory defaults,
 // and whatever a second campaign's disposition list turns out to hold. The
@@ -508,14 +497,13 @@ export function callStatusFor(event: NeodoveInboundEvent): CallStatus | null {
     if (event.eventType === "call_not_connected") {
         const reason =
             known?.connectStatus === "not_connected"
-                ? NOT_CONNECTED_TO_CALL_STATUS[known.label]
-                : undefined;
+                ? callStatusForDisposition(known)
+                : null;
         return reason ?? "not_responding";
     }
 
     if (known) {
-        if (known.connectStatus === "connected") return "connected";
-        const reason = NOT_CONNECTED_TO_CALL_STATUS[known.label];
+        const reason = callStatusForDisposition(known);
         if (reason) return reason;
     }
 

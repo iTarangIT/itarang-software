@@ -1,6 +1,7 @@
 // POST /api/inside-sales/lead/[id]/mark-converted
-// BRD §0.7 + §0.10 — terminal Converted. Hard validation: final_price MUST be
-// set on the current commercials row. On success it also creates the draft
+// BRD §0.7 — terminal Converted, settable from any status: the funnel-order and
+// final_price gates are gone (a deal can close on the first call, and a lead
+// closed by mistake has to be recoverable). On success it also creates the draft
 // dealer_onboarding_applications row (BRD §0.13 Point A).
 
 import { randomUUID } from "node:crypto";
@@ -11,7 +12,7 @@ import { auditLogs } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { canTransition, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
 import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
@@ -45,25 +46,17 @@ export const POST = withErrorHandler(
 
         const rows = await db.execute<{
             lead_status: string | null;
-            final_price: string | null;
             asm_id: string | null;
         }>(sql`
-            SELECT
-                dl.lead_status,
-                dl.asm_id,
-                (SELECT final_price::text FROM dealer_lead_commercials c WHERE c.dealer_lead_id = dl.id AND c.is_current = true LIMIT 1) AS final_price
+            SELECT dl.lead_status, dl.asm_id
             FROM dealer_leads dl WHERE dl.id = ${id} LIMIT 1
         `);
         const state = rows[0];
         if (!state) return errorResponse("Lead not found", 404);
+        // Reachable from ANY status, a closed one and none at all included.
+        // Re-converting is safe: the onboarding application is created ON
+        // CONFLICT DO NOTHING, keyed on the lead.
         const fromStatus = state.lead_status as LeadStatus | null;
-        if (!fromStatus) return errorResponse("Lead has no status", 400);
-
-        const t = canTransition(fromStatus, "Converted", {
-            finalPrice: state.final_price === null ? null : Number(state.final_price),
-            actorRole: user.role,
-        });
-        if (!t.ok) return errorResponse(t.reason, 400);
 
         const closingRole = deriveClosingRole(user.role, state.asm_id);
         const remarks =

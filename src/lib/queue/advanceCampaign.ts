@@ -169,6 +169,14 @@ export async function advanceCampaign(
           phone: dealerLeads.phone,
           lead_status: dealerLeads.lead_status,
           ai_recall_status: dealerLeads.ai_recall_status,
+          // Projected here rather than checked inside isAiDialable(), which is
+          // shared with the NeoDove human push. One correlated EXISTS on an
+          // indexed column, on a single-row primary-key lookup, once per dial —
+          // and dials are 5s apart.
+          ai_connected: sql<boolean>`EXISTS (
+            SELECT 1 FROM ai_call_logs acl
+             WHERE acl.lead_id = ${dealerLeads.id} AND acl.transcript IS NOT NULL
+          )`,
         })
         .from(dealerLeads)
         .where(eq(dealerLeads.id, claimed.leadId))
@@ -213,6 +221,33 @@ export async function advanceCampaign(
             status: "failed",
             completed_at: new Date(),
             call_outcome: "ineligible_active_lead",
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
+      // The AI-connected hard block, re-checked at dial time.
+      //
+      // A separate branch rather than a condition folded into isAiDialable():
+      // that function is shared with the NeoDove HUMAN push, which must keep
+      // receiving these leads (see the header in exclusionFilter.ts). Keeping
+      // them apart also keeps the two reasons attributable — the call_outcome
+      // says which rule refused the lead.
+      //
+      // Reachable in normal operation: a concurrent campaign, or a manual call,
+      // can connect with this lead after it was enrolled here.
+      if (lead[0].ai_connected) {
+        console.warn("[advanceCampaign] skipping lead the AI has already spoken to", {
+          campaignId,
+          leadId: claimed.leadId,
+        });
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "failed",
+            completed_at: new Date(),
+            call_outcome: "ineligible_ai_connected",
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         await syncCampaignCounters(campaignId);

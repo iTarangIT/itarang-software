@@ -212,27 +212,12 @@ export const GET = withErrorHandler(
         .orderBy(desc(expenseSubmissions.approved_at))
         .limit(5);
 
-      // E-106 — full AI-tracked expense ledger for the CEO read-only view.
-      const aiExpensesQ = db
-        .select({
-          id: expenseSubmissions.id,
-          vendor: expenseSubmissions.vendor,
-          amount: expenseSubmissions.amount,
-          description: expenseSubmissions.description,
-          department: expenseSubmissions.department,
-          // E-218 — the ledger shows and filters on the spend bucket.
-          bucket: expenseSubmissions.bucket,
-          project_tag: expenseSubmissions.project_tag,
-          expense_date: expenseSubmissions.expense_date,
-          bill_url: expenseSubmissions.bill_url,
-          created_at: expenseSubmissions.created_at,
-          submitter_name: users.name,
-        })
-        .from(expenseSubmissions)
-        .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
-        .where(eq(expenseSubmissions.source, "ai"))
-        .orderBy(desc(expenseSubmissions.created_at))
-        .limit(200);
+      // The AI-tracked ledger the CEO card used to render from here is gone.
+      // It was 200 rows and a join, serialised on every 60-second poll of this
+      // dashboard whether or not anyone scrolled to the panel — and it carried
+      // no window, so the card ignored the period selected above it. The panel
+      // now fetches its own filtered, windowed data from
+      // /api/dashboard/ceo/expense-ledger.
 
         // conversion rate
       const conversionResultQ = db
@@ -355,7 +340,6 @@ export const GET = withErrorHandler(
         expensesByProject,
         recentInvoices,
         recentExpenses,
-        aiExpenses,
         [conversionResult],
         [conversionLastMonth],
         [procurementAgg],
@@ -375,7 +359,6 @@ export const GET = withErrorHandler(
         expensesByProjectQ,
         recentInvoicesQ,
         recentExpensesQ,
-        aiExpensesQ,
         conversionResultQ,
         conversionLastMonthQ,
         procurementAggQ,
@@ -466,7 +449,6 @@ export const GET = withErrorHandler(
           project_tag: r.project_tag,
           total: Number(r.total),
         })),
-        ai_expenses: aiExpenses,
         inventoryValue: Number(inventoryAgg?.inventory_value || 0),
         outstandingCredits: Number(outstandingAgg?.outstanding || 0),
         recent_invoices: recentInvoices,

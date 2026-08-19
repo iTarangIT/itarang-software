@@ -31,6 +31,7 @@ import {
 // Import the thresholds module directly (not the scoring barrel) so the client
 // bundle doesn't pull in zod / the scoring engine.
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
+import { CorrectIntentForm } from "@/components/leads/intent-review/CorrectIntentForm";
 
 // Legacy 6-dimension analysis (pre-band rows). Kept only so old
 // follow_up_history rows still render their bars.
@@ -87,29 +88,6 @@ type ClientSignals = {
   evidence?: Record<string, string>;
   [k: string]: unknown;
 };
-
-const DISQUALIFIER_OPTIONS = [
-  "none",
-  "dont_call",
-  "hostile",
-  "not_interested",
-  "call_dropped",
-];
-
-// The yes/no facts a reviewer can flip in deep mode. The five marked `info`
-// drive info_signals_count. Mirrors signals.ts (kept in sync by hand).
-const CORRECTABLE_FACTS: Array<{ key: keyof ClientSignals; label: string; info: boolean }> = [
-  { key: "relevant_dealer", label: "Relevant dealer", info: false },
-  { key: "battery_spec_shared", label: "Battery spec shared", info: true },
-  { key: "volume_shared", label: "Volume shared", info: true },
-  { key: "existing_financier_shared", label: "Existing financier shared", info: true },
-  { key: "financing_need_expressed", label: "Financing need expressed", info: true },
-  { key: "financing_value_acknowledged", label: "Financing value acknowledged", info: true },
-  { key: "pitch_heard", label: "Pitch heard", info: false },
-  { key: "callback_agreed", label: "Callback agreed", info: false },
-];
-
-const LEAD_STATUS_OPTIONS = ["qualified", "warm", "cold", "disqualified"] as const;
 
 // Raw conversation turn shapes vary by provider. Bolna stores objects with
 // `role` + `content` (or `transcript`/`message`); ElevenLabs uses `role` +
@@ -1029,6 +1007,7 @@ function OverviewTab({
   campaignId: string;
   leadId: string | null;
 }) {
+  const qc = useQueryClient();
   const scoreTone = scoreToneClass(data.intentScore ?? null);
   return (
     <div className="px-6 py-5 space-y-6">
@@ -1129,14 +1108,29 @@ function OverviewTab({
 
       {/* Human-in-the-loop correction — only when we have a call to attribute it
           to. This is the entry point of the learning loop: corrections become
-          the benchmark/golden set the eval + calibration levers learn from. */}
+          the golden set the eval + calibration levers learn from, AND (since
+          E-250) the lead's live band.
+
+          Shared with the lead-detail panel rather than reimplemented here. The
+          local copy that used to live in this file was ~280 lines; keeping two
+          would mean a guard added to one and not the other, and a lead behaving
+          differently depending on which screen corrected it. */}
       {(data.callId || data.bolnaCallId) && leadId && (
-        <CorrectScorePanel
-          campaignId={campaignId}
+        <CorrectIntentForm
           leadId={leadId}
           callId={data.callId ?? data.bolnaCallId!}
           intentScore={data.intentScore ?? null}
+          aiBand={data.band ?? null}
           signals={data.signals ?? null}
+          onSaved={() => {
+            // The drawer header's "Corrected" pill and the campaign table's row
+            // pill both read server state, so they need a nudge. These keys are
+            // campaign-specific and the shared form cannot know them.
+            qc.invalidateQueries({
+              queryKey: ["campaign-lead-transcript", campaignId, leadId],
+            });
+            qc.invalidateQueries({ queryKey: ["dialer-campaign-leads", campaignId] });
+          }}
         />
       )}
 
@@ -1152,292 +1146,6 @@ function OverviewTab({
         </section>
       )}
     </div>
-  );
-}
-
-// "Correct this score" — the teach-it's-wrong affordance. Quick mode captures
-// the true status label (+ optional note); deep mode lets a reviewer fix each
-// over-read signal level (e.g. curiosity strong → none on a thin call). Submits
-// to /intent-feedback, where it becomes a golden/benchmark row.
-function CorrectScorePanel({
-  campaignId,
-  leadId,
-  callId,
-  intentScore,
-  signals,
-}: {
-  campaignId: string;
-  leadId: string;
-  callId: string;
-  intentScore: number | null;
-  signals: ClientSignals | null;
-}) {
-  const qc = useQueryClient();
-  const [openPanel, setOpenPanel] = useState(false);
-  const [status, setStatus] = useState<string>("");
-  const [scoreText, setScoreText] = useState<string>("");
-  const [note, setNote] = useState("");
-  const [deep, setDeep] = useState(false);
-  // Per-fact yes/no overrides + the disqualifier, seeded from the call's
-  // extracted signals.
-  const [facts, setFacts] = useState<Record<string, string>>(() => {
-    const seed: Record<string, string> = {};
-    for (const { key } of CORRECTABLE_FACTS) {
-      seed[key as string] = (signals?.[key] as string | undefined) ?? "no";
-    }
-    return seed;
-  });
-  const [disq, setDisq] = useState<string>(
-    (signals?.disqualifier as string | undefined) ?? "none",
-  );
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const feedbackKey = ["intent-feedback", campaignId, leadId, callId];
-  const { data: existing } = useQuery<{
-    feedback: Array<{
-      id: string;
-      correctedStatus: string;
-      correctedScore: number | null;
-      createdAt: string;
-    }>;
-  }>({
-    queryKey: feedbackKey,
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/ai-dialer/campaigns/${campaignId}/leads/${leadId}/intent-feedback?callId=${encodeURIComponent(callId)}`,
-      );
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error?.message ?? "Failed");
-      return json.data;
-    },
-  });
-  const lastCorrection = existing?.feedback?.[0] ?? null;
-
-  async function submit() {
-    if (!status) {
-      setError("Pick the correct status first.");
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    // Deep mode: carry the original signals through, overriding edited facts.
-    let correctedSignals: ClientSignals | null = null;
-    if (deep) {
-      const base: ClientSignals = signals ? { ...signals } : {};
-      for (const { key } of CORRECTABLE_FACTS) {
-        base[key] = facts[key as string];
-      }
-      base.disqualifier = disq;
-      correctedSignals = base;
-    }
-    const parsedScore = scoreText.trim() === "" ? null : Number(scoreText);
-    try {
-      const res = await fetch(
-        `/api/ai-dialer/campaigns/${campaignId}/leads/${leadId}/intent-feedback`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            callId,
-            correctedStatus: status,
-            correctedScore:
-              parsedScore != null && Number.isFinite(parsedScore) ? parsedScore : null,
-            correctedSignals,
-            note: note.trim() || null,
-          }),
-        },
-      );
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error?.message ?? "Save failed");
-      await qc.invalidateQueries({ queryKey: feedbackKey });
-      // Refresh the drawer (header "Corrected" pill) and the campaign table
-      // (row "Corrected" pill) so the flag appears without a manual reload.
-      qc.invalidateQueries({
-        queryKey: ["campaign-lead-transcript", campaignId, leadId],
-      });
-      qc.invalidateQueries({ queryKey: ["dialer-campaign-leads", campaignId] });
-      setOpenPanel(false);
-      setNote("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1.5">
-          <AlertCircle className="w-3.5 h-3.5" />
-          Score looks wrong?
-        </h3>
-        {!openPanel && (
-          <button
-            type="button"
-            onClick={() => setOpenPanel(true)}
-            className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
-          >
-            Correct this score
-          </button>
-        )}
-      </div>
-
-      {lastCorrection && (
-        <p className="mt-2 text-[11px] text-amber-700 flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3" />
-          Last corrected to <b className="capitalize">{lastCorrection.correctedStatus}</b>
-          {lastCorrection.correctedScore != null && <> ({lastCorrection.correctedScore}/100)</>}
-        </p>
-      )}
-
-      {openPanel && (
-        <div className="mt-3 space-y-3">
-          <p className="text-[11px] text-gray-600">
-            AI scored this <b>{intentScore ?? "—"}/100</b>. Tell the system the correct
-            outcome so it can learn.
-          </p>
-
-          {/* Quick mode — the true status label */}
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-600 mb-1">
-              Correct status
-            </label>
-            <div className="flex flex-wrap gap-1.5">
-              {LEAD_STATUS_OPTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setStatus(s)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize border ${
-                    status === s
-                      ? "bg-amber-500 text-white border-amber-500"
-                      : "bg-white text-gray-700 border-gray-200 hover:border-amber-300"
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="text-[11px] font-semibold text-gray-600">
-              Correct score (optional)
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={scoreText}
-              onChange={(e) => setScoreText(e.target.value)}
-              placeholder="0–100"
-              className="w-20 h-8 rounded-lg border border-gray-200 px-2 text-xs"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-600 mb-1">
-              Note (optional)
-            </label>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={2}
-              placeholder="e.g. only two garbled lines, dealer showed no real interest"
-              className="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-xs"
-            />
-          </div>
-
-          {/* Deep mode — per-fact yes/no correction */}
-          <button
-            type="button"
-            onClick={() => setDeep((d) => !d)}
-            className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
-          >
-            {deep ? "Hide signal details" : "Refine signals (advanced)"}
-          </button>
-          {deep && (
-            <div className="space-y-2 rounded-xl border border-amber-100 bg-white p-3">
-              {CORRECTABLE_FACTS.map(({ key, label, info }) => {
-                const val = facts[key as string] ?? "no";
-                return (
-                  <div
-                    key={key as string}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <span className="text-[11px] text-gray-600 flex items-center gap-1">
-                      {label}
-                      {info && (
-                        <span className="text-[8px] uppercase tracking-wide text-gray-400 bg-gray-100 rounded px-1 py-px">
-                          info
-                        </span>
-                      )}
-                    </span>
-                    <div className="flex gap-1">
-                      {["yes", "no"].map((opt) => (
-                        <button
-                          key={opt}
-                          type="button"
-                          onClick={() =>
-                            setFacts((prev) => ({ ...prev, [key as string]: opt }))
-                          }
-                          className={`px-2 py-0.5 rounded text-[11px] font-semibold capitalize border ${
-                            val === opt
-                              ? opt === "yes"
-                                ? "bg-emerald-500 text-white border-emerald-500"
-                                : "bg-gray-400 text-white border-gray-400"
-                              : "bg-white text-gray-600 border-gray-200 hover:border-amber-300"
-                          }`}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-              <label className="flex items-center justify-between gap-2 pt-1 border-t border-gray-100">
-                <span className="text-[11px] text-gray-600">Disqualifier</span>
-                <select
-                  value={disq}
-                  onChange={(e) => setDisq(e.target.value)}
-                  className="h-8 rounded-lg border border-gray-200 px-1 text-xs"
-                >
-                  {DISQUALIFIER_OPTIONS.map((d) => (
-                    <option key={d} value={d}>
-                      {d.replace(/_/g, " ")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-
-          {error && <p className="text-[11px] text-red-600">{error}</p>}
-
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              onClick={submit}
-              disabled={submitting}
-              className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 disabled:opacity-50 inline-flex items-center gap-1.5"
-            >
-              {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
-              Save correction
-            </button>
-            <button
-              type="button"
-              onClick={() => setOpenPanel(false)}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-600 hover:text-gray-900"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
   );
 }
 

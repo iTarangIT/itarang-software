@@ -8,11 +8,13 @@ import {
   Users,
   Target,
   Download,
+  PhoneCall,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrapedLeadsTable } from "./ScrapedLeadsTable";
 import { RawLeadsTable } from "./RawLeadsTable";
 import { RunStatusBadge } from "./ExplorationStatusBadge";
+import { RunCampaignSheet } from "./RunCampaignSheet";
 import { useState } from "react";
 
 function fmtDate(iso: string) {
@@ -44,6 +46,9 @@ interface RunDetail {
     // We normalize to string[] in `normalizeQueries` before rendering.
     search_queries: unknown;
   };
+  /** Canonical {state, city} pairs this run covered — see runAudience.ts.
+   *  Empty for pre-E-227 runs, which is most historical ones. */
+  campaign_cities?: { raw: string; state: string | null; city: string; resolved: boolean }[];
   leads: unknown[];
   dedup_logs: Array<{
     id: string;
@@ -114,10 +119,22 @@ function StatCard({
 interface RunDetailViewProps {
   runId: string;
   onBack: () => void;
+  /**
+   * Where to go once a campaign starts. A prop rather than a router call inside
+   * this component, matching the existing `onBack` contract — the view is
+   * mounted by two different host pages and neither should have its navigation
+   * hard-coded in here.
+   */
+  onCampaignStarted?: (campaignId: string) => void;
 }
 
-export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
+export function RunDetailView({
+  runId,
+  onBack,
+  onCampaignStarted,
+}: RunDetailViewProps) {
   const [activeTab, setActiveTab] = useState<"saved" | "total">("saved");
+  const [campaignSheetOpen, setCampaignSheetOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery<RunDetail>({
     queryKey: ["scraper-run-detail", runId],
@@ -175,6 +192,7 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
   }
 
   const { run } = data;
+  const campaignCities = data.campaign_cities ?? [];
   const queries = normalizeQueries(run.search_queries);
 
   return (
@@ -279,6 +297,28 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
               </button>
             ))}
           </div>
+          <div className="flex items-center gap-2">
+          {/* Enabled straight from the run payload — campaign_cities rides along
+              with the detail fetch, so no extra round trip is needed to know
+              whether this run can be targeted. Disabled with a visible reason
+              rather than hidden: a missing control is indistinguishable from a
+              missing permission. */}
+          {run.status === "completed" && (
+            <button
+              type="button"
+              onClick={() => setCampaignSheetOpen(true)}
+              disabled={campaignCities.length === 0}
+              title={
+                campaignCities.length === 0
+                  ? "No city was recorded for this run's searches, so a campaign cannot be scoped to it."
+                  : `Call dealers in ${campaignCities.map((c) => c.city).join(", ")}`
+              }
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-teal-700 px-3 py-1.5 border border-gray-200 rounded-lg hover:border-teal-300 mb-2 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:border-gray-200 disabled:hover:text-gray-300"
+            >
+              <PhoneCall className="w-3.5 h-3.5" />
+              Run Campaign
+            </button>
+          )}
           {(run.total_found ?? 0) > 0 && (
             <a
               href={`/api/scraper/runs/${runId}/export.xlsx`}
@@ -293,11 +333,26 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
               Export Excel
             </a>
           )}
+          </div>
         </div>
 
         {activeTab === "saved" && <ScrapedLeadsTable runId={runId} />}
         {activeTab === "total" && <RawLeadsTable runId={runId} />}
       </div>
+
+      {/* Mounted only while open, so each open starts from clean state without
+          a reset effect. */}
+      {campaignSheetOpen && (
+        <RunCampaignSheet
+          runId={runId}
+          isOpen
+          onClose={() => setCampaignSheetOpen(false)}
+          onStarted={(campaignId) => {
+            setCampaignSheetOpen(false);
+            onCampaignStarted?.(campaignId);
+          }}
+        />
+      )}
     </div>
   );
 }
