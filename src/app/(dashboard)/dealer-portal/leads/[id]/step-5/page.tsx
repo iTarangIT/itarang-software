@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -8,9 +8,6 @@ import {
   AlertCircle,
   ShieldCheck,
   Banknote,
-  Battery,
-  Plug,
-  Package,
   Clock,
   Lock,
   ArrowRight,
@@ -18,10 +15,37 @@ import {
   Phone,
 } from "lucide-react";
 
+import {
+  CartPricingSummary,
+  ProductCartSections,
+  ProductCategoryCard,
+  useProductCart,
+  useProductScope,
+} from "@/components/dealer-portal/lead-wizard/product-cart";
+import type { PriorSelection } from "@/components/dealer-portal/lead-wizard/product-cart";
+
 // BRD V2 Part F — Step 5 OTP + Dispatch Confirmation (finance only).
-// Scenario A: kyc_status = loan_sanctioned → loan panel + OTP send/entry + dispatch.
+// Scenario A: kyc_status = loan_sanctioned → product cart + OTP send/entry + dispatch.
 // Scenario B: kyc_status = loan_rejected → rejection banner + follow-up actions.
 // Cash leads complete at Step 4 — they never reach this page.
+//
+// Since the Step-4/Step-5 split, this is where the dealer picks the actual
+// battery, charger and paraphernalia and settles the price. Step 4 sends the
+// customer to the lenders with no product attached; the lender quotes against
+// the customer's profile, and only then does real stock get committed here.
+// Inventory is reserved inside confirm-dispatch, not before.
+
+/** Step-4 lead context, reused verbatim — it already serves loan_sanctioned. */
+interface Step4Context {
+  allowed: boolean;
+  dealerId?: string | null;
+  category?: string | null;
+  categoryName?: string | null;
+  productId?: string | null;
+  productTypeName?: string | null;
+  productSku?: string | null;
+  priorSelection?: PriorSelection | null;
+}
 
 interface LoanSanction {
   id: string;
@@ -130,8 +154,13 @@ export default function Step5Page() {
 
   const [data, setData] = useState<StatusData | null>(null);
   const [access, setAccess] = useState<AccessData | null>(null);
+  const [step4Ctx, setStep4Ctx] = useState<Step4Context | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [savingProduct, setSavingProduct] = useState(false);
+  // Cleared whenever the dealer edits the cart, so the OTP can only ever be
+  // sent against a price that is actually persisted.
+  const [productSaved, setProductSaved] = useState(false);
 
   const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
   const [otpDigits, setOtpDigits] = useState<string[]>(["", "", "", "", "", ""]);
@@ -148,12 +177,93 @@ export default function Step5Page() {
 
   const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
+  // The cart. Called unconditionally, above every early return below, because
+  // hooks cannot sit behind a conditional. It no-ops while dealerId is null.
+  //
+  // Frozen once the customer has approved the code over the phone: they said
+  // yes to a specific number, so changing the battery afterwards has to mean a
+  // fresh call, not a silent re-point. The server enforces the same rule from
+  // the other side by expiring any outstanding OTP when the product is saved.
+  // The scope narrows the cart, and a category change clears the cart — so the
+  // two reference each other. The ref breaks the cycle.
+  const resetCartRef = useRef<() => void>(() => {});
+
+  const refetchCtx = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/lead/${leadId}/step-4-access`);
+      const json = await res.json();
+      if (json.success) setStep4Ctx(json.data as Step4Context);
+    } catch {
+      setError("Failed to refresh lead context");
+    }
+  }, [leadId]);
+
+  // Category / Product Type. A finance lead sets these here, not on Step 4 —
+  // it reaches its lenders before any product is chosen.
+  const scope = useProductScope({
+    leadId,
+    category: step4Ctx?.category ?? null,
+    productId: step4Ctx?.productId ?? null,
+    refetchLead: refetchCtx,
+    onSelectionInvalidated: () => resetCartRef.current(),
+    onError: setError,
+  });
+
+  const cart = useProductCart({
+    leadId,
+    dealerId: step4Ctx?.dealerId ?? null,
+    category: step4Ctx?.category ?? null,
+    scopeProducts: scope.selectedProducts,
+    prior: step4Ctx?.priorSelection ?? null,
+    readOnly: otpVerified,
+    // Keeps an already-reserved serial visible — the case for leads submitted
+    // before the split, whose stock was reserved at Step-4 submit and would
+    // otherwise vanish from the picker.
+    includeSerials: {
+      battery: data?.productSelection?.battery_serial ?? null,
+      charger: data?.productSelection?.charger_serial ?? null,
+    },
+    draftKeyPrefix: "step5-draft",
+    onError: setError,
+  });
+
+  useEffect(() => {
+    resetCartRef.current = cart.resetSelection;
+  }, [cart.resetSelection]);
+
+  // The OTP unlocks once a battery is committed server-side. A lead that
+  // already carries a saved serial (submitted before the split, or saved in an
+  // earlier session) counts as ready without re-saving.
+  const persistedSerial = data?.productSelection?.battery_serial ?? null;
+  const productReady =
+    productSaved ||
+    (!!persistedSerial &&
+      persistedSerial === (cart.selectedBattery?.serial_number ?? persistedSerial));
+
+  // Any edit invalidates a prior save — the dealer must re-save before the OTP.
+  const cartSignature = `${cart.selectedBattery?.serial_number ?? ""}|${
+    cart.selectedCharger?.serial_number ?? ""
+  }|${cart.live.finalPrice}`;
+  const savedSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (savedSignatureRef.current !== null && savedSignatureRef.current !== cartSignature) {
+      setProductSaved(false);
+    }
+  }, [cartSignature]);
+
   const load = async () => {
     try {
-      const [accessRes, statusRes] = await Promise.all([
+      // step-4-access already returns the full lead context (dealer id,
+      // category, product type, prior selection) for a loan_sanctioned lead,
+      // so the cart needs no endpoint of its own. Its `readOnly: true` is
+      // deliberately ignored here — Step 5 is where the product IS editable.
+      const [accessRes, statusRes, ctxRes] = await Promise.all([
         fetch(`/api/lead/${leadId}/step-5-access`).then((r) => r.json()),
         fetch(`/api/lead/${leadId}/step-5/status`).then((r) => r.json()),
+        fetch(`/api/lead/${leadId}/step-4-access`).then((r) => r.json()),
       ]);
+
+      if (ctxRes?.success) setStep4Ctx(ctxRes.data as Step4Context);
 
       if (accessRes?.success) {
         setAccess(accessRes.data);
@@ -197,7 +307,47 @@ export default function Step5Page() {
     return () => clearInterval(t);
   }, [secondsLeft]);
 
+  const handleSaveProduct = async () => {
+    if (!cart.selectedBattery) {
+      setError("Pick a battery first");
+      return;
+    }
+    setSavingProduct(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/lead/${leadId}/step-5/product-selection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cart.toSubmitPayload()),
+      });
+      const json = await res.json();
+      if (json.success) {
+        savedSignatureRef.current = cartSignature;
+        setProductSaved(true);
+        cart.saveLocalDraft();
+        // Saving expires any outstanding OTP server-side; mirror that here so
+        // the dealer isn't left holding a code that will now be rejected.
+        setOtpVerified(false);
+        setOtpDigits(["", "", "", "", "", ""]);
+        setSecondsLeft(0);
+        await load();
+      } else {
+        setError(json.error?.message || "Could not save the product selection");
+      }
+    } catch {
+      setError("Could not save the product selection");
+    } finally {
+      setSavingProduct(false);
+    }
+  };
+
   const handleSendOtp = async () => {
+    // The customer is about to approve a number over the phone, so there has
+    // to be a saved number for them to approve.
+    if (!productReady) {
+      setError("Save the product selection before calling the customer");
+      return;
+    }
     setSending(true);
     setError(null);
     try {
@@ -650,7 +800,6 @@ export default function Step5Page() {
   // ─── Scenario A — Loan Sanctioned ────────────────────────────────────────
 
   const loan = data.loanSanction;
-  const product = data.productSelection;
   const mm = Math.floor(secondsLeft / 60);
   const ss = secondsLeft % 60;
 
@@ -665,11 +814,11 @@ export default function Step5Page() {
   const otpSessionActive = !!otp && !otp.isUsed;
   const showOtpUi = otpSessionActive || !!otpSentTo;
 
-  const paraphernaliaItems = formatParaphernalia(product?.paraphernalia);
-
   return (
     <div className="min-h-screen bg-gray-50 -mx-6 sm:mx-0">
-      <div className="max-w-4xl mx-auto px-0 py-6 sm:p-8 space-y-5">
+      {/* Wider than the other scenarios: this one carries the cart plus a
+          sticky pricing rail. The dispatched / rejected branches stay narrow. */}
+      <div className="max-w-[1200px] mx-auto px-0 py-6 sm:p-8 space-y-5">
         <ProgressHeader leadId={leadId} active={5} />
 
         <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
@@ -731,52 +880,43 @@ export default function Step5Page() {
           </section>
         )}
 
-        {/* ─── Product Summary ───────────────────────────────────────────── */}
-        {product && (
-          <section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-            <SectionTitle icon={<Package className="w-4 h-4" />} title="Product Summary" />
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 text-sm">
-              <Field
-                label="Battery Serial"
-                value={
-                  <span className="inline-flex items-center gap-1.5">
-                    <Battery className="w-3.5 h-3.5 text-gray-400" />
-                    <span className="font-mono">{product.battery_serial ?? "—"}</span>
-                  </span>
-                }
-              />
-              <Field
-                label="Charger Serial"
-                value={
-                  <span className="inline-flex items-center gap-1.5">
-                    <Plug className="w-3.5 h-3.5 text-gray-400" />
-                    <span className="font-mono">{product.charger_serial ?? "—"}</span>
-                  </span>
-                }
-              />
-              <Field
-                label="Category"
-                value={
-                  product.category && product.sub_category
-                    ? `${product.category} · ${product.sub_category}`
-                    : product.category || "—"
-                }
-              />
-              <Field label="Dealer Margin" value={fmtINR(product.dealer_margin)} />
-              <Field label="Final Price" value={fmtINR(product.final_price)} highlight />
-              <Field
-                label="Paraphernalia"
-                value={
-                  paraphernaliaItems.length > 0 ? (
-                    <span className="text-xs">{paraphernaliaItems.join(", ")}</span>
-                  ) : (
-                    <span className="text-xs text-gray-400">None</span>
-                  )
-                }
-              />
-            </div>
-          </section>
-        )}
+        {/* ─── Product cart + OTP, with the pricing rail alongside ───────── */}
+        {/* Replaces the old read-only Product Summary: this is where the
+            dealer commits to real stock, now that the lender has quoted. */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-8 space-y-5">
+            {/* Section A — Category & Product Type. A finance lead sets these
+                here: Step 4 only routes the customer to the lenders. */}
+            <ProductCategoryCard
+              scope={scope}
+              category={step4Ctx?.category ?? null}
+              categoryName={step4Ctx?.categoryName}
+              productId={step4Ctx?.productId ?? null}
+              productTypeName={step4Ctx?.productTypeName}
+              productSku={step4Ctx?.productSku}
+              readOnly={otpVerified}
+              hint="Pick one or more product types — the Battery, Charger and Paraphernalia lists below show only the available stock for those products. Switching category clears the chosen battery, charger, and paraphernalia."
+            />
+
+            <ProductCartSections cart={cart} />
+
+            {!otpVerified && (
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs text-gray-500">
+                  {productReady
+                    ? "Product saved. You can call the customer with the OTP."
+                    : "Save the product selection to unlock the customer OTP."}
+                </p>
+                <button
+                  onClick={handleSaveProduct}
+                  disabled={savingProduct || !cart.selectedBattery}
+                  className="px-5 py-2.5 rounded-xl bg-[#0047AB] text-white text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {savingProduct && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {savingProduct ? "Saving…" : "Save product selection"}
+                </button>
+              </div>
+            )}
 
         {/* ─── OTP Confirmation ──────────────────────────────────────────── */}
         <section className="bg-white border-2 border-[#0047AB]/20 rounded-2xl p-6 shadow-sm">
@@ -907,11 +1047,23 @@ export default function Step5Page() {
               )}
             </div>
           )}
-        </section>
+            </section>
+          </div>
+
+          {/* Right rail — pricing, sticky beside the cart and the OTP card. */}
+          <div className="lg:col-span-4">
+            <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+              <CartPricingSummary
+                cart={cart}
+                inventoryNote="Inventory is reserved and dispatched on OTP confirm"
+              />
+            </div>
+          </div>
+        </div>
 
         <p className="text-[11px] text-gray-400 text-center pt-2">
-          Step 5 finalises the sale: inventory marked sold, warranty activated, after-sales record
-          opened, and the customer notified — all in a single transaction.
+          Step 5 finalises the sale: stock reserved and dispatched, warranty activated, after-sales
+          record opened, and the customer notified — all in a single transaction.
         </p>
       </div>
     </div>
@@ -1038,27 +1190,3 @@ function ProgressHeader({ leadId, active }: { leadId: string; active: number }) 
   );
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function formatParaphernalia(p: Record<string, unknown> | null | undefined): string[] {
-  if (!p) return [];
-  const out: string[] = [];
-  for (const [key, value] of Object.entries(p)) {
-    if (value == null || value === "" || value === 0 || value === false) continue;
-    const label = key
-      .replace(/_/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
-    if (typeof value === "number") {
-      out.push(`${label} ×${value}`);
-    } else if (typeof value === "boolean") {
-      out.push(label);
-    } else if (typeof value === "string") {
-      out.push(`${label}: ${value}`);
-    } else if (Array.isArray(value)) {
-      if (value.length > 0) out.push(`${label}: ${value.join(", ")}`);
-    } else {
-      out.push(`${label}: ${JSON.stringify(value)}`);
-    }
-  }
-  return out;
-}

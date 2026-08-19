@@ -32,6 +32,7 @@ import {
   ClipboardList,
   FileSignature,
   FileSpreadsheet,
+  Gavel,
   Handshake,
   Landmark,
   Loader2,
@@ -67,6 +68,11 @@ const CATEGORY_META: Record<NotificationCategory, { icon: LucideIcon; tint: stri
   "Product & Dispatch": { icon: PackageCheck, tint: "bg-lime-50", fg: "text-lime-700" },
   Inventory: { icon: Boxes, tint: "bg-amber-50", fg: "text-amber-600" },
   Escalations: { icon: Megaphone, tint: "bg-rose-50", fg: "text-rose-600" },
+  // The five auction events (lot published, outbid, ending soon, won, lost)
+  // were registered in the catalog without a matching entry here, so this map
+  // no longer satisfied Record<NotificationCategory, …> and every auction
+  // notification fell through to the default icon.
+  Auctions: { icon: Gavel, tint: "bg-amber-50", fg: "text-amber-700" },
   // Buyback's own eight, unchanged
   Negotiation: { icon: Handshake, tint: "bg-violet-50", fg: "text-violet-600" },
   "Buyback Requests": { icon: Recycle, tint: "bg-emerald-50", fg: "text-emerald-600" },

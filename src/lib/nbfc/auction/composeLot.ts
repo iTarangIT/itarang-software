@@ -69,6 +69,157 @@ function lotCode(): string {
   return `LOT-${rand}`;
 }
 
+// ---------------------------------------------------------------------------
+// Latest-evaluation facts — price, SOH and manufacture date per battery.
+// ---------------------------------------------------------------------------
+// [FIX] `avg_soh` used to be hard-set to null on every composed lot, with a
+// comment promising a publish-time backfill that publishLot() never performed.
+// Every composed lot therefore showed "SOH n/a" on the dealer card while the
+// reading sat one join away. The same read that prices the lot now also carries
+// the health figure and the manufacture date, so nothing extra is queried.
+interface EvalFacts {
+  price: number;
+  soh: number | null;
+  manufacturing_date: string | null;
+}
+
+function readNum(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const n = typeof value === "number" ? value : Number(String(value));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Whole months between a manufacturing date and today. Mirrors createLot.ts. */
+function ageMonthsFrom(value: unknown): number | null {
+  if (!value) return null;
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const months =
+    (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+  return months >= 0 ? months : null;
+}
+
+async function latestEvalFactsFor(
+  batteryIds: string[],
+): Promise<Map<string, EvalFacts>> {
+  if (batteryIds.length === 0) return new Map();
+
+  // Built with the query builder rather than raw SQL: drizzle's `sql` template
+  // expands a JS array into a record tuple, so `= ANY(${ids}::uuid[])` fails
+  // with `42846 cannot cast type record to uuid[]`. `inArray` emits the right
+  // thing and stays parameterised.
+  //
+  // DISTINCT ON has no builder equivalent, so the newest-evaluation-per-battery
+  // pick happens in JS off an ordered read. Reading the LATEST matters: a
+  // battery re-evaluated after refurbishment has two rows, and pricing it off
+  // the pre-repair figure would undercharge for the repair.
+  const rows = await db
+    .select({
+      battery_id: nbfcRecoveryPipeline.battery_id,
+      price: nbfcBatteryEvaluations.base_auction_price,
+      step1: nbfcBatteryEvaluations.step1,
+    })
+    .from(nbfcRecoveryPipeline)
+    .innerJoin(
+      nbfcBatteryEvaluations,
+      eq(nbfcBatteryEvaluations.recovery_pipeline_id, nbfcRecoveryPipeline.id),
+    )
+    .where(inArray(nbfcRecoveryPipeline.battery_id, batteryIds))
+    .orderBy(desc(nbfcBatteryEvaluations.created_at));
+
+  const out = new Map<string, EvalFacts>();
+  for (const r of rows) {
+    if (!r.battery_id) continue;
+    if (out.has(r.battery_id)) continue; // first = newest
+    const step1 = (r.step1 ?? null) as Record<string, unknown> | null;
+    out.set(r.battery_id, {
+      price: Number(r.price) || 0,
+      soh: step1 ? readNum(step1.soh_percent) : null,
+      manufacturing_date: step1
+        ? ((step1.manufacturing_date as string | null) ?? null)
+        : null,
+    });
+  }
+  return out;
+}
+
+/** A battery row, reduced to the fields lot arithmetic needs. */
+export interface LotBattery {
+  id: string;
+  serial: string;
+  condition_grade: string | null;
+  capacity: string | null;
+}
+
+export interface LotFactItem {
+  battery_id: string;
+  serial: string;
+  condition: string;
+  item_price: number | null;
+  /** Latest evaluation's state of health. Null until the battery is graded. */
+  soh: number | null;
+}
+
+export interface LotFacts {
+  items: LotFactItem[];
+  derivedBase: number;
+  avgSoh: number | null;
+  ageMonths: number | null;
+  capacity: string | null;
+}
+
+/**
+ * Everything a lot row derives from its batteries: per-item price, the summed
+ * base price, the average state of health and the average age.
+ *
+ * Shared by compose, add-item and remove-item so a lot's aggregates can never
+ * drift away from the batteries actually on it.
+ */
+export async function buildLotFacts(
+  batteries: LotBattery[],
+): Promise<LotFacts> {
+  const ids = batteries.map((b) => b.id);
+  const [refurbCosts, evalFacts] = await Promise.all([
+    refurbishmentCostForBatteries(ids),
+    latestEvalFactsFor(ids),
+  ]);
+
+  const items: LotFactItem[] = batteries.map((b) => {
+    const f = evalFacts.get(b.id);
+    const itemPrice = (f?.price ?? 0) + (refurbCosts.get(b.id) ?? 0);
+    return {
+      battery_id: b.id,
+      serial: b.serial,
+      condition: b.condition_grade ?? "partial_working",
+      item_price: itemPrice > 0 ? itemPrice : null,
+      soh: f?.soh ?? null,
+    };
+  });
+
+  const sohs = batteries
+    .map((b) => evalFacts.get(b.id)?.soh)
+    .filter((s): s is number => s != null && Number.isFinite(s));
+  const avgSoh =
+    sohs.length > 0 ? sohs.reduce((a, b) => a + b, 0) / sohs.length : null;
+
+  const ages = batteries
+    .map((b) => ageMonthsFrom(evalFacts.get(b.id)?.manufacturing_date))
+    .filter((a): a is number => a != null);
+  const ageMonths =
+    ages.length > 0
+      ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length)
+      : null;
+
+  return {
+    items,
+    derivedBase: items.reduce((sum, i) => sum + (i.item_price ?? 0), 0),
+    avgSoh,
+    ageMonths,
+    capacity: batteries[0]?.capacity ?? null,
+  };
+}
+
 export interface ComposeLotInput {
   tenant_id: string;
   actor_user_id: string;
@@ -169,50 +320,12 @@ export async function composeLot(input: ComposeLotInput): Promise<LotSummary> {
 
   // Per-item price: the battery's own evaluation price plus what its
   // refurbishment actually cost (BRD §15 — accessories are rolled in so the
-  // dealer sees ONE number rather than an itemised bill).
-  const refurbCosts = await refurbishmentCostForBatteries(uniqueIds);
+  // dealer sees ONE number rather than an itemised bill). The same read carries
+  // SOH and manufacture age, so the lot card has a health figure to show.
+  const facts = await buildLotFacts(batteries);
+  const items = facts.items;
 
-  // Built with the query builder rather than raw SQL: drizzle's `sql` template
-  // expands a JS array into a record tuple, so `= ANY(${ids}::uuid[])` fails
-  // with `42846 cannot cast type record to uuid[]`. `inArray` emits the right
-  // thing and stays parameterised.
-  //
-  // DISTINCT ON has no builder equivalent, so the newest-evaluation-per-battery
-  // pick happens in JS off an ordered read. Reading the LATEST matters: a
-  // battery re-evaluated after refurbishment has two rows, and pricing it off
-  // the pre-repair figure would undercharge for the repair.
-  const evalRows = await db
-    .select({
-      battery_id: nbfcRecoveryPipeline.battery_id,
-      price: nbfcBatteryEvaluations.base_auction_price,
-    })
-    .from(nbfcRecoveryPipeline)
-    .innerJoin(
-      nbfcBatteryEvaluations,
-      eq(nbfcBatteryEvaluations.recovery_pipeline_id, nbfcRecoveryPipeline.id),
-    )
-    .where(inArray(nbfcRecoveryPipeline.battery_id, uniqueIds))
-    .orderBy(desc(nbfcBatteryEvaluations.created_at));
-
-  const evalByBattery = new Map<string, number>();
-  for (const r of evalRows) {
-    if (!r.battery_id) continue;
-    if (evalByBattery.has(r.battery_id)) continue; // first = newest
-    evalByBattery.set(r.battery_id, Number(r.price) || 0);
-  }
-
-  const items = batteries.map((b) => {
-    const itemPrice =
-      (evalByBattery.get(b.id) ?? 0) + (refurbCosts.get(b.id) ?? 0);
-    return {
-      battery_id: b.id,
-      serial: b.serial,
-      condition: b.condition_grade ?? "partial_working",
-      item_price: itemPrice > 0 ? itemPrice : null,
-    };
-  });
-
-  const derivedBase = items.reduce((sum, i) => sum + (i.item_price ?? 0), 0);
+  const derivedBase = facts.derivedBase;
   const basePrice = input.base_price ?? derivedBase;
   if (!(basePrice > 0)) {
     throw new Error(
@@ -221,7 +334,6 @@ export async function composeLot(input: ComposeLotInput): Promise<LotSummary> {
   }
 
   const increment = input.bid_increment ?? computeBidIncrement(basePrice);
-  const avgSoh = null; // filled from telemetry at publish time if available
 
   const created = await db.transaction(async (tx) => {
     const [lot] = await tx
@@ -229,9 +341,9 @@ export async function composeLot(input: ComposeLotInput): Promise<LotSummary> {
       .values({
         lot_code: lotCode(),
         title: input.title ?? null,
-        capacity: batteries[0]?.capacity ?? null,
-        avg_soh: avgSoh,
-        age_months: null,
+        capacity: facts.capacity,
+        avg_soh: facts.avgSoh != null ? facts.avgSoh.toFixed(2) : null,
+        age_months: facts.ageMonths,
         quantity: items.length,
         base_price: basePrice.toFixed(2),
         bid_increment: increment.toFixed(2),

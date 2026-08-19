@@ -238,6 +238,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "auction.ending_soon": "Auctions",
   "auction.won": "Auctions",
   "auction.lost": "Auctions",
+  "auction.paused": "Auctions",
+  "auction.resumed": "Auctions",
+  "auction.cancelled": "Auctions",
 
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",

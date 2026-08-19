@@ -37,6 +37,12 @@ const RequestBody = z
   .object({
     lot_id: z.string().uuid(),
     winning_bid_id: z.string().uuid(),
+    /**
+     * Step-up credential. Optional in the schema and enforced by the service
+     * in production only — the E-069 acceptance test sends none, and awarding
+     * is the one destructive control that shipped with no gate at all.
+     */
+    mfa_token: z.string().min(1).optional(),
   })
   .strict();
 
@@ -68,6 +74,7 @@ export async function POST(req: NextRequest) {
       lot_id: parsed.data.lot_id,
       winning_bid_id: parsed.data.winning_bid_id,
       actor_user_id: actor.user_id,
+      mfa_token: parsed.data.mfa_token ?? null,
     });
 
     return NextResponse.json(result);
