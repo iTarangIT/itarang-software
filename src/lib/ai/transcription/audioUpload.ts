@@ -101,6 +101,23 @@ export function audioExtensionFor(
 }
 
 /**
+ * The reverse of audioExtensionFor: a content type for an object we already
+ * stored, derived from its key.
+ *
+ * Needed when audio is read straight out of S3 rather than over HTTP — there is
+ * no Content-Type header to copy in that path, and handing the transcriber
+ * "application/octet-stream" costs it the container hint it uses to pick a
+ * decoder.
+ */
+export function audioContentTypeFor(pathOrKey: string | null | undefined): string {
+  const ext = extname(pathOrKey ?? "").toLowerCase();
+  for (const [type, e] of Object.entries(ALLOWED_AUDIO_TYPES)) {
+    if (e === ext) return type;
+  }
+  return "audio/mpeg";
+}
+
+/**
  * Throw unless this looks like audio the transcriber can read.
  */
 export function assertAudioUpload(

@@ -30,10 +30,17 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { INTENT_REVIEW_ROLES } from "@/lib/leads/access";
-import { filesProxyPath, putObject } from "@/lib/storage/s3";
+import {
+  filesProxyPath,
+  getObject,
+  parseFilesProxyRef,
+  putObject,
+} from "@/lib/storage/s3";
+import { rehostElevenLabsRecording } from "@/lib/ai/storage/recordingStore";
 import {
   MAX_RECORDING_BYTES,
   RECORDINGS_BUCKET,
+  audioContentTypeFor,
   audioExtensionFor,
   recordingKeyFor,
 } from "@/lib/ai/transcription/audioUpload";
@@ -52,20 +59,63 @@ export const POST = withErrorHandler(
     const { id: leadId } = await ctx.params;
     const { callId } = Body.parse(await req.json());
 
-    const calls = rowsOf<{ recording_url: string | null }>(
+    const calls = rowsOf<{ recording_url: string | null; provider: string | null }>(
       await db.execute(sql`
-        SELECT recording_url
+        SELECT recording_url, provider
           FROM ai_call_logs
          WHERE call_id = ${callId}
          ORDER BY created_at DESC
          LIMIT 1
       `),
     );
+    if (calls.length === 0) {
+      return errorResponse("No such call.", 404);
+    }
 
-    const recordingUrl = calls[0]?.recording_url ?? null;
+    // ── RESOLVE the audio; do not just read a column ─────────────────────────
+    //
+    // recording_url being NULL is the NORMAL state for an ElevenLabs call, not
+    // an error. ElevenLabs hands back no hosted URL on its webhook — the audio
+    // sits behind an authenticated endpoint and nothing is stored until someone
+    // plays it. On sandbox that is 275 of 293 calls; on production the great
+    // majority too.
+    //
+    // So the first version of this route, which 404'd on a null column, refused
+    // to re-analyse ~94% of calls whose audio is perfectly retrievable — while
+    // the player rendered immediately above the button plays those same calls
+    // fine, because /api/ai-dialer/recording/[callId] performs exactly this lazy
+    // re-host on demand. "No audio to re-analyse" directly under a working
+    // player is the kind of contradiction that gets a feature written off as
+    // broken.
+    //
+    // Reusing that route's own function keeps the two paths in step: fetch from
+    // the provider once, re-host into our bucket, backfill the column so every
+    // later reader takes the fast path.
+    let recordingUrl = calls[0].recording_url ?? null;
+    if (!recordingUrl && calls[0].provider === "elevenlabs") {
+      recordingUrl = (await rehostElevenLabsRecording(callId)) || null;
+
+      if (recordingUrl) {
+        // Best-effort, as the player route treats it: the re-host has already
+        // succeeded, so a failed backfill costs one repeat next time rather
+        // than this request.
+        try {
+          await db.execute(sql`
+            UPDATE ai_call_logs
+               SET recording_url = ${recordingUrl}, updated_at = now()
+             WHERE call_id = ${callId}
+          `);
+        } catch (err) {
+          console.error("[reanalyse] recording_url backfill failed", callId, err);
+        }
+      }
+    }
+
     if (!recordingUrl) {
       return errorResponse(
-        "This call has no stored recording, so there is no audio to re-analyse.",
+        "The audio for this call could not be retrieved, so there is nothing to " +
+          "re-analyse. Try playing it in the player above — if that is silent too, " +
+          "the provider no longer has the recording.",
         404,
       );
     }
@@ -90,28 +140,54 @@ export const POST = withErrorHandler(
       );
     }
 
-    // Pull the provider's audio server-side. The reviewer's browser cannot do
-    // this — the provider URL is on another origin and may need credentials.
-    let res: Response;
-    try {
-      res = await fetch(recordingUrl);
-    } catch (err) {
-      return errorResponse(
-        `Could not reach the stored recording: ${
-          err instanceof Error ? err.message : "network error"
-        }`,
-        502,
-      );
-    }
-    if (!res.ok) {
-      return errorResponse(
-        `The stored recording could not be downloaded (HTTP ${res.status}).`,
-        502,
-      );
-    }
+    // Pull the audio server-side. TWO sources, and they are not interchangeable:
+    //
+    //   · Our own /api/files/call-recordings/… proxy, which is where every
+    //     re-hosted ElevenLabs recording lives. That route is in
+    //     AUTH_REQUIRED_BUCKETS, and a fetch() from this server carries no
+    //     session cookie — so asking our own front door for our own object
+    //     returns 401. Read it out of S3 directly instead.
+    //   · A provider or public-bucket URL (Bolna, legacy Supabase): an ordinary
+    //     cross-origin fetch, which the reviewer's browser could not do itself.
+    //
+    // Getting this wrong is silent and total: every re-hosted recording would
+    // fail with "could not be downloaded (HTTP 401)" and look like an outage.
+    let audio: Buffer;
+    let contentType: string;
 
-    const contentType = res.headers.get("content-type") || "audio/mpeg";
-    const audio = Buffer.from(await res.arrayBuffer());
+    const stored = parseFilesProxyRef(recordingUrl);
+    if (stored) {
+      const bytes = await getObject(stored.bucket, stored.key);
+      if (!bytes) {
+        return errorResponse(
+          "The stored recording could not be read back from storage.",
+          502,
+        );
+      }
+      audio = bytes;
+      // No Content-Type header on this path — derive it from the key.
+      contentType = audioContentTypeFor(stored.key);
+    } else {
+      let res: Response;
+      try {
+        res = await fetch(recordingUrl);
+      } catch (err) {
+        return errorResponse(
+          `Could not reach the stored recording: ${
+            err instanceof Error ? err.message : "network error"
+          }`,
+          502,
+        );
+      }
+      if (!res.ok) {
+        return errorResponse(
+          `The stored recording could not be downloaded (HTTP ${res.status}).`,
+          502,
+        );
+      }
+      contentType = res.headers.get("content-type") || "audio/mpeg";
+      audio = Buffer.from(await res.arrayBuffer());
+    }
 
     // The same 25 MB ceiling the upload route enforces, and for the same
     // reason: above it the transcription service refuses the file, so storing a
