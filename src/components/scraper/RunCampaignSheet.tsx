@@ -15,6 +15,14 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  CampaignWindowPicker,
+  INITIAL_SCHEDULE,
+  isScheduleInvalid,
+  toSchedulePayload,
+  useScheduleDefaults,
+  type CampaignScheduleValue,
+} from "@/components/leads/campaign-window-picker";
 import { Loader2, MapPin, Phone, X } from "lucide-react";
 
 type RunCity = {
@@ -72,6 +80,10 @@ export function RunCampaignSheet({
 }) {
   const [provider, setProvider] = useState<"bolna" | "elevenlabs">("bolna");
   const [starting, setStarting] = useState(false);
+  // E-254 — the calling window for the campaign this run kicks off.
+  const [schedule, setSchedule] =
+    useState<CampaignScheduleValue>(INITIAL_SCHEDULE);
+  useScheduleDefaults(setSchedule);
   const [error, setError] = useState<string | null>(null);
 
   // No reset-on-open effect: the host mounts this only while the sheet is open,
@@ -97,13 +109,17 @@ export function RunCampaignSheet({
   const burnDown = Math.round(dialable * OBSERVED_CONNECT_RATE);
 
   async function start() {
+    if (isScheduleInvalid(schedule)) return;
     setStarting(true);
     setError(null);
     try {
       const res = await fetch(`/api/scraper/runs/${runId}/campaign`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({
+          provider,
+          schedule: toSchedulePayload(schedule),
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json?.success) {
@@ -275,6 +291,16 @@ export function RunCampaignSheet({
           )}
         </div>
 
+        {/* E-254 — calling window for the campaign this run starts. */}
+        <div className="border-t border-gray-100 px-6 py-4">
+          <CampaignWindowPicker
+            value={schedule}
+            onChange={setSchedule}
+            idPrefix="run-campaign"
+            compact
+          />
+        </div>
+
         <div className="flex items-center justify-end gap-2 border-t border-gray-100 bg-gray-50 px-6 py-4">
           <button
             type="button"
@@ -286,7 +312,12 @@ export function RunCampaignSheet({
           <button
             type="button"
             onClick={start}
-            disabled={isLoading || starting || !data?.canRun}
+            disabled={
+              isLoading ||
+              starting ||
+              !data?.canRun ||
+              isScheduleInvalid(schedule)
+            }
             className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300"
           >
             {starting ? (
