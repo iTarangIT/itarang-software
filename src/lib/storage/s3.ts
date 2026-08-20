@@ -83,6 +83,52 @@ export function filesProxyUrl(logicalBucket: string, key: string): string {
   return origin ? `${origin}${p}` : p;
 }
 
+/**
+ * The inverse of filesProxyPath/filesProxyUrl: given a stored URL, say whether
+ * it points at our own /api/files proxy and, if so, which object.
+ *
+ * Exists because a SERVER reading a recording must not go through that route.
+ * /api/files/[bucket]/[...path] requires a Supabase session for call-recordings
+ * and documents, and a server-side fetch() carries no cookie — so asking our own
+ * front door for our own object returns 401. Callers use this to detect the case
+ * and read the bytes straight from S3 with getObject().
+ *
+ * Returns null for anything else (a provider URL, a public bucket URL), which
+ * the caller should fetch normally.
+ */
+export function parseFilesProxyRef(
+  urlOrPath: string | null | undefined,
+): { bucket: string; key: string } | null {
+  if (!urlOrPath) return null;
+
+  let path = urlOrPath;
+  if (new RegExp("^https?://", "i").test(urlOrPath)) {
+    try {
+      path = new URL(urlOrPath).pathname;
+    } catch {
+      return null;
+    }
+  }
+
+  const m = new RegExp("^/api/files/([^/]+)/(.+)$").exec(path);
+  if (!m) return null;
+
+  // Segments are percent-encoded by filesProxyPath; undo that to recover the
+  // real key (which may legitimately contain characters that were escaped).
+  const key = m[2]
+    .split("/")
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    })
+    .join("/");
+
+  return { bucket: decodeURIComponent(m[1]), key };
+}
+
 export async function putObject(
   logicalBucket: string,
   key: string,
