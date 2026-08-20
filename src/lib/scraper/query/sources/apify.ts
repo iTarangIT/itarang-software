@@ -4,6 +4,8 @@
 // simpler than the old run + poll + fetch-dataset flow and a better fit for
 // the per-chunk handler's 60s Vercel budget.
 
+import { TARGET_COUNTRY_CODE } from "../../geo";
+
 const ACTOR_ID = "compass~crawler-google-places";
 
 // Cap the actor's wait so a slow scrape can't blow the chunk handler's
@@ -13,6 +15,32 @@ const ACTOR_TIMEOUT_SECONDS = 40;
 // Belt-and-suspenders client timeout — Apify should return by ACTOR_TIMEOUT_SECONDS,
 // but a stalled TCP socket would still leak the chunk's budget without this.
 const FETCH_TIMEOUT_MS = (ACTOR_TIMEOUT_SECONDS + 5) * 1000;
+
+export interface ApifyActorInput {
+  searchStringsArray: string[];
+  maxCrawledPlacesPerSearch: number;
+  language: string;
+  countryCode: string;
+}
+
+// The actor's input, built separately so the country scope is assertable.
+//
+// WITHOUT countryCode the actor drives Google Maps with no geographic anchor
+// and Maps geo-biases to wherever the crawler is running. On run
+// SCRAPE-20260820-e3ae054b that turned "lead-acid battery dealer for
+// 3-wheelers in Sirathu" into twelve Fort Lauderdale battery shops — 19 of
+// the 35 rows Apify returned that run were not in India. Do not remove it.
+export function buildApifyActorInput(
+  query: string,
+  maxResults: number,
+): ApifyActorInput {
+  return {
+    searchStringsArray: [query],
+    maxCrawledPlacesPerSearch: maxResults,
+    language: "en",
+    countryCode: TARGET_COUNTRY_CODE,
+  };
+}
 
 export interface ApifyPlaceResult {
   placeId: string | null;
@@ -47,11 +75,7 @@ export async function fetchFromApifySingle(
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        searchStringsArray: [query],
-        maxCrawledPlacesPerSearch: maxResults,
-        language: "en",
-      }),
+      body: JSON.stringify(buildApifyActorInput(query, maxResults)),
       signal: controller.signal,
     });
   } catch (err: any) {

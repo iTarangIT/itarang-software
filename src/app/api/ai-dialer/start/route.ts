@@ -7,6 +7,7 @@ import { createCampaign } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { requireAuth, requireRole } from "@/lib/auth-utils";
 import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
 
 const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
 
@@ -25,7 +26,36 @@ export async function POST(req: NextRequest) {
   await requireRole([...LEADS_OVERSIGHT_ROLES]);
 
   const body = await req.json();
-  const { queueIds, provider: rawProvider, category, location, region } = body;
+  const {
+    queueIds,
+    provider: rawProvider,
+    category,
+    location,
+    region,
+    schedule: rawSchedule,
+  } = body;
+
+  // E-254 — the calling window. Zod here rather than hand-destructuring like
+  // the rest of this route: a malformed window is the one field that can put a
+  // campaign into a state nothing recovers it from (a zero-length window parks
+  // it forever), so it is worth refusing at the door with a real message.
+  //
+  // Absent means unscheduled, which is the pre-E-228 behaviour and stays the
+  // default for every caller that has not been taught about windows.
+  let schedule = null as ReturnType<typeof campaignScheduleSchema.parse> | null;
+  if (rawSchedule != null) {
+    const parsed = campaignScheduleSchema.safeParse(rawSchedule);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: parsed.error.issues[0]?.message ?? "Invalid calling window",
+        },
+        { status: 400 },
+      );
+    }
+    schedule = parsed.data;
+  }
 
   if (!Array.isArray(queueIds) || queueIds.length === 0) {
     return NextResponse.json(
@@ -98,6 +128,7 @@ export async function POST(req: NextRequest) {
     category: typeof category === "string" ? category : null,
     region: regionToPersist,
     triggeredBy,
+    schedule,
   });
 
   // Every lead in the queue had already been reached by AI. Say so plainly
@@ -146,12 +177,20 @@ export async function POST(req: NextRequest) {
   // block the redirect/banner update.
   let firstCallPlaced = false;
   let firstCallError: string | null = null;
+  // E-254 — set when the campaign was started outside its window. Not an error:
+  // advanceCampaign parked it and it will run on its own.
+  let armedStatus: "scheduled" | "paused" | null = null;
+  let resumeAt: string | null = null;
   if (campaignId) {
     try {
       const r = await advanceCampaign(campaignId);
       firstCallPlaced = r.kind === "placed";
       if (r.kind === "error") {
         firstCallError = r.error;
+      }
+      if (r.kind === "window-closed") {
+        armedStatus = r.status;
+        resumeAt = r.resumeAt ? r.resumeAt.toISOString() : null;
       }
     } catch (err) {
       firstCallError = err instanceof Error ? err.message : "advance threw";
@@ -171,5 +210,9 @@ export async function POST(req: NextRequest) {
     campaignId,
     firstCallPlaced,
     firstCallError,
+    // null unless the window was shut at start time. 'scheduled' = it will wake
+    // itself at resumeAt; 'paused' = a single run waiting for a human.
+    armedStatus,
+    resumeAt,
   });
 }

@@ -10,6 +10,7 @@ import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { dialerSession, type DialerProvider } from "./dialerSession";
 import { summarizeRegion } from "@/lib/leads/regionSummary";
 import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
+import { scheduleColumns, type ValidatedSchedule } from "./campaignWindow";
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
 // webhook the call is effectively orphaned — flip the row to failed and let
@@ -70,6 +71,11 @@ export async function createCampaign(opts: {
   // Explicit campaign name. Defaults to the auto-generated "Segment · Region ·
   // time" label. The List flow passes the user-typed list name.
   name?: string;
+  // E-254 — the calling window. Omitted (or mode 'now') means unscheduled: the
+  // campaign dials continuously, exactly as it did before E-228. Callers pass
+  // the zod-validated shape; scheduleColumns() decides which columns that
+  // becomes, so no call site has to remember the mode<->columns coupling.
+  schedule?: ValidatedSchedule | null;
 }): Promise<CreateCampaignResult> {
   try {
     // THE HARD GUARANTEE for the AI-connected block.
@@ -114,6 +120,9 @@ export async function createCampaign(opts: {
       region_filter: opts.region ?? null,
       status: opts.status ?? "running",
       total_leads: queueIds.length,
+      // E-254 — schedule_mode + the three window columns, or the unscheduled
+      // quartet when no schedule was supplied.
+      ...scheduleColumns(opts.schedule),
     });
 
     if (queueIds.length > 0) {

@@ -56,8 +56,16 @@ export async function GET(req: Request) {
       .select({
         id: dialerCampaigns.id,
         started_at: dialerCampaigns.started_at,
+        // E-228 — real activity, stamped by advanceCampaign on every placement
+        // and by the resume ticker when it wakes a campaign. See the COALESCE
+        // below for why started_at alone is not safe once campaigns can pause.
+        last_advanced_at: dialerCampaigns.last_advanced_at,
       })
       .from(dialerCampaigns)
+      // 'scheduled' and 'paused' campaigns are deliberately outside this sweep:
+      // they are not stalled, they are waiting for a clock. E-228 chose a new
+      // status over reusing 'stopped' precisely so this predicate needed no
+      // change to stay correct.
       .where(eq(dialerCampaigns.status, "running"));
 
     for (const c of running) {
@@ -81,8 +89,16 @@ export async function GET(req: Request) {
       // the last 10 min is dead — finalize as stopped. Treat the campaign's
       // own started_at as a fallback "last activity" timestamp when no
       // per-lead rows have completed yet.
+      //
+      // COALESCE(last_advanced_at, started_at), NOT started_at — THE
+      // MORNING-AFTER TRAP. A campaign paused overnight still carries
+      // yesterday's started_at. The moment the resume ticker flips it back to
+      // 'running' it is hours old with no recent activity, so measuring from
+      // started_at would force-stop it before it placed its first call of the
+      // day, every single day, making recurring campaigns silently never work.
+      const lastActiveAt = c.last_advanced_at ?? c.started_at;
       const campaignAgeMs =
-        runStartedAt.getTime() - new Date(c.started_at).getTime();
+        runStartedAt.getTime() - new Date(lastActiveAt).getTime();
 
       let finalizedAs: "stopped" | null = null;
       if (campaignAgeMs > STALL_FINALIZE_AGE_MS) {
@@ -100,7 +116,7 @@ export async function GET(req: Request) {
 
         const lastCompletedAt = lastActivity[0]?.completed_at
           ? new Date(lastActivity[0].completed_at).getTime()
-          : new Date(c.started_at).getTime();
+          : new Date(lastActiveAt).getTime();
         const sinceLastActivityMs = runStartedAt.getTime() - lastCompletedAt;
 
         if (sinceLastActivityMs > NO_PROGRESS_WINDOW_MS) {

@@ -8,6 +8,14 @@
 
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  CampaignWindowPicker,
+  INITIAL_SCHEDULE,
+  isScheduleInvalid,
+  toSchedulePayload,
+  useScheduleDefaults,
+  type CampaignScheduleValue,
+} from "./campaign-window-picker";
 import Link from "next/link";
 import {
   Plus,
@@ -65,7 +73,10 @@ export function ListsTab({
   onStartList,
 }: {
   provider: ListProvider;
-  onStartList?: (campaignId: string) => Promise<void> | void;
+  onStartList?: (
+    campaignId: string,
+    schedule: ReturnType<typeof toSchedulePayload>,
+  ) => Promise<void> | void;
 }) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -78,6 +89,13 @@ export function ListsTab({
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<CreateSummary | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
+  // E-254 — one calling window for the tab, applied to whichever draft is
+  // started. Deliberately not per-row: `provider` already works this way, a
+  // picker inside every card would drown the list, and the operator starts one
+  // list at a time anyway.
+  const [schedule, setSchedule] =
+    useState<CampaignScheduleValue>(INITIAL_SCHEDULE);
+  useScheduleDefaults(setSchedule);
 
   const { data, isLoading } = useQuery({
     queryKey: ["dialer-list-campaigns"],
@@ -142,10 +160,10 @@ export function ListsTab({
   };
 
   const handleStart = async (id: string) => {
-    if (startingId) return;
+    if (startingId || isScheduleInvalid(schedule)) return;
     setStartingId(id);
     try {
-      await onStartList?.(id);
+      await onStartList?.(id, toSchedulePayload(schedule));
     } finally {
       setStartingId(null);
     }
@@ -638,6 +656,16 @@ export function ListsTab({
         </div>
       )}
 
+      {/* E-254 — the calling window applied when Start is pressed below. */}
+      <div className="px-1 pb-2">
+        <CampaignWindowPicker
+          value={schedule}
+          onChange={setSchedule}
+          idPrefix="lists-tab"
+          compact
+        />
+      </div>
+
       {/* Campaign list */}
       {isLoading ? (
         <div className="lists-scroll">
@@ -694,7 +722,7 @@ export function ListsTab({
                     type="button"
                     className="lists-start"
                     title={`Start dialing via ${provider === "elevenlabs" ? "ElevenLabs" : "Bolna"}`}
-                    disabled={startingId === c.id}
+                    disabled={startingId === c.id || isScheduleInvalid(schedule)}
                     onClick={() => handleStart(c.id)}
                   >
                     {startingId === c.id ? (
