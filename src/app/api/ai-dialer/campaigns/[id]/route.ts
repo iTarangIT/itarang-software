@@ -29,6 +29,14 @@ export const GET = withErrorHandler(
         triggeredBy: dialerCampaigns.triggered_by,
         triggeredByName: users.name,
         stoppedBy: dialerCampaigns.stopped_by,
+        // E-228/E-254 — the calling window, so the card can say when this
+        // campaign runs and when a parked one will wake.
+        scheduleMode: dialerCampaigns.schedule_mode,
+        windowStart: dialerCampaigns.window_start,
+        windowEnd: dialerCampaigns.window_end,
+        windowDays: dialerCampaigns.window_days,
+        resumeAfter: dialerCampaigns.resume_after,
+        pausedAt: dialerCampaigns.paused_at,
       })
       .from(dialerCampaigns)
       .leftJoin(users, eq(users.id, dialerCampaigns.triggered_by))

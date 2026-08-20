@@ -63,6 +63,13 @@ export type UnifiedCampaignRow = {
     triggeredBy: string | null;
     triggeredByName: string | null;
     totalTalkTimeSeconds: number | null;
+    // E-228/E-254 — NULL on the NeoDove half: those are human-agent campaigns
+    // and have no dialer calling window.
+    scheduleMode: string | null;
+    windowStart: string | null;
+    windowEnd: string | null;
+    windowDays: unknown;
+    resumeAfter: string | null;
 };
 
 export const GET = withErrorHandler(async (req: Request) => {
@@ -117,6 +124,11 @@ export const GET = withErrorHandler(async (req: Request) => {
                      LEFT JOIN ai_call_logs acl ON acl.call_id = dcl.bolna_call_id
                      WHERE dcl.campaign_id = c.id
                    ) AS "totalTalkTimeSeconds",
+                   c.schedule_mode AS "scheduleMode",
+                   c.window_start AS "windowStart",
+                   c.window_end AS "windowEnd",
+                   c.window_days AS "windowDays",
+                   c.resume_after AS "resumeAfter",
                    COALESCE(c.started_at, c.created_at) AS sort_key
               FROM dialer_campaigns c
               LEFT JOIN users u ON u.id = c.triggered_by
@@ -145,6 +157,16 @@ export const GET = withErrorHandler(async (req: Request) => {
                    c.created_by::text AS "triggeredBy",
                    u.name AS "triggeredByName",
                    NULL::int AS "totalTalkTimeSeconds",
+                   -- Explicitly cast rather than bare NULL. Postgres can often
+                   -- infer an untyped NULL's type from the other UNION branch,
+                   -- but it is not obliged to, and when it cannot the failure
+                   -- is the WHOLE statement -- which would take the AI-dialer
+                   -- half of the tab down with it, not just the NeoDove half.
+                   NULL::varchar AS "scheduleMode",
+                   NULL::varchar AS "windowStart",
+                   NULL::varchar AS "windowEnd",
+                   NULL::jsonb AS "windowDays",
+                   NULL::timestamptz AS "resumeAfter",
                    COALESCE(c.started_at, c.created_at) AS sort_key
               FROM neodove_campaigns c
               LEFT JOIN users u ON u.id = c.created_by
@@ -156,7 +178,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         SELECT id, kind, name, status, provider, category, "regionFilter",
                "totalLeads", "callsMade", "completedLeads", "failedLeads",
                "startedAt", "completedAt", "triggeredBy", "triggeredByName",
-               "totalTalkTimeSeconds"
+               "totalTalkTimeSeconds", "scheduleMode", "windowStart",
+               "windowEnd", "windowDays", "resumeAfter"
           FROM (
                 SELECT * FROM ai
                 ${wantNeodove ? sql`UNION ALL SELECT * FROM nd` : sql``}

@@ -46,6 +46,14 @@ export const GET = withErrorHandler(async (req: Request) => {
       completedAt: dialerCampaigns.completed_at,
       triggeredBy: dialerCampaigns.triggered_by,
       triggeredByName: users.name,
+      // E-228/E-254 — the calling window, so the card can say when this
+      // campaign runs and when a parked one will wake.
+      scheduleMode: dialerCampaigns.schedule_mode,
+      windowStart: dialerCampaigns.window_start,
+      windowEnd: dialerCampaigns.window_end,
+      windowDays: dialerCampaigns.window_days,
+      resumeAfter: dialerCampaigns.resume_after,
+      pausedAt: dialerCampaigns.paused_at,
       // Total talk time across the campaign's calls (seconds): sum of each
       // call's provider-reported duration (ai_call_logs.call_duration), falling
       // back to per-lead wall-clock (capped at 2h) — mirrors the per-call
