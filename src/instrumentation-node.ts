@@ -26,6 +26,7 @@
 import { runDialerPollOnce } from "@/lib/ai/pollCallStatus";
 import { sweepStalledCallingLeads } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
+import { runCampaignWindowTick } from "@/lib/queue/resumeCampaigns";
 import { syncInvoicesSinceLastRun } from "@/lib/zoho/sync";
 import { db } from "@/lib/db";
 import { dialerCampaigns } from "@/lib/db/schema";
@@ -42,9 +43,15 @@ export async function startDialerTickers() {
 
   const POLL_INTERVAL_MS = 30_000;
   const WATCHDOG_INTERVAL_MS = 2 * 60_000;
+  // E-254 — how promptly a campaign crosses a window boundary. 60s means a
+  // campaign scheduled for 11:00 places its first call by 11:01 at the latest,
+  // and one whose window closes at 15:00 reads as Paused by 15:01. That is the
+  // resolution a business-hours window is specified at anyway.
+  const WINDOW_INTERVAL_MS = 60_000;
 
   let pollInFlight = false;
   let watchdogInFlight = false;
+  let resumeInFlight = false;
 
   const pollTick = async () => {
     if (pollInFlight) return;
@@ -110,11 +117,53 @@ export async function startDialerTickers() {
     }
   };
 
+
+  // E-254 — the calling-window ticker. Two halves, both load-bearing:
+  //
+  //   park   — a campaign whose window just closed is parked HERE rather than
+  //            waiting for a call-completion webhook that may never come. It is
+  //            what makes "pause at the end time" an event instead of a side
+  //            effect, and it is the only thing that rescues a campaign left
+  //            'running' by an advance that arranged no re-entry.
+  //   resume — a campaign whose window just opened is claimed back. This is
+  //            what makes a recurring campaign multi-day.
+  //
+  // Both live in lib/queue/resumeCampaigns.ts so this and
+  // /api/cron/campaign-resume run identical statements.
+  const windowTick = async () => {
+    if (resumeInFlight) return;
+    resumeInFlight = true;
+    try {
+      const { parked, resumed } = await runCampaignWindowTick();
+      if (parked.length > 0) {
+        console.log(
+          `[instrumentation:campaign-window] window closed on ${parked.length} campaign(s)`,
+        );
+      }
+      if (resumed.length > 0) {
+        console.log(
+          `[instrumentation:campaign-window] window opened for ${resumed.length} campaign(s)`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:campaign-window] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      resumeInFlight = false;
+    }
+  };
+
   // Initial kick after a short delay so a freshly-booted server reconciles
-  // any leftover 'calling' rows from a prior process.
+  // any leftover 'calling' rows from a prior process — and so a campaign whose
+  // window opened while the process was down starts without waiting a full
+  // interval. E-228 stores resume_after on the row precisely so a restart
+  // mid-pause is a non-event: the state is on disk, not in this process.
   const kickoff = setTimeout(() => {
     pollTick();
     watchdogTick();
+    windowTick();
   }, 5_000);
   if (typeof kickoff.unref === "function") kickoff.unref();
 
@@ -126,8 +175,15 @@ export async function startDialerTickers() {
     watchdogInterval.unref();
   }
 
+  // Its own opt-out, separate from ENABLE_DIALER_POLL: a deployment may want to
+  // silence the status poll without also freezing every scheduled campaign.
+  if (process.env.ENABLE_CAMPAIGN_RESUME !== "0") {
+    const windowInterval = setInterval(windowTick, WINDOW_INTERVAL_MS);
+    if (typeof windowInterval.unref === "function") windowInterval.unref();
+  }
+
   console.log(
-    "[instrumentation] dialer-poll (30s) + dialer-watchdog (2m) started in-process",
+    "[instrumentation] dialer-poll (30s) + dialer-watchdog (2m) + campaign-window (60s) started in-process",
   );
 }
 

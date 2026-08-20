@@ -1684,7 +1684,14 @@ export default function LeadsUnifiedPage() {
   // (advanceDialerToNextLead). The modal already filtered the queue by
   // region + segment server-side, so we use it directly.
   const confirmDialerStart = useCallback(
-    async ({ provider, category, region, filters, queue }: DialerStartPayload) => {
+    async ({
+      provider,
+      category,
+      region,
+      filters,
+      queue,
+      schedule,
+    }: DialerStartPayload) => {
       if (queue.length === 0) return;
 
       stopRef.current = false;
@@ -1714,13 +1721,24 @@ export default function LeadsUnifiedPage() {
           // dialer_campaigns IS mirrored in schema.ts, so a database without it
           // fails on every campaign INSERT.
           region: { ...region, filters },
+          // E-254 — deliberately a TOP-LEVEL key, unlike `filters` above.
+          // Anything nested inside `region` is swallowed by the region_filter
+          // jsonb blob; the schedule has to reach the real schedule_mode /
+          // window_* columns, because that is what the SQL window predicate and
+          // the resume ticker read. Nested, the campaign would show a window in
+          // the UI and dial straight through it.
+          schedule,
         }),
       });
+      let armedStatus: string | null = null;
+      let resumeAt: string | null = null;
       try {
         const startJson = await startRes.json();
         if (startJson?.campaignId) {
           setCurrentCampaignId(startJson.campaignId);
         }
+        armedStatus = startJson?.armedStatus ?? null;
+        resumeAt = startJson?.resumeAt ?? null;
       } catch {
         // Non-fatal; the /status poller will surface campaignId on the next tick.
       }
@@ -1729,6 +1747,21 @@ export default function LeadsUnifiedPage() {
       // advanceCampaign. Just light up the row optimistically and start
       // polling — the campaign-lead row's status='calling' from the DB
       // is what /api/ai-dialer/status now reflects.
+      // E-254 — unless the campaign was started outside its calling window, in
+      // which case NO call was placed and the optimistic banner would be a lie:
+      // it would show lead #1 dialling and a 1/N counter for a campaign that is
+      // parked. Stand the dialer back down and say when it will actually run.
+      if (armedStatus) {
+        setDialerOn(false);
+        setDialerPhase("idle");
+        toast.success(
+          armedStatus === "scheduled" && resumeAt
+            ? `Campaign scheduled — calling starts ${new Date(resumeAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit" })} IST`
+            : "Campaign saved — it is outside the calling window, so no calls were placed",
+        );
+        return;
+      }
+
       const head = queue[0];
       startCallingLead(head.id);
       setDialerCallsMade(1);
@@ -1742,17 +1775,31 @@ export default function LeadsUnifiedPage() {
   // live banner reads counts from /api/ai-dialer/status. Light up the session
   // indicator and jump to the Campaigns tab to watch it run.
   const startListCampaign = useCallback(
-    async (campaignId: string, provider: DialerProvider) => {
+    async (campaignId: string, provider: DialerProvider, schedule?: unknown) => {
       const res = await fetch(`/api/ai-dialer/lists/${campaignId}/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({ provider, schedule: schedule ?? null }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
         toast.error(json?.error?.message ?? "Failed to start the campaign");
         return;
       }
+      // E-254 — started outside its calling window, the campaign is parked and
+      // no call was placed. Skip the live banner (which would claim 1 call made
+      // on a campaign that has not dialled) and just show it in the list.
+      if (json.data?.armed) {
+        const resumeAt = json.data?.resumeAt as string | null;
+        toast.success(
+          json.data?.status === "scheduled" && resumeAt
+            ? `Campaign scheduled — calling starts ${new Date(resumeAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit" })} IST`
+            : "Campaign saved — it is outside the calling window, so no calls were placed",
+        );
+        setTab("campaigns");
+        return;
+      }
+
       stopRef.current = false;
       queueRef.current = [];
       setDialerQueue([]);

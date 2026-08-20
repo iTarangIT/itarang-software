@@ -14,6 +14,11 @@ import {
 } from "@/lib/db/schema";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
+import {
+  bucketFor,
+  resolveDurationBucketConfig,
+} from "@/lib/ai-dialer/call-duration/config-store";
 import { asc, eq } from "drizzle-orm";
 import ExcelJS from "exceljs";
 
@@ -65,6 +70,15 @@ function failureReasonOf(r: {
   });
 }
 
+/** The same duration the lead table, the drawer and the histogram all show. */
+function durationOf(r: {
+  call_duration: number | null;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+}) {
+  return deriveDurationSeconds(r.call_duration, r.started_at, r.completed_at);
+}
+
 export const GET = withErrorHandler(
   async (
     _req: Request,
@@ -85,7 +99,9 @@ export const GET = withErrorHandler(
 
     const { id } = await params;
 
-    const [campaignRow, leadRows] = await Promise.all([
+    // Resolved alongside the rows so the sheet's bucket labels are the same
+    // ones the on-screen histogram was drawn with.
+    const [campaignRow, leadRows, { buckets: durationBuckets }] = await Promise.all([
       db
         .select()
         .from(dialerCampaigns)
@@ -116,6 +132,9 @@ export const GET = withErrorHandler(
           // Same already-joined row — the evidence behind the failure reason.
           log_status: aiCallLogs.status,
           log_call_status: aiCallLogs.call_status,
+          // Same already-joined row again. Duration is derived rather than read
+          // straight off this column — see deriveDurationSeconds.
+          call_duration: aiCallLogs.call_duration,
         })
         .from(dialerCampaignLeads)
         .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
@@ -125,6 +144,7 @@ export const GET = withErrorHandler(
         )
         .where(eq(dialerCampaignLeads.campaign_id, id))
         .orderBy(asc(dialerCampaignLeads.queue_position)),
+      resolveDurationBucketConfig(),
     ]);
 
     const workbook = new ExcelJS.Workbook();
@@ -180,6 +200,11 @@ export const GET = withErrorHandler(
       { header: "Current Status", key: "current_status", width: 16 },
       { header: "Started", key: "started_at", width: 22 },
       { header: "Ended", key: "completed_at", width: 22 },
+      // Duration sits with the timestamps it is derived from, and before the
+      // debug columns. Written as a NUMBER, not "0m 12s", so the column sorts
+      // and averages in Excel — the point of exporting it at all.
+      { header: "Duration (s)", key: "duration_seconds", width: 14 },
+      { header: "Duration Bucket", key: "duration_bucket", width: 16 },
       { header: "Call Id", key: "call_id", width: 28 },
       { header: "Transcription", key: "transcription", width: 80 },
     ];
@@ -207,6 +232,8 @@ export const GET = withErrorHandler(
         current_status: r.current_status ?? "—",
         started_at: fmt(r.started_at),
         completed_at: fmt(r.completed_at),
+        duration_seconds: durationOf(r) ?? "—",
+        duration_bucket: bucketFor(durationOf(r), durationBuckets)?.label ?? "—",
         call_id: r.bolna_call_id ?? "—",
         transcription: transcriptCell(r.transcript),
       });

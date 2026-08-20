@@ -19,6 +19,7 @@ import { requireAuth, requireRole } from "@/lib/auth-utils";
 import { resolveDialerAudience } from "@/lib/ai-dialer/audience";
 import { citiesLabel, resolveRunCities } from "@/lib/scraper/runAudience";
 import { createCampaign } from "@/lib/queue/campaignTracker";
+import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import type { DialerProvider } from "@/lib/queue/dialerSession";
 
@@ -31,6 +32,7 @@ export const POST = withErrorHandler(
         const { id: runId } = await params;
         const body = (await req.json().catch(() => ({}))) as {
             provider?: unknown;
+            schedule?: unknown;
         };
         const provider: DialerProvider = ALLOWED_PROVIDERS.includes(
             body.provider as DialerProvider,
@@ -79,9 +81,27 @@ export const POST = withErrorHandler(
         // startDraftCampaign is the same primitive the Lists flow uses and it
         // brings provider tagging, the Redis dialer session and the first call
         // with it — so this path cannot drift from that one.
+        // E-254 — the calling window. Unlike the Lists flow this path creates
+        // and starts in one request, so the window can go straight onto the
+        // insert.
+        let schedule = null as ReturnType<
+            typeof campaignScheduleSchema.parse
+        > | null;
+        if (body.schedule != null) {
+            const parsed = campaignScheduleSchema.safeParse(body.schedule);
+            if (!parsed.success) {
+                return errorResponse(
+                    parsed.error.issues[0]?.message ?? "Invalid calling window",
+                    400,
+                );
+            }
+            schedule = parsed.data;
+        }
+
         const { campaignId, queued, blockedAiConnected } = await createCampaign({
             queueIds: audience.queueIds,
             provider,
+            schedule,
             category: "all",
             status: "draft",
             name: `Scrape run · ${citiesLabel(cities)} · ${ts}`,
@@ -117,6 +137,11 @@ export const POST = withErrorHandler(
             cities,
             firstCallPlaced: started.firstCallPlaced,
             firstCallError: started.firstCallError,
+            // E-254 — set when the run started outside its calling window, so
+            // the sheet can say when it will actually dial.
+            armed: started.armed,
+            armedStatus: started.armedStatus,
+            resumeAt: started.resumeAt ? started.resumeAt.toISOString() : null,
         });
     },
 );

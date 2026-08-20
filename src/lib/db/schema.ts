@@ -3868,6 +3868,14 @@ export const dialerCampaigns = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // E-254 — execution type. Decides what happens when the window CLOSES:
+    //   "now"       unscheduled, dial continuously (default, pre-E-228 behaviour)
+    //   "single"    dial today's window once, then status="paused" until a human
+    //   "recurring" dial every window_days day, auto-resuming, until the queue empties
+    // Short-circuits the window predicate, so a "now" row ignores the columns below.
+    schedule_mode: varchar("schedule_mode", { length: 16 })
+      .notNull()
+      .default("now"),
     // E-228 — per-campaign calling window. NULL on all three means UNSCHEDULED:
     // the campaign dials continuously, exactly as it did before E-228. Defaults
     // are pre-filled in the UI from assignment_config (E-120), not stored here.
