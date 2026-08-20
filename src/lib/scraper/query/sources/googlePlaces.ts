@@ -1,4 +1,5 @@
 import { retryFetch, parseRetryAfter, type RetryableHttpError } from "./retry";
+import { TARGET_COUNTRY } from "../../geo";
 
 // Lazy: don't throw at module load. We let Apify run even when Google Places
 // is unconfigured, and surface a per-source error from the chunk pipeline.
@@ -128,12 +129,35 @@ interface RawPlace {
   location?: { latitude?: number; longitude?: number };
 }
 
+export interface SearchTextBody {
+  textQuery: string;
+  maxResultCount: number;
+  regionCode: string;
+  pageToken?: string;
+}
+
+// regionCode is the ccTLD region Google resolves the query from. It BIASES,
+// it does not restrict — an unresolvable town can still surface a foreign
+// business — so this is the first of two defences and processing/filter.ts is
+// the one that actually holds the line. See ../../geo.ts.
+export function buildSearchTextBody(
+  query: string,
+  pageToken?: string,
+): SearchTextBody {
+  const body: SearchTextBody = {
+    textQuery: query,
+    maxResultCount: 20,
+    regionCode: TARGET_COUNTRY,
+  };
+  if (pageToken) body.pageToken = pageToken;
+  return body;
+}
+
 async function fetchPage(
   query: string,
   pageToken?: string,
 ): Promise<{ places: PlaceResult[]; nextPageToken?: string }> {
-  const body: any = { textQuery: query, maxResultCount: 20 };
-  if (pageToken) body.pageToken = pageToken;
+  const body = buildSearchTextBody(query, pageToken);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
