@@ -101,6 +101,13 @@ export default function NbfcVerificationPanel({
           request_type: "additional_docs",
           doc_for,
           comments,
+          // E-254 — the same items, structured, so an SLA auto-forward can
+          // create them without parsing the text above.
+          items: items.map((it) => ({
+            doc_label: it.doc_label,
+            reason: it.reason,
+            is_required: it.is_required,
+          })),
         }),
       });
       const json = await res.json();

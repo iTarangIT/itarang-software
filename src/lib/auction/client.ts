@@ -23,6 +23,15 @@
  *   stripped here so a bidder is not shown `CONFLICT:` in a toast.
  */
 
+/**
+ * Shown when the request never reached the server. Chrome words that failure
+ * as the bare `TypeError: Failed to fetch`, which every NBFC screen has so far
+ * put straight into a toast or an inline error — telling the operator nothing
+ * about whether their work was saved, and nothing about what to do next.
+ */
+export const NETWORK_ERROR_MESSAGE =
+  "Could not reach the server — check your connection and try again.";
+
 /** Strips the `KIND: ` prefix the services use to carry a status code. */
 function humanise(message: string): string {
   return message.replace(/^[A-Z_]+:\s*/, "").trim() || message;
@@ -52,19 +61,35 @@ async function readBody(res: Response): Promise<Record<string, unknown>> {
 }
 
 /**
+ * `fetch` itself, with transport failures normalised into AuctionApiError.
+ *
+ * STATUS 0 MEANS "NEVER REACHED THE SERVER". A rejected `fetch` is not a
+ * response — no request was answered, so the caller cannot know whether the
+ * work happened. Callers that can safely repeat the request key their retry
+ * off this status; everything else at least gets a message worth reading.
+ */
+async function send(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.body ? { "content-type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+  } catch {
+    throw new AuctionApiError(NETWORK_ERROR_MESSAGE, 0);
+  }
+}
+
+/**
  * NBFC-side routes: `{ ok, error }`, or a bare payload on the one legacy route.
  */
 export async function nbfcFetch<T>(
   input: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(input, {
-    ...init,
-    headers: {
-      ...(init?.body ? { "content-type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+  const res = await send(input, init);
   const body = await readBody(res);
 
   if (!res.ok || body.ok === false) {
@@ -81,13 +106,7 @@ export async function dealerFetch<T>(
   input: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(input, {
-    ...init,
-    headers: {
-      ...(init?.body ? { "content-type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+  const res = await send(input, init);
   const body = await readBody(res);
 
   if (!res.ok || body.success === false) {

@@ -70,6 +70,31 @@ export const LEADS_OVERSIGHT_ROLES = [
 export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo"] as const;
 
 /**
+ * Roles that may download a single lead's touchpoint history as .xlsx — the
+ * "Export to Excel" button on the inside-sales pane and on the CRM lead-detail
+ * Activity timeline.
+ *
+ * ⚠ This IS the list the export route enforces
+ * (src/app/api/inside-sales/lead/[id]/history/export.xlsx/route.ts imports it),
+ * so the button and the endpoint cannot drift into a button that 403s.
+ *
+ * Deliberately NARROWER than LEADS_PAGE_ROLES: sales_executive, sales_insight
+ * and finance_controller can read the leads list, but the route has never let
+ * them pull a lead's whole activity log into a file, and widening who can walk
+ * off with that is a decision for the team, not a side effect of adding a
+ * button.
+ */
+export const LEAD_HISTORY_EXPORT_ROLES = [
+  "inside_sales_rep",
+  "asm",
+  "admin",
+  "ceo",
+  "sales_manager",
+  "sales_head",
+  "business_head",
+] as const;
+
+/**
  * Roles that can be handed ownership of a lead — the target list for the
  * reassign pickers.
  *

@@ -34,6 +34,7 @@ import {
 } from "@/lib/notifications/emit";
 import {
   ADMIN_PARTY,
+  SYSTEM_PARTY,
   actingParty,
   agentParty,
   customerParty,
@@ -549,24 +550,29 @@ export async function notifyNbfcRequestRaised(p: {
   });
 }
 
-/** Admin forwarded an NBFC request down to the dealer. */
+/**
+ * Admin forwarded an NBFC request down to the dealer. E-254 — or the SLA sweep
+ * did, in which case `from` is SYSTEM_PARTY and the wording says so.
+ */
 export async function notifyNbfcRequestForwarded(p: {
   leadId: string;
   requestId: string;
   docLabels: string[];
   nbfcName?: string | null;
   targetStep?: "kyc" | "borrower-consent";
+  from?: Party;
 }) {
   const list = p.docLabels.filter(Boolean).join(", ");
+  const bySystem = p.from?.party === "system";
   await emit({
     type: "nbfc.request_forwarded",
     title: "Documents requested",
-    message: `iTarang admin needs ${list || "additional documents"} for this application${
+    message: `${bySystem ? "iTarang" : "iTarang admin"} needs ${list || "additional documents"} for this application${
       p.nbfcName ? ` (requested by ${p.nbfcName})` : ""
     }. Please upload and re-submit.`,
     leadId: p.leadId,
     stage: "NBFC request",
-    from: ADMIN_PARTY,
+    from: p.from ?? ADMIN_PARTY,
     data: { requestId: p.requestId, doc_labels: p.docLabels },
     to: [
       toLeadDealer(p.leadId, {
@@ -673,12 +679,16 @@ export async function notifyNbfcRequestUpload(p: {
   });
 }
 
-/** Admin pushed the finished documents (or a direct message) up to the NBFC. */
+/**
+ * Admin pushed the finished documents (or a direct message) up to the NBFC.
+ * E-254 — or the SLA sweep did (`from` = SYSTEM_PARTY).
+ */
 export async function notifyNbfcRequestPushed(p: {
   leadId: string;
   requestId: string;
   tenantId: string;
   isMessage?: boolean;
+  from?: Party;
 }) {
   const who = await leadLabel(p.leadId);
   const label = await tenantDisplayName(p.tenantId);
@@ -690,7 +700,7 @@ export async function notifyNbfcRequestPushed(p: {
       : `The documents you requested for ${who} have been updated and are now available.`,
     leadId: p.leadId,
     stage: "NBFC request",
-    from: ADMIN_PARTY,
+    from: p.from ?? ADMIN_PARTY,
     data: { requestId: p.requestId },
     to: [toNbfc(p.tenantId, label, { href: nbfcLead(p.leadId, "#documents") })],
   });
@@ -1512,6 +1522,68 @@ export async function notifyKycAutoApproved(p: {
 }
 
 /**
+ * E-254 — the NBFC request SLA sweep acted (or tried to) on a request no admin
+ * had touched in time. Admin-facing FYI / call to action:
+ *   - kind 'forwarded' ok  → the request went to the dealer without an admin click.
+ *   - kind 'pushed'    ok  → the dealer's uploads went to the NBFC unreviewed.
+ *   - ok=false             → the auto action threw; the request still needs a
+ *                            human, and nothing else would surface that.
+ */
+export async function notifyNbfcRequestAutoRouted(p: {
+  leadId: string;
+  requestId: string;
+  kind: "forwarded" | "pushed";
+  ok: boolean;
+  slaWindow: string;
+  nbfcName?: string | null;
+  docLabels?: string[];
+  error?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const lender = p.nbfcName ? ` from ${p.nbfcName}` : "";
+  const docs = (p.docLabels ?? []).filter(Boolean).join(", ");
+  const forwarded = p.kind === "forwarded";
+
+  const title = !p.ok
+    ? forwarded
+      ? "NBFC request auto-forward failed — action needed"
+      : "NBFC request auto-push failed — action needed"
+    : forwarded
+      ? "NBFC request auto-forwarded to the dealer (SLA)"
+      : "Dealer uploads auto-pushed to the NBFC (SLA)";
+
+  const message = !p.ok
+    ? `The ${p.slaWindow} SLA elapsed on the NBFC request${lender} for ${who}, but the system could not ${
+        forwarded ? "forward it to the dealer" : "push the uploads to the NBFC"
+      }: ${p.error || "unknown error"}. This request still needs you.`
+    : forwarded
+      ? `No admin action within the ${p.slaWindow} SLA, so the system forwarded the NBFC request${lender} for ${who} to the dealer${
+          docs ? ` (${docs})` : ""
+        }, relaying the NBFC's comments as the reason.`
+      : `No admin review within the ${p.slaWindow} SLA, so the system marked the dealer's uploads${
+          docs ? ` (${docs})` : ""
+        } verified and pushed them to the NBFC${lender} for ${who}. Nobody at iTarang opened them.`;
+
+  await emit({
+    type: forwarded ? "nbfc.request_auto_forwarded" : "nbfc.request_auto_pushed",
+    title,
+    message,
+    leadId: p.leadId,
+    stage: "NBFC request",
+    from: SYSTEM_PARTY,
+    data: {
+      requestId: p.requestId,
+      kind: p.kind,
+      ok: p.ok,
+      sla_window: p.slaWindow,
+      doc_labels: p.docLabels ?? [],
+      error: p.error ?? null,
+    },
+    to: [toAdmins({ href: adminLead(p.leadId, "#nbfc-actions") })],
+  });
+}
+
+/**
  * E-242 — a quotation cleared approval and its draft is ready to send.
  *
  * WHO IS TOLD, AND WHY BOTH
@@ -1533,6 +1605,55 @@ export async function notifyKycAutoApproved(p: {
  * scrutiny the number has had, and the person about to send it to a dealer
  * should not have to go and find out which happened.
  */
+/**
+ * E-256 — a quote version landed `pending` and is waiting in the CEO queue.
+ *
+ * The queue (`PendingQuotationsPanel`) was pull-only: the OEM price gate parks
+ * an out-of-band quote and nothing tells the CEO it exists, so a dealer waits
+ * exactly as long as it takes someone to open the dashboard. This is the push
+ * half — one notification to `ceo` (and `admin`, who can also decide), landing
+ * on the CEO dashboard where the pending panel lives.
+ *
+ * The reason lines were flagged goes in the copy: the CEO's first question is
+ * "why is this in front of me", and the answer is already computed
+ * (`linesNeedingAttention`) at the moment the quote parks.
+ */
+export async function notifyQuotationPendingApproval(p: {
+  leadId: string;
+  commercialId: string;
+  dealerName: string | null;
+  value: number;
+  /** e.g. "2 lines below OEM reference" — from the gate's evaluation. */
+  reason?: string | null;
+  raisedByName?: string | null;
+}) {
+  const dealer = p.dealerName?.trim() || "a dealer";
+  const money = p.value > 0 ? ` for ₹${p.value.toLocaleString("en-IN")}` : "";
+  const who = p.raisedByName?.trim() ? ` by ${p.raisedByName.trim()}` : "";
+  const why = p.reason?.trim() ? ` Flagged: ${p.reason.trim()}.` : "";
+
+  await emit({
+    type: "quote.pending_approval",
+    title: "Quotation awaiting your approval",
+    message: `A quotation${money} was raised for ${dealer}${who} and is waiting in the approval queue.${why} The dealer sees nothing until it is approved.`,
+    leadId: p.leadId,
+    stage: "Quotation",
+    from: ADMIN_PARTY,
+    data: {
+      commercialId: p.commercialId,
+      value: p.value,
+      reason: p.reason ?? null,
+    },
+    to: [
+      {
+        audience: { kind: "roles" as const, roles: ["ceo", "admin"] },
+        as: ADMIN_PARTY,
+        href: "/ceo",
+      },
+    ],
+  });
+}
+
 export async function notifyQuotationApproved(p: {
   leadId: string;
   commercialId: string;

@@ -488,6 +488,13 @@ export async function autoApproveLeadKyc(
                     sql`${otherDocumentRequests.is_required} IS DISTINCT FROM false`,
                     sql`${otherDocumentRequests.upload_status} IS DISTINCT FROM 'verified'`,
                     sql`${otherDocumentRequests.upload_status} IS DISTINCT FROM 'rejected'`,
+                    // E-254 — NBFC-originated children (source='nbfc') are
+                    // governed by the NBFC request SLA's own leg-2 clock, which
+                    // verifies only what the dealer actually UPLOADED. This
+                    // sweep has no file_url guard, so touching them here would
+                    // mark never-uploaded lender requests verified without ever
+                    // reprojecting the wrapper — leave them alone.
+                    isNull(otherDocumentRequests.nbfc_request_id),
                 ),
             )
             .returning({ id: otherDocumentRequests.id });

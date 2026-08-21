@@ -68,6 +68,33 @@ const TABS = [
   { value: "all", label: "All" },
 ] as const;
 
+// [E-256] Everything the "Start auction" block needs. Kept in the same order and
+// wording as the seller's composer so the two screens describe one feature.
+const DURATIONS = [2, 12, 24, 48] as const;
+const SCOPES = ["india", "state", "city", "radius"] as const;
+type VisibilityScope = (typeof SCOPES)[number];
+const SCOPE_LABEL: Record<VisibilityScope, string> = {
+  india: "All India",
+  state: "States",
+  city: "Cities",
+  radius: "Radius",
+};
+const CHANNELS = ["in_app", "whatsapp", "email", "sms"] as const;
+const CHANNEL_LABEL: Record<string, string> = {
+  in_app: "In-app",
+  whatsapp: "WhatsApp",
+  email: "Email",
+  sms: "SMS",
+};
+
+/** Comma- or newline-separated free text into a clean list. */
+function splitList(raw: string): string[] {
+  return raw
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** Poll cadence. Slower than the dealer surfaces on purpose — an admin is
  *  watching for exceptions, not racing a countdown, and this list is the
  *  heaviest read in the feature. */
@@ -383,6 +410,15 @@ function LotActions({ lot, onChanged }: { lot: Lot; onChanged: () => void }) {
   const [mfa, setMfa] = useState("");
   const [reserve, setReserve] = useState(String(lot.base_price));
   const [confirmDestructive, setConfirmDestructive] = useState(false);
+  // [E-256] Starting a draft: the window and the audience the seller's composer
+  // would otherwise have chosen.
+  const [duration, setDuration] = useState<2 | 12 | 24 | 48>(12);
+  const [scope, setScope] = useState<VisibilityScope>("india");
+  const [statesRaw, setStatesRaw] = useState("");
+  const [citiesRaw, setCitiesRaw] = useState("");
+  const [centreCity, setCentreCity] = useState("");
+  const [radiusKm, setRadiusKm] = useState("150");
+  const [channels, setChannels] = useState<string[]>([...CHANNELS]);
   const [state, setState] = useState<ActionState>({
     busy: false,
     note: null,
@@ -405,14 +441,17 @@ function LotActions({ lot, onChanged }: { lot: Lot; onChanged: () => void }) {
             note: json?.error ?? `HTTP ${res.status}`,
             tone: "error",
           });
-          return false;
+          return null;
         }
         setState({ busy: false, note: "Done.", tone: "ok" });
         onChanged();
-        return true;
+        // [E-256] The body is returned so a caller with something worth saying
+        // can replace "Done." — starting a lot reports the window it opened and
+        // how many dealers were told, which is the whole point of the click.
+        return json ?? {};
       } catch {
         setState({ busy: false, note: "Could not reach the server.", tone: "error" });
-        return false;
+        return null;
       }
     },
     [lot.lot_id, onChanged],
@@ -423,6 +462,53 @@ function LotActions({ lot, onChanged }: { lot: Lot; onChanged: () => void }) {
   const isLive = lot.status === "live";
   const isPaused = lot.status === "paused";
   const isEnded = lot.status === "ended";
+  const isDraft = lot.status === "draft";
+  const isScheduled = lot.status === "scheduled";
+
+  // A rule that names nothing reaches nobody, and the server refuses it. Say so
+  // before the click rather than after.
+  const visibilityReady =
+    scope === "india" ||
+    (scope === "state" && splitList(statesRaw).length > 0) ||
+    (scope === "city" && splitList(citiesRaw).length > 0) ||
+    (scope === "radius" && centreCity.trim() !== "" && Number(radiusKm) > 0);
+
+  /** Replaces the generic "Done." with what actually happened to the market. */
+  function reportStarted(res: Record<string, unknown> | null) {
+    if (!res?.ok) return;
+    const ends = new Date(String(res.ends_at)).toLocaleString("en-IN");
+    const dealers = res.audience_dealers;
+    setState({
+      busy: false,
+      tone: "ok",
+      note:
+        res.status === "live"
+          ? `Live until ${ends}` +
+            (typeof dealers === "number" ? ` · ${dealers} dealers told.` : ".")
+          : `Scheduled to open ${new Date(String(res.starts_at)).toLocaleString("en-IN")}.`,
+    });
+  }
+
+  function startLot() {
+    if (isScheduled) {
+      // Already has a window and a frozen audience — only the opening moves.
+      void post("start", { reason: reason.trim() }).then(reportStarted);
+      return;
+    }
+    const visibility: Record<string, unknown> = { scope };
+    if (scope === "state") visibility.states = splitList(statesRaw);
+    if (scope === "city") visibility.cities = splitList(citiesRaw);
+    if (scope === "radius") {
+      visibility.centre_city = centreCity.trim();
+      visibility.radius_km = Number(radiusKm);
+    }
+    void post("start", {
+      reason: reason.trim(),
+      duration_hours: duration,
+      visibility,
+      channels,
+    }).then(reportStarted);
+  }
 
   return (
     <div className="auc-actions" data-open={confirmDestructive ? "true" : "false"}>
@@ -439,6 +525,194 @@ function LotActions({ lot, onChanged }: { lot: Lot; onChanged: () => void }) {
           placeholder="Why is this lot being changed? Recorded against the lot."
         />
       </div>
+
+      {/* --- start: the only action that MAKES a lot run --- */}
+      {isDraft || isScheduled ? (
+        <div
+          style={{
+            borderBlockEnd: "1px solid var(--auc-rule)",
+            paddingBlockEnd: "0.75rem",
+            display: "grid",
+            gap: "0.75rem",
+          }}
+        >
+          {isScheduled ? (
+            <div className="auc-action-row">
+              <span className="auc-action-label">Start auction</span>
+              <button
+                type="button"
+                className="auc-btn"
+                disabled={state.busy || needsReason}
+                onClick={startLot}
+              >
+                Open now
+              </button>
+              <span className="auc-note">
+                Brings the opening forward. The closing time moves with it, so
+                the lot still runs for the window its audience was told about.
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="auc-action-row">
+                <span className="auc-action-label">Duration</span>
+                <div className="auc-seg">
+                  {DURATIONS.map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      aria-pressed={duration === d}
+                      disabled={state.busy}
+                      onClick={() => setDuration(d)}
+                    >
+                      {d} h
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="auc-action-row">
+                <span className="auc-action-label">Who can see it</span>
+                <div className="auc-seg">
+                  {SCOPES.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      aria-pressed={scope === s}
+                      disabled={state.busy}
+                      onClick={() => setScope(s)}
+                    >
+                      {SCOPE_LABEL[s]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {scope === "state" ? (
+                <div className="auc-action-row">
+                  <label
+                    className="auc-action-label"
+                    htmlFor={`states-${lot.lot_id}`}
+                  >
+                    States
+                  </label>
+                  <input
+                    id={`states-${lot.lot_id}`}
+                    className="auc-input"
+                    style={{ flex: "1 1 22rem" }}
+                    value={statesRaw}
+                    onChange={(e) => setStatesRaw(e.target.value)}
+                    placeholder="Maharashtra, Karnataka"
+                  />
+                </div>
+              ) : null}
+
+              {scope === "city" ? (
+                <div className="auc-action-row">
+                  <label
+                    className="auc-action-label"
+                    htmlFor={`cities-${lot.lot_id}`}
+                  >
+                    Cities
+                  </label>
+                  <input
+                    id={`cities-${lot.lot_id}`}
+                    className="auc-input"
+                    style={{ flex: "1 1 22rem" }}
+                    value={citiesRaw}
+                    onChange={(e) => setCitiesRaw(e.target.value)}
+                    placeholder="Pune, Nashik"
+                  />
+                </div>
+              ) : null}
+
+              {scope === "radius" ? (
+                <div className="auc-action-row">
+                  <label
+                    className="auc-action-label"
+                    htmlFor={`centre-${lot.lot_id}`}
+                  >
+                    Centre &amp; radius
+                  </label>
+                  <input
+                    id={`centre-${lot.lot_id}`}
+                    className="auc-input"
+                    style={{ inlineSize: "14rem" }}
+                    value={centreCity}
+                    onChange={(e) => setCentreCity(e.target.value)}
+                    placeholder="City at the centre"
+                  />
+                  <input
+                    className="auc-input"
+                    type="number"
+                    min={1}
+                    step={25}
+                    style={{ inlineSize: "8rem" }}
+                    value={radiusKm}
+                    onChange={(e) => setRadiusKm(e.target.value)}
+                    aria-label="Radius in km"
+                  />
+                  <span className="auc-note">
+                    km, measured to each dealer&rsquo;s city centre — good for
+                    &ldquo;near this warehouse&rdquo;, not for metres.
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="auc-action-row">
+                <span className="auc-action-label">Tell them over</span>
+                {CHANNELS.map((c) => (
+                  <label
+                    key={c}
+                    className="auc-note"
+                    style={{
+                      display: "flex",
+                      gap: "0.375rem",
+                      alignItems: "center",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={channels.includes(c)}
+                      onChange={(e) =>
+                        setChannels((prev) =>
+                          e.target.checked
+                            ? [...prev, c]
+                            : prev.filter((x) => x !== c),
+                        )
+                      }
+                    />
+                    {CHANNEL_LABEL[c]}
+                  </label>
+                ))}
+              </div>
+
+              <div className="auc-action-row">
+                <span className="auc-action-label">Start auction</span>
+                <button
+                  type="button"
+                  className="auc-btn"
+                  disabled={
+                    state.busy ||
+                    needsReason ||
+                    !visibilityReady ||
+                    channels.length === 0
+                  }
+                  onClick={startLot}
+                >
+                  Publish &amp; start
+                </button>
+                <span className="auc-note">
+                  Publishes on {lot.seller_name ?? "the seller"}&rsquo;s behalf:
+                  freezes who can see the lot, opens bidding for {duration} h,
+                  and queues the notices. Recorded against the lot with your
+                  reason.
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div className="auc-action-row">
         <span className="auc-action-label">Timing</span>

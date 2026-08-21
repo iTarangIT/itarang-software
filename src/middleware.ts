@@ -564,7 +564,7 @@ export async function middleware(request: NextRequest) {
     // the layout does the fine-grained nbfc_users.role === 'nbfc_risk_head'
     // gate. admin/ceo retain support access.
     "/risk-head": ["nbfc_partner", "admin", "ceo"],
-    "/admin/dealer-verification": ["sales_head"],
+    "/admin/dealer-verification": ["sales_head", "ceo"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
     // business_head also need read access for support and oversight. The
