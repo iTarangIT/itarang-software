@@ -26,6 +26,8 @@ import {
   notifyNbfcRequestRaised,
   notifyNbfcRequestUpload,
 } from "@/lib/notifications/events";
+import { notifyDealerForLead } from "@/lib/notifications";
+import { SYSTEM_PARTY, type Party } from "@/lib/notifications/provenance";
 import { sendEmail } from "@/lib/email/mailer";
 import { generateActToken, actTokenExpiry, buildActLink } from "@/lib/nbfc/act-token";
 import { NBFC_DOC_STATUS_LABEL } from "@/lib/nbfc/doc-requests";
@@ -158,12 +160,15 @@ export async function notifyNbfcOfUpdate(opts: {
   leadId: string;
   requestId: string;
   isMessage?: boolean;
+  /** E-254 — SYSTEM_PARTY when the SLA sweep pushed. */
+  from?: Party;
 }): Promise<void> {
   await notifyNbfcRequestPushed({
     tenantId: opts.tenantId,
     leadId: opts.leadId,
     requestId: opts.requestId,
     isMessage: opts.isMessage,
+    from: opts.from,
   });
 }
 
@@ -178,8 +183,51 @@ export async function notifyDealerOfForward(opts: {
   docLabels: string[];
   nbfcName?: string | null;
   targetStep?: "kyc" | "borrower-consent";
+  /** E-254 — SYSTEM_PARTY when the SLA sweep forwarded. */
+  from?: Party;
 }): Promise<void> {
   await notifyNbfcRequestForwarded(opts);
+}
+
+/**
+ * Admin forwarded a single NBFC per-document verdict (queried / rejected) to
+ * the dealer as a re-upload request (E-209) — nudge the dealer, deep-linking
+ * the bell to the right step + the Additional Documents section. Shared by the
+ * admin route and the E-254 SLA sweep (`bySystem`), so both say the same thing.
+ */
+export async function notifyDealerOfVerdictForward(opts: {
+  leadId: string;
+  requestId: string;
+  docFor: "primary" | "co_borrower";
+  step: 2 | 3;
+  docLabel: string;
+  /** The instruction the dealer sees as the re-upload reason. */
+  message: string;
+  bySystem?: boolean;
+}): Promise<void> {
+  const where =
+    opts.step === 3 ? "Step 3 (co-borrower documents)" : "Step 2 (customer documents)";
+  const href =
+    opts.step === 3
+      ? `/dealer-portal/leads/${opts.leadId}/borrower-consent#other-documentation`
+      : `/dealer-portal/leads/${opts.leadId}/kyc#other-documentation`;
+  const who = opts.docFor === "co_borrower" ? "co-borrower's" : "customer's";
+  const actor = opts.bySystem
+    ? "iTarang (NBFC request, auto-forwarded on SLA)"
+    : "iTarang admin (NBFC request)";
+  await notifyDealerForLead({
+    leadId: opts.leadId,
+    type: "nbfc_verdict_forwarded",
+    title: `Re-upload requested: ${opts.docLabel}`,
+    message: `${actor} — the ${who} ${opts.docLabel} needs re-upload on ${where}. "${opts.message}"`,
+    ...(opts.bySystem ? { from: SYSTEM_PARTY } : {}),
+    data: {
+      requestId: opts.requestId,
+      step: opts.step,
+      note: opts.message,
+      href,
+    },
+  }).catch(() => {});
 }
 
 /** Status label passthrough for callers that want the human string. */

@@ -71,6 +71,18 @@
     {
       "path": "/api/cron/kyc-auto-approval",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/nbfc-request-sla",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/gdrive-mirror",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/gdrive-mirror?backfill=1",
+      "schedule": "40 2 * * *"
     }
   ],
   "functions": {

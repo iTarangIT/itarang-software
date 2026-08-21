@@ -908,6 +908,55 @@ export async function startKycAutoApprovalTicker() {
   console.log("[instrumentation] KYC auto-approval SLA sweep (60s) started in-process");
 }
 
+// ---------------------------------------------------------------------------
+// NBFC request SLA sweep — route NBFC document requests no admin acted on.
+// ---------------------------------------------------------------------------
+// [E-257] Same shape and same reasoning as startKycAutoApprovalTicker directly
+// above: the write path stamps `nbfc_doc_requests.sla_due_at` /
+// `nbfc_document_verifications.sla_due_at` and returns; without this tick the
+// deadline is a column nobody reads. 60s because the windows are minutes to
+// days, and an idle tick is three cheap claims against partial indexes.
+//
+// runNbfcRequestSlaTick() returns immediately when the feature is disabled,
+// which is the shipped default — inert until an admin turns it on at
+// /admin/settings/nbfc-request-sla.
+export async function startNbfcRequestSlaTicker() {
+  // Skip on Vercel — /api/cron/nbfc-request-sla owns it there.
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 60_000;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { runNbfcRequestSlaTick } = await import("@/lib/nbfc/request-sla");
+      await runNbfcRequestSlaTick();
+    } catch (err) {
+      // Never let one bad tick kill the ticker. The likeliest cause is a
+      // database without E-257, where every tick throws "column sla_due_at
+      // does not exist" and the manual NBFC Actions card carries on untouched.
+      console.error(
+        "[instrumentation:nbfc-request-sla] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Behind the KYC auto-approval sweep (150s) in the staggered kickoff.
+  const kickoff = setTimeout(tick, 165_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] NBFC request SLA sweep (60s) started in-process");
+}
+
 /**
  * Drain the attached-recording transcription queue.
  *
@@ -999,4 +1048,82 @@ export async function startRecordingTranscriptionTicker() {
       TICK_INTERVAL_MS / 1000,
     )}s) started in-process`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Google Drive mirror — back up every S3 object to Drive (E-255).
+// ---------------------------------------------------------------------------
+// The upload path (s3.ts → drive-mirror.ts) tries the Drive copy inline right
+// after each S3 write; this ticker drains whatever that could not finish —
+// rows written while the feature was off, uploads that failed on quota or a
+// Google outage, presigned browser PUTs that never touched the server — and,
+// every six hours, lists the S3 bucket to enqueue anything with no ledger row
+// at all (the pre-existing corpus, and a safety net for missed hooks).
+//
+// runDriveMirrorTick() returns immediately while the feature is disabled,
+// which is the shipped default — inert until an admin turns it on at
+// /admin/settings/gdrive-mirror.
+export async function startDriveMirrorTicker() {
+  // Skip on Vercel — /api/cron/gdrive-mirror owns it there.
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_GDRIVE_MIRROR_TICKER === "0") return;
+
+  const TICK_INTERVAL_MS = 60_000;
+  const BACKFILL_EVERY_MS =
+    Number(process.env.GDRIVE_MIRROR_BACKFILL_INTERVAL_MS || "") || 6 * 60 * 60_000;
+  const MAX_PER_TICK = Number(process.env.GDRIVE_MIRROR_MAX_PER_TICK || "") || 25;
+
+  let inFlight = false;
+  let lastBackfillAt = 0;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { runDriveMirrorTick, runDriveMirrorBackfill } = await import(
+        "@/lib/storage/drive-mirror"
+      );
+      const first = await runDriveMirrorTick({ max: MAX_PER_TICK, timeBudgetMs: 50_000 });
+      if (first.skipped_reason) {
+        // Disabled / unconfigured — nothing else to do this tick, and no
+        // backfill either (the ledger would only pile up rows nobody drains).
+        return;
+      }
+      if (first.done > 0 || first.failed > 0 || first.missing > 0) {
+        console.log(
+          `[instrumentation:gdrive-mirror] claimed=${first.claimed} done=${first.done} ` +
+            `failed=${first.failed} missing=${first.missing} durationMs=${first.duration_ms}`,
+        );
+      }
+      const now = Date.now();
+      if (now - lastBackfillAt >= BACKFILL_EVERY_MS) {
+        lastBackfillAt = now;
+        const b = await runDriveMirrorBackfill();
+        if (b.enqueued > 0) {
+          console.log(
+            `[instrumentation:gdrive-mirror] backfill listed=${b.listed} enqueued=${b.enqueued} durationMs=${b.duration_ms}`,
+          );
+        }
+      }
+    } catch (err) {
+      // Never let one bad tick kill the ticker. The likeliest cause is a
+      // database without E-255 ("relation storage_drive_mirror does not
+      // exist"); uploads to S3 carry on untouched either way.
+      console.error(
+        "[instrumentation:gdrive-mirror] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Behind the NBFC request SLA sweep (165s) in the staggered kickoff.
+  const kickoff = setTimeout(tick, 180_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] Google Drive mirror sweep (60s) started in-process");
 }

@@ -53,6 +53,11 @@ export async function loadLineTaxRefs(
       // text, so a non-uuid product_id cannot raise
       // invalid_text_representation and take the document down. Same guard the
       // CEO quotation queue and listOemPriceHistory use.
+      //
+      // IN (sql.join), never `= ANY(${ids})`: drizzle expands a JS array param
+      // into a row constructor, which raises at runtime — and the catch below
+      // would swallow it into "every line unrated". Same workaround as
+      // oemPrices.ts.
       const rows = await db.execute<{
         product_id: string;
         hsn_code: string | null;
@@ -60,7 +65,10 @@ export async function loadLineTaxRefs(
       }>(sql`
         SELECT id::text AS product_id, hsn_code, gst_rate_pct::text AS gst_rate_pct
           FROM ${sql.raw(table)}
-         WHERE id::text = ANY(${ids})
+         WHERE id::text IN (${sql.join(
+           ids.map((id) => sql`${id}`),
+           sql`, `,
+         )})
       `);
       for (const r of rows as unknown as Record<string, unknown>[]) {
         const rate = r.gst_rate_pct == null ? null : Number(r.gst_rate_pct);

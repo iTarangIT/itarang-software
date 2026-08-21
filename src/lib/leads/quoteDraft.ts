@@ -43,7 +43,7 @@ import {
   quoteNumberRoot,
 } from "./quote-pdf/numbering";
 import { renderProformaHtml } from "./quote-pdf/proforma-template";
-import { buildQuotationView } from "./quote-pdf/view";
+import { buildQuotationView, composeBillToAddress } from "./quote-pdf/view";
 import { resolvePlaceOfSupply } from "./quote-pdf/gst-states";
 import { loadLineTaxRefs } from "./quote-pdf/view-store";
 
@@ -133,6 +133,10 @@ interface CommercialRow {
   dealer_gstin: string | null;
   dealer_state: string | null;
   dealer_city: string | null;
+  dealer_phone: string | null;
+  dealer_area: string | null;
+  dealer_location: string | null;
+  dealer_pincode: string | null;
 }
 
 export interface GenerateOptions {
@@ -174,7 +178,15 @@ export async function generateQuotationDraft(
            l.dealer_name,
            l.gstin  AS dealer_gstin,
            l.state  AS dealer_state,
-           l.city   AS dealer_city
+           l.city   AS dealer_city,
+           -- The rest of the Bill To block. The lead's address is spread over
+           -- four free-text columns and its mobile is the number the dealer is
+           -- actually chased on, so all five are selected here and composed in
+           -- ./quote-pdf/view rather than being pieced together in SQL.
+           l.phone    AS dealer_phone,
+           l.area     AS dealer_area,
+           l.location AS dealer_location,
+           l.pincode  AS dealer_pincode
       FROM dealer_lead_commercials c
       LEFT JOIN dealer_leads l ON l.id = c.dealer_lead_id
      WHERE c.commercial_id = ${commercialId}
@@ -235,7 +247,14 @@ export async function generateQuotationDraft(
     dealer: {
       name: row.dealer_name,
       gstin: row.dealer_gstin,
-      addressLines: row.dealer_city ? [row.dealer_city] : [],
+      addressLines: composeBillToAddress({
+        location: row.dealer_location,
+        area: row.dealer_area,
+        city: row.dealer_city,
+        state: row.dealer_state,
+        pincode: row.dealer_pincode,
+      }),
+      phone: row.dealer_phone,
     },
     commercialTerms: {
       paymentMethod: row.payment_method,

@@ -2,7 +2,10 @@ import { db } from "@/lib/db";
 import { aiCallLogs } from "@/lib/db/schema";
 import { or, eq, sql, desc } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
-import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
+import {
+  LEADS_PAGE_ROLES,
+  LEAD_HISTORY_EXPORT_ROLES,
+} from "@/lib/leads/access";
 import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
 import { redirect } from "next/navigation";
@@ -184,7 +187,13 @@ export default async function LeadDetailPage({ params }: any) {
         <LeadDetailClient calls={calls} lead={lead} />
 
         <div className="mt-6">
-          <TouchpointTimeline touchpoints={touchpoints} />
+          <TouchpointTimeline
+            touchpoints={touchpoints}
+            leadId={id}
+            canExport={(LEAD_HISTORY_EXPORT_ROLES as readonly string[]).includes(
+              user.role,
+            )}
+          />
         </div>
       </div>
     </div>

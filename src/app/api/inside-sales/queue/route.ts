@@ -8,6 +8,7 @@ import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { fetchQueueRows, countQueueRows } from "@/lib/inside-sales/queryBuilder";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
+import { readQueueFilters } from "@/lib/leads/queueFilters";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     });
     const neodoveOnly = parsed.neodove === "1";
     const callbackOnly = parsed.callback === "1";
+    // Stage / interest / region / created-date. Validated against their closed
+    // vocabularies inside readQueueFilters, so an unknown value is dropped
+    // rather than reaching the SQL builder.
+    const filters = readQueueFilters(url.searchParams);
 
     const [rows, total] = await Promise.all([
         fetchQueueRows({
@@ -56,6 +61,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             neodoveOnly,
             callbackOnly,
+            filters,
         }),
         countQueueRows({
             tab: parsed.tab,
@@ -63,6 +69,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             q: parsed.q ?? null,
             neodoveOnly,
             callbackOnly,
+            filters,
         }),
     ]);
 

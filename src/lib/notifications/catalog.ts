@@ -100,6 +100,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // reason: there the recipient maintains the catalogue.
   "quote.approved": "Leads",
   "quote.dealer_decision": "Leads",
+  // E-256 — a quote landed in the CEO pending queue. Same Leads filing as its
+  // siblings: the recipient acts on a deal, not on the catalogue.
+  "quote.pending_approval": "Leads",
 
   // --- Dealer onboarding (portal + WhatsApp) ---
   "onboarding.chat_started": "Onboarding",
@@ -144,6 +147,9 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.request_forwarded": "NBFC Requests",
   "nbfc.request_pushed": "NBFC Requests",
   "nbfc.request_declined": "NBFC Requests",
+  // E-257 — the SLA sweep's own events (admin FYI / failure call-to-action).
+  "nbfc.request_auto_forwarded": "NBFC Requests",
+  "nbfc.request_auto_pushed": "NBFC Requests",
   "nbfc.doc_uploaded": "NBFC Requests",
   // E-240 — the direct NBFC ⇄ dealer channel.
   "nbfc.doc_req_direct": "NBFC Requests",
@@ -322,6 +328,9 @@ const WARNING = new Set([
   // type is good news that can wait, and splitting them into two types to give
   // each its own colour would mean two entries everywhere for one event.
   "quote.dealer_decision",
+  // E-256 — a pending quote is a dealer waiting on a number the rep has already
+  // committed to; the queue is pull-only, so the amber chip IS the prompt.
+  "quote.pending_approval",
   // You are no longer winning, and the window is finite — both are "act now or
   // lose it", which is the definition of amber. `auction.lost` is NOT here: by
   // the time it arrives there is nothing left to act on.

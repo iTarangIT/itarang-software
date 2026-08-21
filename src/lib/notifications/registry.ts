@@ -193,6 +193,9 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.request_forwarded": "Admin forwarded an NBFC request to the dealer",
   "nbfc.request_pushed": "Request pushed back to the NBFC",
   "nbfc.request_declined": "NBFC request declined",
+  // E-257 — the NBFC request SLA sweep acted without an admin click.
+  "nbfc.request_auto_forwarded": "NBFC request auto-forwarded to the dealer (SLA)",
+  "nbfc.request_auto_pushed": "Dealer uploads auto-pushed to the NBFC (SLA)",
   "nbfc.doc_uploaded": "Dealer uploaded a document the NBFC asked for",
   // E-240 — the direct NBFC ⇄ dealer channel (no admin forward in between).
   "nbfc.doc_req_direct": "NBFC asked the dealer for a document directly",
@@ -302,6 +305,10 @@ export const TYPE_LABELS: Record<string, string> = {
   // E-242. Fires once a quotation clears the gate — by the CEO or by the OEM
   // price rule — and its draft has been generated.
   "quote.approved": "Quotation approved",
+  // E-256. Fires when a quote_issue / quote_revision lands `pending` — the CEO
+  // queue was pull-only before this, so a waiting quote announced itself to
+  // nobody.
+  "quote.pending_approval": "Quotation awaiting CEO approval",
   // E-243. The dealer's own answer, captured from the approval link or a
   // tapped WhatsApp button.
   "quote.dealer_decision": "Dealer responded to a quotation",

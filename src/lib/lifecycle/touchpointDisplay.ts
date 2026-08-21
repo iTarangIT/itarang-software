@@ -60,40 +60,10 @@ export const TOUCHPOINT_ICONS: Record<TouchpointType | "default", TouchpointIcon
     default: Activity,
 };
 
-export const TOUCHPOINT_TYPE_LABEL: Record<TouchpointType, string> = {
-    ai_call: "AI call",
-    inside_sales_call: "Call",
-    // "Requested", not "Called": the CRM asked NeoDove to work this lead next.
-    // Whether anybody dialled shows up later as a separate call touchpoint.
-    neodove_dial_request: "Priority dial requested",
-    whatsapp: "WhatsApp",
-    brochure_sent: "Brochure sent",
-    // "Released", not "Delivered": this is the quote clearing the approval gate.
-    // Whether it reached the dealer is `quote_dispatched`.
-    quote_sent: "Quote approved & released",
-    quote_submitted: "Quote sent for approval",
-    quote_rejected: "Quote rejected",
-    quote_dispatched: "Quote sent to dealer",
-    quote_dealer_approved: "Dealer approved quote",
-    quote_dealer_declined: "Dealer declined quote",
-    status_change_note: "Status update",
-    lead_assigned: "Assigned",
-    lead_claimed: "Claimed",
-    ownership_transfer: "Reassigned",
-    asm_transfer: "Transferred to ASM",
-    visit: "Visit",
-    escalation_raised: "Escalation raised",
-    escalation_resolved_reassign: "Escalation → reassigned",
-    escalation_resolved_returned: "Escalation → returned",
-    escalation_resolved_no_action: "Escalation → no action",
-    escalation_ceo_comment: "CEO comment",
-    escalation_ceo_recommendation: "CEO recommendation",
-    reactivated_via_ai_dialer: "Reactivated (AI)",
-    reactivated_via_upload: "Reactivated (upload)",
-    reactivated_via_admin: "Reactivated (admin)",
-    ai_dialer_admin_push: "Pushed to AI dialer",
-    onboarding_dropout_action: "Onboarding loopback",
-};
+// The wording now lives in touchpointLabels.ts so the .xlsx exports can read
+// it without importing this React module. Re-exported here because both
+// timelines already import it from this path.
+export { TOUCHPOINT_TYPE_LABEL } from "@/lib/lifecycle/touchpointLabels";
 
 /**
  * Where a touchpoint came from, for the CRM timeline's provenance badge.
