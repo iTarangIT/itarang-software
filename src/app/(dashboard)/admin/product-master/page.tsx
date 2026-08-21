@@ -27,6 +27,8 @@ interface BatteryRow {
   warranty_months: number;
   iot_compatible: boolean;
   compatible_charger_models: string[];
+  hsn_code: string | null;
+  gst_rate_pct: string | null;
   status: string;
 }
 
@@ -40,6 +42,8 @@ interface ChargerRow {
   compatible_battery_models: string[];
   base_price: string | null;
   warranty_months: number;
+  hsn_code: string | null;
+  gst_rate_pct: string | null;
   status: string;
 }
 
@@ -50,6 +54,8 @@ interface ParaphernaliaRow {
   compatible_categories: string[];
   max_qty_per_lead: number;
   harness_variant: boolean;
+  hsn_code: string | null;
+  gst_rate_pct: string | null;
   status: string;
 }
 
@@ -307,6 +313,7 @@ function BatteryTable({
           <th className="px-4 py-3 text-right">Warranty</th>
           <th className="px-4 py-3 text-left">IoT</th>
           <th className="px-4 py-3 text-left">Categories</th>
+          <th className="px-4 py-3 text-right">GST / HSN</th>
           <th className="px-4 py-3 text-left">Status</th>
           <th className="px-4 py-3 text-right">Actions</th>
         </tr>
@@ -323,6 +330,7 @@ function BatteryTable({
             <td className="px-4 py-3 text-right tabular-nums">{r.warranty_months} mo</td>
             <td className="px-4 py-3">{r.iot_compatible ? "Yes" : "—"}</td>
             <td className="px-4 py-3 text-xs text-gray-600">{(r.compatible_categories || []).join(", ") || "—"}</td>
+            <td className="px-4 py-3 text-right"><GstCell rate={r.gst_rate_pct} hsn={r.hsn_code} /></td>
             <td className="px-4 py-3"><StatusPill status={r.status} /></td>
             <td className="px-4 py-3 text-right">
               <RowActions row={r} onEdit={() => onEdit(r)} onToggle={() => onToggle(r)} />
@@ -353,6 +361,7 @@ function ChargerTable({
           <th className="px-4 py-3 text-left">Type</th>
           <th className="px-4 py-3 text-right">Base price</th>
           <th className="px-4 py-3 text-right">Warranty</th>
+          <th className="px-4 py-3 text-right">GST / HSN</th>
           <th className="px-4 py-3 text-left">Status</th>
           <th className="px-4 py-3 text-right">Actions</th>
         </tr>
@@ -368,6 +377,7 @@ function ChargerTable({
             <td className="px-4 py-3 text-gray-600">{r.charging_type ?? "—"}</td>
             <td className="px-4 py-3 text-right tabular-nums">{r.base_price ? `₹${Number(r.base_price).toLocaleString("en-IN")}` : "—"}</td>
             <td className="px-4 py-3 text-right tabular-nums">{r.warranty_months} mo</td>
+            <td className="px-4 py-3 text-right"><GstCell rate={r.gst_rate_pct} hsn={r.hsn_code} /></td>
             <td className="px-4 py-3"><StatusPill status={r.status} /></td>
             <td className="px-4 py-3 text-right">
               <RowActions row={r} onEdit={() => onEdit(r)} onToggle={() => onToggle(r)} />
@@ -397,6 +407,7 @@ function ParaTable({
           <th className="px-4 py-3 text-left">Categories</th>
           <th className="px-4 py-3 text-right">Max qty / lead</th>
           <th className="px-4 py-3 text-left">Harness variant</th>
+          <th className="px-4 py-3 text-right">GST / HSN</th>
           <th className="px-4 py-3 text-left">Status</th>
           <th className="px-4 py-3 text-right">Actions</th>
         </tr>
@@ -409,6 +420,7 @@ function ParaTable({
             <td className="px-4 py-3 text-xs text-gray-600">{(r.compatible_categories || []).join(", ") || "—"}</td>
             <td className="px-4 py-3 text-right tabular-nums">{r.max_qty_per_lead}</td>
             <td className="px-4 py-3">{r.harness_variant ? "Yes" : "—"}</td>
+            <td className="px-4 py-3 text-right"><GstCell rate={r.gst_rate_pct} hsn={r.hsn_code} /></td>
             <td className="px-4 py-3"><StatusPill status={r.status} /></td>
             <td className="px-4 py-3 text-right">
               <RowActions row={r} onEdit={() => onEdit(r)} onToggle={() => onToggle(r)} />
@@ -417,6 +429,16 @@ function ParaTable({
         ))}
       </tbody>
     </table>
+  );
+}
+
+// E-256: rate + HSN in one cell; "policy default" until someone edits the row.
+function GstCell({ rate, hsn }: { rate: string | null; hsn: string | null }) {
+  return (
+    <span className="tabular-nums">
+      {rate != null ? `${Number(rate)}%` : "—"}
+      {hsn && <span className="text-gray-400 text-xs"> · {hsn}</span>}
+    </span>
   );
 }
 
@@ -555,6 +577,53 @@ function MultiSelectChips({
   );
 }
 
+// E-256: GST rate + HSN pair, shared by all three forms. Left blank on create,
+// the DB defaults fill in the asset-type policy rate (shown as the placeholder).
+function GstFields({
+  gstRatePct,
+  setGstRatePct,
+  hsnCode,
+  setHsnCode,
+  defaultRate,
+  defaultHsn,
+}: {
+  gstRatePct: string;
+  setGstRatePct: (v: string) => void;
+  hsnCode: string;
+  setHsnCode: (v: string) => void;
+  defaultRate: string;
+  defaultHsn: string;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <FieldLabel hint="printed on quotations">GST rate (%)</FieldLabel>
+        <input
+          type="number"
+          min="0"
+          max="50"
+          step="0.01"
+          value={gstRatePct}
+          onChange={(e) => setGstRatePct(e.target.value)}
+          placeholder={defaultRate}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+        />
+      </div>
+      <div>
+        <FieldLabel>HSN code</FieldLabel>
+        <input
+          type="text"
+          maxLength={8}
+          value={hsnCode}
+          onChange={(e) => setHsnCode(e.target.value)}
+          placeholder={defaultHsn}
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono"
+        />
+      </div>
+    </div>
+  );
+}
+
 // ───── Battery form ─────
 
 function BatteryForm({
@@ -581,6 +650,8 @@ function BatteryForm({
   const [warrantyMonths, setWarrantyMonths] = useState(editing?.warranty_months?.toString() ?? "0");
   const [iotCompatible, setIotCompatible] = useState(editing?.iot_compatible ?? false);
   const [chargerModels, setChargerModels] = useState<string[]>(editing?.compatible_charger_models ?? []);
+  const [gstRatePct, setGstRatePct] = useState(editing?.gst_rate_pct?.toString() ?? "");
+  const [hsnCode, setHsnCode] = useState(editing?.hsn_code ?? "");
   const [active, setActive] = useState((editing?.status ?? "active") === "active");
   const [submitting, setSubmitting] = useState(false);
 
@@ -604,6 +675,8 @@ function BatteryForm({
       warrantyMonths: Number(warrantyMonths) || 0,
       iotCompatible,
       compatibleChargerModels: chargerModels,
+      gstRatePct: gstRatePct.trim() ? Number(gstRatePct) : isEdit ? null : undefined,
+      hsnCode: hsnCode.trim() ? hsnCode.trim() : isEdit ? null : undefined,
       status: active ? "active" : "inactive",
     };
     setSubmitting(true);
@@ -732,6 +805,15 @@ function BatteryForm({
         />
       </div>
 
+      <GstFields
+        gstRatePct={gstRatePct}
+        setGstRatePct={setGstRatePct}
+        hsnCode={hsnCode}
+        setHsnCode={setHsnCode}
+        defaultRate="18"
+        defaultHsn="85076000"
+      />
+
       <div className="flex items-center gap-6 pt-2">
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={iotCompatible} onChange={(e) => setIotCompatible(e.target.checked)} />
@@ -770,6 +852,8 @@ function ChargerForm({
   const [batteryModels, setBatteryModels] = useState<string[]>(editing?.compatible_battery_models ?? []);
   const [basePrice, setBasePrice] = useState(editing?.base_price?.toString() ?? "");
   const [warrantyMonths, setWarrantyMonths] = useState(editing?.warranty_months?.toString() ?? "0");
+  const [gstRatePct, setGstRatePct] = useState(editing?.gst_rate_pct?.toString() ?? "");
+  const [hsnCode, setHsnCode] = useState(editing?.hsn_code ?? "");
   const [active, setActive] = useState((editing?.status ?? "active") === "active");
   const [submitting, setSubmitting] = useState(false);
 
@@ -791,6 +875,8 @@ function ChargerForm({
       compatibleBatteryModels: batteryModels,
       basePrice: basePrice.trim() ? Number(basePrice) : null,
       warrantyMonths: Number(warrantyMonths) || 0,
+      gstRatePct: gstRatePct.trim() ? Number(gstRatePct) : isEdit ? null : undefined,
+      hsnCode: hsnCode.trim() ? hsnCode.trim() : isEdit ? null : undefined,
       status: active ? "active" : "inactive",
     };
     setSubmitting(true);
@@ -911,6 +997,15 @@ function ChargerForm({
         />
       </div>
 
+      <GstFields
+        gstRatePct={gstRatePct}
+        setGstRatePct={setGstRatePct}
+        hsnCode={hsnCode}
+        setHsnCode={setHsnCode}
+        defaultRate="5"
+        defaultHsn="85044030"
+      />
+
       <div className="flex items-center gap-6 pt-2">
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
@@ -940,6 +1035,8 @@ function ParaForm({
   const [categories, setCategories] = useState<string[]>(editing?.compatible_categories ?? []);
   const [maxQty, setMaxQty] = useState(editing?.max_qty_per_lead?.toString() ?? "0");
   const [harnessVariant, setHarnessVariant] = useState(editing?.harness_variant ?? false);
+  const [gstRatePct, setGstRatePct] = useState(editing?.gst_rate_pct?.toString() ?? "");
+  const [hsnCode, setHsnCode] = useState(editing?.hsn_code ?? "");
   const [active, setActive] = useState((editing?.status ?? "active") === "active");
   const [submitting, setSubmitting] = useState(false);
 
@@ -965,6 +1062,8 @@ function ParaForm({
       compatibleCategories: categories,
       maxQtyPerLead: Number(maxQty) || 0,
       harnessVariant,
+      gstRatePct: gstRatePct.trim() ? Number(gstRatePct) : isEdit ? null : undefined,
+      hsnCode: hsnCode.trim() ? hsnCode.trim() : isEdit ? null : undefined,
       status: active ? "active" : "inactive",
     };
     setSubmitting(true);
@@ -1037,6 +1136,15 @@ function ParaForm({
           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
         />
       </div>
+
+      <GstFields
+        gstRatePct={gstRatePct}
+        setGstRatePct={setGstRatePct}
+        hsnCode={hsnCode}
+        setHsnCode={setHsnCode}
+        defaultRate="18"
+        defaultHsn="85079090"
+      />
 
       <div className="flex items-center gap-6 pt-2">
         <label className="flex items-center gap-2 text-sm">

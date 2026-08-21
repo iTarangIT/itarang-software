@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -10,6 +10,16 @@ import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
 import { CreateLeadModal } from "./modals/CreateLeadModal";
+import { QueueFilterBar } from "@/components/leads/QueueFilterBar";
+import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
+import {
+    EMPTY_QUEUE_FILTERS,
+    hasAnyQueueFilter,
+    readQueueFilters,
+    writeQueueFilters,
+    type QueueFilters,
+    type QueueRegion,
+} from "@/lib/leads/queueFilters";
 import {
     QUEUE_TABS,
     type QueueCounts,
@@ -47,18 +57,49 @@ export function QueueView({ viewerId, viewerRole }: Props) {
     const [search, setSearch] = useState(initialQ);
     const [searchDebounced, setSearchDebounced] = useState(initialQ);
     const [neodoveOnly, setNeodoveOnly] = useState(initialNeodove);
+    // Leads who asked to be called back. The API has supported this since the
+    // disposition work; it had no control until now, so the one queue that most
+    // needs it — a rep's own open list — could not ask the question.
+    const [callbackOnly, setCallbackOnly] = useState(params.get("callback") === "1");
     const [createOpen, setCreateOpen] = useState(false);
+    // Seeded from the URL so a filtered view survives a reload and can be pasted
+    // to a colleague — the same contract the tab and page already had.
+    const [filters, setFilters] = useState<QueueFilters>(() =>
+        readQueueFilters(new URLSearchParams(params.toString())),
+    );
+    // Open on load when ANY filter arrived in the URL, so a filter inherited
+    // from a pasted link is never doing invisible work. Derived from the parsed
+    // values rather than from param names, so it cannot fall out of step with
+    // the filter set.
+    const [filtersOpen, setFiltersOpen] = useState(() =>
+        hasAnyQueueFilter(readQueueFilters(new URLSearchParams(params.toString()))),
+    );
+
+    /**
+     * Everything that narrows the list, as query params.
+     *
+     * ONE BUILDER for the rows request, the badge counts and the CSV href, so
+     * the sheet is exactly what the screen is showing. `page` is deliberately
+     * absent — the counts and the export both span the whole result set.
+     */
+    const filterParams = useMemo(() => {
+        const p = new URLSearchParams();
+        if (searchDebounced) p.set("q", searchDebounced);
+        if (neodoveOnly) p.set("neodove", "1");
+        if (callbackOnly) p.set("callback", "1");
+        return writeQueueFilters(p, filters);
+    }, [searchDebounced, neodoveOnly, callbackOnly, filters]);
+
+    const filterKey = filterParams.toString();
 
     // Sync state → URL for back/forward + share.
     useEffect(() => {
-        const next = new URLSearchParams();
+        const next = new URLSearchParams(filterKey);
         if (tab !== "my_open") next.set("tab", tab);
         if (page !== 1) next.set("page", String(page));
-        if (searchDebounced) next.set("q", searchDebounced);
-        if (neodoveOnly) next.set("neodove", "1");
         const queryString = next.toString();
         router.replace(`/inside-sales${queryString ? `?${queryString}` : ""}`, { scroll: false });
-    }, [tab, page, searchDebounced, neodoveOnly, router]);
+    }, [tab, page, filterKey, router]);
 
     // 300ms debounce on the search box.
     useEffect(() => {
@@ -69,14 +110,24 @@ export function QueueView({ viewerId, viewerRole }: Props) {
         return () => window.clearTimeout(t);
     }, [search]);
 
+    const patchFilter = useCallback((key: keyof QueueFilters, value: string) => {
+        setFilters((f) => ({ ...f, [key]: value }));
+        setPage(1);
+    }, []);
+
+    const resetFilters = useCallback(() => {
+        setFilters(EMPTY_QUEUE_FILTERS);
+        setPage(1);
+    }, []);
+
     // ── Counts (all tabs) ────────────────────────────────────────────────
     const countsQuery = useQuery<{ success: true; data: QueueCounts }>({
-        // The NeoDove filter is part of the key: the badges narrow with the list,
-        // so a cached unfiltered count must not be shown above a filtered table.
-        queryKey: ["inside-sales-counts", neodoveOnly],
+        // Every filter is part of the key: the badges narrow with the list, so a
+        // cached unfiltered count must not be shown above a filtered table.
+        queryKey: ["inside-sales-counts", filterKey],
         queryFn: async () => {
             const u = new URL("/api/inside-sales/queue/counts", window.location.origin);
-            if (neodoveOnly) u.searchParams.set("neodove", "1");
+            u.search = filterKey;
             const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) throw new Error("Failed to load tab counts");
             return res.json();
@@ -85,16 +136,33 @@ export function QueueView({ viewerId, viewerRole }: Props) {
     });
     const counts = countsQuery.data?.data;
 
+    // ── Region options (current tab) ─────────────────────────────────────
+    // The State/City options this tab's leads actually span. Keyed on the tab
+    // alone and cached: the options describe the queue, not the current filter,
+    // so re-fetching them as the filter changes would cost a DISTINCT scan per
+    // keystroke to return the same list.
+    const regionsQuery = useQuery<{ success: true; data: { regions: QueueRegion[] } }>({
+        queryKey: ["inside-sales-queue-regions", tab],
+        queryFn: async () => {
+            const u = new URL("/api/inside-sales/queue/facets", window.location.origin);
+            u.searchParams.set("tab", tab);
+            const res = await fetch(u.toString(), { cache: "no-store" });
+            if (!res.ok) throw new Error("Failed to load regions");
+            return res.json();
+        },
+        staleTime: 5 * 60 * 1000,
+    });
+    const regions = regionsQuery.data?.data?.regions ?? [];
+
     // ── Rows (current tab) ───────────────────────────────────────────────
     const rowsQuery = useQuery<{ success: true; data: QueueResponse }>({
-        queryKey: ["inside-sales-queue", tab, page, searchDebounced, neodoveOnly],
+        queryKey: ["inside-sales-queue", tab, page, filterKey],
         queryFn: async () => {
             const u = new URL("/api/inside-sales/queue", window.location.origin);
+            u.search = filterKey;
             u.searchParams.set("tab", tab);
             u.searchParams.set("page", String(page));
             u.searchParams.set("limit", String(PAGE_SIZE));
-            if (searchDebounced) u.searchParams.set("q", searchDebounced);
-            if (neodoveOnly) u.searchParams.set("neodove", "1");
             const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) throw new Error("Failed to load queue");
             return res.json();
@@ -102,6 +170,12 @@ export function QueueView({ viewerId, viewerRole }: Props) {
     });
 
     const data = rowsQuery.data?.data;
+
+    const exportHref = useMemo(() => {
+        const p = new URLSearchParams(filterKey);
+        p.set("tab", tab);
+        return `/api/inside-sales/queue/export?${p.toString()}`;
+    }, [filterKey, tab]);
 
     // ── Holiday cache for stale-row visual cues (BRD §0.5) ───────────────
     const holidaysQuery = useQuery<{ success: true; data: { dates: string[] } }>({
@@ -129,8 +203,8 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                         setPage(1);
                     }}
                 />
-                <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
-                    <div className="relative flex-1 max-w-md">
+                <div className="flex flex-wrap items-center gap-3 border-b border-gray-100 px-4 py-3">
+                    <div className="relative min-w-[220px] flex-1 md:max-w-md">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                         <Input
                             value={search}
@@ -171,10 +245,56 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                         />
                         NeoDove
                     </button>
+                    {/* Beside NeoDove, not behind the disclosure, for the same
+                        reason: it is an ACTION filter — the dealer asked us to
+                        ring back and the AI cannot — not a refinement. */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setCallbackOnly((v) => !v);
+                            setPage(1);
+                        }}
+                        aria-pressed={callbackOnly}
+                        title={
+                            callbackOnly
+                                ? "Showing only leads who asked to be called back — click to show all"
+                                : "Show only leads who asked to be called back"
+                        }
+                        className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 ${
+                            callbackOnly
+                                ? "border-amber-300 bg-amber-50 text-amber-700"
+                                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        }`}
+                    >
+                        <span
+                            aria-hidden
+                            className={`h-1.5 w-1.5 rounded-full ${
+                                callbackOnly ? "bg-amber-500" : "bg-gray-300"
+                            }`}
+                        />
+                        Callback
+                    </button>
+                    <QueueFilterBar
+                        values={filters}
+                        onChange={patchFilter}
+                        onReset={resetFilters}
+                        open={filtersOpen}
+                        onToggle={() => setFiltersOpen((v) => !v)}
+                        regions={regions}
+                        // When the lead ARRIVED — a rep's range question is what
+                        // came in over a window, and the queue filters on
+                        // created_at to answer it.
+                        dateLabel="Created"
+                    />
                     {rowsQuery.isFetching && (
                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                     )}
                     <div className="ml-auto flex items-center gap-2">
+                        <QueueCsvButton
+                            href={exportHref}
+                            filename={`inside-sales-${tab}`}
+                            disabled={rowsQuery.isLoading}
+                        />
                         {canUpload && (
                             <Link
                                 href="/inside-sales/upload"

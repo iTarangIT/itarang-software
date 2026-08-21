@@ -7,6 +7,10 @@
  *
  * Mirrors the ExcelJS styling used by the scraper run export. Timestamps are
  * rendered in IST. Used by the SI rep to hand off / archive a lead's history.
+ *
+ * The styling helpers now live in @/lib/excel/sheetStyle, shared with the
+ * multi-lead version of this export (src/lib/leads/touchpointWorkbook.ts) so the
+ * two files look identical whichever way a lead was exported.
  */
 
 import { sql } from "drizzle-orm";
@@ -14,51 +18,20 @@ import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
 import { withErrorHandler, errorResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { fmtIst as fmt, styleHeader, zebra } from "@/lib/excel/sheetStyle";
+import { LEAD_HISTORY_EXPORT_ROLES } from "@/lib/leads/access";
+import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import {
+    CALL_STATUS_LABEL,
+    NEXT_ACTION_LABEL,
+    TOUCHPOINT_TYPE_LABEL,
+    humanise,
+} from "@/lib/lifecycle/touchpointLabels";
 
-const READ_ROLES = [
-    "inside_sales_rep",
-    "asm",
-    "admin",
-    "ceo",
-    "sales_manager",
-    "sales_head",
-    "business_head",
-];
-
-function styleHeader(row: ExcelJS.Row) {
-    row.eachCell((cell) => {
-        cell.fill = {
-            type: "pattern",
-            pattern: "solid",
-            fgColor: { argb: "FF1A1A1A" },
-        };
-        cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-        cell.alignment = { vertical: "middle", horizontal: "center" };
-    });
-    row.height = 28;
-}
-
-function fmt(d: Date | string | null | undefined): string {
-    return d
-        ? new Date(d).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
-        : "—";
-}
-
-function zebra(row: ExcelJS.Row, i: number) {
-    if (i % 2 === 0) {
-        row.eachCell((cell) => {
-            cell.fill = {
-                type: "pattern",
-                pattern: "solid",
-                fgColor: { argb: "FFF9FAFB" },
-            };
-        });
-    }
-    row.eachCell((cell) => {
-        cell.alignment = { vertical: "middle", wrapText: true };
-        cell.border = { bottom: { style: "hair", color: { argb: "FFE5E7EB" } } };
-    });
-}
+// The list lives in lib/leads/access.ts because the CRM lead-detail timeline
+// decides whether to render the button from it — one list, so a visible button
+// always corresponds to an endpoint that answers.
+const READ_ROLES = [...LEAD_HISTORY_EXPORT_ROLES];
 
 type TouchpointRow = {
     touchpoint_type: string | null;
@@ -137,28 +110,33 @@ export const GET = withErrorHandler(
             views: [{ state: "frozen", ySplit: 1 }],
         });
         tpSheet.columns = [
-            { header: "Type", key: "type", width: 24 },
+            // Same wording, same column order as the bulk export
+            // (src/lib/leads/touchpointWorkbook.ts): "Activity" then "Details"
+            // are the two lines of the Activity-timeline card on screen.
+            { header: "Activity", key: "activity", width: 26 },
             { header: "Performed By", key: "by", width: 22 },
             { header: "Performed At (IST)", key: "at", width: 24 },
-            { header: "Call Status", key: "call_status", width: 16 },
+            { header: "Details", key: "remarks", width: 60 },
+            { header: "Call Status", key: "call_status", width: 18 },
             { header: "Duration (sec)", key: "duration", width: 14 },
             { header: "Engaged", key: "engaged", width: 10 },
-            { header: "Remarks", key: "remarks", width: 50 },
             { header: "Next Action", key: "next_action", width: 20 },
             { header: "Next Action At (IST)", key: "next_action_at", width: 24 },
+            { header: "Type (code)", key: "type", width: 24 },
         ];
         styleHeader(tpSheet.getRow(1));
         tpRows.forEach((r, i) => {
             const row = tpSheet.addRow({
-                type: r.touchpoint_type ?? "—",
+                activity: humanise(r.touchpoint_type, TOUCHPOINT_TYPE_LABEL),
                 by: r.performed_by_name ?? "System",
                 at: fmt(r.performed_at),
-                call_status: r.call_status ?? "—",
+                remarks: r.remarks ?? "—",
+                call_status: humanise(r.call_status, CALL_STATUS_LABEL),
                 duration: r.call_duration_sec ?? "—",
                 engaged: r.is_engaged == null ? "—" : r.is_engaged ? "Yes" : "No",
-                remarks: r.remarks ?? "—",
-                next_action: r.next_action ?? "—",
+                next_action: humanise(r.next_action, NEXT_ACTION_LABEL),
                 next_action_at: r.next_action_at ? fmt(r.next_action_at) : "—",
+                type: r.touchpoint_type ?? "—",
             });
             zebra(row, i);
         });
@@ -184,11 +162,13 @@ export const GET = withErrorHandler(
         styleHeader(shSheet.getRow(1));
         shRows.forEach((r, i) => {
             const row = shSheet.addRow({
-                from: r.from_status ?? "—",
-                to: r.to_status ?? "—",
+                from: humanise(r.from_status, LEAD_STATUS_LABEL),
+                to: humanise(r.to_status, LEAD_STATUS_LABEL),
                 by: r.changed_by_name ?? "System",
                 at: fmt(r.changed_at),
-                lost_reason: r.to_lost_reason ?? "—",
+                lost_reason: r.to_lost_reason
+                    ? r.to_lost_reason.replace(/_/g, " ")
+                    : "—",
                 notes: r.reason_notes ?? "—",
             });
             zebra(row, i);

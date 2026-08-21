@@ -23,7 +23,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import type { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
-export const STORAGE_BACKEND = (process.env.STORAGE_BACKEND || "supabase").toLowerCase();
+export const STORAGE_BACKEND = (process.env.STORAGE_BACKEND).toLowerCase();
 export const isS3Backend = STORAGE_BACKEND === "s3";
 
 const REGION = process.env.AWS_REGION;
@@ -32,6 +32,39 @@ const S3_BUCKET = process.env.AWS_S3_BUCKET;
 // Block Public Access ON, public S3 URLs do NOT work — set this to a CloudFront
 // domain, or callers should use signObject()/a proxy route instead.
 const PUBLIC_BASE = (process.env.AWS_S3_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+
+// E-255 — every successful write is mirrored to Google Drive as a backup.
+// Loaded lazily so the googleapis/drizzle graph is not pulled in by callers
+// that only need `filesProxyPath()`, and so a mirror problem can never turn
+// into an upload failure: the hook is awaited only for its cheap ledger insert
+// and swallows everything.
+async function notifyStored(input: {
+  bucket: string;
+  key: string;
+  contentType?: string | null;
+  size?: number | null;
+  body?: Buffer | null;
+}): Promise<void> {
+  try {
+    const m = await import("./drive-mirror");
+    await m.onObjectStored(input);
+  } catch (err) {
+    console.error(
+      "[s3] drive-mirror hook failed for",
+      `${input.bucket}/${input.key}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+async function notifyRemoved(bucket: string, keys: string[]): Promise<void> {
+  try {
+    const m = await import("./drive-mirror");
+    await m.onObjectsRemoved(bucket, keys);
+  } catch {
+    /* best-effort */
+  }
+}
 
 let _client: S3Client | null = null;
 function client(): S3Client {
@@ -145,6 +178,7 @@ export async function putObject(
       CacheControl: opts.cacheControl,
     }),
   );
+  await notifyStored({ bucket: logicalBucket, key, contentType, size: body.length, body });
 }
 
 /**
@@ -177,6 +211,8 @@ export async function putObjectStream(
     },
   });
   await upload.done();
+  // Streamed body is gone by now; the mirror re-reads the object from S3.
+  await notifyStored({ bucket: logicalBucket, key, contentType, size: null, body: null });
 }
 
 /** Download an object's bytes, or null if it doesn't exist. */
@@ -262,6 +298,7 @@ export async function removeObjects(logicalBucket: string, keys: string[]): Prom
       Delete: { Objects: keys.map((k) => ({ Key: s3Key(logicalBucket, k) })), Quiet: true },
     }),
   );
+  await notifyRemoved(logicalBucket, keys);
 }
 
 /** List object keys under a logical bucket/prefix, returned Supabase-style (no logical-bucket prefix). */
@@ -282,6 +319,35 @@ export async function listObjects(logicalBucket: string, prefix = ""): Promise<s
     for (const o of r.Contents || []) {
       if (!o.Key) continue;
       out.push(o.Key.startsWith(stripAt) ? o.Key.slice(stripAt.length) : o.Key);
+    }
+    token = r.IsTruncated ? r.NextContinuationToken : undefined;
+  } while (token);
+  return out;
+}
+
+/**
+ * List EVERY object in the physical bucket (optionally under a physical
+ * prefix), with sizes. Keys are physical — `<logical bucket>/<key>` — because
+ * the caller (the E-255 Drive-mirror backfill) wants to discover the logical
+ * buckets rather than be told them.
+ */
+export async function listAllObjects(
+  physicalPrefix = "",
+): Promise<Array<{ key: string; size: number | null; lastModified: Date | null }>> {
+  const out: Array<{ key: string; size: number | null; lastModified: Date | null }> = [];
+  let token: string | undefined;
+  do {
+    const r = await client().send(
+      new ListObjectsV2Command({
+        Bucket: physicalBucket(),
+        Prefix: physicalPrefix || undefined,
+        ContinuationToken: token,
+        MaxKeys: 1000,
+      }),
+    );
+    for (const o of r.Contents || []) {
+      if (!o.Key || o.Key.endsWith("/")) continue; // skip "folder" placeholder objects
+      out.push({ key: o.Key, size: o.Size ?? null, lastModified: o.LastModified ?? null });
     }
     token = r.IsTruncated ? r.NextContinuationToken : undefined;
   } while (token);

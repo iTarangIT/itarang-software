@@ -31,16 +31,19 @@ describe("computeTotals — reproduces ITPI-35", () => {
     expect(result.subTotal).toBe(841_500);
   });
 
-  it("is an inter-state supply, so IGST and not CGST+SGST", () => {
+  it("is an inter-state supply, so one GST row and not CGST+SGST", () => {
     expect(result.isIntraState).toBe(false);
-    expect(result.taxRows.every((r) => r.label.startsWith("IGST"))).toBe(true);
+    // Labelled GST, not IGST (2026-08-20) — the register is still the
+    // integrated one, the document just does not say so. What matters here is
+    // that it is ONE row per rate rather than a CGST/SGST pair.
+    expect(result.taxRows.every((r) => r.label.startsWith("GST"))).toBe(true);
   });
 
   it("emits one row per distinct rate, highest first", () => {
     // Three 18% lines and one 5% line produce exactly two rows on the document.
     expect(result.taxRows).toEqual([
-      { label: "IGST18 (18%)", amount: 133_920 },
-      { label: "IGST5 (5%)", amount: 4_875 },
+      { label: "GST18 (18%)", amount: 133_920 },
+      { label: "GST5 (5%)", amount: 4_875 },
     ]);
   });
 
@@ -71,7 +74,7 @@ describe("computeTotals — intra-state supply splits into CGST + SGST", () => {
     ]);
   });
 
-  it("totals identically to the IGST form — only the registers differ", () => {
+  it("totals identically to the inter-state form — only the registers differ", () => {
     const igst = computeTotals({
       lines: ITPI_35_LINES,
       sellerStateCode: HARYANA,
@@ -109,7 +112,7 @@ describe("an unset rate is not a zero rate", () => {
     expect(result.hasUnsetTax).toBe(true);
     expect(result.subTotal).toBe(1_500);
     // The untaxed 500 is still in the sub-total; it just carries no tax row.
-    expect(result.taxRows).toEqual([{ label: "IGST18 (18%)", amount: 180 }]);
+    expect(result.taxRows).toEqual([{ label: "GST18 (18%)", amount: 180 }]);
     expect(result.total).toBe(1_680);
   });
 
@@ -121,7 +124,7 @@ describe("an unset rate is not a zero rate", () => {
     });
     // An explicit zero rate is a claim we were told to make: it earns a row.
     expect(zeroRated.hasUnsetTax).toBe(false);
-    expect(zeroRated.taxRows).toEqual([{ label: "IGST0 (0%)", amount: 0 }]);
+    expect(zeroRated.taxRows).toEqual([{ label: "GST0 (0%)", amount: 0 }]);
 
     const unset = computeTotals({
       lines: [{ amount: 1_000, gstRatePct: null }],
@@ -144,14 +147,14 @@ describe("an unset rate is not a zero rate", () => {
 });
 
 describe("an unknown place of supply falls back to inter-state", () => {
-  it("uses IGST rather than naming a state it does not know", () => {
+  it("uses the single integrated row rather than naming a state it does not know", () => {
     const result = computeTotals({
       lines: [{ amount: 1_000, gstRatePct: 18 }],
       sellerStateCode: HARYANA,
       placeOfSupplyStateCode: null,
     });
     expect(result.isIntraState).toBe(false);
-    expect(result.taxRows[0].label).toBe("IGST18 (18%)");
+    expect(result.taxRows[0].label).toBe("GST18 (18%)");
   });
 
   it("does not treat an empty string as a match for the seller state", () => {
@@ -165,7 +168,7 @@ describe("an unknown place of supply falls back to inter-state", () => {
 });
 
 describe("line arithmetic", () => {
-  it("matches every IGST amount printed on ITPI-35", () => {
+  it("matches every tax amount printed on ITPI-35", () => {
     expect(lineGstAmount(660_000, 18)).toBe(118_800);
     expect(lineGstAmount(97_500, 5)).toBe(4_875);
     expect(lineGstAmount(9_000, 18)).toBe(1_620);

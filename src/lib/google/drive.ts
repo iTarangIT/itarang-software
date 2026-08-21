@@ -217,6 +217,22 @@ export function describeDriveError(err: unknown): string {
       " and allow a few minutes for it to propagate."
     );
   }
+  // E-255 — the Drive-mirror upload path hits this the moment a service account
+  // tries to CREATE a file in a plain My-Drive folder: Google gives service
+  // accounts no storage of their own, so the file has nowhere to be owned. The
+  // raw error is a 403 whose text says exactly that; without this branch it
+  // fell through to the generic 403 below and blamed folder sharing.
+  if (
+    reason === "storageQuotaExceeded" ||
+    /storage quota|do not have storage/i.test(message)
+  ) {
+    return (
+      "Google Drive refused the upload for lack of storage: a service account has no Drive storage of its own" +
+      (/Service Accounts do not have storage quota/i.test(message) ? "" : ` (${message})`) +
+      ". Either set an 'Act as Workspace user' (domain-wide delegation) so files are owned by that user, " +
+      "or point the root folder at a Shared Drive the service account is a member of."
+    );
+  }
   if (status === 404) {
     return "That folder does not exist, or it has not been shared with the service account.";
   }
