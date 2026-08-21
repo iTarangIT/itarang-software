@@ -41,6 +41,10 @@
       "schedule": "*/2 * * * *"
     },
     {
+      "path": "/api/cron/campaign-resume",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/dialer-poll",
       "schedule": "* * * * *"
     },

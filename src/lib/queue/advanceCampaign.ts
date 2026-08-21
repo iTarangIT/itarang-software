@@ -35,12 +35,27 @@ import {
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
 import { isAiDialable } from "@/lib/ai-dialer/exclusionFilter";
+import {
+  nextWindowOpenSql,
+  pauseForWindow,
+  windowOpenSql,
+  type ScheduleMode,
+} from "./campaignWindow";
 
 export type AdvanceResult =
   | { kind: "placed"; leadId: string; campaignLeadId: string; callId: string | null }
   | { kind: "no-pending"; finalized: boolean }
   | { kind: "skipped"; reason: string }
   | { kind: "campaign-not-running" }
+  // E-254 — the calling window is shut. The campaign has been parked (see
+  // pauseForWindow) and no call was placed. This is a NORMAL outcome, not an
+  // error: callers that report "did the first call go out?" must not turn it
+  // into a failure message.
+  | {
+      kind: "window-closed";
+      status: "scheduled" | "paused";
+      resumeAt: Date | null;
+    }
   | { kind: "error"; error: string };
 
 export type AdvanceOptions = {
@@ -105,6 +120,22 @@ async function hasCallingRows(campaignId: string): Promise<boolean> {
   return r.length > 0;
 }
 
+// Is anything still waiting to be dialled? Consulted only when the window has
+// just shut — see the gate below for why an empty queue must NOT park.
+async function hasPendingRows(campaignId: string): Promise<boolean> {
+  const r = await db
+    .select({ id: dialerCampaignLeads.id })
+    .from(dialerCampaignLeads)
+    .where(
+      and(
+        eq(dialerCampaignLeads.campaign_id, campaignId),
+        eq(dialerCampaignLeads.status, "pending"),
+      ),
+    )
+    .limit(1);
+  return r.length > 0;
+}
+
 export async function advanceCampaign(
   campaignId: string,
   opts: AdvanceOptions = {},
@@ -118,6 +149,13 @@ export async function advanceCampaign(
         status: dialerCampaigns.status,
         provider: dialerCampaigns.provider,
         region_filter: dialerCampaigns.region_filter,
+        // E-254 — the calling window, evaluated in the SAME round trip as the
+        // status read. Both are SQL expressions over now(), so the decision
+        // uses the database's clock; a JS Date here would let the web process
+        // and the resume ticker disagree about whether the window is open.
+        schedule_mode: dialerCampaigns.schedule_mode,
+        window_open: windowOpenSql(),
+        next_open_at: nextWindowOpenSql(),
       })
       .from(dialerCampaigns)
       .where(eq(dialerCampaigns.id, campaignId))
@@ -125,6 +163,51 @@ export async function advanceCampaign(
 
     if (cmp.length === 0 || cmp[0].status !== "running") {
       return { kind: "campaign-not-running" };
+    }
+
+    // E-254 — THE BUSINESS-HOURS GATE.
+    //
+    // Placed here, immediately after the status check, because every path that
+    // dials — /start, /lists/[id]/start, /resume, /recall-failed, /advance, the
+    // webhook chain, the 30s poll and the 2m watchdog — funnels through this
+    // one function. One gate covers all of them; a per-caller check would leave
+    // whichever caller is added next uncovered.
+    //
+    // Before the preCallDelayMs sleep below, so a campaign whose window just
+    // shut parks immediately instead of idling 5 seconds first.
+    //
+    // A call already in flight is NOT cancelled — the window governs when a
+    // call may START, matching E-228's window_end column comment. The in-flight
+    // call finishes, its webhook re-enters here, and this branch parks the
+    // campaign then.
+    if (!cmp[0].window_open) {
+      // Nothing left to dial? Then the window is irrelevant — fall through to
+      // the exhaustion branch below so the campaign finalizes as 'completed'.
+      //
+      // Parking it instead would strand it: a recurring campaign would sit in
+      // 'scheduled' until its next window merely to discover it was already
+      // done, and a SINGLE run would land in 'paused' with 0 pending, where the
+      // Resume button is hidden (canResume requires pendingLeads > 0) and no
+      // ticker claims it. That dead end is reachable any time the last call of
+      // the day finishes after the end time.
+      if (await hasPendingRows(campaignId)) {
+        const mode = (cmp[0].schedule_mode || "now") as ScheduleMode;
+        const nextOpenAt = cmp[0].next_open_at
+          ? new Date(cmp[0].next_open_at)
+          : null;
+        const parked = await pauseForWindow(campaignId, mode, nextOpenAt);
+        console.log("[advanceCampaign] calling window shut — campaign parked", {
+          campaignId,
+          mode,
+          status: parked.status,
+          resumeAt: parked.resumeAt?.toISOString() ?? null,
+        });
+        return {
+          kind: "window-closed",
+          status: parked.status,
+          resumeAt: parked.resumeAt,
+        };
+      }
     }
 
     const provider = (cmp[0].provider || "bolna").toLowerCase();
@@ -348,6 +431,21 @@ export async function advanceCampaign(
             },
           );
         }
+      }
+
+      // E-228 — stamp real activity. The stall watchdog measures inactivity
+      // from COALESCE(last_advanced_at, started_at); without this a campaign
+      // resumed the morning after an overnight pause still carries yesterday's
+      // started_at, so it reads as hours-stale and is force-stopped before it
+      // places its first call of the day — every day. Best-effort: a failed
+      // stamp must not lose a call that is already live.
+      try {
+        await db
+          .update(dialerCampaigns)
+          .set({ last_advanced_at: new Date() })
+          .where(eq(dialerCampaigns.id, campaignId));
+      } catch (err) {
+        console.error("[advanceCampaign] last_advanced_at stamp failed:", err);
       }
 
       return {

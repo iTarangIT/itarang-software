@@ -21,6 +21,14 @@ import {
 import { RegionGroupManager } from "./region-group-manager";
 import { DispositionPicker } from "./DispositionPicker";
 import {
+  CampaignWindowPicker,
+  INITIAL_SCHEDULE,
+  isScheduleInvalid,
+  toSchedulePayload,
+  useScheduleDefaults,
+  type CampaignScheduleValue,
+} from "./campaign-window-picker";
+import {
   AI_CALL_STATES,
   AI_CALL_STATE_HINT,
   AI_CALL_STATE_LABEL,
@@ -57,6 +65,16 @@ export interface DialerStartPayload {
    */
   filters: LeadStateFilters;
   queue: DialerQueueItem[];
+  /**
+   * E-254 — the calling window, or null for an unscheduled campaign.
+   *
+   * A SIBLING of `region`, and it must stay one. The parent folds `filters`
+   * INTO the region blob because that whole object is persisted verbatim as
+   * dialer_campaigns.region_filter; the schedule must not go the same way, or
+   * it would land in that jsonb blob and the real schedule_mode / window_*
+   * columns would stay NULL — a campaign that displays a window and ignores it.
+   */
+  schedule: ReturnType<typeof toSchedulePayload>;
 }
 
 interface DialerStartModalProps {
@@ -68,6 +86,9 @@ interface DialerStartModalProps {
   onStartListCampaign?: (
     campaignId: string,
     provider: DialerProvider,
+    // E-254 — the calling window chosen in the Lists tab's own picker. Null for
+    // an unscheduled campaign, which is the pre-E-228 behaviour.
+    schedule?: unknown,
   ) => Promise<void> | void;
 }
 
@@ -178,10 +199,16 @@ export function DialerStartModal({
   }>({ total: 0, byReason: {} });
   const [totalWithPhone, setTotalWithPhone] = useState(0);
   const [queue, setQueue] = useState<DialerQueueItem[]>([]);
+  // E-254 — the calling window. Seeded from assignment_config by
+  // useScheduleDefaults below; mode starts at "now" so the modal behaves
+  // exactly as before until someone chooses to schedule.
+  const [schedule, setSchedule] =
+    useState<CampaignScheduleValue>(INITIAL_SCHEDULE);
   const [showGroupManager, setShowGroupManager] = useState(false);
   const [saveAsName, setSaveAsName] = useState<string>("");
   const [savingGroup, setSavingGroup] = useState(false);
   const saveGroup = useSaveAsRegionGroup();
+  useScheduleDefaults(setSchedule);
 
   const reqIdRef = useRef(0);
 
@@ -288,19 +315,31 @@ export function DialerStartModal({
   if (!isOpen) return null;
 
   const handleConfirm = async () => {
-    if (selectedCount === 0 || submitting) return;
+    // The schedule guard mirrors campaignScheduleSchema on the server, so an
+    // impossible window is caught at the form rather than coming back as a 400.
+    if (selectedCount === 0 || submitting || isScheduleInvalid(schedule)) return;
     setSubmitting(true);
     try {
-      await onConfirm({ provider, category, region, filters, queue });
+      await onConfirm({
+        provider,
+        category,
+        region,
+        filters,
+        queue,
+        schedule: toSchedulePayload(schedule),
+      });
       onClose();
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Launch a draft list campaign with the currently-selected voice agent.
-  const handleStartList = async (campaignId: string) => {
-    await onStartListCampaign?.(campaignId, provider);
+  // Launch a draft list campaign with the currently-selected voice agent and
+  // the window chosen in the Lists tab. The schedule comes from ListsTab rather
+  // than this modal's own section 05: the Lists tab is a separate flow with its
+  // own picker, and section 05 is hidden while it is open.
+  const handleStartList = async (campaignId: string, listSchedule: unknown) => {
+    await onStartListCampaign?.(campaignId, provider, listSchedule);
     onClose();
   };
 
@@ -784,6 +823,21 @@ export function DialerStartModal({
               </div>
             </div>
           )}
+
+          {/* ── 05 · Calling window (E-254) ─────────────────────────── */}
+          {mode !== "list" && (
+            <div className="mb-2 relative z-0">
+              <div className="flex items-baseline justify-between mb-3">
+                <p className="dialer-eyebrow">05 · Calling window</p>
+                <p className="text-[11px] text-gray-400">optional</p>
+              </div>
+              <CampaignWindowPicker
+                value={schedule}
+                onChange={setSchedule}
+                idPrefix="dialer-start"
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-3 px-7 py-5 border-t border-gray-100 bg-gray-50">
@@ -827,7 +881,12 @@ export function DialerStartModal({
             {mode !== "list" && (
               <button
                 onClick={handleConfirm}
-                disabled={selectedCount === 0 || submitting || previewing}
+                disabled={
+                  selectedCount === 0 ||
+                  submitting ||
+                  previewing ||
+                  isScheduleInvalid(schedule)
+                }
                 className="dialer-cta inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] cursor-pointer"
               >
                 {submitting ? (

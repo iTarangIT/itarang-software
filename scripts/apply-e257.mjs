@@ -1,7 +1,7 @@
-// Applies drizzle/E-254_nbfc_request_sla.sql and then PROVES it landed.
+// Applies drizzle/E-257_nbfc_request_sla.sql and then PROVES it landed.
 //
-// Usage:  DATABASE_URL=postgresql://…database-2… node scripts/apply-e254.mjs
-//         DATABASE_URL=postgresql://…database-2… node scripts/apply-e254.mjs --dry-run
+// Usage:  DATABASE_URL=postgresql://…database-2… node scripts/apply-e257.mjs
+//         DATABASE_URL=postgresql://…database-2… node scripts/apply-e257.mjs --dry-run
 //
 // TARGET SELECTION — READ THIS BEFORE RUNNING.
 // An explicit process.env.DATABASE_URL always wins. Falling back to .env.local
@@ -10,7 +10,7 @@
 // and the two databases drift. The host is printed, together with which
 // environment that host IS, before a single byte is written.
 //
-// WHAT E-254 DOES. Seven columns on nbfc_doc_requests (sla_due_at,
+// WHAT E-257 DOES. Seven columns on nbfc_doc_requests (sla_due_at,
 // forward_source, push_source, auto_forwarded_at, auto_pushed_at, sla_failure,
 // requested_items), three on nbfc_document_verifications (sla_due_at,
 // forward_source, sla_failure) and two PARTIAL indexes. It backs the NBFC
@@ -31,7 +31,7 @@ import { readFileSync } from "node:fs";
 import postgres from "postgres";
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const FILE = "drizzle/E-254_nbfc_request_sla.sql";
+const FILE = "drizzle/E-257_nbfc_request_sla.sql";
 
 function resolveUrl() {
     if (process.env.DATABASE_URL) {
@@ -43,7 +43,7 @@ function resolveUrl() {
     return { url: m[1].trim().replace(/^["']|["']$/g, ""), from: ".env.local (NOT explicit — check the host below)" };
 }
 
-/** Tables E-254 alters. A missing one means E-200/E-201 were never applied here. */
+/** Tables E-257 alters. A missing one means E-200/E-201 were never applied here. */
 const PREREQ_TABLES = ["nbfc_doc_requests", "nbfc_document_verifications"];
 
 /** Every column this file must add. */
@@ -186,10 +186,10 @@ try {
     );
 
     if (failed) {
-        console.log("\nE-254 FAILED verification. Investigate before deploying the code.");
+        console.log("\nE-257 FAILED verification. Investigate before deploying the code.");
         process.exit(1);
     }
-    console.log("\nE-254 applied and verified. Pure additive DDL — no row was read or written.");
+    console.log("\nE-257 applied and verified. Pure additive DDL — no row was read or written.");
     console.log("The automation remains OFF until an admin enables it at /admin/settings/nbfc-request-sla.");
 } catch (err) {
     console.error("\nERROR:", err?.message ?? err);

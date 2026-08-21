@@ -1,11 +1,11 @@
 /**
- * E-254 end-to-end check against the ACTIVE database (prints the host first).
+ * E-257 end-to-end check against the ACTIVE database (prints the host first).
  * Creates one throwaway wrapper + one throwaway verdict on a real lead that has
  * an NBFC assignment, drives both SLA legs by backdating the clocks and running
  * the sweep, asserts every hop, then deletes what it created and switches the
  * feature back to what it was. Nothing here touches pre-existing rows.
  *
- *   node --import tsx --env-file=.env.local scripts/_verify-e254-sla.ts
+ *   node --import tsx --env-file=.env.local scripts/_verify-e257-sla.ts
  */
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
@@ -108,7 +108,7 @@ async function main() {
     ok(kids.length === 1 && kids[0].doc_label === "E254-TEST Updated bank statement" && kids[0].source === "nbfc", "one child created from requested_items: " + kids[0]?.doc_label + " (reason: " + kids[0]?.rejection_reason + ")");
 
     // 2. leg 2
-    await db.update(otherDocumentRequests).set({ upload_status: "uploaded", file_url: "https://example.invalid/e254.pdf", uploaded_at: new Date() }).where(eq(otherDocumentRequests.id, kids[0].id));
+    await db.update(otherDocumentRequests).set({ upload_status: "uploaded", file_url: "https://example.invalid/e257.pdf", uploaded_at: new Date() }).where(eq(otherDocumentRequests.id, kids[0].id));
     const st = await recomputeWrapperStatus(reqId);
     [w] = await db.select().from(nbfcDocRequests).where(eq(nbfcDocRequests.id, reqId));
     ok(st === "admin_review_upload" && w.sla_due_at, "after upload: admin_review_upload with push clock " + w.sla_due_at?.toISOString());
@@ -130,9 +130,9 @@ async function main() {
     ok(kid.upload_status === "verified" && kid.review_source === "system" && kid.reviewed_by === null, "child verified with review_source=system, no admin actor");
 
     // 3. leg 1, verdict
-    const base = { leadId: asg.lead_id, assignmentId: asg.id, nbfcId: asg.nbfc_id, tenantId: asg.tenant_id, docFor: "primary" as const, docKey: "e254_test_doc", verifiedBy: actor };
+    const base = { leadId: asg.lead_id, assignmentId: asg.id, nbfcId: asg.nbfc_id, tenantId: asg.tenant_id, docFor: "primary" as const, docKey: "e257_test_doc", verifiedBy: actor };
     await upsertNbfcVerdict({ ...base, verdict: "queried", notes: "E254-TEST please re-upload a clearer scan" });
-    let [v] = await db.select().from(nbfcDocumentVerifications).where(and(eq(nbfcDocumentVerifications.assignment_id, asg.id), eq(nbfcDocumentVerifications.doc_key, "e254_test_doc")));
+    let [v] = await db.select().from(nbfcDocumentVerifications).where(and(eq(nbfcDocumentVerifications.assignment_id, asg.id), eq(nbfcDocumentVerifications.doc_key, "e257_test_doc")));
     verdictId = v.id;
     ok(v.sla_due_at, "verdict queried -> sla_due_at " + v.sla_due_at?.toISOString());
     const firstDue = v.sla_due_at!.getTime();
@@ -154,7 +154,7 @@ async function main() {
     const [vw] = await db.select().from(nbfcDocRequests).where(eq(nbfcDocRequests.id, v.forwarded_request_id!));
     ok(vw.status === "forwarded_to_dealer" && vw.request_type === "correction" && vw.raised_by === actor, "spawned correction wrapper forwarded, raised_by = NBFC user (NOT NULL column)");
     const vkids = await db.select().from(otherDocumentRequests).where(eq(otherDocumentRequests.nbfc_request_id, vw.id));
-    ok(vkids.length === 1 && /rejected the e254_test_doc/.test(vkids[0].rejection_reason ?? ""), "child reason falls back to a sentence when notes are null: " + vkids[0]?.rejection_reason);
+    ok(vkids.length === 1 && /rejected the e257_test_doc/.test(vkids[0].rejection_reason ?? ""), "child reason falls back to a sentence when notes are null: " + vkids[0]?.rejection_reason);
 
     // 4. audit + admin notifications
     const audits = await db.select({ action: auditLogs.action, entity_id: auditLogs.entity_id }).from(auditLogs).where(and(eq(auditLogs.entity_type, "nbfc_request_sla"), inArray(auditLogs.entity_id, created)));

@@ -2150,19 +2150,19 @@ export const nbfcDocRequests = pgTable(
     // recomputeWrapperStatus() early-returns on it. The admin still sees the
     // thread and is still notified on both legs.
     dealer_direct: boolean("dealer_direct").default(false).notNull(),
-    // E-254 — the NBFC request SLA clock. Deadline of the CURRENT leg (status
+    // E-257 — the NBFC request SLA clock. Deadline of the CURRENT leg (status
     // 'nbfc_raised' → auto-forward to dealer; 'admin_review_upload' → auto-push
     // to NBFC). Stamped on entering the leg, NULLed by any admin action or by
     // the sweep's claim. NULL = no clock. Never backfill.
     sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
-    // E-254 — 'admin' | 'system': who forwarded / pushed. Default 'admin'.
+    // E-257 — 'admin' | 'system': who forwarded / pushed. Default 'admin'.
     forward_source: varchar("forward_source", { length: 16 }).default('admin'),
     push_source: varchar("push_source", { length: 16 }).default('admin'),
     auto_forwarded_at: timestamp("auto_forwarded_at", { withTimezone: true }),
     auto_pushed_at: timestamp("auto_pushed_at", { withTimezone: true }),
-    // E-254 — last sweep error; the request stays with the admin, no retry.
+    // E-257 — last sweep error; the request stays with the admin, no retry.
     sla_failure: text("sla_failure"),
-    // E-254 — structured items the NBFC asked for ([{doc_label, reason,
+    // E-257 — structured items the NBFC asked for ([{doc_label, reason,
     // is_required}]) so an auto-forward does not have to parse nbfc_comments.
     requested_items: jsonb("requested_items").default(sql`'[]'::jsonb`),
     item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
@@ -2248,10 +2248,10 @@ export const nbfcDocumentVerifications = pgTable(
     forwarded_at: timestamp("forwarded_at", { withTimezone: true }),
     forwarded_request_id: varchar("forwarded_request_id", { length: 255 }),
     forwarded_by: uuid("forwarded_by"),
-    // E-254 — when the SLA sweep may auto-forward this queried/rejected verdict
+    // E-257 — when the SLA sweep may auto-forward this queried/rejected verdict
     // to the dealer. NULL = no clock. Never backfill.
     sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
-    // E-254 — 'admin' | 'system': who forwarded it. Default 'admin'.
+    // E-257 — 'admin' | 'system': who forwarded it. Default 'admin'.
     forward_source: varchar("forward_source", { length: 16 }).default('admin'),
     sla_failure: text("sla_failure"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3889,6 +3889,14 @@ export const dialerCampaigns = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // E-254 — execution type. Decides what happens when the window CLOSES:
+    //   "now"       unscheduled, dial continuously (default, pre-E-228 behaviour)
+    //   "single"    dial today's window once, then status="paused" until a human
+    //   "recurring" dial every window_days day, auto-resuming, until the queue empties
+    // Short-circuits the window predicate, so a "now" row ignores the columns below.
+    schedule_mode: varchar("schedule_mode", { length: 16 })
+      .notNull()
+      .default("now"),
     // E-228 — per-campaign calling window. NULL on all three means UNSCHEDULED:
     // the campaign dials continuously, exactly as it did before E-228. Defaults
     // are pre-filled in the UI from assignment_config (E-120), not stored here.
