@@ -21,7 +21,7 @@
  */
 import { useState } from "react";
 import { toast } from "sonner";
-import { nbfcFetch } from "@/lib/auction/client";
+import { AuctionApiError, nbfcFetch } from "@/lib/auction/client";
 import BatteryPhotoCapture from "@/components/nbfc-portal/BatteryPhotoCapture";
 
 interface Step1State {
@@ -59,6 +59,56 @@ interface Props {
   /** Used to create that row on the spot when it does not. */
   batterySerial?: string | null;
   onComplete?: (result: EvaluationResult) => void;
+}
+
+/**
+ * POSTs the evaluation, retrying ONCE when the request never reached the
+ * server.
+ *
+ * The three-step form is filled in over minutes, so by the time Submit is
+ * pressed the browser is reusing a keep-alive socket that has been idle far
+ * longer than the server's idle timeout — and a dev server restart, a
+ * reconnecting laptop or a redeploy all land the same way: the connection dies
+ * before a single byte of the response comes back and `fetch` rejects. The
+ * operator saw the bare "Failed to fetch", could not tell whether the
+ * evaluation had been recorded, and had nothing to press but Submit again.
+ *
+ * `AuctionApiError` with `status === 0` is exactly that case — no response was
+ * ever received — which is the only case that is retried here. A 4xx/5xx is a
+ * real answer from the server and repeating it would only repeat the failure.
+ *
+ * Repeating a POST is safe because `recordEvaluation()` dedupes an identical
+ * resubmission of the same pipeline row inside a short window and returns the
+ * row it already wrote, so a retry after a lost response cannot leave two
+ * evaluations behind.
+ */
+async function postEvaluation(
+  recoveryPipelineId: string,
+  body: unknown,
+): Promise<EvaluationResult> {
+  const attempt = () =>
+    nbfcFetch<EvaluationResult>(
+      `/api/nbfc/recovery/${recoveryPipelineId}/evaluation`,
+      { method: "POST", body: JSON.stringify(body) },
+    ).then((json) => {
+      // A 2xx whose body failed to load parses to `{}`; rendering the result
+      // panel from that throws on `base_auction_price.toLocaleString`. Treat
+      // it as the transport failure it is so the retry below covers it.
+      if (!json || typeof json.evaluation_id !== "string") {
+        throw new AuctionApiError(
+          "The server's reply did not arrive in full — please try again.",
+          0,
+        );
+      }
+      return json;
+    });
+
+  try {
+    return await attempt();
+  } catch (e) {
+    if (e instanceof AuctionApiError && e.status === 0) return attempt();
+    throw e;
+  }
 }
 
 export function BatteryEvaluationWizard({
@@ -122,21 +172,10 @@ export function BatteryEvaluationWizard({
         },
       };
 
-      const res = await fetch(
-        `/api/nbfc/recovery/${recoveryPipelineId}/evaluation`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.error ?? `HTTP ${res.status}`);
-      }
-      setResult(json as EvaluationResult);
+      const json = await postEvaluation(recoveryPipelineId, body);
+      setResult(json);
       setStep(4);
-      onComplete?.(json as EvaluationResult);
+      onComplete?.(json);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

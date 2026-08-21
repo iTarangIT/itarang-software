@@ -14,6 +14,8 @@ const createSchema = z.object({
   compatibleCategories: z.array(z.string().trim().min(1)).default([]),
   maxQtyPerLead: z.number().int().min(0).max(5000).default(0),
   harnessVariant: z.boolean().default(false),
+  hsnCode: z.string().trim().min(1).max(8).nullable().optional(),
+  gstRatePct: z.number().min(0).max(50).nullable().optional(),
   status: statusSchema.default("active"),
 });
 
@@ -60,6 +62,10 @@ export const POST = withErrorHandler(async (req: Request) => {
       compatible_categories: body.compatibleCategories,
       max_qty_per_lead: body.maxQtyPerLead,
       harness_variant: body.harnessVariant,
+      // Omit when not provided so the E-256 column defaults (18% / 85079090)
+      // fill in, rather than inserting an explicit NULL over them.
+      hsn_code: body.hsnCode ?? undefined,
+      gst_rate_pct: body.gstRatePct != null ? String(body.gstRatePct) : undefined,
       status: body.status,
       created_by: user.id,
       updated_at: new Date(),

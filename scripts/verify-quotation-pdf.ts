@@ -20,7 +20,11 @@ import { join } from "node:path";
 import type { CommercialsProductLine } from "../src/lib/inside-sales/types";
 import { DEFAULT_QUOTATION_CONFIG } from "../src/lib/leads/quote-pdf/config";
 import { renderProformaHtml } from "../src/lib/leads/quote-pdf/proforma-template";
-import { buildQuotationView, taxRefKey } from "../src/lib/leads/quote-pdf/view";
+import {
+  buildQuotationView,
+  composeBillToAddress,
+  taxRefKey,
+} from "../src/lib/leads/quote-pdf/view";
 import type { LineTaxRef } from "../src/lib/leads/quote-pdf/view";
 import { renderPdfFromHtml } from "../src/lib/pdf/render-html";
 
@@ -87,7 +91,21 @@ async function main() {
     lines: LINES,
     taxRefs: TAX_REFS,
     placeOfSupply: { stateCode: "05", label: "Uttarakhand (05)" },
-    dealer: { name: "Himadri Enterprises", gstin: "05EAUPB2253Q1Z8" },
+    // The full Bill To block, composed the way quoteDraft.ts composes it from
+    // the lead's own columns — so this render exercises the address/mobile
+    // lines and not just the name.
+    dealer: {
+      name: "Himadri Enterprises",
+      gstin: "05EAUPB2253Q1Z8",
+      addressLines: composeBillToAddress({
+        area: "Transport Nagar",
+        location: "Haldwani",
+        city: "Haldwani",
+        state: "Uttarakhand",
+        pincode: "263139",
+      }),
+      phone: "+919876543210",
+    },
   });
 
   const failures: string[] = [];
@@ -104,13 +122,22 @@ async function main() {
   check("No signature block", view.signatureDataUri, null);
   check("Document title", view.documentTitle, "Quotation");
   check("Sub Total", view.subTotal, EXPECTED.subTotal);
-  check("IGST18 (18%)", view.taxRows[0]?.amount, EXPECTED.igst18);
-  check("IGST5 (5%)", view.taxRows[1]?.amount, EXPECTED.igst5);
+  // The reference document heads these rows IGST; ours say GST (2026-08-20).
+  // The LABEL is asserted, not just the amount, so a register silently changing
+  // name again is caught here and not on a document already with a dealer.
+  check("Tax row 1 label", view.taxRows[0]?.label, "GST18 (18%)");
+  check("Tax row 1 amount", view.taxRows[0]?.amount, EXPECTED.igst18);
+  check("Tax row 2 label", view.taxRows[1]?.label, "GST5 (5%)");
+  check("Tax row 2 amount", view.taxRows[1]?.amount, EXPECTED.igst5);
   check("Total", view.total, EXPECTED.total);
   check("Total In Words", view.totalInWords, EXPECTED.words);
   check("Place Of Supply", view.placeOfSupply, "Uttarakhand (05)");
   check("Quote Date", view.quoteDate, "13/08/2026");
-  check("Tax split", view.isIntraState ? "CGST+SGST" : "IGST", "IGST");
+  check("Tax split", view.isIntraState ? "CGST+SGST" : "integrated", "integrated");
+  // The Bill To block carries the lead's address and mobile, not just a name.
+  check("Bill To line 1", view.billTo.addressLines[0], "Transport Nagar");
+  check("Bill To line 2", view.billTo.addressLines[1], "Haldwani, Uttarakhand 263139");
+  check("Bill To mobile", view.billTo.phone, "+919876543210");
 
   const html = renderProformaHtml(view);
   console.log("\nRendering PDF through the real pipeline…");

@@ -31,6 +31,10 @@ interface Verdict {
   // E-209 — set once the admin has forwarded this verdict to the dealer.
   forwarded_at: string | null;
   forwarded_request_id: string | null;
+  // E-254 — the leg-1 SLA clock and who forwarded it.
+  sla_due_at?: string | null;
+  forward_source?: string | null;
+  sla_failure?: string | null;
 }
 interface ReqItem {
   id: string;
@@ -57,6 +61,22 @@ interface Wrapper {
   // gate. Read-only here: there is nothing for the admin to forward or push.
   dealer_direct?: boolean | null;
   created_at: string;
+  // E-254 — the SLA clock of the current leg and the provenance of each hop.
+  sla_due_at?: string | null;
+  forward_source?: string | null;
+  push_source?: string | null;
+  auto_forwarded_at?: string | null;
+  auto_pushed_at?: string | null;
+  sla_failure?: string | null;
+}
+// E-254 — what the settings page currently says, so the card can explain a
+// missing clock ("SLA is off" vs "raised before it was switched on").
+interface SlaInfo {
+  enabled: boolean;
+  forwardSlaMinutes: number;
+  pushSlaMinutes: number;
+  autoForwardToDealer: boolean;
+  autoPushToNbfc: boolean;
 }
 // E-240 — one turn of the NBFC ⇄ Dealer conversation on a direct request.
 interface ThreadMessage {
@@ -116,9 +136,109 @@ function LinkifiedText({ text }: { text: string }) {
   );
 }
 
+/** "1h 12m" / "3d 4h" / "4m 09s" — same shape as the KYC case-header countdown. */
+function formatSpan(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  const seconds = Math.floor((ms % 60_000) / 1000);
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+/**
+ * E-254 — one chip that says what the SLA clock will do to this row and when.
+ * `now` is the parent's tick, offset to the server clock, so every chip on
+ * the card counts down together against the clock the sweep actually uses.
+ */
+function SlaChip({
+  dueAt,
+  now,
+  action,
+  sla,
+  legOn,
+}: {
+  dueAt: string | null | undefined;
+  now: number;
+  /** What happens at expiry. */
+  action: "forward" | "push";
+  sla: SlaInfo | null;
+  /** Whether this leg's auto action is switched on in settings. */
+  legOn: boolean;
+}) {
+  const verb = action === "forward" ? "Auto-forwards to dealer" : "Auto-pushes to NBFC";
+  if (!dueAt) {
+    if (!sla || !sla.enabled || !legOn) return null; // feature off — say nothing
+    // Feature on but this row carries no clock: it was already waiting when
+    // the switch was flipped, and enabling never reaches back.
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+        title="This request was already waiting when the SLA was switched on, so it carries no deadline — it needs a manual action."
+      >
+        No SLA clock · manual
+      </span>
+    );
+  }
+  const remaining = new Date(dueAt).getTime() - now;
+  if (!Number.isFinite(remaining)) return null;
+  const overdue = remaining <= 0;
+  const soon = remaining > 0 && remaining < 15 * 60_000;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+        overdue
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : soon
+            ? "border-amber-200 bg-amber-50 text-amber-700"
+            : "border-violet-200 bg-violet-50 text-violet-700"
+      }`}
+      title={`Deadline ${new Date(dueAt).toLocaleString("en-IN")}`}
+    >
+      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      {overdue ? `${verb} shortly (overdue)` : `${verb} in ${formatSpan(remaining)}`}
+    </span>
+  );
+}
+
+/** E-254 — provenance badge: this hop was done by the sweep, not a person. */
+function AutoBadge({ kind, at }: { kind: "forwarded" | "pushed"; at?: string | null }) {
+  const label = kind === "forwarded" ? "Forwarded automatically (SLA)" : "Pushed automatically (SLA)";
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700"
+      title={
+        at
+          ? `${label} on ${new Date(at).toLocaleString("en-IN")}${kind === "pushed" ? " — nobody at iTarang opened the uploads." : ""}`
+          : label
+      }
+    >
+      ⚡ {label}
+    </span>
+  );
+}
+
+/** E-254 — the sweep tried and threw; the row is back with the admin. */
+function SlaFailure({ message }: { message: string }) {
+  return (
+    <p className="mt-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+      <strong>Auto-routing failed:</strong> {message} — please action this manually.
+    </p>
+  );
+}
+
 export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) {
   const [thread, setThread] = useState<Entry[]>([]);
   const [verdicts, setVerdicts] = useState<Verdict[]>([]);
+  // E-254 — SLA settings + a server-clock offset so countdowns tick against
+  // the database's clock, not this browser's.
+  const [sla, setSla] = useState<SlaInfo | null>(null);
+  const [clockOffset, setClockOffset] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   // forward composer: requestId → comma/line separated labels
@@ -145,6 +265,11 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
       if (json.success) {
         setThread(json.data.thread ?? []);
         setVerdicts(json.data.verdicts ?? []);
+        setSla(json.data.sla ?? null);
+        if (json.data.serverNow) {
+          const serverMs = new Date(json.data.serverNow).getTime();
+          if (Number.isFinite(serverMs)) setClockOffset(serverMs - Date.now());
+        }
       }
     } catch {
       // best-effort
@@ -156,6 +281,22 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
   useEffect(() => {
     load();
   }, [load]);
+
+  // E-254 — one shared tick for every countdown chip. Only runs while there is
+  // a clock to show, and re-polls the thread once a minute so a row the sweep
+  // just moved does not sit here showing "overdue" until the next manual refresh.
+  const anyClock =
+    thread.some((e) => !!e.request.sla_due_at) || verdicts.some((v) => !!v.sla_due_at);
+  useEffect(() => {
+    if (!anyClock) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    const r = setInterval(() => void load(), 60_000);
+    return () => {
+      clearInterval(t);
+      clearInterval(r);
+    };
+  }, [anyClock, load]);
+  const serverNow = now + clockOffset;
 
   const forward = async (requestId: string) => {
     // For a manual-consent request, attach the NBFC's uploaded consent document
@@ -524,12 +665,28 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                       {v.doc_for === "co_borrower" ? "Co-borrower · " : ""}
                       {v.doc_key}
                     </span>
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
-                    >
-                      {label}
+                    <span className="flex flex-wrap items-center justify-end gap-1.5">
+                      {/* E-254 — leg-1 clock on an unforwarded ask; provenance once forwarded. */}
+                      {(v.verdict === "queried" || v.verdict === "rejected") && !v.forwarded_at ? (
+                        <SlaChip
+                          dueAt={v.sla_due_at}
+                          now={serverNow}
+                          action="forward"
+                          sla={sla}
+                          legOn={!!sla?.autoForwardToDealer}
+                        />
+                      ) : null}
+                      {v.forwarded_at && v.forward_source === "system" ? (
+                        <AutoBadge kind="forwarded" at={v.forwarded_at} />
+                      ) : null}
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
+                      >
+                        {label}
+                      </span>
                     </span>
                   </div>
+                  {v.sla_failure && !v.forwarded_at ? <SlaFailure message={v.sla_failure} /> : null}
                   {v.notes ? (
                     <p className="mt-1 whitespace-pre-line text-slate-600">{v.notes}</p>
                   ) : null}
@@ -567,6 +724,8 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                           rejectDrafts={childReject}
                           setRejectDrafts={setChildReject}
                           onReview={reviewChild}
+                          sla={sla}
+                          now={serverNow}
                         />
                       ) : (
                         <div className="space-y-1.5">
@@ -676,10 +835,47 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                     tone="emerald"
                   />
                 </div>
-                <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                  {STATUS_LABEL[request.status] ?? request.status}
+                <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                  {/* E-254 — the SLA clock of the current leg, and who moved it. */}
+                  {!request.dealer_direct &&
+                  request.request_type !== "message" &&
+                  (request.status === "nbfc_raised" || request.status === "admin_review") ? (
+                    <SlaChip
+                      dueAt={request.sla_due_at}
+                      now={serverNow}
+                      action="forward"
+                      sla={sla}
+                      legOn={!!sla?.autoForwardToDealer}
+                    />
+                  ) : null}
+                  {!request.dealer_direct && request.status === "admin_review_upload" ? (
+                    <SlaChip
+                      dueAt={request.sla_due_at}
+                      now={serverNow}
+                      action="push"
+                      sla={sla}
+                      legOn={!!sla?.autoPushToNbfc}
+                    />
+                  ) : null}
+                  {request.forward_source === "system" ? (
+                    <AutoBadge kind="forwarded" at={request.auto_forwarded_at} />
+                  ) : null}
+                  {request.push_source === "system" &&
+                  (request.status === "pushed_to_nbfc" || request.status === "closed") ? (
+                    <AutoBadge kind="pushed" at={request.auto_pushed_at} />
+                  ) : null}
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    {STATUS_LABEL[request.status] ?? request.status}
+                  </span>
                 </span>
               </div>
+              {request.sla_failure &&
+              !request.dealer_direct &&
+              (request.status === "nbfc_raised" ||
+                request.status === "admin_review" ||
+                request.status === "admin_review_upload") ? (
+                <SlaFailure message={request.sla_failure} />
+              ) : null}
 
               {items.length > 0 ? (
                 <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-xs">
@@ -1053,6 +1249,8 @@ function ForwardedVerdictStatus({
   rejectDrafts,
   setRejectDrafts,
   onReview,
+  sla,
+  now,
 }: {
   entry: Entry | undefined;
   docFor: string;
@@ -1060,6 +1258,9 @@ function ForwardedVerdictStatus({
   rejectDrafts: Record<string, string>;
   setRejectDrafts: Dispatch<SetStateAction<Record<string, string>>>;
   onReview: (childId: string, action: "approve" | "reject") => void;
+  /** E-254 */
+  sla?: SlaInfo | null;
+  now?: number;
 }) {
   const stepLabel = docFor === "co_borrower" ? "Step 3" : "Step 2";
 
@@ -1090,7 +1291,23 @@ function ForwardedVerdictStatus({
         >
           {STATUS_LABEL[status] ?? status}
         </span>
+        {/* E-254 — leg-2 clock while the uploads wait on the admin; provenance after. */}
+        {status === "admin_review_upload" && now !== undefined ? (
+          <SlaChip
+            dueAt={entry.request.sla_due_at}
+            now={now}
+            action="push"
+            sla={sla ?? null}
+            legOn={!!sla?.autoPushToNbfc}
+          />
+        ) : null}
+        {pushed && entry.request.push_source === "system" ? (
+          <AutoBadge kind="pushed" at={entry.request.auto_pushed_at} />
+        ) : null}
       </div>
+      {entry.request.sla_failure && status === "admin_review_upload" ? (
+        <SlaFailure message={entry.request.sla_failure} />
+      ) : null}
 
       {entry.items.map((it) => {
         const st = it.upload_status ?? "not_uploaded";

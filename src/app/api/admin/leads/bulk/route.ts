@@ -2,7 +2,8 @@
 // admin operation (the documented exception to the single-owner rule, §0.12).
 // One audited touchpoint per affected lead.
 //
-// Actions: reassign · mark_lost · push_to_ai · reactivate · export(CSV).
+// Actions: reassign · mark_lost · push_to_ai · reactivate · export(CSV) ·
+// export_touchpoints(XLSX).
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -14,6 +15,7 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { buildTouchpointWorkbook } from "@/lib/leads/touchpointWorkbook";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { assignLeadOwner, resolveAssignTarget } from "@/lib/leads/assignOwner";
 import {
@@ -23,14 +25,23 @@ import {
 } from "@/lib/lifecycle/transitions";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// 300, not 60: export_touchpoints may assemble a workbook for up to 5,000 leads
+// and their whole activity log, which is well past what 60s comfortably covers.
+export const maxDuration = 300;
 
 // ⚠ MUST stay equal to LEADS_BULK_ROLES in src/lib/leads/access.ts — that list
 // decides whether the bulk bar renders, this one decides whether it works.
 const MUTATE_ROLES = ["admin", "sales_head", "ceo"];
 
 const BodySchema = z.object({
-    action: z.enum(["reassign", "mark_lost", "push_to_ai", "reactivate", "export"]),
+    action: z.enum([
+        "reassign",
+        "mark_lost",
+        "push_to_ai",
+        "reactivate",
+        "export",
+        "export_touchpoints",
+    ]),
     lead_ids: z.array(z.string().min(1)).min(1).max(5000),
     target_user_id: z.string().min(1).optional(),
     lost_reason: z.enum(LOST_REASON).optional(),
@@ -78,6 +89,26 @@ export const POST = withErrorHandler(async (req: Request) => {
             headers: {
                 "Content-Type": "text/csv; charset=utf-8",
                 "Content-Disposition": `attachment; filename="leads_export.csv"`,
+            },
+        });
+    }
+
+    // ── Export touchpoints — return an .xlsx download. ─────────────────────
+    // Read-only, like `export` above: it must return BEFORE the mutating paths,
+    // and it writes no touchpoint of its own (exporting the log is not an event
+    // in the log).
+    if (body.action === "export_touchpoints") {
+        const workbook = await buildTouchpointWorkbook(ids);
+        const buffer = await workbook.xlsx.writeBuffer();
+        return new Response(Buffer.from(buffer), {
+            status: 200,
+            headers: {
+                "Content-Type":
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "Content-Disposition":
+                    'attachment; filename="lead_touchpoint_history.xlsx"',
+                "Content-Length": buffer.byteLength.toString(),
+                "Cache-Control": "no-store",
             },
         });
     }

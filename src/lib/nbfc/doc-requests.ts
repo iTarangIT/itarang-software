@@ -23,6 +23,14 @@
  * admin-gated path above is untouched, and the admin still sees every direct
  * thread. Anything that projects status from children must early-return on these
  * wrappers (see recomputeWrapperStatus / pushNbfcDocRequest).
+ *
+ * E-254 adds the SLA clock. `nbfc_doc_requests.sla_due_at` is the deadline of
+ * the CURRENT leg — stamped here when a wrapper is born 'nbfc_raised' (leg 1:
+ * auto-forward to the dealer) and when recomputeWrapperStatus lands it in
+ * 'admin_review_upload' (leg 2: auto-verify + push to the NBFC) — and NULLed by
+ * every admin action below, so an admin who acts in time always wins. The
+ * sweep that fires on expiry lives in request-sla.ts; `forward_source` /
+ * `push_source` record who actually moved the request ('admin' | 'system').
  */
 import crypto from "crypto";
 import { and, asc, eq, inArray, ne } from "drizzle-orm";
@@ -37,6 +45,11 @@ import {
   nbfcDocumentVerifications,
   otherDocumentRequests,
 } from "@/lib/db/schema";
+import {
+  forwardDueAtFrom,
+  getNbfcRequestSlaSettings,
+  pushDueAtFrom,
+} from "@/lib/nbfc/request-sla-settings";
 
 // --- Status + type vocabularies (mirror the E-202 CHECK constraints) ---
 
@@ -73,6 +86,9 @@ export const NBFC_REQUEST_TYPES = [
 export type NbfcRequestType = (typeof NBFC_REQUEST_TYPES)[number];
 
 export const STEP4_MAX_ITEMS = 10;
+
+/** E-254 — who performed a forward / push: a human admin, or the SLA sweep. */
+export type ActionSource = "admin" | "system";
 
 /** Human-readable label for a hop status (UI badges). */
 export const NBFC_DOC_STATUS_LABEL: Record<string, string> = {
@@ -137,6 +153,11 @@ export interface CreateWrapperInput {
   attachments?: RequestAttachment[];
   /** E-210 — the NBFC verdict this reply answers (groups it under that verdict). */
   verdictId?: number | null;
+  /**
+   * E-254 — the structured items the NBFC asked for, so an SLA auto-forward can
+   * create the exact children a human would have (instead of parsing comments).
+   */
+  requestedItems?: ForwardItem[];
 }
 
 export interface ForwardItem {
@@ -156,6 +177,14 @@ export async function createNbfcDocRequest(
 ): Promise<{ id: string }> {
   const now = new Date();
   const id = generateNbfcRequestId(now);
+  const status = input.initialStatus ?? NBFC_DOC_STATUS.RAISED;
+  // E-254 — a request that lands with the admin starts the leg-1 clock. Read
+  // in try/catch inside getNbfcRequestSlaSettings: a settings hiccup must never
+  // fail an NBFC raise, it just means the request waits for a human.
+  const slaDueAt =
+    status === NBFC_DOC_STATUS.RAISED
+      ? forwardDueAtFrom(now, await getNbfcRequestSlaSettings())
+      : null;
   await db.insert(nbfcDocRequests).values({
     id,
     lead_id: input.leadId,
@@ -168,9 +197,11 @@ export async function createNbfcDocRequest(
     nbfc_comments: input.comments ?? null,
     attachments: input.attachments ?? [],
     verdict_id: input.verdictId ?? null,
-    status: input.initialStatus ?? NBFC_DOC_STATUS.RAISED,
+    status,
     item_count: 0,
     raised_by: input.raisedBy,
+    sla_due_at: slaDueAt,
+    requested_items: input.requestedItems ?? [],
     created_at: now,
     updated_at: now,
   });
@@ -301,7 +332,10 @@ export async function messagesByRequest(
  */
 export async function forwardNbfcDocRequest(opts: {
   requestId: string;
-  adminUserId: string;
+  /** NULL when the SLA sweep forwards (E-254) — pair it with source:'system'. */
+  adminUserId: string | null;
+  /** E-254 — who is forwarding. Defaults to 'admin'. */
+  source?: ActionSource;
   items: ForwardItem[];
   adminNotes?: string | null;
   /**
@@ -427,7 +461,9 @@ export async function forwardNbfcDocRequest(opts: {
     });
   }
 
-  // Advance the wrapper.
+  // Advance the wrapper. The leg-1 clock is cleared whoever forwards; the
+  // provenance columns say who it was.
+  const source: ActionSource = opts.source ?? "admin";
   await db
     .update(nbfcDocRequests)
     .set({
@@ -435,6 +471,9 @@ export async function forwardNbfcDocRequest(opts: {
       item_count: (wrapper.item_count ?? 0) + created.length,
       admin_notes: opts.adminNotes ?? wrapper.admin_notes ?? null,
       reviewed_by: opts.adminUserId,
+      sla_due_at: null,
+      forward_source: source,
+      auto_forwarded_at: source === "system" ? now : wrapper.auto_forwarded_at,
       updated_at: now,
     })
     .where(eq(nbfcDocRequests.id, wrapper.id));
@@ -443,7 +482,7 @@ export async function forwardNbfcDocRequest(opts: {
 }
 
 /** Friendly document labels for the standard NBFC verdict doc_keys. */
-const VERDICT_DOC_LABELS: Record<string, string> = {
+export const VERDICT_DOC_LABELS: Record<string, string> = {
   aadhaar: "Aadhaar Card",
   pan: "PAN Card",
   bank: "Bank Statement / Proof",
@@ -466,7 +505,10 @@ const VERDICT_DOC_LABELS: Record<string, string> = {
  */
 export async function forwardVerdictToDealer(opts: {
   verdictId: number;
-  adminUserId: string;
+  /** NULL when the SLA sweep forwards (E-254) — pair it with source:'system'. */
+  adminUserId: string | null;
+  /** E-254 — who is forwarding. Defaults to 'admin'. */
+  source?: ActionSource;
   /** The admin's instruction to the dealer — required; shown as the re-upload reason. */
   message: string;
 }): Promise<{
@@ -505,6 +547,8 @@ export async function forwardVerdictToDealer(opts: {
   const reason = message;
 
   // Wrapper (correction) → child (otherDocumentRequests), reusing the loop.
+  // `raised_by` is NOT NULL: on a system forward (E-254) the NBFC user who
+  // recorded the verdict is the one who, in substance, raised the request.
   const { id: requestId } = await createNbfcDocRequest({
     leadId: verdict.lead_id,
     assignmentId: verdict.assignment_id,
@@ -514,12 +558,13 @@ export async function forwardVerdictToDealer(opts: {
     docFor,
     targetDocKey: verdict.doc_key,
     comments: verdict.notes ?? null,
-    raisedBy: opts.adminUserId,
+    raisedBy: opts.adminUserId ?? verdict.verified_by,
   });
 
   await forwardNbfcDocRequest({
     requestId,
     adminUserId: opts.adminUserId,
+    source: opts.source,
     items: [
       {
         doc_label: docLabel,
@@ -549,6 +594,8 @@ export async function forwardVerdictToDealer(opts: {
       forwarded_at: now,
       forwarded_request_id: requestId,
       forwarded_by: opts.adminUserId,
+      forward_source: opts.source ?? "admin",
+      sla_due_at: null,
       updated_at: now,
     })
     .where(eq(nbfcDocumentVerifications.id, opts.verdictId));
@@ -630,9 +677,12 @@ export async function sendVerdictDocumentToNbfc(opts: {
     verdictId: verdict.id,
   });
 
+  // E-254 — the admin has answered this verdict himself, so the leg-1 clock
+  // stops; an auto-forward to the dealer on top would double-ask. If the NBFC
+  // re-queries after seeing the reply, the verdict upsert re-arms the clock.
   await db
     .update(nbfcDocumentVerifications)
-    .set({ updated_at: new Date() })
+    .set({ sla_due_at: null, updated_at: new Date() })
     .where(eq(nbfcDocumentVerifications.id, verdict.id));
 
   return {
@@ -644,10 +694,101 @@ export async function sendVerdictDocumentToNbfc(opts: {
   };
 }
 
+/**
+ * E-254 — what a human would have typed into "Forward to dealer", derived from
+ * the request itself, so the SLA sweep creates the same children an admin
+ * would. Priority:
+ *   1. `requested_items` — the structured list captured at raise (additional
+ *      documents modal).
+ *   2. Lines of `nbfc_comments` in the modal's serialised shape
+ *      "1. Label (required) — reason" (legacy rows raised before E-254).
+ *   3. A `correction` with a known `target_doc_key` → that one document.
+ *   4. `manual_consent` → the customer-signed consent (the card's own default).
+ *   5. One generic item carrying the NBFC's comments as the reason.
+ * Always capped to the wrapper's remaining item budget (STEP4_MAX_ITEMS).
+ */
+export function deriveForwardItems(
+  wrapper: {
+    request_type: string;
+    target_doc_key: string | null;
+    nbfc_comments: string | null;
+    requested_items?: unknown;
+    item_count?: number | null;
+  },
+  nbfcName: string,
+): ForwardItem[] {
+  const budget = Math.max(0, STEP4_MAX_ITEMS - (wrapper.item_count ?? 0));
+  const comments = (wrapper.nbfc_comments ?? "").trim();
+  const reasonPrefix = `Requested by ${nbfcName}`;
+  const reason = comments ? `${reasonPrefix}: ${comments}` : `${reasonPrefix}.`;
+
+  const structured = Array.isArray(wrapper.requested_items)
+    ? (wrapper.requested_items as Array<Record<string, unknown>>)
+        .map((it) => ({
+          doc_label: String(it?.doc_label ?? "").trim(),
+          doc_key: typeof it?.doc_key === "string" ? it.doc_key : undefined,
+          is_required: it?.is_required !== false,
+          reason:
+            typeof it?.reason === "string" && it.reason.trim()
+              ? `${reasonPrefix}: ${it.reason.trim()}`
+              : reason,
+        }))
+        .filter((it) => it.doc_label.length > 0)
+    : [];
+  if (structured.length > 0) return structured.slice(0, budget);
+
+  // "1. Updated bank statement (required) — last 6 months"
+  const LINE_RE = /^\s*\d+\.\s+(.+?)\s+\((required|optional)\)\s+[—-]\s+(.*)$/;
+  const parsed: ForwardItem[] = [];
+  for (const line of comments.split(/\r?\n/)) {
+    const m = line.match(LINE_RE);
+    if (!m) continue;
+    parsed.push({
+      doc_label: m[1].trim(),
+      is_required: m[2] === "required",
+      reason: m[3].trim() ? `${reasonPrefix}: ${m[3].trim()}` : `${reasonPrefix}.`,
+    });
+  }
+  if (parsed.length > 0) return parsed.slice(0, budget);
+
+  if (wrapper.request_type === "correction" && wrapper.target_doc_key) {
+    const key = wrapper.target_doc_key;
+    return [
+      {
+        doc_label: VERDICT_DOC_LABELS[key] ?? key,
+        doc_key: key,
+        is_required: true,
+        reason,
+      },
+    ].slice(0, budget);
+  }
+
+  if (wrapper.request_type === "manual_consent") {
+    return [
+      {
+        doc_label: "Customer-signed DPDP consent document",
+        is_required: true,
+        reason,
+      },
+    ].slice(0, budget);
+  }
+
+  return [
+    {
+      doc_label:
+        wrapper.request_type === "correction"
+          ? `Corrected document (requested by ${nbfcName})`
+          : `Documents requested by ${nbfcName}`,
+      is_required: true,
+      reason,
+    },
+  ].slice(0, budget);
+}
+
 /** Admin declines the NBFC ask outright — no children created. */
 export async function declineNbfcDocRequest(opts: {
   requestId: string;
-  adminUserId: string;
+  adminUserId: string | null;
   adminNotes?: string | null;
 }): Promise<void> {
   const now = new Date();
@@ -657,6 +798,7 @@ export async function declineNbfcDocRequest(opts: {
       status: NBFC_DOC_STATUS.REJECTED,
       admin_notes: opts.adminNotes ?? null,
       reviewed_by: opts.adminUserId,
+      sla_due_at: null,
       closed_at: now,
       updated_at: now,
     })
@@ -717,9 +859,20 @@ export async function recomputeWrapperStatus(
   }
 
   if (next !== wrapper.status) {
+    const now = new Date();
+    // E-254 — the leg-2 clock. Entering admin review starts it (the dealer has
+    // delivered everything and iTarang now owes the NBFC a review); leaving it
+    // — an admin rejected a child, so the dealer owes a re-upload — clears it.
+    // A later re-upload comes back through here and gets a FRESH window.
+    let slaDueAt: Date | null = wrapper.sla_due_at ?? null;
+    if (next === NBFC_DOC_STATUS.ADMIN_REVIEW_UPLOAD) {
+      slaDueAt = pushDueAtFrom(now, await getNbfcRequestSlaSettings());
+    } else if (wrapper.status === NBFC_DOC_STATUS.ADMIN_REVIEW_UPLOAD) {
+      slaDueAt = null;
+    }
     await db
       .update(nbfcDocRequests)
-      .set({ status: next, updated_at: new Date() })
+      .set({ status: next, sla_due_at: slaDueAt, updated_at: now })
       .where(eq(nbfcDocRequests.id, requestId));
   }
   return next;
@@ -740,7 +893,10 @@ export async function allChildrenVerified(requestId: string): Promise<boolean> {
  */
 export async function pushNbfcDocRequest(opts: {
   requestId: string;
-  adminUserId: string;
+  /** NULL when the SLA sweep pushes (E-254) — pair it with source:'system'. */
+  adminUserId: string | null;
+  /** E-254 — who is pushing. Defaults to 'admin'. */
+  source?: ActionSource;
 }): Promise<void> {
   const [wrapper] = await db
     .select()
@@ -759,11 +915,15 @@ export async function pushNbfcDocRequest(opts: {
     }
   }
   const now = new Date();
+  const source: ActionSource = opts.source ?? "admin";
   await db
     .update(nbfcDocRequests)
     .set({
       status: NBFC_DOC_STATUS.PUSHED,
       reviewed_by: opts.adminUserId,
+      sla_due_at: null,
+      push_source: source,
+      auto_pushed_at: source === "system" ? now : wrapper.auto_pushed_at,
       updated_at: now,
     })
     .where(eq(nbfcDocRequests.id, opts.requestId));
@@ -860,7 +1020,12 @@ export async function ackNbfcDocRequest(requestId: string): Promise<void> {
   const now = new Date();
   await db
     .update(nbfcDocRequests)
-    .set({ status: NBFC_DOC_STATUS.CLOSED, closed_at: now, updated_at: now })
+    .set({
+      status: NBFC_DOC_STATUS.CLOSED,
+      sla_due_at: null,
+      closed_at: now,
+      updated_at: now,
+    })
     .where(eq(nbfcDocRequests.id, requestId));
 }
 
@@ -986,7 +1151,7 @@ export async function listDealerRequestsForLead(
  * "Your lender" rather than failing, and the lender's legal name is not
  * load-bearing here (the dealer already knows who the lead was routed to).
  */
-async function nbfcDisplayNames(
+export async function nbfcDisplayNames(
   nbfcIds: number[],
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();

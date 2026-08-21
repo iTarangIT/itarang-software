@@ -2150,6 +2150,21 @@ export const nbfcDocRequests = pgTable(
     // recomputeWrapperStatus() early-returns on it. The admin still sees the
     // thread and is still notified on both legs.
     dealer_direct: boolean("dealer_direct").default(false).notNull(),
+    // E-254 — the NBFC request SLA clock. Deadline of the CURRENT leg (status
+    // 'nbfc_raised' → auto-forward to dealer; 'admin_review_upload' → auto-push
+    // to NBFC). Stamped on entering the leg, NULLed by any admin action or by
+    // the sweep's claim. NULL = no clock. Never backfill.
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    // E-254 — 'admin' | 'system': who forwarded / pushed. Default 'admin'.
+    forward_source: varchar("forward_source", { length: 16 }).default('admin'),
+    push_source: varchar("push_source", { length: 16 }).default('admin'),
+    auto_forwarded_at: timestamp("auto_forwarded_at", { withTimezone: true }),
+    auto_pushed_at: timestamp("auto_pushed_at", { withTimezone: true }),
+    // E-254 — last sweep error; the request stays with the admin, no retry.
+    sla_failure: text("sla_failure"),
+    // E-254 — structured items the NBFC asked for ([{doc_label, reason,
+    // is_required}]) so an auto-forward does not have to parse nbfc_comments.
+    requested_items: jsonb("requested_items").default(sql`'[]'::jsonb`),
     item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
     raised_by: uuid("raised_by").notNull(), // NBFC actor
     reviewed_by: uuid("reviewed_by"), // admin who forwarded / pushed
@@ -2233,6 +2248,12 @@ export const nbfcDocumentVerifications = pgTable(
     forwarded_at: timestamp("forwarded_at", { withTimezone: true }),
     forwarded_request_id: varchar("forwarded_request_id", { length: 255 }),
     forwarded_by: uuid("forwarded_by"),
+    // E-254 — when the SLA sweep may auto-forward this queried/rejected verdict
+    // to the dealer. NULL = no clock. Never backfill.
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    // E-254 — 'admin' | 'system': who forwarded it. Default 'admin'.
+    forward_source: varchar("forward_source", { length: 16 }).default('admin'),
+    sla_failure: text("sla_failure"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -10730,5 +10751,42 @@ export const moduleUsageUserDaily = pgTable(
     dayIdx: index("module_usage_user_daily_day_idx").on(t.day),
     moduleIdx: index("module_usage_user_daily_module_idx").on(t.module, t.day.desc()),
     userIdx: index("module_usage_user_daily_user_idx").on(t.user_id, t.day.desc()),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// E-255 — Google Drive mirror ledger.
+//
+// One row per S3 object (logical bucket + key), written the moment an object
+// lands in S3 (see src/lib/storage/s3.ts → drive-mirror.ts) and by the backfill
+// sweep for objects that pre-date the feature. Nothing in the app READS
+// documents through this table — the S3 copy remains the served one; this is
+// the queue + receipt for the Drive backup copy.
+// ---------------------------------------------------------------------------
+export const storageDriveMirror = pgTable(
+  "storage_drive_mirror",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey().notNull(),
+    bucket: varchar("bucket", { length: 64 }).notNull(),
+    object_key: text("object_key").notNull(),
+    content_type: varchar("content_type", { length: 255 }),
+    size_bytes: bigint("size_bytes", { mode: "number" }),
+    // pending | uploading | done | failed | source_deleted
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    drive_file_id: text("drive_file_id"),
+    drive_folder_id: text("drive_folder_id"),
+    drive_web_view_link: text("drive_web_view_link"),
+    drive_md5: text("drive_md5"),
+    last_error: text("last_error"),
+    mirrored_at: timestamp("mirrored_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    bucketKeyUq: uniqueIndex("storage_drive_mirror_bucket_key_uq").on(t.bucket, t.object_key),
+    dueIdx: index("storage_drive_mirror_due_idx").on(t.status, t.next_attempt_at),
+    statusIdx: index("storage_drive_mirror_status_idx").on(t.status),
   }),
 );

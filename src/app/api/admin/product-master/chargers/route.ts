@@ -17,6 +17,8 @@ const createSchema = z.object({
   compatibleBatteryModels: z.array(z.string().trim().min(1)).default([]),
   basePrice: z.number().min(0).nullable().optional(),
   warrantyMonths: z.number().int().min(0).max(240).default(0),
+  hsnCode: z.string().trim().min(1).max(8).nullable().optional(),
+  gstRatePct: z.number().min(0).max(50).nullable().optional(),
   status: statusSchema.default("active"),
 });
 
@@ -66,6 +68,10 @@ export const POST = withErrorHandler(async (req: Request) => {
       compatible_battery_models: body.compatibleBatteryModels,
       base_price: body.basePrice != null ? String(body.basePrice) : null,
       warranty_months: body.warrantyMonths,
+      // Omit when not provided so the E-256 column defaults (5% / 85044030)
+      // fill in, rather than inserting an explicit NULL over them.
+      hsn_code: body.hsnCode ?? undefined,
+      gst_rate_pct: body.gstRatePct != null ? String(body.gstRatePct) : undefined,
       status: body.status,
       created_by: user.id,
       updated_at: new Date(),
