@@ -14,10 +14,14 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
 import { initialApprovalStatus, isGatedQuoteEvent } from "@/lib/leads/quoteApproval";
 import { tryGenerateQuotationDraft } from "@/lib/leads/quoteDraft";
-import { notifyQuotationApproved } from "@/lib/notifications/events";
+import {
+    notifyQuotationApproved,
+    notifyQuotationPendingApproval,
+} from "@/lib/notifications/events";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import {
     evaluateAgainstOemPrices,
+    linesNeedingAttention,
     resolveQuoteApproval,
     type OemEvaluation,
 } from "@/lib/leads/oemPricing";
@@ -236,6 +240,33 @@ export const POST = withErrorHandler(
                     value: Number(total ?? 0),
                     mode: "auto",
                     draftReady: !!draft,
+                });
+            } else if (outcome.approvalStatus === "pending" && outcome.commercialId) {
+                // E-256 — the gate parked this quote, and the CEO queue is
+                // pull-only: without a push the dealer waits exactly as long as
+                // it takes someone to open the dashboard. Post-transaction like
+                // every other emitter, and never the reason a saved quote
+                // reports failure.
+                const [lead] = await db
+                    .select({ dealerName: dealerLeads.dealer_name })
+                    .from(dealerLeads)
+                    .where(eq(dealerLeads.id, id))
+                    .limit(1);
+
+                const flagged = outcome.evaluation
+                    ? linesNeedingAttention(outcome.evaluation)
+                    : 0;
+
+                await notifyQuotationPendingApproval({
+                    leadId: id,
+                    commercialId: outcome.commercialId,
+                    dealerName: lead?.dealerName ?? null,
+                    value: Number(total ?? 0),
+                    reason:
+                        flagged > 0
+                            ? `${flagged} line${flagged === 1 ? "" : "s"} below OEM reference, unpriced, or without a reference price`
+                            : null,
+                    raisedByName: user.name ?? user.email ?? null,
                 });
             }
         } else if (body.event_type === "brochure_share") {

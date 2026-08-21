@@ -6,7 +6,14 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Download, Loader2, Repeat, X, XCircle } from "lucide-react";
+import {
+    Download,
+    FileSpreadsheet,
+    Loader2,
+    Repeat,
+    X,
+    XCircle,
+} from "lucide-react";
 import { Modal } from "@/app/(dashboard)/inside-sales/_components/Modal";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +38,12 @@ export function BulkActionBar({
     const [lostReason, setLostReason] = useState<string>(LOST_REASON[0]);
     const [reason, setReason] = useState("");
     const [busy, setBusy] = useState(false);
+    // Which download is in flight, so the spinner lands on the button that was
+    // actually clicked — `busy` alone is shared with the modal and would spin
+    // both export buttons at once.
+    const [downloading, setDownloading] = useState<
+        null | "export" | "export_touchpoints"
+    >(null);
 
     const usersQuery = useQuery<{ success: true; data: { users: UserOption[] } }>({
         queryKey: ["admin-user-options"],
@@ -48,26 +61,51 @@ export function BulkActionBar({
         lostReason,
     );
 
-    async function exportCsv() {
+    // Both exports are the same download: POST the selection, take the file
+    // back as a blob, hand it to a synthetic anchor. The response also carries
+    // Content-Disposition, but with a blob: URL the client-side `download`
+    // attribute is what names the saved file.
+    async function downloadExport(
+        action: "export" | "export_touchpoints",
+        filename: string,
+    ) {
         setBusy(true);
+        setDownloading(action);
         try {
             const res = await fetch("/api/admin/leads/bulk", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "export", lead_ids: selectedIds }),
+                body: JSON.stringify({ action, lead_ids: selectedIds }),
             });
-            if (!res.ok) throw new Error("Export failed");
+            if (!res.ok) {
+                // Failures come back as JSON (withErrorHandler), successes as a
+                // file — so only try to read a message when it isn't the file.
+                let message = "Export failed";
+                try {
+                    const json = await res.json();
+                    message = json?.error?.message ?? message;
+                } catch {
+                    /* non-JSON body — keep the generic message */
+                }
+                throw new Error(message);
+            }
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "leads_export.csv";
+            a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
+            toast.success(
+                `Downloaded ${filename} — ${selectedIds.length} lead${
+                    selectedIds.length === 1 ? "" : "s"
+                }.`,
+            );
         } catch (e) {
             toast.error((e as Error).message);
         } finally {
             setBusy(false);
+            setDownloading(null);
         }
     }
 
@@ -142,11 +180,38 @@ export function BulkActionBar({
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={exportCsv}
+                    onClick={() => downloadExport("export", "leads_export.csv")}
                     disabled={busy}
                 >
-                    <Download className="h-3.5 w-3.5 mr-1" />
+                    {downloading === "export" ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    ) : (
+                        <Download className="h-3.5 w-3.5 mr-1" />
+                    )}
                     Export CSV
+                </Button>
+                {/* The CSV above is the lead ROWS. This is their activity log —
+                    every touchpoint and status change of every selected lead,
+                    in one workbook. */}
+                <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                        downloadExport(
+                            "export_touchpoints",
+                            "lead_touchpoint_history.xlsx",
+                        )
+                    }
+                    disabled={busy}
+                    title="Download the touchpoint history of every selected lead as an Excel workbook"
+                >
+                    {downloading === "export_touchpoints" ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    ) : (
+                        <FileSpreadsheet className="h-3.5 w-3.5 mr-1" />
+                    )}
+                    Export Touchpoints
                 </Button>
                 <button
                     type="button"

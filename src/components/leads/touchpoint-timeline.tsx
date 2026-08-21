@@ -18,6 +18,7 @@
 "use client";
 
 import { useState } from "react";
+import { Download } from "lucide-react";
 import {
     TOUCHPOINT_ICONS,
     TOUCHPOINT_TYPE_LABEL,
@@ -75,8 +76,14 @@ function formatDuration(sec: number): string {
 
 export function TouchpointTimeline({
     touchpoints,
+    leadId,
+    canExport = false,
 }: {
     touchpoints: LeadTouchpoint[];
+    /** Needed to build the export URL; omit and the button is not offered. */
+    leadId?: string;
+    /** Role check done by the server page against LEAD_HISTORY_EXPORT_ROLES. */
+    canExport?: boolean;
 }) {
     const [shown, setShown] = useState(PAGE);
     const visible = touchpoints.slice(0, shown);
@@ -90,20 +97,43 @@ export function TouchpointTimeline({
 
     return (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            {/* items-center, not items-baseline: the export button is taller
+                than the caption it sits beside, and on a baseline row it drags
+                the heading out of line. */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
                 <h2 className="text-sm font-semibold text-gray-900">
                     Activity timeline
                 </h2>
-                <p className="text-xs text-gray-500">
-                    {touchpoints.length}{" "}
-                    {touchpoints.length === 1 ? "entry" : "entries"} · newest first
-                    {backfilled > 0 && (
-                        <span className="text-amber-700">
-                            {" "}
-                            · {backfilled} backfilled from CSV
-                        </span>
+                <div className="flex items-center gap-3">
+                    <p className="text-xs text-gray-500">
+                        {touchpoints.length}{" "}
+                        {touchpoints.length === 1 ? "entry" : "entries"} · newest
+                        first
+                        {backfilled > 0 && (
+                            <span className="text-amber-700">
+                                {" "}
+                                · {backfilled} backfilled from CSV
+                            </span>
+                        )}
+                    </p>
+
+                    {/* Same workbook the inside-sales pane serves, from the same
+                        route — this timeline is what admin/CEO actually read, and
+                        it was the one place the history could not be taken away
+                        as a file. A plain <a>, not a fetch: the response is an
+                        attachment, so the browser saves it with no JS involved. */}
+                    {canExport && leadId && touchpoints.length > 0 && (
+                        <a
+                            href={`/api/inside-sales/lead/${encodeURIComponent(
+                                leadId,
+                            )}/history/export.xlsx`}
+                            className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                            <Download className="h-3.5 w-3.5" />
+                            Export to Excel
+                        </a>
                     )}
-                </p>
+                </div>
             </div>
 
             {touchpoints.length === 0 ? (

@@ -53,6 +53,19 @@ const Body = z.object({
   // E-240 — 'dealer' skips the admin forward gate. Defaults to the original
   // admin-gated behaviour, so every existing caller is unaffected.
   route_to: z.enum(["admin", "dealer"]).default("admin"),
+  // E-254 — the structured items behind an additional-documents request, kept
+  // beside the serialised `comments` so an SLA auto-forward creates exactly
+  // the children a human would have. Optional: every existing caller omits it.
+  items: z
+    .array(
+      z.object({
+        doc_label: z.string().min(1).max(200),
+        reason: z.string().max(2000).optional().nullable(),
+        is_required: z.boolean().optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
 });
 
 export async function GET(
@@ -166,6 +179,11 @@ export async function POST(
       comments: d.comments ?? null,
       raisedBy: actor.user_id,
       initialStatus: NBFC_DOC_STATUS.RAISED,
+      requestedItems: d.items?.map((it) => ({
+        doc_label: it.doc_label,
+        reason: it.reason ?? undefined,
+        is_required: it.is_required ?? true,
+      })),
     });
 
     // Best-effort: notify + email the admins (act link).

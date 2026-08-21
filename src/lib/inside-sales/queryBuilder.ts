@@ -7,6 +7,13 @@ import { db } from "@/lib/db";
 import type { QueueRow, QueueTab } from "./types";
 import { OPEN_STATUSES, TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
+import {
+    foldRegionFacets,
+    queueFilterClauses,
+    regionFacetQuery,
+    type QueueFilterInput,
+} from "@/lib/leads/queueFilterSql";
+import type { QueueRegion } from "@/lib/leads/queueFilters";
 
 const OPEN_LIST = sql.raw(
     OPEN_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -42,7 +49,19 @@ type BuildArgs = {
     neodoveOnly?: boolean;
     /** Only leads who asked to be called back — from either system. */
     callbackOnly?: boolean;
+    /** Stage / interest / region / date range — see @/lib/leads/queueFilters. */
+    filters?: QueueFilterInput;
 };
+
+/**
+ * The date a `from`/`to` range means on THIS queue.
+ *
+ * When the lead ARRIVED. A rep's range question is "what came in last week" —
+ * they are looking at a backlog, and the useful axis is intake. (The ASM queue
+ * ranges over the visit date instead, because their question is "what am I out
+ * seeing this week".)
+ */
+const ISR_DATE_COLUMN = sql`dl.created_at`;
 
 function tabFilter(tab: QueueTab, userId: string) {
     switch (tab) {
@@ -76,7 +95,8 @@ function extraFilters({
     q,
     neodoveOnly,
     callbackOnly,
-}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly">) {
+    filters,
+}: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters">) {
     const parts: SQL[] = [];
     if (q) {
         const like = `%${q}%`;
@@ -102,6 +122,7 @@ function extraFilters({
             OR to_jsonb(dl) ->> 'last_disposition' = 'As to Call Back'
         )`);
     }
+    if (filters) parts.push(...queueFilterClauses(filters, ISR_DATE_COLUMN));
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
 
@@ -140,11 +161,12 @@ export async function fetchQueueRows({
     q,
     neodoveOnly,
     callbackOnly,
+    filters,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId);
     const order = tabOrder(tab);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
 
     const rows = await db.execute<QueueRow>(sql`
         SELECT
@@ -183,12 +205,13 @@ export async function countQueueRows({
     q,
     neodoveOnly,
     callbackOnly,
+    filters,
 }: Pick<
     BuildArgs,
-    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly"
+    "tab" | "userId" | "q" | "neodoveOnly" | "callbackOnly" | "filters"
 >): Promise<number> {
     const where = tabFilter(tab, userId);
-    const search = extraFilters({ q, neodoveOnly, callbackOnly });
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl WHERE ${where} ${search}
     `);
@@ -198,7 +221,7 @@ export async function countQueueRows({
 /**
  * Badge counts for all five tabs in one round trip.
  *
- * `neodoveOnly` is threaded through because a badge that ignores it is worse
+ * Every filter is threaded through, because a badge that ignores one is worse
  * than no badge: the rep would read "My Open Leads 3" above an empty table and
  * conclude the screen is broken. The search box is deliberately NOT applied here
  * — that is pre-existing behaviour and changing what a badge counts is a
@@ -206,11 +229,12 @@ export async function countQueueRows({
  */
 export async function fetchAllTabCounts(
     userId: string,
-    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly">,
+    opts?: Pick<BuildArgs, "neodoveOnly" | "callbackOnly" | "filters">,
 ): Promise<Record<QueueTab, number>> {
     const extra = extraFilters({
         neodoveOnly: opts?.neodoveOnly,
         callbackOnly: opts?.callbackOnly,
+        filters: opts?.filters,
     });
     const rows = await db.execute<{
         my_open: string;
@@ -234,4 +258,22 @@ export async function fetchAllTabCounts(
         team: Number(r.team ?? 0),
         my_closed: Number(r.my_closed ?? 0),
     };
+}
+
+/**
+ * The states and cities this rep's queue actually spans, per tab.
+ *
+ * Feeds the region selects. Deliberately NOT narrowed by the other filters: a
+ * dropdown that removes the option you are about to pick as you pick it is
+ * unusable, and re-fetching the facets on every keystroke would cost a DISTINCT
+ * scan per keystroke to do it.
+ */
+export async function fetchQueueRegions(
+    userId: string,
+    tab: QueueTab,
+): Promise<QueueRegion[]> {
+    const rows = await db.execute<{ state: string | null; city: string | null }>(
+        regionFacetQuery(tabFilter(tab, userId)),
+    );
+    return foldRegionFacets(rows as unknown as { state: string | null; city: string | null }[]);
 }

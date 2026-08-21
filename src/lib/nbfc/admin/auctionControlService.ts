@@ -20,6 +20,19 @@ import { db } from "@/lib/db";
 import { closeLotNow } from "@/lib/nbfc/auction/scheduler";
 import { verifyStepUp, stepUpRequired } from "@/lib/nbfc/security/step-up";
 import { notifyLotLifecycle } from "@/lib/nbfc/auction/notify";
+// [E-256] Starting a draft goes through the SAME publish path the seller's own
+// composer uses, so an admin-started lot is identical downstream to one the
+// NBFC started itself — window, frozen audience, fan-out and all.
+import {
+  publishLot,
+  AUCTION_DURATIONS_HOURS,
+  type AuctionDurationHours,
+} from "@/lib/nbfc/auction/composeLot";
+import {
+  resolveAuctionAudience,
+  type VisibilityRule,
+  type AudienceChannel,
+} from "@/lib/nbfc/auction/audience";
 import {
   auctionLots,
   auctionBids,
@@ -60,6 +73,9 @@ async function loadLotOrThrow(lot_id: string) {
     .select({
       id: auctionLots.id,
       lot_code: auctionLots.lot_code,
+      // [E-256] `starts_at` is what makes "open a scheduled lot now" able to
+      // preserve the window the seller chose rather than inventing a new one.
+      starts_at: auctionLots.starts_at,
       ends_at: auctionLots.ends_at,
       base_price: auctionLots.base_price,
       status: auctionLots.status,
@@ -647,5 +663,208 @@ export async function approveWinningBid(
     lot_id: input.lot_id,
     winning_bid_id: input.winning_bid_id,
     payment_collection_started: paymentCollectionStarted,
+  };
+}
+
+// ===========================================================================
+// 6. publish / start_now  — [E-256]
+// ===========================================================================
+/**
+ * WHAT WAS MISSING
+ *   Every action above operates on a lot that is ALREADY running. Nothing in
+ *   the Auction Control Centre could make one run. A lot reached the
+ *   marketplace only by its own NBFC opening the composer and pressing
+ *   "Publish lot", so an admin looking at a draft that should have gone live an
+ *   hour ago — a seller who never came back, a lot auto-seeded off the recovery
+ *   board that nobody claimed — could pause it, cancel it, or re-price it, but
+ *   could not start it.
+ *
+ * TWO DIFFERENT STARTS
+ *   A DRAFT has no window and no audience yet, so starting it means publishing
+ *   it: choose a duration, choose who can see it, freeze the audience. That is
+ *   `publishLot()` — the same function the seller's own composer calls, so an
+ *   admin-started lot is indistinguishable downstream from a seller-started
+ *   one. The admin acts ON BEHALF OF the seller tenant: the audit row
+ *   publishLot writes lands under `lot.seller_tenant_id` with the ADMIN's user
+ *   id, which is exactly the record you want when asking later who started it.
+ *
+ *   A SCHEDULED lot already has both, and starting it means only bringing the
+ *   opening forward. `ends_at` moves with it so the auction still runs for the
+ *   duration the seller chose — pulling the start in without moving the end
+ *   would silently shorten it, the same bug `resumeAuction` exists to avoid.
+ *
+ * PAUSED IS NOT STARTED
+ *   A paused lot is refused here and pointed at Resume, which restores the
+ *   time the lot sat frozen. Routing it through this function would reset a
+ *   live market's clock.
+ */
+export const ACTION_PUBLISH = "publish";
+export const ACTION_START_NOW = "start_now";
+
+export type StartAuctionInput = {
+  lot_id: string;
+  reason: string;
+  actor_user_id: string;
+  /** Draft lots only. Ignored when the lot is already scheduled. */
+  duration_hours?: number;
+  /** Draft lots only. Required there — a lot with no audience is invisible. */
+  visibility?: VisibilityRule;
+  channels?: AudienceChannel[];
+};
+
+export type StartAuctionResult = {
+  lot_id: string;
+  lot_code: string;
+  from_status: "draft" | "scheduled";
+  status: "live" | "scheduled";
+  starts_at: string;
+  ends_at: string;
+  /** Null when the lot was already scheduled — its audience froze at publish. */
+  audience_dealers: number | null;
+};
+
+export async function startAuction(
+  input: StartAuctionInput,
+): Promise<StartAuctionResult> {
+  const trimmedReason = input.reason?.trim() ?? "";
+  if (!trimmedReason) {
+    throw new Error("BAD_REQUEST: reason must not be empty");
+  }
+
+  const lot = await loadLotOrThrow(input.lot_id);
+
+  if (lot.status === "paused") {
+    throw new Error(
+      "CONFLICT: lot is paused — use Resume, which gives back the time it sat frozen",
+    );
+  }
+  if (lot.status !== "draft" && lot.status !== "scheduled") {
+    throw new Error(
+      `CONFLICT: only a draft or scheduled lot can be started (status="${lot.status}")`,
+    );
+  }
+
+  // ---- scheduled → bring the opening forward ------------------------------
+  if (lot.status === "scheduled") {
+    const now = new Date();
+    const previousStart = lot.starts_at
+      ? new Date(lot.starts_at as unknown as string)
+      : null;
+    const previousEnd = new Date(lot.ends_at as unknown as string);
+    const windowMs = previousStart
+      ? Math.max(0, previousEnd.getTime() - previousStart.getTime())
+      : 0;
+    // A scheduled lot with no start recorded cannot have its window measured,
+    // so its existing deadline stands rather than being invented.
+    const newEndsAt = windowMs > 0 ? new Date(now.getTime() + windowMs) : previousEnd;
+    if (newEndsAt.getTime() <= now.getTime()) {
+      throw new Error(
+        "CONFLICT: this lot's window has already elapsed — it needs a new one, not a start",
+      );
+    }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(auctionLots)
+        .set({ status: "live", starts_at: now, ends_at: newEndsAt })
+        .where(eq(auctionLots.id, input.lot_id));
+
+      await tx.insert(nbfcAuctionLotActions).values({
+        lot_id: input.lot_id,
+        action_code: ACTION_START_NOW,
+        previous_value: {
+          status: "scheduled",
+          starts_at: previousStart ? previousStart.toISOString() : null,
+          ends_at: previousEnd.toISOString(),
+        },
+        new_value: {
+          status: "live",
+          starts_at: now.toISOString(),
+          ends_at: newEndsAt.toISOString(),
+          window_preserved_minutes: Math.round(windowMs / 60000),
+        },
+        reason: trimmedReason,
+        acted_by: input.actor_user_id,
+      });
+    });
+
+    return {
+      lot_id: input.lot_id,
+      lot_code: lot.lot_code,
+      from_status: "scheduled",
+      status: "live",
+      starts_at: now.toISOString(),
+      ends_at: newEndsAt.toISOString(),
+      audience_dealers: null,
+    };
+  }
+
+  // ---- draft → publish on the seller's behalf ------------------------------
+  if (!lot.seller_tenant_id) {
+    throw new Error(
+      "CONFLICT: this lot has no seller NBFC recorded, so there is nobody to publish it for",
+    );
+  }
+  if (!input.visibility) {
+    throw new Error("BAD_REQUEST: a draft needs a visibility rule to be started");
+  }
+  if (
+    input.duration_hours == null ||
+    !(AUCTION_DURATIONS_HOURS as readonly number[]).includes(input.duration_hours)
+  ) {
+    throw new Error(
+      `BAD_REQUEST: duration must be one of ${AUCTION_DURATIONS_HOURS.join(", ")} hours`,
+    );
+  }
+
+  // Resolved BEFORE publishing, not after. `freezeAudience` is happy to freeze
+  // an empty audience, and publishLot would then return a live lot that no
+  // dealer can see and nobody was told about — which looks like a working
+  // auction right up until it closes with zero bids.
+  const members = await resolveAuctionAudience(input.visibility);
+  if (members.length === 0) {
+    throw new Error(
+      "CONFLICT: this visibility rule reaches no dealers — widen it before starting the auction",
+    );
+  }
+
+  const published = await publishLot({
+    tenant_id: lot.seller_tenant_id,
+    actor_user_id: input.actor_user_id,
+    lot_id: input.lot_id,
+    duration_hours: input.duration_hours as AuctionDurationHours,
+    visibility: input.visibility,
+    channels: input.channels,
+  });
+
+  // A second row in the lot's own action log. publishLot's audit entry sits in
+  // `nbfc_audit_log` under the seller's tenant; this one is what the Control
+  // Centre's per-lot history reads, and it is the only place that records the
+  // admin's stated reason for starting somebody else's lot.
+  await db.insert(nbfcAuctionLotActions).values({
+    lot_id: input.lot_id,
+    action_code: ACTION_PUBLISH,
+    previous_value: { status: "draft" },
+    new_value: {
+      status: published.status,
+      starts_at: published.starts_at,
+      ends_at: published.ends_at,
+      duration_hours: input.duration_hours,
+      visibility_scope: input.visibility.scope,
+      audience_dealers: published.audience_dealers,
+      started_by_admin: true,
+    },
+    reason: trimmedReason,
+    acted_by: input.actor_user_id,
+  });
+
+  return {
+    lot_id: published.lot_id,
+    lot_code: published.lot_code,
+    from_status: "draft",
+    status: published.status,
+    starts_at: published.starts_at,
+    ends_at: published.ends_at,
+    audience_dealers: published.audience_dealers,
   };
 }

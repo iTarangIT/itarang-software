@@ -24,6 +24,12 @@
  * about tax law that nobody at iTarang has made. So a NULL rate contributes
  * nothing to any tax row, is reported through `hasUnsetTax`, and the template
  * marks the line rather than quietly printing 0.00.
+ *
+ * Since E-256 the business HAS made a claim for the three known asset types
+ * (battery 18, charger 5, paraphernalia 18): the masters are backfilled and
+ * view.ts falls back to DEFAULT_TAX_BY_ASSET_TYPE, so a rate only reaches here
+ * as NULL for an asset type the policy doesn't name. The NULL handling stays
+ * for exactly that case.
  */
 import type { GstRate, QuotationLineView, TaxRow } from "./types";
 
@@ -50,7 +56,8 @@ export function lineGstAmount(amount: number, rate: GstRate): number | null {
  * How a rate is named in the totals block.
  *
  * ITPI-35 writes `IGST18 (18%)` — the register name with the rate appended to
- * it, then the rate again in brackets. A whole-number rate prints without a
+ * it, then the rate again in brackets. The shape is kept and the integrated
+ * register is printed as `GST18 (18%)` — see computeTotals. A whole-number rate prints without a
  * decimal (18, not 18.00); a fractional one keeps what it needs.
  */
 export function rateSuffix(rate: number): string {
@@ -83,7 +90,7 @@ export interface ComputeTotalsInput {
  *
  * ONE ROW PER DISTINCT RATE, not per line: ITPI-35 carries three 18% lines and
  * one 5% line and prints exactly two tax rows. Rows are ordered by rate
- * descending, which is the order that document uses (IGST18 above IGST5).
+ * descending, which is the order that document uses (GST18 above GST5).
  *
  * When the place of supply is unknown the supply is treated as INTER-state.
  * That is the conservative reading — an unknown destination is more likely to
@@ -138,7 +145,12 @@ export function computeTotals(input: ComputeTotalsInput): TaxComputation {
       taxRows.push({ label: taxLabel("CGST", rate / 2), amount: cgst });
       taxRows.push({ label: taxLabel("SGST", rate / 2), amount: sgst });
     } else {
-      taxRows.push({ label: taxLabel("IGST", rate), amount });
+      // Named "GST", not "IGST" — a business decision (2026-08-20). The supply
+      // IS integrated and the arithmetic is unchanged; the dealers reading these
+      // quotations asked what "IGST" meant often enough that the register name
+      // was costing more than it explained. The intra-state branch above keeps
+      // CGST/SGST because those two rows only make sense named.
+      taxRows.push({ label: taxLabel("GST", rate), amount });
     }
   }
 

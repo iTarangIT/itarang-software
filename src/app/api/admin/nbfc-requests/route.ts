@@ -23,6 +23,7 @@ import {
   NBFC_DOC_STATUS,
 } from "@/lib/nbfc/doc-requests";
 import { notifyNbfcOfUpdate } from "@/lib/nbfc/doc-request-notify";
+import { getNbfcRequestSlaSettings } from "@/lib/nbfc/request-sla-settings";
 import { uploadAdminAttachments } from "@/lib/nbfc/request-uploads";
 
 export const runtime = "nodejs";
@@ -63,7 +64,25 @@ export async function GET(req: NextRequest) {
           inArray(nbfcDocumentVerifications.verdict, ["queried", "rejected"]),
         ),
       );
-    return NextResponse.json({ success: true, data: { thread, verdicts } });
+    // E-254 — the SLA settings and the server clock, so the card can render a
+    // live "auto-forwards in …" countdown against the same clock the sweep
+    // uses, and say plainly when no clock is running.
+    const sla = await getNbfcRequestSlaSettings();
+    return NextResponse.json({
+      success: true,
+      data: {
+        thread,
+        verdicts,
+        sla: {
+          enabled: sla.enabled,
+          forwardSlaMinutes: sla.forwardSlaMinutes,
+          pushSlaMinutes: sla.pushSlaMinutes,
+          autoForwardToDealer: sla.autoForwardToDealer,
+          autoPushToNbfc: sla.autoPushToNbfc,
+        },
+        serverNow: new Date().toISOString(),
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load NBFC requests";
     return NextResponse.json({ success: false, error: { message } }, { status: 500 });
