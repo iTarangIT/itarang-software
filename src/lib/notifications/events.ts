@@ -551,7 +551,7 @@ export async function notifyNbfcRequestRaised(p: {
 }
 
 /**
- * Admin forwarded an NBFC request down to the dealer. E-254 — or the SLA sweep
+ * Admin forwarded an NBFC request down to the dealer. E-257 — or the SLA sweep
  * did, in which case `from` is SYSTEM_PARTY and the wording says so.
  */
 export async function notifyNbfcRequestForwarded(p: {
@@ -681,7 +681,7 @@ export async function notifyNbfcRequestUpload(p: {
 
 /**
  * Admin pushed the finished documents (or a direct message) up to the NBFC.
- * E-254 — or the SLA sweep did (`from` = SYSTEM_PARTY).
+ * E-257 — or the SLA sweep did (`from` = SYSTEM_PARTY).
  */
 export async function notifyNbfcRequestPushed(p: {
   leadId: string;
@@ -1522,7 +1522,7 @@ export async function notifyKycAutoApproved(p: {
 }
 
 /**
- * E-254 — the NBFC request SLA sweep acted (or tried to) on a request no admin
+ * E-257 — the NBFC request SLA sweep acted (or tried to) on a request no admin
  * had touched in time. Admin-facing FYI / call to action:
  *   - kind 'forwarded' ok  → the request went to the dealer without an admin click.
  *   - kind 'pushed'    ok  → the dealer's uploads went to the NBFC unreviewed.

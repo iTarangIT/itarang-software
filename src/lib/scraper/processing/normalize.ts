@@ -1,4 +1,5 @@
 import { normalizeIndianPhone } from "@/lib/ai/phone";
+import { detectForeignCountry } from "../geo";
 import {
   parseAddressComponents,
   extractTargetCityFromQuery,
@@ -37,9 +38,19 @@ export function normalizeLeads(leads: any[], source: string) {
     const state = components?.state ?? parsed.state ?? null;
     const pincode = components?.pincode ?? parsed.pincode ?? null;
 
+    // normalizeIndianPhone prefixes "+91" to ANY 10-digit string, so a US
+    // number arrives looking like a valid Indian mobile — (954) 527-4640
+    // became +919545274640 on run SCRAPE-20260820-e3ae054b and was dialled as
+    // such. filterLeads drops foreign leads outright, but never let a foreign
+    // number acquire an Indian country code on the way there.
+    const foreignCountry = detectForeignCountry({
+      address: lead.address,
+      components,
+    });
+
     return {
       name: lead.name || null,
-      phone: normalizeIndianPhone(lead.phone),
+      phone: foreignCountry ? null : normalizeIndianPhone(lead.phone),
       email: null,
       website: lead.website || null,
 

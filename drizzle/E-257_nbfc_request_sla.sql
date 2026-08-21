@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------------
--- E-254: NBFC request SLA — time-boxed auto-routing of the NBFC ⇄ Admin ⇄
+-- E-257: NBFC request SLA — time-boxed auto-routing of the NBFC ⇄ Admin ⇄
 --        Dealer document-request loop.
 --
 -- WHAT THIS ADDS, AND WHY.
@@ -101,25 +101,25 @@ END; $do$;
 -- in the service layer, recorded here.
 DO $do$ BEGIN
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.sla_due_at IS
-        'E-254. Deadline of the CURRENT leg of the NBFC request SLA: on status ''nbfc_raised'' it is when the sweep may auto-forward to the dealer; on ''admin_review_upload'' it is when the sweep may auto-verify the uploads and push to the NBFC. Stamped on entering the leg (createNbfcDocRequest / recomputeWrapperStatus) from app_settings.nbfc_request_sla; NULLed by any admin action or by the sweep''s claim. NULL = no clock — the state of every row that predates E-254 or entered the leg while the feature was off. Never backfill.'$c$;
+        'E-257. Deadline of the CURRENT leg of the NBFC request SLA: on status ''nbfc_raised'' it is when the sweep may auto-forward to the dealer; on ''admin_review_upload'' it is when the sweep may auto-verify the uploads and push to the NBFC. Stamped on entering the leg (createNbfcDocRequest / recomputeWrapperStatus) from app_settings.nbfc_request_sla; NULLed by any admin action or by the sweep''s claim. NULL = no clock — the state of every row that predates E-257 or entered the leg while the feature was off. Never backfill.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.forward_source IS
-        'E-254. Who forwarded this request to the dealer: ''admin'' (a human clicked Forward) | ''system'' (the SLA sweep). Defaults to ''admin''.'$c$;
+        'E-257. Who forwarded this request to the dealer: ''admin'' (a human clicked Forward) | ''system'' (the SLA sweep). Defaults to ''admin''.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.push_source IS
-        'E-254. Who pushed this request back to the NBFC: ''admin'' | ''system'' (the SLA sweep verified the uploads WITHOUT a human review). Defaults to ''admin''.'$c$;
+        'E-257. Who pushed this request back to the NBFC: ''admin'' | ''system'' (the SLA sweep verified the uploads WITHOUT a human review). Defaults to ''admin''.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.auto_forwarded_at IS
-        'E-254. When the SLA sweep auto-forwarded this request to the dealer. NULL when a human did it (or it has not happened).'$c$;
+        'E-257. When the SLA sweep auto-forwarded this request to the dealer. NULL when a human did it (or it has not happened).'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.auto_pushed_at IS
-        'E-254. When the SLA sweep auto-pushed this request to the NBFC.'$c$;
+        'E-257. When the SLA sweep auto-pushed this request to the NBFC.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.sla_failure IS
-        'E-254. The error message from the last SLA sweep attempt on this row, when the auto action threw. The clock is already cleared, so the request stays with the admin for manual action and is never retried.'$c$;
+        'E-257. The error message from the last SLA sweep attempt on this row, when the auto action threw. The clock is already cleared, so the request stays with the admin for manual action and is never retried.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_doc_requests.requested_items IS
-        'E-254. Structured items the NBFC asked for ([{doc_label, reason, is_required}]), captured at raise so an auto-forward does not have to parse nbfc_comments. Empty for legacy rows and for request types with a single implied item.'$c$;
+        'E-257. Structured items the NBFC asked for ([{doc_label, reason, is_required}]), captured at raise so an auto-forward does not have to parse nbfc_comments. Empty for legacy rows and for request types with a single implied item.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_document_verifications.sla_due_at IS
-        'E-254. When the SLA sweep may auto-forward this ''queried''/''rejected'' verdict to the dealer. Stamped on the verdict upsert while forwarded_at IS NULL; NULLed when the verdict becomes verified/pending, when an admin forwards or answers it, or by the sweep''s claim. NULL = no clock. Never backfill.'$c$;
+        'E-257. When the SLA sweep may auto-forward this ''queried''/''rejected'' verdict to the dealer. Stamped on the verdict upsert while forwarded_at IS NULL; NULLed when the verdict becomes verified/pending, when an admin forwards or answers it, or by the sweep''s claim. NULL = no clock. Never backfill.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_document_verifications.forward_source IS
-        'E-254. Who forwarded this verdict to the dealer: ''admin'' | ''system''. Defaults to ''admin''.'$c$;
+        'E-257. Who forwarded this verdict to the dealer: ''admin'' | ''system''. Defaults to ''admin''.'$c$;
     EXECUTE $c$COMMENT ON COLUMN nbfc_document_verifications.sla_failure IS
-        'E-254. Error from the last SLA sweep attempt on this verdict; the row stays with the admin.'$c$;
+        'E-257. Error from the last SLA sweep attempt on this verdict; the row stays with the admin.'$c$;
 EXCEPTION WHEN undefined_table OR undefined_column THEN
     RAISE NOTICE 'skip: comments (a target table/column is absent)';
 END; $do$;

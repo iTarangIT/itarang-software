@@ -2,7 +2,7 @@
  * Google Drive mirror settings (E-255).
  *
  * One jsonb blob under the `gdrive_mirror` key in `app_settings`, same shape of
- * thing as the E-254 NBFC-request-SLA blob: a singleton read by one ticker and
+ * thing as the E-257 NBFC-request-SLA blob: a singleton read by one ticker and
  * written by one admin form (/admin/settings/gdrive-mirror).
  *
  * What lives here vs. in env:

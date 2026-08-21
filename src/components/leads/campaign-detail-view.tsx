@@ -24,14 +24,18 @@ import {
   StopCircle,
   PhoneOutgoing,
   RotateCcw,
+  ChevronDown,
+  X,
 } from "lucide-react";
 import { CampaignLeadTranscriptDrawer } from "./CampaignLeadTranscriptDrawer";
+import { CallDurationPanel } from "./campaign-duration/CallDurationPanel";
 import {
   CampaignLeadStatusBadge,
   CampaignOutcomeBadge,
   CampaignStatusBadge,
 } from "./campaign-status-badge";
 import { describeRegion, displayCampaignName } from "@/lib/leads/regionSummary";
+import { formatWindow } from "@/lib/queue/campaignSchedule";
 import { toast } from "sonner";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 
@@ -50,6 +54,13 @@ type Campaign = {
   completedAt: string | null;
   triggeredBy: string | null;
   triggeredByName: string | null;
+  // E-228/E-254 — the calling window and, when parked, when it next opens.
+  scheduleMode: string | null;
+  windowStart: string | null;
+  windowEnd: string | null;
+  windowDays: unknown;
+  resumeAfter: string | null;
+  pausedAt: string | null;
 };
 
 type Lead = {
@@ -93,6 +104,9 @@ const BUCKET_LABELS: Record<Bucket, string> = {
   failed: "Failed",
 };
 
+// Ties the Completed card's aria-controls to the panel it opens.
+const DURATION_PANEL_ID = "campaign-duration-panel";
+
 function fmt(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -119,11 +133,20 @@ function StatCard({
   value,
   Icon,
   tone,
+  // Only the Completed card passes these. With onClick undefined this renders
+  // the exact <div> it always was — no button, no hover, no focus ring, no
+  // chevron — so the other three cards cannot regress.
+  onClick,
+  expanded,
+  controls,
 }: {
   label: string;
   value: number | string;
   Icon: any;
   tone: "neutral" | "emerald" | "amber" | "rose" | "blue";
+  onClick?: () => void;
+  expanded?: boolean;
+  controls?: string;
 }) {
   const toneClass = {
     neutral: "bg-gray-50 text-gray-700 border-gray-200",
@@ -132,16 +155,52 @@ function StatCard({
     rose: "bg-rose-50 text-rose-700 border-rose-200",
     blue: "bg-blue-50 text-blue-700 border-blue-200",
   }[tone];
-  return (
-    <div className={`rounded-xl border px-4 py-3 ${toneClass}`}>
+
+  const body = (
+    <>
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider opacity-80">
           {label}
         </span>
-        <Icon className="w-4 h-4 opacity-70" />
+        {onClick ? (
+          // The card keeps its own icon and gains the affordance beside it.
+          // Swapping the icon for a chevron would re-skin the card, which is
+          // exactly what this change is not allowed to do.
+          <span className="flex items-center gap-1">
+            <Icon className="w-4 h-4 opacity-70" />
+            <ChevronDown
+              className={`w-3.5 h-3.5 opacity-60 transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+          </span>
+        ) : (
+          <Icon className="w-4 h-4 opacity-70" />
+        )}
       </div>
       <p className="text-2xl font-bold mt-1 tabular-nums">{value}</p>
-    </div>
+    </>
+  );
+
+  if (!onClick) {
+    return <div className={`rounded-xl border px-4 py-3 ${toneClass}`}>{body}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={expanded}
+      aria-controls={controls}
+      // w-full + text-left restore the box model a <button> otherwise breaks,
+      // and cursor-pointer is required rather than decorative because Tailwind
+      // v4's preflight resets button { cursor: default }. Everything through
+      // ${toneClass} is the <div>'s className verbatim, so the four cards stay
+      // pixel-identical until you hover.
+      className={`w-full text-left rounded-xl border px-4 py-3 ${toneClass} cursor-pointer transition-shadow hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+        expanded ? "ring-2 ring-emerald-500/40" : ""
+      }`}
+    >
+      {body}
+    </button>
   );
 }
 
@@ -260,6 +319,15 @@ export function CampaignDetailView({
   const [intentMin, setIntentMin] = useState<number | null>(null);
   const [intentStrict, setIntentStrict] = useState(false);
   const [intentCustom, setIntentCustom] = useState(false);
+  // Call-duration analysis, opened from the Completed stat card. The selected
+  // duration bucket is a SERVER-SIDE filter on the lead table (see the leads
+  // query below) — it is a different axis from `bucket`, which is a status.
+  const [durationOpen, setDurationOpen] = useState(false);
+  // Carries the label as well as the key so the filter chip can name the bucket
+  // without the parent having to re-fetch (or re-derive) the histogram config.
+  const [durationBucket, setDurationBucket] = useState<
+    { key: string; label: string } | null
+  >(null);
   const queryClient = useQueryClient();
   const router = useRouter();
 
@@ -275,16 +343,23 @@ export function CampaignDetailView({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
       queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-duration", campaignId],
+      });
+      queryClient.invalidateQueries({
         queryKey: ["dialer-campaign-leads", campaignId],
       });
     },
   });
 
-  // Resume a stopped campaign: continue dialing the leads that were never
-  // reached, in THIS same campaign (stats stay cumulative). The route flips it
-  // back to running and advanceCampaign claims only 'pending' rows, so
+  // Resume a stopped or paused campaign: continue dialing the leads that were
+  // never reached, in THIS same campaign (stats stay cumulative). The route
+  // flips it back to running and advanceCampaign claims only 'pending' rows, so
   // completed/failed leads are never re-dialed. Failed leads are handled
   // separately by the "Retry failed leads" button.
+  //
+  // E-254 — resuming OUTSIDE the calling window does not dial and is not an
+  // error: advanceCampaign re-parks the campaign, and the route reports
+  // armed + resumeAt so we can say when it will actually run.
   const resumeMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(
@@ -295,10 +370,20 @@ export function CampaignDetailView({
       if (!json.success) throw new Error(json.error?.message ?? "Resume failed");
       return json.data;
     },
-    onSuccess: () => {
+    onSuccess: (data: { armed?: boolean; resumeAt?: string | null }) => {
+      if (data?.armed) {
+        toast.success(
+          data.resumeAt
+            ? `Outside the calling window — calling resumes ${new Date(data.resumeAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit" })} IST`
+            : "Outside the calling window — no calls were placed",
+        );
+      }
       // Status flips to running → the campaign GET's refetchInterval re-enables
       // and the page resumes live 4s polling on its own.
       queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
+      queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-duration", campaignId],
+      });
       queryClient.invalidateQueries({
         queryKey: ["dialer-campaign-leads", campaignId],
       });
@@ -328,6 +413,9 @@ export function CampaignDetailView({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
+      queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-duration", campaignId],
+      });
       queryClient.invalidateQueries({
         queryKey: ["dialer-campaign-leads", campaignId],
       });
@@ -374,7 +462,10 @@ export function CampaignDetailView({
     },
     refetchInterval: (query) => {
       const c = query.state.data as Campaign | undefined;
-      return c?.status === "running" ? 4000 : false;
+      if (c?.status === "running") return 4000;
+      // E-254 — a scheduled campaign wakes itself, so poll slowly rather than
+      // not at all, or the page would sit on "Scheduled" after it had started.
+      return c?.status === "scheduled" ? 60000 : false;
     },
   });
 
@@ -384,16 +475,26 @@ export function CampaignDetailView({
   const pendingLeads = campaign
     ? campaign.totalLeads - campaign.completedLeads - campaign.failedLeads
     : 0;
+  // E-254 — 'paused' is a single-run campaign that reached its window end time,
+  // which is precisely what this button is for. 'scheduled' is excluded on
+  // purpose: it already has a resume armed and the ticker owns it, so a manual
+  // resume would only park it again.
   const canResume =
-    !isRunning && campaign?.status === "stopped" && pendingLeads > 0;
+    !isRunning &&
+    (campaign?.status === "stopped" || campaign?.status === "paused") &&
+    pendingLeads > 0;
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
-    queryKey: ["dialer-campaign-leads", campaignId, bucket, page],
+    queryKey: ["dialer-campaign-leads", campaignId, bucket, page, durationBucket?.key ?? null],
     queryFn: async () => {
       const params = new URLSearchParams({
         bucket,
         page: String(page),
       });
+      // Filtered SERVER-side on purpose. The table only ever holds one 50-row
+      // page, so filtering the loaded rows would show a fraction of the calls
+      // the histogram just counted — with no sign anything was dropped.
+      if (durationBucket) params.set("durationBucket", durationBucket.key);
       const res = await fetch(
         `/api/ai-dialer/campaigns/${campaignId}/leads?${params}`,
       );
@@ -403,6 +504,23 @@ export function CampaignDetailView({
     },
     refetchInterval: isRunning ? 4000 : false,
   });
+
+  // Collapsing the panel drops its filter with it — otherwise the table stays
+  // filtered by a control the user can no longer see.
+  const toggleDuration = () => {
+    if (durationOpen) setDurationBucket(null);
+    setDurationOpen((v) => !v);
+  };
+
+  // A duration bucket replaces the status filter rather than narrowing it (the
+  // route does the same), so the tab strip moves to All to say so. Narrowing to
+  // Completed would drop the connected-but-failed calls that ARE counted in the
+  // bar, and the table would come back shorter than the number just clicked.
+  const selectDurationBucket = (next: { key: string; label: string } | null) => {
+    setDurationBucket(next);
+    setPage(1);
+    if (next) setBucket("all");
+  };
 
   if (campaignLoading || !campaign) {
     return (
@@ -601,7 +719,49 @@ export function CampaignDetailView({
                 <MapPin className="w-3 h-3" />
                 {describeRegion(campaign.regionFilter)}
               </span>
+              {/* E-254 — say what window this campaign runs in. formatWindow
+                  returns null for an unscheduled campaign, so pre-E-228
+                  campaigns show nothing extra. */}
+              {formatWindow({
+                schedule_mode: campaign.scheduleMode,
+                window_start: campaign.windowStart,
+                window_end: campaign.windowEnd,
+                window_days: campaign.windowDays,
+              }) && (
+                <span className="text-gray-500 inline-flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {formatWindow({
+                    schedule_mode: campaign.scheduleMode,
+                    window_start: campaign.windowStart,
+                    window_end: campaign.windowEnd,
+                    window_days: campaign.windowDays,
+                  })}
+                </span>
+              )}
             </div>
+            {/* When it will actually dial again. A parked campaign otherwise
+                looks identical to a stalled one. */}
+            {campaign.status === "scheduled" && campaign.resumeAfter && (
+              <p className="mt-2 text-xs text-blue-700">
+                Calling resumes{" "}
+                {new Date(campaign.resumeAfter).toLocaleString("en-IN", {
+                  timeZone: "Asia/Kolkata",
+                  weekday: "short",
+                  day: "2-digit",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}{" "}
+                IST
+              </p>
+            )}
+            {campaign.status === "paused" && (
+              <p className="mt-2 text-xs text-slate-600">
+                Paused at the end of its calling window with {pendingLeads} lead
+                {pendingLeads === 1 ? "" : "s"} left. Single-run campaigns do not
+                resume on their own — press Resume calling when you are ready.
+              </p>
+            )}
             <p className="mt-2 text-xs text-gray-500">
               Triggered by{" "}
               <span className="font-medium text-gray-700">
@@ -632,6 +792,9 @@ export function CampaignDetailView({
           value={campaign.completedLeads}
           Icon={CheckCircle2}
           tone="emerald"
+          onClick={toggleDuration}
+          expanded={durationOpen}
+          controls={DURATION_PANEL_ID}
         />
         <StatCard
           label="Failed"
@@ -640,6 +803,19 @@ export function CampaignDetailView({
           tone="rose"
         />
       </div>
+
+      {/* Call-duration analysis for the Completed card. Rendering is what gates
+          the aggregate query — there is no `enabled` flag in the panel. The
+          parent is space-y-6, so this needs no margin of its own. */}
+      {durationOpen && (
+        <CallDurationPanel
+          id={DURATION_PANEL_ID}
+          campaignId={campaignId}
+          isRunning={isRunning}
+          selectedBucket={durationBucket?.key ?? null}
+          onSelectBucket={selectDurationBucket}
+        />
+      )}
 
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
         <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 pt-3">
@@ -652,6 +828,10 @@ export function CampaignDetailView({
                   onClick={() => {
                     setBucket(b);
                     setPage(1);
+                    // A status tab is a different axis from a duration bucket;
+                    // picking one clears the other rather than silently
+                    // intersecting two filters the user chose separately.
+                    setDurationBucket(null);
                   }}
                   className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                     isActive
@@ -663,6 +843,19 @@ export function CampaignDetailView({
                 </button>
               );
             })}
+
+            {/* Both ends of the interaction are labelled: the bar shows
+                aria-pressed, the table shows this. */}
+            {durationBucket && (
+              <button
+                type="button"
+                onClick={() => setDurationBucket(null)}
+                className="mb-2 ml-2 inline-flex cursor-pointer items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              >
+                Duration: {durationBucket.label}
+                <X className="h-3 w-3" />
+              </button>
+            )}
           </div>
 
           {/* Intent-score filter + live count of matching leads. */}

@@ -13,6 +13,7 @@ import {
   CampaignStatusBadge,
 } from "./campaign-status-badge";
 import { displayCampaignName, summarizeRegion } from "@/lib/leads/regionSummary";
+import { formatWindow } from "@/lib/queue/campaignSchedule";
 
 type CampaignRow = {
   id: string;
@@ -35,6 +36,13 @@ type CampaignRow = {
   triggeredBy: string | null;
   triggeredByName: string | null;
   totalTalkTimeSeconds: number | null;
+  // E-228/E-254 — the calling window. NULL on every NeoDove row (human-agent
+  // campaigns have no dialer window) and on every pre-E-228 campaign.
+  scheduleMode?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  windowDays?: unknown;
+  resumeAfter?: string | null;
 };
 
 // Total talk time across a campaign's calls, as "1h 03m" / "7m 12s" / "45s".
@@ -58,6 +66,34 @@ function categoryLabel(c: string | null): string {
     scheduled: "Scheduled",
   };
   return map[c] ?? c;
+}
+
+// E-254 — "11:00-15:00 IST · Mon-Sat · Recurring", or null when the campaign is
+// unscheduled. formatWindow is shared with the detail header so the list and
+// the detail page cannot describe the same row differently.
+function windowLabel(c: CampaignRow): string | null {
+  return formatWindow({
+    schedule_mode: c.scheduleMode,
+    window_start: c.windowStart,
+    window_end: c.windowEnd,
+    window_days: c.windowDays,
+  });
+}
+
+// "Thu 11:00" — day plus time, because a parked campaign's next opening is
+// routinely tomorrow or after the weekend, and a bare "11:00" would read as
+// today.
+function fmtResume(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 function providerChip(p: string) {
@@ -139,7 +175,13 @@ export function CampaignsTable({
       const hasActive = rows.some(
         (r) => r.status === "running" || r.status === "pushing",
       );
-      return hasActive ? 4000 : false;
+      if (hasActive) return 4000;
+      // E-254 — a scheduled campaign flips itself to running when its window
+      // opens, with no user action to trigger a refetch. Poll slowly so that
+      // transition appears on its own; 4s would be wasteful for something that
+      // may still be hours away.
+      const hasScheduled = rows.some((r) => r.status === "scheduled");
+      return hasScheduled ? 60000 : false;
     },
   });
 
@@ -245,6 +287,21 @@ export function CampaignsTable({
                   </td>
                   <td className="px-4 py-3">
                     <CampaignStatusBadge status={c.status} />
+                    {/* E-254 — "Scheduled" on its own does not say scheduled
+                        for WHEN, which is the question this row exists to
+                        answer. Show the wake time for a parked campaign and the
+                        window itself for one that is merely constrained. */}
+                    {c.status === "scheduled" && c.resumeAfter ? (
+                      <p className="text-[11px] text-blue-700 mt-0.5">
+                        Resumes {fmtResume(c.resumeAfter)}
+                      </p>
+                    ) : (
+                      windowLabel(c) && (
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          {windowLabel(c)}
+                        </p>
+                      )
+                    )}
                   </td>
                   <td className="px-4 py-3">{providerChip(c.provider)}</td>
                   <td className="px-4 py-3 text-gray-700">
@@ -278,6 +335,7 @@ export function CampaignsTable({
                                 ? "bg-emerald-500"
                                 : c.status === "stopped" ||
                                     c.status === "paused" ||
+                                    c.status === "scheduled" ||
                                     c.status === "draft"
                                   ? "bg-zinc-400"
                                   : "bg-rose-500"

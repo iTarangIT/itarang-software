@@ -193,7 +193,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.request_forwarded": "Admin forwarded an NBFC request to the dealer",
   "nbfc.request_pushed": "Request pushed back to the NBFC",
   "nbfc.request_declined": "NBFC request declined",
-  // E-254 — the NBFC request SLA sweep acted without an admin click.
+  // E-257 — the NBFC request SLA sweep acted without an admin click.
   "nbfc.request_auto_forwarded": "NBFC request auto-forwarded to the dealer (SLA)",
   "nbfc.request_auto_pushed": "Dealer uploads auto-pushed to the NBFC (SLA)",
   "nbfc.doc_uploaded": "Dealer uploaded a document the NBFC asked for",

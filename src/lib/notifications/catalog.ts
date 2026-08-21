@@ -147,7 +147,7 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.request_forwarded": "NBFC Requests",
   "nbfc.request_pushed": "NBFC Requests",
   "nbfc.request_declined": "NBFC Requests",
-  // E-254 — the SLA sweep's own events (admin FYI / failure call-to-action).
+  // E-257 — the SLA sweep's own events (admin FYI / failure call-to-action).
   "nbfc.request_auto_forwarded": "NBFC Requests",
   "nbfc.request_auto_pushed": "NBFC Requests",
   "nbfc.doc_uploaded": "NBFC Requests",
