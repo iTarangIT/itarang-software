@@ -16,6 +16,8 @@ const patchSchema = z.object({
   warrantyMonths: z.number().int().min(0).max(240).optional(),
   iotCompatible: z.boolean().optional(),
   compatibleChargerModels: z.array(z.string().trim().min(1)).optional(),
+  hsnCode: z.string().trim().min(1).max(8).nullable().optional(),
+  gstRatePct: z.number().min(0).max(50).nullable().optional(),
   status: z.enum(["active", "inactive"]).optional(),
 });
 
@@ -60,6 +62,8 @@ export const PATCH = withErrorHandler(
         warranty_months: body.warrantyMonths,
         iot_compatible: body.iotCompatible,
         compatible_charger_models: body.compatibleChargerModels,
+        hsn_code: body.hsnCode,
+        gst_rate_pct: body.gstRatePct != null ? String(body.gstRatePct) : body.gstRatePct,
         status: body.status,
         updated_at: new Date(),
       })

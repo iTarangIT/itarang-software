@@ -38,6 +38,7 @@
     "verify:calculator": "node --import tsx scripts/verify-calculator-engine.ts",
     "verify:duration-histogram": "node --import tsx --env-file=.env.local scripts/verify-duration-histogram.ts",
     "verify:notifications": "node --import tsx --env-file=.env.local scripts/verify-notification-registry.ts",
+    "verify:queue-filters": "node --import tsx --env-file=.env.local scripts/_verify-queue-filters.ts",
     "verify:auction": "node --import tsx --env-file=.env.local scripts/verify-auction-e2e.ts",
     "verify:scraper-geo": "node --import tsx --env-file=.env.local scripts/verify-scraper-geo-gate.ts",
     "backfill:dispositions": "node --import tsx --env-file=.env.local scripts/backfill-dispositions.ts",

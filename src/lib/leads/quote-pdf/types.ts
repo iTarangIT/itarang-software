@@ -44,11 +44,13 @@ export interface QuotationLineView {
 }
 
 /**
- * One row in the totals block, e.g. `IGST18 (18%)` or `CGST9 (9%)`.
+ * One row in the totals block, e.g. `GST18 (18%)` or `CGST9 (9%)`.
  *
  * The label carries the rate twice, matching ITPI-35 — the register name
- * (`IGST18`) and the rate as applied (`(18%)`) — because a document showing two
+ * (`GST18`) and the rate as applied (`(18%)`) — because a document showing two
  * different rates needs both to be unambiguous about which lines fed which row.
+ *
+ * The inter-state row is labelled GST rather than IGST — see computeTotals.
  */
 export interface TaxRow {
   label: string;
@@ -79,6 +81,15 @@ export interface BillToBlock {
   name: string;
   gstin: string | null;
   addressLines: string[];
+  /**
+   * The lead's mobile number, printed under the address.
+   *
+   * On the document because a quotation gets worked from the printed page as
+   * often as from the CRM, and whoever is chasing it should not have to look
+   * the dealer up to ring them. NULL prints no line at all rather than a
+   * dangling "Mobile" label.
+   */
+  phone: string | null;
 }
 
 export interface BankBlock {

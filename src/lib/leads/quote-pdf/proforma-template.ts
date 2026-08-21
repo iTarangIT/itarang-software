@@ -65,7 +65,13 @@ function qty(n: number): string {
 const UNSET_TAX = '<span class="unset">Not set</span>';
 
 export function renderProformaHtml(view: QuotationView): string {
-  const taxHeaderLabel = view.isIntraState ? "GST" : "IGST";
+  // "GST" in both cases (2026-08-20). It used to read "IGST" on an inter-state
+  // supply, matching the register the totals rows name; dealers read that as a
+  // different, extra tax. The totals block still splits into CGST/SGST when the
+  // supply is intra-state, which is where the distinction actually has to be
+  // made — a per-line column that changes name by destination does not help
+  // anyone reading one quotation.
+  const taxHeaderLabel = "GST";
 
   const lineRows = view.lines
     .map((line) => {
@@ -182,8 +188,8 @@ export function renderProformaHtml(view: QuotationView): string {
   table.items th { text-align: left; font-size: 9px; font-weight: 700; color: #94A3B8;
        text-transform: uppercase; letter-spacing: .4px; padding: 7px 8px;
        background: #FAFBFC; border-bottom: 1px solid #E5E7EB;
-       /* "IGST %" and "IGST Amt" otherwise break across two lines and shove the
-          header row out of alignment with the numbers under it. */
+       /* "GST Amt" and "Sub Total" otherwise break across two lines and shove
+          the header row out of alignment with the numbers under it. */
        white-space: nowrap; }
   table.items th.num, table.items td.num { text-align: right;
        font-variant-numeric: tabular-nums; }
@@ -268,6 +274,7 @@ export function renderProformaHtml(view: QuotationView): string {
   <div class="lbl">Bill To</div>
   <div class="toname">${esc(view.billTo.name)}</div>
   ${view.billTo.addressLines.length ? `<div class="togst">${view.billTo.addressLines.map((l) => esc(l)).join("<br/>")}</div>` : ""}
+  ${view.billTo.phone ? `<div class="togst">Mobile ${esc(view.billTo.phone)}</div>` : ""}
   ${view.billTo.gstin ? `<div class="togst">GSTIN ${esc(view.billTo.gstin)}</div>` : ""}
 </div>
 
@@ -288,7 +295,7 @@ ${
       <th class="num">Rate</th>
       <th class="num">${esc(taxHeaderLabel)} %</th>
       <th class="num">${esc(taxHeaderLabel)} Amt</th>
-      <th class="num">Amount</th>
+      <th class="num">Sub Total</th>
     </tr>
   </thead>
   <tbody>${lineRows}</tbody>

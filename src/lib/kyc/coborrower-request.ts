@@ -35,7 +35,8 @@ export async function requestCoBorrowerForLead(
   leadId: string,
   opts: {
     reason: string;
-    adminUserId: string;
+    /** NULL when the E-254 NBFC request SLA sweep acts (system actor). */
+    adminUserId: string | null;
     isReplacement?: boolean;
   },
 ): Promise<RequestCoBorrowerResult | null> {

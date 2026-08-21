@@ -104,6 +104,15 @@ export const POST = withErrorHandler(
       return row;
     });
 
+    // E-255 — the original went to S3 via a presigned browser PUT, so it never
+    // passed through putObject() and its Drive-mirror hook. Enqueue it here,
+    // now that we know it exists. Best-effort; never fails the request.
+    void import("@/lib/storage/drive-mirror")
+      .then((m) =>
+        m.onObjectStored({ bucket: BUYBACK_BUCKET, key: body.s3_key_original, contentType: null }),
+      )
+      .catch(() => {});
+
     return successResponse(
       { photo_id: photo.id, line_id: photo.line_id, has_thumbnail: displayKey !== null },
       201,

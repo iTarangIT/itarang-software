@@ -49,6 +49,8 @@ import {
   ChevronDown,
   Gavel,
   ShieldCheck,
+  Timer,
+  CloudUpload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -254,6 +256,22 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
+        {
+          // E-254 — NBFC request SLA (auto-forward to dealer / auto-push to
+          // NBFC). Own entry beside KYC Automation, same reasoning.
+          id: "sh-nbfc-request-sla",
+          label: "NBFC Request SLA",
+          icon: Timer,
+          href: "/admin/settings/nbfc-request-sla",
+        },
+        {
+          // E-255 — Google Drive backup of every stored document. Own entry
+          // beside NBFC Request SLA, same reasoning.
+          id: "sh-gdrive-mirror",
+          label: "Drive Backup",
+          icon: CloudUpload,
+          href: "/admin/settings/gdrive-mirror",
+        },
       ],
     },
   ],
@@ -390,6 +408,15 @@ const roleNavigation: Record<string, any[]> = {
           label: "Product Review",
           icon: Package,
           href: "/admin/product-review",
+        },
+        // Same console the Ops/sales_head persona uses at
+        // /admin/dealer-verification — CEO gets the identical entry rather than
+        // a parallel /ceo copy, so there is one queue and one set of actions.
+        {
+          id: "dealer-validation",
+          label: "Dealer Validation",
+          icon: ClipboardCheck,
+          href: "/admin/dealer-verification",
         },
         {
           id: "expense-approvals",
@@ -821,6 +848,20 @@ const roleNavigation: Record<string, any[]> = {
           label: "KYC Automation",
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
+        },
+        {
+          // E-254 — own entry, not a tab. See the sales_head block above.
+          id: "admin-nbfc-request-sla",
+          label: "NBFC Request SLA",
+          icon: Timer,
+          href: "/admin/settings/nbfc-request-sla",
+        },
+        {
+          // E-255 — own entry, not a tab. See the sales_head block above.
+          id: "admin-gdrive-mirror",
+          label: "Drive Backup",
+          icon: CloudUpload,
+          href: "/admin/settings/gdrive-mirror",
         },
       ],
     },

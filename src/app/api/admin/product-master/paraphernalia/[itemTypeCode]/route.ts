@@ -11,6 +11,8 @@ const patchSchema = z.object({
   compatibleCategories: z.array(z.string().trim().min(1)).optional(),
   maxQtyPerLead: z.number().int().min(0).max(5000).optional(),
   harnessVariant: z.boolean().optional(),
+  hsnCode: z.string().trim().min(1).max(8).nullable().optional(),
+  gstRatePct: z.number().min(0).max(50).nullable().optional(),
   status: z.enum(["active", "inactive"]).optional(),
 });
 
@@ -50,6 +52,8 @@ export const PATCH = withErrorHandler(
         compatible_categories: body.compatibleCategories,
         max_qty_per_lead: body.maxQtyPerLead,
         harness_variant: body.harnessVariant,
+        hsn_code: body.hsnCode,
+        gst_rate_pct: body.gstRatePct != null ? String(body.gstRatePct) : body.gstRatePct,
         status: body.status,
         updated_at: new Date(),
       })

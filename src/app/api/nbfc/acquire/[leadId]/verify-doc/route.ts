@@ -14,6 +14,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { nbfcDocumentVerifications } from "@/lib/db/schema";
+import { upsertNbfcVerdict } from "@/lib/nbfc/doc-verdict";
 import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
@@ -103,37 +104,20 @@ export async function POST(
       );
     }
 
-    const now = new Date();
-    await db
-      .insert(nbfcDocumentVerifications)
-      .values({
-        lead_id: leadId,
-        assignment_id: assignment.id,
-        nbfc_id: assignment.nbfc_id,
-        tenant_id: actor.tenant_id,
-        doc_for: d.doc_for,
-        doc_key: d.doc_key,
-        verdict: d.verdict,
-        notes: d.notes ?? null,
-        verified_by: actor.user_id,
-        verified_at: now,
-        created_at: now,
-        updated_at: now,
-      })
-      .onConflictDoUpdate({
-        target: [
-          nbfcDocumentVerifications.assignment_id,
-          nbfcDocumentVerifications.doc_for,
-          nbfcDocumentVerifications.doc_key,
-        ],
-        set: {
-          verdict: d.verdict,
-          notes: d.notes ?? null,
-          verified_by: actor.user_id,
-          verified_at: now,
-          updated_at: now,
-        },
-      });
+    // One shared write (E-254): upsertNbfcVerdict is also where the leg-1 SLA
+    // clock is armed on a queried/rejected verdict, so every verdict path must
+    // go through it.
+    await upsertNbfcVerdict({
+      leadId,
+      assignmentId: assignment.id,
+      nbfcId: assignment.nbfc_id,
+      tenantId: actor.tenant_id,
+      docFor: d.doc_for,
+      docKey: d.doc_key,
+      verdict: d.verdict,
+      notes: d.notes ?? null,
+      verifiedBy: actor.user_id,
+    });
 
     return NextResponse.json({ ok: true, verdict: d.verdict });
   } catch (e) {

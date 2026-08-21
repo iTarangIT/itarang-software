@@ -31,13 +31,25 @@
  *     recorded against a battery still sitting in needs_inspection.
  */
 import { db } from "@/lib/db";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import {
   nbfcBatteryEvaluations,
   nbfcRecoveryPipeline,
   recoveryBatteries,
 } from "@/lib/db/schema";
 import { gradeForSoh, type ConditionGrade } from "@/lib/nbfc/recovery/stages";
+
+/**
+ * How long an identical resubmission of the same pipeline row is treated as a
+ * retry of the first one rather than a second evaluation.
+ *
+ * The client retries a POST whose response never arrived (see
+ * BatteryEvaluationWizard.postEvaluation), and an impatient double-click does
+ * the same thing by hand. Both replay the exact same three steps within
+ * seconds; a genuine re-evaluation is a person re-inspecting a battery, which
+ * neither happens inside a minute nor produces byte-identical readings.
+ */
+const RESUBMIT_WINDOW_MS = 60_000;
 
 export interface Step1 {
   soh_percent: number;
@@ -185,6 +197,38 @@ export async function recordEvaluation(
   // needs_inspection — the row said the inspection had happened and the board
   // said it had not.
   const evalRow = await db.transaction(async (tx) => {
+    // Idempotency for a replayed submit. Keyed on the payload itself rather
+    // than on a client-supplied token: no column had to be added, and the
+    // question being asked ("did this exact evaluation just land?") is the one
+    // that matters. jsonb equality is key-order independent, so it does not
+    // depend on how the client serialised the object.
+    const [replay] = await tx
+      .select({ id: nbfcBatteryEvaluations.id })
+      .from(nbfcBatteryEvaluations)
+      .where(
+        and(
+          eq(nbfcBatteryEvaluations.tenant_id, input.tenant_id),
+          eq(
+            nbfcBatteryEvaluations.recovery_pipeline_id,
+            input.recovery_pipeline_id,
+          ),
+          gt(
+            nbfcBatteryEvaluations.created_at,
+            new Date(Date.now() - RESUBMIT_WINDOW_MS),
+          ),
+          sql`${nbfcBatteryEvaluations.step1} = ${JSON.stringify(input.step1)}::jsonb`,
+          sql`${nbfcBatteryEvaluations.step2} = ${JSON.stringify(input.step2)}::jsonb`,
+          sql`${nbfcBatteryEvaluations.step3} = ${JSON.stringify(input.step3)}::jsonb`,
+        ),
+      )
+      .orderBy(desc(nbfcBatteryEvaluations.created_at))
+      .limit(1);
+
+    // The first attempt committed everything below — stage and battery master
+    // included — so returning its id is the whole of the work. Every value in
+    // the result is derived from the same input, so it reads back identical.
+    if (replay) return replay;
+
     const [created] = await tx
       .insert(nbfcBatteryEvaluations)
       .values({

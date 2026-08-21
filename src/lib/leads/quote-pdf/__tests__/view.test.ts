@@ -10,7 +10,13 @@ import { describe, expect, it } from "vitest";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { DEFAULT_QUOTATION_CONFIG, mergeQuotationConfig, stateCodeFromGstin } from "../config";
 import { renderProformaHtml } from "../proforma-template";
-import { buildQuotationView, formatQuoteDate, taxRefKey, type LineTaxRef } from "../view";
+import {
+  buildQuotationView,
+  composeBillToAddress,
+  formatQuoteDate,
+  taxRefKey,
+  type LineTaxRef,
+} from "../view";
 
 const LINES: CommercialsProductLine[] = [
   {
@@ -73,8 +79,8 @@ describe("buildQuotationView reproduces ITPI-35", () => {
     expect(view.subTotal).toBe(841_500);
     expect(view.total).toBe(980_295);
     expect(view.taxRows).toEqual([
-      { label: "IGST18 (18%)", amount: 133_920 },
-      { label: "IGST5 (5%)", amount: 4_875 },
+      { label: "GST18 (18%)", amount: 133_920 },
+      { label: "GST5 (5%)", amount: 4_875 },
     ]);
   });
 
@@ -161,7 +167,9 @@ describe("renderProformaHtml", () => {
       quoteNumber: "ITQ-2026-0003",
       quoteDate: new Date("2026-08-13T06:00:00.000Z"),
       config: DEFAULT_QUOTATION_CONFIG,
-      lines: [LINES[0]],
+      // An asset type the E-256 policy doesn't name: no catalogue rate and no
+      // asset-type default, so the line must render as unset, never as 0%.
+      lines: [{ ...LINES[0], asset_type: "subscription" as never }],
       taxRefs: new Map(), // catalogue has no rate for it
       placeOfSupply: { stateCode: "05", label: "Uttarakhand (05)" },
       dealer: { name: "Himadri Enterprises", gstin: null },
@@ -175,7 +183,47 @@ describe("renderProformaHtml", () => {
     expect(view.total).toBe(660_000);
   });
 
-  it("switches the column header to GST when the supply is intra-state", () => {
+  it("falls back to the asset-type policy rate when the catalogue has none", () => {
+    const view = buildQuotationView({
+      quoteNumber: "ITQ-2026-0008",
+      quoteDate: new Date("2026-08-13T06:00:00.000Z"),
+      config: DEFAULT_QUOTATION_CONFIG,
+      lines: LINES,
+      taxRefs: new Map(), // masters not yet backfilled on this database
+      placeOfSupply: { stateCode: "05", label: "Uttarakhand (05)" },
+      dealer: { name: "Himadri Enterprises", gstin: null },
+    });
+    // battery 18 / charger 5 / paraphernalia 18, with the policy HSNs.
+    expect(view.hasUnsetTax).toBe(false);
+    expect(view.lines.map((l) => l.gstRatePct)).toEqual([18, 5, 18, 18]);
+    expect(view.lines.map((l) => l.hsnCode)).toEqual([
+      "85076000",
+      "85044030",
+      "85079090",
+      "85079090",
+    ]);
+    // Same totals as the fully-catalogued reference document.
+    expect(view.subTotal).toBe(841_500);
+    expect(view.total).toBe(980_295);
+  });
+
+  it("lets a catalogue rate override the asset-type default", () => {
+    const view = buildQuotationView({
+      quoteNumber: "ITQ-2026-0009",
+      quoteDate: new Date("2026-08-13T06:00:00.000Z"),
+      config: DEFAULT_QUOTATION_CONFIG,
+      lines: [LINES[0]],
+      taxRefs: new Map([
+        [taxRefKey("battery", "p1"), { hsnCode: "85071000", gstRatePct: 28 }],
+      ]),
+      placeOfSupply: { stateCode: "05", label: "Uttarakhand (05)" },
+      dealer: { name: "Himadri Enterprises", gstin: null },
+    });
+    expect(view.lines[0].gstRatePct).toBe(28);
+    expect(view.lines[0].hsnCode).toBe("85071000");
+  });
+
+  it("splits into CGST + SGST when the supply is intra-state", () => {
     const view = buildQuotationView({
       quoteNumber: "ITQ-2026-0004",
       quoteDate: new Date("2026-08-13T06:00:00.000Z"),
@@ -189,7 +237,9 @@ describe("renderProformaHtml", () => {
     expect(view.isIntraState).toBe(true);
     expect(out).toContain("CGST9 (9%)");
     expect(out).toContain("SGST9 (9%)");
-    expect(out).not.toContain("IGST18");
+    expect(out).not.toContain("GST18 (18%)");
+    // The word IGST left the document entirely on 2026-08-20.
+    expect(out).not.toContain("IGST");
   });
 });
 
@@ -278,5 +328,92 @@ describe("formatQuoteDate", () => {
   it("renders IST, not UTC", () => {
     // 2026-08-13T19:00Z is already 14 Aug in IST.
     expect(formatQuoteDate(new Date("2026-08-13T19:00:00.000Z"))).toBe("14/08/2026");
+  });
+});
+
+describe("the line-item table's column headers", () => {
+  it("heads the tax columns GST and the line total Sub Total", () => {
+    const out = renderProformaHtml(itpi35View());
+    expect(out).toContain("<th class=\"num\">GST %</th>");
+    expect(out).toContain("<th class=\"num\">GST Amt</th>");
+    // "Amount" until 2026-08-20. The column IS the line's pre-tax sub-total and
+    // now says so, next to a GST column that would otherwise look additive.
+    expect(out).toContain("<th class=\"num\">Sub Total</th>");
+    expect(out).not.toContain("<th class=\"num\">Amount</th>");
+  });
+});
+
+describe("the Bill To block", () => {
+  function billTo(dealer: Parameters<typeof buildQuotationView>[0]["dealer"]) {
+    return buildQuotationView({
+      quoteNumber: "ITQ-2026-0009",
+      quoteDate: new Date("2026-08-13T06:00:00.000Z"),
+      config: DEFAULT_QUOTATION_CONFIG,
+      lines: LINES,
+      taxRefs: TAX_REFS,
+      placeOfSupply: { stateCode: "06", label: "Haryana (06)" },
+      dealer,
+    });
+  }
+
+  it("prints the lead's name, address and mobile", () => {
+    const view = billTo({
+      name: "Komal Enterprises ( Panipat) Nitish",
+      gstin: null,
+      addressLines: composeBillToAddress({
+        area: "Model Town",
+        location: "Panipat",
+        city: "Panipat",
+        state: "Haryana",
+        pincode: "132103",
+      }),
+      phone: "+917419005078",
+    });
+    expect(view.billTo.name).toBe("Komal Enterprises ( Panipat) Nitish");
+    // "Panipat" is the city AND the free-text location; it prints once.
+    expect(view.billTo.addressLines).toEqual([
+      "Model Town",
+      "Panipat, Haryana 132103",
+    ]);
+    expect(view.billTo.phone).toBe("+917419005078");
+
+    const out = renderProformaHtml(view);
+    expect(out).toContain("Model Town");
+    expect(out).toContain("Panipat, Haryana 132103");
+    expect(out).toContain("Mobile +917419005078");
+  });
+
+  it("prints no mobile line at all when the lead has no phone", () => {
+    const view = billTo({ name: "No Phone Traders", gstin: null, phone: "  " });
+    expect(view.billTo.phone).toBeNull();
+    expect(renderProformaHtml(view)).not.toContain("Mobile");
+  });
+
+  it("escapes the mobile like every other Bill To field", () => {
+    const view = billTo({
+      name: "Injection Traders",
+      gstin: null,
+      phone: '<script>alert(1)</script>',
+    });
+    expect(renderProformaHtml(view)).not.toContain("<script>");
+  });
+});
+
+describe("composeBillToAddress", () => {
+  it("returns nothing when the lead has no address at all", () => {
+    expect(composeBillToAddress({})).toEqual([]);
+    expect(
+      composeBillToAddress({ city: "  ", state: null, pincode: "" }),
+    ).toEqual([]);
+  });
+
+  it("drops a location that only repeats the city, whatever the case", () => {
+    expect(
+      composeBillToAddress({ location: "panipat", city: "Panipat", state: "Haryana" }),
+    ).toEqual(["Panipat, Haryana"]);
+  });
+
+  it("keeps a PIN even when nothing else resolves", () => {
+    expect(composeBillToAddress({ pincode: "132103" })).toEqual(["132103"]);
   });
 });
