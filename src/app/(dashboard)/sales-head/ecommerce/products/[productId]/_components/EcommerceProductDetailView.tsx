@@ -1,0 +1,199 @@
+"use client";
+
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { formatDate, formatPrice, htmlToParagraphs } from "@/lib/ecommerce/format";
+import type { EcommerceProductDetail } from "@/lib/ecommerce/types";
+
+export function EcommerceProductDetailView({ productId }: { productId: string }) {
+    const query = useQuery<{ success: true; data: EcommerceProductDetail }>({
+        queryKey: ["ecommerce-product", productId],
+        queryFn: async () => {
+            const res = await fetch(`/api/ecommerce/products/${productId}`, { cache: "no-store" });
+            if (!res.ok) {
+                const body = await res.json().catch(() => null);
+                throw new Error(body?.error?.message ?? "Failed to load product from Hostinger");
+            }
+            return res.json();
+        },
+    });
+
+    const p = query.data?.data;
+
+    return (
+        <div className="space-y-5">
+            <Link
+                href="/sales-head/ecommerce/products"
+                className="inline-flex items-center gap-1.5 text-sm text-ink-muted hover:text-ink"
+            >
+                <ArrowLeft className="h-4 w-4" />
+                Back to products
+            </Link>
+
+            {query.isLoading ? (
+                <div className="rounded-xl border border-border bg-surface p-12 text-center shadow-card">
+                    <Loader2 className="mx-auto h-5 w-5 animate-spin text-ink-muted" />
+                </div>
+            ) : null}
+
+            {query.error ? (
+                <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger-bg/50 px-4 py-6 text-sm text-danger">
+                    <AlertTriangle className="h-4 w-4" />
+                    {(query.error as Error).message}
+                </div>
+            ) : null}
+
+            {p ? (
+                <>
+                    <header className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h1 className="text-2xl font-semibold tracking-tight text-ink">
+                                {p.title || "Untitled"}
+                            </h1>
+                            <Badge variant={p.status === "published" ? "success" : "muted"}>
+                                {p.status ?? "unknown"}
+                            </Badge>
+                            {p.type ? <Badge variant="outline">{p.type}</Badge> : null}
+                            {!p.purchasable ? <Badge variant="warning">not purchasable</Badge> : null}
+                        </div>
+                        {p.subtitle ? <p className="text-sm text-ink-muted">{p.subtitle}</p> : null}
+                        <p className="font-mono text-xs text-ink-muted">{p.id}</p>
+                    </header>
+
+                    <section className="grid gap-5 md:grid-cols-3">
+                        <div className="space-y-4 md:col-span-2">
+                            <Panel title="Variants and stock">
+                                <VariantTable variants={p.variants} />
+                            </Panel>
+
+                            <Panel title="Description">
+                                {htmlToParagraphs(p.descriptionHtml).length ? (
+                                    <div className="space-y-2 px-4 py-3 text-sm text-ink">
+                                        {htmlToParagraphs(p.descriptionHtml).map((para, i) => (
+                                            <p key={i}>{para}</p>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="px-4 py-3 text-sm text-ink-muted">No description.</p>
+                                )}
+                            </Panel>
+                        </div>
+
+                        <div className="space-y-4">
+                            <Panel title="Details">
+                                <dl className="divide-y divide-border text-sm">
+                                    <Row label="Slug" value={p.urlHandle ?? p.slug ?? "—"} mono />
+                                    <Row label="Created" value={formatDate(p.createdAt)} />
+                                    <Row label="Updated" value={formatDate(p.updatedAt)} />
+                                    <Row label="Variants" value={String(p.variantCount)} />
+                                </dl>
+                            </Panel>
+
+                            {p.media.length ? (
+                                <Panel title="Media">
+                                    <div className="grid grid-cols-3 gap-2 px-4 py-3">
+                                        {p.media.map((m) => (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
+                                            <img
+                                                key={m.id}
+                                                src={m.url}
+                                                alt=""
+                                                className="aspect-square w-full rounded-md border border-border object-cover"
+                                            />
+                                        ))}
+                                    </div>
+                                </Panel>
+                            ) : null}
+                        </div>
+                    </section>
+                </>
+            ) : null}
+        </div>
+    );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+        <div className="rounded-xl border border-border bg-surface shadow-card">
+            <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                {title}
+            </div>
+            {children}
+        </div>
+    );
+}
+
+function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+    return (
+        <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
+            <dt className="text-ink-muted">{label}</dt>
+            <dd className={mono ? "font-mono text-xs text-ink" : "text-ink"}>{value}</dd>
+        </div>
+    );
+}
+
+function VariantTable({ variants }: { variants: EcommerceProductDetail["variants"] }) {
+    if (!variants.length) {
+        return <p className="px-4 py-3 text-sm text-ink-muted">No variants.</p>;
+    }
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+                <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
+                    <tr>
+                        <th className="px-4 py-2.5 text-left font-semibold">Variant</th>
+                        <th className="px-4 py-2.5 text-left font-semibold">SKU</th>
+                        <th className="px-4 py-2.5 text-left font-semibold">Price</th>
+                        <th className="px-4 py-2.5 text-left font-semibold">Stock</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                    {variants.map((v) => (
+                        <tr key={v.id}>
+                            <td className="px-4 py-2.5">
+                                {v.title}
+                                {!v.isActive ? (
+                                    <Badge variant="muted" className="ml-2">
+                                        inactive
+                                    </Badge>
+                                ) : null}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-xs text-ink-muted">
+                                {v.sku ?? "—"}
+                            </td>
+                            <td className="px-4 py-2.5">
+                                {formatPrice(v.price)}
+                                {v.price?.amountMinor !== null && v.price ? (
+                                    /* Raw minor-unit value shown because the price scale is not
+                                       yet confirmed with Hostinger — see the plan's Phase 1 notes.
+                                       Better to expose the source number than imply certainty. */
+                                    <span className="ml-1.5 font-mono text-[10px] text-ink-muted">
+                                        (raw {v.price.amountMinor})
+                                    </span>
+                                ) : null}
+                            </td>
+                            <td className="px-4 py-2.5">
+                                {!v.manageInventory ? (
+                                    <span className="text-ink-muted">Not tracked</span>
+                                ) : (
+                                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                                        {v.inventoryQuantity ?? "—"}
+                                        {v.allowBackorder ? (
+                                            <Badge variant="warning">backorder allowed</Badge>
+                                        ) : null}
+                                        {v.trackLowStock && v.lowStockThreshold !== null ? (
+                                            <Badge variant="outline">low at {v.lowStockThreshold}</Badge>
+                                        ) : null}
+                                    </span>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}

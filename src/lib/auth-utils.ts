@@ -108,3 +108,27 @@ export async function requireInventoryAdmin() {
 
   return user;
 }
+
+// Roles allowed to administer the Hostinger Ecommerce catalog.
+//
+// Deliberately NOT reusing INVENTORY_ADMIN_ROLES. That set guards the CRM's
+// physical EV asset/Product Master system, which is a separate domain from the
+// Hostinger storefront — reusing it would both couple the two and silently hand
+// ecommerce access to inventory_manager (plus the two roles seeded for neither).
+// sales_head is the intended operator; ceo and admin already hold universal
+// access everywhere else.
+export const ECOMMERCE_ADMIN_ROLES = new Set([
+  "sales_head",
+  "ceo",
+  "admin",
+]);
+
+export async function requireEcommerceAdmin() {
+  const user = await requireAuth();
+
+  if (!ECOMMERCE_ADMIN_ROLES.has(user.role)) {
+    throw new ForbiddenError("Forbidden: Ecommerce admin role required");
+  }
+
+  return user;
+}
