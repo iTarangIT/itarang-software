@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Store,
   ShoppingCart,
   Users,
   UserCheck,
@@ -460,6 +461,20 @@ const roleNavigation: Record<string, any[]> = {
           label: "Transfer",
           icon: ShoppingCart,
           href: "/admin/inventory/transfer",
+        },
+      ],
+    },
+    // Hostinger Ecommerce storefront. Deliberately a SEPARATE section from
+    // INVENTORY above: that one is the physical EV asset / Product Master
+    // system, this one is the online store. They share no data.
+    {
+      section: "ECOMMERCE",
+      items: [
+        {
+          id: "sh-ecommerce-products",
+          label: "Products",
+          icon: Store,
+          href: "/sales-head/ecommerce/products",
         },
       ],
     },
