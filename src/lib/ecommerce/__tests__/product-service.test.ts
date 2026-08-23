@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import type { HostingerProductRow } from "@/lib/hostinger/types";
 
@@ -85,6 +85,14 @@ const LEAN: HostingerProductRow = {
 beforeEach(() => {
   listProducts.mockReset();
   getProductById.mockReset();
+  // Detail builds the Hostinger dashboard deep-link from server config, so the
+  // store id has to be present even though no request is made.
+  vi.stubEnv("HOSTINGER_STORE_ID", "store_TEST123");
+  vi.stubEnv("HOSTINGER_API_TOKEN", "fake-token-for-tests");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("variant inventory normalisation", () => {
@@ -104,6 +112,17 @@ describe("variant inventory normalisation", () => {
 
     expect(p.variants[0].inventoryQuantity).toBe(4);
     expect(p.totalInventory).toBe(4);
+  });
+
+  it("builds the Hostinger deep-link server-side from the store id", async () => {
+    getProductById.mockResolvedValue(MANAGED);
+    const p = await getEcommerceProductDetail(MANAGED.id);
+
+    // Built here rather than in the browser so the store id never needs a
+    // NEXT_PUBLIC_ variable.
+    expect(p.adminUrl).toBe(
+      `https://ecommerce.hostinger.com/store/store_TEST123/products/edit?product=${MANAGED.id}`,
+    );
   });
 });
 

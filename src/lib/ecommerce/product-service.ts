@@ -7,8 +7,17 @@
  * physical `products` / `product_master_*` system.
  */
 
-import { getProductById, listProducts } from "@/lib/hostinger/products";
+import { getHostingerConfig } from "@/lib/hostinger/client";
+import {
+  createDigitalProduct,
+  createPhysicalProduct,
+  getProductById,
+  listProducts,
+  updateProduct,
+  updateVariantPrice,
+} from "@/lib/hostinger/products";
 import type {
+  HostingerCreateResponse,
   HostingerPrice,
   HostingerProductRow,
   HostingerProductStatus,
@@ -97,9 +106,213 @@ export async function getEcommerceProductDetail(
   productId: string,
 ): Promise<EcommerceProductDetail> {
   const row = await getProductById(productId);
+  const { storeId } = getHostingerConfig();
   return {
     ...summarise(row),
     media: (row.media ?? []).map((m) => ({ url: m.url })),
     variants: (row.variants ?? []).map(toVariant),
+    // Same shape Hostinger returns as `admin_url` on create.
+    adminUrl: `https://ecommerce.hostinger.com/store/${storeId}/products/edit?product=${row.id}`,
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * Writes (Phase 5)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Structured log line for every mutation.
+ *
+ * This is NOT an audit trail and must not be mistaken for one: no CRM database
+ * writes were authorised for this feature, so there is no `audit_logs` row and
+ * no in-product history. What lands here is greppable in the PM2/Vercel logs and
+ * nothing more — unqueryable, subject to log retention, invisible in the UI.
+ * If "who changed this price" ever needs answering in-product, that is a
+ * decision to revisit the audit question, not a reason to invent a table.
+ */
+function logMutation(entry: {
+  action: string;
+  actorId: string;
+  actorRole: string;
+  productId?: string;
+  fields?: Record<string, unknown>;
+  outcome: "ok" | "failed";
+  correlationId?: string | null;
+  error?: string;
+}) {
+  console.info("[ecommerce-mutation]", JSON.stringify(entry));
+}
+
+export interface EcommerceActor {
+  id: string;
+  role: string;
+}
+
+export interface CreateProductInput {
+  kind: "physical" | "digital";
+  name: string;
+  priceMinor: number;
+  description?: string;
+  currency?: string;
+  downloadUrl?: string;
+  /** Draft is create + PATCH; see the partial-failure contract below. */
+  publish: boolean;
+}
+
+export interface CreateProductResult {
+  productId: string;
+  title: string;
+  status: string;
+  adminUrl: string;
+  /**
+   * True when the product was created but the follow-up status=draft PATCH
+   * failed, leaving it PUBLISHED. The caller must say so explicitly — reporting
+   * a generic failure would invite a retry that creates a second product.
+   */
+  draftFailed?: boolean;
+  draftError?: string;
+}
+
+export async function createEcommerceProduct(
+  input: CreateProductInput,
+  actor: EcommerceActor,
+): Promise<CreateProductResult> {
+  const body = {
+    name: input.name,
+    price: input.priceMinor,
+    ...(input.currency ? { currency: input.currency } : {}),
+    ...(input.description ? { description: input.description } : {}),
+    ...(input.kind === "digital" && input.downloadUrl
+      ? { download_url: input.downloadUrl }
+      : {}),
+  };
+
+  let created: HostingerCreateResponse;
+  try {
+    created =
+      input.kind === "digital"
+        ? await createDigitalProduct(body)
+        : await createPhysicalProduct(body);
+  } catch (e) {
+    logMutation({
+      action: "product.create",
+      actorId: actor.id,
+      actorRole: actor.role,
+      fields: { name: input.name, priceMinor: input.priceMinor, kind: input.kind },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  const productId = created.product.id;
+  logMutation({
+    action: "product.create",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { name: input.name, priceMinor: input.priceMinor, kind: input.kind },
+    outcome: "ok",
+  });
+
+  const result: CreateProductResult = {
+    productId,
+    title: created.product.title,
+    status: created.product.status,
+    adminUrl: created.admin_url,
+  };
+
+  // Both create endpoints publish immediately — there is no status on create —
+  // so "save as draft" is a second call, and it can fail on its own.
+  if (!input.publish) {
+    try {
+      await updateProduct(productId, { status: "draft" });
+      result.status = "draft";
+      logMutation({
+        action: "product.update",
+        actorId: actor.id,
+        actorRole: actor.role,
+        productId,
+        fields: { status: "draft" },
+        outcome: "ok",
+      });
+    } catch (e) {
+      result.draftFailed = true;
+      result.draftError = e instanceof Error ? e.message : String(e);
+      logMutation({
+        action: "product.update",
+        actorId: actor.id,
+        actorRole: actor.role,
+        productId,
+        fields: { status: "draft" },
+        outcome: "failed",
+        error: result.draftError,
+      });
+    }
+  }
+
+  return result;
+}
+
+export async function updateEcommerceProduct(
+  productId: string,
+  fields: { name?: string; status?: "draft" | "published" | "archived" },
+  actor: EcommerceActor,
+): Promise<void> {
+  try {
+    // `description` is deliberately never sent: the API can write it but offers
+    // no way to read it, so including it would overwrite the live value with
+    // whatever the blank form held.
+    await updateProduct(productId, fields);
+  } catch (e) {
+    logMutation({
+      action: "product.update",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields,
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+  logMutation({
+    action: "product.update",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields,
+    outcome: "ok",
+  });
+}
+
+export async function updateEcommerceProductPrice(
+  productId: string,
+  variantId: string,
+  amountMinor: number,
+  currency: string,
+  actor: EcommerceActor,
+): Promise<void> {
+  try {
+    await updateVariantPrice(productId, variantId, amountMinor, currency);
+  } catch (e) {
+    logMutation({
+      action: "variant.price.update",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { variantId, amountMinor, currency },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+  logMutation({
+    action: "variant.price.update",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { variantId, amountMinor, currency },
+    outcome: "ok",
+  });
 }

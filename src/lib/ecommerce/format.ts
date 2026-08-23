@@ -53,3 +53,36 @@ export function formatPriceRange(range: EcommercePriceRange | null): string {
   if (range.maxMinor === null || range.maxMinor === range.minMinor) return min;
   return `${min} – ${formatMinor(range.maxMinor, range.currencyCode)}`;
 }
+
+/**
+ * Rupees (what the operator types) to minor units (what the API stores).
+ *
+ * This conversion is the single most dangerous line in the write path: getting
+ * it wrong by a factor of 100 prices a product at ₹12.34 instead of ₹1,234.
+ * Callers must show the returned integer to the operator before submitting, and
+ * the server re-validates it independently rather than trusting the client.
+ *
+ * Returns null for anything that is not a positive amount with at most `digits`
+ * decimal places, so a bad input fails loudly instead of rounding silently.
+ */
+export function rupeesToMinor(input: string, currencyCode = "inr"): number | null {
+  const trimmed = input.trim().replace(/,/g, "");
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+
+  const digits = minorUnitDigits(currencyCode);
+  const [whole, frac = ""] = trimmed.split(".");
+  if (frac.length > digits) return null;
+
+  const padded = frac.padEnd(digits, "0");
+  // String concatenation rather than `value * 100`, which loses pennies to
+  // floating point (1234.56 * 100 === 123455.99999999999).
+  const minor = Number(`${whole}${padded}`);
+  if (!Number.isSafeInteger(minor) || minor < 1) return null;
+  return minor;
+}
+
+/** Minor units back to a plain editable string (no symbol, no grouping). */
+export function minorToRupees(amountMinor: number, currencyCode = "inr"): string {
+  const digits = minorUnitDigits(currencyCode);
+  return (amountMinor / 10 ** digits).toFixed(digits);
+}

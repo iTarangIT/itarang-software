@@ -1,17 +1,25 @@
 /**
- * Hostinger product operations — READ-ONLY (documented API v1).
+ * Hostinger product operations (documented API v1).
  *
- * Create/update/delete are not implemented here; those phases are separately
- * gated. The documented write verbs are PATCH and DELETE — the server confirms
- * this itself, returning 405 "Supported methods: PATCH, DELETE." for any other
- * verb on a product. There is no PUT.
+ * Reads: list + single-product lookup. Writes (Phase 5): create physical/digital,
+ * partial product update, and variant price update. Delete is NOT here — it is
+ * Phase 7.
+ *
+ * The documented write verbs are PATCH and DELETE; the server confirms this
+ * itself, returning 405 "Supported methods: PATCH, DELETE." for any other verb
+ * on a product. There is no PUT.
  */
 
-import { hostingerGet } from "./client";
+import { hostingerGet, hostingerWrite } from "./client";
 import type {
+  HostingerCreateDigitalRequest,
+  HostingerCreatePhysicalRequest,
+  HostingerCreateResponse,
   HostingerProductListResponse,
   HostingerProductRow,
   HostingerProductStatus,
+  HostingerUpdateProductRequest,
+  HostingerVariantBatchRequest,
 } from "./types";
 
 /**
@@ -68,4 +76,52 @@ export async function getProductById(productId: string): Promise<HostingerProduc
     throw err;
   }
   return row;
+}
+
+/* ---------------------------------------------------------------------------
+ * Writes (Phase 5). Create + update only — no delete (Phase 7), no inventory
+ * (Phase 6).
+ * ------------------------------------------------------------------------- */
+
+/** Both create endpoints produce a PUBLISHED product; there is no status field. */
+export async function createPhysicalProduct(
+  body: HostingerCreatePhysicalRequest,
+): Promise<HostingerCreateResponse> {
+  return hostingerWrite<HostingerCreateResponse>("POST", "/products/physical", body);
+}
+
+export async function createDigitalProduct(
+  body: HostingerCreateDigitalRequest,
+): Promise<HostingerCreateResponse> {
+  return hostingerWrite<HostingerCreateResponse>("POST", "/products/digital", body);
+}
+
+/** Partial update. Omitted keys are left untouched. */
+export async function updateProduct(
+  productId: string,
+  body: HostingerUpdateProductRequest,
+): Promise<unknown> {
+  return hostingerWrite("PATCH", `/products/${encodeURIComponent(productId)}`, body);
+}
+
+/**
+ * Price only. The batch endpoint is partial (verified), so inventory fields are
+ * deliberately NOT sent — including them would drag stock into a price edit and
+ * reintroduce a lost-update race against concurrent purchases.
+ */
+export async function updateVariantPrice(
+  productId: string,
+  variantId: string,
+  amountMinor: number,
+  currency: string,
+): Promise<unknown> {
+  const body: HostingerVariantBatchRequest = {
+    // sale_amount is omitted, not nulled — the API rejects a null.
+    variants: [{ variant_id: variantId, prices: [{ amount: amountMinor, currency }] }],
+  };
+  return hostingerWrite(
+    "PATCH",
+    `/products/${encodeURIComponent(productId)}/variants/batch`,
+    body,
+  );
 }
