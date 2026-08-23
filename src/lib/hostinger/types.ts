@@ -80,3 +80,67 @@ export const HOSTINGER_PRODUCT_STATUSES = [
   "archived",
 ] as const;
 export type HostingerProductStatus = (typeof HOSTINGER_PRODUCT_STATUSES)[number];
+
+/* ---------------------------------------------------------------------------
+ * Write request/response shapes (Phase 5)
+ * ------------------------------------------------------------------------- */
+
+/** POST /products/physical — creates a PUBLISHED product with one variant. */
+export interface HostingerCreatePhysicalRequest {
+  /** ≤255. Note the API takes `name` but returns `title`. */
+  name: string;
+  /** Integer ≥1, smallest currency unit (paise for INR). */
+  price: number;
+  /** ISO 4217, 3 chars. Omit to use the store's default currency. */
+  currency?: string;
+  /** ≤5000. Create-only: the API offers no way to read a description back. */
+  description?: string;
+}
+
+/** POST /products/digital — as physical, plus an optional download link. */
+export interface HostingerCreateDigitalRequest extends HostingerCreatePhysicalRequest {
+  /** ≤2048. */
+  download_url?: string;
+}
+
+export interface HostingerCreateResponse {
+  product: {
+    id: string;
+    title: string;
+    type: string;
+    status: string;
+    price: number;
+    currency_code: string;
+  };
+  /** Deep link into the Hostinger dashboard for this product. */
+  admin_url: string;
+}
+
+/**
+ * PATCH /products/{id}. Partial — omitted keys are left untouched (verified).
+ *
+ * `description` is intentionally absent from the CRM's update path: the API can
+ * write it but exposes no way to read it, so an edit form would load blank and
+ * overwrite the live value with empty. Create only.
+ */
+export interface HostingerUpdateProductRequest {
+  name?: string;
+  status?: "draft" | "published" | "archived";
+}
+
+/**
+ * PATCH /products/{id}/variants/batch — verified PARTIAL: a prices-only body
+ * leaves inventory_quantity untouched, so price edits need no read-modify-write.
+ *
+ * Two vendor quirks, both verified: the price object here uses `currency`
+ * (reads return `currency_code`), and `sale_amount: null` is REJECTED — omit the
+ * key entirely rather than nulling it.
+ */
+export interface HostingerVariantPriceUpdate {
+  variant_id: string;
+  prices: { amount: number; currency: string; sale_amount?: number }[];
+}
+
+export interface HostingerVariantBatchRequest {
+  variants: HostingerVariantPriceUpdate[];
+}

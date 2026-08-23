@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ChevronLeft, ChevronRight, Inbox, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Inbox, Loader2, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPriceRange } from "@/lib/ecommerce/format";
@@ -41,7 +41,15 @@ export function EcommerceProductListView() {
                 <span className="text-sm text-ink-muted">
                     {query.isLoading ? "Loading..." : `${total} product${total === 1 ? "" : "s"}`}
                 </span>
-                {query.isFetching && <Loader2 className="h-4 w-4 animate-spin text-ink-muted" />}
+                <div className="flex items-center gap-3">
+                    {query.isFetching && <Loader2 className="h-4 w-4 animate-spin text-ink-muted" />}
+                    <Link href="/sales-head/ecommerce/products/new">
+                        <Button size="sm">
+                            <Plus className="h-4 w-4" />
+                            New product
+                        </Button>
+                    </Link>
+                </div>
             </div>
 
             {query.error ? (

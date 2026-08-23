@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Pencil } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatPrice, formatPriceRange } from "@/lib/ecommerce/format";
 import type { EcommerceProductDetail } from "@/lib/ecommerce/types";
@@ -58,6 +59,20 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                             {p.type ? <Badge variant="outline">{p.type}</Badge> : null}
                         </div>
                         <p className="font-mono text-xs text-ink-muted">{p.id}</p>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                            <Link href={`/sales-head/ecommerce/products/${p.id}/edit`}>
+                                <Button size="sm">
+                                    <Pencil className="h-4 w-4" />
+                                    Edit
+                                </Button>
+                            </Link>
+                            <a href={p.adminUrl} target="_blank" rel="noopener noreferrer">
+                                <Button size="sm" variant="outline">
+                                    Edit in Hostinger
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                </Button>
+                            </a>
+                        </div>
                     </header>
 
                     <section className="grid gap-5 md:grid-cols-3">

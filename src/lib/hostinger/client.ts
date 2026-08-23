@@ -11,10 +11,19 @@
  * fails at call time with a useful message instead of breaking import of every
  * module downstream.
  *
- * READ-ONLY BY CONSTRUCTION. This module exposes `hostingerGet` and nothing else.
- * There is deliberately no post/patch/delete helper: create, update, inventory and
- * delete are separately gated phases. Do not add a mutation helper here without
- * that approval.
+ * WRITE SURFACE (Phase 5, approved). Exposes `hostingerGet` and `hostingerWrite`.
+ * `hostingerWrite` permits POST and PATCH only, for exactly these endpoints:
+ *
+ *   POST  /products/physical            create a physical product
+ *   POST  /products/digital             create a digital product
+ *   PATCH /products/{id}                name / description / status
+ *   PATCH /products/{id}/variants/batch price (inventory is Phase 6)
+ *
+ * There is deliberately still NO DELETE helper — delete and the archive workflow
+ * are Phase 7. Do not widen this surface without that approval.
+ *
+ * Writes are never retried. A timeout on a mutation is an UNKNOWN outcome, not a
+ * failure, and a blind retry could create a second product.
  */
 
 export function cleanEnv(value?: string) {
@@ -86,6 +95,9 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 function toCrmStatus(vendorStatus: number): number {
   if (vendorStatus === 404) return 404;
   if (vendorStatus === 429) return 429;
+  // 422 describes the request WE built, so it is actionable for the operator and
+  // is passed through with the vendor's field message (see hostingerWrite).
+  if (vendorStatus === 422 || vendorStatus === 400) return 422;
   return 502;
 }
 
@@ -152,4 +164,78 @@ export async function hostingerGet<T>(
   } catch {
     throw new HostingerApiError("Hostinger returned a malformed response", 502, null);
   }
+}
+
+/**
+ * POST / PATCH against the documented API. See the module header for the exact
+ * set of permitted endpoints — this helper does not police the path, so keep
+ * callers confined to `src/lib/hostinger/products.ts`.
+ *
+ * Never retried: a mutation timeout is an unknown outcome, and retrying could
+ * create a duplicate product.
+ */
+export async function hostingerWrite<T>(
+  method: "POST" | "PATCH",
+  path: string,
+  body: unknown,
+): Promise<T> {
+  const cfg = getHostingerConfig();
+  const url = buildUrl(path, undefined, cfg.storeId);
+
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      method,
+      headers: {
+        Authorization: `Bearer ${cfg.token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      body: JSON.stringify(body),
+    });
+  } catch (e: unknown) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
+    // Deliberately NOT "failed": the write may well have landed. Callers must
+    // surface this as indeterminate rather than inviting a retry.
+    throw new HostingerApiError(
+      timedOut
+        ? "Hostinger did not respond in time — the change may or may not have been applied. Refresh and check before retrying."
+        : "Could not reach Hostinger — the change may or may not have been applied. Refresh and check before retrying.",
+      504,
+      null,
+    );
+  }
+
+  const text = await res.text().catch(() => "");
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok) {
+    const envelope = parsed as { message?: string; correlation_id?: string } | null;
+    const correlationId = envelope?.correlation_id ?? null;
+    console.error(`[hostinger] ${method} ${path} -> ${res.status}`, {
+      correlationId,
+      body: text.slice(0, 500),
+    });
+
+    const crmStatus = toCrmStatus(res.status);
+    // A 422 is a complaint about the payload we constructed — surfacing the
+    // vendor's field message ("...prices.0.sale_amount must be an integer") is
+    // what makes it fixable. Every other status keeps a generic message so no
+    // unvalidated vendor text reaches the browser.
+    const message =
+      crmStatus === 422 && typeof envelope?.message === "string"
+        ? envelope.message.slice(0, 300)
+        : `Hostinger returned ${res.status}`;
+
+    throw new HostingerApiError(message, crmStatus, correlationId);
+  }
+
+  return parsed as T;
 }

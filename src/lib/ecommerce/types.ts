@@ -60,6 +60,13 @@ export interface EcommerceProductSummary {
 export interface EcommerceProductDetail extends EcommerceProductSummary {
   media: { url: string }[];
   variants: EcommerceVariant[];
+  /**
+   * Deep link into the Hostinger dashboard for this product. Built server-side
+   * because the store id lives in server config — exposing it through a
+   * NEXT_PUBLIC_ variable just to string a URL together in the browser would
+   * leak configuration for no reason.
+   */
+  adminUrl: string;
 }
 
 export interface EcommerceProductListResult {
