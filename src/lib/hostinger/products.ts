@@ -19,7 +19,11 @@ import type {
   HostingerProductRow,
   HostingerProductStatus,
   HostingerUpdateProductRequest,
+  HostingerVariant,
   HostingerVariantBatchRequest,
+  HostingerVariantInventoryBatchRequest,
+  HostingerVariantInventoryUpdate,
+  HostingerVariantListResponse,
 } from "./types";
 
 /**
@@ -119,6 +123,43 @@ export async function updateVariantPrice(
     // sale_amount is omitted, not nulled — the API rejects a null.
     variants: [{ variant_id: variantId, prices: [{ amount: amountMinor, currency }] }],
   };
+  return hostingerWrite(
+    "PATCH",
+    `/products/${encodeURIComponent(productId)}/variants/batch`,
+    body,
+  );
+}
+
+/** Variants for one product. Used for the pre-write stock re-read. */
+export async function listVariants(productId: string): Promise<HostingerVariant[]> {
+  const res = await hostingerGet<HostingerVariantListResponse>(
+    `/products/${encodeURIComponent(productId)}/variants`,
+  );
+  return Array.isArray(res?.data) ? res.data : [];
+}
+
+/**
+ * Inventory only. Absolute — `quantity` is the resulting stock, not a delta, and
+ * the write is idempotent (verified: setting 7 twice leaves 7).
+ *
+ * `prices` is never sent: the batch endpoint replaces a variant's prices in full,
+ * so including them would let a stock edit disturb pricing.
+ *
+ * Note: setting manage_inventory=false does NOT clear inventory_quantity — the
+ * stored figure survives and is simply ignored, so it will be stale if tracking
+ * is switched back on. Callers should treat an untracked variant's quantity as
+ * meaningless rather than current.
+ */
+export async function updateVariantInventory(
+  productId: string,
+  variantId: string,
+  fields: { quantity?: number; manageInventory?: boolean },
+): Promise<unknown> {
+  const variant: HostingerVariantInventoryUpdate = { variant_id: variantId };
+  if (fields.quantity !== undefined) variant.inventory_quantity = fields.quantity;
+  if (fields.manageInventory !== undefined) variant.manage_inventory = fields.manageInventory;
+
+  const body: HostingerVariantInventoryBatchRequest = { variants: [variant] };
   return hostingerWrite(
     "PATCH",
     `/products/${encodeURIComponent(productId)}/variants/batch`,

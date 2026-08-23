@@ -144,3 +144,28 @@ export interface HostingerVariantPriceUpdate {
 export interface HostingerVariantBatchRequest {
   variants: HostingerVariantPriceUpdate[];
 }
+
+/**
+ * PATCH /products/{id}/variants/batch — inventory only (Phase 6).
+ *
+ * `prices` is deliberately absent from this type. The docs state prices "replace
+ * the variant's existing prices in full", so including them in a stock edit could
+ * drop a variant's other-currency prices. A stock change must not touch pricing.
+ */
+export interface HostingerVariantInventoryUpdate {
+  variant_id: string;
+  /** Integer ≥ 0. Absolute — the resulting quantity, not a delta. */
+  inventory_quantity?: number;
+  /** Whether stock is tracked at all. False makes the storefront treat it as unlimited. */
+  manage_inventory?: boolean;
+}
+
+export interface HostingerVariantInventoryBatchRequest {
+  variants: HostingerVariantInventoryUpdate[];
+}
+
+/** GET /products/{id}/variants */
+export interface HostingerVariantListResponse {
+  data: HostingerVariant[];
+  meta: HostingerListMeta;
+}
