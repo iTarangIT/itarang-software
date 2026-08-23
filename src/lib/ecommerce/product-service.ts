@@ -13,7 +13,9 @@ import {
   createPhysicalProduct,
   getProductById,
   listProducts,
+  listVariants,
   updateProduct,
+  updateVariantInventory,
   updateVariantPrice,
 } from "@/lib/hostinger/products";
 import type {
@@ -315,4 +317,115 @@ export async function updateEcommerceProductPrice(
     fields: { variantId, amountMinor, currency },
     outcome: "ok",
   });
+}
+
+/** Current tracked state of one variant, for the pre-write drift check. */
+export interface VariantStock {
+  variantId: string;
+  quantity: number | null;
+  manageInventory: boolean;
+}
+
+export async function readVariantStock(
+  productId: string,
+  variantId: string,
+): Promise<VariantStock> {
+  const variants = await listVariants(productId);
+  const v = variants.find((x) => x.id === variantId);
+  if (!v) {
+    const err = new Error("Variant not found on this product") as Error & { status?: number };
+    err.status = 404;
+    throw err;
+  }
+  const manageInventory = v.manage_inventory === true;
+  return {
+    variantId: v.id,
+    // Null when untracked, so callers cannot mistake "not tracked" for zero.
+    quantity:
+      manageInventory && typeof v.inventory_quantity === "number" ? v.inventory_quantity : null,
+    manageInventory,
+  };
+}
+
+/** Raised when stock moved between the operator reading it and submitting. */
+export class StockDriftError extends Error {
+  readonly status = 409;
+  readonly currentQuantity: number | null;
+  /** withErrorHandler forwards `details` alongside the message (api-utils.ts). */
+  readonly details: { currentQuantity: number | null };
+  constructor(expected: number, current: number | null) {
+    super(
+      `Stock changed from ${expected} to ${current ?? "untracked"} since this form was opened. Nothing was written — review the current value and submit again.`,
+    );
+    this.name = "StockDriftError";
+    this.currentQuantity = current;
+    this.details = { currentQuantity: current };
+  }
+}
+
+export async function updateEcommerceVariantInventory(
+  productId: string,
+  input: {
+    variantId: string;
+    quantity?: number;
+    manageInventory?: boolean;
+    /**
+     * What the operator saw when the form loaded. Absolute writes cannot
+     * double-count, but they DO silently discard anything that moved in between,
+     * so the value is re-checked immediately before writing.
+     */
+    expectedQuantity?: number;
+  },
+  actor: EcommerceActor,
+): Promise<VariantStock> {
+  const before = await readVariantStock(productId, input.variantId);
+
+  // Only meaningful when the variant is already tracked; switching tracking ON
+  // has no prior quantity to drift from.
+  if (
+    input.expectedQuantity !== undefined &&
+    before.manageInventory &&
+    before.quantity !== input.expectedQuantity
+  ) {
+    logMutation({
+      action: "variant.inventory.update",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { ...input, blockedBy: "stock-drift", actual: before.quantity },
+      outcome: "failed",
+    });
+    throw new StockDriftError(input.expectedQuantity, before.quantity);
+  }
+
+  try {
+    await updateVariantInventory(productId, input.variantId, {
+      quantity: input.quantity,
+      manageInventory: input.manageInventory,
+    });
+  } catch (e) {
+    logMutation({
+      action: "variant.inventory.update",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { ...input },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  // Read back rather than echoing the request, so the UI shows what Hostinger
+  // actually holds instead of what we hoped it would.
+  const after = await readVariantStock(productId, input.variantId);
+  logMutation({
+    action: "variant.inventory.update",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { ...input, from: before.quantity, to: after.quantity },
+    outcome: "ok",
+  });
+  return after;
 }

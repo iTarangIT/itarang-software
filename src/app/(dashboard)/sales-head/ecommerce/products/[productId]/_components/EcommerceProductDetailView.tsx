@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Pencil } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Boxes, ExternalLink, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatPrice, formatPriceRange } from "@/lib/ecommerce/format";
-import type { EcommerceProductDetail } from "@/lib/ecommerce/types";
+import type { EcommerceProductDetail, EcommerceVariant } from "@/lib/ecommerce/types";
+import { InventoryDialog } from "./InventoryDialog";
 
 export function EcommerceProductDetailView({ productId }: { productId: string }) {
     const query = useQuery<{ success: true; data: EcommerceProductDetail }>({
@@ -22,6 +24,7 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
     });
 
     const p = query.data?.data;
+    const [stockFor, setStockFor] = useState<EcommerceVariant | null>(null);
 
     return (
         <div className="space-y-5">
@@ -78,7 +81,7 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                     <section className="grid gap-5 md:grid-cols-3">
                         <div className="space-y-4 md:col-span-2">
                             <Panel title="Variants and stock">
-                                <VariantTable variants={p.variants} />
+                                <VariantTable variants={p.variants} onAdjust={setStockFor} />
                             </Panel>
                         </div>
 
@@ -110,6 +113,19 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                     </section>
                 </>
             ) : null}
+
+            {stockFor && p ? (
+                <InventoryDialog
+                    productId={p.id}
+                    variant={stockFor}
+                    onClose={() => setStockFor(null)}
+                    onSaved={() => {
+                        // Re-fetch rather than patching local state, so the page shows
+                        // what Hostinger holds rather than what we asked for.
+                        void query.refetch();
+                    }}
+                />
+            ) : null}
         </div>
     );
 }
@@ -134,7 +150,13 @@ function Row({ label, value }: { label: string; value: string }) {
     );
 }
 
-function VariantTable({ variants }: { variants: EcommerceProductDetail["variants"] }) {
+function VariantTable({
+    variants,
+    onAdjust,
+}: {
+    variants: EcommerceProductDetail["variants"];
+    onAdjust: (v: EcommerceVariant) => void;
+}) {
     if (!variants.length) {
         return <p className="px-4 py-3 text-sm text-ink-muted">No variants.</p>;
     }
@@ -148,6 +170,7 @@ function VariantTable({ variants }: { variants: EcommerceProductDetail["variants
                         <th className="px-4 py-2.5 text-left font-semibold">SKU</th>
                         <th className="px-4 py-2.5 text-left font-semibold">Price</th>
                         <th className="px-4 py-2.5 text-left font-semibold">Stock</th>
+                        <th className="px-4 py-2.5 text-right font-semibold"></th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -178,6 +201,12 @@ function VariantTable({ variants }: { variants: EcommerceProductDetail["variants
                                 ) : (
                                     (v.inventoryQuantity ?? "—")
                                 )}
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                                <Button size="sm" variant="outline" onClick={() => onAdjust(v)}>
+                                    <Boxes className="h-3.5 w-3.5" />
+                                    Adjust stock
+                                </Button>
                             </td>
                         </tr>
                     ))}
