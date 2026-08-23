@@ -1,96 +1,95 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import type { HostingerProduct } from "@/lib/hostinger/types";
+import type { HostingerProductRow } from "@/lib/hostinger/types";
 
 /**
  * Normalisation is the seam where Hostinger's envelope becomes something the
- * Sales Head UI renders. Two failure modes matter, and both are silent:
+ * Sales Head UI renders. Three failure modes matter, and all are silent:
  *
  *   · an unmanaged variant reported as 0 stock — reads as "out of stock" in the
  *     UI when it actually means "Hostinger isn't tracking this at all";
- *   · a dropped allow_backorder flag — hides that Hostinger will accept orders
- *     below zero, which is the one thing stopping someone assuming the platform
- *     will refuse an oversell.
+ *   · `variants: null` (the default, since the payload is lean unless
+ *     include[]=variants) treated as "no variants" — would zero out the counts;
+ *   · a price scale slip — amounts are minor units, so a 100x error is one
+ *     misplaced divide away.
  *
- * Fixtures below mirror real payloads captured from the live store during the
- * read-only Phase 1 probe.
+ * Fixtures mirror real payloads captured from the live store.
  */
 
 const listProducts = vi.fn();
-const getProduct = vi.fn();
+const getProductById = vi.fn();
 
 vi.mock("@/lib/hostinger/products", () => ({
-  MAX_PAGE_SIZE: 100,
+  PER_PAGE: 50,
   listProducts: (...a: unknown[]) => listProducts(...a),
-  getProduct: (...a: unknown[]) => getProduct(...a),
+  getProductById: (...a: unknown[]) => getProductById(...a),
 }));
 
 const { getEcommerceProductDetail, getEcommerceProductList } = await import(
   "../product-service"
 );
 
-/** Real shape: a managed variant with stock 4 and backorder enabled. */
-const MANAGED: HostingerProduct = {
+/** Real shape: managed variant, stock 4. */
+const MANAGED: HostingerProductRow = {
   id: "prod_01M07W8R9V3QPTKFDC9B63XZHM",
   title: "iTarang Lithium Battery 200Ah - 12V LiFePO4",
-  subtitle: "Longer backup for bigger loads",
   status: "published",
-  updated_at: "2026-08-19T00:30:21.887Z",
-  type: { value: "physical" },
+  thumbnail: "https://cdn.example/thumb.png",
+  type: "physical",
+  variant_count: 1,
+  price_range: { min: 100, max: 100, currency_code: "inr" },
   variants: [
     {
       id: "variant_01M07W8REJ33FDFZX1YGJSX3D0",
       title: "iTarang Lithium Battery 200Ah",
-      image_url: null,
       sku: "ITR-BAT-LI-200",
+      options: [],
+      prices: [{ amount: 100, sale_amount: null, currency_code: "inr" }],
       inventory_quantity: 4,
-      allow_backorder: true,
       manage_inventory: true,
-      track_low_stock: false,
-      low_stock_threshold: null,
-      is_active: true,
-      prices: [
-        {
-          id: "ma_1",
-          currency_code: "inr",
-          currency: { code: "inr", symbol: "₹", decimal_digits: 2 },
-          amount: 100,
-          sale_amount: null,
-          region_id: null,
-        },
-      ],
     },
   ],
+  media: [{ url: "https://cdn.example/1.png", type: "image", is_thumbnail: true }],
 };
 
 /** Real shape: the combo product, which does not manage inventory. */
-const UNMANAGED: HostingerProduct = {
+const UNMANAGED: HostingerProductRow = {
   id: "prod_01M07WD4XP42SYQ1E1C1FTXYSM",
   title: "iTarang 900VA Inverter + 150Ah Lithium Battery Combo",
   status: "published",
+  thumbnail: null,
+  type: "physical",
+  variant_count: 1,
+  price_range: { min: 100, max: 100, currency_code: "inr" },
   variants: [
     {
       id: "variant_01M07WD51VQ15T6B2JBJSANMZ0",
       title: "Combo",
-      image_url: null,
       sku: "ITR-CMB-900-150",
-      manage_inventory: false,
-      inventory_quantity: 0,
-      allow_backorder: false,
-      is_active: true,
+      options: [],
       prices: [],
+      inventory_quantity: 0,
+      manage_inventory: false,
     },
   ],
+  media: null,
+};
+
+/** Default lean list row — variants and media omitted unless include[] is sent. */
+const LEAN: HostingerProductRow = {
+  ...MANAGED,
+  variants: null,
+  media: null,
 };
 
 beforeEach(() => {
   listProducts.mockReset();
-  getProduct.mockReset();
+  getProductById.mockReset();
 });
 
 describe("variant inventory normalisation", () => {
   it("reports null - not zero - when the variant is not inventory-managed", async () => {
-    getProduct.mockResolvedValue(UNMANAGED);
+    getProductById.mockResolvedValue(UNMANAGED);
     const p = await getEcommerceProductDetail(UNMANAGED.id);
 
     expect(p.variants[0].manageInventory).toBe(false);
@@ -99,67 +98,68 @@ describe("variant inventory normalisation", () => {
     expect(p.totalInventory).toBeNull();
   });
 
-  it("preserves quantity and the backorder flag for managed variants", async () => {
-    getProduct.mockResolvedValue(MANAGED);
+  it("preserves quantity for managed variants", async () => {
+    getProductById.mockResolvedValue(MANAGED);
     const p = await getEcommerceProductDetail(MANAGED.id);
 
     expect(p.variants[0].inventoryQuantity).toBe(4);
-    expect(p.variants[0].allowBackorder).toBe(true);
     expect(p.totalInventory).toBe(4);
-    expect(p.anyBackorder).toBe(true);
+  });
+});
+
+describe("lean list rows", () => {
+  it("keeps variant_count from the payload when variants were not included", async () => {
+    listProducts.mockResolvedValue({
+      data: [LEAN],
+      meta: { current_page: 1, per_page: 50, total: 1 },
+    });
+    const res = await getEcommerceProductList({ page: 1 });
+
+    // variants: null means "not loaded", NOT "this product has no variants".
+    expect(res.rows[0].variantCount).toBe(1);
+    expect(res.rows[0].totalInventory).toBeNull();
+    // SKU comes off the variant, so it is unavailable on a lean row.
+    expect(res.rows[0].sku).toBeNull();
   });
 });
 
 describe("summary shaping", () => {
   it("exposes the SKU only for single-variant products", async () => {
     listProducts.mockResolvedValue({
-      products: [MANAGED],
-      count: 1,
-      offset: 0,
-      limit: 25,
+      data: [MANAGED],
+      meta: { current_page: 1, per_page: 50, total: 1 },
     });
-    const res = await getEcommerceProductList({ limit: 25, offset: 0 });
+    const res = await getEcommerceProductList({ page: 1 });
 
     expect(res.rows[0].sku).toBe("ITR-BAT-LI-200");
-    expect(res.rows[0].variantCount).toBe(1);
     expect(res.rows[0].type).toBe("physical");
-    expect(res.total).toBe(1);
+    expect(res.rows[0].status).toBe("published");
   });
 
-  it("carries the raw price amount and its scale rather than a formatted string", async () => {
-    getProduct.mockResolvedValue(MANAGED);
-    const p = await getEcommerceProductDetail(MANAGED.id);
-
-    // The price scale is not yet confirmed with Hostinger, so the service must
-    // hand the UI the source number and let it disclose the raw value.
-    expect(p.variants[0].price?.amountMinor).toBe(100);
-    expect(p.variants[0].price?.decimalDigits).toBe(2);
-    expect(p.variants[0].price?.currencyCode).toBe("inr");
-  });
-
-  it("defaults decimal digits to 2 when the currency omits them", async () => {
-    getProduct.mockResolvedValue({
-      ...MANAGED,
-      variants: [
-        {
-          ...MANAGED.variants![0],
-          prices: [
-            {
-              id: "ma_2",
-              currency_code: "inr",
-              // decimal_digits absent
-              currency: { code: "inr", symbol: "₹" } as never,
-              amount: 4999900,
-              sale_amount: null,
-              region_id: null,
-            },
-          ],
-        },
-      ],
+  it("carries paging straight from the vendor meta rather than assuming it", async () => {
+    listProducts.mockResolvedValue({
+      data: [],
+      meta: { current_page: 3, per_page: 50, total: 120 },
     });
-    const p = await getEcommerceProductDetail(MANAGED.id);
+    const res = await getEcommerceProductList({ page: 3 });
 
-    // Guessing 0 would render paise as rupees and overstate by 100x.
-    expect(p.variants[0].price?.decimalDigits).toBe(2);
+    expect(res.page).toBe(3);
+    expect(res.perPage).toBe(50);
+    expect(res.total).toBe(120);
+  });
+
+  it("maps price_range in minor units without rescaling", async () => {
+    listProducts.mockResolvedValue({
+      data: [MANAGED],
+      meta: { current_page: 1, per_page: 50, total: 1 },
+    });
+    const res = await getEcommerceProductList({ page: 1 });
+
+    // 100 paise. Rescaling here would double-apply the divide in formatPrice.
+    expect(res.rows[0].priceRange).toEqual({
+      minMinor: 100,
+      maxMinor: 100,
+      currencyCode: "inr",
+    });
   });
 });
