@@ -1,60 +1,55 @@
 /** Presentation helpers for the Hostinger Ecommerce views. */
 
-import type { EcommercePrice } from "./types";
+import type { EcommercePrice, EcommercePriceRange } from "./types";
 
 /**
- * Formats a vendor price for display.
+ * How many minor units make one major unit for a currency.
  *
- * The amount is treated as MINOR UNITS (paise for INR). That inference is not
- * yet confirmed with Hostinger — see the Phase 1 notes — so every caller should
- * also surface `rawAmount` rather than presenting this as settled. It matters
- * only cosmetically while the feature is read-only, but must be nailed down
- * before any write path exists.
+ * The documented API returns only an ISO currency code — unlike the old
+ * undocumented surface it carries no `decimal_digits`, so the exponent is derived
+ * from Intl rather than read off the payload. Falls back to 2, which is right for
+ * INR and every other currency this store is likely to use; guessing 0 would
+ * render paise as rupees and overstate every price by 100x.
  */
-export function formatPrice(price: EcommercePrice | null): string {
-  if (!price || price.amountMinor === null) return "—";
-  const divisor = 10 ** price.decimalDigits;
-  const major = price.amountMinor / divisor;
-  const symbol = price.currencySymbol || price.currencyCode.toUpperCase();
-  return `${symbol}${major.toLocaleString("en-IN", {
-    minimumFractionDigits: price.decimalDigits,
-    maximumFractionDigits: price.decimalDigits,
-  })}`;
-}
-
-export function formatDate(iso: string | null): string {
-  if (!iso) return "—";
+function minorUnitDigits(currencyCode: string): number {
   try {
-    return new Date(iso).toLocaleDateString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
+    const fmt = new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: currencyCode.toUpperCase(),
     });
+    return fmt.resolvedOptions().maximumFractionDigits ?? 2;
   } catch {
-    return "—";
+    return 2;
   }
 }
 
+function formatMinor(amountMinor: number, currencyCode: string): string {
+  const digits = minorUnitDigits(currencyCode);
+  const major = amountMinor / 10 ** digits;
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: currencyCode.toUpperCase(),
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(major);
+  } catch {
+    return `${currencyCode.toUpperCase()} ${major.toFixed(digits)}`;
+  }
+}
+
+export function formatPrice(price: EcommercePrice | null): string {
+  if (!price || price.amountMinor === null) return "—";
+  return formatMinor(price.amountMinor, price.currencyCode);
+}
+
 /**
- * Hostinger returns `description` as HTML. The repo has no sanitiser dependency
- * and no existing dangerouslySetInnerHTML usage, so rather than introduce an
- * XSS surface for a read-only admin view, tags are stripped and the text is
- * rendered as paragraphs. Rich rendering can come later with a real sanitiser.
+ * Renders a span. Single-variant products report min === max, so those collapse
+ * to one figure rather than showing a pointless "X – X".
  */
-export function htmlToParagraphs(html: string | null): string[] {
-  if (!html) return [];
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .split(/\n{2,}/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+export function formatPriceRange(range: EcommercePriceRange | null): string {
+  if (!range || range.minMinor === null) return "—";
+  const min = formatMinor(range.minMinor, range.currencyCode);
+  if (range.maxMinor === null || range.maxMinor === range.minMinor) return min;
+  return `${min} – ${formatMinor(range.maxMinor, range.currencyCode)}`;
 }

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { formatDate, formatPrice, htmlToParagraphs } from "@/lib/ecommerce/format";
+import { formatPrice, formatPriceRange } from "@/lib/ecommerce/format";
 import type { EcommerceProductDetail } from "@/lib/ecommerce/types";
 
 export function EcommerceProductDetailView({ productId }: { productId: string }) {
@@ -56,9 +56,7 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                                 {p.status ?? "unknown"}
                             </Badge>
                             {p.type ? <Badge variant="outline">{p.type}</Badge> : null}
-                            {!p.purchasable ? <Badge variant="warning">not purchasable</Badge> : null}
                         </div>
-                        {p.subtitle ? <p className="text-sm text-ink-muted">{p.subtitle}</p> : null}
                         <p className="font-mono text-xs text-ink-muted">{p.id}</p>
                     </header>
 
@@ -67,27 +65,14 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                             <Panel title="Variants and stock">
                                 <VariantTable variants={p.variants} />
                             </Panel>
-
-                            <Panel title="Description">
-                                {htmlToParagraphs(p.descriptionHtml).length ? (
-                                    <div className="space-y-2 px-4 py-3 text-sm text-ink">
-                                        {htmlToParagraphs(p.descriptionHtml).map((para, i) => (
-                                            <p key={i}>{para}</p>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <p className="px-4 py-3 text-sm text-ink-muted">No description.</p>
-                                )}
-                            </Panel>
                         </div>
 
                         <div className="space-y-4">
                             <Panel title="Details">
                                 <dl className="divide-y divide-border text-sm">
-                                    <Row label="Slug" value={p.urlHandle ?? p.slug ?? "—"} mono />
-                                    <Row label="Created" value={formatDate(p.createdAt)} />
-                                    <Row label="Updated" value={formatDate(p.updatedAt)} />
+                                    <Row label="Type" value={p.type ?? "—"} />
                                     <Row label="Variants" value={String(p.variantCount)} />
+                                    <Row label="Price range" value={formatPriceRange(p.priceRange)} />
                                 </dl>
                             </Panel>
 
@@ -97,7 +82,7 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                                         {p.media.map((m) => (
                                             /* eslint-disable-next-line @next/next/no-img-element */
                                             <img
-                                                key={m.id}
+                                                key={m.url}
                                                 src={m.url}
                                                 alt=""
                                                 className="aspect-square w-full rounded-md border border-border object-cover"
@@ -125,11 +110,11 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     );
 }
 
-function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Row({ label, value }: { label: string; value: string }) {
     return (
         <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
             <dt className="text-ink-muted">{label}</dt>
-            <dd className={mono ? "font-mono text-xs text-ink" : "text-ink"}>{value}</dd>
+            <dd className="text-ink">{value}</dd>
         </div>
     );
 }
@@ -155,10 +140,10 @@ function VariantTable({ variants }: { variants: EcommerceProductDetail["variants
                         <tr key={v.id}>
                             <td className="px-4 py-2.5">
                                 {v.title}
-                                {!v.isActive ? (
-                                    <Badge variant="muted" className="ml-2">
-                                        inactive
-                                    </Badge>
+                                {v.options.length ? (
+                                    <span className="ml-2 text-xs text-ink-muted">
+                                        {v.options.map((o) => `${o.name}: ${o.value}`).join(", ")}
+                                    </span>
                                 ) : null}
                             </td>
                             <td className="px-4 py-2.5 font-mono text-xs text-ink-muted">
@@ -166,28 +151,17 @@ function VariantTable({ variants }: { variants: EcommerceProductDetail["variants
                             </td>
                             <td className="px-4 py-2.5">
                                 {formatPrice(v.price)}
-                                {v.price?.amountMinor !== null && v.price ? (
-                                    /* Raw minor-unit value shown because the price scale is not
-                                       yet confirmed with Hostinger — see the plan's Phase 1 notes.
-                                       Better to expose the source number than imply certainty. */
-                                    <span className="ml-1.5 font-mono text-[10px] text-ink-muted">
-                                        (raw {v.price.amountMinor})
-                                    </span>
+                                {v.price && v.price.saleAmountMinor !== null ? (
+                                    <Badge variant="info" className="ml-2">
+                                        on sale
+                                    </Badge>
                                 ) : null}
                             </td>
                             <td className="px-4 py-2.5">
                                 {!v.manageInventory ? (
                                     <span className="text-ink-muted">Not tracked</span>
                                 ) : (
-                                    <span className="inline-flex flex-wrap items-center gap-1.5">
-                                        {v.inventoryQuantity ?? "—"}
-                                        {v.allowBackorder ? (
-                                            <Badge variant="warning">backorder allowed</Badge>
-                                        ) : null}
-                                        {v.trackLowStock && v.lowStockThreshold !== null ? (
-                                            <Badge variant="outline">low at {v.lowStockThreshold}</Badge>
-                                        ) : null}
-                                    </span>
+                                    (v.inventoryQuantity ?? "—")
                                 )}
                             </td>
                         </tr>

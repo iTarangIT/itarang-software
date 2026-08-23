@@ -1,50 +1,51 @@
 /**
  * Hostinger Ecommerce API client — the ONLY module that reads HOSTINGER_*.
  *
- * Follows the src/lib/digio/client.ts convention: credentials are read through
- * lazy getters rather than module-load constants, so an unconfigured
- * environment fails at call time with a useful message instead of breaking
- * import of every module downstream.
+ * Targets the DOCUMENTED API at developers.hostinger.com/api/ecommerce/v1.
+ * Phases 2-4 originally shipped against api-ecommerce.hostinger.com, an internal
+ * surface with no published contract, no version prefix and no changelog; Phase
+ * 4C migrated off it. Do not reintroduce that host.
  *
- * READ-ONLY BY CONSTRUCTION. This module exposes `hostingerGet` and nothing
- * else. There is deliberately no post/patch/delete helper: the create, update,
- * inventory and delete phases are separately gated, and each is blocked on an
- * unresolved API question (update method, price scale, delete semantics).
- * Do not add a mutation helper here without that approval.
+ * Follows the src/lib/digio/client.ts convention: credentials are read through a
+ * lazy getter rather than module-load constants, so an unconfigured environment
+ * fails at call time with a useful message instead of breaking import of every
+ * module downstream.
  *
- * Verified 2026-08-23: base host from HOSTINGER_ECOMMERCE_API_URL, store-scoped
- * path prefix `/store/{storeId}`, Bearer auth. The `/v1/`, `/api/v1/` and
- * `/stores/` prefixes all 404.
+ * READ-ONLY BY CONSTRUCTION. This module exposes `hostingerGet` and nothing else.
+ * There is deliberately no post/patch/delete helper: create, update, inventory and
+ * delete are separately gated phases. Do not add a mutation helper here without
+ * that approval.
  */
 
 export function cleanEnv(value?: string) {
   return (value || "").trim().replace(/^["']|["']$/g, "");
 }
 
+/** Documented production API server (from the spec's `servers[]`). */
+export const HOSTINGER_API_BASE = "https://developers.hostinger.com/api/ecommerce/v1";
+
 export interface HostingerConfig {
-  baseUrl: string;
   storeId: string;
   token: string;
   /**
-   * Read but not yet used by any known endpoint. Phase 1 found no product
-   * operation that consumes it, and `/sales-channel/{id}/products` 404s. It is
-   * carried here so its purpose can be settled without touching callers.
+   * Read but not sent. No documented product, variant or inventory operation
+   * accepts a sales channel — it is a store-creation field. Carried here so its
+   * purpose can be settled without touching callers.
    */
   salesChannelId: string | null;
 }
 
-const REQUIRED_VARS = [
-  "HOSTINGER_ECOMMERCE_API_URL",
-  "HOSTINGER_STORE_ID",
-  "HOSTINGER_API_TOKEN",
-] as const;
+const REQUIRED_VARS = ["HOSTINGER_STORE_ID", "HOSTINGER_API_TOKEN"] as const;
 
 /**
  * Throws naming only the missing VARIABLE NAMES — never a value, so a
  * misconfiguration is diagnosable from logs without leaking the token.
+ *
+ * HOSTINGER_ECOMMERCE_API_URL is deliberately NOT required: it addressed the old
+ * undocumented host and is unused since 4C. Requiring it would fail requests over
+ * a value nothing reads.
  */
 export function getHostingerConfig(): HostingerConfig {
-  const baseUrl = cleanEnv(process.env.HOSTINGER_ECOMMERCE_API_URL).replace(/\/+$/, "");
   const storeId = cleanEnv(process.env.HOSTINGER_STORE_ID);
   const token = cleanEnv(process.env.HOSTINGER_API_TOKEN);
   const salesChannelId = cleanEnv(process.env.HOSTINGER_SALES_CHANNEL_ID);
@@ -58,20 +59,20 @@ export function getHostingerConfig(): HostingerConfig {
     throw err;
   }
 
-  return { baseUrl, storeId, token, salesChannelId: salesChannelId || null };
+  return { storeId, token, salesChannelId: salesChannelId || null };
 }
 
 /** A non-2xx response from Hostinger, carrying a CRM-facing HTTP status. */
 export class HostingerApiError extends Error {
   readonly status: number;
-  /** Hostinger's x-request-id, for vendor support tickets. */
-  readonly requestId: string | null;
+  /** Hostinger's correlation id, for vendor support tickets. */
+  readonly correlationId: string | null;
 
-  constructor(message: string, status: number, requestId: string | null) {
+  constructor(message: string, status: number, correlationId: string | null) {
     super(message);
     this.name = "HostingerApiError";
     this.status = status;
-    this.requestId = requestId;
+    this.correlationId = correlationId;
   }
 }
 
@@ -79,26 +80,38 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 /**
  * Maps a vendor status onto the status the CRM should return. Hostinger's 401
- * means OUR token is bad, which is a server-side misconfiguration — surfacing
- * it as 401 to the browser would wrongly imply the CRM user is logged out.
+ * means OUR token is bad, which is a server-side misconfiguration — surfacing it
+ * as 401 to the browser would wrongly imply the CRM user is logged out.
  */
 function toCrmStatus(vendorStatus: number): number {
-  if (vendorStatus === 401 || vendorStatus === 403) return 502;
   if (vendorStatus === 404) return 404;
   if (vendorStatus === 429) return 429;
-  if (vendorStatus >= 500) return 502;
   return 502;
+}
+
+/** Query values; arrays are serialised as repeated `key[]=` params. */
+export type QueryValue = string | number | undefined | (string | number)[];
+
+function buildUrl(path: string, params: Record<string, QueryValue> | undefined, storeId: string) {
+  const url = new URL(`${HOSTINGER_API_BASE}/stores/${encodeURIComponent(storeId)}${path}`);
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      // The API expects repeated bracket params: include[]=variants&include[]=media
+      for (const v of value) url.searchParams.append(`${key}[]`, String(v));
+    } else {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url;
 }
 
 export async function hostingerGet<T>(
   path: string,
-  searchParams?: Record<string, string | number | undefined>,
+  params?: Record<string, QueryValue>,
 ): Promise<T> {
   const cfg = getHostingerConfig();
-  const url = new URL(`${cfg.baseUrl}/store/${encodeURIComponent(cfg.storeId)}${path}`);
-  for (const [k, v] of Object.entries(searchParams ?? {})) {
-    if (v !== undefined) url.searchParams.set(k, String(v));
-  }
+  const url = buildUrl(path, params, cfg.storeId);
 
   let res: Response;
   try {
@@ -113,28 +126,30 @@ export async function hostingerGet<T>(
     throw new HostingerApiError(`Hostinger request ${reason}`, 504, null);
   }
 
-  const requestId = res.headers.get("x-request-id");
-
   if (!res.ok) {
     // Body is read for the log line only. It is never forwarded to the browser:
     // the vendor's error envelope is unvalidated and could echo request detail.
     const body = await res.text().catch(() => "");
-    console.error(
-      `[hostinger] GET ${path} -> ${res.status}`,
-      { requestId, body: body.slice(0, 500) },
-    );
+    let correlationId: string | null = null;
+    try {
+      correlationId = (JSON.parse(body) as { correlation_id?: string }).correlation_id ?? null;
+    } catch {
+      /* non-JSON error body */
+    }
+    console.error(`[hostinger] GET ${path} -> ${res.status}`, {
+      correlationId,
+      body: body.slice(0, 500),
+    });
     throw new HostingerApiError(
-      res.status === 404
-        ? "Product not found in Hostinger"
-        : `Hostinger returned ${res.status}`,
+      res.status === 404 ? "Product not found in Hostinger" : `Hostinger returned ${res.status}`,
       toCrmStatus(res.status),
-      requestId,
+      correlationId,
     );
   }
 
   try {
     return (await res.json()) as T;
   } catch {
-    throw new HostingerApiError("Hostinger returned a malformed response", 502, requestId);
+    throw new HostingerApiError("Hostinger returned a malformed response", 502, null);
   }
 }

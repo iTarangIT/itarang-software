@@ -1,7 +1,9 @@
 // GET /api/ecommerce/products/:productId
 //
-// Read-only product detail from Hostinger, including its embedded variants.
-// Variants are NOT a separate Hostinger resource — they arrive on the product.
+// Read-only product detail from Hostinger, including its variants and media.
+// The documented API has no single-product GET (it answers 405); the documented
+// substitute is the `product_ids` filter on the list endpoint, which the
+// reference describes as doubling as a single-product lookup.
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
@@ -13,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 // Hostinger ids look like `prod_01M07WD4XP42SYQ1E1C1FTXYSM`. Validated loosely
 // rather than by exact prefix so a future id format doesn't 400 here, but
-// tightly enough to keep junk out of the outbound URL.
+// tightly enough to keep junk out of the outbound query.
 const ParamsSchema = z.object({
     productId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, "Invalid product id"),
 });

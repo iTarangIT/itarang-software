@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { getHostingerConfig, hostingerGet, HostingerApiError } from "../client";
 
 /**
- * The client is the only module that reads HOSTINGER_*, so two things must hold
+ * The client is the only module that reads HOSTINGER_*, so three things must hold
  * no matter what:
  *
  *   · the token never appears anywhere except the Authorization header — a leak
@@ -11,18 +11,19 @@ import { getHostingerConfig, hostingerGet, HostingerApiError } from "../client";
  *   · a Hostinger 401 must NOT surface to the browser as a 401. Our token being
  *     wrong is a server misconfiguration; passing it through would tell the CRM
  *     user they are logged out, sending them to re-auth over a problem no login
- *     can fix.
- *
- * Path shape is asserted against what the read-only Phase 1 probe confirmed:
- * `{BASE}/store/{storeId}/...` with no version prefix.
+ *     can fix;
+ *   · array params must serialise as repeated `key[]=` — the documented API's
+ *     include / product_ids / status filters are all arrays, and a comma-joined
+ *     value is silently ignored rather than rejected.
  */
 
 const ENV = {
-  HOSTINGER_ECOMMERCE_API_URL: "https://api-ecommerce.example.test",
   HOSTINGER_STORE_ID: "store_TEST123",
   HOSTINGER_API_TOKEN: "fake-token-for-tests",
   HOSTINGER_SALES_CHANNEL_ID: "scha_TEST",
 };
+
+const BASE = "https://developers.hostinger.com/api/ecommerce/v1/stores/store_TEST123";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -38,23 +39,10 @@ afterEach(() => {
 });
 
 function ok(body: unknown) {
-  return {
-    ok: true,
-    status: 200,
-    headers: new Headers({ "x-request-id": "req_1" }),
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-  };
+  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
 }
-
-function fail(status: number) {
-  return {
-    ok: false,
-    status,
-    headers: new Headers({ "x-request-id": "req_err" }),
-    json: async () => ({}),
-    text: async () => "upstream detail",
-  };
+function fail(status: number, body = '{"correlation_id":"abc-123"}') {
+  return { ok: false, status, json: async () => JSON.parse(body), text: async () => body };
 }
 
 describe("getHostingerConfig", () => {
@@ -70,33 +58,45 @@ describe("getHostingerConfig", () => {
     }
   });
 
-  it("strips surrounding quotes and a trailing slash from the base URL", () => {
-    vi.stubEnv("HOSTINGER_ECOMMERCE_API_URL", '"https://api-ecommerce.example.test/"');
-    expect(getHostingerConfig().baseUrl).toBe("https://api-ecommerce.example.test");
+  it("does NOT require HOSTINGER_ECOMMERCE_API_URL", () => {
+    // It addressed the old undocumented host and is unused since Phase 4C.
+    // Requiring it would fail requests over a value nothing reads.
+    vi.stubEnv("HOSTINGER_ECOMMERCE_API_URL", "");
+    expect(() => getHostingerConfig()).not.toThrow();
+  });
+
+  it("strips surrounding quotes from values", () => {
+    vi.stubEnv("HOSTINGER_STORE_ID", '"store_TEST123"');
+    expect(getHostingerConfig().storeId).toBe("store_TEST123");
   });
 });
 
 describe("hostingerGet", () => {
-  it("builds the store-scoped path and keeps the token out of the URL", async () => {
-    fetchMock.mockResolvedValue(ok({ products: [] }));
-    await hostingerGet("/products", { limit: 25, offset: 0 });
+  it("builds the documented /stores/{id} path and keeps the token out of the URL", async () => {
+    fetchMock.mockResolvedValue(ok({ data: [], meta: {} }));
+    await hostingerGet("/products", { page: 1 });
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe(
-      "https://api-ecommerce.example.test/store/store_TEST123/products?limit=25&offset=0",
-    );
+    expect(url).toBe(`${BASE}/products?page=1`);
     expect(url).not.toContain(ENV.HOSTINGER_API_TOKEN);
     expect(init.method).toBe("GET");
     expect(init.headers.Authorization).toBe(`Bearer ${ENV.HOSTINGER_API_TOKEN}`);
   });
 
-  it("omits undefined query params rather than sending the string 'undefined'", async () => {
-    fetchMock.mockResolvedValue(ok({}));
-    await hostingerGet("/products", { limit: 10, offset: undefined });
+  it("serialises arrays as repeated key[] params", async () => {
+    fetchMock.mockResolvedValue(ok({ data: [], meta: {} }));
+    await hostingerGet("/products", { page: 1, include: ["variants", "media"] });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "https://api-ecommerce.example.test/store/store_TEST123/products?limit=10",
+      `${BASE}/products?page=1&include%5B%5D=variants&include%5B%5D=media`,
     );
+  });
+
+  it("omits undefined params rather than sending the string 'undefined'", async () => {
+    fetchMock.mockResolvedValue(ok({}));
+    await hostingerGet("/products", { page: 1, q: undefined });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/products?page=1`);
   });
 
   it("maps a Hostinger 401 to 502 so it never reads as a CRM auth failure", async () => {
@@ -106,16 +106,17 @@ describe("hostingerGet", () => {
 
   it("passes 404 through and keeps 429 as 429", async () => {
     fetchMock.mockResolvedValue(fail(404));
-    await expect(hostingerGet("/products/x")).rejects.toMatchObject({ status: 404 });
+    await expect(hostingerGet("/products")).rejects.toMatchObject({ status: 404 });
 
     fetchMock.mockResolvedValue(fail(429));
     await expect(hostingerGet("/products")).rejects.toMatchObject({ status: 429 });
   });
 
-  it("never forwards the upstream error body to the caller", async () => {
-    fetchMock.mockResolvedValue(fail(500));
+  it("captures the correlation id but never forwards the upstream body", async () => {
+    fetchMock.mockResolvedValue(fail(500, '{"correlation_id":"abc-123","message":"upstream detail"}'));
     await expect(hostingerGet("/products")).rejects.toSatisfy(
-      (e: HostingerApiError) => !e.message.includes("upstream detail"),
+      (e: HostingerApiError) =>
+        e.correlationId === "abc-123" && !e.message.includes("upstream detail"),
     );
   });
 

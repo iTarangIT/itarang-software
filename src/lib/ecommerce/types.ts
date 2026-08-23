@@ -3,25 +3,32 @@
  *
  * Shared between the API routes and the Sales Head UI (the same seam as
  * src/lib/admin/types.ts). These are NOT database models — nothing here is
- * persisted. Hostinger remains the source of truth; the CRM stores no
- * ecommerce product data.
+ * persisted. Hostinger remains the source of truth; the CRM stores no ecommerce
+ * product data.
  *
- * Deliberately named `Ecommerce*` rather than `Product*`: the CRM already has
- * an unrelated physical EV product/inventory system, and a bare `Product` type
- * in shared scope would invite exactly the conflation this feature must avoid.
+ * Deliberately named `Ecommerce*` rather than `Product*`: the CRM already has an
+ * unrelated physical EV product/inventory system, and a bare `Product` type in
+ * shared scope would invite exactly the conflation this feature must avoid.
+ *
+ * Fields the documented API cannot supply (description, subtitle, timestamps,
+ * slug, purchasable, allow_backorder, low-stock flags, variant is_active) are
+ * absent by design rather than optional — see the Phase 4C loss inventory. Their
+ * removal is what makes TypeScript flag any call site still expecting them,
+ * instead of letting a lost field render as a silently blank cell.
  */
 
+/** Integer amounts in the smallest currency unit (paise for INR). */
 export interface EcommercePrice {
-  /**
-   * Raw vendor amount. SCALE UNVERIFIED — see HostingerPrice.amount. Assumed
-   * minor units; `decimalDigits` is carried alongside so the UI can format and
-   * still show the raw figure rather than silently asserting a scale.
-   */
   amountMinor: number | null;
   saleAmountMinor: number | null;
   currencyCode: string;
-  currencySymbol: string;
-  decimalDigits: number;
+}
+
+/** A product's price span across its variants, as the API reports it. */
+export interface EcommercePriceRange {
+  minMinor: number | null;
+  maxMinor: number | null;
+  currencyCode: string;
 }
 
 export interface EcommerceVariant {
@@ -31,49 +38,33 @@ export interface EcommerceVariant {
   /** Null when the variant is not inventory-managed — not zero. */
   inventoryQuantity: number | null;
   manageInventory: boolean;
-  /** When true, Hostinger will accept orders below zero stock. */
-  allowBackorder: boolean;
-  trackLowStock: boolean;
-  lowStockThreshold: number | null;
-  isActive: boolean;
   price: EcommercePrice | null;
-  imageUrl: string | null;
+  options: { name: string; value: string }[];
 }
 
 export interface EcommerceProductSummary {
   id: string;
   title: string;
-  subtitle: string | null;
   status: string | null;
   /** e.g. "physical" | "digital" */
   type: string | null;
   thumbnail: string | null;
-  slug: string | null;
   variantCount: number;
   /** First variant's SKU. Null when the product has multiple variants. */
   sku: string | null;
-  /** Convenience for the list column; null when no variant is managed. */
+  /** Sum across inventory-managed variants; null when none is managed. */
   totalInventory: number | null;
-  /** True when at least one variant allows backorder. */
-  anyBackorder: boolean;
-  /** Price of the first variant, for the list column. */
-  price: EcommercePrice | null;
-  updatedAt: string | null;
+  priceRange: EcommercePriceRange | null;
 }
 
 export interface EcommerceProductDetail extends EcommerceProductSummary {
-  /** Raw HTML from Hostinger. Must be sanitised before rendering. */
-  descriptionHtml: string | null;
-  media: { id: string; url: string }[];
+  media: { url: string }[];
   variants: EcommerceVariant[];
-  createdAt: string | null;
-  purchasable: boolean;
-  urlHandle: string | null;
 }
 
 export interface EcommerceProductListResult {
   rows: EcommerceProductSummary[];
   total: number;
-  offset: number;
-  limit: number;
+  page: number;
+  perPage: number;
 }

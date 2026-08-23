@@ -6,21 +6,17 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronLeft, ChevronRight, Inbox, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatDate, formatPrice } from "@/lib/ecommerce/format";
+import { formatPriceRange } from "@/lib/ecommerce/format";
 import type { EcommerceProductListResult } from "@/lib/ecommerce/types";
-
-const PAGE_SIZE = 25;
 
 export function EcommerceProductListView() {
     const [page, setPage] = useState(1);
-    const offset = (page - 1) * PAGE_SIZE;
 
     const query = useQuery<{ success: true; data: EcommerceProductListResult }>({
         queryKey: ["ecommerce-products", page],
         queryFn: async () => {
             const u = new URL("/api/ecommerce/products", window.location.origin);
-            u.searchParams.set("limit", String(PAGE_SIZE));
-            u.searchParams.set("offset", String(offset));
+            u.searchParams.set("page", String(page));
             const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) {
                 const body = await res.json().catch(() => null);
@@ -33,9 +29,11 @@ export function EcommerceProductListView() {
     const data = query.data?.data;
     const rows = data?.rows ?? [];
     const total = data?.total ?? 0;
-    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    const start = total === 0 ? 0 : offset + 1;
-    const end = Math.min(offset + PAGE_SIZE, total);
+    // Page size is Hostinger's, not ours — read it back rather than assuming.
+    const perPage = data?.perPage ?? 50;
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    const start = total === 0 ? 0 : (page - 1) * perPage + 1;
+    const end = Math.min(page * perPage, total);
 
     return (
         <div className="rounded-xl border border-border bg-surface shadow-card">
@@ -61,8 +59,8 @@ export function EcommerceProductListView() {
                             <th className="px-4 py-3 text-left font-semibold">SKU</th>
                             <th className="px-4 py-3 text-left font-semibold">Price</th>
                             <th className="px-4 py-3 text-left font-semibold">Stock</th>
+                            <th className="px-4 py-3 text-left font-semibold">Type</th>
                             <th className="px-4 py-3 text-left font-semibold">Status</th>
-                            <th className="px-4 py-3 text-left font-semibold">Updated</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
@@ -90,32 +88,24 @@ export function EcommerceProductListView() {
                                     >
                                         {p.title || "Untitled"}
                                     </Link>
-                                    {p.subtitle ? (
-                                        <div className="mt-0.5 text-xs text-ink-muted">{p.subtitle}</div>
-                                    ) : null}
                                 </td>
                                 <td className="px-4 py-3 font-mono text-xs text-ink-muted">
                                     {p.sku ?? `${p.variantCount} variants`}
                                 </td>
-                                <td className="px-4 py-3">{formatPrice(p.price)}</td>
+                                <td className="px-4 py-3">{formatPriceRange(p.priceRange)}</td>
                                 <td className="px-4 py-3">
                                     {p.totalInventory === null ? (
                                         <span className="text-ink-muted">Not tracked</span>
                                     ) : (
-                                        <span className="inline-flex items-center gap-1.5">
-                                            {p.totalInventory}
-                                            {p.anyBackorder ? (
-                                                <Badge variant="warning">backorder</Badge>
-                                            ) : null}
-                                        </span>
+                                        p.totalInventory
                                     )}
                                 </td>
+                                <td className="px-4 py-3 text-ink-muted">{p.type ?? "—"}</td>
                                 <td className="px-4 py-3">
                                     <Badge variant={p.status === "published" ? "success" : "muted"}>
                                         {p.status ?? "unknown"}
                                     </Badge>
                                 </td>
-                                <td className="px-4 py-3 text-ink-muted">{formatDate(p.updatedAt)}</td>
                             </tr>
                         ))}
                     </tbody>
