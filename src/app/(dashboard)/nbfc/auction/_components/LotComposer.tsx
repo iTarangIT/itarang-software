@@ -681,7 +681,8 @@ export default function LotComposer({ lotId }: { lotId?: string }) {
 
             <span className="auc-hint">
               A battery can sit on only one open lot at a time. Anything already
-              on another draft is greyed out here.
+              on another lot — draft, scheduled, live or paused — is left out of
+              this list until that lot ends or is cancelled.
             </span>
           </div>
         </section>

@@ -447,6 +447,27 @@ export async function applyKycFinalDecision(input: {
         }).catch(() => {});
     }
 
+    // E-264 Phase 2 — the approval that unlocks Section G is invisible to a lead
+    // that lives in WhatsApp: the dealer portal lights up, the customer is told
+    // nothing, and the lead sits at step_3_cleared until somebody opens it.
+    // Offer the choice on the channel they are already on.
+    //
+    // Best-effort and deliberately un-awaited-for-failure: the decision above is
+    // committed, and a WhatsApp outage must never turn an approval into an
+    // error. pushStep4ToWhatsApp re-checks payment_method and kyc_status itself,
+    // so firing it on every approval is safe — cash leads and primary-only
+    // approvals are a no-op inside it.
+    if (decision === "approved") {
+        import("@/lib/whatsapp/step4-flow")
+            .then(({ pushStep4ToWhatsApp }) => pushStep4ToWhatsApp(leadId))
+            .catch((err) => {
+                console.error(
+                    `[final-decision] WhatsApp Step-4 push for ${leadId} failed:`,
+                    err,
+                );
+            });
+    }
+
     return {
         ok: true,
         leadStatus,

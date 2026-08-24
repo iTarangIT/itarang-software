@@ -420,11 +420,20 @@ export async function middleware(request: NextRequest) {
   // no protected prefix happens to match it, and accidental is not the same as
   // intended. The route it renders carries no bidder data, no reserve and no
   // live bid; bidding still requires a dealer login.
+  // E-262 — /recovery-agent/<token> is the repossession agent's field form.
+  // They are not iTarang users and have no login; the single-use token in the
+  // path IS the credential, and the route it renders discloses only who and
+  // where, never the borrower's arrears. Listed here for the same reason
+  // /reset-password and /auctions are: nothing in roleDashboards matches the
+  // prefix today, so it would fall through un-redirected either way — but
+  // accidental is not the same as intended, and a future widening of
+  // isProtectedRoute would otherwise silently break an agent's link.
   const isPublicRoute =
     path === "/login" ||
     path === "/logout" ||
     path === "/reset-password" ||
-    path === "/auctions";
+    path === "/auctions" ||
+    path.startsWith("/recovery-agent/");
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>

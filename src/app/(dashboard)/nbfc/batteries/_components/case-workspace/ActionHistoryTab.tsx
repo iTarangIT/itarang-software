@@ -17,6 +17,7 @@ const ACTION_LABELS: Record<string, string> = {
   field_visit: "Field visit",
   loan_restructuring: "Loan restructuring",
   flag_for_recovery: "Flag for recovery",
+  unflag_for_recovery: "Recovery flag withdrawn",
   pii_data_access: "PII access",
   audit_log_export: "Audit log export",
   risk_rule_threshold_change: "Risk rule threshold change",
