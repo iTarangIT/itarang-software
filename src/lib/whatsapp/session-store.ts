@@ -10,7 +10,7 @@
 // points at a dealer's file, so the existing onboarding handlers drive a dealer
 // application while the operator receives the replies.
 
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
@@ -92,6 +92,73 @@ export type Ctx = {
     consentOtpAttempts?: number;
     /** Channel the consent OTP was sent over, so Resend uses the same one. */
     consentOtpChannel?: "call" | "sms" | "whatsapp";
+
+    // ---- E-264: the rest of the journey. One sub-object per phase, so a
+    // phase can be reset (or abandoned) without disturbing the others, and so
+    // patchLeadSub() can write one of them atomically. ----
+
+    /** Co-borrower capture (DC_CB_*). */
+    cb?: {
+      requestId?: string;
+      coBorrowerId?: string;
+      /** Cursor into CO_BORROWER_QUESTIONS. */
+      qIndex?: number;
+      /** Co-borrower's own name from their first ID doc. Checked BOTH ways:
+       *  against their other documents, and against the primary borrower's —
+       *  a "co-borrower" who is the same person is the thing this prevents. */
+      name?: string;
+      docs?: Record<string, true>;
+      consentOtpAttempts?: number;
+      consentOtpChannel?: "call" | "sms" | "whatsapp";
+      /** They took the web link instead; poll for completion on next inbound. */
+      webLinked?: true;
+    };
+
+    /** Step 4 — routing the lead to lenders (DC_S4_*). */
+    s4?: {
+      loanAmount?: number;
+      /** The BRE-matched lenders offered, so a tapped row resolves back. */
+      options?: Array<{
+        nbfcId: number;
+        loanProductId: number | null;
+        label: string;
+        sub: string;
+      }>;
+      /** Paging cursor for the lender list — mirrors ctx.op.pickPage. */
+      page?: number;
+      /** Capped at 2, matching submitProductSelectionSchema. */
+      picked?: Array<{ nbfc_id: string; loan_product_id: string | null }>;
+      preSanctionDocs?: Array<{
+        url: string;
+        name: string;
+        type: string;
+        size: number;
+      }>;
+    };
+
+    /** Offers and sanction (DC_OF_*, DC_SN_*). */
+    of?: {
+      offers?: Array<{
+        nbfcId: number;
+        name: string;
+        emi: string;
+        tenure: number;
+        roi: string;
+        loanAmount: string;
+      }>;
+      pickedNbfcId?: number;
+    };
+    sn?: { sanctionId?: string; nbfcName?: string };
+
+    /** Step 5 — dispatch (DC_DP_*). */
+    dp?: {
+      selectionId?: string;
+      otpAttempts?: number;
+      otpChannel?: "call" | "sms" | "whatsapp";
+      /** Read back from product_selections for display only — never typed in
+       *  chat. A mistyped serial fails mid-transaction after stock has moved. */
+      batterySerial?: string;
+    };
   };
   /** E-214 — internal onboarding operator state. Lives ONLY on the
    *  `operator_hub` row; the per-dealer `operator_file` rows carry ordinary
@@ -170,6 +237,90 @@ export async function mergeContext(
     .update(whatsappOnboardingSessions)
     .set({ context: ctx as any, updated_at: new Date() })
     .where(eq(whatsappOnboardingSessions.id, session.id));
+}
+
+/**
+ * E-264 — atomically merge a patch into `context.lead`, in SQL.
+ *
+ * mergeContext above is a read-modify-write with nothing holding the row in
+ * between, which was harmless while only an inbound turn ever wrote: turns for
+ * one phone are serialised by the customer's own typing speed. It stops being
+ * harmless once the journey pushes into a chat out of band — a "your loan is
+ * sanctioned" push landing while the customer is mid-reply will silently drop
+ * one of the two writes.
+ *
+ * Rather than touch mergeContext's ~40 existing call sites, new journey code
+ * writes through this. `||` is a shallow jsonb merge, so keys the caller did not
+ * mention are preserved even if another writer added them a millisecond ago.
+ */
+export async function patchLead(
+  sessionId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  if (Object.keys(patch).length === 0) return;
+  await db
+    .update(whatsappOnboardingSessions)
+    .set({
+      context: sql`jsonb_set(
+        coalesce(${whatsappOnboardingSessions.context}, '{}'::jsonb),
+        '{lead}',
+        coalesce(${whatsappOnboardingSessions.context} -> 'lead', '{}'::jsonb)
+          || ${JSON.stringify(patch)}::jsonb,
+        true)`,
+      updated_at: new Date(),
+    })
+    .where(eq(whatsappOnboardingSessions.id, sessionId));
+}
+
+/** Same, one level deeper: context.lead.<key> — e.g. the per-phase sub-objects. */
+export async function patchLeadSub(
+  sessionId: string,
+  key: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  if (Object.keys(patch).length === 0) return;
+  await db
+    .update(whatsappOnboardingSessions)
+    .set({
+      context: sql`jsonb_set(
+        coalesce(${whatsappOnboardingSessions.context}, '{}'::jsonb),
+        ${sql.raw(`'{lead,${key.replace(/[^a-zA-Z0-9_]/g, "")}}'`)},
+        coalesce(
+          ${whatsappOnboardingSessions.context} -> 'lead' -> ${key},
+          '{}'::jsonb
+        ) || ${JSON.stringify(patch)}::jsonb,
+        true)`,
+      updated_at: new Date(),
+    })
+    .where(eq(whatsappOnboardingSessions.id, sessionId));
+}
+
+/**
+ * E-264 — compare-and-swap on the conversation state. Returns false when the
+ * session had already moved on, meaning someone else got there first.
+ *
+ * Used to guard the steps that spend money or move stock — winner selection and
+ * dispatch confirmation — against a double-tap. WhatsApp buttons stay tappable
+ * after they are pressed, and a customer on a bad connection will press twice.
+ * This is belt; the braces are the provider_message_id dedupe in the webhook and
+ * the existing DB guards (assignment status, otp_confirmations.is_used).
+ */
+export async function setSessionIf(
+  id: string,
+  expectState: string,
+  patch: Partial<SessionRow>,
+): Promise<boolean> {
+  const rows = await db
+    .update(whatsappOnboardingSessions)
+    .set({ ...patch, updated_at: new Date() } as any)
+    .where(
+      and(
+        eq(whatsappOnboardingSessions.id, id),
+        eq(whatsappOnboardingSessions.current_state, expectState),
+      ),
+    )
+    .returning({ id: whatsappOnboardingSessions.id });
+  return rows.length === 1;
 }
 
 export async function patchApplication(

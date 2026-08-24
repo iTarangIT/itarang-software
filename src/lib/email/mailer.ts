@@ -147,6 +147,16 @@ async function agentMailSend(cfg: AgentMailConfig, opts: SendMailOptions): Promi
 
 let smtpVerified = false;
 
+/** True when SMTP_* is complete enough to build a transport. */
+function smtpConfigured(): boolean {
+  return Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_PORT &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS,
+  );
+}
+
 function smtpMailer(): Mailer {
   const host = process.env.SMTP_HOST;
   const portRaw = process.env.SMTP_PORT;
@@ -196,12 +206,42 @@ function smtpMailer(): Mailer {
 /**
  * Returns the active mailer. AgentMail when configured, else SMTP. Synchronous
  * so both `getMailer()` and `await getMailer()` call styles work.
+ *
+ * AgentMail FALLS BACK TO SMTP when a send fails and SMTP is configured.
+ *
+ * The provider is chosen once, at construction, from which env vars are set —
+ * which is fine until the chosen provider starts refusing. AgentMail's plan
+ * carries a DAILY SEND CAP (100 on the developer tier), and when it is reached
+ * every send in the application 429s at once: agent links, FI links, dealer
+ * approvals, password resets. That is not a per-feature outage, it is the whole
+ * outbound channel, and it lasts until the window rolls.
+ *
+ * So a failed AgentMail send is retried over SMTP rather than surfaced. The
+ * fallback is deliberately silent about WHY it fell back — the caller wanted an
+ * email delivered, not a lecture about quotas — but it logs, so the cap does
+ * not become invisible.
+ *
+ * When SMTP is not configured the original error is rethrown untouched. A
+ * confusing "missing email configuration" would replace the real reason, and
+ * the real reason (a rate limit, with a reset time in it) is exactly what
+ * somebody needs to read.
  */
 export function getMailer(): Mailer {
   const am = agentMailConfig();
   if (am) {
     return {
-      sendMail: (opts) => agentMailSend(am, opts),
+      sendMail: async (opts) => {
+        try {
+          return await agentMailSend(am, opts);
+        } catch (err) {
+          if (!smtpConfigured()) throw err;
+          console.warn(
+            "[mailer] AgentMail send failed, falling back to SMTP:",
+            err instanceof Error ? err.message : err,
+          );
+          return smtpMailer().sendMail(opts);
+        }
+      },
       // AgentMail is a stateless HTTP API — nothing to pre-verify.
       verify: async () => true as const,
     };

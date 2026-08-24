@@ -50,6 +50,12 @@ export type NotificationCategory =
   | "Onboarding"
   | "Inventory"
   | "Auctions"
+  | "Scrap Sales"
+  // [E-262/E-263] The physical collection leg — dispatching an agent, what they
+  // found at the door, and standing them down. Its own category rather than a
+  // corner of "Auctions": an auction is where a recovered battery ends up, not
+  // what happens on somebody's doorstep.
+  | "Recovery"
   | "Escalations";
 
 /** Ordered exactly as the filter bar should list them. "System" stays last. */
@@ -66,6 +72,7 @@ export const CATEGORIES: NotificationCategory[] = [
   "Product & Dispatch",
   "Inventory",
   "Auctions",
+  "Scrap Sales",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
   ...BUYBACK_CATEGORIES.filter((c) => c !== "System"),
@@ -246,7 +253,25 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "auction.lost": "Auctions",
   "auction.paused": "Auctions",
   "auction.resumed": "Auctions",
+
+  // [E-262/E-263] Battery recovery — the physical collection leg. These go to
+  // the NBFC that owns the loan, which is the party waiting on the answer.
+  "recovery.assigned": "Recovery",
+  "recovery.visit": "Recovery",
+  "recovery.collected": "Recovery",
+  "recovery.cancelled": "Recovery",
   "auction.cancelled": "Auctions",
+
+  // --- Scrap sales (E-258) ---
+  // NOT filed under Auctions. An auction is a dealer bidding in public against
+  // a clock; a scrap consignment is a private two-party negotiation between one
+  // NBFC and iTarang, ending in a payout rather than a settlement. Muting one
+  // must never silence the other.
+  "scrap.consignment_submitted": "Scrap Sales",
+  "scrap.offer_countered": "Scrap Sales",
+  "scrap.deal_agreed": "Scrap Sales",
+  "scrap.consignment_closed": "Scrap Sales",
+  "scrap.payment_settled": "Scrap Sales",
 
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
@@ -288,6 +313,8 @@ const CRITICAL = new Set([
 
 /** Waiting on the recipient to act — surfaced amber. */
 const WARNING = new Set([
+  "recovery.visit",
+  "recovery.collected",
   "kyc.docs_requested",
   "kyc_docs_requested",
   "kyc.coborrower_requested",
@@ -336,6 +363,12 @@ const WARNING = new Set([
   // the time it arrives there is nothing left to act on.
   "auction.outbid",
   "auction.ending_soon",
+  // E-258 — both are "the other side is waiting on you". A submitted
+  // consignment is scrap the NBFC cannot move until iTarang prices it, and a
+  // counter is a deal stalling until someone answers. `deal_agreed` and
+  // `payment_settled` are deliberately NOT amber: they close an action.
+  "scrap.consignment_submitted",
+  "scrap.offer_countered",
 ]);
 
 /**
@@ -468,6 +501,14 @@ export function linkFor(
     if (role === "dealer") return "/dealer-portal/auctions";
     if (role === "nbfc") return "/nbfc/auction";
     return "/admin/nbfc/auction";
+  }
+
+  if (category === "Scrap Sales") {
+    // Same reasoning as Auctions: emit() always sets a per-recipient href, so
+    // this only catches rows written without one. Land on the list.
+    if (role === "dealer") return null; // dealers are not party to a scrap sale
+    if (role === "nbfc") return "/nbfc/recovery/scrap";
+    return "/admin/nbfc/scrap";
   }
 
   if (category === "Escalations") {

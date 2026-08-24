@@ -3,9 +3,14 @@
 /**
  * E-035 — FlagForRecoveryDialog
  *
- * Risk Head confirmation dialog for the irreversible "Flag for Recovery"
- * action. Posts to POST /api/nbfc/actions/flag-for-recovery with a reason
- * (>= 20 chars) and surfaces the result.
+ * Risk Head confirmation dialog for the "Flag for Recovery" action. Posts to
+ * POST /api/nbfc/actions/flag-for-recovery with a reason (>= 20 chars) and
+ * surfaces the result.
+ *
+ * The flag is no longer described as irreversible: it can be withdrawn via
+ * UnflagRecoveryDialog while recovery has not physically started. The copy here
+ * says exactly that, because a confirmation that overstates the stakes is the
+ * reason operators leave wrong flags standing.
  */
 import { useState } from "react";
 
@@ -170,8 +175,14 @@ export function FlagForRecoveryDialog({
               Flag for Recovery
             </h2>
             <p style={{ color: "#374151", marginBottom: "1rem" }}>
-              This will permanently flag loan <code>{loanSanctionId}</code> for
-              recovery. <strong>This action is irreversible.</strong>
+              This flags loan <code>{loanSanctionId}</code> for recovery and
+              opens it in the recovery queue.{" "}
+              <strong>
+                It can be withdrawn until recovery physically starts
+              </strong>{" "}
+              — once the battery is inspected, sent for refurbishment or lotted
+              for auction, the flag is locked in. Both the flag and any
+              withdrawal are written to the audit log.
             </p>
             <label
               style={{ display: "block", fontWeight: 600, marginBottom: 6 }}

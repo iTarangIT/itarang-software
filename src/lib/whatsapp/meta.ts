@@ -176,6 +176,18 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
           text: reply?.id ?? reply?.title ?? "",
         };
       }
+      case "button":
+        // A tap on a TEMPLATE quick-reply button. Meta delivers this as its own
+        // top-level type with `button.payload`, NOT wrapped in an `interactive`
+        // envelope — so without this case every template CTA fell through to
+        // `unsupported` and was discarded. Normalising to "interactive" means
+        // the payload lands in `text` and every existing id-matching handler
+        // works on it unchanged.
+        return {
+          ...base,
+          type: "interactive",
+          text: msg.button?.payload ?? msg.button?.text ?? "",
+        };
       default:
         return { ...base, type: "unsupported", text: msg.type };
     }

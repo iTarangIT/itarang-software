@@ -17,13 +17,14 @@
  * UNIQUE constraint — a duplicate insert would surface as a 23505 the caller
  * can choose to swallow).
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   auctionLots,
   auctionLotItems,
   nbfcBatteryEvaluations,
   nbfcRecoveryPipeline,
+  recoveryBatteries,
 } from "@/lib/db/schema";
 
 type DbLike = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -243,6 +244,27 @@ export async function publishLotFromRecovery(
         item_price: basePrice.toFixed(2),
       })
       .onConflictDoNothing();
+
+    // And mark the battery itself as spoken for. Every OTHER way a battery
+    // reaches a lot — composeLot(), addLotItems() — flips this, and the whole
+    // product reads `lotted` as "already on a lot": the recovery board shows
+    // it, and the composer's picker used to hide on it alone. Seeding a draft
+    // here without the flip left a battery sitting on a live auction while
+    // still advertising itself as free stock, which is how the same battery
+    // ended up offered twice.
+    //
+    // Only from a sellable state, so a re-run cannot walk `sold` or `scrapped`
+    // backwards; the item insert above is idempotent for the same reason.
+    await x
+      .update(recoveryBatteries)
+      .set({ state_code: "lotted", updated_at: new Date() })
+      .where(
+        and(
+          eq(recoveryBatteries.id, pipeline.battery_id),
+          eq(recoveryBatteries.tenant_id, input.tenant_id),
+          inArray(recoveryBatteries.state_code, ["ready", "inspected"]),
+        ),
+      );
   }
 
   return {
