@@ -169,3 +169,108 @@ export interface HostingerVariantListResponse {
   data: HostingerVariant[];
   meta: HostingerListMeta;
 }
+
+/* ---------------------------------------------------------------------------
+ * Product media (Phase 8A)
+ *
+ * Two-step upload: request a signed URL, POST the bytes to it, then attach by
+ * `object_name`. A single-call path also exists for an image already reachable
+ * at a public URL.
+ *
+ * NOTE: the documented API has NO delete-image and NO reorder-image endpoint.
+ * Media can be added from the CRM but not removed or reordered — the UI must say
+ * so rather than offer a control that cannot work.
+ * ------------------------------------------------------------------------- */
+
+export interface HostingerImageUploadUrlResponse {
+  /** Signed storage endpoint to POST the file to (multipart/form-data). */
+  upload_url: string;
+  /** Form fields that must accompany the multipart upload, verbatim. */
+  fields: Record<string, string>;
+  /** Key to hand back to the attach endpoint. */
+  object_name: string;
+}
+
+export interface HostingerAttachImageRequest {
+  /** Publicly reachable raster image. Provide either this OR object_name. */
+  image_url?: string;
+  /** Key returned by the upload-url step. Provide either this OR image_url. */
+  object_name?: string;
+  /** True makes it the primary image; omitted means "only if there isn't one yet". */
+  is_thumbnail?: boolean;
+}
+
+/** Raster formats Hostinger accepts. SVG is explicitly refused. */
+export const HOSTINGER_IMAGE_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+] as const;
+
+/** Documented ceiling: 15 MB. */
+export const HOSTINGER_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Commercial fields on a variant, all carried by the batch endpoint.
+ *
+ * `prices` REPLACES the variant's existing prices in full, which is why callers
+ * must send every currency they want kept, not just the one being changed.
+ * `sale_amount` must be an integer when present — null is rejected — so clearing
+ * a discount means omitting the key entirely.
+ */
+export interface HostingerVariantCommercialUpdate {
+  variant_id: string;
+  /** Batch-supported. */
+  title?: string;
+  /**
+   * NOT accepted by the batch endpoint — it is silently ignored there (verified
+   * 2026-08-24). Retained only for the variant-CREATE payload, where SKU is the
+   * one and only opportunity to set it.
+   */
+  sku?: string;
+  prices?: { amount: number; currency: string; sale_amount?: number }[];
+}
+
+/* ---------------------------------------------------------------------------
+ * Variant creation (Phase 8B)
+ *
+ * This is the ONLY endpoint that accepts `sku`, and the only place a variant's
+ * option values can ever be set — both are immutable afterwards (verified: the
+ * batch endpoint 400s on `options` and silently ignores `sku`).
+ *
+ * `options` is STRICTLY required: an omitted key and an empty array both return
+ * 422 "The options field is required." A variant cannot exist without at least
+ * one option, which is why an option-less product can never carry a SKU.
+ * ------------------------------------------------------------------------- */
+
+export interface HostingerOptionValue {
+  name: string;
+  value: string;
+}
+
+export interface HostingerCreateVariantRequest {
+  /** 1…10 pairs. Required. Every option the product already has must be given a value. */
+  options: HostingerOptionValue[];
+  /** Optional — omit and Hostinger titles it from the option values ("M", "M / Red"). */
+  title?: string;
+  /** Set here or never. */
+  sku?: string;
+  /** `sale_amount` IS honoured at creation — verified — so no follow-up call is needed. */
+  prices?: { amount: number; currency: string; sale_amount?: number }[];
+  inventory_quantity?: number;
+  manage_inventory?: boolean;
+}
+
+/**
+ * Fields the variant batch endpoint actually accepts. Established by sending each
+ * candidate name individually: everything else returns 400, including six
+ * spellings of weight and seven of low-stock. Kept here as the authoritative
+ * list so nobody re-adds a field the API will reject or silently drop.
+ */
+export const HOSTINGER_VARIANT_UPDATABLE_FIELDS = [
+  "title",
+  "inventory_quantity",
+  "manage_inventory",
+  "prices",
+] as const;

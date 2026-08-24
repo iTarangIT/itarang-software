@@ -61,6 +61,11 @@ export interface EcommerceProductDetail extends EcommerceProductSummary {
   media: { url: string }[];
   variants: EcommerceVariant[];
   /**
+   * Derived from the variants, not fetched — Hostinger has no option resource.
+   * Empty for a single-variant product that has never had options.
+   */
+  options: EcommerceOption[];
+  /**
    * Deep link into the Hostinger dashboard for this product. Built server-side
    * because the store id lives in server config — exposing it through a
    * NEXT_PUBLIC_ variable just to string a URL together in the browser would
@@ -75,3 +80,27 @@ export interface EcommerceProductListResult {
   page: number;
   perPage: number;
 }
+
+/* ---------------------------------------------------------------------------
+ * Options and selections (Phase 8B)
+ *
+ * Hostinger exposes NO option or selection resource. Both exist only as the
+ * `{name, value}` pairs carried by variants, so these types are DERIVED from a
+ * variant read — never stored, never persisted, and never mapped in the CRM.
+ * ------------------------------------------------------------------------- */
+
+export interface EcommerceOption {
+  /** e.g. "Size" */
+  name: string;
+  /** Distinct values across the product's variants, e.g. ["M", "L"] */
+  selections: string[];
+  /**
+   * True when Hostinger backfilled its literal "Default Value" placeholder onto
+   * variants that predate this dimension. Surfaced so the UI can explain it
+   * rather than showing it as a real selection someone chose.
+   */
+  hasPlaceholder: boolean;
+}
+
+/** Hostinger's literal placeholder when a dimension is added to existing variants. */
+export const HOSTINGER_PLACEHOLDER_SELECTION = "Default Value";

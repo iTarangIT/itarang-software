@@ -14,19 +14,31 @@ import {
   deleteProduct,
   getProductById,
   listProducts,
+  createVariant,
+  deleteVariant,
   listVariants,
   updateProduct,
+  updateVariantCommercial,
   updateVariantInventory,
-  updateVariantPrice,
+  attachProductImage,
+  createImageUploadUrl,
+  uploadImageToSignedUrl,
 } from "@/lib/hostinger/products";
+import {
+  HOSTINGER_IMAGE_MAX_BYTES,
+  HOSTINGER_IMAGE_MIME_TYPES,
+} from "@/lib/hostinger/types";
 import type {
   HostingerCreateResponse,
+  HostingerCreateVariantRequest,
   HostingerPrice,
   HostingerProductRow,
   HostingerProductStatus,
   HostingerVariant,
 } from "@/lib/hostinger/types";
+import { HOSTINGER_PLACEHOLDER_SELECTION } from "./types";
 import type {
+  EcommerceOption,
   EcommercePrice,
   EcommercePriceRange,
   EcommerceProductDetail,
@@ -110,10 +122,12 @@ export async function getEcommerceProductDetail(
 ): Promise<EcommerceProductDetail> {
   const row = await getProductById(productId);
   const { storeId } = getHostingerConfig();
+  const variants = (row.variants ?? []).map(toVariant);
   return {
     ...summarise(row),
     media: (row.media ?? []).map((m) => ({ url: m.url })),
-    variants: (row.variants ?? []).map(toVariant),
+    variants,
+    options: deriveOptions(variants),
     // Same shape Hostinger returns as `admin_url` on create.
     adminUrl: `https://ecommerce.hostinger.com/store/${storeId}/products/edit?product=${row.id}`,
   };
@@ -289,36 +303,6 @@ export async function updateEcommerceProduct(
   });
 }
 
-export async function updateEcommerceProductPrice(
-  productId: string,
-  variantId: string,
-  amountMinor: number,
-  currency: string,
-  actor: EcommerceActor,
-): Promise<void> {
-  try {
-    await updateVariantPrice(productId, variantId, amountMinor, currency);
-  } catch (e) {
-    logMutation({
-      action: "variant.price.update",
-      actorId: actor.id,
-      actorRole: actor.role,
-      productId,
-      fields: { variantId, amountMinor, currency },
-      outcome: "failed",
-      error: e instanceof Error ? e.message : String(e),
-    });
-    throw e;
-  }
-  logMutation({
-    action: "variant.price.update",
-    actorId: actor.id,
-    actorRole: actor.role,
-    productId,
-    fields: { variantId, amountMinor, currency },
-    outcome: "ok",
-  });
-}
 
 /** Current tracked state of one variant, for the pre-write drift check. */
 export interface VariantStock {
@@ -524,4 +508,388 @@ export async function restoreEcommerceProduct(
   actor: EcommerceActor,
 ): Promise<void> {
   await updateEcommerceProduct(productId, { status: "draft" }, actor);
+}
+
+/* ---------------------------------------------------------------------------
+ * Product media + variant commercial fields (Phase 8A)
+ * ------------------------------------------------------------------------- */
+
+export interface UploadImageInput {
+  /** Raw file bytes, when uploading from the operator's machine. */
+  file?: { blob: Blob; filename: string; mimeType: string; size: number };
+  /** Alternative: an already-public image Hostinger can fetch itself. */
+  imageUrl?: string;
+  isThumbnail?: boolean;
+}
+
+/**
+ * Validates before anything leaves our server, so a bad file never reaches
+ * Hostinger. Their attach step scans and content-validates independently, so a
+ * file passing these checks can still be refused there — that failure surfaces
+ * as itself rather than as a generic "upload failed".
+ */
+function assertUploadable(file: NonNullable<UploadImageInput["file"]>) {
+  const bad = (msg: string) => {
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = 422;
+    throw err;
+  };
+  if (file.size > HOSTINGER_IMAGE_MAX_BYTES) {
+    bad(`Image is too large — the maximum is ${HOSTINGER_IMAGE_MAX_BYTES / (1024 * 1024)} MB.`);
+  }
+  if (file.size === 0) bad("The file is empty.");
+  if (!(HOSTINGER_IMAGE_MIME_TYPES as readonly string[]).includes(file.mimeType)) {
+    // SVG is called out because it is the one people reach for and Hostinger
+    // explicitly refuses it.
+    bad(
+      file.mimeType === "image/svg+xml"
+        ? "SVG images are not accepted by Hostinger. Use JPEG, PNG, GIF or WebP."
+        : `Unsupported image type "${file.mimeType}". Use JPEG, PNG, GIF or WebP.`,
+    );
+  }
+}
+
+export async function uploadEcommerceProductImage(
+  productId: string,
+  input: UploadImageInput,
+  actor: EcommerceActor,
+): Promise<void> {
+  const via = input.file ? "file" : "url";
+  try {
+    if (input.file) {
+      assertUploadable(input.file);
+      const signed = await createImageUploadUrl(productId);
+      await uploadImageToSignedUrl(signed, input.file.blob, input.file.filename);
+      await attachProductImage(productId, {
+        object_name: signed.object_name,
+        ...(input.isThumbnail !== undefined ? { is_thumbnail: input.isThumbnail } : {}),
+      });
+    } else if (input.imageUrl) {
+      await attachProductImage(productId, {
+        image_url: input.imageUrl,
+        ...(input.isThumbnail !== undefined ? { is_thumbnail: input.isThumbnail } : {}),
+      });
+    } else {
+      const err = new Error("Provide either a file or an image URL") as Error & { status?: number };
+      err.status = 422;
+      throw err;
+    }
+  } catch (e) {
+    logMutation({
+      action: "product.image.add",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { via, isThumbnail: input.isThumbnail },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  logMutation({
+    action: "product.image.add",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { via, isThumbnail: input.isThumbnail },
+    outcome: "ok",
+  });
+}
+
+export interface VariantCommercialInput {
+  variantId: string;
+  /** Batch-supported. Options and SKU are NOT — see the field list in types.ts. */
+  title?: string;
+  amountMinor?: number;
+  /** Omit to leave the discount alone; null to CLEAR it. */
+  saleAmountMinor?: number | null;
+  currency?: string;
+}
+
+/**
+ * Price and discount on a variant.
+ *
+ * SKU is deliberately absent. The batch endpoint SILENTLY IGNORES `sku` — sending
+ * it alone returns 400, and sending it alongside prices returns 200 with the SKU
+ * unchanged (verified 2026-08-24). The docs agree: batch updates "title,
+ * inventory, stock tracking and prices". SKU can only be set when a variant is
+ * CREATED, so accepting it here would report success while changing nothing.
+ *
+ * Two things make the rest less trivial than it looks:
+ *
+ *  1. The batch endpoint REPLACES a variant's prices in full. Sending only the
+ *     currency being edited would silently delete a multi-currency variant's
+ *     other prices — a latent defect in the original Phase 5 price path. So the
+ *     current prices are read first and the target currency is replaced within
+ *     them, leaving every other currency intact.
+ *  2. `sale_amount: null` is rejected by the API ("must be an integer"), so a
+ *     discount is cleared by OMITTING the key from the replacement price object.
+ */
+export async function updateEcommerceVariantCommercial(
+  productId: string,
+  input: VariantCommercialInput,
+  actor: EcommerceActor,
+): Promise<void> {
+  const fields: {
+    title?: string;
+    prices?: { amount: number; currency: string; sale_amount?: number }[];
+  } = {};
+
+  if (input.title !== undefined) fields.title = input.title;
+
+  const touchingPrice = input.amountMinor !== undefined || input.saleAmountMinor !== undefined;
+  if (touchingPrice) {
+    const variants = await listVariants(productId);
+    const current = variants.find((v) => v.id === input.variantId);
+    if (!current) {
+      const err = new Error("Variant not found on this product") as Error & { status?: number };
+      err.status = 404;
+      throw err;
+    }
+
+    const targetCurrency = (
+      input.currency ??
+      current.prices?.[0]?.currency_code ??
+      "inr"
+    ).toLowerCase();
+
+    const rebuilt = (current.prices ?? []).map((p) => {
+      const code = (p.currency_code ?? "").toLowerCase();
+      if (code !== targetCurrency) {
+        // Untouched currency — carried over verbatim so the full-replace does
+        // not drop it.
+        return {
+          amount: p.amount ?? 0,
+          currency: code,
+          ...(typeof p.sale_amount === "number" ? { sale_amount: p.sale_amount } : {}),
+        };
+      }
+      const amount = input.amountMinor ?? p.amount ?? 0;
+      // undefined = leave as-is; null = clear (by omitting the key entirely).
+      const sale =
+        input.saleAmountMinor === undefined
+          ? typeof p.sale_amount === "number"
+            ? p.sale_amount
+            : undefined
+          : (input.saleAmountMinor ?? undefined);
+      return { amount, currency: code, ...(sale !== undefined ? { sale_amount: sale } : {}) };
+    });
+
+    // A variant with no price row yet still needs one to be priced.
+    if (!rebuilt.some((p) => p.currency === targetCurrency)) {
+      rebuilt.push({
+        amount: input.amountMinor ?? 0,
+        currency: targetCurrency,
+        ...(input.saleAmountMinor ? { sale_amount: input.saleAmountMinor } : {}),
+      });
+    }
+    fields.prices = rebuilt;
+  }
+
+  try {
+    await updateVariantCommercial(productId, input.variantId, fields);
+  } catch (e) {
+    logMutation({
+      action: "variant.commercial.update",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { ...input },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  logMutation({
+    action: "variant.commercial.update",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { ...input, pricesSent: fields.prices?.length },
+    outcome: "ok",
+  });
+}
+
+/* ---------------------------------------------------------------------------
+ * Options, selections and variants (Phase 8B)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Derives the option/selection structure from the variants themselves, because
+ * Hostinger has no option resource to read. Order follows first appearance,
+ * which matches the order Hostinger reports option pairs in.
+ */
+export function deriveOptions(variants: EcommerceVariant[]): EcommerceOption[] {
+  const byName = new Map<string, string[]>();
+  for (const v of variants) {
+    for (const o of v.options ?? []) {
+      const list = byName.get(o.name) ?? [];
+      if (!list.includes(o.value)) list.push(o.value);
+      byName.set(o.name, list);
+    }
+  }
+  return [...byName.entries()].map(([name, selections]) => ({
+    name,
+    selections,
+    hasPlaceholder: selections.includes(HOSTINGER_PLACEHOLDER_SELECTION),
+  }));
+}
+
+export interface CreateVariantInput {
+  options: { name: string; value: string }[];
+  sku?: string;
+  amountMinor?: number;
+  saleAmountMinor?: number;
+  currency?: string;
+  quantity?: number;
+  manageInventory?: boolean;
+}
+
+/**
+ * Create one variant. Everything commercial is accepted in this single call —
+ * including `sale_amount`, verified — so there is no follow-up update.
+ *
+ * This is also the ONLY place a SKU can be set. If the caller supplies one it is
+ * sent here or not at all.
+ */
+export async function createEcommerceVariant(
+  productId: string,
+  input: CreateVariantInput,
+  actor: EcommerceActor,
+): Promise<EcommerceVariant> {
+  if (!input.options?.length) {
+    // The API answers 422 "The options field is required." Failing here gives a
+    // message that explains WHY rather than echoing the vendor.
+    const err = new Error(
+      "A variant needs at least one option (for example Size: M). Hostinger cannot create a variant without one.",
+    ) as Error & { status?: number };
+    err.status = 422;
+    throw err;
+  }
+
+  const currency = (input.currency ?? "inr").toLowerCase();
+  const body: HostingerCreateVariantRequest = {
+    options: input.options,
+    ...(input.sku ? { sku: input.sku } : {}),
+    ...(input.amountMinor !== undefined
+      ? {
+          prices: [
+            {
+              amount: input.amountMinor,
+              currency,
+              // Omitted rather than nulled — the API rejects sale_amount: null.
+              ...(input.saleAmountMinor !== undefined
+                ? { sale_amount: input.saleAmountMinor }
+                : {}),
+            },
+          ],
+        }
+      : {}),
+    ...(input.quantity !== undefined ? { inventory_quantity: input.quantity } : {}),
+    ...(input.manageInventory !== undefined
+      ? { manage_inventory: input.manageInventory }
+      : {}),
+    // `title` is deliberately omitted so Hostinger's own default applies
+    // ("M", "M / Red"), which keeps CRM-created variants consistent with
+    // dashboard-created ones.
+  };
+
+  let created: HostingerVariant;
+  try {
+    created = await createVariant(productId, body);
+  } catch (e) {
+    logMutation({
+      action: "variant.create",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { options: input.options, sku: input.sku },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  logMutation({
+    action: "variant.create",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { variantId: created?.id, options: input.options, sku: input.sku },
+    outcome: "ok",
+  });
+  return toVariant(created);
+}
+
+/** Raised when deleting a variant would leave the product with none. */
+export class LastVariantError extends Error {
+  readonly status = 409;
+  constructor() {
+    super(
+      "This is the product's only variant. Deleting it would leave the product with no price and no stock while still published. Delete or archive the product instead.",
+    );
+    this.name = "LastVariantError";
+  }
+}
+
+/**
+ * Delete a variant, refusing to remove the last one.
+ *
+ * Hostinger permits this: deleting down to zero variants returns 200 and leaves a
+ * PUBLISHED product with no variants, no price and no stock (verified). Nothing
+ * in the API flags it, and the storefront listing is broken from that moment.
+ * The count is re-read immediately before deleting rather than trusted from the
+ * page, so a concurrently-deleted sibling cannot slip past the guard.
+ */
+export async function deleteEcommerceVariant(
+  productId: string,
+  variantId: string,
+  actor: EcommerceActor,
+): Promise<{ remaining: number }> {
+  const before = await listVariants(productId);
+  if (!before.some((v) => v.id === variantId)) {
+    const err = new Error("Variant not found on this product") as Error & { status?: number };
+    err.status = 404;
+    throw err;
+  }
+  if (before.length <= 1) {
+    logMutation({
+      action: "variant.delete",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { variantId, blockedBy: "last-variant" },
+      outcome: "failed",
+    });
+    throw new LastVariantError();
+  }
+
+  try {
+    await deleteVariant(productId, variantId);
+  } catch (e) {
+    logMutation({
+      action: "variant.delete",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      fields: { variantId },
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  // Read back rather than assuming the count decremented.
+  const after = await listVariants(productId);
+  logMutation({
+    action: "variant.delete",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { variantId, remaining: after.length },
+    outcome: "ok",
+  });
+  return { remaining: after.length };
 }
