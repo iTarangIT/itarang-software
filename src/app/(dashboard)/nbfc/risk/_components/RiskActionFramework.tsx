@@ -65,9 +65,9 @@ const ACTION_ROWS: ActionRow[] = [
     action: "Flag for Recovery",
     approval: "Single — Risk Head",
     approvalTone: "bg-slate-100 text-slate-700",
-    reversible: "No — permanent flag",
-    reversibleTone: "bg-red-50 text-red-700",
-    auditLog: "Yes",
+    reversible: "Yes — until recovery physically starts",
+    reversibleTone: "bg-emerald-50 text-emerald-700",
+    auditLog: "Yes — withdrawal logged alongside the flag",
   },
 ];
 

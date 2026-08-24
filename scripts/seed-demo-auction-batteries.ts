@@ -62,12 +62,22 @@
  *                          pipeline are listed, not evaluated: an evaluation
  *                          hangs off a pipeline row and there is nowhere else
  *                          in the app that reads a measured SOH.
+ *   --count <N>            fleet size (default 5). The five hand-written
+ *                          batteries below are always slots 1..5 and never
+ *                          change; slots 6..N are generated from them —
+ *                          same five stories, different borrower, city, ticket
+ *                          size and default depth — so a bigger fleet still
+ *                          spreads across every CDS band, DPD bucket and SOH
+ *                          band instead of repeating one row. Deterministic
+ *                          in the slot number, so growing the fleet later
+ *                          leaves every existing serial untouched.
  *   --dry                  print the plan, write nothing.
  *
  * Usage:
  *   node --import tsx --env-file=.env.local scripts/seed-demo-auction-batteries.ts --dry
  *   node --import tsx --env-file=.env.local scripts/seed-demo-auction-batteries.ts \
  *        --tenant nbfc-kgdtlth5 --dealer ACC-ITARANG-20260427-b79e09 --prefix EF
+ *   node --import tsx --env-file=.env.local scripts/seed-demo-auction-batteries.ts  *        --tenant nbfc-kgdtlth5 --dealer ACC-ITARANG-20260427-b79e09 --prefix EF --count 50
  */
 import "./_load-env";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -114,6 +124,13 @@ const TENANT_SLUG = arg("tenant");
 const DEALER_ID = arg("dealer") ?? DEFAULT_DEALER_ID;
 const PREFIX = (arg("prefix") ?? "AUC").toUpperCase();
 const UPLOADER_ARG = arg("uploader");
+const COUNT = (() => {
+  const raw = arg("count");
+  if (raw === undefined) return 5;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--count must be a positive integer, got '${raw}'.`);
+  return n;
+})();
 
 /** Resolved in main() — tenant row + the uploader id. */
 let TENANT_ID = DEFAULT_TENANT_ID;
@@ -140,6 +157,15 @@ interface DemoBattery {
   tenure: number;
   /** Months back from today the loan was disbursed. */
   disbursedMonthsAgo: number;
+  /**
+   * Extra days back, on top of the months. Whole-month disbursement dates put
+   * every due date on today's day-of-month, so the newest overdue installment
+   * is always ~31 days old and the portal's "1-30 days" DPD bucket can never
+   * have anything in it. Shifting the schedule `d` days earlier makes the
+   * newest overdue installment exactly `d` days late. Defaults to 0, which is
+   * what the five hand-written batteries have always used.
+   */
+  disbursedDaysAgo?: number;
   /** Installments 1..paidCount were collected; the rest are overdue. */
   paidCount: number;
   /** Of the paid ones, these 1-based indices were collected late. */
@@ -163,7 +189,7 @@ const serialFor = (n: number) =>
     ? `DEMO-BAT-${String(n).padStart(4, "0")}`
     : `DEMO-BAT-${PREFIX}-${String(n).padStart(4, "0")}`;
 
-const FLEET: DemoBattery[] = [
+const BASE_FLEET: DemoBattery[] = [
   {
     key: 1,
     serial: serialFor(1),
@@ -256,6 +282,140 @@ const FLEET: DemoBattery[] = [
   },
 ];
 
+// ── Grown fleet ──────────────────────────────────────────────────────────────
+// Slots 6..COUNT are generated from the five stories above rather than written
+// out: a demo needs volume (paging, filters, DPD buckets with more than one row
+// in them) but volume made of copies teaches nothing. Each generated slot keeps
+// its archetype's SHAPE — hard default / early default / fresh default /
+// current-with-a-blemish / current-and-clean — and varies the borrower, place,
+// ticket size, tenure and how deep the default runs.
+//
+// Everything is derived from the slot number alone. No randomness: growing the
+// fleet from 5 to 50 to 200 later must leave every serial already seeded, and
+// every DPD it was demoed with, exactly where it was.
+
+// Disjoint from the five hand-written borrowers, so a generated slot never
+// collides with slot 1-5's name. Surnames are the gender-neutral ones only
+// ("Devi"/"Kumar" are not) — the two pools are combined mechanically.
+const FIRST_NAMES = [
+  "Kavita", "Deepak", "Rekha", "Manoj", "Anita", "Sanjay",
+  "Meena", "Vikas", "Sarita", "Rahul", "Nisha", "Alok",
+];
+const LAST_NAMES = [
+  "Yadav", "Verma", "Sharma", "Singh", "Gupta", "Prasad",
+  "Mishra", "Pandey", "Chauhan", "Saini", "Tiwari", "Rawat",
+];
+const PLACES = [
+  { area: "Govind Nagar", city: "Kanpur", state: "Uttar Pradesh" },
+  { area: "Aliganj", city: "Lucknow", state: "Uttar Pradesh" },
+  { area: "Chowk Bazaar", city: "Varanasi", state: "Uttar Pradesh" },
+  { area: "Civil Lines", city: "Prayagraj", state: "Uttar Pradesh" },
+  { area: "Rajendra Nagar", city: "Patna", state: "Bihar" },
+  { area: "Kankarbagh", city: "Patna", state: "Bihar" },
+  { area: "Sigra", city: "Varanasi", state: "Uttar Pradesh" },
+  { area: "Hazratganj", city: "Lucknow", state: "Uttar Pradesh" },
+  { area: "Lalpur", city: "Ranchi", state: "Jharkhand" },
+  { area: "Bistupur", city: "Jamshedpur", state: "Jharkhand" },
+  { area: "Sector 62", city: "Noida", state: "Uttar Pradesh" },
+  { area: "Rajouri Garden", city: "New Delhi", state: "Delhi" },
+  { area: "Shahdara", city: "New Delhi", state: "Delhi" },
+  { area: "Model Town", city: "Ludhiana", state: "Punjab" },
+  { area: "Sadar Bazaar", city: "Agra", state: "Uttar Pradesh" },
+  { area: "Thatipur", city: "Gwalior", state: "Madhya Pradesh" },
+];
+const TENURES = [12, 15, 18, 24];
+// Spans every band in stages.ts: >=70 refurbishable, 55-69 partial-working,
+// <55 scrap — so an auction demo can always find a lot of each kind.
+const SOH_POOL = [88, 82, 78, 74, 71, 68, 63, 58, 52, 45, 91, 66, 57, 49, 85];
+
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+/** The disbursement date for a battery: months back, then days back. */
+function disbursementDate(b: Pick<DemoBattery, "disbursedMonthsAgo" | "disbursedDaysAgo">): Date {
+  const d = addMonthsClamped(TODAY, -b.disbursedMonthsAgo);
+  if (b.disbursedDaysAgo) d.setUTCDate(d.getUTCDate() - b.disbursedDaysAgo);
+  return d;
+}
+
+/** Installments fallen due by TODAY for a loan of this age and tenure. */
+function elapsedFor(disbursedMonthsAgo: number, tenure: number, disbursedDaysAgo = 0): number {
+  const disbursedAt = disbursementDate({ disbursedMonthsAgo, disbursedDaysAgo });
+  let n = 0;
+  for (let i = 1; i <= tenure; i++) {
+    if (addMonthsClamped(disbursedAt, i).getTime() < TODAY.getTime()) n++;
+  }
+  return n;
+}
+
+function generateBattery(key: number): DemoBattery {
+  const i = key - BASE_FLEET.length - 1; // 0-based index among generated slots
+  const archetype = BASE_FLEET[(key - 1) % BASE_FLEET.length];
+  const place = PLACES[i % PLACES.length];
+  const driverName = `${FIRST_NAMES[i % FIRST_NAMES.length]} ${
+    LAST_NAMES[((i % LAST_NAMES.length) + Math.floor(i / FIRST_NAMES.length) + 1) % LAST_NAMES.length]
+  }`;
+
+  const tenure = TENURES[(i * 3) % TENURES.length];
+  const loanAmount =
+    clamp(archetype.loanAmount + ((((i * 7) % 11) - 5) * 4000), 32000, 120000);
+  const emiAmount = Math.max(1000, Math.round(loanAmount / tenure / 50) * 50);
+
+  // Keep the loan live: disbursed at least 3 months ago, never so long ago that
+  // the whole tenure has run off (a closed loan is not a battery to recover).
+  const disbursedMonthsAgo = clamp(
+    archetype.disbursedMonthsAgo + (((i * 5) % 5) - 2),
+    3,
+    tenure - 1,
+  );
+  // Spread the offsets across the month so the "1-30 days" bucket fills.
+  const disbursedDaysAgo = (i * 9) % 30;
+  const elapsed = elapsedFor(disbursedMonthsAgo, tenure, disbursedDaysAgo);
+
+  // Archetypes 1-3 default, 4-5 are current. For a defaulter, missing 1..4
+  // installments puts it in a DPD bucket ~30/60/90/120 days deep.
+  const defaults = elapsedInstallments(archetype) > archetype.paidCount;
+  // `i` alone, not `i + key`: key is i + BASE_FLEET.length, so `i + key` is
+  // 2i + 5 and `% 4` can only land on two of the four values — the fleet came
+  // out with DPD 31 and 92 and nothing in the 60 or 120 buckets.
+  const missed = defaults ? 1 + (i % 4) : 0;
+  const paidCount = clamp(elapsed - missed, 0, elapsed);
+
+  const paidLate = (i % 3 === 0 ? [] : i % 3 === 1 ? [2] : [1, 3]).filter(
+    (n) => n <= paidCount,
+  );
+
+  const manufacturedAt = addMonthsClamped(TODAY, -(14 + (i % 18)));
+
+  return {
+    key,
+    serial: serialFor(key),
+    driverName,
+    phone: `98765${String(key).padStart(5, "0")}`,
+    address: `${((i * 13) % 99) + 1}, ${place.area}, ${place.city}`,
+    city: place.city,
+    state: place.state,
+    loanAmount,
+    emiAmount,
+    tenure,
+    disbursedMonthsAgo,
+    disbursedDaysAgo,
+    paidCount,
+    paidLate,
+    remarks: `Demo battery for the recovery & auction walkthrough. ${
+      defaults ? `Default, ${missed} EMI${missed === 1 ? "" : "s"} missed.` : "Current."
+    }`,
+    soh: SOH_POOL[i % SOH_POOL.length],
+    manufactured: fmt(manufacturedAt),
+  };
+}
+
+const FLEET: DemoBattery[] = [
+  ...BASE_FLEET.slice(0, COUNT),
+  ...Array.from({ length: Math.max(0, COUNT - BASE_FLEET.length) }, (_, n) =>
+    generateBattery(BASE_FLEET.length + n + 1),
+  ),
+];
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Add `n` whole months, clamping the day to the target month's length. */
@@ -279,7 +439,7 @@ function fmt(d: Date): string {
 async function seedBattery(b: DemoBattery) {
   const lsId = `LS-DEMO-${PREFIX}-${b.key}`;
   const leadId = `LEAD-DEMO-${PREFIX}-${b.key}`;
-  const disbursedAt = addMonthsClamped(TODAY, -b.disbursedMonthsAgo);
+  const disbursedAt = disbursementDate(b);
 
   return db.transaction(async (tx) => {
     // 1. Lead — borrower context (name, city, dealer) for the portal columns.
@@ -329,7 +489,40 @@ async function seedBattery(b: DemoBattery) {
       })
       .onConflictDoNothing({ target: loanSanctions.id });
 
+    // Re-assert on a prior run. The insert above no-ops on conflict, so the
+    // sanction stays frozen at whatever the FIRST run wrote — and since the
+    // EMI schedule is generated from `disbursed_at` and `tenure_months`, any
+    // later change to a battery's plan (a different tenure, ticket size or
+    // disbursement date — which is exactly what growing the fleet re-derives)
+    // would leave the stored schedule on the old dates while the overlay in
+    // step 5 computed paid/overdue against the new ones. That mismatch is
+    // silent: it just yields wrong DPDs.
+    await tx
+      .update(loanSanctions)
+      .set({
+        loan_amount: b.loanAmount.toString(),
+        disbursement_amount: b.loanAmount.toString(),
+        emi: b.emiAmount.toString(),
+        tenure_months: b.tenure,
+        status: "disbursed",
+        nbfc_id: TENANT_ID,
+        sanctioned_at: disbursedAt,
+        disbursed_at: disbursedAt,
+      })
+      .where(eq(loanSanctions.id, lsId));
+
     // 3. Disbursement bridge → nbfc_loans + emi_schedules skeleton.
+    //    The bridge only generates a schedule when the loan has none, so drop
+    //    one that no longer matches the plan and let it rebuild.
+    const stale = await tx
+      .select({ id: emiSchedules.id, due_date: emiSchedules.due_date })
+      .from(emiSchedules)
+      .where(eq(emiSchedules.loan_sanction_id, lsId))
+      .orderBy(asc(emiSchedules.due_date));
+    const expectedFirstDue = fmt(addMonthsClamped(disbursedAt, 1));
+    if (stale.length > 0 && (stale.length !== b.tenure || stale[0].due_date !== expectedFirstDue)) {
+      await tx.delete(emiSchedules).where(eq(emiSchedules.loan_sanction_id, lsId));
+    }
     await projectDisbursedLoan(tx, lsId);
 
     // 4. Battery serial onto the servicing ledger row — this is what makes the
@@ -403,6 +596,7 @@ async function seedBattery(b: DemoBattery) {
         outstanding_amount: outstanding.toString(),
         current_dpd: maxDpd,
         emi_amount: b.emiAmount.toString(),
+        emi_due_date_dom: disbursedAt.getUTCDate(),
         is_active: true,
         updated_at: new Date(),
       })
@@ -414,12 +608,7 @@ async function seedBattery(b: DemoBattery) {
 
 /** Installments that have fallen due by TODAY, given the disbursement date. */
 function elapsedInstallments(b: DemoBattery): number {
-  const disbursedAt = addMonthsClamped(TODAY, -b.disbursedMonthsAgo);
-  let n = 0;
-  for (let i = 1; i <= b.tenure; i++) {
-    if (addMonthsClamped(disbursedAt, i).getTime() < TODAY.getTime()) n++;
-  }
-  return n;
+  return elapsedFor(b.disbursedMonthsAgo, b.tenure, b.disbursedDaysAgo);
 }
 
 // ── --flag: put the defaulters into the recovery pipeline ────────────────────
@@ -602,23 +791,42 @@ async function main() {
   console.log(`Dealer:   ${DEALER_ID} (${dealer.name})`);
   console.log(`Uploader: ${UPLOADER_ID}`);
   console.log(`Prefix:   ${PREFIX}`);
+  console.log(`Count:    ${COUNT}`);
   console.log(`Today:    ${fmt(TODAY)}`);
   console.log(`Mode:     ${DRY ? "DRY-RUN (no writes)" : "APPLY"}\n`);
 
-  console.table(
-    FLEET.map((b) => ({
-      serial: b.serial,
-      sanction: `LS-DEMO-${PREFIX}-${b.key}`,
-      driver: b.driverName,
-      city: b.city,
-      loan: b.loanAmount,
-      emi: b.emiAmount,
-      tenure: b.tenure,
-      disbursed: fmt(addMonthsClamped(TODAY, -b.disbursedMonthsAgo)),
-      paid: b.paidCount,
-      soh: b.soh,
-    })),
-  );
+  const row = (b: DemoBattery) => ({
+    serial: b.serial,
+    sanction: `LS-DEMO-${PREFIX}-${b.key}`,
+    driver: b.driverName,
+    city: b.city,
+    loan: b.loanAmount,
+    emi: b.emiAmount,
+    tenure: b.tenure,
+    disbursed: fmt(disbursementDate(b)),
+    paid: b.paidCount,
+    soh: b.soh,
+  });
+  const TABLE_MAX = 12;
+  if (FLEET.length <= TABLE_MAX) {
+    console.table(FLEET.map(row));
+  } else {
+    // A 50-row table buries the thing you actually want to check — that the
+    // fleet still spreads across the buckets the portal filters on.
+    console.table(FLEET.slice(0, TABLE_MAX).map(row));
+    console.log(`… and ${FLEET.length - TABLE_MAX} more (${serialFor(TABLE_MAX + 1)} … ${serialFor(FLEET.length)})`);
+    const defaulted = FLEET.filter((b) => elapsedInstallments(b) > b.paidCount);
+    const band = (n: number) => (n >= 70 ? "refurbishable ≥70" : n >= 55 ? "partial 55-69" : "scrap <55");
+    const bands = FLEET.reduce<Record<string, number>>((acc, b) => {
+      acc[band(b.soh)] = (acc[band(b.soh)] ?? 0) + 1;
+      return acc;
+    }, {});
+    console.log(
+      `Spread:   ${FLEET.length} batteries — ${defaulted.length} in default, ` +
+        `${FLEET.length - defaulted.length} current · SOH ` +
+        Object.entries(bands).map(([k, v]) => `${v} ${k}`).join(", "),
+    );
+  }
   console.log(`Modes:    seed${FLAG ? " + flag" : ""}${EVALUATE ? " + evaluate" : ""}`);
 
   if (DRY) {

@@ -284,7 +284,18 @@ export const TYPE_LABELS: Record<string, string> = {
   // bidder watching a countdown had no way to learn the auction had stopped.
   "auction.paused": "An auction you bid on was paused",
   "auction.resumed": "An auction you bid on has resumed",
+  "recovery.assigned": "A recovery agent has been dispatched to collect a battery",
+  "recovery.visit": "A recovery agent attended but could not collect the battery",
+  "recovery.collected": "A recovery agent has collected a battery — awaiting review",
+  "recovery.cancelled": "A battery collection was cancelled and the agent stood down",
   "auction.cancelled": "An auction you bid on was cancelled",
+
+  // --- Scrap sales (E-258) ---
+  "scrap.consignment_submitted": "An NBFC offered scrap batteries to iTarang",
+  "scrap.offer_countered": "A new price was put on a scrap consignment",
+  "scrap.deal_agreed": "A scrap rate was agreed",
+  "scrap.consignment_closed": "A scrap consignment was declined or withdrawn",
+  "scrap.payment_settled": "A scrap consignment was paid for",
 
   // --- Escalations ---
   escalation_raised: "Escalation raised (legacy)",
