@@ -263,9 +263,28 @@ export async function markCampaignLeadCalling(opts: {
 // the next event and manual SQL repairs are picked up automatically. Cost is
 // one indexed aggregate per campaign event (idx_dialer_campaign_leads_campaign_status).
 //
-// calls_made tracks completed_leads by design — it counts calls that actually
-// connected and completed, which is exactly the success path. A failed attempt
-// (no answer, trigger error, no webhook) bumps failed_leads only.
+// calls_made COUNTS ATTEMPTS — completed plus failed — and used to be defined
+// as an alias of completed_leads, which had two visible consequences.
+//
+//   · The campaign detail header showed "Calls made 71" beside "Completed 71"
+//     on a 146-lead campaign where 75 had in fact been dialled and failed. Two
+//     cards carrying the same number, one of them mislabelled.
+//   · The progress bar is `calls_made / total_eligible`. A campaign whose leads
+//     all fail therefore sat at 0% for its entire run and stayed at 0% after
+//     finishing: sandbox camp_mpx is 25 leads, 25 failed, status completed,
+//     progress bar 0%.
+//
+// Cost per call is unaffected: cost-analytics divides by its own COUNT of
+// ai_call_logs rows (`cost_calls`), never by this column.
+//
+// Deriving rather than bumping is the older fix and still the important one:
+// these used to be maintained as ±1 bumps issued in a second statement right
+// after each row update, with no transaction around the pair, so any
+// interruption between the two writes drifted the counters permanently. As a
+// full re-derive, a lost update self-heals on the next campaign event and
+// manual SQL repairs are picked up automatically — which is also why the
+// E-266 backfill only has to touch campaigns that will never fire another
+// event.
 export async function syncCampaignCounters(
   campaignId: string | null,
 ): Promise<void> {
@@ -275,7 +294,7 @@ export async function syncCampaignCounters(
       UPDATE dialer_campaigns c
       SET completed_leads = t.comp,
           failed_leads    = t.fail,
-          calls_made      = t.comp
+          calls_made      = t.comp + t.fail
       FROM (
         SELECT
           count(*) FILTER (WHERE status = 'completed')::int AS comp,
