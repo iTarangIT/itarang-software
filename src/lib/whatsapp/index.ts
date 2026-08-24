@@ -2,6 +2,7 @@
 // on the WhatsAppAdapter interface, so swapping providers is a one-line change
 // here (design §0 principle 4, §10).
 
+import { DryRunWhatsAppAdapter } from "./dry-run";
 import { MetaWhatsAppAdapter } from "./meta";
 import type { WhatsAppAdapter } from "./types";
 
@@ -9,10 +10,20 @@ let cached: WhatsAppAdapter | null = null;
 
 export function getAdapter(): WhatsAppAdapter {
   if (cached) return cached;
+  // WA_DRY_RUN outranks the provider setting on purpose: a verification script
+  // sets it without touching WHATSAPP_PROVIDER, and forgetting to unset the
+  // provider would then message real customers from a test run.
+  if (process.env.WA_DRY_RUN === "1") {
+    cached = new DryRunWhatsAppAdapter();
+    return cached;
+  }
   const provider = (process.env.WHATSAPP_PROVIDER || "meta").toLowerCase();
   switch (provider) {
     case "meta":
       cached = new MetaWhatsAppAdapter();
+      break;
+    case "dry-run":
+      cached = new DryRunWhatsAppAdapter();
       break;
     // case "interakt": cached = new InteraktAdapter(); break;   // future
     // case "gupshup":  cached = new GupshupAdapter();  break;   // future

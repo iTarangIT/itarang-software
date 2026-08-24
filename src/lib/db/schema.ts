@@ -4555,7 +4555,9 @@ export const nbfcOfferNegotiations = pgTable(
     nbfc_id: integer("nbfc_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     round: integer("round").notNull(),
-    party: varchar("party", { length: 8 }).notNull(), // 'nbfc' | 'dealer'
+    // 'nbfc' | 'dealer' | 'customer' (E-265 — the borrower writing from their
+    // own WhatsApp chat). No CHECK; the vocabulary is enforced in the service.
+    party: varchar("party", { length: 8 }).notNull(),
     kind: varchar("kind", { length: 16 }).notNull(), // 'offer' | 'counter' | 'fix'
     loan_amount: numeric("loan_amount", { precision: 14, scale: 2 }),
     roi_pct: numeric("roi_pct", { precision: 5, scale: 2 }),

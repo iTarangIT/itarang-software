@@ -15,14 +15,16 @@
  * expressed by `nbfc_doc_requests.status`. Hops 4–6 are DERIVED from the child
  * min-state and stored denormalised so list views stay one-row.
  *
- * E-240 adds a SECOND, direct channel beside that cycle. A wrapper flagged
- * `dealer_direct` skips the admin's forward click: it is born
- * 'forwarded_to_dealer', has NO children at all, and carries its conversation in
- * `nbfc_doc_request_messages` instead — the dealer answers from the Step-4
- * pre-sanction card and the reply flips it straight to 'pushed_to_nbfc'. The
- * admin-gated path above is untouched, and the admin still sees every direct
- * thread. Anything that projects status from children must early-return on these
- * wrappers (see recomputeWrapperStatus / pushNbfcDocRequest).
+ * E-240 added a SECOND, direct channel beside that cycle — a wrapper flagged
+ * `dealer_direct`, born 'forwarded_to_dealer' with NO children, carrying its
+ * conversation in `nbfc_doc_request_messages` and answered by the dealer from
+ * the Step-4 pre-sanction card. **the admin gate now retires it**: the admin is the single
+ * gate again, and at hop 3 he now has two moves rather than one — forward the
+ * ask down (forwardNbfcDocRequest) when he does not hold the document, or
+ * answer it himself (fulfilNbfcDocRequestByAdmin) when he does. No new
+ * `dealer_direct` rows are created, but the existing ones must keep working, so
+ * anything that projects status from children still early-returns on them (see
+ * recomputeWrapperStatus / pushNbfcDocRequest).
  *
  * E-254 adds the SLA clock. `nbfc_doc_requests.sla_due_at` is the deadline of
  * the CURRENT leg — stamped here when a wrapper is born 'nbfc_raised' (leg 1:
@@ -209,64 +211,21 @@ export async function createNbfcDocRequest(
 }
 
 /* ------------------------------------------------------------------ *
- * E-240 — the DIRECT NBFC ⇄ Dealer channel
+ * E-240 — the DIRECT NBFC ⇄ Dealer channel (RETIRED; read-only)
  * ------------------------------------------------------------------ */
 
 export type MessageParty = "nbfc" | "dealer" | "admin";
 
 /**
- * The NBFC asks the dealer for a document DIRECTLY, skipping the admin forward
- * gate (E-240). Born 'forwarded_to_dealer' — i.e. already with the dealer — and
- * flagged `dealer_direct` so `recomputeWrapperStatus` leaves it alone: it has no
- * children, and the files come back on the message thread instead.
- *
- * `step4_extra_items` is reused as the request type deliberately: it is already
- * permitted by the E-202 CHECK and means exactly this ("the NBFC wants extra
- * documents at Step 4"), so no constraint has to be widened.
- *
- * The admin is not cut out — the wrapper and every message in it still render in
- * the admin "NBFC KYC Verification" card, and the route notifies admins too.
+ * RETIRED — `createDirectDealerRequest` lived here: the NBFC wrote a request
+ * straight onto the dealer's Step-4 card, skipping the admin forward gate. It
+ * is gone; the iTarang admin is now the single gate for every NBFC ask (he
+ * either answers it himself via fulfilNbfcDocRequestByAdmin or forwards it with
+ * forwardNbfcDocRequest). Rows created under it are still flagged
+ * `dealer_direct`, so every reader below — recomputeWrapperStatus,
+ * pushNbfcDocRequest, listDealerRequestsForLead, markDirectRequestAnswered —
+ * keeps its early-return so in-flight threads finish normally.
  */
-export async function createDirectDealerRequest(input: {
-  leadId: string;
-  assignmentId: string;
-  nbfcId: number;
-  tenantId: string;
-  comments: string;
-  raisedBy: string;
-  docFor?: "primary" | "co_borrower";
-  attachments?: RequestAttachment[];
-}): Promise<{ id: string }> {
-  const { id } = await createNbfcDocRequest({
-    leadId: input.leadId,
-    assignmentId: input.assignmentId,
-    nbfcId: input.nbfcId,
-    tenantId: input.tenantId,
-    requestType: "step4_extra_items",
-    docFor: input.docFor ?? "primary",
-    comments: input.comments,
-    raisedBy: input.raisedBy,
-    initialStatus: NBFC_DOC_STATUS.FORWARDED,
-    attachments: input.attachments ?? [],
-  });
-  await db
-    .update(nbfcDocRequests)
-    .set({ dealer_direct: true })
-    .where(eq(nbfcDocRequests.id, id));
-
-  // Seed the thread with the NBFC's ask so the dealer and the NBFC read the same
-  // conversation — `nbfc_comments` alone would leave round 1 outside the thread.
-  await appendRequestMessage({
-    requestId: id,
-    leadId: input.leadId,
-    party: "nbfc",
-    authorUserId: input.raisedBy,
-    message: input.comments,
-    attachments: input.attachments ?? [],
-  });
-  return { id };
-}
-
 /** Append one message (with any files) to a request thread. Append-only. */
 export async function appendRequestMessage(input: {
   requestId: string;
@@ -718,6 +677,89 @@ export async function sendVerdictDocumentToNbfc(opts: {
     leadId: verdict.lead_id,
     tenantId: verdict.tenant_id,
     docLabel,
+    attachmentCount: opts.attachments.length,
+  };
+}
+
+/**
+ * The admin ALREADY HAS the document the NBFC asked for, so he answers the
+ * request himself instead of forwarding it to the dealer — hops 3→7 in one
+ * move.
+ *
+ * This is the "or else" half of the admin gate: every NBFC ask lands with the
+ * admin first, and the admin either uploads the file here (this function) or
+ * forwards it down to the dealer/customer (forwardNbfcDocRequest). Only a
+ * wrapper still sitting with the admin ('nbfc_raised' / 'admin_review') can be
+ * answered this way — once it has been forwarded, the children are the record
+ * and the request comes back up through admin_review_upload → push.
+ *
+ * The files are merged onto the wrapper's `attachments` and the note onto
+ * `admin_notes`, which is exactly what the NBFC thread and the admin card
+ * already render (the same shape E-210 uses for a verdict reply), so nothing
+ * downstream needs to learn a new column. The leg-1 SLA clock and the act-from-
+ * email token are cleared: the request is answered, so an auto-forward on top
+ * would double-ask the dealer for a document the NBFC already has.
+ */
+export async function fulfilNbfcDocRequestByAdmin(opts: {
+  requestId: string;
+  adminUserId: string;
+  /** The admin's note to the NBFC — required. */
+  message: string;
+  attachments: RequestAttachment[];
+}): Promise<{ leadId: string; tenantId: string; attachmentCount: number }> {
+  const [wrapper] = await db
+    .select()
+    .from(nbfcDocRequests)
+    .where(eq(nbfcDocRequests.id, opts.requestId))
+    .limit(1);
+  if (!wrapper) throw new Error("NOT_FOUND: nbfc request not found");
+  if (wrapper.request_type === "message") {
+    throw new Error("BAD_REQUEST: a message thread has no request to answer");
+  }
+  if (wrapper.dealer_direct) {
+    throw new Error(
+      "BAD_REQUEST: this is a legacy direct NBFC→dealer thread; the dealer answers it",
+    );
+  }
+  if (
+    wrapper.status !== NBFC_DOC_STATUS.RAISED &&
+    wrapper.status !== NBFC_DOC_STATUS.ADMIN_REVIEW
+  ) {
+    throw new Error(
+      `BAD_REQUEST: this request is '${
+        NBFC_DOC_STATUS_LABEL[wrapper.status] ?? wrapper.status
+      }' — only a request still with the admin can be answered directly`,
+    );
+  }
+
+  const message = opts.message.trim();
+  if (!message) throw new Error("BAD_REQUEST: a message for the NBFC is required");
+  if (opts.attachments.length === 0) {
+    throw new Error("BAD_REQUEST: attach at least one document to send");
+  }
+
+  const now = new Date();
+  const existing = Array.isArray(wrapper.attachments)
+    ? (wrapper.attachments as RequestAttachment[])
+    : [];
+  await db
+    .update(nbfcDocRequests)
+    .set({
+      attachments: [...existing, ...opts.attachments],
+      admin_notes: [wrapper.admin_notes, message].filter(Boolean).join("\n"),
+      status: NBFC_DOC_STATUS.PUSHED,
+      reviewed_by: opts.adminUserId,
+      push_source: "admin",
+      sla_due_at: null,
+      act_token_hash: null,
+      act_token_expires_at: null,
+      updated_at: now,
+    })
+    .where(eq(nbfcDocRequests.id, opts.requestId));
+
+  return {
+    leadId: wrapper.lead_id,
+    tenantId: wrapper.tenant_id,
     attachmentCount: opts.attachments.length,
   };
 }
