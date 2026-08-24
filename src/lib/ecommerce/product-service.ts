@@ -11,6 +11,7 @@ import { getHostingerConfig } from "@/lib/hostinger/client";
 import {
   createDigitalProduct,
   createPhysicalProduct,
+  deleteProduct,
   getProductById,
   listProducts,
   listVariants,
@@ -428,4 +429,99 @@ export async function updateEcommerceVariantInventory(
     outcome: "ok",
   });
   return after;
+}
+
+/**
+ * Outcome of a delete attempt.
+ *
+ * `removed: false` is not a failure — Hostinger archives a subscription product
+ * with active subscribers instead of deleting it, so a 200 does not prove the
+ * product is gone. The read-back is what turns a 200 into a truthful answer.
+ */
+export interface DeleteProductResult {
+  productId: string;
+  removed: boolean;
+  /** The status it is now in, when it survived the delete. */
+  survivingStatus?: string | null;
+}
+
+export async function deleteEcommerceProduct(
+  productId: string,
+  actor: EcommerceActor,
+): Promise<DeleteProductResult> {
+  try {
+    await deleteProduct(productId);
+  } catch (e) {
+    logMutation({
+      action: "product.delete",
+      actorId: actor.id,
+      actorRole: actor.role,
+      productId,
+      outcome: "failed",
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+
+  // Read back rather than trusting the 200. Reporting "deleted" for a product
+  // that is actually still there would send someone hunting for something that
+  // is still on the books.
+  let removed = true;
+  let survivingStatus: string | null | undefined;
+  try {
+    const still = await getProductById(productId);
+    removed = false;
+    survivingStatus = still.status ?? null;
+  } catch (e) {
+    // A 404 here is the expected, successful case.
+    const status = (e as { status?: number }).status;
+    if (status !== 404) {
+      // The delete itself succeeded; only the confirmation read failed. Say so
+      // rather than claiming either outcome.
+      logMutation({
+        action: "product.delete",
+        actorId: actor.id,
+        actorRole: actor.role,
+        productId,
+        outcome: "ok",
+        error: `delete succeeded but read-back failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      const err = new Error(
+        "The product was deleted but the confirmation check failed. Refresh the list to see whether it is gone.",
+      ) as Error & { status?: number };
+      err.status = 502;
+      throw err;
+    }
+  }
+
+  logMutation({
+    action: "product.delete",
+    actorId: actor.id,
+    actorRole: actor.role,
+    productId,
+    fields: { removed, survivingStatus },
+    outcome: "ok",
+  });
+
+  return { productId, removed, survivingStatus };
+}
+
+/** Retire a product. Reversible — see restoreEcommerceProduct. */
+export async function archiveEcommerceProduct(
+  productId: string,
+  actor: EcommerceActor,
+): Promise<void> {
+  await updateEcommerceProduct(productId, { status: "archived" }, actor);
+}
+
+/**
+ * Bring an archived product back as a DRAFT, never straight to published.
+ * Restoring should not silently put something back on sale — publishing stays a
+ * separate, deliberate step.
+ */
+export async function restoreEcommerceProduct(
+  productId: string,
+  actor: EcommerceActor,
+): Promise<void> {
+  await updateEcommerceProduct(productId, { status: "draft" }, actor);
 }

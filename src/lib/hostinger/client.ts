@@ -11,19 +11,22 @@
  * fails at call time with a useful message instead of breaking import of every
  * module downstream.
  *
- * WRITE SURFACE (Phase 5, approved). Exposes `hostingerGet` and `hostingerWrite`.
- * `hostingerWrite` permits POST and PATCH only, for exactly these endpoints:
+ * WRITE SURFACE. Exposes `hostingerGet`, `hostingerWrite` and `hostingerDelete`,
+ * for exactly these endpoints:
  *
- *   POST  /products/physical            create a physical product
- *   POST  /products/digital             create a digital product
- *   PATCH /products/{id}                name / description / status
- *   PATCH /products/{id}/variants/batch price (inventory is Phase 6)
+ *   POST   /products/physical            create a physical product      (Phase 5)
+ *   POST   /products/digital             create a digital product       (Phase 5)
+ *   PATCH  /products/{id}                name / status                  (Phase 5/7)
+ *   PATCH  /products/{id}/variants/batch price                          (Phase 5)
+ *   PATCH  /products/{id}/variants/batch inventory                      (Phase 6)
+ *   DELETE /products/{id}                permanent removal              (Phase 7)
  *
- * There is deliberately still NO DELETE helper — delete and the archive workflow
- * are Phase 7. Do not widen this surface without that approval.
+ * This is now the complete surface the CRM needs. Do not widen it further without
+ * a decision — in particular, nothing here should ever touch a CRM database table.
  *
  * Writes are never retried. A timeout on a mutation is an UNKNOWN outcome, not a
- * failure, and a blind retry could create a second product.
+ * failure: a blind retry could create a second product, and for DELETE it could
+ * report a removal that never happened or mask one that did.
  */
 
 export function cleanEnv(value?: string) {
@@ -238,4 +241,62 @@ export async function hostingerWrite<T>(
   }
 
   return parsed as T;
+}
+
+/**
+ * DELETE against the documented API.
+ *
+ * Kept separate from `hostingerWrite` so the one irreversible verb is visible at
+ * every call site rather than hiding behind a method argument.
+ *
+ * Never retried: a timeout here is genuinely ambiguous — the product may or may
+ * not be gone — and callers must resolve that by reading back, not by retrying.
+ */
+export async function hostingerDelete<T>(path: string): Promise<T | null> {
+  const cfg = getHostingerConfig();
+  const url = buildUrl(path, undefined, cfg.storeId);
+
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+    });
+  } catch (e: unknown) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
+    throw new HostingerApiError(
+      timedOut
+        ? "Hostinger did not respond in time — the product may or may not have been deleted. Refresh the list to check before trying again."
+        : "Could not reach Hostinger — the product may or may not have been deleted. Refresh the list to check before trying again.",
+      504,
+      null,
+    );
+  }
+
+  const text = await res.text().catch(() => "");
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    /* empty or non-JSON body is normal for a delete */
+  }
+
+  if (!res.ok) {
+    const envelope = parsed as { message?: string; correlation_id?: string } | null;
+    const correlationId = envelope?.correlation_id ?? null;
+    console.error(`[hostinger] DELETE ${path} -> ${res.status}`, {
+      correlationId,
+      body: text.slice(0, 500),
+    });
+    const crmStatus = toCrmStatus(res.status);
+    const message =
+      crmStatus === 422 && typeof envelope?.message === "string"
+        ? envelope.message.slice(0, 300)
+        : `Hostinger returned ${res.status}`;
+    throw new HostingerApiError(message, crmStatus, correlationId);
+  }
+
+  return (parsed as T) ?? null;
 }

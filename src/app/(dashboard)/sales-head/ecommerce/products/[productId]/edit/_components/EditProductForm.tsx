@@ -11,7 +11,13 @@ import { minorToRupees, rupeesToMinor } from "@/lib/ecommerce/format";
 import type { EcommerceProductDetail } from "@/lib/ecommerce/types";
 
 type Status = "draft" | "published" | "archived";
-const SETTABLE: Status[] = ["draft", "published", "archived"];
+/**
+ * Archiving is deliberately NOT offered here. It is a lifecycle action with its
+ * own confirmation on the product page, rather than something that happens as a
+ * side effect of saving an unrelated edit. This form handles routine
+ * draft <-> published only.
+ */
+const SETTABLE: Status[] = ["draft", "published"];
 
 export function EditProductForm({ productId }: { productId: string }) {
     const router = useRouter();

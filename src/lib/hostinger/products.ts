@@ -10,7 +10,7 @@
  * on a product. There is no PUT.
  */
 
-import { hostingerGet, hostingerWrite } from "./client";
+import { hostingerDelete, hostingerGet, hostingerWrite } from "./client";
 import type {
   HostingerCreateDigitalRequest,
   HostingerCreatePhysicalRequest,
@@ -165,4 +165,17 @@ export async function updateVariantInventory(
     `/products/${encodeURIComponent(productId)}/variants/batch`,
     body,
   );
+}
+
+/**
+ * Permanent removal. Irreversible from the CRM: afterwards the product is absent
+ * from every endpoint available to us, and there is no way to list deleted
+ * products, so absence is the only confirmation obtainable.
+ *
+ * One documented exception — "a subscription product with active subscribers is
+ * archived instead of deleted so its data stays available" — means a 200 here
+ * does NOT prove the product is gone. Callers must read back rather than assume.
+ */
+export async function deleteProduct(productId: string): Promise<void> {
+  await hostingerDelete(`/products/${encodeURIComponent(productId)}`);
 }
