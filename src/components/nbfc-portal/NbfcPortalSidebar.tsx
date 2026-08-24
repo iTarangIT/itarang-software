@@ -23,8 +23,10 @@ import {
   Cog,
   FilePlus2,
   FileText,
+  Flag,
   Gavel,
   Layers,
+  Recycle,
   Search,
   Siren,
   Wrench,
@@ -77,6 +79,16 @@ const NAV_ITEMS: Array<{
     label: "Risk Alerts",
     icon: Siren,
   },
+  // Where "Flag for Recovery" lands. The flag wrote a pipeline row and a
+  // battery stub and then had nowhere to show them: the Kanban below carries
+  // a serial and a stage, with no borrower, no dealer and no outstanding on
+  // it. This is the flagged book — read here, moved on the board.
+  {
+    id: "recovery-queue",
+    href: "/nbfc/recovery/queue",
+    label: "Recovery",
+    icon: Flag,
+  },
   {
     id: "recovery",
     href: "/nbfc/recovery",
@@ -97,6 +109,15 @@ const NAV_ITEMS: Array<{
     href: "/nbfc/recovery/refurbishment",
     label: "Refurbishment",
     icon: Wrench,
+  },
+  // [E-258] Scrap is the one recovery outcome the auction cannot sell — a
+  // dealer bids on batteries that still work. This is where it goes instead:
+  // bundled, photographed, priced and sold to iTarang.
+  {
+    id: "recovery-scrap",
+    href: "/nbfc/recovery/scrap",
+    label: "Scrap Sales",
+    icon: Recycle,
   },
   // [E-234] `/nbfc/auction` shipped with E-038 and was never linked from
   // anywhere — an orphan page reachable only by typing the URL. Recovery is the

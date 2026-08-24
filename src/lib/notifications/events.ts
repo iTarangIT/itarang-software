@@ -812,6 +812,115 @@ export async function notifyFiEvent(p: {
 }
 
 /* ================================================================== *
+ * BATTERY RECOVERY — the physical collection leg (E-262 / E-263)
+ * ================================================================== */
+
+/**
+ * Tells the NBFC what its recovery agent just did.
+ *
+ * The agent has no account and no way into the portal, so everything they
+ * report reaches the NBFC through this — including, for a visit that produced
+ * nothing, the coordinates they stood at. That is the part that matters: a
+ * report saying "nobody home" is a claim, and the same report with a map pin at
+ * the borrower's address is a record.
+ *
+ * Audience is the owning NBFC only. iTarang admins are deliberately NOT copied:
+ * a repossession is the lender's operation, and E-231's mute gate exists
+ * precisely so feeds are not filled with other people's routine work.
+ */
+export async function notifyRecoveryEvent(p: {
+  tenantId: string;
+  nbfcName: string;
+  event: "assigned" | "visit" | "collected" | "cancelled";
+  borrowerName: string;
+  agentName?: string | null;
+  batterySerial?: string | null;
+  /** Where the agent actually stood. Rendered as a map link in the message. */
+  lat?: number | null;
+  lng?: number | null;
+  /** Metres from the geocoded borrower address, when there was an anchor. */
+  distanceM?: number | null;
+  /** Visit only: why nothing was collected, and when they will return. */
+  outcomeLabel?: string | null;
+  nextVisitAt?: Date | null;
+  notes?: string | null;
+  /** Cancel only. */
+  reason?: string | null;
+  /** e.g. "the borrower paid" */
+  cause?: string | null;
+}) {
+  const what = p.batterySerial ? `${p.batterySerial} (${p.borrowerName})` : p.borrowerName;
+  const agent = p.agentName ?? "The recovery agent";
+
+  // Plain text, in the message itself rather than only in `data`, so it
+  // survives into the email body — which is where an operator reading this on a
+  // phone will actually see it.
+  const where =
+    p.lat != null && p.lng != null
+      ? ` Location: https://www.google.com/maps?q=${p.lat},${p.lng}` +
+        (p.distanceM != null ? ` (${Math.round(p.distanceM)} m from the address).` : ".")
+      : "";
+
+  const copy: Record<typeof p.event, { type: string; title: string; message: string }> = {
+    assigned: {
+      type: "recovery.assigned",
+      title: "Recovery agent dispatched",
+      message: `${agent} has been sent to collect ${what}.`,
+    },
+    visit: {
+      type: "recovery.visit",
+      title: "Agent attended — nothing collected",
+      message:
+        `${agent} attended for ${what} but could not collect` +
+        (p.outcomeLabel ? ` — ${p.outcomeLabel.toLowerCase()}.` : ".") +
+        (p.notes ? ` "${p.notes}"` : "") +
+        (p.nextVisitAt
+          ? ` Returning ${p.nextVisitAt.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST.`
+          : " They are not going back.") +
+        where,
+    },
+    collected: {
+      type: "recovery.collected",
+      title: "Battery collected — awaiting your review",
+      message:
+        `${agent} collected ${what}. Review the photographs and approve to file them ` +
+        `against the battery.` + where,
+    },
+    cancelled: {
+      type: "recovery.cancelled",
+      title: "Battery collection cancelled",
+      message:
+        `The collection of ${what} was cancelled` +
+        (p.cause ? ` — ${p.cause}` : "") +
+        `. ${agent} has been told not to collect.` +
+        (p.reason ? ` Reason: ${p.reason}` : ""),
+    },
+  };
+
+  const c = copy[p.event];
+  await emit({
+    type: c.type,
+    title: c.title,
+    message: c.message,
+    stage: "Recovery",
+    from: p.event === "assigned" || p.event === "cancelled"
+      ? nbfcParty(p.nbfcName)
+      : agentParty(p.agentName ?? "Recovery agent"),
+    data: {
+      agent_name: p.agentName ?? null,
+      battery_serial: p.batterySerial ?? null,
+      lat: p.lat ?? null,
+      lng: p.lng ?? null,
+      distance_from_address_m: p.distanceM ?? null,
+      next_visit_at: p.nextVisitAt ? p.nextVisitAt.toISOString() : null,
+    },
+    to: [
+      toNbfc(p.tenantId, p.nbfcName, { href: "/nbfc/recovery/queue" }),
+    ],
+  });
+}
+
+/* ================================================================== *
  * VIDEO KYC / E-NACH / LOAN AGREEMENT
  * ================================================================== */
 
