@@ -43,6 +43,10 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import { leads } from "@/lib/db/schema";
+import {
+  bajajFallbackMessage,
+  recordNoPreferredPartner,
+} from "@/lib/leads/bajaj-fallback";
 import { loadSectionGOptions, type SectionGNbfc } from "@/lib/leads/section-g";
 import {
   STEP4_UNLOCKED_STATUSES,
@@ -307,11 +311,19 @@ async function onStep4Start(
   }
 
   if (options.length === 0) {
+    // No preferred partner covers this customer's state/city. That is not
+    // "financing unavailable" — Bajaj Finserv operates nationally and can serve
+    // them directly, so hand over the local Sales Manager rather than leaving
+    // them with a dead end. The unserved city is recorded either way; a list of
+    // the towns where customers asked and we had no partner is exactly what a
+    // partnership team needs, and it only exists if we write it down now.
+    await recordNoPreferredPartner({ leadId });
+    await setSession(session.id, { current_state: DC_S4_WAIT });
     await reply(
       session,
-      "We couldn't match a lending partner to your profile automatically. " +
-        "The iTarang team has been notified and will arrange your financing " +
-        "manually — we'll come back to you here.",
+      `${bajajFallbackMessage()}\n\n` +
+        `_We've noted your details and the iTarang team will follow up if a ` +
+        `partner becomes available in your area._`,
     );
     return;
   }
