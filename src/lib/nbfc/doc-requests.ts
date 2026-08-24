@@ -478,6 +478,34 @@ export async function forwardNbfcDocRequest(opts: {
     })
     .where(eq(nbfcDocRequests.id, wrapper.id));
 
+  // E-264 — the customer's leg of the NBFC → admin → customer loop.
+  //
+  // The NBFC asks the admin, the admin forwards here, and until now the forward
+  // only minted upload links that somebody had to copy out by hand. For a lead
+  // that arrived over WhatsApp, ask on the channel it came in on: the customer
+  // gets the doc list, a "Send here" button, and the same links.
+  //
+  // Best-effort and not awaited — the rows above are committed, and a WhatsApp
+  // failure must not turn a successful forward into an error.
+  if (created.length > 0) {
+    void import("@/lib/whatsapp/doc-request-flow")
+      .then(({ pushDocRequestToWhatsApp }) =>
+        pushDocRequestToWhatsApp({
+          leadId: wrapper.lead_id,
+          docFor: docFor === "co_borrower" ? "co_borrower" : "primary",
+          items: created.map((c, i) => ({
+            id: c.id,
+            docLabel: c.doc_label,
+            uploadLink: c.upload_link,
+            reason: opts.items[i]?.reason ?? null,
+          })),
+        }),
+      )
+      .catch((err) =>
+        console.error("[nbfc/doc-requests] WhatsApp push failed:", err),
+      );
+  }
+
   return { lead_status: nextStatus, requests: created };
 }
 

@@ -45,6 +45,14 @@ export const BATTERY_CONDITIONS = [
 ] as const;
 export type BatteryCondition = (typeof BATTERY_CONDITIONS)[number];
 
+/**
+ * A drizzle handle or an open transaction. Callers that need this write to sit
+ * inside a wider unit of work — the recovery-agent approve step writes the
+ * battery, its photos and the assignment together — pass their `tx` in. Mirrors
+ * `DbLike` in `auction/createLot.ts`, which solved the same problem first.
+ */
+export type DbLike = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export interface CreateBatteryInput {
   tenant_id: string;
   serial: string;
@@ -60,6 +68,8 @@ export interface CreateBatteryInput {
   loan_sanction_id?: string | null;
   recovery_pipeline_id?: string | null;
   notes?: string | null;
+  /** Drizzle handle or transaction. Defaults to the singleton `db`. */
+  executor?: DbLike;
 }
 
 export interface BatteryRow {
@@ -132,14 +142,18 @@ function shape(row: typeof recoveryBatteries.$inferSelect): BatteryRow {
 export async function createRecoveryBattery(
   input: CreateBatteryInput,
 ): Promise<{ battery: BatteryRow; reused: boolean }> {
+  const x = input.executor ?? db;
   const serial = input.serial.trim();
   if (!serial) throw new Error("BAD_REQUEST: serial must not be empty");
 
-  const existing = await db
+  const existing = await x
     .select()
     .from(recoveryBatteries)
     .where(eq(recoveryBatteries.serial, serial))
     .limit(1);
+
+  let battery: typeof recoveryBatteries.$inferSelect;
+  let reused: boolean;
 
   if (existing.length > 0) {
     const prior = existing[0];
@@ -151,7 +165,24 @@ export async function createRecoveryBattery(
         `CONFLICT: battery ${serial} is already registered to another NBFC`,
       );
     }
-    const [updated] = await db
+    // [FIX] And a battery already tied to a DIFFERENT loan is not ours to move
+    // either. This used to overwrite `loan_sanction_id` with whatever arrived,
+    // which was harmless while the only caller was the recovery flag — the
+    // serial came off the loan record itself and could not disagree. It stops
+    // being harmless the moment a serial is TYPED: a recovery agent standing in
+    // front of a battery, entering it on their phone, is one transposed digit
+    // away from silently re-registering another borrower's asset against this
+    // loan. Re-intake of the SAME loan is still the normal path and still works.
+    if (
+      input.loan_sanction_id &&
+      prior.loan_sanction_id &&
+      prior.loan_sanction_id !== input.loan_sanction_id
+    ) {
+      throw new Error(
+        `CONFLICT: battery ${serial} is already registered against loan ${prior.loan_sanction_id}`,
+      );
+    }
+    const [updated] = await x
       .update(recoveryBatteries)
       .set({
         state_code: "intaken",
@@ -167,48 +198,61 @@ export async function createRecoveryBattery(
       })
       .where(eq(recoveryBatteries.id, prior.id))
       .returning();
-    return { battery: shape(updated), reused: true };
+    battery = updated;
+    reused = true;
+  } else {
+    const [created] = await x
+      .insert(recoveryBatteries)
+      .values({
+        tenant_id: input.tenant_id,
+        serial,
+        model: input.model ?? null,
+        capacity: input.capacity ?? null,
+        manufacturing_date: input.manufacturing_date ?? null,
+        recovery_date: input.recovery_date ? new Date(input.recovery_date) : new Date(),
+        warehouse: input.warehouse ?? null,
+        lat: input.lat != null ? String(input.lat) : null,
+        lng: input.lng != null ? String(input.lng) : null,
+        city: input.city ?? null,
+        state: input.state ?? null,
+        loan_sanction_id: input.loan_sanction_id ?? null,
+        recovery_pipeline_id: input.recovery_pipeline_id ?? null,
+        notes: input.notes ?? null,
+        state_code: "intaken",
+      })
+      .returning();
+    battery = created;
+    reused = false;
   }
-
-  const [created] = await db
-    .insert(recoveryBatteries)
-    .values({
-      tenant_id: input.tenant_id,
-      serial,
-      model: input.model ?? null,
-      capacity: input.capacity ?? null,
-      manufacturing_date: input.manufacturing_date ?? null,
-      recovery_date: input.recovery_date ? new Date(input.recovery_date) : new Date(),
-      warehouse: input.warehouse ?? null,
-      lat: input.lat != null ? String(input.lat) : null,
-      lng: input.lng != null ? String(input.lng) : null,
-      city: input.city ?? null,
-      state: input.state ?? null,
-      loan_sanction_id: input.loan_sanction_id ?? null,
-      recovery_pipeline_id: input.recovery_pipeline_id ?? null,
-      notes: input.notes ?? null,
-      state_code: "intaken",
-    })
-    .returning();
 
   // Keep the two sides of the link in step. The pipeline row is the workflow
   // position and it needs to point at the asset for the settlement join that
   // replaced the old battery_serial == lot_code string match.
+  //
+  // [FIX] This used to sit inside the INSERT branch only, so a battery that
+  // came back through recovery a second time — the exact case the reuse branch
+  // exists for — left `nbfc_recovery_pipeline.battery_id` NULL. Two things
+  // downstream read that column and quietly do nothing without it:
+  // `recordEvaluation` only updates the battery master `if (batteryId)`, and
+  // `publishLotFromRecovery` builds the lot item from `pipeline.battery_id`. A
+  // re-recovered battery could therefore be inspected and photographed and then
+  // never be sellable, with no error anywhere to explain why.
   if (input.recovery_pipeline_id) {
-    await db
+    await x
       .update(nbfcRecoveryPipeline)
-      .set({ battery_id: created.id, updated_at: new Date() })
+      .set({ battery_id: battery.id, updated_at: new Date() })
       .where(eq(nbfcRecoveryPipeline.id, input.recovery_pipeline_id));
   }
 
-  return { battery: shape(created), reused: false };
+  return { battery: shape(battery), reused };
 }
 
 export async function getBattery(
   tenant_id: string,
   battery_id: string,
+  executor?: DbLike,
 ): Promise<BatteryRow | null> {
-  const rows = await db
+  const rows = await (executor ?? db)
     .select()
     .from(recoveryBatteries)
     .where(
@@ -326,9 +370,11 @@ export async function attachBatteryPhotos(
   tenant_id: string,
   battery_id: string,
   paths: string[],
+  executor?: DbLike,
 ): Promise<BatteryRow> {
+  const x = executor ?? db;
   if (paths.length === 0) {
-    const current = await getBattery(tenant_id, battery_id);
+    const current = await getBattery(tenant_id, battery_id, executor);
     if (!current) throw new Error("NOT_FOUND: battery not found");
     return current;
   }
@@ -343,7 +389,7 @@ export async function attachBatteryPhotos(
     sql`, `,
   )}]::text[]`;
 
-  const [updated] = await db
+  const [updated] = await x
     .update(recoveryBatteries)
     .set({
       image_urls: sql`(
@@ -397,7 +443,25 @@ export async function setBatteryState(
   return shape(updated);
 }
 
-/** Batteries eligible to be put into a lot, for the lot-composition picker. */
+/**
+ * Batteries eligible to be put into a lot, for the lot-composition picker.
+ *
+ * Two conditions, not one. The state check is the obvious half: only inspected
+ * or ready stock can be sold. The NOT EXISTS is the half that was missing, and
+ * without it the picker offered batteries that are already on a live auction.
+ *
+ * `state_code = 'lotted'` was doing that job alone, on the assumption that
+ * everything which reaches a lot passes through composeLot/addLotItems, which
+ * set it. `publishLotFromRecovery()` does not — a battery dragged to
+ * `ready_for_auction` on the recovery board gets an auto-seeded draft lot while
+ * its own row stays `inspected`. Asking `auction_lot_items` directly is the
+ * answer that does not depend on every writer remembering to flip a flag, and
+ * it is the same rule composeLot enforces when the operator finally clicks Add,
+ * so the picker no longer offers something the server will refuse.
+ *
+ * A lot the operator is editing right now is caught by this too; the composer
+ * merges its own items back in from the lot detail (see LotComposer).
+ */
 export async function listLottableBatteries(
   tenant_id: string,
 ): Promise<BatteryRow[]> {
@@ -408,6 +472,13 @@ export async function listLottableBatteries(
       and(
         eq(recoveryBatteries.tenant_id, tenant_id),
         inArray(recoveryBatteries.state_code, ["ready", "inspected"]),
+        sql`NOT EXISTS (
+          SELECT 1
+            FROM auction_lot_items ali
+            JOIN auction_lots al ON al.id = ali.lot_id
+           WHERE ali.battery_id = ${recoveryBatteries.id}
+             AND al.status IN ('draft', 'scheduled', 'live', 'paused')
+        )`,
       ),
     )
     .orderBy(desc(recoveryBatteries.updated_at));

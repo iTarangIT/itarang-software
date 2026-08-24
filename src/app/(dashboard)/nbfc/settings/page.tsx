@@ -33,6 +33,7 @@ import ServiceOptInSection, {
 } from "./_components/ServiceOptInSection";
 import StepOwnersSection from "./_components/StepOwnersSection";
 import WalletSection from "./_components/WalletSection";
+import RecoveryAgentDirectory from "./_components/RecoveryAgentDirectory";
 
 export const dynamic = "force-dynamic";
 
@@ -184,6 +185,12 @@ export default async function SettingsPage() {
         canEdit={canEdit}
         callbackBase={callbackBase}
       />
+
+      {/* Recovery agents (E-262) — the people dispatched to collect a flagged
+          battery. Its own section rather than a link inside Service Opt-In (the
+          way the FI directory sits): the Recovery queue cannot dispatch anyone
+          until this list has a name in it, so it is not a sub-setting. */}
+      <RecoveryAgentDirectory canEdit={canEdit} />
 
       {/* Notification Channels — per-NBFC Email/SMS/WhatsApp gateways (§15.5) */}
       <NotificationChannelsSection />

@@ -52,6 +52,7 @@ import {
   Timer,
   CloudUpload,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
@@ -222,6 +223,48 @@ const COMMON_ITEMS = [
   },
 ];
 
+
+/**
+ * [E-259] Settings → NBFC, a sub-navigation node rather than four more
+ * top-level entries.
+ *
+ * Settings had grown a flat list in which "NBFC Request SLA" sat between "KYC
+ * Automation" and "Drive Backup" with nothing marking it as being about a
+ * different counterparty. Grouping the NBFC-facing settings under one node
+ * makes room for Payments without the list becoming a wall.
+ *
+ * Ids and hrefs of the moved entries are unchanged — `getActiveItemId` is
+ * longest-href-wins over a flattened list, the badge mapping keys on item.id,
+ * and `data-testid="nav-…"` is unchanged for both.
+ */
+function nbfcSettingsSubnav(idPrefix: string) {
+  return {
+    id: `${idPrefix}-nbfc-settings`,
+    label: "NBFC",
+    icon: Landmark,
+    // A node, not a route. Never used for matching; present because every
+    // other item in the tree has one.
+    href: "/admin/settings",
+    children: [
+      {
+        // E-259 — when iTarang pays each NBFC for the scrap batteries it buys.
+        id: `${idPrefix}-nbfc-payments`,
+        label: "Payments",
+        icon: Wallet,
+        href: "/admin/settings/payments",
+      },
+      {
+        // E-254 — NBFC request SLA (auto-forward to dealer / auto-push to
+        // NBFC). Moved under NBFC; same id, same route.
+        id: `${idPrefix}-nbfc-request-sla`,
+        label: "Request SLA",
+        icon: Timer,
+        href: "/admin/settings/nbfc-request-sla",
+      },
+    ],
+  };
+}
+
 // Per-role sections pinned BELOW COMMON_ITEMS.
 //
 // COMMON_ITEMS is appended to every role at the end of the build (see
@@ -256,17 +299,10 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
-        {
-          // E-254 — NBFC request SLA (auto-forward to dealer / auto-push to
-          // NBFC). Own entry beside KYC Automation, same reasoning.
-          id: "sh-nbfc-request-sla",
-          label: "NBFC Request SLA",
-          icon: Timer,
-          href: "/admin/settings/nbfc-request-sla",
-        },
+        nbfcSettingsSubnav("sh"),
         {
           // E-255 — Google Drive backup of every stored document. Own entry
-          // beside NBFC Request SLA, same reasoning.
+          // beside the NBFC group, same reasoning.
           id: "sh-gdrive-mirror",
           label: "Drive Backup",
           icon: CloudUpload,
@@ -578,6 +614,15 @@ const roleNavigation: Record<string, any[]> = {
           icon: Gavel,
           href: "/admin/nbfc/auction/analytics",
         },
+        // [E-258] The buying end of the NBFC scrap trade. A battery that fails
+        // inspection is excluded from the auction by design, so the `scrap`
+        // stage had no buyer at all until this desk existed.
+        {
+          id: "nbfc-scrap-desk",
+          label: "Scrap Purchase",
+          icon: Recycle,
+          href: "/admin/nbfc/scrap",
+        },
         {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",
@@ -849,13 +894,7 @@ const roleNavigation: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
-        {
-          // E-254 — own entry, not a tab. See the sales_head block above.
-          id: "admin-nbfc-request-sla",
-          label: "NBFC Request SLA",
-          icon: Timer,
-          href: "/admin/settings/nbfc-request-sla",
-        },
+        nbfcSettingsSubnav("admin"),
         {
           // E-255 — own entry, not a tab. See the sales_head block above.
           id: "admin-gdrive-mirror",
@@ -1516,10 +1555,28 @@ const roleNavigation: Record<string, any[]> = {
  * "/admin/buyback" matches at all, so it wins by default — unchanged from
  * before.
  */
+/**
+ * [E-259] A rendered sub-navigation child. The surrounding file types nav
+ * entries as `any`; the sub-navigation block is new, so it does not.
+ */
+interface SubNavItem {
+  id: string;
+  label: string;
+  href: string;
+  icon: LucideIcon;
+}
+
 interface NavItemForActive {
   id: string;
   href: string;
   exact?: boolean;
+  /**
+   * [E-259] A nested sub-navigation node — an item that is a heading with its
+   * own items under it (Settings → NBFC → Payments). The node itself has no
+   * route; `href` on such an item is ignored by the matcher below, which
+   * flattens children in so a child can still win longest-match.
+   */
+  children?: NavItemForActive[];
 }
 interface NavGroupForActive {
   items: NavItemForActive[];
@@ -1539,7 +1596,16 @@ function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): stri
   let winnerId: string | null = null;
   let winnerLength = -1;
   for (const group of menuItems) {
+    // Flatten one level of sub-navigation: a child route has to compete in the
+    // same longest-match contest as everything else, or the sidebar goes dark
+    // on it. Sub-navigation NODES are dropped rather than flattened — they
+    // carry no route of their own.
+    const flat: NavItemForActive[] = [];
     for (const item of group.items) {
+      if (item.children?.length) flat.push(...item.children);
+      else flat.push(item);
+    }
+    for (const item of flat) {
       // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
       const itemPath = item.href.split("?")[0];
       const matches = item.exact
@@ -1644,7 +1710,9 @@ function SidebarNav({
         {menuItems.map((group: any) => {
           const isOpen = isSectionOpen(group.section);
           const hasActive = group.items.some(
-            (item: any) => item.id === activeItemId,
+            (item: any) =>
+              item.id === activeItemId ||
+              item.children?.some((c: SubNavItem) => c.id === activeItemId),
           );
           const panelId = `${navId}-${slugifySection(group.section)}`;
           return (
@@ -1682,6 +1750,76 @@ function SidebarNav({
                   <div className="pb-2">
                     {group.items.map((item: any) => {
                       const isActive = item.id === activeItemId;
+
+                      // [E-259] A sub-navigation node: a heading with its own
+                      // items under it, not a link. Rendered as a details/
+                      // summary rather than more useState, so it needs no
+                      // extra state to stay open across a navigation and is
+                      // keyboard-operable for free. It starts open whenever
+                      // one of its children is the active route — a collapsed
+                      // group hiding the page you are on reads as the sidebar
+                      // having lost you.
+                      if (item.children?.length) {
+                        const childActive = item.children.some(
+                          (c: SubNavItem) => c.id === activeItemId,
+                        );
+                        return (
+                          <details
+                            key={item.id}
+                            open={childActive || undefined}
+                            className="sidebar-subnav"
+                          >
+                            <summary
+                              data-testid={`nav-${item.id}`}
+                              data-has-active={childActive ? "true" : undefined}
+                              className="sidebar-nav-item cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                            >
+                              <item.icon
+                                className="w-[18px] h-[18px] shrink-0 text-white/55"
+                                strokeWidth={1.75}
+                              />
+                              <span className="truncate flex-1">{item.label}</span>
+                              <ChevronDown
+                                aria-hidden="true"
+                                className="w-3.5 h-3.5 ml-auto shrink-0 opacity-60 transition-transform duration-200 [details[open]_&]:rotate-180"
+                                strokeWidth={2}
+                              />
+                            </summary>
+                            <div className="pl-4">
+                              {item.children.map((child: SubNavItem) => {
+                                const childIsActive = child.id === activeItemId;
+                                return (
+                                  <Link
+                                    key={child.id}
+                                    href={child.href}
+                                    onClick={onNavigate}
+                                    data-testid={`nav-${child.id}`}
+                                    className={cn(
+                                      childIsActive
+                                        ? "sidebar-nav-item-active"
+                                        : "sidebar-nav-item",
+                                    )}
+                                  >
+                                    <child.icon
+                                      className={cn(
+                                        "w-[18px] h-[18px] shrink-0",
+                                        childIsActive
+                                          ? "text-white"
+                                          : "text-white/55",
+                                      )}
+                                      strokeWidth={1.75}
+                                    />
+                                    <span className="truncate flex-1">
+                                      {child.label}
+                                    </span>
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          </details>
+                        );
+                      }
+
                       return (
                         <Link
                           key={item.id}

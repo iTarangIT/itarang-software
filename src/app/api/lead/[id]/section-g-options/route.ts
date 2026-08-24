@@ -15,13 +15,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { dealers, leads, productCategories } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import {
-  loadActiveProductsForDealer,
-  matchProducts,
-  type CustomerProfile,
-} from "@/lib/bre";
+import { loadSectionGOptions } from "@/lib/leads/section-g";
 
 const querySchema = z.object({
   loanAmount: z.coerce.number().min(0).optional(),
@@ -60,114 +56,16 @@ export async function GET(
         { status: 403 },
       );
     }
-    if (!user.dealer_id) {
-      return NextResponse.json({
-        success: true,
-        data: { items: [], engine: "bre-v1" },
-      });
-    }
 
-    const [dealerRow] = await db
-      .select({ id: dealers.id })
-      .from(dealers)
-      .where(eq(dealers.dealer_id, user.dealer_id))
-      .limit(1);
-    if (!dealerRow) {
-      return NextResponse.json({
-        success: true,
-        data: { items: [], engine: "bre-v1" },
-      });
-    }
-
-    const products = await loadActiveProductsForDealer(dealerRow.id);
-    if (products.length === 0) {
-      return NextResponse.json({
-        success: true,
-        data: { items: [], engine: "bre-v1" },
-      });
-    }
-
-    // Resolve the lead's product_category_id (UUID FK) to its category name
-    // (e.g. "3W", "2W") — that's what nbfc_loan_products.eligible_battery_categories
-    // stores. The admin NBFC product form picks "3W"/"2W"/etc. so the matcher
-    // must compare against the same string, not the lead's UUID.
-    let batteryCategoryName: string | null = null;
-    if (lead.product_category_id) {
-      const [categoryRow] = await db
-        .select({ name: productCategories.name })
-        .from(productCategories)
-        .where(eq(productCategories.id, lead.product_category_id))
-        .limit(1);
-      batteryCategoryName = categoryRow?.name ?? null;
-    }
-
-    const customer: CustomerProfile = {
-      battery_category: batteryCategoryName,
-      state: lead.state ?? null,
-      city: lead.city ?? null,
-      loan_amount: loanAmount ?? null,
-      // Pre-bureau-check at this point in the flow; rule is skipped unless a
-      // score is plumbed in by a later phase.
-      credit_score: null,
-      resident_status:
-        lead.resident_status === "owned" || lead.resident_status === "rented"
-          ? lead.resident_status
-          : null,
-    };
-
-    const result = matchProducts(customer, products);
-
-    const productIndex = new Map(products.map((p) => [p.id, p]));
-
-    type NbfcGroup = {
-      nbfcId: number;
-      nbfcCode: string;
-      shortName: string;
-      legalName: string;
-      activeLoanProducts: Array<{
-        id: number;
-        productName: string;
-        loanAmountMin: number;
-        loanAmountMax: number;
-        tenureMonthsMin: number;
-        tenureMonthsMax: number;
-        minRoiPct: string;
-        maxRoiPct: string;
-        downPaymentPct: string;
-      }>;
-    };
-
-    const byNbfc = new Map<number, NbfcGroup>();
-    for (const hit of result.hits) {
-      const meta = productIndex.get(hit.product_id);
-      if (!meta) continue;
-      const group = byNbfc.get(hit.nbfc_id) ?? {
-        nbfcId: hit.nbfc_id,
-        nbfcCode: meta.nbfc_id_code,
-        shortName: meta.nbfc_short_name,
-        legalName: meta.nbfc_legal_name,
-        activeLoanProducts: [],
-      };
-      group.activeLoanProducts.push({
-        id: hit.product_id,
-        productName: hit.product_name,
-        loanAmountMin: hit.bands.loan_amount_min,
-        loanAmountMax: hit.bands.loan_amount_max,
-        tenureMonthsMin: hit.bands.tenure_months_min,
-        tenureMonthsMax: hit.bands.tenure_months_max,
-        minRoiPct: hit.bands.min_roi_pct,
-        maxRoiPct: hit.bands.max_roi_pct,
-        downPaymentPct: hit.bands.down_payment_pct,
-      });
-      byNbfc.set(hit.nbfc_id, group);
-    }
+    // The match itself lives in @/lib/leads/section-g so the WhatsApp
+    // lender-selection flow (E-264 Phase 2) asks the identical question
+    // without a dealer session. It returns [] for "no dealer row" and
+    // "no candidate products" alike — both mean the same thing to the page.
+    const items = await loadSectionGOptions(lead, loanAmount);
 
     return NextResponse.json({
       success: true,
-      data: {
-        items: Array.from(byNbfc.values()),
-        engine: "bre-v1",
-      },
+      data: { items, engine: "bre-v1" },
     });
   } catch (err: unknown) {
     // postgres-js / Drizzle errors carry the underlying SQL in `.message`

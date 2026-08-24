@@ -18,6 +18,16 @@
  * A pipeline row whose battery has never been registered has nowhere to put
  * them; the panel offers to create the record from the serial it already knows,
  * rather than sending the operator to a different screen and back.
+ *
+ * SCRAP SKIPS THE REFURBISHMENT FIELDS. Step 2's cost estimate and checklist
+ * describe work done to put a battery back in service — terminal cleaning,
+ * recalibration, warranty reset. A scrapped battery gets none of it:
+ * recordEvaluation() sends it to stage 'scrap' with condition_grade = null and
+ * it leaves through Scrap Sales, never refurbishment. Neither field feeds
+ * computeBasePrice() either, so the form was asking the operator to cost work
+ * nobody will do and tick a checklist nobody will follow. Both are hidden on
+ * that decision and submitted as zero/false rather than as whatever was typed
+ * before the decision changed.
  */
 import { useState } from "react";
 import { toast } from "sonner";
@@ -144,6 +154,11 @@ export function BatteryEvaluationWizard({
     reject: false,
   });
 
+  // Derived rather than clearing the fields on change: an operator who picks
+  // Scrap, reconsiders and goes back to Cell Replacement gets back the cost
+  // they had already typed.
+  const isScrap = s2.decision === "scrap";
+
   async function submit() {
     setError(null);
     setSubmitting(true);
@@ -159,11 +174,16 @@ export function BatteryEvaluationWizard({
         },
         step2: {
           decision: s2.decision,
-          estimated_cost: Number(s2.estimated_cost),
+          // A scrapped battery is never refurbished, so it carries no
+          // refurbishment cost and no completed checklist. Sending the stale
+          // form state would put a repair estimate on a scrap record.
+          estimated_cost: isScrap ? 0 : Number(s2.estimated_cost),
           checklist: {
-            terminal_cleaning: s2.terminal_cleaning,
-            software_recalibration: s2.software_recalibration,
-            warranty_reset: s2.warranty_reset,
+            terminal_cleaning: isScrap ? false : s2.terminal_cleaning,
+            software_recalibration: isScrap
+              ? false
+              : s2.software_recalibration,
+            warranty_reset: isScrap ? false : s2.warranty_reset,
           },
         },
         step3: {
@@ -360,54 +380,70 @@ export function BatteryEvaluationWizard({
               <option value="scrap">Scrap</option>
             </select>
           </label>
-          <label className="block text-sm">
-            <span>Estimated refurb cost</span>
-            <input
-              type="number"
-              min={0}
-              value={s2.estimated_cost}
-              onChange={(e) =>
-                setS2({ ...s2, estimated_cost: e.target.value })
-              }
-              className="mt-1 w-full rounded border px-2 py-1"
-            />
-          </label>
-          <fieldset className="space-y-1 text-sm">
-            <legend className="font-medium">Checklist</legend>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={s2.terminal_cleaning}
-                onChange={(e) =>
-                  setS2({ ...s2, terminal_cleaning: e.target.checked })
-                }
-              />
-              Terminal cleaning
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={s2.software_recalibration}
-                onChange={(e) =>
-                  setS2({
-                    ...s2,
-                    software_recalibration: e.target.checked,
-                  })
-                }
-              />
-              Software recalibration
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={s2.warranty_reset}
-                onChange={(e) =>
-                  setS2({ ...s2, warranty_reset: e.target.checked })
-                }
-              />
-              Warranty reset
-            </label>
-          </fieldset>
+          {isScrap ? (
+            /*
+              Nothing to cost and nothing to tick. Say where the battery goes
+              instead, so the shorter step reads as a decision the form
+              understood rather than as fields that failed to load.
+            */
+            <p className="rounded bg-slate-50 p-2 text-sm text-slate-600">
+              No refurbishment cost or checklist for a scrapped battery — it
+              will not be repaired or auctioned. On submit it moves to the
+              scrap stage and can be bundled into a consignment for iTarang
+              from <span className="font-medium">Scrap Sales</span>.
+            </p>
+          ) : (
+            <>
+              <label className="block text-sm">
+                <span>Estimated refurb cost</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={s2.estimated_cost}
+                  onChange={(e) =>
+                    setS2({ ...s2, estimated_cost: e.target.value })
+                  }
+                  className="mt-1 w-full rounded border px-2 py-1"
+                />
+              </label>
+              <fieldset className="space-y-1 text-sm">
+                <legend className="font-medium">Checklist</legend>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={s2.terminal_cleaning}
+                    onChange={(e) =>
+                      setS2({ ...s2, terminal_cleaning: e.target.checked })
+                    }
+                  />
+                  Terminal cleaning
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={s2.software_recalibration}
+                    onChange={(e) =>
+                      setS2({
+                        ...s2,
+                        software_recalibration: e.target.checked,
+                      })
+                    }
+                  />
+                  Software recalibration
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={s2.warranty_reset}
+                    onChange={(e) =>
+                      setS2({ ...s2, warranty_reset: e.target.checked })
+                    }
+                  />
+                  Warranty reset
+                </label>
+              </fieldset>
+            </>
+          )}
           <div className="flex justify-between">
             <button
               type="button"

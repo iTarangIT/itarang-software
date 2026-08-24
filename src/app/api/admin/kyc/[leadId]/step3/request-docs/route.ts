@@ -19,9 +19,9 @@ import {
 // form from any primary KYC verification card or supporting-docs card and the
 // backend creates one otherDocumentRequests row per checklist item.
 //
-// This route only creates rows + flips the lead kyc_status into a Step 3
-// waiting state. Customer outreach (SMS/WhatsApp) is triggered from the dealer
-// dashboard's existing Send Link buttons.
+// This route creates rows, flips the lead kyc_status into a Step 3 waiting
+// state, and (E-264) pushes the request to WhatsApp when the lead has a chat.
+// The dealer dashboard's Send Link buttons remain the manual alternative.
 
 const itemSchema = z.object({
   doc_label: z.string().min(1),
@@ -181,6 +181,32 @@ export async function POST(
       performed_by: appUser.id,
       timestamp: now,
     });
+
+    // E-264 — actually deliver the request. Until now this route minted an
+    // upload link and returned it, and nothing ever sent it: the admin screen
+    // said "Awaiting upload from dealer / customer…" while the customer had been
+    // told nothing. For a lead whose documents arrived over WhatsApp, ask on the
+    // channel they were already using.
+    //
+    // Best-effort and deliberately not awaited into the response: a WhatsApp
+    // failure must not fail an admin action whose rows are already committed.
+    // pushDocRequestToWhatsApp returns "none" and logs when there is no chat.
+    void import("@/lib/whatsapp/doc-request-flow")
+      .then(({ pushDocRequestToWhatsApp }) =>
+        pushDocRequestToWhatsApp({
+          leadId,
+          docFor: doc_for,
+          items: created.map((c, i) => ({
+            id: c.id,
+            docLabel: c.doc_label,
+            uploadLink: c.upload_link,
+            reason: items[i]?.reason ?? null,
+          })),
+        }),
+      )
+      .catch((err) =>
+        console.error("[Admin Step3 Request Docs] WhatsApp push failed:", err),
+      );
 
     return NextResponse.json({
       success: true,
