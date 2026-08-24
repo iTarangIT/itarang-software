@@ -239,9 +239,9 @@ export default function NbfcRequestThread({
   if (entries.length === 0) {
     return (
       <p className="text-sm text-slate-400">
-        No requests yet. Use <em>Ask Dealer for Documents</em> above to message
-        the dealer directly, or the other buttons to route a correction /
-        co-borrower request through the iTarang admin.
+        No requests yet. Use the buttons above to raise a document, correction or
+        co-borrower request with the iTarang admin — they either send you the
+        document themselves or collect it from the dealer/customer for you.
       </p>
     );
   }

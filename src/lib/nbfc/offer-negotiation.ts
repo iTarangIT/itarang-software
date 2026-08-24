@@ -28,7 +28,18 @@ import { nbfcOfferNegotiations } from "@/lib/db/schema";
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
 
-export const NEGOTIATION_PARTIES = ["nbfc", "dealer"] as const;
+/**
+ * 'customer' is the borrower writing from their own WhatsApp chat, as opposed to
+ * a dealer countering on their behalf from the portal. The column is varchar(8)
+ * with no CHECK (see below) and 'customer' is exactly eight characters, so no
+ * migration was needed — E-265 records the vocabulary in a COMMENT.
+ *
+ * There is deliberately no matching `negotiation_status`: that column is
+ * varchar(16) and 'customer_countered' would not fit. A customer's counter
+ * leaves the status at 'dealer_countered', which means "the borrower side
+ * countered" — the status says whose turn it is, `party` says who typed.
+ */
+export const NEGOTIATION_PARTIES = ["nbfc", "dealer", "customer"] as const;
 export type NegotiationParty = (typeof NEGOTIATION_PARTIES)[number];
 
 export const NEGOTIATION_KINDS = ["offer", "counter", "fix", "close"] as const;

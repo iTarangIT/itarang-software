@@ -1,21 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
 
-import { db } from "@/lib/db";
-import { inventory, products, productCategories } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
-
-// inventory.asset_category stores the productCategories.name (set at
-// bulk-upload time). Callers may pass either the category id or the
-// name — resolve to the name so both work.
-async function resolveCategoryName(input: string): Promise<string> {
-  const [cat] = await db
-    .select({ name: productCategories.name })
-    .from(productCategories)
-    .where(eq(productCategories.id, input))
-    .limit(1);
-  return cat?.name ?? input;
-}
+import { listDealerBatteries } from "@/lib/inventory/dealer-stock";
 
 // BRD V2 §2.3 — dealer battery inventory list for the product picker.
 // Filters: dealer_id + asset_type=Battery + status=available.
@@ -23,11 +9,8 @@ async function resolveCategoryName(input: string): Promise<string> {
 // Optional query params: category, subCategory, includeSerials.
 // Sort: oem_invoice_date ASC (oldest first — BRD ageing priority rule).
 //
-// `includeSerials` (comma-separated) widens the status filter to also return
-// those specific serials whatever state they are in. Without it, a lead whose
-// battery is already reserved renders an EMPTY picker and silently loses the
-// existing choice — which is exactly what leads submitted before the
-// Step-4/Step-5 split look like, since Step 4 used to reserve on submit.
+// The query lives in `src/lib/inventory/dealer-stock.ts` so the WhatsApp Step-5
+// picker offers exactly the same stock, in the same order, as this screen.
 
 export async function GET(
   req: NextRequest,
@@ -46,81 +29,17 @@ export async function GET(
     }
 
     const { searchParams } = new URL(req.url);
-    const category = searchParams.get("category");
-    const subCategory = searchParams.get("subCategory");
-    const includeSerials = (searchParams.get("includeSerials") ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const filters = [
-      eq(inventory.dealer_id, dealerId),
-      or(eq(inventory.asset_type, "Battery"), eq(inventory.asset_type, "battery"))!,
-      includeSerials.length > 0
-        ? or(
-            eq(inventory.status, "available"),
-            inArray(inventory.serial_number, includeSerials),
-          )!
-        : eq(inventory.status, "available"),
-    ];
-    if (category) {
-      const categoryName = await resolveCategoryName(category);
-      // Use prefix match so canonical names like "3W" also pick up inventory
-      // rows tagged "3W Batteries", "3W Vehicles", etc.
-      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
-    }
-    // Step 4 is where the dealer selects the actual battery, so every
-    // available battery in the category is listed — exactly like the chargers
-    // route. (It must NOT be narrowed to lead.primary_product_id: that "Product
-    // Type" can be a charger or paraphernalia, which would zero the list.)
-    if (subCategory) filters.push(eq(inventory.model_type, subCategory));
-
-    const rows = await db
-      .select({
-        id: inventory.id,
-        serial_number: inventory.serial_number,
-        model_name: products.name,
-        model_type: inventory.model_type,
-        product_id: inventory.product_id,
-        asset_category: inventory.asset_category,
-        invoice_date: inventory.oem_invoice_date,
-        soc_percent: inventory.soc_percent,
-        soc_last_sync_at: inventory.soc_last_sync_at,
-        status: inventory.status,
-        price: products.price,
-        voltage_v: products.voltage_v,
-        capacity_ah: products.capacity_ah,
-        warranty_months: products.warranty_months,
-        // GST snapshot — already captured per inventory row at OEM upload.
-        gross_amount: inventory.inventory_amount,
-        gst_percent: inventory.gst_percent,
-        gst_amount: inventory.gst_amount,
-        net_amount: inventory.final_amount,
-      })
-      .from(inventory)
-      .leftJoin(products, eq(inventory.product_id, products.id))
-      .where(and(...filters))
-      .orderBy(asc(inventory.oem_invoice_date));
-
-    // Compute inventory_age in days + ageing badge per BRD §3842.
-    const today = Date.now();
-    const enriched = rows.map((r) => {
-      const ageMs = r.invoice_date ? today - new Date(r.invoice_date).getTime() : 0;
-      const ageDays = Math.max(0, Math.floor(ageMs / (1000 * 60 * 60 * 24)));
-      let ageBadge: "fresh" | "ageing" | "old" = "fresh";
-      if (ageDays > 180) ageBadge = "old";
-      else if (ageDays > 90) ageBadge = "ageing";
-      return {
-        ...r,
-        inventory_age_days: ageDays,
-        age_badge: ageBadge,
-      };
+    const data = await listDealerBatteries({
+      dealerId,
+      category: searchParams.get("category"),
+      subCategory: searchParams.get("subCategory"),
+      includeSerials: (searchParams.get("includeSerials") ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     });
 
-    // Recommendation flag = oldest unit (rows already filtered to available).
-    const withRecommend = enriched.map((r, idx) => ({ ...r, recommended: idx === 0 }));
-
-    return NextResponse.json({ success: true, data: withRecommend });
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("[Dealer Batteries] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to load batteries";
