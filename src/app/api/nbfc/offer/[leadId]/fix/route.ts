@@ -178,6 +178,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       console.error("[offer/fix] notification failed:", err);
     }
 
+    // E-264 Phase 3 — tell the borrower in their chat that these are the final
+    // terms, so the "ask for better" affordance disappears there too. Its own
+    // push rather than the ordinary offer one: a customer who keeps being
+    // offered a negotiation the service will refuse learns to distrust the chat.
+    void import("@/lib/whatsapp/offer-flow")
+      .then(({ pushOfferFixedToWhatsApp }) =>
+        pushOfferFixedToWhatsApp(leadId, assignment.nbfc_id),
+      )
+      .catch((err) => console.error("[offer/fix] WhatsApp push failed:", err));
+
     return NextResponse.json({ ok: true, negotiation_status: "fixed", fixed_at: now.toISOString() });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

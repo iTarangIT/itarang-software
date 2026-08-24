@@ -13,6 +13,11 @@ import {
 // recorded, and every correction / additional-document request it raised — with
 // controls to Forward the request to the dealer, Push the finished docs back to
 // the NBFC, Decline, or post a direct message to the NBFC (Change 3).
+//
+// The admin gate makes this card the ONLY gate: nothing reaches the dealer from
+// the NBFC except through here. At hop 3 the admin has two moves — upload the
+// document himself (it goes straight back to the NBFC) or forward the ask to the
+// dealer/customer and push the reviewed file back when it returns.
 
 interface VerdictAttachment {
   url: string;
@@ -255,6 +260,12 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
   const [replyMsg, setReplyMsg] = useState<Record<number, string>>({});
   // Bumped after a successful send so the <input type="file"> remounts empty.
   const [replyReset, setReplyReset] = useState<Record<number, number>>({});
+  // The same uploader on a standalone NBFC request: the admin already
+  // holds the document the NBFC asked for, so he answers the request instead of
+  // forwarding it to the dealer. Keyed by wrapper id.
+  const [fulfilFiles, setFulfilFiles] = useState<Record<string, File[]>>({});
+  const [fulfilMsg, setFulfilMsg] = useState<Record<string, string>>({});
+  const [fulfilReset, setFulfilReset] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     try {
@@ -495,6 +506,56 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
           return next;
         });
         setReplyReset((prev) => ({ ...prev, [verdictId]: (prev[verdictId] ?? 0) + 1 }));
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Answer a standalone NBFC request without going to the dealer: the
+  // admin uploads the document he already holds and the wrapper goes straight
+  // to 'pushed_to_nbfc'. The other half of the gate is "Forward to dealer".
+  const fulfilRequest = async (requestId: string) => {
+    const files = fulfilFiles[requestId] ?? [];
+    const message = (fulfilMsg[requestId] ?? "").trim();
+    if (files.length === 0) {
+      setBanner("Choose at least one document to send to the NBFC.");
+      return;
+    }
+    if (!message) {
+      setBanner("Type a message for the NBFC before sending.");
+      return;
+    }
+    const key = `fulfil-${requestId}`;
+    setBusy(key);
+    setBanner(null);
+    try {
+      const fd = new FormData();
+      fd.append("message", message);
+      for (const f of files) fd.append("files", f);
+      const res = await fetch(`/api/admin/nbfc-requests/${requestId}/fulfil`, {
+        method: "POST",
+        body: fd,
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setBanner(json.error?.message ?? "Could not send the document");
+      } else {
+        setFulfilFiles((prev) => {
+          const next = { ...prev };
+          delete next[requestId];
+          return next;
+        });
+        setFulfilMsg((prev) => {
+          const next = { ...prev };
+          delete next[requestId];
+          return next;
+        });
+        setFulfilReset((prev) => ({
+          ...prev,
+          [requestId]: (prev[requestId] ?? 0) + 1,
+        }));
       }
       await load();
     } finally {
@@ -818,6 +879,14 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                       <LinkifiedText text={request.nbfc_comments} />
                     </p>
                   ) : null}
+                  {/* What the admin wrote back — set when he answers the request
+                      himself or declines it. */}
+                  {request.admin_notes ? (
+                    <p className="mt-0.5 whitespace-pre-line text-xs text-slate-500">
+                      <span className="font-medium">You:</span>{" "}
+                      <LinkifiedText text={request.admin_notes} />
+                    </p>
+                  ) : null}
                   {request.request_type === "manual_consent" &&
                   firstUrl(request.nbfc_comments) ? (
                     <a
@@ -1018,6 +1087,33 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                     {busy === request.id ? "Forwarding…" : "Create request & forward"}
                   </button>
                 </div>
+              ) : null}
+
+              {/* The other half of the gate. The NBFC's ask stops here
+                  first; if the document is already on file the admin uploads it
+                  and it goes straight back, no dealer round-trip. Hidden once
+                  the request has moved on (it is then the children's story) and
+                  on co-borrower asks, which have no document to send. */}
+              {!request.dealer_direct &&
+              request.request_type !== "message" &&
+              request.request_type !== "co_borrower" &&
+              (request.status === "nbfc_raised" ||
+                request.status === "admin_review") ? (
+                <AdminReplyComposer
+                  docFor={request.doc_for}
+                  replies={[]}
+                  files={fulfilFiles[request.id] ?? []}
+                  message={fulfilMsg[request.id] ?? ""}
+                  resetKey={fulfilReset[request.id] ?? 0}
+                  busy={busy === `fulfil-${request.id}`}
+                  onFiles={(files) =>
+                    setFulfilFiles((prev) => ({ ...prev, [request.id]: files }))
+                  }
+                  onMessage={(m) =>
+                    setFulfilMsg((prev) => ({ ...prev, [request.id]: m }))
+                  }
+                  onSend={() => fulfilRequest(request.id)}
+                />
               ) : null}
 
               <DirectMessage

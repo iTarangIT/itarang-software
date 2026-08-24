@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, otpConfirmations, productSelections } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { generateId } from "@/lib/api-utils";
-import {
-  productSelectionColumns,
-  step5ProductSelectionSchema,
-} from "@/lib/leads/productSelectionSchema";
+import { step5ProductSelectionSchema } from "@/lib/leads/productSelectionSchema";
+import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
 
 /**
  * Step 5 product save.
@@ -19,20 +16,10 @@ import {
  * dealer picks the battery and settles the final price here, once terms are
  * known.
  *
- * It writes the same `product_selections` columns as
- * `/api/lead/[id]/submit-product-selection` — both go through
- * `productSelectionColumns()` so they can never disagree about which field
- * lands in which column.
- *
- * It deliberately does NOT reserve inventory. Reservation happens inside the
- * `confirm-dispatch` transaction, so a lead only locks stock at the moment it
- * ships. See the plan's "oversell window" note: between saving here and
- * dispatching, the serial is still available to another lead.
- *
- * Saving invalidates any outstanding OTP. The customer approves a specific
- * price over the phone, so changing the battery or the margin afterwards has
- * to force a fresh call rather than silently re-pointing an approval the
- * customer already gave.
+ * The write lives in `src/lib/leads/step5-product.ts` — the customer chooses the
+ * same stock from their WhatsApp chat, and both callers must invalidate an
+ * outstanding OTP and must NOT reserve inventory. This route keeps auth,
+ * eligibility and HTTP shaping.
  */
 
 export async function POST(
@@ -69,78 +56,17 @@ export async function POST(
       );
     }
 
-    const now = new Date();
-    const columns = productSelectionColumns(body);
-
-    const [existing] = await db
-      .select({ id: productSelections.id, battery_serial: productSelections.battery_serial })
-      .from(productSelections)
-      .where(eq(productSelections.lead_id, leadId))
-      .orderBy(desc(productSelections.created_at))
-      .limit(1);
-
-    const result = await db.transaction(async (tx) => {
-      let selectionId: string;
-
-      if (existing) {
-        selectionId = existing.id;
-        await tx
-          .update(productSelections)
-          .set({
-            ...columns,
-            category: body.category ?? undefined,
-            model_number: body.modelNumber ?? undefined,
-            updated_at: now,
-          })
-          .where(eq(productSelections.id, existing.id));
-      } else {
-        // Defensive: a sanctioned lead should always have the row Step 4
-        // inserted. Create one rather than 500 so a dealer is never stranded
-        // on a lead whose Step-4 row was cleaned up out from under them.
-        selectionId = await generateId("PS");
-        await tx.insert(productSelections).values({
-          id: selectionId,
-          lead_id: leadId,
-          ...columns,
-          category: body.category || lead.product_category_id,
-          model_number: body.modelNumber || lead.product_type_id,
-          payment_mode: "finance",
-          admin_decision: "pending",
-          submitted_by: user.id,
-          submitted_at: now,
-          created_at: now,
-          updated_at: now,
-        });
-      }
-
-      // Any OTP the customer has not yet spent approved a different number.
-      // Expire it so `verify-otp` rejects it and the dealer has to re-send.
-      await tx
-        .update(otpConfirmations)
-        .set({ expires_at: now })
-        .where(
-          and(
-            eq(otpConfirmations.lead_id, leadId),
-            eq(otpConfirmations.otp_type, "dispatch_confirmation"),
-            eq(otpConfirmations.is_used, false),
-          ),
-        );
-
-      return { selectionId };
-    });
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        productSelectionId: result.selectionId,
-        batterySerial: body.batterySerial,
-        chargerSerial: body.chargerSerial ?? null,
-        finalPrice: body.finalPrice,
-        // True when the dealer changed the product after an OTP was already
-        // sent — the UI uses this to explain why the OTP box reset.
-        otpInvalidated: !!existing && existing.battery_serial !== body.batterySerial,
+    const data = await saveStep5ProductSelection({
+      leadId,
+      body,
+      submittedBy: user.id,
+      lead: {
+        product_category_id: lead.product_category_id,
+        product_type_id: lead.product_type_id,
       },
     });
+
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("[Step 5 Product Selection] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to save product selection";
