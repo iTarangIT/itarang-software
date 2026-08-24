@@ -24,7 +24,10 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import { dialerCampaignLeads } from "../src/lib/db/schema";
-import { correlatedDurationSeconds } from "../src/lib/ai-dialer/call-duration/derive";
+import {
+    correlatedDurationSeconds,
+    DURATION_SECONDS_SQL,
+} from "../src/lib/ai-dialer/call-duration/derive";
 import { deriveBuckets, DEFAULT_DURATION_BUCKET_CONFIG } from "../src/lib/ai-dialer/call-duration/config";
 import {
     BUCKET_MATCH_PREDICATE,
@@ -292,11 +295,194 @@ async function filterAgreementSection(campaignId: string) {
 }
 
 
+/**
+ * The regression this whole rule exists to prevent, asserted against live rows.
+ *
+ * `dialer_campaign_leads.started_at` / `completed_at` bracket the DIALER'S
+ * ATTEMPT, not a conversation. A `trigger_failed` lead — the provider rejected
+ * the trigger outright and no phone ever rang — still carries both timestamps,
+ * five to sixty seconds apart. While the duration rule accepted that wall clock
+ * on its own, every one of those leads was bucketed by how long the dialer took
+ * to fail: one production campaign of 146 leads (71 completed, 75 failed)
+ * reported all 146 as "measured calls".
+ *
+ * Two scans, both database-wide rather than one-campaign, because the defect
+ * was a property of the RULE and could reappear on any campaign:
+ *
+ *   1. no lead lacking both forms of connection evidence has a duration;
+ *   2. no `trigger_failed` lead has a duration at all.
+ *
+ * Cheap: a count over dialer_campaign_leads with one correlated subquery each,
+ * the same shape the leads route already pays per row.
+ */
+/**
+ * Total talk time on the campaigns LIST vs. the campaign DETAIL panel.
+ *
+ * Two screens, two different queries, one number. api/ai-dialer/campaigns and
+ * api/campaigns/unified each compute `totalTalkTimeSeconds` with a correlated
+ * SUM; the panel gets its `totalTalkSeconds` out of the histogram CTE. All
+ * three now bind DURATION_SECONDS_SQL, and the list route's comment claims in
+ * so many words that its total IS the sum of the detail table's Duration cells.
+ * This is that claim, executed.
+ *
+ * It also serves as the only place either list query's SQL is run at all — a
+ * type-check cannot tell you that a hand-written correlated subquery parses,
+ * and neither can vitest.
+ */
+async function listAgreementSection(campaignId: string) {
+    console.log("\nCampaigns-list talk time vs. the detail panel");
+
+    // The same shape both list routes build: one LATERAL per lead, the shared
+    // predicate, coalesced to 0 so a SUM behaves.
+    const [{ total }] = (await db.execute(sql`
+        SELECT COALESCE(SUM(COALESCE(${DURATION_SECONDS_SQL}, 0)), 0)::int AS total
+          FROM dialer_campaign_leads dcl
+          LEFT JOIN LATERAL (
+            SELECT a.call_duration, a.transcript
+              FROM ai_call_logs a
+             WHERE a.call_id = dcl.bolna_call_id
+             ORDER BY a.updated_at DESC NULLS LAST
+             LIMIT 1
+          ) acl ON TRUE
+         WHERE dcl.campaign_id = ${campaignId}
+    `)) as unknown as Array<{ total: number }>;
+
+    const rows = Array.from(
+        await db.execute(buildDurationHistogramSql(campaignId, BUCKETS)),
+    ) as unknown as DurationHistogramRow[];
+    const panel = foldDurationHistogram(
+        rows,
+        BUCKETS,
+        { edgesSeconds: [...DEFAULT_DURATION_BUCKET_CONFIG.edgesSeconds], source: "default" },
+        campaignId,
+    ).totals.totalTalkSeconds;
+
+    if (Number(total) === panel) {
+        ok(`list total ${total}s = panel total ${panel}s`);
+    } else {
+        bad("list and panel agree on total talk time", `list ${total}s, panel ${panel}s`);
+    }
+}
+
+async function neverConnectedSection() {
+    console.log("\nCalls that never connected have no duration");
+
+    const duration = correlatedDurationSeconds(
+        dialerCampaignLeads.started_at,
+        dialerCampaignLeads.completed_at,
+        dialerCampaignLeads.bolna_call_id,
+    );
+
+    // The evidence the rule accepts: a transcript, or provider-reported talk
+    // time. Restated here as a subquery rather than imported, because this is
+    // the INDEPENDENT check — importing CONNECTED_PREDICATE would make the
+    // assertion true by construction and prove nothing.
+    const evidence = sql`EXISTS (
+        SELECT 1 FROM ai_call_logs a
+         WHERE a.call_id = ${dialerCampaignLeads.bolna_call_id}
+           AND (a.transcript IS NOT NULL OR (a.call_duration IS NOT NULL AND a.call_duration > 0))
+    )`;
+
+    const [{ n: ghosts }] = (await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(dialerCampaignLeads)
+        .where(and(sql`NOT ${evidence}`, sql`${duration} IS NOT NULL`))) as Array<{ n: number }>;
+
+    if (Number(ghosts) === 0) {
+        ok("no lead without a transcript or provider talk time carries a duration");
+    } else {
+        bad(
+            "no lead without a transcript or provider talk time carries a duration",
+            `${ghosts} lead(s) would be bucketed on dialer latency alone`,
+        );
+    }
+
+    const [{ n: triggerFailed }] = (await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(dialerCampaignLeads)
+        .where(
+            and(
+                sql`${dialerCampaignLeads.call_outcome} LIKE 'trigger_failed%'`,
+                sql`${duration} IS NOT NULL`,
+            ),
+        )) as Array<{ n: number }>;
+
+    if (Number(triggerFailed) === 0) {
+        ok("no trigger_failed lead is bucketed");
+    } else {
+        bad("no trigger_failed lead is bucketed", `${triggerFailed} lead(s) still bucketed`);
+    }
+
+    // Scale of what the rule is holding back, for the log. Not an assertion:
+    // this number is expected to be LARGE and is the reason the rule exists.
+    const [{ n: wallOnly }] = (await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(dialerCampaignLeads)
+        .where(
+            and(
+                sql`NOT ${evidence}`,
+                sql`${dialerCampaignLeads.started_at} IS NOT NULL`,
+                sql`${dialerCampaignLeads.completed_at} IS NOT NULL`,
+                sql`extract(epoch FROM (${dialerCampaignLeads.completed_at} - ${dialerCampaignLeads.started_at})) > 0`,
+            ),
+        )) as Array<{ n: number }>;
+    console.log(
+        `  (${wallOnly} lead(s) carry positive wall-clock time with no connection evidence — ` +
+            "each one a bar this rule keeps out of the chart)",
+    );
+}
+
+/**
+ * The counter the campaign header reads, checked against the rows it summarises.
+ *
+ * calls_made was an alias of completed_leads until E-266, which is why the
+ * header printed "Calls made 71" beside "Completed 71" on a campaign with 75
+ * further failed attempts, and why the progress bar sat at 0% on a campaign
+ * whose leads had all failed.
+ */
+async function counterSection() {
+    console.log("\ndialer_campaigns counters vs. their rows");
+
+    const drift = Array.from(
+        await db.execute(sql`
+        SELECT c.id, c.calls_made, c.completed_leads, c.failed_leads,
+               t.comp, t.fail
+          FROM dialer_campaigns c
+          JOIN (
+            SELECT campaign_id,
+                   count(*) FILTER (WHERE status = 'completed')::int AS comp,
+                   count(*) FILTER (WHERE status = 'failed')::int    AS fail
+              FROM dialer_campaign_leads
+             GROUP BY campaign_id
+          ) t ON t.campaign_id = c.id
+         WHERE c.calls_made      IS DISTINCT FROM t.comp + t.fail
+            OR c.completed_leads IS DISTINCT FROM t.comp
+            OR c.failed_leads    IS DISTINCT FROM t.fail
+         LIMIT 5
+    `),
+    ) as Array<Record<string, unknown>>;
+
+    if (drift.length === 0) {
+        ok("calls_made = completed + failed on every campaign");
+    } else {
+        // Not a code failure if E-266 has not been applied to this database —
+        // say which, so the reader does not go hunting in campaignTracker.ts.
+        bad(
+            "calls_made = completed + failed on every campaign",
+            `${drift.length}+ campaign(s) drift, e.g. ${JSON.stringify(drift[0])}` +
+                " — apply drizzle/E-266_recompute_campaign_calls_made.sql to this database",
+        );
+    }
+}
+
 async function main() {
     console.log("Verifying campaign call-duration histogram (read-only)");
     await boundarySection();
     const campaignId = await liveSection();
     if (campaignId) await filterAgreementSection(campaignId);
+    if (campaignId) await listAgreementSection(campaignId);
+    await neverConnectedSection();
+    await counterSection();
 
     console.log(
         `\n${failed === 0 ? "ALL CHECKS PASSED" : `${failed} CHECK(S) FAILED`}` +

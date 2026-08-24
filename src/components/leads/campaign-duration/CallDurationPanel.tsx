@@ -1,10 +1,23 @@
 // The analysis section that opens when the Completed stat card is clicked.
 //
-// It answers one question: how fast are this campaign's connected calls dying,
-// and why. Production data has put the median AI call around eleven seconds,
-// with roughly seven in ten connected calls ending inside twenty — a signal that
-// until now only existed in an offline script. Seeing it per campaign is what
-// lets someone tell a bad campaign from a bad script.
+// It answers one question in four parts: WHERE are this campaign's calls being
+// lost, and why. Reading order is deliberate and is not the order the data was
+// built in —
+//
+//   1. the greeting cliff, when it fires. On the stored transcripts 44 of 83
+//      connected calls end inside the AI's opening sentence at a median of
+//      seven seconds, and when that is true every number below it is a
+//      consequence rather than a finding;
+//   2. the funnel — attempted, placed, answered, then what happened on the
+//      call — on THREE separate denominators, because the evidence thins out
+//      as you go down and blending them would report "2% qualify" when the
+//      truth is "we almost never score a call";
+//   3. the duration distribution, the shape of the calls that survived;
+//   4. the opening-line table, the only section that proposes an action.
+//
+// Parts 2-4 each survive the others being empty. A campaign with no stored
+// transcripts still gets part 3; one with no reported durations still gets
+// parts 1, 2 and 4.
 //
 // THE AGGREGATE IS SERVER-SIDE, DELIBERATELY. The obvious shortcut is to bucket
 // the rows the lead table already loaded, but that table caps at 100 rows per
@@ -20,8 +33,13 @@
 import * as React from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AlertCircle, Clock } from "lucide-react";
+import { BucketOutcomeLegend } from "./BucketOutcomeLegend";
+import { CallFunnel } from "./CallFunnel";
+import { GreetingCliff } from "./GreetingCliff";
+import { OpeningScriptTable } from "./OpeningScriptTable";
 import { DurationHistogram } from "./DurationHistogram";
-import type { DurationHistogramResponse } from "./types";
+import { DurationSummaryStrip } from "./DurationSummaryStrip";
+import type { CallQualityResponse } from "./types";
 
 function PanelShell({
   id,
@@ -49,7 +67,7 @@ function PanelShell({
           id="campaign-duration-title"
           className="text-base font-bold tracking-tight text-gray-900"
         >
-          How long the connected calls lasted
+          Where these calls are being lost
         </h3>
       </div>
 
@@ -64,6 +82,13 @@ function PanelShell({
 function LoadingBody() {
   return (
     <div>
+      {/* Four tiles then the plot — the same three-band shape the loaded panel
+          has, so arrival does not reflow the page. */}
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-[86px] animate-pulse rounded-xl bg-gray-100" />
+        ))}
+      </div>
       <div className="flex items-end gap-1.5" style={{ height: 150 }}>
         {[0.5, 0.8, 0.6, 0.7, 0.45, 0.3].map((h, i) => (
           <div
@@ -104,7 +129,7 @@ export function CallDurationPanel({
   /** Carries the label so the table's filter chip can name the bucket. */
   onSelectBucket: (next: { key: string; label: string } | null) => void;
 }) {
-  const { data, isLoading, isError, error, refetch } = useQuery<DurationHistogramResponse>({
+  const { data, isLoading, isError, error, refetch } = useQuery<CallQualityResponse>({
     queryKey: ["dialer-campaign-duration", campaignId],
     queryFn: async () => {
       const res = await fetch(
@@ -112,7 +137,7 @@ export function CallDurationPanel({
       );
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message ?? "Failed");
-      return json.data as DurationHistogramResponse;
+      return json.data as CallQualityResponse;
     },
     // 10s while running, not the campaign header's 4s: this is a whole-campaign
     // aggregate that moves by one call every half-minute at best, and it is the
@@ -172,26 +197,13 @@ export function CallDurationPanel({
     );
   }
 
-  // The state that actually happens on a running campaign: rows have finished
-  // but the provider has not reported durations yet.
-  if (totals.bucketedConnected === 0) {
-    return (
-      <PanelShell id={id}>
-        <EmptyBody
-          message={
-            totals.connectedLeads > 0
-              ? `${totals.connectedLeads} call${totals.connectedLeads === 1 ? "" : "s"} connected, none with a recorded duration yet.`
-              : "No call has reached a dealer yet."
-          }
-          detail={
-            totals.connectedLeads > 0
-              ? "Durations arrive with the provider webhook, usually within a minute of the call ending."
-              : `${totals.attemptedLeads} call${totals.attemptedLeads === 1 ? " was" : "s were"} dialled but none produced a conversation. The Failed tab explains why.`
-          }
-        />
-      </PanelShell>
-    );
-  }
+  // No usable duration does NOT mean nothing to show. The funnel is computed
+  // from outcomes and transcripts, so "how far did these calls get" survives a
+  // provider that never reported a single duration — and that combination is
+  // common, not exotic: every campaign dialled before the ElevenLabs migration
+  // looks exactly like this. Returning early here (as this panel used to) threw
+  // away the half of the analysis that still worked.
+  const hasHistogram = totals.bucketedConnected > 0;
 
   return (
     <PanelShell
@@ -204,16 +216,74 @@ export function CallDurationPanel({
         ) : null
       }
     >
-      <DurationHistogram
-        buckets={buckets}
-        bucketedConnected={totals.bucketedConnected}
-        selected={selectedBucket}
-        onSelect={(key) => {
-          if (selectedBucket === key) return onSelectBucket(null);
-          const hit = buckets.find((b) => b.key === key);
-          onSelectBucket(hit ? { key: hit.key, label: hit.label } : null);
-        }}
-      />
+      {/* The order is the order the question gets asked. The greeting cliff
+          first, because when it fires it is the finding that changes what you
+          do and every number below it is a consequence. Then the funnel: where
+          the calls went. Then the duration distribution, which is the shape of
+          the calls that survived. The script table last, because it is the
+          only section that proposes an action rather than a measurement.
+
+          The summary strip is not decoration. Its closing paragraph is the only
+          place that names every denominator in words, and without it the
+          chart's "N measured calls" sits unexplained next to a Completed card
+          showing a different number, which reads as a bug and costs the panel
+          its credibility. See DurationSummaryStrip's header. */}
+      <GreetingCliff funnel={data.funnel} />
+
+      <div className="mt-5">
+        <CallFunnel funnel={data.funnel} />
+      </div>
+
+      <div className="mt-6 border-t border-gray-100 pt-5">
+        {hasHistogram ? (
+          <>
+            <DurationSummaryStrip
+              totals={totals}
+              shortestLabel={buckets[0]?.label ?? "20s"}
+            />
+
+            <div className="mt-5">
+              <DurationHistogram
+                buckets={buckets}
+                bucketedConnected={totals.bucketedConnected}
+                selected={selectedBucket}
+                onSelect={(key) => {
+                  if (selectedBucket === key) return onSelectBucket(null);
+                  const hit = buckets.find((b) => b.key === key);
+                  onSelectBucket(hit ? { key: hit.key, label: hit.label } : null);
+                }}
+              />
+            </div>
+
+            <div className="mt-4">
+              <BucketOutcomeLegend
+                buckets={buckets}
+                selected={selectedBucket}
+                onClear={() => onSelectBucket(null)}
+              />
+            </div>
+          </>
+        ) : (
+          <EmptyBody
+            message={
+              totals.connectedLeads > 0
+                ? `${totals.connectedLeads} call${totals.connectedLeads === 1 ? "" : "s"} connected, none with a recorded duration yet.`
+                : "No call has reached a dealer yet."
+            }
+            detail={
+              totals.connectedLeads > 0
+                ? "Durations arrive with the provider webhook, usually within a minute of the call ending. The stages above do not depend on them."
+                : `${totals.attemptedLeads} call${totals.attemptedLeads === 1 ? " was" : "s were"} taken off the queue but none produced a conversation. The Failed tab explains why.`
+            }
+          />
+        )}
+      </div>
+
+      {data.funnel.openingScripts.length > 0 && (
+        <div className="mt-6 border-t border-gray-100 pt-5">
+          <OpeningScriptTable scripts={data.funnel.openingScripts} />
+        </div>
+      )}
     </PanelShell>
   );
 }
