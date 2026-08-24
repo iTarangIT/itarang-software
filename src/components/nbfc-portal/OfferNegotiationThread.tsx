@@ -44,6 +44,8 @@ type Viewer = "dealer" | "nbfc" | "admin";
 const PARTY_STYLE: Record<string, string> = {
   nbfc: "bg-sky-50 text-sky-700 border-sky-200",
   dealer: "bg-violet-50 text-violet-700 border-violet-200",
+  // The borrower writing from their own WhatsApp chat — distinct from the dealer.
+  customer: "bg-emerald-50 text-emerald-700 border-emerald-200",
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -56,11 +58,21 @@ const KIND_LABEL: Record<string, string> = {
   close: "Loan product deleted",
 };
 
-/** "You" wherever the viewer is the party — an NBFC officer reading "NBFC asked" is odd. */
+/**
+ * "You" wherever the viewer is the party — an NBFC officer reading "NBFC asked"
+ * is odd.
+ *
+ * 'customer' is a borrower who wrote from their own WhatsApp chat rather than a
+ * dealer countering for them. Labelling it matters: the previous fallback
+ * returned "Dealer" for every non-NBFC party, so a customer's own words would
+ * have been attributed to their dealer on the lender's screen.
+ */
 function partyLabel(party: string, viewer: Viewer): string {
   if (viewer === "nbfc" && party === "nbfc") return "You";
   if (viewer === "dealer" && party === "dealer") return "You";
-  return party === "nbfc" ? "NBFC" : "Dealer";
+  if (party === "nbfc") return "NBFC";
+  if (party === "customer") return "Customer";
+  return "Dealer";
 }
 
 /** Money fields get ₹ and grouping; ROI a %; tenure a "mo". */
