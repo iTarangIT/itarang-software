@@ -56,10 +56,14 @@ function shapeRow(r: any) {
     finalIntentScore: r.finalIntentScore,
     currentStatus: r.currentStatus,
     // Exact call duration (seconds) shown in the table's Duration column.
+    // `hasTranscript` gates the wall-clock fallback: the started/completed pair
+    // brackets the DIALER's attempt, so without that gate a trigger_failed row
+    // shows the seconds we spent failing to place the call as its duration.
     durationSeconds: deriveDurationSeconds(
       r.callDuration,
       r.startedAt,
       r.completedAt,
+      r.hasTranscript,
     ),
     // True when a reviewer has manually corrected this lead's intent score.
     corrected: Boolean(r.corrected),
@@ -293,8 +297,11 @@ export const GET = withErrorHandler(
     // evidence-order note in failureReason.ts). Intersecting the two would
     // return FEWER rows than the bar the user just clicked promised — the exact
     // "confident wrong number" this feature exists to prevent. Duration bounds
-    // alone are the precise population: a derived duration is never zero, so
-    // `>= lo` already excludes every call that never connected.
+    // alone are the precise population: a derived duration exists ONLY for a
+    // call something proves connected, so `>= lo` already excludes every call
+    // that never did. That was not true until the wall-clock fallback was gated
+    // on the transcript — before then a trigger_failed lead carried the seconds
+    // the dialer spent failing as its "duration" and matched these bounds.
     if (bucket !== "all" && !durationBounds) {
       conditions.push(inArray(dialerCampaignLeads.status, [bucket]));
     }

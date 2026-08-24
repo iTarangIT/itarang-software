@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { deriveFailureReason, type FailureReasonInput } from "../../failureReason";
 import { DEFAULT_DURATION_BUCKET_CONFIG, deriveBuckets } from "../config";
+import { CONNECTED_PREDICATE, DURATION_SECONDS_PREDICATE } from "../derive";
 import {
     bucketDefsJson,
+    buildDurationHistogramSql,
     classifyDurationOutcome,
     foldDurationHistogram,
     type DurationHistogramRow,
@@ -282,5 +285,47 @@ describe("foldDurationHistogram", () => {
         const out = foldDurationHistogram([], BUCKETS, { ...CFG, source: "app_settings" }, "camp_9");
         expect(out.campaignId).toBe("camp_9");
         expect(out.config).toEqual({ edgesSeconds: [20, 40, 60, 120, 300], source: "app_settings" });
+    });
+});
+
+// The CTE used to hand-inline its own copy of the duration CASE and its own
+// "transcript OR duration > 0" test. That is precisely the four-copies problem
+// derive.ts's header warns about, and it is why fixing the rule in derive.ts
+// did not reach this query: the histogram kept bucketing trigger_failed leads
+// by how long the dialer took to fail. These pins fail if a copy ever comes
+// back.
+describe("buildDurationHistogramSql", () => {
+    const render = (campaignId = "camp_1") =>
+        new PgDialect().sqlToQuery(buildDurationHistogramSql(campaignId, BUCKETS)).sql;
+
+    it("binds the shared duration predicate rather than a local copy", () => {
+        expect(render()).toContain(DURATION_SECONDS_PREDICATE);
+    });
+
+    it("binds the shared connected predicate rather than a local copy", () => {
+        expect(render()).toContain(CONNECTED_PREDICATE);
+    });
+
+    it("never treats campaign-lead timestamps as evidence a call connected", () => {
+        // The only place dcl.started_at may appear is inside the duration CASE,
+        // where the transcript already gates it. It must not reach the
+        // `connected` CTE or the totals filters on its own.
+        const rendered = render();
+        expect(rendered).not.toMatch(/WHERE\s+has_transcript IS TRUE OR duration_seconds > 0/);
+        expect(rendered).not.toMatch(/FILTER \(WHERE has_transcript IS TRUE OR duration_seconds > 0\)/);
+    });
+
+    it("parameterises the campaign id instead of interpolating it", () => {
+        const query = new PgDialect().sqlToQuery(
+            buildDurationHistogramSql("camp_'; DROP TABLE users; --", BUCKETS),
+        );
+        expect(query.sql).not.toContain("DROP TABLE");
+        expect(query.params).toContain("camp_'; DROP TABLE users; --");
+    });
+
+    it("carries every configured bucket into the bound json", () => {
+        expect(render()).toContain("jsonb_array_elements");
+        const query = new PgDialect().sqlToQuery(buildDurationHistogramSql("camp_1", BUCKETS));
+        expect(query.params).toContain(bucketDefsJson(BUCKETS));
     });
 });

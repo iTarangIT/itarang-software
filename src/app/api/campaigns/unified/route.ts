@@ -20,6 +20,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 
@@ -109,19 +110,28 @@ export const GET = withErrorHandler(async (req: Request) => {
                    c.completed_at AS "completedAt",
                    c.triggered_by::text AS "triggeredBy",
                    u.name AS "triggeredByName",
+                   -- Binds the ONE duration rule from call-duration/derive
+                   -- instead of restating it, so this list and the campaign
+                   -- detail panel cannot quote different talk time for the same
+                   -- campaign. The copy this replaces took per-lead wall clock
+                   -- as a duration on its own, which added the seconds the
+                   -- dialer spent failing to place trigger_failed calls into a
+                   -- figure labelled "talk time".
+                   --
+                   -- LATERAL ... LIMIT 1, not a plain LEFT JOIN:
+                   -- ai_call_logs_call_id_idx is NOT unique, so the join this
+                   -- replaces double-counted any lead whose call_id had two log
+                   -- rows.
                    (
-                     SELECT COALESCE(SUM(
-                       CASE
-                         WHEN acl.call_duration IS NOT NULL AND acl.call_duration > 0
-                           THEN acl.call_duration
-                         WHEN dcl.started_at IS NOT NULL AND dcl.completed_at IS NOT NULL
-                              AND EXTRACT(epoch FROM (dcl.completed_at - dcl.started_at)) > 0
-                              AND EXTRACT(epoch FROM (dcl.completed_at - dcl.started_at)) < 7200
-                           THEN EXTRACT(epoch FROM (dcl.completed_at - dcl.started_at))::int
-                         ELSE 0
-                       END), 0)::int
+                     SELECT COALESCE(SUM(COALESCE(${DURATION_SECONDS_SQL}, 0)), 0)::int
                      FROM dialer_campaign_leads dcl
-                     LEFT JOIN ai_call_logs acl ON acl.call_id = dcl.bolna_call_id
+                     LEFT JOIN LATERAL (
+                       SELECT a.call_duration, a.transcript
+                         FROM ai_call_logs a
+                        WHERE a.call_id = dcl.bolna_call_id
+                        ORDER BY a.updated_at DESC NULLS LAST
+                        LIMIT 1
+                     ) acl ON TRUE
                      WHERE dcl.campaign_id = c.id
                    ) AS "totalTalkTimeSeconds",
                    c.schedule_mode AS "scheduleMode",
