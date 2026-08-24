@@ -376,6 +376,17 @@ export const leads = pgTable("leads", {
   consent_status: varchar("consent_status", { length: 20 }).default('pending'),
   has_co_borrower: boolean("has_co_borrower").default(false),
   has_additional_docs_required: boolean("has_additional_docs_required").default(false),
+  // E-264 — 'unassigned' | 'assigned'. A customer who self-onboards over
+  // WhatsApp has no dealer, but dealer_id can NOT be left NULL: nearly every
+  // read path compares it against the caller's dealer code, so a NULL would make
+  // the lead invisible to the very queue meant to rescue it. dealer_id therefore
+  // points at the house dealer as a holding pen, and ownership is expressed
+  // here. Step 4 refuses to start while this is 'unassigned'.
+  assignment_status: varchar("assignment_status", { length: 24 })
+    .default('assigned')
+    .notNull(),
+  dealer_assigned_at: timestamp("dealer_assigned_at", { withTimezone: true }),
+  dealer_assigned_by: uuid("dealer_assigned_by"),
   interim_step_status: varchar("interim_step_status", { length: 20 }).default('pending'),
   kyc_draft_data: jsonb("kyc_draft_data"),
   step_status: jsonb("step_status"),
@@ -2287,6 +2298,46 @@ export const coBorrowerRequests = pgTable(
   }),
 );
 
+// E-264 — hashed, purpose-scoped magic links handed to a customer over WhatsApp
+// so they can finish a step on a mobile web page without a login.
+//
+// This is a third token system on purpose, because neither existing one fits:
+// nbfc_doc_requests.act_token_hash hashes correctly but its consumer page still
+// wants an admin browser session, and other_document_requests.upload_token has
+// the right no-session semantics but stores the secret in PLAINTEXT across three
+// duplicated generators. This takes the hashing from the first and the audience
+// from the second. The upload_token surface is deliberately left untouched.
+export const leadActionTokens = pgTable(
+  "lead_action_tokens",
+  {
+    id: uuid().primaryKey().defaultRandom().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    /** co_borrower | step4 | offers | step5 — vocabulary owned by action-token.ts */
+    purpose: varchar({ length: 32 }).notNull(),
+    /** sha256(raw). The raw token exists only in the WhatsApp message. */
+    token_hash: varchar("token_hash", { length: 64 }).notNull(),
+    audience: varchar({ length: 16 }).default('customer').notNull(),
+    /** The number it was issued to — audit only; forwarding a link is normal. */
+    wa_phone: varchar("wa_phone", { length: 20 }),
+    ref_id: varchar("ref_id", { length: 255 }),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** Nullable: step4/offers links are legitimately re-openable in their window. */
+    consumed_at: timestamp("consumed_at", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    leadActionTokensHashUnique: uniqueIndex("lead_action_tokens_hash_unique").on(
+      table.token_hash,
+    ),
+    leadActionTokensLeadPurposeIdx: index(
+      "lead_action_tokens_lead_purpose_idx",
+    ).on(table.lead_id, table.purpose, table.expires_at),
+  }),
+);
+
 // --- LOAN OFFERS (SM → Dealer) ---
 
 export const loanOffers = pgTable(
@@ -3392,6 +3443,17 @@ export const whatsappOnboardingSessions = pgTable(
       .notNull(),
     operator_id: uuid("operator_id"),
     parent_session_id: uuid("parent_session_id"),
+    // E-264 — the interactive prompt we could not send because Meta's 24-hour
+    // service window was shut. A template cannot carry a list or more than three
+    // buttons, so out-of-window we send a generic template nudge and stash the
+    // real prompt here; the customer's next inbound re-opens the window and the
+    // orchestrator replays it verbatim. Sending the template does NOT re-open
+    // the window — only their reply does.
+    pending_prompt: jsonb("pending_prompt"),
+    pending_prompt_at: timestamp("pending_prompt_at", { withTimezone: true }),
+    // E-264 — unanswered template nudges since the last inbound. Meta scores the
+    // business down for these, so they are capped. Reset on inbound.
+    window_nudges_sent: integer("window_nudges_sent").default(0).notNull(),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -5290,6 +5352,10 @@ export const recoveryBatteries = pgTable(
     image_urls: text("image_urls").array().notNull().default(sql`'{}'::text[]`),
     state_code: varchar("state_code", { length: 24 }).notNull().default("draft"),
     notes: text("notes"),
+    // [E-258] Set when this battery was sold to iTarang as scrap. Turns
+    // state_code='scrapped' from a bare status into "sold under SCR-000123",
+    // which is what anyone auditing a scrapped battery actually asks.
+    scrap_consignment_id: uuid("scrap_consignment_id"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -5298,6 +5364,455 @@ export const recoveryBatteries = pgTable(
     stateIdx: index("recovery_batteries_state_idx").on(table.state_code),
     pipelineIdx: index("recovery_batteries_pipeline_idx").on(table.recovery_pipeline_id),
     loanIdx: index("recovery_batteries_loan_idx").on(table.loan_sanction_id),
+    scrapConsignmentIdx: index("recovery_batteries_scrap_consignment_idx").on(
+      table.scrap_consignment_id,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-262 — recovery agent dispatch: the physical leg between flag and bench
+// -----------------------------------------------------------------------------
+// Flagging a loan for recovery writes the flag, a pipeline row at
+// 'needs_inspection' and a battery stub; inspection then assumes the battery is
+// already on a bench. The job in between — somebody drives to the borrower,
+// finds the battery, photographs it and brings it back — had no record at all.
+//
+// The NBFC keeps a directory of recovery agents (no logins, contacts only),
+// dispatches one with a single-use link, and the agent's phone captures live
+// GPS and watermarked photos at the address. The NBFC reviews and approves,
+// which stamps the battery master and hands it to the inspection wizard.
+//
+// Modelled on field_investigations / nbfc_fi_agents (E-148), which already
+// solved assign → tokenised link → GPS + photo capture → reviewer decision.
+//
+// Mirrors drizzle/E-262_recovery_agent_dispatch.sql, which is the source of
+// truth. No pgEnum and no CHECK on the status columns — same decision as every
+// other status column in this family (see the E-232 header).
+//
+// THREE INDEXES LIVE ONLY IN THE SQL. Drizzle's index builder cannot express a
+// partial index, and all three of these carry a rule rather than a lookup:
+//   recovery_assignments_open_unique         one live assignment per loan
+//   recovery_assignments_link_token_unique   the token is a credential
+//   recovery_assignment_photos_slot_unique   one photo per named slot
+// -----------------------------------------------------------------------------
+export const nbfcRecoveryAgents = pgTable(
+  "nbfc_recovery_agents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    nbfc_id: integer("nbfc_id"),
+    name: varchar("name", { length: 200 }).notNull(),
+    // Phone required, email optional — an agent is reached on a phone; email is
+    // the link wire when they have one.
+    phone: varchar("phone", { length: 20 }).notNull(),
+    email: varchar("email", { length: 200 }),
+    city: varchar("city", { length: 120 }),
+    /** Free text — "Ranchi + 60km". Not a geofence; it helps a human pick. */
+    coverage_area: text("coverage_area"),
+    preferred_channel: varchar("preferred_channel", { length: 12 })
+      .default("email")
+      .notNull(), // email|sms|whatsapp
+    /** Compared against the selfie the field form captures. */
+    reference_photo_url: text("reference_photo_url"),
+    /** Soft delete — assignments reference these rows. */
+    active: boolean("active").default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantActiveIdx: index("nbfc_recovery_agents_tenant_active_idx").on(
+      table.tenant_id,
+      table.active,
+    ),
+  }),
+);
+
+export const recoveryAssignments = pgTable(
+  "recovery_assignments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // varchar(255), NOT uuid — `loan_sanctions.id` is character varying here.
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    recovery_pipeline_id: uuid("recovery_pipeline_id"),
+    battery_id: uuid("battery_id"),
+    /**
+     * Nullable: a flag raised with no serial has none, and the agent supplies
+     * it on the field form — they are the one holding the battery.
+     */
+    battery_serial: varchar("battery_serial", { length: 64 }),
+
+    attempt_no: integer("attempt_no").default(1).notNull(),
+    is_current: boolean("is_current").default(true).notNull(),
+    /**
+     * assigned | in_progress | collected | completed | rejected | cancelled
+     *
+     * `assigned` means the link exists but the send was never confirmed;
+     * `in_progress` means the agent has it. Without that distinction a bounced
+     * email looks exactly like an agent who has not set off yet.
+     */
+    status: varchar("status", { length: 24 }).default("assigned").notNull(),
+
+    agent_id: uuid("agent_id"),
+    /** Denormalised so renaming an agent does not rewrite history. */
+    agent_name: varchar("agent_name", { length: 200 }),
+    agent_phone: varchar("agent_phone", { length: 20 }),
+    assigned_by: uuid("assigned_by"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    due_at: timestamp("due_at", { withTimezone: true }),
+
+    link_token: varchar("link_token", { length: 80 }),
+    link_sent_at: timestamp("link_sent_at", { withTimezone: true }),
+    link_channel: varchar("link_channel", { length: 12 }), // email|sms|whatsapp
+    link_expires_at: timestamp("link_expires_at", { withTimezone: true }),
+    /** Why nobody was reached, so the queue never shows a silent 'assigned'. */
+    dispatch_error: text("dispatch_error"),
+
+    collected_at: timestamp("collected_at", { withTimezone: true }),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_accuracy_m: numeric("gps_accuracy_m", { precision: 8, scale: 2 }),
+    /**
+     * Server clock, not the handset's — a phone's time is user-settable and
+     * this is evidence.
+     */
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    /**
+     * Geocoded borrower address, frozen at assign. NULL when no geocoding key
+     * is configured — say so in the UI rather than rendering a bare dash.
+     */
+    stated_lat: numeric("stated_lat", { precision: 10, scale: 7 }),
+    stated_lng: numeric("stated_lng", { precision: 10, scale: 7 }),
+    distance_from_address_m: numeric("distance_from_address_m", { precision: 10, scale: 2 }),
+    condition_notes: text("condition_notes"),
+    agent_declaration_at: timestamp("agent_declaration_at", { withTimezone: true }),
+
+    reviewed_by: uuid("reviewed_by"),
+    reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+    review_decision: varchar("review_decision", { length: 16 }), // approve|reject
+    review_notes: text("review_notes"),
+
+    cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
+    /** NULL when the system cancelled it — nobody clicked, the borrower paid. */
+    cancelled_by: uuid("cancelled_by"),
+    cancel_reason: text("cancel_reason"),
+    cancel_source: varchar("cancel_source", { length: 24 }), // manual|emi_payment|reassigned
+
+    // [E-263] A cache of the visit log, for the queue. The log is authoritative.
+    next_visit_at: timestamp("next_visit_at", { withTimezone: true }),
+    visit_attempt_count: integer("visit_attempt_count").default(0).notNull(),
+
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantStatusIdx: index("recovery_assignments_tenant_status_idx").on(
+      table.tenant_id,
+      table.status,
+    ),
+    loanIdx: index("recovery_assignments_loan_idx").on(table.loan_sanction_id),
+    // recovery_assignments_open_unique and recovery_assignments_link_token_unique
+    // are PARTIAL and therefore SQL-only. See the header.
+  }),
+);
+
+export const recoveryAssignmentPhotos = pgTable(
+  "recovery_assignment_photos",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    // serial | battery | vehicle | agent_selfie | extra
+    photo_type: varchar("photo_type", { length: 24 }).notNull(),
+    /**
+     * Relative storage path, never an absolute URL — the backend flips between
+     * Supabase and S3 behind STORAGE_BACKEND and a signed URL would rot.
+     */
+    image_url: text("image_url").notNull(),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    /**
+     * watermarkPhoto() never throws; it reports whether it managed to stamp the
+     * image. An unstamped photo is still evidence — flagged, not dropped.
+     */
+    watermark_applied: boolean("watermark_applied").default(false).notNull(),
+    uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    assignmentIdx: index("recovery_assignment_photos_assignment_idx").on(
+      table.assignment_id,
+    ),
+    // recovery_assignment_photos_slot_unique is PARTIAL — SQL-only.
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-263 — recovery_visit_attempts: the doorstep nobody answered
+// -----------------------------------------------------------------------------
+// E-262 modelled a collection as one event. Real repossession is not: the agent
+// drives out, knocks, and the customer is not home — or refuses, or the address
+// is wrong. None of those is a collection, and until this table there was no way
+// to record any of them, so an agent who went and found nobody looked identical
+// to one who never left.
+//
+// Append-only, one row per journey, each with its own GPS fix. A set of columns
+// on the assignment would let a third visit overwrite the second, and "we
+// attended twice at the agreed time" is exactly the history a disputed
+// repossession turns on.
+//
+// Mirrors drizzle/E-263_recovery_visit_attempts.sql, which is the source of
+// truth. `recovery_visit_attempts_no_unique` is a plain unique index and IS
+// expressible here; `recovery_assignments_next_visit_idx` is partial and stays
+// SQL-only.
+// -----------------------------------------------------------------------------
+export const recoveryVisitAttempts = pgTable(
+  "recovery_visit_attempts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    /** The agent's count of journeys, not a sequence — it reads that way in the UI. */
+    attempt_no: integer("attempt_no").default(1).notNull(),
+    /**
+     * not_present | refused | address_not_found | battery_missing | other
+     *
+     * Never `collected`: a successful collection is the assignment's own
+     * terminal write, and duplicating it here would create two disagreeing
+     * records of one fact.
+     */
+    outcome: varchar("outcome", { length: 24 }).notNull(),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_accuracy_m: numeric("gps_accuracy_m", { precision: 8, scale: 2 }),
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    distance_from_address_m: numeric("distance_from_address_m", { precision: 10, scale: 2 }),
+    notes: text("notes"),
+    /** NULL is a real answer — "nobody home and I am not going back". */
+    next_visit_at: timestamp("next_visit_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    assignmentIdx: index("recovery_visit_attempts_assignment_idx").on(
+      table.assignment_id,
+      table.created_at,
+    ),
+    tenantIdx: index("recovery_visit_attempts_tenant_idx").on(
+      table.tenant_id,
+      table.created_at,
+    ),
+    attemptUnique: uniqueIndex("recovery_visit_attempts_no_unique").on(
+      table.assignment_id,
+      table.attempt_no,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-258 — scrap consignments: the NBFC → iTarang sale of scrapped batteries
+// -----------------------------------------------------------------------------
+// `nbfc_recovery_pipeline.stage = 'scrap'` is terminal and has no buyer behind
+// it: the auction path sells refurbished stock to dealers and excludes scrap by
+// design (SOH < 55%). iTarang buys that scrap directly.
+//
+// The NBFC bundles one or many scrap batteries into a consignment with photos
+// and a RATE PER BATTERY; admin answers with its own rate; either side may
+// counter; on acceptance the rate freezes and amount = rate × battery_count;
+// iTarang then pays (RazorpayX payout or a recorded offline transfer) and the
+// batteries transfer.
+//
+// Mirrors drizzle/E-258_scrap_consignments.sql, which is the source of truth.
+// No pgEnum and no CHECK on the status columns — same decision as every other
+// status column in this family (see the E-232 header): the vocabulary lives in
+// src/lib/nbfc/scrap/consignment.ts so it can move without a migration against
+// a drifting database.
+// -----------------------------------------------------------------------------
+
+export const scrapConsignments = pgTable(
+  "scrap_consignments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    ref_code: varchar("ref_code", { length: 24 }).notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // draft | submitted | negotiating | agreed | paid | rejected | withdrawn
+    status: varchar("status", { length: 24 }).notNull().default("draft"),
+    battery_count: integer("battery_count").notNull().default(0),
+    // [E-260] flat = one rate for every battery; itemised = a rate per item.
+    pricing_mode: varchar("pricing_mode", { length: 16 })
+      .notNull()
+      .default("flat"),
+    asking_rate_per_battery: numeric("asking_rate_per_battery", { precision: 12, scale: 2 }),
+    // [E-260] The total asked, written in BOTH modes — flat stores
+    // rate × count, itemised the sum of the item rates. The negotiation runs
+    // on this column, which is what keeps every downstream read from having to
+    // ask which of the two price fields is authoritative.
+    asking_amount: numeric("asking_amount", { precision: 14, scale: 2 }),
+    agreed_rate_per_battery: numeric("agreed_rate_per_battery", { precision: 12, scale: 2 }),
+    agreed_amount: numeric("agreed_amount", { precision: 14, scale: 2 }),
+    current_round: integer("current_round").notNull().default(0),
+    // Who spoke last ('nbfc' | 'admin') — the other side owes the next answer.
+    last_party: varchar("last_party", { length: 8 }),
+    pickup_city: varchar("pickup_city", { length: 120 }),
+    pickup_state: varchar("pickup_state", { length: 120 }),
+    warehouse: varchar("warehouse", { length: 160 }),
+    // Relative /api/files/<bucket>/<key> paths, never absolute URLs. Per-battery
+    // shots stay on recovery_batteries.image_urls and are not copied here.
+    photo_urls: text("photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    note: text("note"),
+    // Where iTarang sends the money. On the deal rather than on nbfc_tenants,
+    // which carries no bank columns at all.
+    payee_name: varchar("payee_name", { length: 160 }),
+    payee_account_number: varchar("payee_account_number", { length: 40 }),
+    payee_ifsc: varchar("payee_ifsc", { length: 11 }),
+    // unpaid | processing | paid | failed
+    payment_status: varchar("payment_status", { length: 24 }).notNull().default("unpaid"),
+    payment_provider: varchar("payment_provider", { length: 16 }),
+    payment_ref: text("payment_ref"),
+    payment_utr: varchar("payment_utr", { length: 64 }),
+    payment_failure_reason: text("payment_failure_reason"),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    paid_by: uuid("paid_by"),
+    created_by: uuid("created_by"),
+    agreed_by: uuid("agreed_by"),
+    submitted_at: timestamp("submitted_at", { withTimezone: true }),
+    agreed_at: timestamp("agreed_at", { withTimezone: true }),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    // [E-259] When the batteries physically reached iTarang. Under a post_lot
+    // payment term this is a hard gate on the payout; under pre_lot it is
+    // still recorded, because paid-on / arrived-on is the pair of dates a
+    // reconciliation needs.
+    received_at: timestamp("received_at", { withTimezone: true }),
+    received_by: uuid("received_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("scrap_consignments_ref_uidx").on(table.ref_code),
+    tenantIdx: index("scrap_consignments_tenant_idx").on(table.tenant_id, table.created_at),
+    statusIdx: index("scrap_consignments_status_idx").on(table.status, table.created_at),
+    // The partial "open" index (scrap_consignments_open_idx) is created by the
+    // migration; drizzle's builder has no partial-index syntax, so it is
+    // intentionally absent here.
+  }),
+);
+
+export const scrapConsignmentItems = pgTable(
+  "scrap_consignment_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    consignment_id: uuid("consignment_id")
+      .notNull()
+      .references(() => scrapConsignments.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_id: uuid("battery_id"),
+    // Snapshotted, not joined: the serial is what a dispute is argued in and
+    // the battery row can be re-pointed by a later recovery.
+    serial: varchar("serial", { length: 64 }).notNull(),
+    // [E-260] The NBFC's price for this one battery; NULL in flat mode. Never
+    // rewritten after submission — it is the breakdown behind the asking
+    // total, not a per-battery negotiation of its own.
+    asking_rate: numeric("asking_rate", { precision: 12, scale: 2 }),
+    // [E-261] This battery's share of the settled deal, frozen at acceptance
+    // when the accepted round was itemised — and cleared when it was not, so a
+    // stale breakdown can never disagree with agreed_amount.
+    agreed_rate: numeric("agreed_rate", { precision: 12, scale: 2 }),
+    model: varchar("model", { length: 120 }),
+    capacity: varchar("capacity", { length: 32 }),
+    soh_pct: numeric("soh_pct", { precision: 5, scale: 2 }),
+    condition_note: text("condition_note"),
+    // TRUE while the parent deal is live. The migration's partial unique index
+    // on (battery_id) WHERE is_open is what stops one battery being sold twice.
+    is_open: boolean("is_open").notNull().default(true),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    consignmentIdx: index("scrap_consignment_items_consignment_idx").on(table.consignment_id),
+    batteryIdx: index("scrap_consignment_items_battery_idx").on(table.battery_id),
+    itemUnique: uniqueIndex("scrap_consignment_items_uidx").on(
+      table.consignment_id,
+      table.battery_id,
+    ),
+  }),
+);
+
+// Append-only round log, modelled on nbfcOfferNegotiations (E-238) for the same
+// reason: the header row is overwritten with each new rate, so without this the
+// history a disputed payment turns on is gone. The unique (consignment_id,
+// round) is a concurrency guard — a round is always current_round + 1, so two
+// simultaneous counters must collide with 23505 rather than both claim round 3.
+export const scrapConsignmentOffers = pgTable(
+  "scrap_consignment_offers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    consignment_id: uuid("consignment_id")
+      .notNull()
+      .references(() => scrapConsignments.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id").notNull(),
+    round: integer("round").notNull(),
+    party: varchar("party", { length: 8 }).notNull(), // 'nbfc' | 'admin'
+    kind: varchar("kind", { length: 16 }).notNull(), // quote|counter|accept|reject|withdraw
+    // [E-261] How THIS round was expressed: 'lot' = one number for the pile,
+    // 'itemised' = a rate per battery in scrap_consignment_offer_items. On the
+    // round rather than the consignment, because either side may switch at any
+    // round — an itemised ask can be answered with a lot price and vice versa.
+    pricing_mode: varchar("pricing_mode", { length: 16 })
+      .notNull()
+      .default("lot"),
+    rate_per_battery: numeric("rate_per_battery", { precision: 12, scale: 2 }),
+    battery_count: integer("battery_count"),
+    amount: numeric("amount", { precision: 14, scale: 2 }),
+    message: text("message"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    roundUnique: uniqueIndex("scrap_consignment_offers_round_uidx").on(
+      table.consignment_id,
+      table.round,
+    ),
+    consignmentIdx: index("scrap_consignment_offers_consignment_idx").on(
+      table.consignment_id,
+      table.created_at,
+    ),
+  }),
+);
+
+/**
+ * [E-261] The per-battery breakdown of one negotiation round.
+ *
+ * Append-only, like the round log it hangs off: a superseded round keeps its
+ * numbers, so "what did they say about THIS battery three rounds ago" stays
+ * answerable. SUM(rate) equals the parent offer's `amount`, which is what
+ * acceptance and payment actually read.
+ */
+export const scrapConsignmentOfferItems = pgTable(
+  "scrap_consignment_offer_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    offer_id: uuid("offer_id")
+      .notNull()
+      .references(() => scrapConsignmentOffers.id, { onDelete: "cascade" }),
+    // Denormalised so a consignment's whole breakdown is one indexed read
+    // rather than a join through every round.
+    consignment_id: uuid("consignment_id").notNull(),
+    item_id: uuid("item_id")
+      .notNull()
+      .references(() => scrapConsignmentItems.id, { onDelete: "cascade" }),
+    battery_id: uuid("battery_id"),
+    rate: numeric("rate", { precision: 12, scale: 2 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // One rate per battery per round: without it a retried write would double
+    // the round's total, which is a SUM over these rows.
+    offerItemUnique: uniqueIndex("scrap_consignment_offer_items_uidx").on(
+      table.offer_id,
+      table.item_id,
+    ),
+    consignmentIdx: index("scrap_consignment_offer_items_consignment_idx").on(
+      table.consignment_id,
+      table.created_at,
+    ),
   }),
 );
 
@@ -10796,5 +11311,36 @@ export const storageDriveMirror = pgTable(
     bucketKeyUq: uniqueIndex("storage_drive_mirror_bucket_key_uq").on(t.bucket, t.object_key),
     dueIdx: index("storage_drive_mirror_due_idx").on(t.status, t.next_attempt_at),
     statusIdx: index("storage_drive_mirror_status_idx").on(t.status),
+  }),
+);
+
+/**
+ * [E-259] Per-NBFC scrap payment term — WHEN iTarang pays for a consignment.
+ *
+ * 'pre_lot' pays before the batteries arrive, 'post_lot' only once they are
+ * marked received. Absence of a row is meaningful and is NOT backfilled: an
+ * NBFC nobody has decided about is read as post_lot, the safer of the two.
+ *
+ * The CHECK constraint on payment_timing lives in the migration; the
+ * vocabulary that mirrors it is SCRAP_PAYMENT_TIMINGS in
+ * src/lib/nbfc/scrap/payment-settings.ts.
+ */
+export const nbfcScrapPaymentSettings = pgTable(
+  "nbfc_scrap_payment_settings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    payment_timing: varchar("payment_timing", { length: 16 })
+      .notNull()
+      .default("post_lot"),
+    note: text("note"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantUnique: uniqueIndex("nbfc_scrap_payment_settings_tenant_uidx").on(
+      table.tenant_id,
+    ),
   }),
 );

@@ -77,3 +77,26 @@ function logCauseChain(err: unknown): void {
     depth += 1;
   }
 }
+
+/**
+ * Turn a Zod failure into a `VALIDATION: …` string an operator can act on.
+ *
+ * The routes used to answer a rejected body with the bare word "VALIDATION"
+ * and put the real reason in an `issues` array no client reads — so a
+ * mistyped IFSC surfaced as an empty red toast with no field, no rule and
+ * nothing to correct. The message names the field and the rule; `issues`
+ * still rides along for anyone debugging.
+ *
+ * Only the first issue is spelled out. A form that fails two rules at once is
+ * rare enough that a count is more useful than a wall of text.
+ */
+export function validationError(err: {
+  issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>;
+}): string {
+  const [first, ...rest] = err.issues;
+  if (!first) return "VALIDATION: the request body was rejected";
+  const field = first.path.map(String).join(".");
+  const where = field ? `${field} — ` : "";
+  const more = rest.length ? ` (+${rest.length} more)` : "";
+  return `VALIDATION: ${where}${first.message}${more}`;
+}

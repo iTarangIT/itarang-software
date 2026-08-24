@@ -73,6 +73,10 @@ const CATEGORY_META: Record<NotificationCategory, { icon: LucideIcon; tint: stri
   // no longer satisfied Record<NotificationCategory, …> and every auction
   // notification fell through to the default icon.
   Auctions: { icon: Gavel, tint: "bg-amber-50", fg: "text-amber-700" },
+  // E-258 — the NBFC → iTarang scrap trade. Added to the catalogue with the
+  // feature but never here, which broke the Record<NotificationCategory, …>
+  // exhaustiveness the comment above exists to protect.
+  "Scrap Sales": { icon: Trash2, tint: "bg-stone-100", fg: "text-stone-600" },
   // Buyback's own eight, unchanged
   Negotiation: { icon: Handshake, tint: "bg-violet-50", fg: "text-violet-600" },
   "Buyback Requests": { icon: Recycle, tint: "bg-emerald-50", fg: "text-emerald-600" },

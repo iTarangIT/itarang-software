@@ -112,6 +112,13 @@ import {
   replyList,
   setSession,
 } from "./session-store";
+// E-264 — journey phases register their states here instead of adding cases to
+// the two console switches. Type-only + a lookup; no phase module is imported
+// at eval time, so the one-way dependency rule this file relies on is intact.
+import { leadStateHandler } from "./lead-states";
+// Static side-effect import: registers every shipped journey phase. Must stay
+// a static import — a dynamic one can fail silently and leave the registry empty.
+import { loadLeadPhases } from "./lead-phases";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 // Defined in ./labels so admin API routes and client components can read it
 // without importing this module (and its whole dependency tree) at eval time.
@@ -284,6 +291,10 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     return;
   }
 
+  // E-264 — the journey phases registered their states at module load; this
+  // call exists so the side-effect import cannot be tree-shaken away.
+  loadLeadPhases();
+
   // E-243 — a dealer tapping Approve / Decline on a quotation.
   //
   // FIRST, ahead of every other gate including the operator check and the
@@ -354,6 +365,44 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   if (operator) {
     const { runOperatorTurn } = await import("./operator-orchestrator");
     return await runOperatorTurn(session, event, operator);
+  }
+
+  // E-264 — a journey button press (cb_start:<lead>, of_pick:<lead>:<nbfc>, …).
+  //
+  // Placed HERE, and the position is load-bearing in both directions:
+  //  • AFTER the operator gate, which returns early — an allowlisted internal
+  //    number is never a lead actor, and that gate must keep winning.
+  //  • BEFORE the console gate below. A `cb_start:` tap arriving while the
+  //    session sits at DC_MENU would otherwise fall into onMenuChoice's
+  //    `default:` and be silently swallowed as an unrecognised menu row.
+  //
+  // Button ids cannot collide with the stop word or a greeting, so nothing
+  // downstream is starved by running this first. Same try/catch-and-fall-through
+  // shape as the E-243 quotation gate: a failure here must not eat the message.
+  try {
+    const { handleLeadAction } = await import("./leadActionReply");
+    if (await handleLeadAction(session, event)) return;
+  } catch (err) {
+    console.error("[WhatsApp] lead-action gate failed:", err);
+  }
+
+  // E-264 — the customer came back, so Meta's 24-hour window is open again.
+  // Deliver anything we had to park while it was shut, and reset the nudge
+  // budget. Runs after the lead-action gate so an explicit button tap is
+  // answered on its own terms rather than being pre-empted by a stale prompt.
+  try {
+    const { replayParkedPrompt, onInboundResetNudges } = await import(
+      "./outbound"
+    );
+    await onInboundResetNudges(session.id);
+    if (session.pending_prompt) {
+      const replayed = await replayParkedPrompt(await loadSession(session.id));
+      // A replayed prompt IS this turn's reply: the customer's "hi" was an
+      // answer to the doorbell, not to whatever state the session is parked in.
+      if (replayed) return;
+    }
+  } catch (err) {
+    console.error("[WhatsApp] parked-prompt replay failed:", err);
   }
 
   // Global stop word (stop / end / exit): bail out of whatever flow is active
@@ -779,9 +828,16 @@ async function runCustomerTurn(
         return await onLeadFinanceQuestion(session, event);
       case "DC_LEAD_CONSENT_REVIEW":
         return await onConsentReview(session, event);
-      default:
+      default: {
+        // E-264 — same journey-state table the dealer console consults. This is
+        // the half that makes "identical flow for both actors" structural rather
+        // than a promise: there is one registry, so a state cannot exist for the
+        // dealer and be missing for the customer.
+        const handler = leadStateHandler(session.current_state);
+        if (handler) return await handler(session, event, houseDealer);
         // Completed or stale state → thank-you + reset to the chooser.
         return await finishCustomerFlow(session);
+      }
     }
   } catch (err) {
     console.error("[WhatsApp/customer] turn failed:", err);
@@ -3108,10 +3164,17 @@ export async function runConsoleTurn(
         return await onLeadFinanceQuestion(session, event);
       case "DC_LEAD_CONSENT_REVIEW":
         return await onConsentReview(session, event);
-      default:
+      default: {
+        // E-264 — journey phases (co-borrower, Step 4, offers, dispatch) register
+        // their states in ./lead-states rather than adding cases here, so the
+        // dealer and customer entry points cannot drift apart. One clause, and
+        // every phase is reachable from both.
+        const handler = leadStateHandler(session.current_state);
+        if (handler) return await handler(session, event, dealer);
         // Any other state (an onboarding-terminal state, or a stale DC_* not yet
         // handled) drops the dealer back to the menu.
         return await showDealerMenu(session, dealer);
+      }
     }
   } catch (err) {
     console.error("[WhatsApp/console] turn failed:", err);
