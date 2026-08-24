@@ -239,6 +239,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       loanAmount: offer?.loan_amount ?? null,
     });
 
+    // E-264 — Step 5 begins for the customer. Best-effort and not awaited: the
+    // sanction is committed and must not be undone by a messaging failure.
+    void import("@/lib/whatsapp/dispatch-flow")
+      .then(({ pushDispatchReady }) => pushDispatchReady(leadId))
+      .catch((err) =>
+        console.error("[nbfc/sanction] WhatsApp push failed:", err),
+      );
+
     return NextResponse.json({
       ok: true,
       loan_sanction_id: loanSanctionId,
