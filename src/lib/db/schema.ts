@@ -1109,6 +1109,16 @@ export const aiCallLogs = pgTable(
     human_band: varchar("human_band", { length: 20 }),
     human_reviewed_by: uuid("human_reviewed_by"),
     human_reviewed_at: timestamp("human_reviewed_at", { withTimezone: true }),
+    // E-267 — `transcript_turns jsonb` is DELIBERATELY ABSENT from this object,
+    // the same rule E-250/E-242/E-224/E-236 follow. Drizzle names every column
+    // of a mirrored table in its generated SQL, so declaring it here would make
+    // all 21 aiCallLogs call sites — including three bare `db.insert()` on the
+    // call-finalize path — hard-fail with `column "transcript_turns" does not
+    // exist` on any database where E-267 has not been applied. Since there is
+    // no auto-runner and the per-environment ticks drift, that would trade one
+    // dark metric for the entire AI call-logging pipeline. It is written
+    // instead by a guarded raw UPDATE in elevenlabs/finalizeCall.ts, which
+    // confines an unapplied E-267 to the feature that needs it.
   },
   (table) => {
     return {

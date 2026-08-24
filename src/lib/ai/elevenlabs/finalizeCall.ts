@@ -4,7 +4,7 @@
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
@@ -121,6 +121,9 @@ export async function finalizeElevenLabsCall(
         intentScore: null,
         intentReason: null,
         nextAction: null,
+        // Usually empty on this path, but a call can fail after turns were
+        // exchanged and those turns are the only record of how far it got.
+        transcriptTurns: conversation ?? null,
       });
 
       // Even failed calls (initiation_failure, busy, no-answer) accrue
@@ -292,6 +295,7 @@ export async function finalizeElevenLabsCall(
       recordingUrl,
       duration,
       phone: phone ?? lead.phone,
+      transcriptTurns: conversation ?? null,
       intentScore: null,
       intentReason: null,
       nextAction: "auto_retry",
@@ -403,6 +407,7 @@ export async function finalizeElevenLabsCall(
     recordingUrl,
     duration,
     phone: phone ?? lead.phone,
+    transcriptTurns: conversation ?? null,
     intentScore: analysis.intent_score,
     intentReason: analysis.memory?.intent_summary ?? null,
     nextAction: action ?? null,
@@ -521,6 +526,70 @@ export async function finalizeElevenLabsCall(
   }
 }
 
+/**
+ * E-267 — persist the provider's turn array, timings and all.
+ *
+ * A SEPARATE RAW STATEMENT, not a column on the drizzle model, and that is a
+ * blast-radius decision rather than a stylistic one. `aiCallLogs` has 21 call
+ * sites including three bare `db.insert()` on this very path; because drizzle
+ * names every column of a mirrored table in its generated SQL, adding
+ * transcript_turns to the model would make ALL of them fail with `column
+ * "transcript_turns" does not exist` on any database where E-267 has not been
+ * applied. There is no migration auto-runner here and the per-environment ticks
+ * are known to drift, so that trades one dark metric for the entire AI
+ * call-logging pipeline. Written this way, an unapplied E-267 costs exactly the
+ * feature that needs it. Same rule as E-250/E-242/E-224/E-236.
+ *
+ * Stores the array VERBATIM rather than reshaping it. The whole point is to
+ * stop discarding fields the provider sends, and a mapper that picked
+ * {role, message, time} would lose the next field they add exactly the way the
+ * stringifier lost this one. An empty array stores NULL, so "no turns" and "not
+ * captured" stay distinguishable.
+ *
+ * Logs whether timings actually arrived. `time_in_call_secs` is optional in the
+ * provider's schema and had never been read by this codebase when E-267 was
+ * written, so this line is how the first live call answers that — rather than
+ * someone noticing a permanently-empty metric weeks later.
+ *
+ * Best-effort, like every other write on this path: a failure here must not
+ * take down call finalization.
+ */
+async function persistTranscriptTurns(
+  callId: string,
+  turns: unknown[] | null | undefined,
+): Promise<void> {
+  if (!callId || !Array.isArray(turns) || turns.length === 0) return;
+
+  const timed = turns.filter(
+    (t) =>
+      t !== null &&
+      typeof t === "object" &&
+      typeof (t as { time_in_call_secs?: unknown }).time_in_call_secs === "number",
+  ).length;
+
+  try {
+    await db.execute(
+      sql`UPDATE ai_call_logs
+             SET transcript_turns = ${JSON.stringify(turns)}::jsonb
+           WHERE call_id = ${callId}`,
+    );
+    console.log(
+      `[elevenlabs:finalize] stored ${turns.length} turn(s), ${timed} with timings`,
+    );
+  } catch (err) {
+    // undefined_column means E-267 is unapplied on this database. Say so once,
+    // plainly, instead of emitting a stack trace that reads like a real fault.
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "42703") {
+      console.warn(
+        "[elevenlabs:finalize] transcript_turns not stored — apply drizzle/E-267_ai_call_logs_transcript_turns.sql",
+      );
+      return;
+    }
+    console.error("[elevenlabs:finalize] transcript_turns write failed:", err);
+  }
+}
+
 async function upsertAiCallLog(opts: {
   callId: string;
   leadId: string;
@@ -545,6 +614,11 @@ async function upsertAiCallLog(opts: {
   band?: string | null;
   callStatus?: string | null;
   infoSignalsCount?: number | null;
+  // E-267 — the provider's turn array VERBATIM. `transcript` above is this same
+  // content flattened to "<speaker>: <message>" lines, a step that discards each
+  // turn's time_in_call_secs. The array already travelled this far as the
+  // payload's `conversation`; until E-267 it was dropped here.
+  transcriptTurns?: unknown[] | null;
 }): Promise<void> {
   try {
     const existing = opts.callId
@@ -581,6 +655,7 @@ async function upsertAiCallLog(opts: {
           updated_at: now,
         })
         .where(eq(aiCallLogs.id, existing[0].id));
+      await persistTranscriptTurns(opts.callId, opts.transcriptTurns);
       return;
     }
 
@@ -609,6 +684,7 @@ async function upsertAiCallLog(opts: {
       info_signals_count: opts.infoSignalsCount ?? null,
       ended_at: now,
     });
+    await persistTranscriptTurns(opts.callId || id, opts.transcriptTurns);
   } catch (err) {
     console.error("[elevenlabs:finalize] ai_call_logs upsert failed:", err);
   }
@@ -667,6 +743,9 @@ async function markLeadNeedsReview(opts: {
     intentScore: null,
     intentReason: opts.reason,
     nextAction: null,
+    // The analysis failed, so the turns are the ONLY structured record of this
+    // call. Storing them is what lets it be re-read later without re-dialling.
+    transcriptTurns: opts.conversation ?? null,
   });
 
   await fetchAndPersistCallCost("elevenlabs", opts.callId);
