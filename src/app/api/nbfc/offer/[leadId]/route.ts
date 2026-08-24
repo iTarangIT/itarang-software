@@ -392,6 +392,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         tenureMonths:
           parsed.data.tenure_months == null ? null : Number(parsed.data.tenure_months),
       });
+
+      // E-264 Phase 3 — the borrower's own copy, in their chat. Best-effort and
+      // not awaited: the offer is committed and must not be undone by a
+      // messaging failure. Inside the `ceoStatus !== "pending"` guard for the
+      // same reason the notification is — a held offer is not one anyone can act
+      // on, and it must never reach a customer's phone (E-161).
+      void import("@/lib/whatsapp/offer-flow")
+        .then(({ pushOfferToWhatsApp }) =>
+          pushOfferToWhatsApp(leadId, assignment.nbfc_id),
+        )
+        .catch((err) => console.error("[nbfc/offer] WhatsApp push failed:", err));
     }
 
     return NextResponse.json({

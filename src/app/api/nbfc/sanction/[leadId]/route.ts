@@ -241,8 +241,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
     // E-264 — Step 5 begins for the customer. Best-effort and not awaited: the
     // sanction is committed and must not be undone by a messaging failure.
-    void import("@/lib/whatsapp/dispatch-flow")
-      .then(({ pushDispatchReady }) => pushDispatchReady(leadId))
+    //
+    // Phase 3 moved this onto the dedicated `sanctioned` template, which was
+    // declared and approved for exactly this milestone and had no call site. Its
+    // button hands over to the dispatch phase, so the customer goes straight
+    // from "approved" to choosing a battery.
+    void import("@/lib/whatsapp/offer-flow")
+      .then(({ pushSanctionedToWhatsApp }) =>
+        pushSanctionedToWhatsApp(
+          leadId,
+          offer?.loan_amount ?? null,
+          offer?.emi_amount ?? null,
+        ),
+      )
       .catch((err) =>
         console.error("[nbfc/sanction] WhatsApp push failed:", err),
       );

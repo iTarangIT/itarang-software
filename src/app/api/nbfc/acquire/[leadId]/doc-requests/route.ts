@@ -7,12 +7,14 @@
  *
  * Role: `credit_underwriting` (owns verification/offer terms, §7.2) or `nbfc_admin`.
  *
- * Two routings, chosen by `route_to`:
- *   'admin'  (default) — the original E-200 path. Status 'nbfc_raised'; the admin
- *                        forwards it via /api/admin/nbfc-requests/[id]/forward.
- *   'dealer'           — E-240. Straight to the dealer's Step-4 pre-sanction
- *                        card, no admin click in between. Admins are still
- *                        notified and still see the whole thread.
+ * ONE routing: every request lands with the iTarang admin ('nbfc_raised'), who
+ * either answers it himself via /api/admin/nbfc-requests/[id]/fulfil (he already
+ * holds the document) or forwards it to the dealer/customer via
+ * /api/admin/nbfc-requests/[id]/forward and pushes the reviewed file back.
+ *
+ * This retires the E-240 direct-to-dealer routing: `route_to: 'dealer'` is now
+ * rejected with a 400. Threads raised under it before this stay readable and
+ * repliable through the [id]/reply route — only new ones are refused.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -21,13 +23,11 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import {
-  createDirectDealerRequest,
   createNbfcDocRequest,
   listThreadForLead,
   NBFC_DOC_STATUS,
 } from "@/lib/nbfc/doc-requests";
 import { notifyAdminsOfNbfcRequest } from "@/lib/nbfc/doc-request-notify";
-import { notifyNbfcDocRequestDirect } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,8 +50,8 @@ const Body = z.object({
   doc_for: z.enum(["primary", "co_borrower"]).default("primary"),
   target_doc_key: z.string().max(120).optional().nullable(),
   comments: z.string().max(4000).optional().nullable(),
-  // E-240 — 'dealer' skips the admin forward gate. Defaults to the original
-  // admin-gated behaviour, so every existing caller is unaffected.
+  // Kept in the contract only so an old client gets a clear 400 instead
+  // of a silent re-route; 'admin' is the only routing that still exists.
   route_to: z.enum(["admin", "dealer"]).default("admin"),
   // E-254 — the structured items behind an additional-documents request, kept
   // beside the serialised `comments` so an SLA auto-forward creates exactly
@@ -117,6 +117,19 @@ export async function POST(
     }
     const d = parsed.data;
 
+    // The admin is the single gate; nothing may be written straight to
+    // the dealer any more.
+    if (d.route_to === "dealer") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "BAD_REQUEST: direct-to-dealer requests are retired — every document request is routed through the iTarang admin",
+        },
+        { status: 400 },
+      );
+    }
+
     const actor = await resolveActor(req.headers);
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
@@ -134,38 +147,6 @@ export async function POST(
         { ok: false, error: "BAD_REQUEST: no assignment for this lead under this tenant" },
         { status: 400 },
       );
-    }
-
-    // E-240 — direct to the dealer. The comment IS the request here (there are
-    // no structured items to forward), so it is required rather than optional.
-    if (d.route_to === "dealer") {
-      const comments = (d.comments ?? "").trim();
-      if (!comments) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error:
-              "BAD_REQUEST: a message is required when sending a request straight to the dealer",
-          },
-          { status: 400 },
-        );
-      }
-      const { id } = await createDirectDealerRequest({
-        leadId,
-        assignmentId: assignment.id,
-        nbfcId: assignment.nbfc_id,
-        tenantId: actor.tenant_id,
-        docFor: d.doc_for,
-        comments,
-        raisedBy: actor.user_id,
-      });
-      await notifyNbfcDocRequestDirect({
-        leadId,
-        requestId: id,
-        nbfcName: actor.tenant_slug,
-        comments,
-      }).catch(() => {});
-      return NextResponse.json({ ok: true, id, routed_to: "dealer" });
     }
 
     const { id } = await createNbfcDocRequest({
