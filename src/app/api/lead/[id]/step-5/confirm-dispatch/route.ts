@@ -292,6 +292,17 @@ export async function POST(
       }).catch(() => {});
     }
 
+    // E-264 — the same news on WhatsApp when the customer has a chat. Additive
+    // to the SMS above, not a replacement: a customer with no WhatsApp session
+    // still gets told, and one with both gets it on the channel they read.
+    void import("@/lib/whatsapp/dispatch-flow")
+      .then(({ pushDispatched }) =>
+        pushDispatched(leadId, selection.battery_serial ?? null),
+      )
+      .catch((err) =>
+        console.error("[step-5/confirm-dispatch] WhatsApp push failed:", err),
+      );
+
     return NextResponse.json({
       success: true,
       data: {

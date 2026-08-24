@@ -24,7 +24,7 @@ import "./doc-request-flow";
 import "./coborrower-flow";     // Phase 1
 import "./step4-flow";          // Phase 2
 // import "./offer-flow";        // Phase 3
-// import "./dispatch-flow";     // Phase 4
+import "./dispatch-flow";       // Phase 4
 
 import { registeredLeadStates } from "./lead-states";
 
