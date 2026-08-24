@@ -370,10 +370,15 @@ export const GET = withErrorHandler(
     // the field), capped to guard against bad timestamps. Shared with the leads
     // table and the duration histogram so the drawer header, the table cell and
     // the chart can never quote three different numbers for one call.
+    //
+    // That fallback is licensed by the transcript resolved just above: the
+    // started/completed pair brackets the dialer's ATTEMPT, so on a call that
+    // never connected it measures our own latency, not talk time.
     const callDuration = deriveDurationSeconds(
       latest?.callDuration ?? null,
       cl.startedAt,
       cl.completedAt,
+      transcript != null,
     );
 
     const summary = buildSummary({

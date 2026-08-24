@@ -23,7 +23,20 @@
  *   outcome_mix  per-bucket evidence tuples, folded into reasons in TypeScript
  *   totals       the denominators, computed over lead_call so nothing is lost
  *
- * THREE THINGS THAT LOOK LIKE STYLE AND ARE NOT
+ * FOUR THINGS THAT LOOK LIKE STYLE AND ARE NOT
+ *
+ *   0. `is_connected` and `duration_seconds` are BOUND FROM ../derive, not
+ *      written out here. This CTE used to carry its own copy of both — an
+ *      inlined CASE and a local `has_transcript IS TRUE OR duration_seconds > 0`
+ *      — which is exactly the four-copies problem derive.ts's header warns
+ *      about, and it is why fixing the rule there did not reach this query. The
+ *      copy accepted the campaign-lead wall clock as proof a call connected, so
+ *      every trigger_failed lead (provider rejected the trigger, no phone ever
+ *      rang) was bucketed by how long the dialer took to fail: one production
+ *      campaign of 146 leads reported all 146 as measured calls when only 71
+ *      had completed. buildDurationHistogramSql is now pinned in
+ *      __tests__/histogram.test.ts against the shared predicate strings, so a
+ *      re-inlined copy fails the suite rather than drifting quietly.
  *
  *   1. LEFT JOIN LATERAL ... LIMIT 1, not four correlated subqueries.
  *      ai_call_logs_call_id_idx is NOT unique, and the leads route currently
@@ -56,6 +69,7 @@ import {
     type FailureReasonInput,
 } from "../failureReason";
 import { classifyOutcomeFamily, type OutcomeFamily } from "./outcomeFamilies";
+import { CONNECTED_SQL, DURATION_SECONDS_SQL } from "./derive";
 import type { DurationBucket } from "./config";
 
 /** A failure code, or the success member the failure vocabulary has no word for. */
@@ -229,15 +243,8 @@ WITH lead_call AS (
       acl.transcript IS NOT NULL AS has_transcript,
       acl.status                 AS provider_status,
       acl.call_status            AS band_call_status,
-      CASE
-        WHEN acl.call_duration IS NOT NULL AND acl.call_duration > 0
-          THEN acl.call_duration
-        WHEN dcl.started_at IS NOT NULL AND dcl.completed_at IS NOT NULL
-             AND extract(epoch FROM (dcl.completed_at - dcl.started_at)) > 0
-             AND extract(epoch FROM (dcl.completed_at - dcl.started_at)) < 7200
-          THEN extract(epoch FROM (dcl.completed_at - dcl.started_at))::int
-        ELSE NULL
-      END AS duration_seconds
+      ${CONNECTED_SQL}           AS is_connected,
+      ${DURATION_SECONDS_SQL}    AS duration_seconds
     FROM dialer_campaign_leads dcl
     LEFT JOIN LATERAL (
       SELECT a.call_duration, a.transcript, a.status, a.call_status
@@ -249,8 +256,7 @@ WITH lead_call AS (
    WHERE dcl.campaign_id = ${campaignId}
 ),
 connected AS (
-  SELECT * FROM lead_call
-   WHERE has_transcript IS TRUE OR duration_seconds > 0
+  SELECT * FROM lead_call WHERE is_connected
 ),
 bucket_defs AS (
   SELECT (b.value->>'ord')::int  AS bucket_ord,
@@ -294,15 +300,11 @@ totals AS (
     count(*)::int                                                              AS campaign_leads,
     count(*) FILTER (WHERE status = 'completed')::int                          AS completed_leads,
     count(*) FILTER (WHERE status <> 'pending')::int                           AS attempted_leads,
-    count(*) FILTER (WHERE has_transcript IS TRUE OR duration_seconds > 0)::int
-                                                                               AS connected_leads,
-    count(*) FILTER (WHERE (has_transcript IS TRUE OR duration_seconds > 0)
-                       AND duration_seconds IS NULL)::int                      AS connected_without_duration,
-    COALESCE(sum(duration_seconds)
-             FILTER (WHERE has_transcript IS TRUE OR duration_seconds > 0), 0)::int
-                                                                               AS connected_total_seconds,
+    count(*) FILTER (WHERE is_connected)::int                                  AS connected_leads,
+    count(*) FILTER (WHERE is_connected AND duration_seconds IS NULL)::int     AS connected_without_duration,
+    COALESCE(sum(duration_seconds) FILTER (WHERE is_connected), 0)::int        AS connected_total_seconds,
     (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_seconds)
-       FILTER (WHERE has_transcript IS TRUE OR duration_seconds > 0))::int     AS connected_median_seconds
+       FILTER (WHERE is_connected))::int                                       AS connected_median_seconds
     FROM lead_call
 )
 SELECT bs.bucket_ord, bs.bucket_key, bs.bucket_count,

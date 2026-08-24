@@ -75,8 +75,17 @@ function durationOf(r: {
   call_duration: number | null;
   started_at: Date | string | null;
   completed_at: Date | string | null;
+  transcript: string | null;
 }) {
-  return deriveDurationSeconds(r.call_duration, r.started_at, r.completed_at);
+  // `transcript` is what licenses the wall-clock fallback. Without it a
+  // trigger_failed lead exports the seconds the dialer spent failing as though
+  // a dealer had talked for them.
+  return deriveDurationSeconds(
+    r.call_duration,
+    r.started_at,
+    r.completed_at,
+    r.transcript != null,
+  );
 }
 
 export const GET = withErrorHandler(
