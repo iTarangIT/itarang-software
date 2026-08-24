@@ -59,6 +59,7 @@ import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
 import type { ParkedPrompt } from "./outbound";
+import { schemeName } from "./scheme-name";
 import {
   patchLeadSub,
   reply,
@@ -110,16 +111,6 @@ function text(e: InboundEvent): string {
 // ---------------------------------------------------------------------------
 // Presentation
 // ---------------------------------------------------------------------------
-
-/**
- * The customer-facing name of a lender. Mirrors the portal's
- * "iTarang Scheme N (NBFC-XXXX)" — index-based, so it is stable only within one
- * rendering of one list. That is fine: nothing downstream reads it, the pick
- * carries the real ids.
- */
-function schemeName(index: number): string {
-  return `iTarang Scheme ${index + 1}`;
-}
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
