@@ -458,14 +458,51 @@ export async function applyKycFinalDecision(input: {
     // so firing it on every approval is safe — cash leads and primary-only
     // approvals are a no-op inside it.
     if (decision === "approved") {
-        import("@/lib/whatsapp/step4-flow")
-            .then(({ pushStep4ToWhatsApp }) => pushStep4ToWhatsApp(leadId))
-            .catch((err) => {
+        // E-264 — policy rules that require a co-borrower regardless of the
+        // reviewer's judgement: applicant under 18, over 55, or female.
+        //
+        // Evaluated HERE rather than at document capture on purpose. The inputs
+        // (DOB, and gender from the Aadhaar extraction) are known earlier, but
+        // asking a customer to produce a co-borrower for a lead that is about to
+        // be rejected wastes their time and ours. At the approval it is a real
+        // decision: either the file clears to Step 4, or it needs a co-borrower
+        // first — which is exactly the choice this reviewer was making anyway.
+        //
+        // When a rule fires we request the co-borrower INSTEAD of pushing Step 4;
+        // requestCoBorrowerForLead moves the lead back to awaiting_co_borrower_kyc
+        // and (via its own hook) asks the customer on WhatsApp. Step 4 fires on
+        // the next approval, once the co-borrower has been reviewed.
+        void (async () => {
+            try {
+                const { evaluateAutoCoBorrower } = await import(
+                    "@/lib/kyc/coborrower-auto-rules"
+                );
+                const verdict = await evaluateAutoCoBorrower(leadId);
+                if (verdict.required && verdict.reason) {
+                    const { requestCoBorrowerForLead } = await import(
+                        "@/lib/kyc/coborrower-request"
+                    );
+                    await requestCoBorrowerForLead(leadId, {
+                        reason: verdict.reason,
+                        adminUserId: actor.id ?? null,
+                    });
+                    console.log(
+                        `[final-decision] auto co-borrower for ${leadId}: ${verdict.rules.join("; ")}`,
+                    );
+                    return;
+                }
+
+                const { pushStep4ToWhatsApp } = await import(
+                    "@/lib/whatsapp/step4-flow"
+                );
+                await pushStep4ToWhatsApp(leadId);
+            } catch (err) {
                 console.error(
-                    `[final-decision] WhatsApp Step-4 push for ${leadId} failed:`,
+                    `[final-decision] post-approval WhatsApp step for ${leadId} failed:`,
                     err,
                 );
-            });
+            }
+        })();
     }
 
     return {
