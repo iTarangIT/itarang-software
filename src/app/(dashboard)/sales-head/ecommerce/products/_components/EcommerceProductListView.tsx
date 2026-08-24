@@ -9,14 +9,33 @@ import { Button } from "@/components/ui/button";
 import { formatPriceRange } from "@/lib/ecommerce/format";
 import type { EcommerceProductListResult } from "@/lib/ecommerce/types";
 
+/**
+ * Archived products are hidden by default. The API returns every status when
+ * unfiltered, so without this an archived product sits in the list looking much
+ * like a live one and archiving appears to do nothing.
+ *
+ * The filter is applied here rather than server-side by default, so the API keeps
+ * returning the whole catalogue when queried directly.
+ */
+const FILTERS = {
+    active: { label: "Active", statuses: ["draft", "published"] },
+    published: { label: "Published", statuses: ["published"] },
+    draft: { label: "Draft", statuses: ["draft"] },
+    archived: { label: "Archived", statuses: ["archived"] },
+    all: { label: "All", statuses: [] as string[] },
+} as const;
+type FilterKey = keyof typeof FILTERS;
+
 export function EcommerceProductListView() {
     const [page, setPage] = useState(1);
+    const [filter, setFilter] = useState<FilterKey>("active");
 
     const query = useQuery<{ success: true; data: EcommerceProductListResult }>({
-        queryKey: ["ecommerce-products", page],
+        queryKey: ["ecommerce-products", page, filter],
         queryFn: async () => {
             const u = new URL("/api/ecommerce/products", window.location.origin);
             u.searchParams.set("page", String(page));
+            for (const st of FILTERS[filter].statuses) u.searchParams.append("status", st);
             const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) {
                 const body = await res.json().catch(() => null);
@@ -38,9 +57,26 @@ export function EcommerceProductListView() {
     return (
         <div className="rounded-xl border border-border bg-surface shadow-card">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <span className="text-sm text-ink-muted">
-                    {query.isLoading ? "Loading..." : `${total} product${total === 1 ? "" : "s"}`}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm text-ink-muted">
+                        {query.isLoading ? "Loading..." : `${total} product${total === 1 ? "" : "s"}`}
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                        {(Object.keys(FILTERS) as FilterKey[]).map((k) => (
+                            <Button
+                                key={k}
+                                size="sm"
+                                variant={filter === k ? "primary" : "ghost"}
+                                onClick={() => {
+                                    setFilter(k);
+                                    setPage(1);
+                                }}
+                            >
+                                {FILTERS[k].label}
+                            </Button>
+                        ))}
+                    </div>
+                </div>
                 <div className="flex items-center gap-3">
                     {query.isFetching && <Loader2 className="h-4 w-4 animate-spin text-ink-muted" />}
                     <Link href="/sales-head/ecommerce/products/new">
@@ -83,7 +119,12 @@ export function EcommerceProductListView() {
                             <tr>
                                 <td colSpan={6} className="px-4 py-12 text-center text-ink-muted">
                                     <Inbox className="mx-auto mb-2 h-5 w-5" />
-                                    No products in the Hostinger catalog.
+                                    {/* Name the filter — a bare "no products" reads as an
+                                        empty catalogue and sends people hunting for something
+                                        that is merely filtered out. */}
+                                    {filter === "all"
+                                        ? "No products in the Hostinger catalog."
+                                        : `No ${FILTERS[filter].label.toLowerCase()} products. Try a different filter.`}
                                 </td>
                             </tr>
                         ) : null}

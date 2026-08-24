@@ -3,12 +3,23 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Boxes, ExternalLink, Loader2, Pencil } from "lucide-react";
+import {
+    AlertTriangle,
+    Archive,
+    ArrowLeft,
+    Boxes,
+    ExternalLink,
+    Loader2,
+    Pencil,
+    RotateCcw,
+    Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatPrice, formatPriceRange } from "@/lib/ecommerce/format";
 import type { EcommerceProductDetail, EcommerceVariant } from "@/lib/ecommerce/types";
 import { InventoryDialog } from "./InventoryDialog";
+import { DeleteProductDialog } from "./DeleteProductDialog";
 
 export function EcommerceProductDetailView({ productId }: { productId: string }) {
     const query = useQuery<{ success: true; data: EcommerceProductDetail }>({
@@ -25,6 +36,28 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
 
     const p = query.data?.data;
     const [stockFor, setStockFor] = useState<EcommerceVariant | null>(null);
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [lifecycleBusy, setLifecycleBusy] = useState(false);
+    const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+
+    async function setStatus(status: "archived" | "draft") {
+        setLifecycleBusy(true);
+        setLifecycleError(null);
+        try {
+            const res = await fetch(`/api/ecommerce/products/${productId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status }),
+            });
+            const body = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(body?.error?.message ?? "Update failed");
+            await query.refetch();
+        } catch (e) {
+            setLifecycleError(e instanceof Error ? e.message : "Update failed");
+        } finally {
+            setLifecycleBusy(false);
+        }
+    }
 
     return (
         <div className="space-y-5">
@@ -75,7 +108,57 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                                     <ExternalLink className="h-3.5 w-3.5" />
                                 </Button>
                             </a>
+
+                            {p.status === "archived" ? (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={lifecycleBusy}
+                                    onClick={() => setStatus("draft")}
+                                    title="Restores as a draft — publishing is a separate step"
+                                >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    Restore as draft
+                                </Button>
+                            ) : (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={lifecycleBusy}
+                                    onClick={() => {
+                                        if (
+                                            window.confirm(
+                                                `Archive "${p.title}"?
+
+It will be retired and hidden from the storefront. This is reversible — you can restore it as a draft later.`,
+                                            )
+                                        ) {
+                                            void setStatus("archived");
+                                        }
+                                    }}
+                                >
+                                    <Archive className="h-3.5 w-3.5" />
+                                    Archive
+                                </Button>
+                            )}
+
+                            <Button
+                                size="sm"
+                                variant="danger"
+                                disabled={lifecycleBusy}
+                                onClick={() => setConfirmDelete(true)}
+                            >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Delete
+                            </Button>
                         </div>
+
+                        {lifecycleError ? (
+                            <div className="flex items-center gap-2 rounded-lg bg-danger-bg/50 px-3 py-2 text-sm text-danger">
+                                <AlertTriangle className="h-4 w-4" />
+                                {lifecycleError}
+                            </div>
+                        ) : null}
                     </header>
 
                     <section className="grid gap-5 md:grid-cols-3">
@@ -112,6 +195,14 @@ export function EcommerceProductDetailView({ productId }: { productId: string })
                         </div>
                     </section>
                 </>
+            ) : null}
+
+            {confirmDelete && p ? (
+                <DeleteProductDialog
+                    productId={p.id}
+                    productTitle={p.title}
+                    onClose={() => setConfirmDelete(false)}
+                />
             ) : null}
 
             {stockFor && p ? (

@@ -1,5 +1,6 @@
-// GET   /api/ecommerce/products/:productId
-// PATCH /api/ecommerce/products/:productId   (Phase 5 — name / status)
+// GET    /api/ecommerce/products/:productId
+// PATCH  /api/ecommerce/products/:productId   (Phase 5 — name / status)
+// DELETE /api/ecommerce/products/:productId   (Phase 7 — permanent removal)
 //
 // Read-only product detail from Hostinger, including its variants and media.
 // The documented API has no single-product GET (it answers 405); the documented
@@ -11,6 +12,7 @@ import { z } from "zod";
 import { requireEcommerceAdmin } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import {
+    deleteEcommerceProduct,
     getEcommerceProductDetail,
     updateEcommerceProduct,
 } from "@/lib/ecommerce/product-service";
@@ -65,5 +67,24 @@ export const PATCH = withErrorHandler(
         await updateEcommerceProduct(productId, fields, { id: user.id, role: user.role });
 
         return successResponse({ productId, ...fields });
+    },
+);
+
+/**
+ * DELETE — permanent removal. Irreversible from the CRM.
+ *
+ * The service reads the product back afterwards, because a 200 does not prove it
+ * is gone: Hostinger archives a subscription product with active subscribers
+ * instead of deleting it. The response reports what actually happened
+ * (`removed`), not what was requested.
+ */
+export const DELETE = withErrorHandler(
+    async (_req: NextRequest, ctx: { params: Promise<{ productId: string }> }) => {
+        const user = await requireEcommerceAdmin();
+
+        const { productId } = ParamsSchema.parse(await ctx.params);
+        const result = await deleteEcommerceProduct(productId, { id: user.id, role: user.role });
+
+        return successResponse(result);
     },
 );
