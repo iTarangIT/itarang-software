@@ -10,7 +10,7 @@
  * on a product. There is no PUT.
  */
 
-import { hostingerDelete, hostingerGet, hostingerWrite } from "./client";
+import { HostingerApiError, hostingerDelete, hostingerGet, hostingerWrite } from "./client";
 import type {
   HostingerCreateDigitalRequest,
   HostingerCreatePhysicalRequest,
@@ -20,10 +20,13 @@ import type {
   HostingerProductStatus,
   HostingerUpdateProductRequest,
   HostingerVariant,
-  HostingerVariantBatchRequest,
   HostingerVariantInventoryBatchRequest,
   HostingerVariantInventoryUpdate,
   HostingerVariantListResponse,
+  HostingerAttachImageRequest,
+  HostingerCreateVariantRequest,
+  HostingerImageUploadUrlResponse,
+  HostingerVariantCommercialUpdate,
 } from "./types";
 
 /**
@@ -108,27 +111,6 @@ export async function updateProduct(
   return hostingerWrite("PATCH", `/products/${encodeURIComponent(productId)}`, body);
 }
 
-/**
- * Price only. The batch endpoint is partial (verified), so inventory fields are
- * deliberately NOT sent — including them would drag stock into a price edit and
- * reintroduce a lost-update race against concurrent purchases.
- */
-export async function updateVariantPrice(
-  productId: string,
-  variantId: string,
-  amountMinor: number,
-  currency: string,
-): Promise<unknown> {
-  const body: HostingerVariantBatchRequest = {
-    // sale_amount is omitted, not nulled — the API rejects a null.
-    variants: [{ variant_id: variantId, prices: [{ amount: amountMinor, currency }] }],
-  };
-  return hostingerWrite(
-    "PATCH",
-    `/products/${encodeURIComponent(productId)}/variants/batch`,
-    body,
-  );
-}
 
 /** Variants for one product. Used for the pre-write stock re-read. */
 export async function listVariants(productId: string): Promise<HostingerVariant[]> {
@@ -178,4 +160,149 @@ export async function updateVariantInventory(
  */
 export async function deleteProduct(productId: string): Promise<void> {
   await hostingerDelete(`/products/${encodeURIComponent(productId)}`);
+}
+
+/* ---------------------------------------------------------------------------
+ * Product media (Phase 8A)
+ * ------------------------------------------------------------------------- */
+
+/** Step 1: ask Hostinger for a signed storage URL to upload into. */
+export async function createImageUploadUrl(
+  productId: string,
+): Promise<HostingerImageUploadUrlResponse> {
+  return hostingerWrite<HostingerImageUploadUrlResponse>(
+    "POST",
+    `/products/${encodeURIComponent(productId)}/images/upload-url`,
+    {},
+  );
+}
+
+/**
+ * Step 2: push the bytes to the signed URL.
+ *
+ * This is NOT a Hostinger API call — it targets whatever storage host the signed
+ * URL points at, so it deliberately sends NO Authorization header. Leaking our
+ * Hostinger token to a third-party storage endpoint would be a real credential
+ * exposure, and the signed URL is already the authorisation.
+ *
+ * `fields` must be appended verbatim and BEFORE the file, which is how signed
+ * form uploads are specified.
+ */
+export async function uploadImageToSignedUrl(
+  signed: HostingerImageUploadUrlResponse,
+  file: Blob,
+  filename: string,
+): Promise<void> {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(signed.fields ?? {})) form.append(k, v);
+  form.append("file", file, filename);
+
+  let res: Response;
+  try {
+    res = await fetch(signed.upload_url, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(120_000), // large files over a slow link
+    });
+  } catch (e: unknown) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
+    throw new HostingerApiError(
+      timedOut ? "Image upload timed out" : "Could not reach the image storage host",
+      504,
+      null,
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[hostinger] signed upload failed", {
+      status: res.status,
+      body: body.slice(0, 300),
+    });
+    throw new HostingerApiError(`Image storage rejected the upload (${res.status})`, 502, null);
+  }
+}
+
+/**
+ * Step 3 — or the whole thing, when attaching an image already public.
+ * Hostinger virus-scans and content-validates here, so this can still fail on a
+ * file that passed our own checks.
+ */
+export async function attachProductImage(
+  productId: string,
+  body: HostingerAttachImageRequest,
+): Promise<unknown> {
+  return hostingerWrite(
+    "POST",
+    `/products/${encodeURIComponent(productId)}/images`,
+    body,
+  );
+}
+
+/**
+ * Prices on a variant, through the batch endpoint.
+ *
+ * SKU is NOT accepted here. The endpoint silently ignores it — `sku` alone 400s,
+ * and `sku` with prices returns 200 with the SKU unchanged (verified). SKU is
+ * only settable at variant creation.
+ *
+ * Inventory fields are deliberately absent so a price edit can never disturb
+ * stock (the batch endpoint is partial; verified in Phase 5).
+ */
+export async function updateVariantCommercial(
+  productId: string,
+  variantId: string,
+  fields: {
+    title?: string;
+    prices?: { amount: number; currency: string; sale_amount?: number }[];
+  },
+): Promise<unknown> {
+  const variant: HostingerVariantCommercialUpdate = { variant_id: variantId };
+  if (fields.title !== undefined) variant.title = fields.title;
+  if (fields.prices !== undefined) variant.prices = fields.prices;
+
+  return hostingerWrite(
+    "PATCH",
+    `/products/${encodeURIComponent(productId)}/variants/batch`,
+    { variants: [variant] },
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Variants (Phase 8B)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Add a variant along one or more option dimensions.
+ *
+ * Creating a variant with an option name the product does not yet have CREATES
+ * that dimension — and Hostinger then backfills `"Default Value"` for it onto
+ * every pre-existing variant. Callers must warn before that happens; it cannot
+ * be undone, as there is no endpoint to rename or remove a dimension.
+ */
+export async function createVariant(
+  productId: string,
+  body: HostingerCreateVariantRequest,
+): Promise<HostingerVariant> {
+  const res = await hostingerWrite<{ data?: HostingerVariant } & HostingerVariant>(
+    "POST",
+    `/products/${encodeURIComponent(productId)}/variants`,
+    body,
+  );
+  // The create response has been seen both bare and wrapped; accept either
+  // rather than assuming, since the vendor is inconsistent across endpoints.
+  return (res as { data?: HostingerVariant }).data ?? (res as HostingerVariant);
+}
+
+/**
+ * Delete one variant.
+ *
+ * The API permits deleting the LAST variant, leaving a published product with no
+ * variants, no price and no stock. It will not stop you. The guard against that
+ * lives in the service layer — see deleteEcommerceVariant.
+ */
+export async function deleteVariant(productId: string, variantId: string): Promise<void> {
+  await hostingerDelete(
+    `/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}`,
+  );
 }

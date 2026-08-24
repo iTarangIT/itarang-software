@@ -24,6 +24,7 @@ export function EditProductForm({ productId }: { productId: string }) {
     const [name, setName] = useState("");
     const [status, setStatus] = useState<Status | "">("");
     const [priceInput, setPriceInput] = useState("");
+    const [discountInput, setDiscountInput] = useState("");
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [saved, setSaved] = useState<string | null>(null);
@@ -52,12 +53,25 @@ export function EditProductForm({ productId }: { productId: string }) {
         if (variant?.price?.amountMinor != null) {
             setPriceInput(minorToRupees(variant.price.amountMinor, variant.price.currencyCode));
         }
+        setDiscountInput(
+            variant?.price?.saleAmountMinor != null
+                ? minorToRupees(variant.price.saleAmountMinor, variant.price.currencyCode)
+                : "",
+        );
     }, [p, variant]);
 
     const priceMinor = useMemo(() => rupeesToMinor(priceInput), [priceInput]);
+    const discountMinor = useMemo(() => rupeesToMinor(discountInput), [discountInput]);
     const priceChanged =
         priceMinor !== null && variant?.price?.amountMinor != null &&
         priceMinor !== variant.price.amountMinor;
+    const currentDiscount = variant?.price?.saleAmountMinor ?? null;
+    // An emptied field means "clear the discount", which is a real change.
+    const discountCleared = discountInput.trim() === "" && currentDiscount !== null;
+    const discountChanged = discountCleared || (discountMinor !== null && discountMinor !== currentDiscount);
+    const discountInvalid = discountInput.trim() !== "" && discountMinor === null;
+    const discountTooHigh =
+        discountMinor !== null && priceMinor !== null && discountMinor >= priceMinor;
     const detailsChanged = !!p && (name.trim() !== p.title || (status && status !== p.status));
 
     async function save() {
@@ -81,13 +95,17 @@ export function EditProductForm({ productId }: { productId: string }) {
                 done.push("details");
             }
 
-            if (priceChanged && variant) {
+            if ((priceChanged || discountChanged) && variant) {
                 const res = await fetch(`/api/ecommerce/products/${productId}/price`, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         variantId: variant.id,
-                        amountMinor: priceMinor,
+                        ...(priceChanged ? { amountMinor: priceMinor } : {}),
+                        // null is the explicit "clear it" signal; undefined means leave alone.
+                        ...(discountChanged
+                            ? { saleAmountMinor: discountCleared ? null : discountMinor }
+                            : {}),
                         currency: variant.price?.currencyCode ?? "inr",
                     }),
                 });
@@ -96,12 +114,12 @@ export function EditProductForm({ productId }: { productId: string }) {
                     // Details may already have been saved above; say which parts
                     // landed rather than implying nothing changed.
                     throw new Error(
-                        `${body?.error?.message ?? "Price update failed"}${
+                        `${body?.error?.message ?? "Pricing update failed"}${
                             done.length ? ` (details were already saved)` : ""
                         }`,
                     );
                 }
-                done.push("price");
+                done.push("pricing");
             }
 
             setSaved(done.length ? `Saved: ${done.join(" and ")}.` : "Nothing to save.");
@@ -198,11 +216,49 @@ export function EditProductForm({ productId }: { productId: string }) {
                 </p>
             </div>
 
+            <div className="grid gap-4">
+                <div className="space-y-1.5">
+                    <Label htmlFor="discount">Discount price (INR)</Label>
+                    <Input
+                        id="discount"
+                        value={discountInput}
+                        inputMode="decimal"
+                        disabled={!variant}
+                        placeholder="leave empty for none"
+                        onChange={(e) => setDiscountInput(e.target.value)}
+                    />
+                    <p className="text-xs text-ink-muted">
+                        {discountInvalid ? (
+                            <span className="text-danger">
+                                Not a valid amount — positive, at most 2 decimals.
+                            </span>
+                        ) : discountTooHigh ? (
+                            <span className="text-danger">
+                                Must be lower than the price, or it is not a discount.
+                            </span>
+                        ) : discountCleared ? (
+                            "Saving removes the existing discount."
+                        ) : discountMinor !== null ? (
+                            <>
+                                Will send <span className="font-mono text-ink">{discountMinor}</span>{" "}
+                                paise as the sale price.
+                            </>
+                        ) : (
+                            "The price customers actually pay. Empty means no discount."
+                        )}
+                    </p>
+                </div>
+
+            </div>
+
             <div className="rounded-lg border border-border bg-bg/40 px-4 py-3 text-xs text-ink-muted">
-                <strong className="text-ink">Description is not editable here.</strong> Hostinger
-                can store a description but offers no way to read one back, so this form cannot
-                show the current text — and saving a blank field would erase it. Edit descriptions
-                in the Hostinger dashboard.
+                <strong className="text-ink">Some fields are only editable in Hostinger.</strong>{" "}
+                <em>Description</em> can be written through the API but not read back, so this form
+                cannot show the current text and saving a blank field would erase it.{" "}
+                <em>Subtitle, ribbon, weight, additional info sections, custom fields</em> and{" "}
+                <em>low-stock tracking</em> are not exposed by Hostinger&apos;s API at all.{" "}
+                <em>SKU</em> can only be set when a variant is first created — the update
+                endpoint silently ignores it. All of these live in the Hostinger dashboard.
                 <a
                     href={p.adminUrl}
                     target="_blank"
@@ -224,7 +280,15 @@ export function EditProductForm({ productId }: { productId: string }) {
             ) : null}
 
             <div className="flex gap-2">
-                <Button disabled={busy || (!detailsChanged && !priceChanged)} onClick={save}>
+                <Button
+                    disabled={
+                        busy ||
+                        discountInvalid ||
+                        discountTooHigh ||
+                        (!detailsChanged && !priceChanged && !discountChanged)
+                    }
+                    onClick={save}
+                >
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}
                 </Button>
                 <Button

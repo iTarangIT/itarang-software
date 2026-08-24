@@ -21,7 +21,7 @@ vi.mock("@/lib/hostinger/products", () => ({
   createPhysicalProduct: vi.fn(),
   createDigitalProduct: vi.fn(),
   updateProduct: vi.fn(),
-  updateVariantPrice: vi.fn(),
+  updateVariantCommercial: vi.fn(),
   listVariants: (...a: unknown[]) => listVariants(...a),
   updateVariantInventory: (...a: unknown[]) => updateVariantInventory(...a),
 }));
