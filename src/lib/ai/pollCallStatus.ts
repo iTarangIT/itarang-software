@@ -111,6 +111,13 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
             duration: s.duration,
             phone: s.phone ?? row.phone ?? null,
             leadId: row.leadId,
+            // E-267 — getElevenLabsCallStatus already carries the provider's
+            // raw turn array, and this hand-off used to drop it, so a call
+            // finalized by the POLLER stored no turns while the same call
+            // finalized by the WEBHOOK stored them. Two paths, one table, and
+            // the difference was invisible until someone asked why timings
+            // existed for only some calls.
+            conversation: s.rawTranscriptTurns,
           });
           result.finalized += 1;
           result.perRow.push({
