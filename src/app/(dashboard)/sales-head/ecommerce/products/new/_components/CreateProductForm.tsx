@@ -8,6 +8,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { rupeesToMinor } from "@/lib/ecommerce/format";
 
+type SetupResult = {
+    variantId?: string;
+    variantCreated?: boolean;
+    defaultVariantRemoved?: boolean;
+    discountApplied?: boolean;
+    stockApplied?: boolean;
+    skuApplied?: boolean;
+    failed?: { step: string; error: string }[];
+};
+
 type CreateResult = {
     productId: string;
     title: string;
@@ -15,6 +25,16 @@ type CreateResult = {
     adminUrl: string;
     draftFailed?: boolean;
     draftError?: string;
+    setup?: SetupResult;
+};
+
+/** Plain-English names for the steps that run after the product exists. */
+const SETUP_STEPS: Record<string, string> = {
+    "read-variants": "reading the new product's variant",
+    "variant-create": "creating the variant with its SKU, price and stock",
+    "placeholder-delete": "removing Hostinger's placeholder variant",
+    discount: "setting the discount price",
+    stock: "setting stock",
 };
 
 /** Outcome of the post-create image attach, reported separately and honestly. */
@@ -25,6 +45,12 @@ export function CreateProductForm() {
     const [kind, setKind] = useState<"physical" | "digital">("physical");
     const [name, setName] = useState("");
     const [priceInput, setPriceInput] = useState("");
+    const [discountInput, setDiscountInput] = useState("");
+    const [optionName, setOptionName] = useState("");
+    const [optionValue, setOptionValue] = useState("");
+    const [sku, setSku] = useState("");
+    const [track, setTrack] = useState(false);
+    const [qty, setQty] = useState("");
     const [description, setDescription] = useState("");
     const [downloadUrl, setDownloadUrl] = useState("");
     const [publish, setPublish] = useState(true);
@@ -38,7 +64,32 @@ export function CreateProductForm() {
     // Recomputed on every keystroke and shown to the operator, so a wrong scale
     // is visible BEFORE submitting rather than discovered on the storefront.
     const priceMinor = useMemo(() => rupeesToMinor(priceInput), [priceInput]);
-    const canSubmit = name.trim().length > 0 && priceMinor !== null && !busy;
+    const discountMinor = useMemo(() => rupeesToMinor(discountInput), [discountInput]);
+
+    const discountInvalid = discountInput.trim() !== "" && discountMinor === null;
+    const discountTooHigh =
+        discountMinor !== null && priceMinor !== null && discountMinor >= priceMinor;
+
+    // Both halves or neither — Hostinger has no concept of an option without a value.
+    const hasOption = optionName.trim() !== "" && optionValue.trim() !== "";
+    const optionHalfFilled =
+        (optionName.trim() !== "") !== (optionValue.trim() !== "");
+    // The vendor constraint, surfaced before submitting rather than as a 422.
+    const skuNeedsOption = sku.trim() !== "" && !hasOption;
+
+    const qtyInvalid = qty.trim() !== "" && !/^\d+$/.test(qty.trim());
+    const trackNeedsQty = track && qty.trim() === "";
+
+    const canSubmit =
+        name.trim().length > 0 &&
+        priceMinor !== null &&
+        !discountInvalid &&
+        !discountTooHigh &&
+        !optionHalfFilled &&
+        !skuNeedsOption &&
+        !qtyInvalid &&
+        !trackNeedsQty &&
+        !busy;
 
     async function submit() {
         if (priceMinor === null) return;
@@ -53,6 +104,14 @@ export function CreateProductForm() {
                     name: name.trim(),
                     priceMinor,
                     publish,
+                    ...(discountMinor !== null ? { saleAmountMinor: discountMinor } : {}),
+                    // Sent only as a pair, and only when the operator named a real
+                    // attribute — nothing here is ever defaulted.
+                    ...(hasOption
+                        ? { options: [{ name: optionName.trim(), value: optionValue.trim() }] }
+                        : {}),
+                    ...(sku.trim() ? { sku: sku.trim() } : {}),
+                    ...(track ? { trackQuantity: true, quantity: Number(qty.trim()) } : {}),
                     ...(description.trim() ? { description: description.trim() } : {}),
                     ...(kind === "digital" && downloadUrl.trim()
                         ? { downloadUrl: downloadUrl.trim() }
@@ -127,6 +186,38 @@ export function CreateProductForm() {
                         Status: <span className="font-medium text-ink">{result.status}</span>
                     </p>
                 )}
+
+                {result.setup?.failed?.length ? (
+                    /* The product exists. Naming the steps that failed beats a
+                       generic error, which would invite a retry and a duplicate. */
+                    <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-bg/60 px-4 py-3 text-sm text-ink">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                        <span>
+                            The product was created, but not everything after it landed.{" "}
+                            <strong>Do not create it again</strong> — finish the rest from the
+                            product page.
+                            <ul className="mt-1 space-y-0.5 text-xs text-ink-muted">
+                                {result.setup.failed.map((f) => (
+                                    <li key={f.step}>
+                                        {SETUP_STEPS[f.step] ?? f.step}: {f.error}
+                                    </li>
+                                ))}
+                            </ul>
+                        </span>
+                    </div>
+                ) : result.setup ? (
+                    <p className="text-sm text-ink-muted">
+                        {[
+                            result.setup.variantCreated ? "Variant created" : null,
+                            result.setup.skuApplied ? "SKU set" : null,
+                            result.setup.discountApplied ? "discount set" : null,
+                            result.setup.stockApplied ? "stock set" : null,
+                        ]
+                            .filter(Boolean)
+                            .join(", ")}
+                        .
+                    </p>
+                ) : null}
 
                 {imageOutcome ? (
                     imageOutcome.attached === imageOutcome.attempted ? (
@@ -229,30 +320,178 @@ export function CreateProductForm() {
                 />
             </div>
 
-            <div className="space-y-1.5">
-                <Label htmlFor="price">Price (INR)</Label>
-                <Input
-                    id="price"
-                    value={priceInput}
-                    inputMode="decimal"
-                    placeholder="1234.56"
-                    onChange={(e) => setPriceInput(e.target.value)}
-                />
+            <section className="space-y-4 rounded-lg border border-border bg-bg/30 px-4 py-4">
+                <h3 className="text-sm font-semibold text-ink">Pricing</h3>
+
+                <div className="space-y-1.5">
+                    <Label htmlFor="price">Price (INR)</Label>
+                    <Input
+                        id="price"
+                        value={priceInput}
+                        inputMode="decimal"
+                        placeholder="1234.56"
+                        onChange={(e) => setPriceInput(e.target.value)}
+                    />
+                    <p className="text-xs text-ink-muted">
+                        {priceInput.trim() === "" ? (
+                            "Up to 2 decimals."
+                        ) : priceMinor === null ? (
+                            <span className="text-danger">
+                                Not a valid amount — must be positive with at most 2 decimals.
+                            </span>
+                        ) : (
+                            <>
+                                Will send <span className="font-mono text-ink">{priceMinor}</span>{" "}
+                                paise to Hostinger.
+                            </>
+                        )}
+                    </p>
+                </div>
+
+                <div className="space-y-1.5">
+                    <Label htmlFor="discount">Discount price (INR)</Label>
+                    <Input
+                        id="discount"
+                        value={discountInput}
+                        inputMode="decimal"
+                        placeholder="leave empty for none"
+                        onChange={(e) => setDiscountInput(e.target.value)}
+                    />
+                    <p className="text-xs text-ink-muted">
+                        {discountInvalid ? (
+                            <span className="text-danger">
+                                Not a valid amount — positive, at most 2 decimals.
+                            </span>
+                        ) : discountTooHigh ? (
+                            <span className="text-danger">
+                                Must be lower than the price, or it is not a discount.
+                            </span>
+                        ) : discountMinor !== null ? (
+                            <>
+                                Will send <span className="font-mono text-ink">{discountMinor}</span>{" "}
+                                paise as the sale price.
+                            </>
+                        ) : (
+                            "The price customers actually pay. Empty means no discount."
+                        )}
+                    </p>
+                </div>
+            </section>
+
+            <section className="space-y-4 rounded-lg border border-border bg-bg/30 px-4 py-4">
+                <div>
+                    <h3 className="text-sm font-semibold text-ink">Variant</h3>
+                    <p className="text-xs text-ink-muted">
+                        {/* Price and stock live on the variant too, but SKU is the one
+                            people expect to be a product field, so it is spelled out. */}
+                        Every product has at least one variant, and the SKU and stock belong to
+                        it — not to the product.
+                    </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                        <Label htmlFor="optionName">Option name</Label>
+                        <Input
+                            id="optionName"
+                            value={optionName}
+                            maxLength={255}
+                            placeholder="Capacity"
+                            onChange={(e) => setOptionName(e.target.value)}
+                        />
+                    </div>
+                    <div className="space-y-1.5">
+                        <Label htmlFor="optionValue">Option value</Label>
+                        <Input
+                            id="optionValue"
+                            value={optionValue}
+                            maxLength={255}
+                            placeholder="150Ah"
+                            onChange={(e) => setOptionValue(e.target.value)}
+                        />
+                    </div>
+                </div>
                 <p className="text-xs text-ink-muted">
-                    {priceInput.trim() === "" ? (
-                        "Up to 2 decimals."
-                    ) : priceMinor === null ? (
+                    {optionHalfFilled ? (
                         <span className="text-danger">
-                            Not a valid amount — must be positive with at most 2 decimals.
+                            Give both a name and a value, or leave both empty.
                         </span>
                     ) : (
+                        /* Stated up front because none of it can be undone: Hostinger
+                           has no endpoint to rename or remove an option. */
                         <>
-                            Will send <span className="font-mono text-ink">{priceMinor}</span> paise
-                            to Hostinger.
+                            Optional, and only for a genuine attribute of the product. An option
+                            becomes a real selector on the storefront and{" "}
+                            <strong className="text-ink">cannot be renamed or removed later</strong>
+                            . Required if you want to set a SKU.
                         </>
                     )}
                 </p>
-            </div>
+
+                <div className="space-y-1.5">
+                    <Label htmlFor="sku">Variant SKU</Label>
+                    <Input
+                        id="sku"
+                        value={sku}
+                        maxLength={255}
+                        placeholder="ITG-LB-150AH"
+                        onChange={(e) => setSku(e.target.value)}
+                    />
+                    <p className="text-xs text-ink-muted">
+                        {skuNeedsOption ? (
+                            <span className="text-danger">
+                                Hostinger only accepts a SKU when a variant with an option is
+                                created. Add a real option above, or leave this empty and set the
+                                SKU in the Hostinger dashboard.
+                            </span>
+                        ) : (
+                            "Set here or not at all — Hostinger has no way to change a SKU afterwards."
+                        )}
+                    </p>
+                </div>
+
+                <div className="space-y-1">
+                    <label className="flex items-center gap-2 text-sm text-ink">
+                        <input
+                            type="checkbox"
+                            checked={track}
+                            onChange={(e) => setTrack(e.target.checked)}
+                        />
+                        Track quantity
+                    </label>
+                    <p className="text-xs text-ink-muted">
+                        Off means Hostinger does not count stock for this product and it never
+                        shows as out of stock.
+                    </p>
+                </div>
+
+                {track ? (
+                    <div className="space-y-1.5">
+                        <Label htmlFor="qty">Quantity</Label>
+                        <Input
+                            id="qty"
+                            value={qty}
+                            inputMode="numeric"
+                            placeholder="0"
+                            onChange={(e) => setQty(e.target.value)}
+                        />
+                        <p className="text-xs text-ink-muted">
+                            {qtyInvalid ? (
+                                <span className="text-danger">Whole numbers only.</span>
+                            ) : trackNeedsQty ? (
+                                <span className="text-danger">
+                                    {/* Hostinger defaults this to 0, which would publish the
+                                        product as out of stock. */}
+                                    Required when tracking is on — leaving it empty would publish
+                                    the product as out of stock.
+                                </span>
+                            ) : (
+                                "Units in stock right now."
+                            )}
+                        </p>
+                    </div>
+                ) : null}
+            </section>
 
             <div className="space-y-1.5">
                 <Label htmlFor="description">Description</Label>
@@ -301,11 +540,11 @@ export function CreateProductForm() {
             <div className="rounded-lg border border-border bg-bg/40 px-4 py-3 text-xs text-ink-muted">
                 {/* Named explicitly so nobody concludes the CRM simply forgot them.
                     None of these appear anywhere in Hostinger's documented API. */}
-                <strong className="text-ink">Not available here.</strong> Subtitle, ribbon, weight,
-                additional info sections, custom fields and low-stock tracking are not exposed by
-                Hostinger&apos;s API — set them in the Hostinger dashboard after creating the
-                product. SKU can only be set when a variant is first created; discount price is set
-                from the product&apos;s edit page once it exists.
+                <strong className="text-ink">Only in the Hostinger dashboard.</strong>{" "}
+                <em>Weight</em>, low-stock tracking, subtitle, ribbon, additional info sections and
+                custom fields cannot be set here. They appear nowhere in Hostinger&apos;s API —
+                not on product creation, not on variant creation and not on variant update — so
+                the dashboard is the only place to enter them.
             </div>
 
             {error ? (

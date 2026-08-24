@@ -46,15 +46,60 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
 // Mirrors the documented CreatePhysicalProductRequest / CreateDigitalProductRequest
 // limits exactly. `price` is an integer in the smallest currency unit — the client
 // converts rupees to paise, and this re-validates rather than trusting it.
-const CreateSchema = z.object({
-    kind: z.enum(["physical", "digital"]).default("physical"),
-    name: z.string().trim().min(1).max(255),
-    priceMinor: z.number().int().min(1),
-    currency: z.string().trim().length(3).optional(),
-    description: z.string().max(5000).optional(),
-    downloadUrl: z.string().url().max(2048).optional(),
-    publish: z.boolean().default(true),
-});
+//
+// The fields below `publish` are NOT part of those requests — Hostinger discards
+// every extra key there (verified). They are applied afterwards, against the
+// variant, by applyCreationExtras in the service. Weight is deliberately absent:
+// it appears nowhere in Hostinger's API, so there is nothing to send it to.
+const CreateSchema = z
+    .object({
+        kind: z.enum(["physical", "digital"]).default("physical"),
+        name: z.string().trim().min(1).max(255),
+        priceMinor: z.number().int().min(1),
+        currency: z.string().trim().length(3).optional(),
+        description: z.string().max(5000).optional(),
+        downloadUrl: z.string().url().max(2048).optional(),
+        publish: z.boolean().default(true),
+
+        saleAmountMinor: z.number().int().min(0).optional(),
+        sku: z.string().trim().min(1).max(255).optional(),
+        // 1…10 per the documented CreateVariantRequest. A real, operator-supplied
+        // attribute — never a placeholder invented to unlock the SKU field.
+        options: z
+            .object({
+                name: z.string().trim().min(1).max(255),
+                value: z.string().trim().min(1).max(255),
+            })
+            .array()
+            .min(1)
+            .max(10)
+            .optional(),
+        trackQuantity: z.boolean().optional(),
+        quantity: z.number().int().min(0).optional(),
+    })
+    .refine((v) => v.saleAmountMinor === undefined || v.saleAmountMinor < v.priceMinor, {
+        // A "discount" at or above list price would publish to the storefront as
+        // one that costs more.
+        message: "The discount price must be lower than the price",
+    })
+    .refine((v) => v.trackQuantity !== true || v.quantity !== undefined, {
+        // Hostinger defaults inventory_quantity to 0, so tracking without a figure
+        // would publish the product as out of stock. Same rule as the inventory route.
+        message: "Turning stock tracking on requires an initial quantity",
+    })
+    .refine((v) => v.sku === undefined || !!v.options?.length, {
+        // Hostinger accepts a SKU only on variant creation, which requires an
+        // option. Saying so beats echoing the vendor's 422 — and the CRM must not
+        // fabricate an option to work around it.
+        message:
+            "A SKU can only be set on a variant with an option. Add a real option (for example Capacity: 150Ah) or leave the SKU empty and set it in the Hostinger dashboard.",
+    })
+    .refine(
+        (v) =>
+            !v.options ||
+            new Set(v.options.map((o) => o.name.toLowerCase())).size === v.options.length,
+        { message: "Each option can only appear once" },
+    );
 
 export const POST = withErrorHandler(async (req: NextRequest) => {
     const user = await requireEcommerceAdmin();
@@ -76,7 +121,14 @@ export const POST = withErrorHandler(async (req: NextRequest) => {
         throw err;
     }
 
-    const result = await createEcommerceProduct(input, { id: user.id, role: user.role });
+    // `trackQuantity` is the form's word for Hostinger's `manage_inventory`. When
+    // it is off, no stock call is made at all: false IS Hostinger's default, and a
+    // quantity on an untracked variant means nothing.
+    const { trackQuantity, quantity, ...rest } = input;
+    const result = await createEcommerceProduct(
+        { ...rest, ...(trackQuantity ? { manageInventory: true, quantity } : {}) },
+        { id: user.id, role: user.role },
+    );
 
     return successResponse(result, 201);
 });

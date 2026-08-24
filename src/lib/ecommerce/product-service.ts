@@ -174,6 +174,45 @@ export interface CreateProductInput {
   downloadUrl?: string;
   /** Draft is create + PATCH; see the partial-failure contract below. */
   publish: boolean;
+
+  /* --- Commercial values applied after the product exists (see applyCreationExtras) --- */
+
+  /** Discount price. Omit for none; the API rejects a null sale_amount. */
+  saleAmountMinor?: number;
+  /**
+   * SKU. Only reachable when `options` is also given: `sku` exists solely on
+   * CreateVariantRequest, which requires at least one option, and the variant
+   * batch endpoint has no sku property at all. Callers must not invent an option
+   * to unlock it — the route rejects a SKU without one.
+   */
+  sku?: string;
+  /**
+   * A real, operator-supplied option (e.g. Capacity / 150Ah). Its presence
+   * switches creation onto the real-variant path.
+   */
+  options?: { name: string; value: string }[];
+  quantity?: number;
+  manageInventory?: boolean;
+}
+
+/**
+ * What happened after the product itself was created.
+ *
+ * Every step here runs against a product that ALREADY EXISTS, so a failure must
+ * name what did and did not land — reporting it as a failed create would invite a
+ * retry and produce a second product.
+ */
+export interface CreateSetupResult {
+  /** The variant that ended up carrying the commercial values. */
+  variantId?: string;
+  /** True when a real option-bearing variant was created (the SKU path). */
+  variantCreated?: boolean;
+  /** True once Hostinger's option-less placeholder variant has been removed. */
+  defaultVariantRemoved?: boolean;
+  discountApplied?: boolean;
+  stockApplied?: boolean;
+  skuApplied?: boolean;
+  failed?: { step: string; error: string }[];
 }
 
 export interface CreateProductResult {
@@ -188,6 +227,8 @@ export interface CreateProductResult {
    */
   draftFailed?: boolean;
   draftError?: string;
+  /** Present only when the caller asked for a discount, SKU, option or stock. */
+  setup?: CreateSetupResult;
 }
 
 export async function createEcommerceProduct(
@@ -268,7 +309,149 @@ export async function createEcommerceProduct(
     }
   }
 
+  const setup = await applyCreationExtras(productId, input, actor);
+  if (setup) result.setup = setup;
+
   return result;
+}
+
+/**
+ * Applies the commercial values the create endpoints cannot carry.
+ *
+ * `CreatePhysicalProductRequest` is exactly name, price, currency and description
+ * — verified against Hostinger's published OpenAPI document and by sending the
+ * extra keys, which come back 201 with every one discarded. So discount, stock
+ * and SKU all have to be written afterwards, against the variant.
+ *
+ * Two paths, decided by whether the operator named a real option:
+ *
+ *   A. No option — the auto-created variant is edited in place. It can take a
+ *      discount and stock, but never a SKU: `sku` exists only on
+ *      CreateVariantRequest, and that requires an option.
+ *   B. An option — a real variant is created carrying everything including the
+ *      SKU, then Hostinger's placeholder variant is deleted.
+ *
+ * Nothing here throws. The product already exists by this point, so every failure
+ * is reported through `failed` instead — see CreateSetupResult.
+ */
+async function applyCreationExtras(
+  productId: string,
+  input: CreateProductInput,
+  actor: EcommerceActor,
+): Promise<CreateSetupResult | undefined> {
+  const wantsVariant = !!input.options?.length;
+  const wantsDiscount = input.saleAmountMinor !== undefined;
+  const wantsStock = input.quantity !== undefined || input.manageInventory !== undefined;
+  if (!wantsVariant && !wantsDiscount && !wantsStock) return undefined;
+
+  const setup: CreateSetupResult = {};
+  const fail = (step: string, e: unknown) => {
+    (setup.failed ??= []).push({ step, error: e instanceof Error ? e.message : String(e) });
+  };
+
+  // Needed by both paths: the target in A, the placeholder to remove in B.
+  let defaultVariantId: string | undefined;
+  try {
+    defaultVariantId = (await listVariants(productId))[0]?.id;
+  } catch (e) {
+    fail("read-variants", e);
+    return setup;
+  }
+  if (!defaultVariantId) {
+    fail("read-variants", new Error("The new product came back with no variant to write to"));
+    return setup;
+  }
+
+  if (wantsVariant) {
+    let created: EcommerceVariant;
+    try {
+      created = await createEcommerceVariant(
+        productId,
+        {
+          options: input.options!,
+          ...(input.sku ? { sku: input.sku } : {}),
+          // The price given at creation belongs to the placeholder variant, which
+          // is about to go, so the real variant has to be priced here too.
+          amountMinor: input.priceMinor,
+          ...(input.saleAmountMinor !== undefined
+            ? { saleAmountMinor: input.saleAmountMinor }
+            : {}),
+          ...(input.currency ? { currency: input.currency } : {}),
+          ...(input.quantity !== undefined ? { quantity: input.quantity } : {}),
+          ...(input.manageInventory !== undefined
+            ? { manageInventory: input.manageInventory }
+            : {}),
+        },
+        actor,
+      );
+    } catch (e) {
+      // The placeholder is deliberately left alone — deleting it now would leave
+      // a published product with no variant at all.
+      fail("variant-create", e);
+      return setup;
+    }
+
+    setup.variantId = created.id;
+    setup.variantCreated = true;
+    setup.skuApplied = !!input.sku;
+    setup.discountApplied = wantsDiscount;
+    setup.stockApplied = wantsStock;
+
+    // Last, and separately reported: until it lands the product simply has an
+    // extra variant, which is recoverable from the product page.
+    try {
+      await deleteEcommerceVariant(productId, defaultVariantId, actor);
+      setup.defaultVariantRemoved = true;
+    } catch (e) {
+      fail("placeholder-delete", e);
+    }
+
+    return setup;
+  }
+
+  setup.variantId = defaultVariantId;
+
+  if (wantsDiscount) {
+    try {
+      // Re-reads the prices and replaces only this currency, so the batch
+      // endpoint's full-replace cannot drop another one.
+      await updateEcommerceVariantCommercial(
+        productId,
+        {
+          variantId: defaultVariantId,
+          saleAmountMinor: input.saleAmountMinor,
+          ...(input.currency ? { currency: input.currency } : {}),
+        },
+        actor,
+      );
+      setup.discountApplied = true;
+    } catch (e) {
+      fail("discount", e);
+    }
+  }
+
+  if (wantsStock) {
+    try {
+      // No expectedQuantity: the variant is seconds old, so there is nothing for
+      // a drift check to compare against.
+      await updateEcommerceVariantInventory(
+        productId,
+        {
+          variantId: defaultVariantId,
+          ...(input.quantity !== undefined ? { quantity: input.quantity } : {}),
+          ...(input.manageInventory !== undefined
+            ? { manageInventory: input.manageInventory }
+            : {}),
+        },
+        actor,
+      );
+      setup.stockApplied = true;
+    } catch (e) {
+      fail("stock", e);
+    }
+  }
+
+  return setup;
 }
 
 export async function updateEcommerceProduct(
