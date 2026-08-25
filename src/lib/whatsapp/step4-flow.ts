@@ -58,7 +58,12 @@ import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
-import type { ParkedPrompt } from "./outbound";
+import {
+  optionLabel,
+  productLines,
+  rowDescription,
+  rowTitle,
+} from "./scheme-format";
 import { schemeName } from "./scheme-name";
 import {
   patchLeadSub,
@@ -112,24 +117,22 @@ function text(e: InboundEvent): string {
 // Presentation
 // ---------------------------------------------------------------------------
 
-const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
-
-/** ≤72 chars — Meta truncates a longer list-row description silently. */
-function rowDescription(p: SectionGNbfc["activeLoanProducts"][number]): string {
-  return `${p.minRoiPct}–${p.maxRoiPct}% · ${p.tenureMonthsMin}–${p.tenureMonthsMax} mo · ${p.downPaymentPct}% down`;
-}
-
+/**
+ * The lenders and their products, as the customer reads them.
+ *
+ * Neither the lender NOR its product is named — see ./scheme-format for why the
+ * product side matters just as much: printing `p.productName` ("Bajaj Finserv EV
+ * Loan") identifies the lender exactly as well as its name would, and this
+ * message is forwardable.
+ *
+ * The NBFC code is not printed either. It was, and it read as a bug to the
+ * customer: an internal id in the middle of a price comparison.
+ */
 function detailBlock(opts: SectionGNbfc[]): string {
   return opts
     .map((o, i) => {
-      const head = `*${schemeName(i)}* (${o.nbfcCode})`;
-      const lines = o.activeLoanProducts.map(
-        (p) =>
-          `   • ${p.productName}\n     ROI ${p.minRoiPct}–${p.maxRoiPct}% · ` +
-          `${p.tenureMonthsMin}–${p.tenureMonthsMax} months · ` +
-          `${p.downPaymentPct}% down\n     Loan ${inr(p.loanAmountMin)}–${inr(p.loanAmountMax)}`,
-      );
-      return `${head}\n${lines.join("\n")}`;
+      const products = o.activeLoanProducts.map((p, j) => productLines(p, j));
+      return `*${schemeName(i)}*\n${products.join("\n\n")}`;
     })
     .join("\n\n");
 }
@@ -144,18 +147,19 @@ function detailBlock(opts: SectionGNbfc[]): string {
 function rowsFor(opts: SectionGNbfc[]): ListRow[] {
   const rows: ListRow[] = [];
   opts.forEach((o, i) => {
-    for (const p of o.activeLoanProducts) {
+    o.activeLoanProducts.forEach((p, j) => {
       if (rows.length >= MAX_ROWS) return;
       rows.push({
         // Not a LEAD_ACTIONS prefix, so parseLeadAction leaves it alone and it
         // reaches this phase's state handler as ordinary text.
         id: `s4p:${o.nbfcId}:${p.id}`,
-        // ≤24 chars. "iTarang Scheme 10" is 17; the NBFC code lives in the
-        // description and the body, which have room for it.
-        title: schemeName(i).slice(0, 24),
-        description: rowDescription(p).slice(0, 72),
+        // "Scheme 1 · Option A". The row used to be titled with the scheme
+        // alone, so a lender offering two products produced two IDENTICAL rows
+        // and the customer could not tell the offers apart.
+        title: rowTitle(i, j),
+        description: rowDescription(p),
       });
-    }
+    });
   });
   return rows;
 }
@@ -202,9 +206,6 @@ const MORE_BUTTONS: ReplyButton[] = [
 export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
   const [lead] = await db
     .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
       payment_method: leads.payment_method,
       kyc_status: leads.kyc_status,
     })
@@ -216,29 +217,39 @@ export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
   if (String(lead.payment_method || "").toLowerCase() !== "finance") return;
   if (!STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) return;
 
-  const name = lead.full_name || lead.owner_name || "there";
-  const ref = lead.reference_id || leadId;
-
-  const prompt: ParkedPrompt = {
-    kind: "text",
-    body:
-      `🎉 *Your KYC is approved!*\n\n` +
-      `Hi ${name}, application ${ref} has cleared verification.\n\n` +
-      `The next step is choosing who finances your battery. You can pick *one ` +
-      `or two* lending partners — applying to two gives you a better chance of ` +
-      `approval and lets you compare the offers that come back.\n\n` +
-      `It takes about a minute.`,
-    buttons: [
-      { id: leadActionId("s4_start", leadId), title: "🏦 Choose lender" },
-    ],
-  };
-
-  await pushToLead(leadId, {
-    prompt,
-    nudge: {
-      template: "lead_action",
-      params: [oneLine(name), oneLine(ref), "your financing options are ready"],
-    },
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          (dealerSide
+            ? `🎉 *${t.customerName}'s KYC is approved!*\n\n` +
+              `Hi ${t.greetName}, application ${t.referenceId} has cleared verification.\n\n` +
+              `The next step is choosing who finances the battery. You can pick *one ` +
+              `or two* lending partners — applying to two gives a better chance of ` +
+              `approval and lets you compare the offers that come back.\n\n`
+            : `🎉 *Your KYC is approved!*\n\n` +
+              `Hi ${t.greetName}, application ${t.referenceId} has cleared verification.\n\n` +
+              `The next step is choosing who finances your battery. You can pick *one ` +
+              `or two* lending partners — applying to two gives you a better chance of ` +
+              `approval and lets you compare the offers that come back.\n\n`) +
+          `It takes about a minute.`,
+        buttons: [
+          { id: leadActionId("s4_start", leadId), title: "🏦 Choose lender" },
+        ],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          dealerSide
+            ? `${t.customerName}'s financing options are ready`
+            : "your financing options are ready",
+        ],
+      },
+    };
   });
 }
 
@@ -383,6 +394,10 @@ async function onStep4Pick(
   const loaded = await optionsFor(leadId);
   if (!loaded) return await lostTrack(session);
   const nbfcIndex = loaded.options.findIndex((o) => o.nbfcId === chosen.nbfcId);
+  const optionIndex =
+    loaded.options[nbfcIndex]?.activeLoanProducts.findIndex(
+      (p) => p.id === chosen.productId,
+    ) ?? -1;
   const product = loaded.options[nbfcIndex]?.activeLoanProducts.find(
     (p) => p.id === chosen.productId,
   );
@@ -399,7 +414,9 @@ async function onStep4Pick(
     return;
   }
 
-  const label = `${schemeName(nbfcIndex)} — ${product.productName}`;
+  // Masked on both halves. `product.productName` was rendered here — the second
+  // place the lender's own brand reached a forwardable chat message.
+  const label = `${schemeName(nbfcIndex)} · ${optionLabel(optionIndex)}`;
 
   // Section G rule 1: the cap counts LENDERS. A second product from a lender
   // already picked swaps that lender's product and leaves the count unchanged.

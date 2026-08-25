@@ -51,7 +51,6 @@ import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
-import type { ParkedPrompt } from "./outbound";
 import { labelFor, schemeLabelsForLead } from "./scheme-name";
 import {
   patchLeadSub,
@@ -162,31 +161,43 @@ export async function pushOfferToWhatsApp(
 
   const labels = await schemeLabelsForLead(leadId);
   const label = labelFor(labels, nbfcId, view.items.indexOf(item));
-  const { name, ref } = await leadIdentity(leadId);
-
   // A resubmit after the customer countered is an ANSWER, and should read like
   // one — otherwise the second offer looks like an unrelated new one.
   const answered = item.negotiation.some((r) => r.party === "customer");
-  const head = answered
-    ? `💬 *${label} has replied to your request*`
-    : `💰 *${label} has made you an offer*`;
   const note = lastLenderMessage(item);
 
-  const prompt: ParkedPrompt = {
-    kind: "text",
-    body:
-      `${head}\n\n${termsBlock(item, label)}` +
-      (note ? `\n\n_"${note}"_` : "") +
-      `\n\nTap below to see all your offers, accept one, or ask for better terms.`,
-    buttons: [{ id: leadActionId("of_view", leadId), title: "📋 View offers" }],
-  };
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    const head = answered
+      ? dealerSide
+        ? `💬 *${label} has replied on ${t.customerName}'s request*`
+        : `💬 *${label} has replied to your request*`
+      : dealerSide
+        ? `💰 *${label} has made an offer for ${t.customerName}*`
+        : `💰 *${label} has made you an offer*`;
 
-  await pushToLead(leadId, {
-    prompt,
-    nudge: {
-      template: "lead_action",
-      params: [oneLine(name), oneLine(ref), "you have a financing offer"],
-    },
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          `${head}\n\n${termsBlock(item, label)}` +
+          (note ? `\n\n_"${note}"_` : "") +
+          (dealerSide
+            ? `\n\nTap below to see every offer on this application, accept one, or ask for better terms.`
+            : `\n\nTap below to see all your offers, accept one, or ask for better terms.`),
+        buttons: [{ id: leadActionId("of_view", leadId), title: "📋 View offers" }],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          dealerSide
+            ? `${t.customerName} has a financing offer`
+            : "you have a financing offer",
+        ],
+      },
+    };
   });
 }
 
@@ -207,21 +218,29 @@ export async function pushOfferFixedToWhatsApp(
 
   const labels = await schemeLabelsForLead(leadId);
   const label = labelFor(labels, nbfcId, view.items.indexOf(item));
-  const { name, ref } = await leadIdentity(leadId);
-
-  await pushToLead(leadId, {
-    prompt: {
-      kind: "text",
-      body:
-        `🔒 *${label} has confirmed its final terms*\n\n${termsBlock(item, label)}\n\n` +
-        `These terms will not change further. Tap below to accept, or to compare ` +
-        `with your other lender.`,
-      buttons: [{ id: leadActionId("of_view", leadId), title: "📋 View offers" }],
-    },
-    nudge: {
-      template: "lead_action",
-      params: [oneLine(name), oneLine(ref), "a lender confirmed its final terms"],
-    },
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          (dealerSide
+            ? `🔒 *${label} has confirmed its final terms for ${t.customerName}*`
+            : `🔒 *${label} has confirmed its final terms*`) +
+          `\n\n${termsBlock(item, label)}\n\n` +
+          `These terms will not change further. Tap below to accept, or to compare ` +
+          (dealerSide ? `with the other lender.` : `with your other lender.`),
+        buttons: [{ id: leadActionId("of_view", leadId), title: "📋 View offers" }],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          "a lender confirmed its final terms",
+        ],
+      },
+    };
   });
 }
 
@@ -529,21 +548,31 @@ export async function pushSanctionedToWhatsApp(
   amount?: string | null,
   emi?: string | null,
 ): Promise<void> {
-  const { name, ref } = await leadIdentity(leadId);
-  await pushToLead(leadId, {
-    prompt: {
-      kind: "text",
-      body:
-        `🎉 *Your loan is approved!*\n\n${name}, application ${ref} has been sanctioned` +
-        (amount ? ` for ${inr(amount)}` : "") +
-        (emi ? ` — EMI ${inr(emi)}` : "") +
-        `.\n\nNext: choose your battery and arrange delivery.`,
-      buttons: [{ id: leadActionId("sn_ack", leadId), title: "📦 Continue" }],
-    },
-    nudge: {
-      template: "sanctioned",
-      params: [oneLine(name), oneLine(ref), oneLine(amount ? inr(amount) : "—")],
-    },
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          (dealerSide
+            ? `🎉 *Loan approved for ${t.customerName}!*\n\n${t.greetName}, application ${t.referenceId} has been sanctioned`
+            : `🎉 *Your loan is approved!*\n\n${t.greetName}, application ${t.referenceId} has been sanctioned`) +
+          (amount ? ` for ${inr(amount)}` : "") +
+          (emi ? ` — EMI ${inr(emi)}` : "") +
+          (dealerSide
+            ? `.\n\nNext: choose the battery and arrange delivery.`
+            : `.\n\nNext: choose your battery and arrange delivery.`),
+        buttons: [{ id: leadActionId("sn_ack", leadId), title: "📦 Continue" }],
+      },
+      nudge: {
+        template: "sanctioned",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          oneLine(amount ? inr(amount) : "—"),
+        ],
+      },
+    };
   });
 }
 
@@ -571,22 +600,6 @@ async function onSanctionAck(
 function leadIdOf(session: SessionRow): string | undefined {
   const ctx = (session.context ?? {}) as { lead?: { leadId?: string } };
   return ctx.lead?.leadId;
-}
-
-async function leadIdentity(leadId: string): Promise<{ name: string; ref: string }> {
-  const [lead] = await db
-    .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
-    })
-    .from(leads)
-    .where(eq(leads.id, leadId))
-    .limit(1);
-  return {
-    name: lead?.full_name || lead?.owner_name || "there",
-    ref: lead?.reference_id || leadId,
-  };
 }
 
 registerLeadAction("of_view", onOfferView);
