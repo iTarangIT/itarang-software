@@ -53,7 +53,6 @@ import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
-import type { ParkedPrompt } from "./outbound";
 import {
   patchLeadSub,
   reply,
@@ -191,41 +190,47 @@ export async function pushCoBorrowerRequest(
   leadId: string,
   reason?: string | null,
 ): Promise<void> {
-  const [lead] = await db
-    .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
-    })
-    .from(leads)
-    .where(eq(leads.id, leadId))
-    .limit(1);
-
-  const name = lead?.full_name || lead?.owner_name || "there";
-  const ref = lead?.reference_id || leadId;
   const why = reason?.trim();
 
-  const prompt: ParkedPrompt = {
-    kind: "text",
-    body:
-      `👥 *A co-borrower is needed*\n\n` +
-      `Hi ${name}, to move application ${ref} forward, the lender needs a ` +
-      `co-borrower — a family member who will share responsibility for the loan.` +
-      (why ? `\n\n_Reason: ${why}_` : "") +
-      `\n\nIt takes about 3 minutes: a few details, then photos of their ` +
-      `Aadhaar, PAN and a passport photo.`,
-    buttons: [
-      { id: leadActionId("cb_start", leadId), title: "➕ Add now" },
-      { id: leadActionId("cb_later", leadId), title: "⏰ Later" },
-    ],
-  };
+  // The work is identical whoever does it; only the subject of the sentence
+  // changes. A dealer running the file is told WHOSE application this is — they
+  // are holding several — and that the relative belongs to the customer, not to
+  // them.
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    const whose = dealerSide
+      ? `your customer *${t.customerName}*'s application ${t.referenceId}`
+      : `application ${t.referenceId}`;
+    const relative = dealerSide
+      ? "a family member of the customer"
+      : "a family member";
 
-  await pushToLead(leadId, {
-    prompt,
-    nudge: {
-      template: "lead_action",
-      params: [oneLine(name), oneLine(ref), "a co-borrower is required"],
-    },
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          `👥 *A co-borrower is needed*\n\n` +
+          `Hi ${t.greetName}, to move ${whose} forward, the lender needs a ` +
+          `co-borrower — ${relative} who will share responsibility for the loan.` +
+          (why ? `\n\n_Reason: ${why}_` : "") +
+          `\n\nIt takes about 3 minutes: a few details, then photos of their ` +
+          `Aadhaar, PAN and a passport photo.`,
+        buttons: [
+          { id: leadActionId("cb_start", leadId), title: "➕ Add now" },
+          { id: leadActionId("cb_later", leadId), title: "⏰ Later" },
+        ],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          dealerSide
+            ? `a co-borrower is required for ${t.customerName}`
+            : "a co-borrower is required",
+        ],
+      },
+    };
   });
 }
 

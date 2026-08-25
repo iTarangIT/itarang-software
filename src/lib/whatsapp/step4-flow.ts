@@ -58,7 +58,6 @@ import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
-import type { ParkedPrompt } from "./outbound";
 import {
   optionLabel,
   productLines,
@@ -207,9 +206,6 @@ const MORE_BUTTONS: ReplyButton[] = [
 export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
   const [lead] = await db
     .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
       payment_method: leads.payment_method,
       kyc_status: leads.kyc_status,
     })
@@ -221,29 +217,39 @@ export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
   if (String(lead.payment_method || "").toLowerCase() !== "finance") return;
   if (!STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) return;
 
-  const name = lead.full_name || lead.owner_name || "there";
-  const ref = lead.reference_id || leadId;
-
-  const prompt: ParkedPrompt = {
-    kind: "text",
-    body:
-      `🎉 *Your KYC is approved!*\n\n` +
-      `Hi ${name}, application ${ref} has cleared verification.\n\n` +
-      `The next step is choosing who finances your battery. You can pick *one ` +
-      `or two* lending partners — applying to two gives you a better chance of ` +
-      `approval and lets you compare the offers that come back.\n\n` +
-      `It takes about a minute.`,
-    buttons: [
-      { id: leadActionId("s4_start", leadId), title: "🏦 Choose lender" },
-    ],
-  };
-
-  await pushToLead(leadId, {
-    prompt,
-    nudge: {
-      template: "lead_action",
-      params: [oneLine(name), oneLine(ref), "your financing options are ready"],
-    },
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          (dealerSide
+            ? `🎉 *${t.customerName}'s KYC is approved!*\n\n` +
+              `Hi ${t.greetName}, application ${t.referenceId} has cleared verification.\n\n` +
+              `The next step is choosing who finances the battery. You can pick *one ` +
+              `or two* lending partners — applying to two gives a better chance of ` +
+              `approval and lets you compare the offers that come back.\n\n`
+            : `🎉 *Your KYC is approved!*\n\n` +
+              `Hi ${t.greetName}, application ${t.referenceId} has cleared verification.\n\n` +
+              `The next step is choosing who finances your battery. You can pick *one ` +
+              `or two* lending partners — applying to two gives you a better chance of ` +
+              `approval and lets you compare the offers that come back.\n\n`) +
+          `It takes about a minute.`,
+        buttons: [
+          { id: leadActionId("s4_start", leadId), title: "🏦 Choose lender" },
+        ],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          dealerSide
+            ? `${t.customerName}'s financing options are ready`
+            : "your financing options are ready",
+        ],
+      },
+    };
   });
 }
 
