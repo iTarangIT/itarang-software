@@ -66,7 +66,6 @@ import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
-import type { ParkedPrompt } from "./outbound";
 import {
   patchLeadSub,
   reply,
@@ -98,16 +97,6 @@ export const DC_DP_WAIT = "DC_DP_WAIT";
  * committed and must not be undone by a messaging failure.
  */
 export async function pushDispatchReady(leadId: string): Promise<void> {
-  const [lead] = await db
-    .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
-    })
-    .from(leads)
-    .where(eq(leads.id, leadId))
-    .limit(1);
-
   const [loan] = await db
     .select({ emi: loanSanctions.emi, loan_amount: loanSanctions.loan_amount })
     .from(loanSanctions)
@@ -115,27 +104,37 @@ export async function pushDispatchReady(leadId: string): Promise<void> {
     .orderBy(desc(loanSanctions.created_at))
     .limit(1);
 
-  const name = lead?.full_name || lead?.owner_name || "there";
-  const ref = lead?.reference_id || leadId;
   const emiLine = loan?.emi ? `EMI ₹${loan.emi}` : "";
 
-  const prompt: ParkedPrompt = {
-    kind: "text",
-    body:
-      `🎉 *Your loan is sanctioned!*\n\n` +
-      `${name}, application ${ref} has been approved` +
-      (loan?.loan_amount ? ` for ₹${loan.loan_amount}` : "") +
-      (emiLine ? ` — ${emiLine}` : "") +
-      `.\n\nTap below to choose your battery and arrange delivery.`,
-    buttons: [{ id: leadActionId("dp_start", leadId), title: "📦 Choose battery" }],
-  };
-
-  await pushToLead(leadId, {
-    prompt,
-    nudge: {
-      template: "lead_action",
-      params: [oneLine(name), oneLine(ref), "your loan is sanctioned"],
-    },
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          (dealerSide
+            ? `🎉 *${t.customerName}'s loan is sanctioned!*\n\n${t.greetName}, application ${t.referenceId} has been approved`
+            : `🎉 *Your loan is sanctioned!*\n\n${t.greetName}, application ${t.referenceId} has been approved`) +
+          (loan?.loan_amount ? ` for ₹${loan.loan_amount}` : "") +
+          (emiLine ? ` — ${emiLine}` : "") +
+          (dealerSide
+            ? `.\n\nTap below to choose the battery and arrange delivery.`
+            : `.\n\nTap below to choose your battery and arrange delivery.`),
+        buttons: [
+          { id: leadActionId("dp_start", leadId), title: "📦 Choose battery" },
+        ],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          dealerSide
+            ? `${t.customerName}'s loan is sanctioned`
+            : "your loan is sanctioned",
+        ],
+      },
+    };
   });
 }
 
@@ -558,32 +557,30 @@ export async function pushDispatched(
   leadId: string,
   batterySerial?: string | null,
 ): Promise<void> {
-  const [lead] = await db
-    .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
-    })
-    .from(leads)
-    .where(eq(leads.id, leadId))
-    .limit(1);
-
-  const name = lead?.full_name || lead?.owner_name || "there";
-  const ref = lead?.reference_id || leadId;
-
-  await pushToLead(leadId, {
-    prompt: {
-      kind: "text",
-      body:
-        `📦 *Dispatched!*\n\n${name}, your iTarang battery` +
-        (batterySerial ? ` (serial *${batterySerial}*)` : "") +
-        ` is on its way and your warranty is now active.\n\n` +
-        `Thank you for choosing iTarang.`,
-    },
-    nudge: {
-      template: "dispatch_done",
-      params: [oneLine(name), oneLine(ref), oneLine(batterySerial ?? "—")],
-    },
+  await pushToLead(leadId, (t) => {
+    const dealerSide = t.audience === "dealer";
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          (dealerSide
+            ? `📦 *Dispatched!*\n\n${t.greetName}, ${t.customerName}'s iTarang battery`
+            : `📦 *Dispatched!*\n\n${t.greetName}, your iTarang battery`) +
+          (batterySerial ? ` (serial *${batterySerial}*)` : "") +
+          (dealerSide
+            ? ` is on its way and the warranty is now active.\n\n`
+            : ` is on its way and your warranty is now active.\n\n`) +
+          `Thank you for choosing iTarang.`,
+      },
+      nudge: {
+        template: "dispatch_done",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          oneLine(batterySerial ?? "—"),
+        ],
+      },
+    };
   });
 }
 
