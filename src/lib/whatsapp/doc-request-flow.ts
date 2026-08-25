@@ -200,7 +200,7 @@ async function onDocRequestWait(
 
   if (event.type !== "image" && event.type !== "document") {
     const text = (event.text ?? "").trim().toLowerCase();
-    if (text === "done" || text === "later" || text === "stop") {
+    if (/^(done|later|stop|bas|ho gaya|hogaya|baad mein|baad me|ruko|band|बस|हो गया|बाद में|रुको|बंद)$/.test(text)) {
       await setSession(session.id, { current_state: "DC_MENU" });
       await reply(
         session,

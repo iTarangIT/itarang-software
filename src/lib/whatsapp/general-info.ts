@@ -5,6 +5,7 @@
 // (answers come ONLY from that facts block). Model is configurable via
 // GEMINI_INFO_MODEL (default gemini-flash-lite-latest).
 
+import { getWhatsAppLanguage } from "./language-settings";
 import { ITARANG_INFO_SYSTEM_PROMPT } from "./prompts";
 
 const MODEL = process.env.GEMINI_INFO_MODEL || "gemini-flash-lite-latest";
@@ -53,8 +54,20 @@ export async function answerGeneralQuestion(
     { role: "user", parts: [{ text: question }] },
   ];
 
+  // Answer natively in the admin-chosen language rather than answering in
+  // English and having the translating adapter re-translate a one-off string.
+  const lang = await getWhatsAppLanguage();
+  const languageLine =
+    lang === "hindi"
+      ? "\n- Reply in Hindi (Devanagari script). Keep product/finance terms like EMI, OTP, KYC, PAN, Aadhaar in English letters."
+      : lang === "hinglish"
+        ? "\n- Reply in Hinglish: everyday Hindi written in Roman/English letters, mixed with common English words. Do not use Devanagari."
+        : "";
+
   const requestBody = JSON.stringify({
-    system_instruction: { parts: [{ text: ITARANG_INFO_SYSTEM_PROMPT }] },
+    system_instruction: {
+      parts: [{ text: ITARANG_INFO_SYSTEM_PROMPT + languageLine }],
+    },
     contents,
     generationConfig: {
       temperature: 0.4,

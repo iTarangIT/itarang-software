@@ -84,6 +84,7 @@ export interface ConfirmDispatchResult {
   warrantyId: string;
   warrantyStart: Date;
   warrantyEnd: Date;
+  warrantyMonths: number;
   afterSalesId: string;
   /** The DB value actually written — see the note in the route's response. */
   loanStatus: "disbursed";
@@ -334,6 +335,7 @@ export async function confirmDispatch(opts: {
     warrantyId: result.warrantyId,
     warrantyStart: result.warrantyStart,
     warrantyEnd: result.warrantyEnd,
+    warrantyMonths: result.warrantyMonths,
     afterSalesId: result.afterSalesId,
     loanStatus: "disbursed",
     batterySerial: selection.battery_serial!,
