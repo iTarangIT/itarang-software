@@ -95,6 +95,11 @@ async function onCashName(
     .set({ full_name: name, owner_name: name, updated_at: new Date() })
     .where(eq(leads.id, leadId));
 
+  await askVehicleRc(session);
+}
+
+/** DC_CASH_RC prompt. Exported so a resumed draft can re-enter here. */
+export async function askVehicleRc(session: SessionRow): Promise<void> {
   await setSession(session.id, { current_state: DC_CASH_RC });
   await reply(
     session,
