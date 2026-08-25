@@ -13,7 +13,7 @@
 // and dealer_user_id (= the Supabase auth uuid = leads.uploader_id). See the
 // approve route (admin/dealer-verifications/[dealerId]/approve) for the wiring.
 
-import { and, desc, eq, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 
 import { generateId } from "@/lib/api-utils";
 import { db } from "@/lib/db/index";
@@ -161,8 +161,14 @@ export interface CreateCustomerLeadParams {
    *  the dealer is not asked to type it; it's extracted from the PAN / Aadhaar
    *  later and overwrites the placeholder stored here. */
   customerName?: string;
-  interest: InterestLevel;
-  paymentMethod: PaymentMethod;
+  /** Both optional: a lead PARKED as a draft before the dealer classified it
+   *  is inserted with only a mobile, and filled in on resume
+   *  (`classifyCustomerLead`). The live flow always passes both. */
+  interest?: InterestLevel;
+  paymentMethod?: PaymentMethod;
+  /** False for a parked draft — the admin bell rings when the lead is
+   *  classified, not when a dealer types a mobile number and walks away. */
+  notify?: boolean;
 }
 
 /** Placeholder owner_name until the real name is read from the PAN / Aadhaar. */
@@ -209,10 +215,12 @@ export async function createCustomerLead(
       // here (web PATCH keeps phone/owner_contact/mobile in lockstep) so the
       // WhatsApp lead's Phone field isn't blank when opened for editing.
       phone: mobile,
-      lead_type: interest,
+      lead_type: interest ?? null,
       lead_source: "dealer_referral",
-      interest_level: interest,
-      payment_method: paymentMethod,
+      // Explicit null, not the column default ('cold'): an unclassified draft
+      // must come back as "not yet asked" on resume, not as a cold lead.
+      interest_level: interest ?? null,
+      payment_method: paymentMethod ?? null,
       lead_status: "new",
       status: "ACTIVE",
       // Marks the lead as WhatsApp-originated (E-174). Web-dealer leads share
@@ -233,15 +241,53 @@ export async function createCustomerLead(
   // A WhatsApp lead is real the moment it is inserted — unlike the web wizard
   // there is no draft placeholder stage — so the admin bell fires here.
   // Best-effort: emit() never throws, so it cannot fail the lead creation.
-  await notifyLeadCreated({
-    leadId,
-    customerName: name === PENDING_CUSTOMER_NAME ? null : name,
-    paymentMethod,
-    source: "whatsapp",
-    dealerName: dealer.dealerName || dealer.dealerCode,
-  });
+  if (params.notify !== false && paymentMethod) {
+    await notifyLeadCreated({
+      leadId,
+      customerName: name === PENDING_CUSTOMER_NAME ? null : name,
+      paymentMethod,
+      source: "whatsapp",
+      dealerName: dealer.dealerName || dealer.dealerCode,
+    });
+  }
 
   return leadId;
+}
+
+/**
+ * Fill in the classification on a lead that was parked before it had one.
+ *
+ * The admin bell fires here when the payment method lands — that is the
+ * moment the lead becomes what `createCustomerLead` normally notifies about.
+ */
+export async function classifyCustomerLead(
+  leadId: string,
+  dealer: ActiveDealer,
+  patch: { interest?: InterestLevel; paymentMethod?: PaymentMethod },
+): Promise<void> {
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (patch.interest) {
+    set.interest_level = patch.interest;
+    set.lead_type = patch.interest;
+  }
+  if (patch.paymentMethod) set.payment_method = patch.paymentMethod;
+  await db.update(leads).set(set).where(eq(leads.id, leadId));
+
+  if (patch.paymentMethod) {
+    const [row] = await db
+      .select({ owner_name: leads.owner_name })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const name = row?.owner_name ?? null;
+    await notifyLeadCreated({
+      leadId,
+      customerName: name && name !== PENDING_CUSTOMER_NAME ? name : null,
+      paymentMethod: patch.paymentMethod,
+      source: "whatsapp",
+      dealerName: dealer.dealerName || dealer.dealerCode,
+    });
+  }
 }
 
 /**
@@ -303,7 +349,22 @@ export interface DealerDraft {
   interest: InterestLevel | null;
   paymentMethod: PaymentMethod | null;
   updatedAt: Date | null;
+  // ---- Where the dealer left off. Read by resumeDraft so a draft re-opens at
+  // the first step that has not been answered, whatever the payment path. ----
+  /** A real name is on the row (not the "Customer" placeholder). */
+  hasName: boolean;
+  vehicleRc: string | null;
+  /** The finance product step (DC_LEAD_PRODUCT) has been answered. */
+  productTagged: boolean;
 }
+
+/**
+ * Lead states that still count as "a draft the dealer can pick up in chat".
+ * Anything past these has left the dealer's hands (submitted, sanctioned,
+ * dispatched, sold) and belongs to the portal — the old filter keyed only on
+ * the admin KYC queue, which let a SOLD cash lead sit in Save Drafts forever.
+ */
+const DRAFT_KYC_STATUSES = ["pending", "draft"];
 
 /**
  * List this dealer's open WhatsApp drafts — leads created over WhatsApp that
@@ -327,6 +388,7 @@ export async function listDealerDrafts(
   const conds = [
     eq(leads.dealer_id, dealerCode),
     eq(leads.source_channel, "whatsapp"),
+    or(isNull(leads.kyc_status), inArray(leads.kyc_status, DRAFT_KYC_STATUSES)),
   ];
   if (submittedIds.length) {
     // notInArray → `leads.id not in ($1, …)`. (A hand-rolled `sql\`... <> all()\``
@@ -345,26 +407,46 @@ export async function listDealerDrafts(
       interest: leads.interest_level,
       paymentMethod: leads.payment_method,
       updatedAt: leads.updated_at,
+      vehicleRc: leads.vehicle_rc,
+      productTypeId: leads.product_type_id,
     })
     .from(leads)
     .where(and(...conds))
     .orderBy(desc(leads.updated_at))
     .limit(limit);
 
-  return rows.map((r) => {
-    const name =
-      r.ownerName && r.ownerName !== PENDING_CUSTOMER_NAME
-        ? r.ownerName
-        : r.fullName || "Customer";
-    return {
-      leadId: r.id,
-      customerName: name,
-      mobile: r.mobile || r.ownerContact || "—",
-      interest: (r.interest as InterestLevel | null) ?? null,
-      paymentMethod: (r.paymentMethod as PaymentMethod | null) ?? null,
-      updatedAt: r.updatedAt ?? null,
-    };
-  });
+  return rows.map(toDealerDraft);
+}
+
+type DraftRow = {
+  id: string;
+  ownerName: string | null;
+  fullName: string | null;
+  ownerContact: string | null;
+  mobile: string | null;
+  interest: string | null;
+  paymentMethod: string | null;
+  updatedAt: Date | null;
+  vehicleRc: string | null;
+  productTypeId: string | null;
+};
+
+function toDealerDraft(r: DraftRow): DealerDraft {
+  const realName =
+    (r.ownerName && r.ownerName !== PENDING_CUSTOMER_NAME ? r.ownerName : null) ||
+    r.fullName ||
+    null;
+  return {
+    leadId: r.id,
+    customerName: realName ?? "Customer",
+    mobile: r.mobile || r.ownerContact || "—",
+    interest: (r.interest as InterestLevel | null) ?? null,
+    paymentMethod: (r.paymentMethod as PaymentMethod | null) ?? null,
+    updatedAt: r.updatedAt ?? null,
+    hasName: !!realName,
+    vehicleRc: r.vehicleRc ?? null,
+    productTagged: !!r.productTypeId,
+  };
 }
 
 /** Load one draft by id, scoped to the dealer so a dealer can only resume their
@@ -383,23 +465,16 @@ export async function getDealerDraft(
       interest: leads.interest_level,
       paymentMethod: leads.payment_method,
       updatedAt: leads.updated_at,
+      vehicleRc: leads.vehicle_rc,
+      productTypeId: leads.product_type_id,
+      kycStatus: leads.kyc_status,
     })
     .from(leads)
     .where(and(eq(leads.id, leadId), eq(leads.dealer_id, dealerCode)))
     .limit(1);
   if (!row) return null;
-  const name =
-    row.ownerName && row.ownerName !== PENDING_CUSTOMER_NAME
-      ? row.ownerName
-      : row.fullName || "Customer";
-  return {
-    leadId: row.id,
-    customerName: name,
-    mobile: row.mobile || row.ownerContact || "—",
-    interest: (row.interest as InterestLevel | null) ?? null,
-    paymentMethod: (row.paymentMethod as PaymentMethod | null) ?? null,
-    updatedAt: row.updatedAt ?? null,
-  };
+  if (row.kycStatus && !DRAFT_KYC_STATUSES.includes(row.kycStatus)) return null;
+  return toDealerDraft(row);
 }
 
 // ── Dealer console: inventory ────────────────────────────────────────────────

@@ -33,6 +33,7 @@ import {
   BarChart3,
   GitMerge,
   MessageSquare,
+  Languages,
   UserMinus,
   History,
   X,
@@ -265,6 +266,27 @@ function nbfcSettingsSubnav(idPrefix: string) {
   };
 }
 
+// Settings → WhatsApp. Same shape as nbfcSettingsSubnav: one factory, called
+// once per role that shows the settings group, so both roles stay in step.
+function whatsappSettingsSubnav(idPrefix: string) {
+  return {
+    id: `${idPrefix}-whatsapp-settings`,
+    label: "WhatsApp",
+    icon: MessageSquare,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: "/admin/settings",
+    children: [
+      {
+        // Bot reply language: English / Hindi / Hinglish. Global for every flow.
+        id: `${idPrefix}-whatsapp-language`,
+        label: "Language",
+        icon: Languages,
+        href: "/admin/settings/whatsapp/language",
+      },
+    ],
+  };
+}
+
 // Per-role sections pinned BELOW COMMON_ITEMS.
 //
 // COMMON_ITEMS is appended to every role at the end of the build (see
@@ -300,6 +322,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           href: "/admin/settings/kyc-automation",
         },
         nbfcSettingsSubnav("sh"),
+        whatsappSettingsSubnav("sh"),
         {
           // E-255 — Google Drive backup of every stored document. Own entry
           // beside the NBFC group, same reasoning.
@@ -895,6 +918,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/settings/kyc-automation",
         },
         nbfcSettingsSubnav("admin"),
+        whatsappSettingsSubnav("admin"),
         {
           // E-255 — own entry, not a tab. See the sales_head block above.
           id: "admin-gdrive-mirror",

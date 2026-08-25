@@ -77,6 +77,7 @@ export interface CashSaleResult {
   warrantyId: string;
   warrantyStart: Date;
   warrantyEnd: Date;
+  warrantyMonths: number;
   afterSalesId: string;
   paymentMode: "cash";
   batterySerial: string;
@@ -248,6 +249,7 @@ export async function confirmCashSale(opts: {
     warrantyId: result.warrantyId,
     warrantyStart: result.warrantyStart,
     warrantyEnd: result.warrantyEnd,
+    warrantyMonths: result.warrantyMonths,
     afterSalesId: result.afterSalesId,
     paymentMode,
     batterySerial: body.batterySerial,
