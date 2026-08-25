@@ -70,12 +70,25 @@ export interface StockQuery {
   includeSerials?: string[];
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * `inventory.asset_category` stores the `productCategories.name` (set at
  * bulk-upload time). Callers may pass either the id or the name — resolve to the
  * name so both work.
+ *
+ * THE UUID GUARD IS LOAD-BEARING, not defensive tidying. `product_categories.id`
+ * is a uuid column, so querying it with a NAME does not return zero rows — it
+ * throws `invalid input syntax for type uuid` and takes the whole call down.
+ * The web picker never hit this because the Step-5 page always passes the lead's
+ * `product_category_id` (a uuid); the WhatsApp picker reads
+ * `product_selections.category`, which holds the NAME once anything has written
+ * a selection. So the same input the doc comment above always promised to accept
+ * was a guaranteed 500.
  */
 async function resolveCategoryName(input: string): Promise<string> {
+  if (!UUID_RE.test(input)) return input;
   const [cat] = await db
     .select({ name: productCategories.name })
     .from(productCategories)
