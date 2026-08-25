@@ -253,8 +253,16 @@ export default async function AcquireLeadDetailPage({
   // active). The disbursement money-transfer itself is PARKED (§19.1), so `sold`
   // is the furthest state iTarang models. `loan_sanctioned` = sanctioned, dealer
   // OTP/dispatch still pending.
-  const sanctioned = lead.kyc_status === "loan_sanctioned" || lead.kyc_status === "sold";
-  const sold = lead.kyc_status === "sold";
+  //
+  // `confirmDispatch` (the Step-5 OTP, web or WhatsApp) writes `dispatched`
+  // and flips the sanction to disbursed in the same transaction; `sold` only
+  // arrives later from Mark Delivered / the nightly cron. Both are past the
+  // OTP gate, so both are "disbursed" for this rail — treating `dispatched` as
+  // unknown made the node regress to "ready" the moment the OTP succeeded.
+  const dispatched = lead.kyc_status === "dispatched";
+  const delivered = lead.kyc_status === "sold";
+  const sold = dispatched || delivered;
+  const sanctioned = lead.kyc_status === "loan_sanctioned" || sold;
 
   function nodeOffer(): StepperStage["state"] {
     // FI / Video KYC now live inside the Offer step and only unlock once won, so
@@ -690,9 +698,11 @@ export default async function AcquireLeadDetailPage({
     {
       key: "disburse",
       label: "Disbursal",
-      sub: sold
-        ? "disbursed & dispatched"
-        : sanctioned
+      sub: delivered
+        ? "disbursed · delivered"
+        : dispatched
+          ? "disbursed · dispatched"
+          : sanctioned
           ? "sanctioned · awaiting dealer OTP"
           : disbursalReady
             ? "ready"
