@@ -51,6 +51,7 @@ export const LEAD_WAIT_STATES = [
   "DC_OF_WAIT",
   "DC_SN_WAIT",
   "DC_DP_PRODUCT",
+  "DC_DP_CHARGER",
   "DC_DP_WAIT",
 ] as const;
 

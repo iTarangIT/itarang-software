@@ -20,17 +20,13 @@
  * media and a real Gemini call, so a stub would prove nothing. Those stay on the
  * live checklist. Everything from "send to lenders" onwards is covered here.
  *
- * HOW IT READS THE DISPATCH OTP. It brute-forces the sha256 in
- * `otp_confirmations.otp_hash` over the million six-digit codes — about a second.
- * That is deliberate: the alternative is a test-only backdoor in the OTP path,
- * and an OTP service with a way to ask it for the code is not an OTP service.
- * The dry-run adapter never records the code either (`dispatch-otp-send.ts`
- * writes the literal "[dispatch OTP sent]" to the message log, by design).
+ * WHAT PHASE 4 NOW ASSERTS. The chat collects the product choice and hands over
+ * to the team — it does NOT send a delivery code and does NOT dispatch. So the
+ * checks are inverted from what you might expect: a minted `otp_confirmations`
+ * row or a lead that moved past `loan_sanctioned` is a FAILURE here.
  */
 
 process.env.WA_DRY_RUN = "1";
-
-import crypto from "crypto";
 
 type Step = { name: string; ok: boolean; detail: string };
 const steps: Step[] = [];
@@ -235,13 +231,28 @@ async function main() {
   }
 
   // ---- Phase 4: Step 5, cart + dispatch -----------------------------------
-  console.log("\nPhase 4 — Step 5 (cart, OTP, dispatch)");
+  console.log("\nPhase 4 — Step 5 (cart, then hand off)");
   if ((await kycStatus()) !== "loan_sanctioned") {
     skip(
       "dispatch",
       `lead is ${await kycStatus()} — have the NBFC sanction it (POST /api/nbfc/sanction/${leadId}), then re-run`,
     );
   } else {
+    // Counted BEFORE the phase, not compared against zero: a lead that was
+    // driven through the old code-based flow already carries rows, and this
+    // check is about what THIS run mints.
+    const otpsBefore = (
+      await db
+        .select({ id: schema.otpConfirmations.id })
+        .from(schema.otpConfirmations)
+        .where(
+          and(
+            eq(schema.otpConfirmations.lead_id, leadId),
+            eq(schema.otpConfirmations.otp_type, "dispatch_confirmation"),
+          ),
+        )
+    ).length;
+
     let sends = await send(leadActionId("dp_start", leadId));
     let rows = lastRows(sends);
     const batteryRow = rows.find((r) => r.id.startsWith("dpb:"));
@@ -273,40 +284,52 @@ async function main() {
         fail("cart saved", "product_selections.battery_serial is still null");
       }
 
-      if ((await state()) !== "DC_DP_OTP") {
-        fail("OTP sent", `state is ${await state()}, expected DC_DP_OTP`);
-      } else {
-        pass("OTP sent", "state DC_DP_OTP");
-        const [row] = await db
-          .select({ otp_hash: schema.otpConfirmations.otp_hash })
-          .from(schema.otpConfirmations)
-          .where(
-            and(
-              eq(schema.otpConfirmations.lead_id, leadId),
-              eq(schema.otpConfirmations.is_used, false),
-            ),
-          )
-          .orderBy(desc(schema.otpConfirmations.created_at))
-          .limit(1);
-        const code = row ? crack(row.otp_hash) : null;
-        if (!code) {
-          fail("OTP recovery", "could not recover the code from its hash");
-        } else {
-          await send(code);
-          const status = await kycStatus();
-          if (status === "dispatched") pass("dispatch", `kyc_status → ${status}`);
-          else fail("dispatch", `expected dispatched, got ${status} (state ${await state()})`);
+      // The chat hands over here — it must NOT send a delivery code and must
+      // NOT dispatch. The dealer runs the OTP and Confirm Dispatch on Step 5.
+      const handoff = sends.some((s) =>
+        (s.body ?? "").includes("iTarang Team will connect you"),
+      );
+      if (handoff) pass("handoff message", "sent with the order summary");
+      else
+        fail(
+          "handoff message",
+          `not sent — last body: ${(sends[sends.length - 1]?.body ?? "").slice(0, 120)}`,
+        );
 
-          if (sel?.battery_serial) {
-            const [inv] = await db
-              .select({ status: schema.inventory.status })
-              .from(schema.inventory)
-              .where(eq(schema.inventory.serial_number, sel.battery_serial))
-              .limit(1);
-            if (inv?.status === "dispatched") pass("inventory", "available → reserved → dispatched");
-            else fail("inventory", `serial is '${inv?.status}', expected 'dispatched'`);
-          }
-        }
+      const parked = await state();
+      if (parked === "DC_DP_WAIT") pass("parked", "state DC_DP_WAIT");
+      else fail("parked", `state is ${parked}, expected DC_DP_WAIT`);
+
+      // The specific regression this change is about: no code was minted.
+      const otps = await db
+        .select({ id: schema.otpConfirmations.id })
+        .from(schema.otpConfirmations)
+        .where(
+          and(
+            eq(schema.otpConfirmations.lead_id, leadId),
+            eq(schema.otpConfirmations.otp_type, "dispatch_confirmation"),
+          ),
+        );
+      const minted = otps.length - otpsBefore;
+      if (minted === 0) {
+        pass(
+          "no delivery code",
+          otpsBefore > 0
+            ? `no new otp_confirmations row (${otpsBefore} pre-existing, from before this change)`
+            : "no otp_confirmations row created",
+        );
+      } else {
+        fail("no delivery code", `${minted} otp_confirmations row(s) minted by this run`);
+      }
+
+      const stillSanctioned = await kycStatus();
+      if (stillSanctioned === "loan_sanctioned") {
+        pass("dispatch left to dealer", "kyc_status still loan_sanctioned");
+      } else {
+        fail(
+          "dispatch left to dealer",
+          `kyc_status moved to ${stillSanctioned} — the chat should not dispatch`,
+        );
       }
     }
   }
@@ -316,20 +339,6 @@ async function main() {
       `${steps.length} checked.`,
   );
   process.exit(failed > 0 ? 1 : 0);
-}
-
-/**
- * Recover a six-digit code from its sha256. ~1M hashes, about a second — the
- * price of not putting a "tell me the code" hook in the OTP service.
- */
-function crack(hash: string): string | null {
-  for (let n = 0; n < 1_000_000; n += 1) {
-    const candidate = String(n).padStart(6, "0");
-    if (crypto.createHash("sha256").update(candidate).digest("hex") === hash) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 main().catch((err) => {
