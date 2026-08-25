@@ -16,3 +16,21 @@ export type {
 } from "@/lib/ai-dialer/call-duration/histogram";
 
 export type { OutcomeFamily } from "@/lib/ai-dialer/call-duration/outcomeFamilies";
+
+export type {
+  CallQualityFunnel,
+  OpeningScriptStat,
+} from "@/lib/ai-dialer/call-quality/funnel";
+
+/**
+ * What GET duration-histogram actually returns.
+ *
+ * The endpoint serves the histogram AND the funnel in one round trip so the
+ * two can never disagree about which calls connected — see the note in
+ * duration-histogram/route.ts. This alias is the wire shape; the two halves
+ * keep their own types so neither module has to import the other.
+ */
+export type CallQualityResponse =
+  import("@/lib/ai-dialer/call-duration/histogram").DurationHistogramResponse & {
+    funnel: import("@/lib/ai-dialer/call-quality/funnel").CallQualityFunnel;
+  };

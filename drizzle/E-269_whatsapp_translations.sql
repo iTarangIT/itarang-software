@@ -1,4 +1,4 @@
--- E-267 — WhatsApp outbound translation cache.
+-- E-269 — WhatsApp outbound translation cache.
 --
 -- Backs src/lib/whatsapp/translate.ts. Every bot message is authored in English
 -- inline in the flow code; when the admin picks Hindi / Hinglish at
@@ -31,4 +31,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_translations_hash_lang_uidx
   ON whatsapp_translations (source_hash, language);
 
 COMMENT ON TABLE whatsapp_translations IS
-  'E-267: Gemini translation cache for outbound WhatsApp bot copy (English source → chosen language). Safe to truncate; entries are re-created on demand.';
+  'E-269: Gemini translation cache for outbound WhatsApp bot copy (English source → chosen language). Safe to truncate; entries are re-created on demand.';

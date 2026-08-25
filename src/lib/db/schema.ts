@@ -1109,6 +1109,16 @@ export const aiCallLogs = pgTable(
     human_band: varchar("human_band", { length: 20 }),
     human_reviewed_by: uuid("human_reviewed_by"),
     human_reviewed_at: timestamp("human_reviewed_at", { withTimezone: true }),
+    // E-267 — `transcript_turns jsonb` is DELIBERATELY ABSENT from this object,
+    // the same rule E-250/E-242/E-224/E-236 follow. Drizzle names every column
+    // of a mirrored table in its generated SQL, so declaring it here would make
+    // all 21 aiCallLogs call sites — including three bare `db.insert()` on the
+    // call-finalize path — hard-fail with `column "transcript_turns" does not
+    // exist` on any database where E-267 has not been applied. Since there is
+    // no auto-runner and the per-environment ticks drift, that would trade one
+    // dark metric for the entire AI call-logging pipeline. It is written
+    // instead by a guarded raw UPDATE in elevenlabs/finalizeCall.ts, which
+    // confines an unapplied E-267 to the feature that needs it.
   },
   (table) => {
     return {
@@ -2503,7 +2513,7 @@ export const deployedAssets = pgTable(
     total_cycles: integer("total_cycles"),
     warranty_start_date: timestamp("warranty_start_date", { withTimezone: true }),
     warranty_end_date: timestamp("warranty_end_date", { withTimezone: true }),
-    // E-266 — the duration applied at dispatch, so a reader never has to
+    // E-268 — the duration applied at dispatch, so a reader never has to
     // re-derive it from the two dates (and get month arithmetic wrong).
     warranty_months: integer("warranty_months"),
     warranty_status: varchar("warranty_status", { length: 20 }).default('active'),
@@ -2947,7 +2957,7 @@ export const appSettings = pgTable("app_settings", {
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
-// --- WHATSAPP TRANSLATIONS (E-267) ---
+// --- WHATSAPP TRANSLATIONS (E-269) ---
 // Gemini translation cache for outbound bot copy. See src/lib/whatsapp/translate.ts.
 // Optional at runtime: every access is guarded, so an unapplied DB degrades to
 // the in-process cache.
