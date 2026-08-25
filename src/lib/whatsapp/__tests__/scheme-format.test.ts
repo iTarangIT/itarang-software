@@ -12,6 +12,8 @@ import {
   range,
   rowDescription,
   rowTitle,
+  tatText,
+  creditScoreText,
 } from "../scheme-format";
 
 const product = {
@@ -135,7 +137,115 @@ describe("masking", () => {
     expect(lines).toContain("Option B");
     expect(lines).toContain("14%");
     expect(lines).toContain("12 months");
-    expect(lines).toContain("No down payment");
+    // The detail block carries its own "Down payment:" label, so the value is
+    // rendered bare ("None") rather than as the whole sentence the picker row
+    // uses ("no down payment").
+    expect(lines).toContain("Down payment: None");
     expect(lines).toContain("₹30,000–₹73,999");
+  });
+});
+
+describe("productLines — the rest of the offer", () => {
+  const loaded = {
+    ...product,
+    processingFeeRupees: 5500,
+    healthLifeInsuranceRupees: 1000,
+    disbursementTatHours: 48,
+    fileChargePct: "1.46",
+    subventionAvailable: true,
+    cibilRequired: true,
+    minCreditScore: 680,
+    maxCreditScore: 900,
+  };
+
+  it("renders every charge the customer actually pays", () => {
+    const lines = productLines(loaded, 0);
+    expect(lines).toContain("Processing fee: ₹5,500");
+    expect(lines).toContain("File charge: 1.46% of loan");
+    expect(lines).toContain("Health & life cover: ₹1,000");
+    expect(lines).toContain("Disbursal in: 2 days");
+    expect(lines).toContain("Credit score 680–900");
+    expect(lines).toContain("Subvention available");
+  });
+
+  it("omits a line entirely rather than printing a dash for a missing value", () => {
+    // The bare `product` fixture has none of the optional fields. A "—"
+    // against "Processing fee" would read as a charge nobody could name.
+    const lines = productLines(product, 0);
+    expect(lines).not.toContain("Processing fee");
+    expect(lines).not.toContain("File charge");
+    expect(lines).not.toContain("Health & life cover");
+    expect(lines).not.toContain("Disbursal in");
+    expect(lines).not.toContain("—");
+  });
+
+  it("treats a zero charge as absent, not as a ₹0 line", () => {
+    const free = { ...loaded, processingFeeRupees: 0, fileChargePct: "0.00" };
+    const lines = productLines(free, 0);
+    expect(lines).not.toContain("Processing fee");
+    expect(lines).not.toContain("File charge");
+  });
+
+  it("prefers a fixed file charge over a percentage when a row carries both", () => {
+    const both = { ...loaded, fileChargeFixed: "7500.00", fileChargePct: "1.46" };
+    expect(productLines(both, 0)).toContain("File charge: ₹7,500");
+  });
+
+  it("keeps the lender masked even with every field populated", () => {
+    const rendered = productLines(loaded, 0);
+    for (const brand of ["Bajaj", "Finserv", "NBFC-", "iTarang Finance"]) {
+      expect(rendered).not.toContain(brand);
+    }
+  });
+});
+
+describe("tatText", () => {
+  it("uses days only for a whole number of them", () => {
+    expect(tatText(48)).toBe("2 days");
+    expect(tatText(24)).toBe("1 day");
+    expect(tatText(96)).toBe("4 days");
+  });
+
+  it("stays in hours rather than inventing a fractional day", () => {
+    // 44h / 24 = 1.83 — harder to read than the hours it came from, and
+    // falsely precise about when the money lands.
+    expect(tatText(44)).toBe("44h");
+    expect(tatText(20)).toBe("20h");
+  });
+
+  it("is silent when unknown", () => {
+    expect(tatText(null)).toBeNull();
+    expect(tatText(0)).toBeNull();
+  });
+});
+
+describe("creditScoreText", () => {
+  it("calls out a waived bureau check — that is good news worth stating", () => {
+    expect(creditScoreText({ ...product, cibilRequired: false })).toBe(
+      "No credit-score check",
+    );
+  });
+
+  it("says nothing for a legacy row where nobody recorded the answer", () => {
+    // Inventing "no credit check" here would be a promise the lender never made.
+    expect(creditScoreText({ ...product, cibilRequired: null })).toBeNull();
+    expect(creditScoreText(product)).toBeNull();
+  });
+
+  it("renders the band, or a floor when there is only one bound", () => {
+    expect(
+      creditScoreText({
+        ...product,
+        cibilRequired: true,
+        minCreditScore: 680,
+        maxCreditScore: 900,
+      }),
+    ).toBe("Credit score 680–900");
+    expect(
+      creditScoreText({ ...product, cibilRequired: true, minCreditScore: 700 }),
+    ).toBe("Credit score 700+");
+    expect(creditScoreText({ ...product, cibilRequired: true })).toBe(
+      "Credit-score check applies",
+    );
   });
 });
