@@ -26,7 +26,7 @@
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
-import { leads, otherDocumentRequests } from "@/lib/db/schema";
+import { otherDocumentRequests } from "@/lib/db/schema";
 
 import type { ActiveDealer } from "./customer-lead";
 import { getAdapter } from "./index";
@@ -34,7 +34,6 @@ import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
 import { registerLeadState } from "./lead-states";
-import type { ParkedPrompt } from "./outbound";
 import { patchLeadSub, reply, setSession, type SessionRow } from "./session-store";
 import { saveMedia } from "./storage";
 import type { InboundEvent } from "./types";
@@ -67,20 +66,6 @@ export async function pushDocRequestToWhatsApp(opts: {
   const { leadId, items, docFor = "primary" } = opts;
   if (items.length === 0) return;
 
-  const [lead] = await db
-    .select({
-      reference_id: leads.reference_id,
-      full_name: leads.full_name,
-      owner_name: leads.owner_name,
-    })
-    .from(leads)
-    .where(eq(leads.id, leadId))
-    .limit(1);
-
-  const who = docFor === "co_borrower" ? "the co-borrower's" : "your";
-  const name = lead?.full_name || lead?.owner_name || "there";
-  const ref = lead?.reference_id || leadId;
-
   const listed = items.slice(0, MAX_LISTED);
   const lines = listed.map((i) => {
     const reason = i.reason?.trim();
@@ -98,32 +83,45 @@ export async function pushDocRequestToWhatsApp(opts: {
       ? `\n\nUpload here: ${listed[0].uploadLink}`
       : `\n\n${listed.map((i) => `${i.docLabel}: ${i.uploadLink}`).join("\n")}`;
 
-  const prompt: ParkedPrompt = {
-    kind: "text",
-    body:
-      `📄 *Document request*\n\n` +
-      `Hi ${name}, iTarang needs ${who} document${items.length > 1 ? "s" : ""} ` +
-      `for application ${ref}:\n\n${lines.join("\n")}` +
-      `\n\nTap *Send here* and photograph ${items.length > 1 ? "them" : "it"} ` +
-      `in this chat, or use the link${listed.length > 1 ? "s" : ""} below.` +
-      links,
-    buttons: [{ id: leadActionId("dr_send", leadId), title: "📎 Send here" }],
-  };
+  const plural = items.length > 1;
 
-  await pushToLead(leadId, {
-    prompt,
-    nudge: {
-      template: "lead_action",
-      params: [
-        oneLine(name),
-        oneLine(ref),
-        oneLine(
-          items.length === 1
-            ? `${items[0].docLabel} is needed`
-            : `${items.length} documents are needed`,
-        ),
-      ],
-    },
+  await pushToLead(leadId, (t) => {
+    // "your document" is right for the customer and wrong for the dealer, who
+    // is being asked for somebody else's paperwork.
+    const whose =
+      t.audience === "dealer"
+        ? docFor === "co_borrower"
+          ? `${t.customerName}'s co-borrower's`
+          : `${t.customerName}'s`
+        : docFor === "co_borrower"
+          ? "the co-borrower's"
+          : "your";
+
+    return {
+      prompt: {
+        kind: "text",
+        body:
+          `📄 *Document request*\n\n` +
+          `Hi ${t.greetName}, iTarang needs ${whose} document${plural ? "s" : ""} ` +
+          `for application ${t.referenceId}:\n\n${lines.join("\n")}` +
+          `\n\nTap *Send here* and photograph ${plural ? "them" : "it"} ` +
+          `in this chat, or use the link${listed.length > 1 ? "s" : ""} below.` +
+          links,
+        buttons: [{ id: leadActionId("dr_send", leadId), title: "📎 Send here" }],
+      },
+      nudge: {
+        template: "lead_action",
+        params: [
+          oneLine(t.greetName),
+          oneLine(t.referenceId),
+          oneLine(
+            items.length === 1
+              ? `${items[0].docLabel} is needed`
+              : `${items.length} documents are needed`,
+          ),
+        ],
+      },
+    };
   });
 }
 

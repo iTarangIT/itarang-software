@@ -810,10 +810,6 @@ async function runCustomerTurn(
         return await onLeadPayment(session, event, houseDealer);
       case "DC_LEAD_PRODUCT":
         return await onLeadProduct(session, event, houseDealer);
-      case "DC_LEAD_CASH_RC":
-        return await onLeadCashRc(session, event, houseDealer);
-      case "DC_LEAD_CASH_DOCS":
-        return await onLeadCashDocs(session, event, houseDealer);
       case "DC_LEAD_DOCS_MODE":
         return await onLeadDocsMode(session, event, houseDealer);
       case "DC_LEAD_DOCS":
@@ -3146,10 +3142,6 @@ export async function runConsoleTurn(
         return await onLeadPayment(session, event, dealer);
       case "DC_LEAD_PRODUCT":
         return await onLeadProduct(session, event, dealer);
-      case "DC_LEAD_CASH_RC":
-        return await onLeadCashRc(session, event, dealer);
-      case "DC_LEAD_CASH_DOCS":
-        return await onLeadCashDocs(session, event, dealer);
       case "DC_LEAD_DOCS_MODE":
         return await onLeadDocsMode(session, event, dealer);
       case "DC_LEAD_DOCS":
@@ -3617,9 +3609,19 @@ async function onLeadPayment(
     ctx.lead = { ...(ctx.lead ?? {}), paymentMethod, leadId };
   });
 
-  // Every lead now captures *product details* next (DC_LEAD_PRODUCT). The
+  // CASH SKIPS EVERYTHING ELSE. A cash sale is a counter transaction: no
+  // lender, no KYC to verify, no admin approval. It goes straight to
+  // name → vehicle reg → pick a battery from live stock → SOLD (./cash-flow).
+  // In particular it skips the product-CATEGORY tag below, because the cash
+  // flow picks a real serial a moment later and tagging a category first would
+  // ask the same question twice.
+  if (paymentMethod === "cash") {
+    const { startCashSale } = await import("./cash-flow");
+    return await startCashSale(session);
+  }
+
+  // Finance leads capture *product details* next (DC_LEAD_PRODUCT). The
   // payment-specific steps run afterwards in afterProductStep():
-  //   • cash → Vehicle Reg. Number → Aadhaar front+back (extract + fill) → save
   //   • hot finance → KYC documents → consent
   //   • warm/cold finance → save (finish on the portal)
   await startProductStep(session, dealer);
@@ -3654,7 +3656,7 @@ async function startProductStep(
         "_No available stock to attach right now — you can set the product on the dealer portal._",
       );
     }
-    return await afterProductStep(session, dealer);
+    return await afterProductStep(session);
   }
 
   const top = options.slice(0, 10); // WhatsApp lists allow ≤10 rows.
@@ -3704,27 +3706,27 @@ async function onLeadProduct(
   await mergeContext(session, (ctx) => {
     if (ctx.lead) ctx.lead.productOptions = undefined;
   });
-  await afterProductStep(session, dealer);
+  await afterProductStep(session);
 }
 
-/** Route by payment method once the product is chosen. */
-async function afterProductStep(
-  session: SessionRow,
-  dealer: ActiveDealer,
-): Promise<void> {
+/**
+ * Route by payment method once the product is chosen.
+ *
+ * Finance-only now: the cash branch moved up into onLeadPayment, which is why
+ * this no longer takes a dealer.
+ */
+async function afterProductStep(session: SessionRow): Promise<void> {
   const fresh = await loadSession(session.id);
   const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
   const interest = (draft.interest ?? "cold") as InterestLevel;
   const paymentMethod = (draft.paymentMethod ?? "cash") as PaymentMethod;
 
-  // Cash → Vehicle Reg. Number, then Aadhaar front + back.
+  // Cash forks earlier now, in onLeadPayment — it never reaches the product
+  // step. This branch remains only for a lead whose draft says cash but which
+  // somehow got here (a resumed session from before the change).
   if (paymentMethod === "cash") {
-    await setSession(session.id, { current_state: "DC_LEAD_CASH_RC" });
-    await reply(
-      session,
-      "🚗 What's the *vehicle registration number*? (e.g. HR 35 A 7898)",
-    );
-    return;
+    const { startCashSale } = await import("./cash-flow");
+    return await startCashSale(session);
   }
 
   // Hot finance → KYC documents → consent.
@@ -3761,203 +3763,6 @@ async function afterProductStep(
       `You can complete the rest on the dealer portal. Send *menu* for more.`,
   );
 }
-
-/** DC_LEAD_CASH_RC — capture the typed vehicle registration number (cash flow). */
-async function onLeadCashRc(
-  session: SessionRow,
-  event: InboundEvent,
-  _dealer: ActiveDealer,
-): Promise<void> {
-  const rc = (event.text ?? "").trim().toUpperCase().replace(/\s+/g, "");
-  if (rc.length < 6 || !/^[A-Z0-9]+$/.test(rc)) {
-    await reply(
-      session,
-      "Please send a valid *vehicle registration number* (e.g. HR 35 A 7898).",
-    );
-    return;
-  }
-  const fresh = await loadSession(session.id);
-  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
-  if (!draft.leadId) {
-    await reply(session, "Let's start over.");
-    return await startNewLead(session);
-  }
-  await db
-    .update(leads)
-    .set({ vehicle_rc: rc, updated_at: new Date() })
-    .where(eq(leads.id, draft.leadId));
-
-  await setSession(session.id, { current_state: "DC_LEAD_CASH_DOCS" });
-  await reply(
-    session,
-    "📎 Now send the customer's *Aadhaar (front & back)* and *PAN card* " +
-      "(photos or PDF, one at a time). All three are required; I'll read the " +
-      "name, date of birth and address from them.",
-  );
-}
-
-// Cash leads require the customer's Aadhaar (front + back) and PAN card.
-const CASH_REQUIRED_DOCS = ["aadhaar_front", "aadhaar_back", "pan_card"] as const;
-
-/** DC_LEAD_CASH_DOCS — collect Aadhaar front + back + PAN card (all required),
- *  extract and fill the lead, then save once all are in. */
-async function onLeadCashDocs(
-  session: SessionRow,
-  event: InboundEvent,
-  _dealer: ActiveDealer,
-): Promise<void> {
-  if (event.type !== "document" && event.type !== "image") {
-    await reply(
-      session,
-      "Please send the customer's *Aadhaar (front & back)* and *PAN card* as photos or a PDF.",
-    );
-    return;
-  }
-  if (!event.mediaProviderId) {
-    await reply(session, "I couldn't read that file. Please resend it.");
-    return;
-  }
-
-  const lead = await getLeadCtx(session);
-  if (!lead.leadId) {
-    await reply(session, "Send *menu* to start again.");
-    return;
-  }
-
-  let media;
-  try {
-    media = await getAdapter().downloadMedia(event.mediaProviderId);
-  } catch {
-    await reply(session, "I couldn't download that file. Please resend it.");
-    return;
-  }
-  if (
-    /zip/i.test(media.mimeType) ||
-    /\.zip$/i.test(media.fileName ?? event.fileName ?? "")
-  ) {
-    await reply(
-      session,
-      "Please send the Aadhaar *front* and *back* as separate photos (not a ZIP).",
-    );
-    return;
-  }
-
-  const cls = await classifyDocument(media.buffer, media.mimeType);
-  const docType = cls.ok ? normalizeCustomerDocType(cls.documentType) : null;
-  if (!docType || !CASH_REQUIRED_DOCS.includes(docType as (typeof CASH_REQUIRED_DOCS)[number])) {
-    await reply(
-      session,
-      "I couldn't tell which document that is. Please send the customer's " +
-        "*Aadhaar front*, *Aadhaar back* or *PAN card*.",
-    );
-    return;
-  }
-
-  // No duplicate-identity check here: CASH leads may be created repeatedly for
-  // the same customer / documents (the duplicate guard applies to finance only,
-  // in the DC_LEAD_DOCS flow).
-  await persistCustomerDoc(
-    lead.leadId,
-    docType,
-    media.buffer,
-    media.mimeType,
-    media.fileName ?? event.fileName,
-    cls.fields,
-  );
-  await mergeContext(session, (ctx) => {
-    if (!ctx.lead) ctx.lead = {};
-    ctx.lead.docs = { ...(ctx.lead.docs ?? {}), [docType]: true };
-  });
-  await reply(session, `Got *${customerDocLabel(docType)}* ✅`);
-
-  // All required docs in → save the lead; else say which are still needed.
-  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
-  if (CASH_REQUIRED_DOCS.every((d) => have.includes(d))) {
-    return await finalizeCashLead(session);
-  }
-  const still = CASH_REQUIRED_DOCS.filter((d) => !have.includes(d));
-  await reply(
-    session,
-    "Still needed:\n" + still.map((d) => `• ${customerDocLabel(d)}`).join("\n"),
-  );
-}
-
-/** Confirm + save a cash lead once Aadhaar front + back are in. */
-async function finalizeCashLead(session: SessionRow): Promise<void> {
-  const fresh = await loadSession(session.id);
-  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
-  await setSession(session.id, { current_state: "DC_MENU" });
-
-  // Name / vehicle / product were written onto the lead (Aadhaar extraction +
-  // the earlier steps) — read them back for the confirmation.
-  let line = { name: "—", rc: "—", model: "—" };
-  if (draft.leadId) {
-    const [row] = await db
-      .select({
-        full_name: leads.full_name,
-        owner_name: leads.owner_name,
-        rc: leads.vehicle_rc,
-        model: leads.asset_model,
-      })
-      .from(leads)
-      .where(eq(leads.id, draft.leadId))
-      .limit(1);
-    line = {
-      name: str(row?.full_name) || str(row?.owner_name) || "—",
-      rc: str(row?.rc) || "—",
-      model: str(row?.model) || "—",
-    };
-  }
-
-  if (((fresh.context as Ctx)?.flow) === "customer") {
-    return await finishCustomerFlow(
-      session,
-      `✅ *Thanks — your details have been saved!*\n\n` +
-        `Name: ${line.name}\n` +
-        `Mobile: ${draft.mobile ?? "—"}\n` +
-        `Vehicle: ${line.rc}\n` +
-        `Product: ${line.model}\n` +
-        `Payment: Cash\n\n` +
-        `Our team will contact you shortly.`,
-    );
-  }
-
-  await reply(
-    session,
-    `✅ *Lead saved!*\n\n` +
-      `Name: ${line.name}\n` +
-      `Mobile: ${draft.mobile ?? "—"}\n` +
-      `Vehicle: ${line.rc}\n` +
-      `Product: ${line.model}\n` +
-      `Payment: Cash\n\n` +
-      `You can complete the rest on the dealer portal. Send *menu* for more.`,
-  );
-}
-
-// ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
-
-const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
-  { id: "consent_call", title: "📞 Call" },
-  { id: "consent_manual", title: "✍ Manual" },
-];
-
-const CONSENT_SEND_BUTTON: ReplyButton = {
-  id: "consent_send",
-  title: "📤 Submit to iTarang",
-};
-
-// At the digital-consent wait step the dealer can pull the latest signing status
-// (so they aren't stranded if the async Digio webhook is delayed). Manual path only.
-const CONSENT_CHECK_BUTTON: ReplyButton = {
-  id: "consent_check",
-  title: "✅ Check if signed",
-};
-
-// At the OTP-wait step the dealer can send the customer a fresh OTP.
-const CONSENT_RESEND_OTP_BUTTON: ReplyButton = {
-  id: "consent_resend_otp",
-  title: "🔁 Resend OTP",
-};
 
 /** Read the active lead context off the (freshly loaded) session. */
 async function getLeadCtx(
@@ -4019,6 +3824,31 @@ async function logDocumentSend(
   });
   await setSession(session.id, { last_outbound_at: new Date() });
 }
+
+// ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
+
+const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
+  { id: "consent_call", title: "📞 Call" },
+  { id: "consent_manual", title: "✍ Manual" },
+];
+
+const CONSENT_SEND_BUTTON: ReplyButton = {
+  id: "consent_send",
+  title: "📤 Submit to iTarang",
+};
+
+// At the digital-consent wait step the dealer can pull the latest signing status
+// (so they aren't stranded if the async Digio webhook is delayed). Manual path only.
+const CONSENT_CHECK_BUTTON: ReplyButton = {
+  id: "consent_check",
+  title: "✅ Check if signed",
+};
+
+// At the OTP-wait step the dealer can send the customer a fresh OTP.
+const CONSENT_RESEND_OTP_BUTTON: ReplyButton = {
+  id: "consent_resend_otp",
+  title: "🔁 Resend OTP",
+};
 
 /** Render the unsigned consent PDF preview and ask the dealer for a delivery
  *  channel. Called right after a Hot + finance lead is saved. */
