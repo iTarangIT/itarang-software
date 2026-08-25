@@ -9,6 +9,10 @@
  * that lives ten minutes is worthless behind a "we'll deliver this when you next
  * message us" queue — if the window is shut the caller needs to know now, so it
  * can fall through to a voice call instead.
+ *
+ * ⚠ NO CALLERS RIGHT NOW — its only caller was `dispatch-otp.ts`, which itself
+ * lost its caller when the chat stopped sending delivery codes. Kept for the
+ * reason given in that file's header.
  */
 
 import { getAdapter } from "./index";
