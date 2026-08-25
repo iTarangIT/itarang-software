@@ -87,6 +87,7 @@ import {
   setLeadProduct,
   getDealerDraft,
   listDealerDrafts,
+  classifyCustomerLead,
   loadApplication,
   normalizeMobile,
   requiresConsent,
@@ -120,6 +121,11 @@ import { leadStateHandler, rerendersOnGreeting } from "./lead-states";
 // a static import — a dynamic one can fail silently and leave the registry empty.
 import { loadLeadPhases } from "./lead-phases";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
+import {
+  DC_ACTIVE_BATT,
+  onActiveBatteryPick,
+  showActiveBatteries,
+} from "./active-batteries";
 // Defined in ./labels so admin API routes and client components can read it
 // without importing this module (and its whole dependency tree) at eval time.
 // Re-exported here because three call sites already import it from here.
@@ -151,7 +157,10 @@ const GREETING_TRIGGERS =
  * customer who actually wants the menu is trapped in a step that answers every
  * message by re-sending itself.
  */
-const EXPLICIT_ESCAPE = /^(menu|home|back|exit|cancel|restart|start over)$/i;
+// Hindi / Hinglish synonyms sit beside the English ones so a bot switched to
+// Hindi at /admin/settings/whatsapp/language still understands the escape words.
+const EXPLICIT_ESCAPE =
+  /^(menu|home|back|exit|cancel|restart|start over|मेनू|मेन्यू|वापस|पीछे|रद्द|wapas|peeche|radd|band karo|बंद करो)$/i;
 
 /** The lead a journey session is pointing at, if any. */
 function leadIdOf(session: SessionRow): string | undefined {
@@ -161,7 +170,7 @@ function leadIdOf(session: SessionRow): string | undefined {
 
 // Global "get me out of here" words. A dealer/customer who types any of these
 // ends the current flow and is returned to the start (see runTurn → handleStop).
-const STOP_TRIGGERS = /^(stop|end|exit)$/i;
+const STOP_TRIGGERS = /^(stop|end|exit|रुको|रोको|बंद|band|ruko|roko|khatam|खत्म)$/i;
 
 // States that a stop word must NOT wipe: submitted / mid-correction / rejected
 // applications are admin-owned, so an "exit" there keeps the state's own reply.
@@ -180,7 +189,7 @@ const UPLOAD_MODE_BUTTONS: ReplyButton[] = [
 // the item for manual admin follow-up and continue instead of looping. Only
 // checked in COLLECTING_DOC, so a "No" to the financing question is unaffected.
 const SKIP_WORDS =
-  /(^|\b)(no|nope|nah|nahi+|naa+|n\/?a|skip|next|proceed|continue|move\s*(on|ahead|forward|further)|don'?t\s*have|do\s*not\s*have|have\s*not|haven'?t|not?\s*avai\w*|un\s*avai\w*|no\s*(doc|document|more)|only\s*this|this\s*(is\s*)?(all|only)|have\s*this\s*only|that'?s\s*all|nothing\s*else|can'?t\s*(get|provide|share|do)|cannot\s*(get|provide|share|do)|nahi\s*hai|aage\s*(badho|chalo))(\b|$)/i;
+  /(^|\b)(no|nope|nah|nahi+|naa+|nahin|नहीं|नही|n\/?a|skip|chhodo|chodo|छोड़ो|छोड़ दो|aage|आगे|next|proceed|continue|move\s*(on|ahead|forward|further)|don'?t\s*have|do\s*not\s*have|have\s*not|haven'?t|not?\s*avai\w*|un\s*avai\w*|no\s*(doc|document|more)|only\s*this|this\s*(is\s*)?(all|only)|have\s*this\s*only|that'?s\s*all|nothing\s*else|can'?t\s*(get|provide|share|do)|cannot\s*(get|provide|share|do)|nahi\s*hai|aage\s*(badho|chalo))(\b|$)/i;
 
 // Company-type choices shown as tappable reply buttons (WhatsApp allows ≤3).
 // The button id IS the canonical CompanyType, so a tap maps straight through
@@ -260,8 +269,8 @@ function financeAnswer(event: InboundEvent): boolean | null {
     if (t === "finance_yes") return true;
     if (t === "finance_no") return false;
   }
-  if (/^(yes|y|haan|ha|sure|yep)$/i.test(t)) return true;
-  if (/^(no|n|nahi|nope)$/i.test(t)) return false;
+  if (/^(yes|y|haan|ha|sure|yep|ji|jee|हाँ|हां|जी|ok|okay|theek hai|ठीक है)$/i.test(t)) return true;
+  if (/^(no|n|nahi|nahin|nope|नहीं|नही|na)$/i.test(t)) return false;
   return null;
 }
 
@@ -700,7 +709,8 @@ async function onChooseFlow(
 // Words that leave the Q&A and return to the entry menu. "menu"/"hi" etc. also
 // exit earlier via the greeting-word check (an info session has no onboarding
 // progress); this covers back/exit/stop, which aren't greeting triggers.
-const INFO_EXIT_WORDS = /^(menu|back|exit|stop|home|main\s*menu)$/i;
+const INFO_EXIT_WORDS =
+  /^(menu|back|exit|stop|home|main\s*menu|मेनू|मेन्यू|वापस|पीछे|रुको|बंद|wapas|peeche|ruko|band)$/i;
 // LLM-spend guardrails per info session.
 const INFO_MAX_TURNS = 15;
 const INFO_HISTORY_PAIRS = 4;
@@ -3049,8 +3059,8 @@ function parseFieldValue(
     case "email":
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v.toLowerCase() : null;
     case "yesno":
-      if (/^(yes|y|haan|ha)$/i.test(v)) return true;
-      if (/^(no|n|nahi)$/i.test(v)) return false;
+      if (/^(yes|y|haan|ha|ji|jee|हाँ|हां|जी)$/i.test(v)) return true;
+      if (/^(no|n|nahi|nahin|नहीं|नही|na)$/i.test(v)) return false;
       return null;
     default:
       return null;
@@ -3104,6 +3114,7 @@ const DEALER_MENU_ROWS: ListRow[] = [
   { id: "menu_new_lead", title: "🆕 New Lead", description: "Create a new customer lead" },
   { id: "menu_drafts", title: "📝 Save Drafts", description: "Resume a saved lead" },
   { id: "menu_inventory", title: "📦 Inventory", description: "View available stock" },
+  { id: "menu_active", title: "🔋 Active batteries", description: "Dispatched & sold — owner, warranty" },
   { id: "menu_help", title: "❓ Help", description: "Support & how it works" },
 ];
 
@@ -3183,6 +3194,8 @@ export async function runConsoleTurn(
         return await onMenuChoice(session, event, dealer);
       case "DC_DRAFTS":
         return await onDraftSelection(session, event, dealer);
+      case DC_ACTIVE_BATT:
+        return await onActiveBatteryPick(session, event, dealer);
       case "DC_LEAD_MOBILE":
         return await onLeadMobile(session, event);
       case "DC_LEAD_INTEREST":
@@ -3230,16 +3243,75 @@ async function showDealerMenu(
   session: SessionRow,
   dealer: ActiveDealer,
 ): Promise<void> {
+  const parked = await parkCurrentLead(session, dealer);
   await mergeContext(session, (ctx) => {
     ctx.lead = undefined;
   });
   await setSession(session.id, { current_state: "DC_MENU" });
   await replyList(
     session,
-    `👋 Hi *${dealer.dealerName}*!\n\nWhat would you like to do?`,
+    (parked ? `${parkedNotice(parked)}\n\n` : "") +
+      `👋 Hi *${dealer.dealerName}*!\n\nWhat would you like to do?`,
     "Open Menu",
     DEALER_MENU_ROWS,
   );
+}
+
+/** Console states that are NOT a customer onboarding in progress. */
+const NOT_A_LEAD_STATE = new Set(["DC_MENU", "DC_DRAFTS", DC_ACTIVE_BATT]);
+
+/**
+ * Save whatever customer onboarding this chat is in the middle of, so that
+ * starting another one (or going to the menu) never loses it.
+ *
+ * Two cases:
+ *   - the lead row already exists (anything from the payment step onwards):
+ *     it is already what Save Drafts lists — nothing to write, just say so.
+ *   - only a mobile (and maybe an interest) has been typed: no row exists yet,
+ *     so one is created now as an unclassified draft. `resumeDraft` picks it up
+ *     at the first unanswered question and `classifyCustomerLead` fills the
+ *     rest in when the dealer gets there.
+ *
+ * Returns the parked draft's display label, or null when nothing was in
+ * progress. Never throws — losing the menu to a failed save would be worse
+ * than losing the save.
+ */
+async function parkCurrentLead(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<string | null> {
+  try {
+    const fresh = await loadSession(session.id);
+    if (NOT_A_LEAD_STATE.has(fresh.current_state)) return null;
+    const lead = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+
+    if (lead.leadId) {
+      const draft = await getDealerDraft(dealer.dealerCode, lead.leadId);
+      // Not a draft any more (sold / submitted) → nothing to park.
+      return draft ? draftLabel(draft) : null;
+    }
+    if (!lead.mobile) return null;
+
+    const leadId = await createCustomerLead({
+      dealer,
+      mobile: lead.mobile,
+      interest: lead.interest,
+      notify: false,
+    });
+    console.log(`[WhatsApp/console] parked unclassified lead ${leadId} for ${lead.mobile}`);
+    return lead.mobile;
+  } catch (err) {
+    console.error("[WhatsApp/console] park lead failed:", err);
+    return null;
+  }
+}
+
+function draftLabel(d: DealerDraft): string {
+  return d.hasName ? `${d.customerName} (${d.mobile})` : d.mobile;
+}
+
+function parkedNotice(label: string): string {
+  return `📝 *${label}* is saved in *Save Drafts* — you can pick it up where you left off any time.`;
 }
 
 async function onMenuChoice(
@@ -3250,11 +3322,13 @@ async function onMenuChoice(
   const id = (event.text ?? "").trim();
   switch (id) {
     case "menu_new_lead":
-      return await startNewLead(session);
+      return await startNewLead(session, dealer);
     case "menu_drafts":
       return await showDrafts(session, dealer);
     case "menu_inventory":
       return await showInventory(session, dealer);
+    case "menu_active":
+      return await showActiveBatteries(session, dealer);
     case "menu_help":
       await reply(session, consoleHelpText());
       return;
@@ -3270,8 +3344,9 @@ function consoleHelpText(): string {
     "",
     "• Send *menu* any time to see your options.",
     "• *New Lead* — create a customer lead step by step.",
-    "• *Save Drafts* — resume a lead you started earlier.",
+    "• *Save Drafts* — resume a lead you started earlier, right where you left it. Starting a new lead or sending *menu* mid-way saves the current one here automatically.",
     "• *Inventory* — see your available stock.",
+    "• *Active batteries* — batteries you've dispatched, with owner and warranty.",
     "• Need a person? Email support@itarang.com.",
   ].join("\n");
 }
@@ -3415,21 +3490,49 @@ async function resumeDraft(
 
   const { interest, paymentMethod } = draft;
 
-  // Non-finance (or unclassified) leads have no further WhatsApp steps.
-  if (!interest || !paymentMethod || !requiresConsent(interest, paymentMethod)) {
+  await reply(session, `▶️ Resuming *${draftLabel(draft)}*.`);
+
+  // 0) Parked before it was classified → the first unanswered question.
+  if (!interest) {
+    await setSession(session.id, { current_state: "DC_LEAD_INTEREST" });
+    await reply(
+      session,
+      "*Lead Classification*\n_Lead interest level_\n\nTap the customer's interest level 👇",
+      INTEREST_BUTTONS,
+    );
+    return;
+  }
+  if (!paymentMethod) {
+    await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
+    await reply(session, paymentPrompt(dealer), paymentButtons(dealer));
+    return;
+  }
+
+  // Cash: name → vehicle reg → battery picker, whichever is next.
+  if (paymentMethod === "cash") {
+    const cash = await import("./cash-flow");
+    if (!draft.hasName) return await cash.startCashSale(session);
+    if (!draft.vehicleRc) return await cash.askVehicleRc(session);
+    const { askBattery } = await import("./dispatch-flow");
+    return await askBattery(await loadSession(session.id), draft.leadId, dealer, 0);
+  }
+
+  // Warm/cold finance has no further WhatsApp steps.
+  if (!requiresConsent(interest, paymentMethod)) {
     await setSession(session.id, { current_state: "DC_MENU" });
     await reply(
       session,
-      `📄 *${draft.customerName}* — ${humanPayment(paymentMethod ?? "cash")} lead is saved.\n\n` +
+      `📄 *${draft.customerName}* — ${humanPayment(paymentMethod)} lead is saved.\n\n` +
         "There's nothing more to capture here; finish the remaining steps on the dealer portal. Send *menu* to go back.",
     );
     return;
   }
 
-  await reply(
-    session,
-    `▶️ Resuming *${draft.customerName}* (${draft.mobile}).`,
-  );
+  // Hot finance: product → documents → consent → finance questions → submit.
+  if (!draft.productTagged) {
+    await startProductStep(await loadSession(session.id), dealer);
+    return;
+  }
 
   // 1) Documents incomplete → back to the documents step.
   if (!REQUIRED_CUSTOMER_DOCS.every((d) => docs[d])) {
@@ -3496,14 +3599,19 @@ async function showInventory(
   await reply(session, lines.join("\n"));
 }
 
-async function startNewLead(session: SessionRow): Promise<void> {
+async function startNewLead(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const parked = await parkCurrentLead(session, dealer);
   await mergeContext(session, (ctx) => {
     ctx.lead = {};
   });
   await setSession(session.id, { current_state: "DC_LEAD_MOBILE" });
   await reply(
     session,
-    "🆕 *New Lead*\n\nPlease enter the *customer's mobile number* (10 digits).",
+    (parked ? `${parkedNotice(parked)}\n\n` : "") +
+      "🆕 *New Lead*\n\nPlease enter the *customer's mobile number* (10 digits).",
   );
 }
 
@@ -3589,6 +3697,9 @@ async function onLeadInterest(
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), interest };
   });
+  // A resumed parked draft already has a row — keep it in step with the chat.
+  const parkedId = ((session.context as Ctx)?.lead ?? {}).leadId;
+  if (parkedId) await classifyCustomerLead(parkedId, dealer, { interest });
   await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
   await reply(session, paymentPrompt(dealer), paymentButtons(dealer));
 }
@@ -3638,7 +3749,7 @@ async function onLeadPayment(
   if (!draft.mobile || !draft.interest) {
     // Context lost (e.g. server restart mid-flow) — restart cleanly.
     await reply(session, "Let's start over.");
-    return await startNewLead(session);
+    return await startNewLead(session, dealer);
   }
 
   // NOTE: no mobile-number duplicate check. The SAME mobile may be reused (cash
@@ -3648,12 +3759,23 @@ async function onLeadPayment(
   // Create the lead now so consent + documents can key off a real lead id. The
   // customer name is stored as a placeholder and filled from the PAN / Aadhaar
   // once the documents are read (fillCustomerLeadFromDoc).
-  const leadId = await createCustomerLead({
-    dealer,
-    mobile: draft.mobile,
-    interest: draft.interest,
-    paymentMethod,
-  });
+  //
+  // A draft parked before this step already HAS a row (see parkCurrentLead);
+  // classify that one instead of inserting a second lead for the same customer.
+  let leadId = draft.leadId;
+  if (leadId) {
+    await classifyCustomerLead(leadId, dealer, {
+      interest: draft.interest,
+      paymentMethod,
+    });
+  } else {
+    leadId = await createCustomerLead({
+      dealer,
+      mobile: draft.mobile,
+      interest: draft.interest,
+      paymentMethod,
+    });
+  }
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), paymentMethod, leadId };
   });
@@ -4270,8 +4392,8 @@ function parseYesNo(event: InboundEvent, prefix: string): boolean | null {
     if (t === `${prefix}_yes`) return true;
     if (t === `${prefix}_no`) return false;
   }
-  if (/^(yes|y|haan|ha|yep|sure|hai)$/i.test(t)) return true;
-  if (/^(no|n|nahi|nope|nahin)$/i.test(t)) return false;
+  if (/^(yes|y|haan|ha|yep|sure|hai|ji|jee|हाँ|हां|जी|ok|okay|theek hai|ठीक है)$/i.test(t)) return true;
+  if (/^(no|n|nahi|nope|nahin|नहीं|नही|na)$/i.test(t)) return false;
   return null;
 }
 
@@ -4595,7 +4717,7 @@ async function onLeadDocs(
 ): Promise<void> {
   if (event.type === "text") {
     const t = (event.text ?? "").trim();
-    if (/^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya)$/i.test(t)) {
+    if (/^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya|hogaya|बस|हो गया|पूरा|poora|pura)$/i.test(t)) {
       return await proceedToConsent(session, dealer);
     }
     await reply(
