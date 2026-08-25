@@ -16,6 +16,15 @@
 //
 // WHO THE CODE GOES TO: `leads.phone || leads.mobile`, always. Never a number
 // from the request. There is nothing here for a caller to redirect.
+//
+// ⚠ NO CALLERS RIGHT NOW. `src/lib/whatsapp/dispatch-flow.ts` was the only one,
+// and the chat no longer sends a delivery code at all — the customer picks their
+// battery and the dealer runs the OTP from the Step-5 screen, which still uses
+// its own inline ladder in POST /api/lead/[id]/step-5/send-otp. This module is
+// kept rather than deleted because it is the session-free version that route
+// should eventually collapse into, and because the product decision that removed
+// its caller is reversible. If you are here wondering why nothing imports it:
+// that is why, and it is deliberate, not an oversight.
 
 import crypto from "crypto";
 import { and, desc, eq } from "drizzle-orm";

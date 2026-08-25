@@ -22,6 +22,7 @@
 
 import "./doc-request-flow";
 import "./coborrower-flow";     // Phase 1
+import "./cash-flow";           // cash sale — counter path
 import "./step4-flow";          // Phase 2
 import "./offer-flow";          // Phase 3
 import "./dispatch-flow";       // Phase 4
