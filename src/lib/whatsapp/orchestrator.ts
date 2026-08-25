@@ -115,7 +115,7 @@ import {
 // E-264 — journey phases register their states here instead of adding cases to
 // the two console switches. Type-only + a lookup; no phase module is imported
 // at eval time, so the one-way dependency rule this file relies on is intact.
-import { leadStateHandler } from "./lead-states";
+import { leadStateHandler, rerendersOnGreeting } from "./lead-states";
 // Static side-effect import: registers every shipped journey phase. Must stay
 // a static import — a dynamic one can fail silently and leave the registry empty.
 import { loadLeadPhases } from "./lead-phases";
@@ -140,6 +140,24 @@ const WANTS_TYPE_CHANGE = /\b(company\s*type|wrong|galat|change|update)\b/i;
 // dealer who has already submitted keeps the "under review" reply instead.
 const GREETING_TRIGGERS =
   /^(hi+|hey+|hello+|helo|hii+|onboard(ing)?|start|begin|restart|namaste|menu)$/i;
+
+/**
+ * The subset of the greeting/menu triggers that unambiguously means "leave this
+ * step", as opposed to a bare hello.
+ *
+ * A greeting arriving inside a tap-driven journey step re-renders that step
+ * (see runConsoleTurn / runCustomerTurn) instead of clearing ctx.lead. These
+ * words are the deliberate way out, so they must keep escaping — otherwise a
+ * customer who actually wants the menu is trapped in a step that answers every
+ * message by re-sending itself.
+ */
+const EXPLICIT_ESCAPE = /^(menu|home|back|exit|cancel|restart|start over)$/i;
+
+/** The lead a journey session is pointing at, if any. */
+function leadIdOf(session: SessionRow): string | undefined {
+  const ctx = (session.context ?? {}) as { lead?: { leadId?: string } };
+  return ctx.lead?.leadId;
+}
 
 // Global "get me out of here" words. A dealer/customer who types any of these
 // ends the current flow and is returned to the start (see runTurn → handleStop).
@@ -791,8 +809,21 @@ async function runCustomerTurn(
 
   try {
     const text = (event.text ?? "").trim();
-    // A typed greeting abandons the in-progress lead and returns to the chooser.
+    // A typed greeting abandons the in-progress lead and returns to the chooser
+    // — except in a tap-driven journey step, where it re-renders instead. Same
+    // reasoning as the dealer console above: for a self-serve customer the lead
+    // pointer is the ONLY route back into their own application, so treating
+    // "hi" as "throw it away" loses an approved loan to a reflex.
     if (event.type === "text" && GREETING_TRIGGERS.test(text)) {
+      const journey = leadStateHandler(session.current_state);
+      if (
+        journey &&
+        rerendersOnGreeting(session.current_state) &&
+        !EXPLICIT_ESCAPE.test(text) &&
+        leadIdOf(session)
+      ) {
+        return await journey(session, event, houseDealer);
+      }
       await mergeContext(session, (ctx) => {
         ctx.flow = undefined;
         ctx.lead = undefined;
@@ -3124,8 +3155,26 @@ export async function runConsoleTurn(
 ): Promise<void> {
   try {
     const text = (event.text ?? "").trim();
-    // A typed greeting / "menu" is always an escape back to the main menu.
+    // A typed greeting / "menu" is an escape back to the main menu — EXCEPT
+    // mid-journey, where it used to be quietly destructive. showDealerMenu
+    // clears ctx.lead, and the menu offers no way back into a submitted lead
+    // (Save Drafts lists kyc_status='draft' only), so one "hi" while choosing a
+    // lender or a battery stranded the application for good. A bare greeting in
+    // a tap-driven step now re-renders that step instead.
+    //
+    // "menu"/"home"/"back" still escape. They are unambiguous requests to
+    // leave, and a customer who genuinely wants out must not be trapped in a
+    // step that keeps re-sending itself.
     if (event.type === "text" && CONSOLE_MENU_TRIGGERS.test(text)) {
+      const journey = leadStateHandler(session.current_state);
+      if (
+        journey &&
+        rerendersOnGreeting(session.current_state) &&
+        !EXPLICIT_ESCAPE.test(text) &&
+        leadIdOf(session)
+      ) {
+        return await journey(session, event, dealer);
+      }
       return await showDealerMenu(session, dealer);
     }
 

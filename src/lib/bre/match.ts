@@ -33,6 +33,13 @@ export type LoanProductRow = {
   // E-115 — null means legacy row (unknown), false means bureau check waived,
   // true means min/max gate is enforced when score is known.
   cibil_required: boolean | null;
+  // Carried for DISPLAY only — the matcher does not read these. A borrower
+  // comparing two schemes pays the file charge out of pocket exactly like the
+  // processing fee, so it has to reach the card; leaving it off made two
+  // schemes look identically priced when they were not.
+  file_charge_fixed?: string | null;
+  file_charge_pct?: string | null;
+  subvention_available?: boolean | null;
 };
 
 function resolveFeeByOwnership(

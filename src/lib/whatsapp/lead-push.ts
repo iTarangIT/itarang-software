@@ -73,6 +73,10 @@ export const LEAD_WAIT_STATES = [
   "DC_SN_WAIT",
   "DC_DP_PRODUCT",
   "DC_DP_CHARGER",
+  "DC_DP_MARGIN",
+  "DC_DP_MARGIN_VAL",
+  "DC_DP_SEND",
+  "DC_DP_OTP",
   "DC_DP_WAIT",
 ] as const;
 
@@ -403,17 +407,137 @@ export async function pushToLead(
   try {
     const target = await resolveLeadTarget(leadId);
     if (!target) return "none";
-    const built = typeof msg === "function" ? msg(target) : msg;
-
-    if (target.session) {
-      await sendOrPark(target.session, built.prompt, built.nudge);
-      return "session";
-    }
-    return await pushCold(target, built.nudge);
+    return await deliverTo(target, msg);
   } catch (err) {
     console.error(`[WhatsApp/lead-push] push for ${leadId} failed:`, err);
     return "none";
   }
+}
+
+/** Word the message for this target and send it. Shared by all three arms. */
+async function deliverTo(
+  target: LeadPushTarget,
+  msg: LeadMessageSpec,
+): Promise<PushResult> {
+  const built = typeof msg === "function" ? msg(target) : msg;
+  if (target.session) {
+    await sendOrPark(target.session, built.prompt, built.nudge);
+    return "session";
+  }
+  return await pushCold(target, built.nudge);
+}
+
+/**
+ * The CUSTOMER's own chat, ignoring the dealer-first rule.
+ *
+ * `resolveLeadTarget` deliberately prefers the dealer, because a dealer-run lead
+ * is the dealer's file and most journey prompts are asking THEM to do something.
+ * This is the other case: a message that is addressed to the customer by
+ * definition — the order the dealer just quoted them, the dispatch that has just
+ * happened. Sending those to the dealer's chat instead would leave the customer
+ * with no record of what they agreed to.
+ *
+ * There is no dealer fallback on purpose. If the customer has no chat and no
+ * usable number this returns "none", and the caller decides — silently routing a
+ * customer-addressed message to the dealer would tell the dealer something and
+ * the customer nothing, which is exactly the failure this exists to avoid.
+ */
+export async function resolveCustomerTarget(
+  leadId: string,
+): Promise<LeadPushTarget | null> {
+  const [lead] = await db
+    .select({
+      reference_id: leads.reference_id,
+      full_name: leads.full_name,
+      owner_name: leads.owner_name,
+      mobile: leads.mobile,
+      phone: leads.phone,
+      owner_contact: leads.owner_contact,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return null;
+
+  const customerName = lead.full_name || lead.owner_name || "there";
+  const session = await findSessionByLeadPhone(leadId);
+  return {
+    leadId,
+    audience: "customer",
+    greetName: customerName,
+    customerName,
+    referenceId: lead.reference_id || leadId,
+    session,
+    waPhone:
+      session?.wa_phone ||
+      toWaPhone(lead.phone || lead.mobile || lead.owner_contact),
+  };
+}
+
+/** Deliver to the customer's own chat. Same contract as `pushToLead`. */
+export async function pushToLeadCustomer(
+  leadId: string,
+  msg: LeadMessageSpec,
+): Promise<PushResult> {
+  try {
+    const target = await resolveCustomerTarget(leadId);
+    if (!target) return "none";
+    return await deliverTo(target, msg);
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] customer push for ${leadId} failed:`, err);
+    return "none";
+  }
+}
+
+export interface LeadFanOut {
+  dealer: PushResult;
+  customer: PushResult;
+}
+
+/**
+ * Tell BOTH sides — for the handful of events that are news to each of them
+ * (the dispatch that just completed, most obviously).
+ *
+ * The two arms are deduplicated, because they collapse onto one chat more often
+ * than you would expect: a self-onboarded customer has no dealer chat at all,
+ * and in a demo the dealer's number and the customer's number are frequently the
+ * same one. Sending twice into the same conversation reads as a bug.
+ *
+ * `msg` is called once per arm, so the dealer sees "your customer's battery" and
+ * the customer sees "your battery" from the one call site.
+ */
+export async function pushToLeadBoth(
+  leadId: string,
+  msg: LeadMessageSpec,
+): Promise<LeadFanOut> {
+  try {
+    const primary = await resolveLeadTarget(leadId);
+    if (!primary) return { dealer: "none", customer: "none" };
+
+    const first = await deliverTo(primary, msg);
+    // Already the customer's chat — there is no dealer chat to tell as well.
+    if (primary.audience === "customer") {
+      return { dealer: "none", customer: first };
+    }
+
+    const customer = await resolveCustomerTarget(leadId);
+    if (!customer || sameChannel(primary, customer)) {
+      return { dealer: first, customer: "none" };
+    }
+    return { dealer: first, customer: await deliverTo(customer, msg) };
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] fan-out for ${leadId} failed:`, err);
+    return { dealer: "none", customer: "none" };
+  }
+}
+
+/** Same conversation, or the same Meta address with no conversation yet. */
+function sameChannel(a: LeadPushTarget, b: LeadPushTarget): boolean {
+  if (a.session && b.session) return a.session.id === b.session.id;
+  if (!a.session && !b.session) return Boolean(a.waPhone) && a.waPhone === b.waPhone;
+  // One has a chat and the other does not; if they are the same number the cold
+  // template would land in that same chat.
+  return Boolean(a.waPhone) && a.waPhone === b.waPhone;
 }
 
 /**

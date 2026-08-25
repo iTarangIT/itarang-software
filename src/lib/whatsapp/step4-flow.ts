@@ -628,7 +628,10 @@ async function lostTrack(session: SessionRow): Promise<void> {
 }
 
 registerLeadAction("s4_start", onStep4Start);
-registerLeadState(DC_S4_PICK, onStep4Pick);
-registerLeadState(DC_S4_MORE, onStep4More);
-registerLeadState(DC_S4_ACK, onStep4Ack);
-registerLeadState(DC_S4_WAIT, onStep4Wait);
+// All four take a tap, never free text, and already re-render their prompt on
+// anything they don't recognise — so a greeting here means "show me that
+// message again", not "throw my application away".
+registerLeadState(DC_S4_PICK, onStep4Pick, { rerenderOnGreeting: true });
+registerLeadState(DC_S4_MORE, onStep4More, { rerenderOnGreeting: true });
+registerLeadState(DC_S4_ACK, onStep4Ack, { rerenderOnGreeting: true });
+registerLeadState(DC_S4_WAIT, onStep4Wait, { rerenderOnGreeting: true });

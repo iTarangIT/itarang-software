@@ -35,6 +35,28 @@ export interface SectionGProduct {
   minRoiPct: string;
   maxRoiPct: string;
   downPaymentPct: string;
+
+  // --- The rest of the offer ------------------------------------------------
+  // These were computed and then thrown away. `matchProducts` already resolves
+  // the fee and insurance columns against the lead's resident_status and hands
+  // them back on `hit.bands`; this projection copied seven fields and dropped
+  // the three that cost the customer money. A card showing only ROI, tenure and
+  // down payment presents two schemes as identical when one carries a ₹2,500
+  // processing fee and the other does not.
+  //
+  // Already resident-status-resolved by the BRE — do NOT re-derive from the
+  // owned/rented columns here, or the two surfaces will disagree.
+  processingFeeRupees: number | null;
+  healthLifeInsuranceRupees: number | null;
+  disbursementTatHours: number | null;
+  /** Fixed rupee file charge, percentage file charge, or neither. */
+  fileChargeFixed: string | null;
+  fileChargePct: string | null;
+  subventionAvailable: boolean | null;
+  /** null = legacy row (unknown); false = bureau check waived. */
+  cibilRequired: boolean | null;
+  minCreditScore: number | null;
+  maxCreditScore: number | null;
 }
 
 export interface SectionGNbfc {
@@ -133,6 +155,18 @@ export async function loadSectionGOptions(
       minRoiPct: hit.bands.min_roi_pct,
       maxRoiPct: hit.bands.max_roi_pct,
       downPaymentPct: hit.bands.down_payment_pct,
+      // From the bands, NOT from `meta` — the BRE has already picked the
+      // owned-vs-rented column using the lead's resident_status.
+      processingFeeRupees: hit.bands.processing_fee_rupees,
+      healthLifeInsuranceRupees: hit.bands.health_life_insurance_rupees,
+      disbursementTatHours: hit.bands.disbursement_tat_hours,
+      // Not part of any matching rule, so these come off the loaded row.
+      fileChargeFixed: meta.file_charge_fixed ?? null,
+      fileChargePct: meta.file_charge_pct ?? null,
+      subventionAvailable: meta.subvention_available ?? null,
+      cibilRequired: meta.cibil_required,
+      minCreditScore: meta.min_credit_score,
+      maxCreditScore: meta.max_credit_score,
     });
     byNbfc.set(hit.nbfc_id, group);
   }

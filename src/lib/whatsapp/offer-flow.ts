@@ -605,6 +605,9 @@ function leadIdOf(session: SessionRow): string | undefined {
 registerLeadAction("of_view", onOfferView);
 registerLeadAction("of_pick", onOfferPick);
 registerLeadAction("sn_ack", onSanctionAck);
-registerLeadState(DC_OF_VIEW, onOfferChoice);
+registerLeadState(DC_OF_VIEW, onOfferChoice, { rerenderOnGreeting: true });
+// DC_OF_MSG is deliberately NOT opted in: free text here IS the payload, and a
+// greeting routed to this handler would be delivered to the lender as the
+// customer's negotiation message. The greeting must stay an escape hatch.
 registerLeadState(DC_OF_MSG, onOfferMessage);
-registerLeadState(DC_OF_WAIT, onOfferWait);
+registerLeadState(DC_OF_WAIT, onOfferWait, { rerenderOnGreeting: true });
