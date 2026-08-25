@@ -158,6 +158,22 @@ export type Ctx = {
       /** Read back from product_selections for display only — never typed in
        *  chat. A mistyped serial fails mid-transaction after stock has moved. */
       batterySerial?: string;
+      /** Paging cursor for the stock lists. */
+      page?: number;
+      /** The charger chosen alongside `batterySerial`, or null for "no charger".
+       *  Held here rather than passed down the call chain because the dealer's
+       *  margin steps sit between the pick and the save, and every one of them
+       *  is a separate inbound message. */
+      chargerSerial?: string | null;
+      /** Dealer margin (DC_DP_MARGIN / DC_DP_MARGIN_VAL). `mode` + `value` are
+       *  what the dealer typed; `amount` is the resolved rupee figure, kept so
+       *  the preview the dealer approved and the row we write cannot drift. */
+      marginMode?: "percent" | "rupees";
+      marginValue?: number;
+      marginAmount?: number;
+      /** The order card has been sent to the customer (DC_DP_OTP onwards). Set
+       *  so a re-tap of Send does not message them twice. */
+      orderSentAt?: string;
     };
   };
   /** E-214 — internal onboarding operator state. Lives ONLY on the

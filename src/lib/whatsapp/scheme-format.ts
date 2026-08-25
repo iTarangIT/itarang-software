@@ -95,6 +95,20 @@ export function downPaymentText(pct: string | number | null | undefined): string
   return `${num(pct)}% down payment`;
 }
 
+/**
+ * The same fact as a VALUE, for a line that already carries the label.
+ *
+ * `downPaymentText` is a whole sentence ("11.11% down payment"), so putting it
+ * after a "Down payment:" label produced "Down payment: 11.11% down payment".
+ * The two forms exist because the picker row has no room for a label and the
+ * detail block has one.
+ */
+export function downPaymentValue(pct: string | number | null | undefined): string {
+  const n = Number(pct);
+  if (!Number.isFinite(n) || n <= 0) return "None";
+  return `${num(pct)}%`;
+}
+
 /** Rupees, grouped Indian-style. */
 export function inr(value: string | number | null | undefined): string {
   const n = Number(value);
@@ -135,6 +149,73 @@ export interface FormattableProduct {
   minRoiPct: string;
   maxRoiPct: string;
   downPaymentPct: string;
+
+  // Optional so a caller holding only the headline bands still type-checks —
+  // every one of these is `null` on a legacy loan-product row, and a card that
+  // refused to render without them would show nothing at all.
+  processingFeeRupees?: number | null;
+  healthLifeInsuranceRupees?: number | null;
+  disbursementTatHours?: number | null;
+  fileChargeFixed?: string | null;
+  fileChargePct?: string | null;
+  subventionAvailable?: boolean | null;
+  cibilRequired?: boolean | null;
+  minCreditScore?: number | null;
+  maxCreditScore?: number | null;
+}
+
+/** A rupee amount that is only worth a line when it is actually charged. */
+function positiveRupees(value: number | string | null | undefined): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * The file charge, which the schema models two mutually-exclusive ways —
+ * `file_charge_fixed` (rupees) or `file_charge_pct` (% of the loan). A product
+ * setting both is a data error rather than a real double charge, so the fixed
+ * amount wins: it is the one a customer can be quoted without knowing their
+ * final loan amount.
+ */
+export function fileChargeText(p: FormattableProduct): string | null {
+  const fixed = positiveRupees(p.fileChargeFixed);
+  if (fixed !== null) return inr(fixed);
+  const pct = positiveRupees(p.fileChargePct);
+  return pct !== null ? `${num(p.fileChargePct)}% of loan` : null;
+}
+
+/**
+ * Turnaround, in the unit a person actually uses.
+ *
+ * Days ONLY for a whole number of them — 48h is "2 days", but 44h is "44h",
+ * not "1.83 days". Dividing unconditionally produced exactly that, and a
+ * fractional day is both harder to read than the hours it came from and
+ * falsely precise about when the money lands.
+ */
+export function tatText(hours: number | null | undefined): string | null {
+  const n = Number(hours);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n % 24 !== 0) return `${num(n)}h`;
+  const days = n / 24;
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+/**
+ * The credit-score requirement, said only when it is a real gate.
+ *
+ * `cibilRequired === false` means the bureau check is waived, which is GOOD
+ * news and worth stating. `null` is a legacy row where nobody recorded the
+ * answer — silence is correct there, because inventing "no credit check" would
+ * be a promise the lender never made.
+ */
+export function creditScoreText(p: FormattableProduct): string | null {
+  if (p.cibilRequired === false) return "No credit-score check";
+  if (p.cibilRequired !== true) return null;
+  const lo = p.minCreditScore;
+  const hi = p.maxCreditScore;
+  if (lo == null && hi == null) return "Credit-score check applies";
+  if (lo != null && hi != null && hi > lo) return `Credit score ${lo}–${hi}`;
+  return `Credit score ${lo ?? hi}+`;
 }
 
 /**
@@ -150,18 +231,49 @@ export function rowDescription(p: FormattableProduct): string {
 }
 
 /**
- * One product, as three indented lines under its scheme.
+ * One product, as a labelled block under its scheme.
  *
  * Indented with two spaces, not the four-plus that shipped: WhatsApp wraps a
  * long line at the viewport and the continuation returns to column zero, so deep
  * indentation produced the ragged block in the report ("11.11%" on one line,
  * "down" alone on the next).
+ *
+ * LABELS, NOT BARE NUMBERS. The first version ran the terms together as
+ * `20% · 12 months` on one line and `11.11% down payment` on the next, which
+ * asks the reader to infer that the first number is interest. Each line now
+ * names what it is, because this message is the basis of a borrowing decision
+ * and it gets forwarded to people who did not see the conversation.
+ *
+ * EVERY OPTIONAL LINE IS OMITTED WHEN ABSENT, never rendered as "—". A dash
+ * against "Processing fee" reads as a charge nobody could name; no line at all
+ * correctly says the scheme does not carry one. `positiveRupees` also treats 0
+ * as absent for the same reason.
  */
 export function productLines(p: FormattableProduct, optionIndex: number): string {
-  return (
-    `  *${optionLabel(optionIndex)}* — ${pctRange(p.minRoiPct, p.maxRoiPct)} · ` +
-    `${range(p.tenureMonthsMin, p.tenureMonthsMax, "months")}\n` +
-    `  ${downPaymentText(p.downPaymentPct)}\n` +
-    `  Loan ${loanRange(p.loanAmountMin, p.loanAmountMax)}`
-  );
+  const lines = [
+    `  *${optionLabel(optionIndex)}*`,
+    `  • Interest: ${pctRange(p.minRoiPct, p.maxRoiPct)} p.a.`,
+    `  • Tenure: ${range(p.tenureMonthsMin, p.tenureMonthsMax, "months")}`,
+    `  • Down payment: ${downPaymentValue(p.downPaymentPct)}`,
+    `  • Loan amount: ${loanRange(p.loanAmountMin, p.loanAmountMax)}`,
+  ];
+
+  const processing = positiveRupees(p.processingFeeRupees);
+  if (processing !== null) lines.push(`  • Processing fee: ${inr(processing)}`);
+
+  const fileCharge = fileChargeText(p);
+  if (fileCharge) lines.push(`  • File charge: ${fileCharge}`);
+
+  const insurance = positiveRupees(p.healthLifeInsuranceRupees);
+  if (insurance !== null) lines.push(`  • Health & life cover: ${inr(insurance)}`);
+
+  const tat = tatText(p.disbursementTatHours);
+  if (tat) lines.push(`  • Disbursal in: ${tat}`);
+
+  const credit = creditScoreText(p);
+  if (credit) lines.push(`  • ${credit}`);
+
+  if (p.subventionAvailable) lines.push(`  • Subvention available`);
+
+  return lines.join("\n");
 }

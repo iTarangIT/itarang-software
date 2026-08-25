@@ -298,4 +298,6 @@ async function onDocRequestWait(
 }
 
 registerLeadAction("dr_send", onDocRequestStart);
-registerLeadState(DC_DOCREQ_WAIT, onDocRequestWait);
+// Expects a photo or a PDF — text is never the payload, and the handler
+// already answers unrecognised text by restating what it needs.
+registerLeadState(DC_DOCREQ_WAIT, onDocRequestWait, { rerenderOnGreeting: true });
