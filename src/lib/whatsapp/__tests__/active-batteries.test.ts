@@ -28,10 +28,10 @@ function battery(i: number, extra: Partial<ActiveBattery> = {}): ActiveBattery {
 }
 
 describe("warrantyMonthsOf", () => {
-  it("prefers the persisted E-266 figure", () => {
+  it("prefers the persisted E-268 figure", () => {
     expect(warrantyMonthsOf(battery(1))).toBe(36);
   });
-  it("falls back to whole months between the dates on pre-E-266 rows", () => {
+  it("falls back to whole months between the dates on pre-E-268 rows", () => {
     expect(warrantyMonthsOf(battery(1, { warrantyMonths: null }))).toBe(36);
     expect(
       warrantyMonthsOf(

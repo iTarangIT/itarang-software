@@ -1,4 +1,4 @@
--- E-266: deployed_assets.warranty_months — the duration applied at dispatch.
+-- E-268: deployed_assets.warranty_months — the duration applied at dispatch.
 --
 -- WHY. `finalizeSale` computed the warranty end date from
 -- `products.warranty_months ?? 24`. That column is `integer NOT NULL DEFAULT 0`
@@ -21,4 +21,4 @@ ALTER TABLE deployed_assets
   ADD COLUMN IF NOT EXISTS warranty_months integer;
 
 COMMENT ON COLUMN deployed_assets.warranty_months IS
-  'E-266: warranty duration applied at dispatch (inventory → product → OEM → 24). NULL on rows written before E-266.';
+  'E-268: warranty duration applied at dispatch (inventory → product → OEM → 24). NULL on rows written before E-268.';

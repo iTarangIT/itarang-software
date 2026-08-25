@@ -10,9 +10,9 @@
  * then served from cache; only strings carrying fresh dynamic values miss.
  *
  * Two cache tiers: an in-process LRU for the hot path, and the
- * `whatsapp_translations` table (E-267) so a restart or a second process does
+ * `whatsapp_translations` table (E-269) so a restart or a second process does
  * not re-pay for the same menu. The table is OPTIONAL — every DB touch is
- * wrapped so an environment where E-267 is not applied degrades to LRU-only
+ * wrapped so an environment where E-269 is not applied degrades to LRU-only
  * with one warning, and never blocks a send.
  *
  * FAIL OPEN. A missing key, a timeout or garbage JSON returns the English
@@ -96,7 +96,7 @@ function disableDbTier(err: unknown): void {
   if (dbTierDisabled) return;
   dbTierDisabled = true;
   console.warn(
-    "[WhatsApp/translate] whatsapp_translations unavailable (E-267 not applied?) — using in-memory cache only:",
+    "[WhatsApp/translate] whatsapp_translations unavailable (E-269 not applied?) — using in-memory cache only:",
     err instanceof Error ? err.message : err,
   );
 }

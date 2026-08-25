@@ -47,7 +47,7 @@
  * shown is exact, and the dealer can still add paraphernalia on the Step-5
  * screen.
  *
- * ── THE DEALER'S LEG (E-266) ────────────────────────────────────────────────
+ * ── THE DEALER'S LEG (E-268) ────────────────────────────────────────────────
  *
  * Everything above describes the CUSTOMER picking for themselves, and it is
  * unchanged. When the person tapping through the picker is the DEALER — which,

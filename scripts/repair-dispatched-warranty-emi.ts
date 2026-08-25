@@ -1,5 +1,5 @@
 /**
- * Repair a lead dispatched BEFORE the E-266 warranty fix and the EMI-amount
+ * Repair a lead dispatched BEFORE the E-268 warranty fix and the EMI-amount
  * fix in projectDisbursedLoan.
  *
  * What it corrects, for ONE lead at a time:

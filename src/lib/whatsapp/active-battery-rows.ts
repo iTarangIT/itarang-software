@@ -21,7 +21,7 @@ export interface ActiveBattery {
   deployedAt: Date;
   warrantyStart: Date | null;
   warrantyEnd: Date | null;
-  /** E-266 column; NULL on rows written before it. See `warrantyMonthsOf`. */
+  /** E-268 column; NULL on rows written before it. See `warrantyMonthsOf`. */
   warrantyMonths: number | null;
   paymentType: string | null;
   paymentStatus: string | null;
@@ -31,7 +31,7 @@ export interface ActiveBattery {
 
 /**
  * Months of cover. The persisted figure when present; otherwise the whole
- * months between the two dates, for rows written before E-266.
+ * months between the two dates, for rows written before E-268.
  */
 export function warrantyMonthsOf(b: {
   warrantyMonths: number | null;
