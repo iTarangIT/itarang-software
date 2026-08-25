@@ -209,7 +209,7 @@ export async function startDispatch(
   leadId: string,
 ): Promise<void> {
   const [lead] = await db
-    .select({ kyc_status: leads.kyc_status })
+    .select({ kyc_status: leads.kyc_status, payment_method: leads.payment_method })
     .from(leads)
     .where(eq(leads.id, leadId))
     .limit(1);
@@ -218,7 +218,7 @@ export async function startDispatch(
     await reply(session, "✅ This order has already been dispatched.");
     return;
   }
-  if (lead?.kyc_status !== "loan_sanctioned") {
+  if (!readyToPick(lead)) {
     await reply(
       session,
       "Your loan isn't ready for delivery yet. We'll message you here the moment it is.",
@@ -300,11 +300,11 @@ export async function pushStockReady(
   leadId: string,
 ): Promise<PushResult | "skipped"> {
   const [lead] = await db
-    .select({ kyc_status: leads.kyc_status })
+    .select({ kyc_status: leads.kyc_status, payment_method: leads.payment_method })
     .from(leads)
     .where(eq(leads.id, leadId))
     .limit(1);
-  if (lead?.kyc_status !== "loan_sanctioned") return "skipped";
+  if (!readyToPick(lead)) return "skipped";
 
   return await pushToLead(leadId, (t) => {
     const dealerSide = t.audience === "dealer";
@@ -837,14 +837,7 @@ async function completeOrder(
         session,
         `🧾 *Sale confirmed*\n\n${orderLines}\n\n` +
           `Serial *${sale.batterySerial}*\n` +
-          // Same guard as the dispatch message: `finalizeSale` derives the end
-          // date from `products.warranty_months`, whose `?? 24` fallback does
-          // not catch zero, so a 0-month product would otherwise be announced
-          // as expiring today.
-          (sale.warrantyEnd.getTime() > Date.now()
-            ? `Warranty *${sale.warrantyId}* is active until ` +
-              `${sale.warrantyEnd.toLocaleDateString("en-IN")}.`
-            : `Warranty *${sale.warrantyId}* is now registered against it.`) +
+          warrantyLine(sale) +
           `\n\nThank you for choosing iTarang.`,
       );
     } catch (err) {
@@ -1005,10 +998,7 @@ async function onDispatchOtp(
       session,
       `✅ *Dispatch confirmed*\n\n` +
         `Battery *${result.batterySerial}* is out for delivery.\n` +
-        (result.warrantyEnd.getTime() > Date.now()
-          ? `Warranty *${result.warrantyId}* is active until ` +
-            `${result.warrantyEnd.toLocaleDateString("en-IN")}.`
-          : `Warranty *${result.warrantyId}* is now registered against it.`),
+        warrantyLine(result),
     );
   } catch (err) {
     await setSession(session.id, { current_state: DC_DP_OTP });
@@ -1110,6 +1100,22 @@ async function sendOrderCard(
 // ---------------------------------------------------------------------------
 // Shared pricing / lookup helpers for the dealer leg
 // ---------------------------------------------------------------------------
+
+/**
+ * The warranty line on a receipt. `finalizeSale` resolves a positive duration
+ * (inventory → product → OEM → 24 months), so the end date is always in the
+ * future and the old "is now registered against it" fallback is gone.
+ */
+function warrantyLine(w: {
+  warrantyId: string;
+  warrantyEnd: Date;
+  warrantyMonths: number;
+}): string {
+  return (
+    `Warranty *${w.warrantyId}* · ${w.warrantyMonths} months · ` +
+    `valid until ${w.warrantyEnd.toLocaleDateString("en-IN")}.`
+  );
+}
 
 /** The inventory value of the cart — items only, no margin. */
 function stockValue(
@@ -1223,6 +1229,23 @@ function firstName(facts: LeadFacts | null): string {
  * only saves a selection, where the cash branch would close a sale, and a
  * malformed payment_method is not something anyone can fix from a chat.
  */
+/**
+ * May this lead open the battery picker?
+ *
+ * Finance: only once sanctioned — the picker leads to an OTP that disburses a
+ * loan. Cash: there is no sanction to wait for; a cash lead never leaves
+ * `pending` until it is `sold`, so gating it on `loan_sanctioned` meant a cash
+ * order parked for stock could never be woken by `pushStockReady`, and the
+ * `dp_start` button that push sends would have been refused on arrival.
+ */
+function readyToPick(
+  lead: { kyc_status: string | null; payment_method: string | null } | undefined,
+): boolean {
+  if (!lead) return false;
+  if (lead.kyc_status === "loan_sanctioned") return true;
+  return isCashLead(lead.payment_method) && lead.kyc_status !== "sold";
+}
+
 function isCashLead(paymentMethod: string | null | undefined): boolean {
   try {
     return toPaymentMode(paymentMethod) === "cash";

@@ -463,7 +463,10 @@ async function onStep4More(
   const picks = s4.picks ?? [];
 
   const t = text(event).toLowerCase();
-  if (t === "s4_more_no" || t === "no" || t === "continue") {
+  if (
+    t === "s4_more_no" ||
+    /^(no|nahi|nahin|नहीं|नही|continue|aage|आगे|bas|बस)$/.test(t)
+  ) {
     return await askDisclosure(session, picks);
   }
   if (t !== "s4_more_yes" && t !== "yes") {

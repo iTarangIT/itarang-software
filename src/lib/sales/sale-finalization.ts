@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 
+import { resolveWarrantyMonths } from "./warranty-months";
 import { db } from "@/lib/db";
 import {
   afterSalesRecords,
@@ -60,8 +61,12 @@ export interface FinalizeSaleOutput {
   warrantyId: string;
   warrantyStart: Date;
   warrantyEnd: Date;
+  /** The duration actually applied — see resolveWarrantyMonths. */
+  warrantyMonths: number;
   afterSalesId: string;
 }
+
+export { DEFAULT_WARRANTY_MONTHS, resolveWarrantyMonths } from "./warranty-months";
 
 export async function finalizeSale(
   input: FinalizeSaleInput,
@@ -87,7 +92,9 @@ export async function finalizeSale(
       asset_type: inventory.asset_type,
       model_type: inventory.model_type,
       product_id: inventory.product_id,
-      warranty_months: products.warranty_months,
+      inventory_warranty_months: inventory.warranty_months,
+      oem_warranty_months: inventory.oem_warranty_months,
+      product_warranty_months: products.warranty_months,
     })
     .from(inventory)
     .leftJoin(products, eq(inventory.product_id, products.id))
@@ -184,7 +191,7 @@ export async function finalizeSale(
   }
 
   // 3. Warranty record — one row per deployment, anchored on the battery.
-  const warrantyMonths = battery.warranty_months ?? 24;
+  const warrantyMonths = resolveWarrantyMonths(battery);
   const warrantyEnd = new Date(soldAt);
   warrantyEnd.setMonth(warrantyEnd.getMonth() + warrantyMonths);
 
@@ -205,6 +212,7 @@ export async function finalizeSale(
     payment_status: input.paymentMode === "cash" ? "paid" : "pending",
     warranty_start_date: soldAt,
     warranty_end_date: warrantyEnd,
+    warranty_months: warrantyMonths,
     warranty_status: "active",
     status: "active",
     created_by: performedBy,
@@ -247,6 +255,7 @@ export async function finalizeSale(
     warrantyId,
     warrantyStart: soldAt,
     warrantyEnd,
+    warrantyMonths,
     afterSalesId,
   };
 }

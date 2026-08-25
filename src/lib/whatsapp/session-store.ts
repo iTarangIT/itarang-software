@@ -195,6 +195,8 @@ export type Ctx = {
      *  turn knows to hand the message to runConsoleTurn. */
     inDealerConsole?: boolean;
   };
+  /** "Active batteries" browser (DC_ACTIVE_BATT) — paging cursor only. */
+  ab?: { page?: number };
 };
 
 /**

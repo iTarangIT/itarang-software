@@ -2503,6 +2503,9 @@ export const deployedAssets = pgTable(
     total_cycles: integer("total_cycles"),
     warranty_start_date: timestamp("warranty_start_date", { withTimezone: true }),
     warranty_end_date: timestamp("warranty_end_date", { withTimezone: true }),
+    // E-266 — the duration applied at dispatch, so a reader never has to
+    // re-derive it from the two dates (and get month arithmetic wrong).
+    warranty_months: integer("warranty_months"),
     warranty_status: varchar("warranty_status", { length: 20 }).default('active'),
     status: varchar({ length: 20 }).default('active').notNull(),
     last_maintenance_at: timestamp("last_maintenance_at", { withTimezone: true }),
@@ -2943,6 +2946,30 @@ export const appSettings = pgTable("app_settings", {
   value: jsonb().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
+
+// --- WHATSAPP TRANSLATIONS (E-267) ---
+// Gemini translation cache for outbound bot copy. See src/lib/whatsapp/translate.ts.
+// Optional at runtime: every access is guarded, so an unapplied DB degrades to
+// the in-process cache.
+
+export const whatsappTranslations = pgTable(
+  "whatsapp_translations",
+  {
+    id: bigserial({ mode: "number" }).primaryKey().notNull(),
+    source_hash: varchar("source_hash", { length: 64 }).notNull(),
+    language: varchar("language", { length: 16 }).notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(),
+    source_text: text("source_text").notNull(),
+    translated_text: text("translated_text").notNull(),
+    model: varchar("model", { length: 64 }),
+    hit_count: integer("hit_count").default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    last_used_at: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("whatsapp_translations_hash_lang_uidx").on(t.source_hash, t.language),
+  ],
+);
 
 // --- DEALER LEAD SCRAPER MODULE ---
 
