@@ -16,6 +16,7 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import {
   REFURB_STATUSES,
+  listRefurbishmentJobs,
   updateRefurbishmentJob,
 } from "@/lib/nbfc/recovery/refurbishment";
 
@@ -84,6 +85,37 @@ export async function PATCH(
         { ok: false, error: "VALIDATION", issues: parsed.error.issues },
         { status: 400 },
       );
+    }
+
+    // [E-270] Workshop transitions belong to iTarang. The NBFC may still
+    // cancel a legacy single job and edit its notes/accessories; it may not
+    // declare work started, a battery ready, or a battery returned — those are
+    // recorded by the admin desk (and for lot items, by the receipt flow).
+    const wanted = parsed.data.status;
+    if (wanted && wanted !== "cancelled") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "FORBIDDEN: workshop transitions (in_progress / ready / returned) are recorded by iTarang, not the NBFC",
+        },
+        { status: 403 },
+      );
+    }
+    if (parsed.data.status || parsed.data.actual_cost !== undefined) {
+      const current = (await listRefurbishmentJobs({ tenant_id: actor.tenant_id, status: "all" })).find(
+        (j) => j.id === id,
+      );
+      if (current?.lot_id) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "FORBIDDEN: this job belongs to a refurbishment lot — act on the lot instead (/nbfc/recovery/refurbishment)",
+          },
+          { status: 403 },
+        );
+      }
     }
 
     const job = await updateRefurbishmentJob({

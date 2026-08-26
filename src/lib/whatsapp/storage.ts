@@ -27,6 +27,17 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/pdf": "pdf",
   "audio/ogg": "ogg",
   "audio/mpeg": "mp3",
+  // Step-4 extra documents accept the same "any format" the web card does.
+  "image/heic": "heic",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/zip": "zip",
+  "application/x-zip-compressed": "zip",
+  "video/mp4": "mp4",
+  "video/3gpp": "3gp",
+  "video/quicktime": "mov",
 };
 
 function extFor(mimeType: string, fileName?: string): string {

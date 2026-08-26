@@ -39,6 +39,8 @@ export const LEAD_ACTIONS = {
   /** Dispatch: begin in chat / open the Step-5 cart. */
   dp_start: "dp_start:",
   dp_web: "dp_web:",
+  /** Step-4 extra documents: open the ≤10 bucket for this lead in chat. */
+  xd_start: "xd_start:",
 } as const;
 
 export type LeadActionKey = keyof typeof LEAD_ACTIONS;

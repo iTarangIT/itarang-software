@@ -26,6 +26,7 @@ import "./cash-flow";           // cash sale — counter path
 import "./step4-flow";          // Phase 2
 import "./offer-flow";          // Phase 3
 import "./dispatch-flow";       // Phase 4
+import "./extra-docs-flow";     // Step-4 extra documents (≤10 bucket)
 
 import { registeredLeadStates } from "./lead-states";
 
