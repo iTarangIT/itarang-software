@@ -65,6 +65,15 @@ export type Ctx = {
   /** Recognized-contact stamp from the greeting-time phone lookup (staff /
    *  existing lead), kept for reuse so we don't re-query every greeting. */
   known?: { kind: "staff" | "lead"; name: string; role?: string };
+  /** Customer journeys the dealer walked away from mid-way (sent *menu* or
+   *  started another lead) that are NOT pre-submit drafts — co-borrower, Step 4,
+   *  offers, dispatch. The DB cannot reconstruct those steps, so the exact
+   *  `lead` sub-context and state are snapshotted here, keyed by lead id, and
+   *  restored verbatim when the dealer picks the lead from Save Drafts. */
+  parked?: Record<
+    string,
+    { state: string; lead: NonNullable<Ctx["lead"]>; at: string }
+  >;
   /** Active customer-lead being created in the post-approval dealer console
    *  (states prefixed DC_*). Independent of the onboarding fields above. */
   lead?: {
@@ -134,6 +143,22 @@ export type Ctx = {
         type: string;
         size: number;
       }>;
+    };
+
+    /** Step-4 extra documents (DC_XD_*) — the ≤10 pre-sanction bucket. The
+     *  files themselves live on product_selections.pre_sanction_doc_urls; this
+     *  only carries what the chat needs between two inbound messages. */
+    xd?: {
+      /** Items in the bucket after the last save, for the "n/10" counter. */
+      count?: number;
+      /** Set when an NBFC request opened this step: its nbfc_doc_requests.id,
+       *  so each file also answers the request's next open child. */
+      requestId?: string;
+      /** Where to go when the batch ends — the new-lead ladder continues to
+       *  consent / submit; a request-driven batch returns to the menu. */
+      next?: "consent" | "submit" | "menu";
+      /** Files saved in THIS batch, for the single end-of-batch notification. */
+      batch?: number;
     };
 
     /** Offers and sanction (DC_OF_*, DC_SN_*). */

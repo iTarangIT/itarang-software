@@ -12,7 +12,8 @@ import { z } from "zod";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, errorResponse, withErrorHandler, generateId } from "@/lib/api-utils";
 import { ASSET_TYPES, AssetType } from "@/lib/inventory/csv-templates";
-import { formatZodErrors, getRowSchema } from "@/lib/inventory/validation";
+import { formatZodErrors, getRowSchema, normalizeLegacyKeys } from "@/lib/inventory/validation";
+import { inventoryPriceFields } from "@/lib/inventory/pricing";
 import { notifyInventoryAssigned } from "@/lib/notifications";
 import { logInventoryEvent } from "@/lib/inventory/events";
 import { resolveProductMaster } from "@/lib/inventory/product-master";
@@ -27,11 +28,12 @@ const bodySchema = z.object({
 export const POST = withErrorHandler(async (req: Request) => {
   const user = await requireInventoryAdmin();
   const body = bodySchema.parse(await req.json());
-  const { dealerId, assetType, data } = body as {
+  const { dealerId, assetType, data: rawData } = body as {
     dealerId: string;
     assetType: AssetType;
     data: Record<string, unknown>;
   };
+  const data = normalizeLegacyKeys(rawData);
 
   if (!ASSET_TYPES.includes(assetType)) {
     return errorResponse("Invalid assetType", 400);
@@ -165,7 +167,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   // Invoice — invoice_number must not already exist for this asset type
   // (per-asset-type uniqueness; one supplier invoice can still span different
-  // asset types). invoice_value is NOT unique — two invoices can legitimately
+  // asset types). base_value is NOT unique — two invoices can legitimately
   // carry the same amount. Mirrors the bulk upload.
   const inventoryTypeForAsset =
     assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
@@ -210,10 +212,12 @@ export const POST = withErrorHandler(async (req: Request) => {
       const oemWarrantyMonths = Number(row.oem_warranty_months);
       const expiry = new Date(warrantyDate);
       expiry.setMonth(expiry.getMonth() + oemWarrantyMonths);
-      const value = Number(row.invoice_value);
-      const gstPercent = row.gst_percent != null ? Number(row.gst_percent) : 0;
-      const gstAmount = value * (gstPercent / 100);
-      const finalAmount = value + gstAmount;
+      const value = Number(row.base_value);
+      const { gstPercent, gstAmount, priceInclusiveGst } = inventoryPriceFields(
+        value,
+        row.gst_percent != null ? Number(row.gst_percent) : 0,
+      );
+      const finalAmount = priceInclusiveGst;
 
       // Hydrated from product master:
       const subCategory = master.compatibleSubCategories[0] ?? "";
@@ -247,6 +251,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         oem_invoice_date: soldDate,
         inventory_amount: value.toString(),
         final_amount: finalAmount.toFixed(2),
+        price_inclusive_gst: priceInclusiveGst.toFixed(2),
         oem_name: String(row.supplier_name || ""),
         oem_warranty_date: warrantyDate.toISOString().slice(0, 10),
         oem_warranty_months: oemWarrantyMonths,
@@ -295,10 +300,12 @@ export const POST = withErrorHandler(async (req: Request) => {
       const oemWarrantyMonths = Number(row.oem_warranty_months);
       const expiry = new Date(warrantyDate);
       expiry.setMonth(expiry.getMonth() + oemWarrantyMonths);
-      const value = Number(row.invoice_value);
-      const gstPercent = row.gst_percent != null ? Number(row.gst_percent) : 0;
-      const gstAmount = value * (gstPercent / 100);
-      const finalAmount = value + gstAmount;
+      const value = Number(row.base_value);
+      const { gstPercent, gstAmount, priceInclusiveGst } = inventoryPriceFields(
+        value,
+        row.gst_percent != null ? Number(row.gst_percent) : 0,
+      );
+      const finalAmount = priceInclusiveGst;
 
       // Hydrated from product master:
       const outputVoltage = master.outputVoltageV ?? "";
@@ -334,6 +341,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         batch_number: row.batch_reference ? String(row.batch_reference) : null,
         inventory_amount: value.toString(),
         final_amount: finalAmount.toFixed(2),
+        price_inclusive_gst: priceInclusiveGst.toFixed(2),
         oem_name: String(row.supplier_name || ""),
         physical_condition: String(row.physical_condition || "").toLowerCase(),
         warehouse_location: row.warehouse_location ? String(row.warehouse_location) : null,
@@ -350,9 +358,11 @@ export const POST = withErrorHandler(async (req: Request) => {
       const invoiceDate = new Date(String(row.invoice_date));
       const value = Number(row.unit_cost);
       const qty = Number(row.quantity);
-      const gstPercent = row.gst_percent != null ? Number(row.gst_percent) : 0;
-      const gstAmount = value * (gstPercent / 100);
-      const finalAmount = value + gstAmount;
+      const { gstPercent, gstAmount, priceInclusiveGst } = inventoryPriceFields(
+        value,
+        row.gst_percent != null ? Number(row.gst_percent) : 0,
+      );
+      const finalAmount = priceInclusiveGst;
       const itemType = master.itemTypeCode;
       const compatible = master.compatibleCategories;
       const label = master.displayLabel;
@@ -373,6 +383,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         oem_invoice_date: invoiceDate,
         inventory_amount: value.toString(),
         final_amount: finalAmount.toFixed(2),
+        price_inclusive_gst: priceInclusiveGst.toFixed(2),
         oem_name: row.supplier ? String(row.supplier) : null,
         warehouse_location: row.warehouse_location ? String(row.warehouse_location) : null,
         is_serialized: false,

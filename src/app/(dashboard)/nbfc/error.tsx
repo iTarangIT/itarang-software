@@ -105,9 +105,20 @@ export default function NbfcError({
   // The AWS RDS instance has no pooler and lives in ap-south-1, so a momentary
   // network hiccup from the dev machine trips the 10s connect_timeout. Retry
   // almost always succeeds — say so instead of showing a raw stack trace.
-  const isDbConnError =
-    /Failed query/.test(msg) ||
+  //
+  // But Drizzle's "Failed query: <sql>" message is ALSO what an unapplied
+  // migration looks like — the real cause (`relation "x" does not exist`,
+  // `column "y" does not exist`, 42P01/42703) sits on `error.cause`, which
+  // Next strips before the message reaches this client boundary. So a bare
+  // "Failed query" must NOT be sold as a timeout: on 2026-08-26 the Recovery
+  // queue showed "connection timed out — retry" for a `recovery_assignments`
+  // table that simply did not exist on database-2 (E-262/E-263 unapplied),
+  // and Retry could never have fixed that. Only the transport words earn the
+  // timeout copy; "Failed query" alone gets an honest "query failed" card
+  // that names both possibilities and points at the server log.
+  const isDbTimeout =
     /CONNECT_TIMEOUT|ECONNRESET|ETIMEDOUT|ENOTFOUND|Connection terminated/i.test(msg);
+  const isDbQueryError = !isDbTimeout && /Failed query/.test(msg);
 
   const isChunkError =
     /ChunkLoadError/.test(msg) ||
@@ -121,16 +132,20 @@ export default function NbfcError({
           <h1 className="text-lg font-semibold text-red-900">
             {isNetworkError
               ? "Lost connection to the server"
-              : isDbConnError
+              : isDbTimeout
                 ? "Couldn’t reach the database"
-                : "This page failed to load"}
+                : isDbQueryError
+                  ? "A database query failed"
+                  : "This page failed to load"}
           </h1>
           <p className="text-sm text-red-700 mt-1">
             {isNetworkError
               ? "The connection dropped while this page was loading, so it never rendered. The server was most likely restarting or recompiling. Retrying usually works."
-              : isDbConnError
+              : isDbTimeout
                 ? "The database connection timed out — usually a brief network blip, not a data problem. Retrying should load the page."
-                : isChunkError
+                : isDbQueryError
+                  ? "The database rejected this query. If Retry doesn’t fix it, the usual cause is a table or column missing on the database this server points at — an unapplied drizzle/E-NNN migration. The exact Postgres error (e.g. ‘relation … does not exist’) is in the server log next to this digest."
+                  : isChunkError
                   ? "A required script bundle is missing — usually a stale tab from before a deploy. Reloading should fix it."
                   : "An unexpected error occurred while rendering this page."}
           </p>

@@ -18,6 +18,7 @@ export interface InboundEvent {
     | "text"
     | "image"
     | "document"
+    | "video"
     | "audio"
     | "interactive"
     | "status"

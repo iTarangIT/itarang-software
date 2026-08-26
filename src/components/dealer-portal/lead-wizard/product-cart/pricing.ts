@@ -146,6 +146,34 @@ export function resolveMargin(
   return Number.isFinite(r) && r >= 0 ? r : 0;
 }
 
+/**
+ * GST charged on the dealer's margin. Policy: every rupee a dealer adds on top
+ * of the GST-inclusive item total is itself a taxable supply, so the customer
+ * pays margin + 18% of margin.
+ *
+ *   marginGst  = round(margin × 18 / 100)
+ *   finalPrice = netSubtotal + margin + marginGst
+ *
+ * e.g. items ₹10,000 · margin 5% = ₹500 · GST ₹90 → final ₹10,590.
+ */
+export const MARGIN_GST_PCT = 18;
+
+/** GST on the dealer margin, whole rupees. 0 for a zero / invalid margin. */
+export function marginGst(margin: number, pct: number = MARGIN_GST_PCT): number {
+  const m = Number(margin);
+  if (!Number.isFinite(m) || m <= 0) return 0;
+  return Math.round((m * pct) / 100);
+}
+
+/** The one definition of the customer-facing total. */
+export function finalPriceOf(
+  netSubtotal: number,
+  margin: number,
+  gst: number = marginGst(margin),
+): number {
+  return Number(netSubtotal || 0) + Number(margin || 0) + Number(gst || 0);
+}
+
 export function computeTotals(input: {
   battery: BatteryRow | null;
   charger: ChargerRow | null;
@@ -187,7 +215,9 @@ export function computeTotals(input: {
     gstSubtotal,
     netSubtotal,
     dealerMargin,
-    finalPrice: netSubtotal + Number(dealerMargin || 0),
+    dealerMarginGstPct: MARGIN_GST_PCT,
+    dealerMarginGst: marginGst(dealerMargin),
+    finalPrice: finalPriceOf(netSubtotal, dealerMargin),
   };
 }
 
@@ -234,6 +264,10 @@ export function totalsFromPrior(prior: PriorSelection): CartTotals {
     gstSubtotal: toNum(prior.gst_subtotal),
     netSubtotal: toNum(prior.net_subtotal),
     dealerMargin: toNum(prior.dealer_margin),
+    // Rows written before E-273 carry no margin GST (NULL → 0). The stored
+    // final_price is what the customer approved, so it is never recomputed.
+    dealerMarginGstPct: toNum(prior.dealer_margin_gst_percent),
+    dealerMarginGst: toNum(prior.dealer_margin_gst_amount),
     finalPrice: toNum(prior.final_price),
   };
 }

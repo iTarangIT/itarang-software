@@ -50,6 +50,8 @@ export interface CashSaleBody {
   paraphernalia?: Record<string, string | number>;
   paraphernaliaLines?: unknown[];
   dealerMargin: number;
+  dealerMarginGstPercent?: number;
+  dealerMarginGstAmount?: number;
   finalPrice: number;
   batteryPrice?: number;
   chargerPrice?: number;
@@ -180,6 +182,8 @@ export async function confirmCashSale(opts: {
       charger_price: body.chargerPrice?.toString(),
       paraphernalia_cost: body.paraphernaliaCost?.toString(),
       dealer_margin: body.dealerMargin.toString(),
+      dealer_margin_gst_percent: body.dealerMarginGstPercent?.toString(),
+      dealer_margin_gst_amount: body.dealerMarginGstAmount?.toString(),
       final_price: body.finalPrice.toString(),
       battery_gross: body.batteryGross?.toString(),
       battery_gst_percent: body.batteryGstPercent?.toString(),
