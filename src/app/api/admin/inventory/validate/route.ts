@@ -12,7 +12,7 @@ import {
   unwrapCsvCell,
 } from "@/lib/inventory/csv-templates";
 import { normalizeDateCell } from "@/lib/inventory/date-normalize";
-import { formatZodErrors, getRowSchema, ValidatedRow } from "@/lib/inventory/validation";
+import { formatZodErrors, getRowSchema, normalizeLegacyKeys, ValidatedRow } from "@/lib/inventory/validation";
 import { loadProductMasterBatch } from "@/lib/inventory/product-master";
 
 const MAX_ROWS = 500;
@@ -63,7 +63,7 @@ export const POST = withErrorHandler(async (req: Request) => {
   rawRows = rawRows.map((row) => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(row)) out[k] = unwrapCsvCell(v);
-    return out;
+    return normalizeLegacyKeys(out);
   });
 
   // Normalize date columns to YYYY-MM-DD. Excel rewrites dates to the system
@@ -133,12 +133,12 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   // ── Invoice consistency + per-asset-type uniqueness ──────────────────────
   // Every row of the file must carry the same invoice_number (battery/charger:
-  // also the same invoice_value). That invoice_number must not already exist
+  // also the same base_value). That invoice_number must not already exist
   // for the SAME asset type — one supplier invoice can span a battery upload
   // AND a charger upload, but the same asset type can't reuse it.
   const refInvoiceNumber = String(rawRows[0]?.invoice_number || "").trim();
   const refInvoiceValue =
-    assetType === "paraphernalia" ? null : Number(rawRows[0]?.invoice_value);
+    assetType === "paraphernalia" ? null : Number(rawRows[0]?.base_value);
   const inventoryTypeForAsset =
     assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
   const invoiceNumberAlreadyUsed =
@@ -284,10 +284,10 @@ export const POST = withErrorHandler(async (req: Request) => {
       }
     }
     if (refInvoiceValue != null && !Number.isNaN(refInvoiceValue)) {
-      const rowInvoiceValue = Number(rawRows[i].invoice_value);
+      const rowInvoiceValue = Number(rawRows[i].base_value);
       if (!Number.isNaN(rowInvoiceValue) && rowInvoiceValue !== refInvoiceValue) {
         errors.push(
-          `invoice_value: must be identical on every row of one upload (expected ${refInvoiceValue})`,
+          `base_value: must be identical on every row of one upload (expected ${refInvoiceValue})`,
         );
       }
     }

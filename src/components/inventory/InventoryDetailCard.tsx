@@ -36,7 +36,8 @@ interface DetailCard {
   supplier_name: string | null;
   invoice_number: string | null;
   invoice_date: string | null;
-  invoice_value: string | null;
+  base_value: string | null;
+  price_inclusive_gst?: string | null;
   inventory_age_days: number | null;
   soc_percent: string | null;
   soc_last_sync_at: string | null;
@@ -179,10 +180,18 @@ export default function InventoryDetailCard({
         <KV label="Invoice Number" value={data.invoice_number ?? "—"} mono />
         <KV label="Invoice Date (Sold to Dealer)" value={fmtDate(data.invoice_date)} />
         <KV
-          label="Invoice Value"
+          label="Base Value (pre-GST)"
           value={
-            data.invoice_value
-              ? `₹${Number(data.invoice_value).toLocaleString("en-IN")}`
+            data.base_value
+              ? `₹${Number(data.base_value).toLocaleString("en-IN")}`
+              : "—"
+          }
+        />
+        <KV
+          label="Price Inclusive GST"
+          value={
+            data.price_inclusive_gst
+              ? `₹${Number(data.price_inclusive_gst).toLocaleString("en-IN")}`
               : "—"
           }
         />

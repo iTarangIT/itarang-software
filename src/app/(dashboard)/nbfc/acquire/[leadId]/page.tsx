@@ -848,6 +848,12 @@ export default async function AcquireLeadDetailPage({
             <p className="text-xl font-bold text-slate-800">
               {fmtInr(ps?.final_price)}
             </p>
+            {ps?.dealer_margin_gst_amount != null && Number(ps.dealer_margin_gst_amount) > 0 ? (
+              <p className="text-[11px] text-slate-500">
+                Items {fmtInr(ps.net_subtotal)} · margin {fmtInr(ps.dealer_margin)} + GST{" "}
+                {fmtInr(ps.dealer_margin_gst_amount)}
+              </p>
+            ) : null}
             <p className="text-xs text-slate-500 mt-2">
               Assigned {fmtDate(assignment.assigned_at)}
             </p>

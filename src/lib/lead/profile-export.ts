@@ -275,6 +275,7 @@ function buildCustomerProfileHtml(d: CustomerProfileData): string {
       <tr><th>Category</th><td>${htmlEscape(d.categoryName)}</td></tr>
       <tr><th>Sub-Category</th><td>${htmlEscape(d.subCategoryName)}</td></tr>
       <tr><th>Dealer Margin</th><td>${htmlEscape(fmtMoney(sel.dealer_margin))}</td></tr>
+      <tr><th>GST on Margin (${htmlEscape(sel.dealer_margin_gst_percent ?? "18")}%)</th><td>${htmlEscape(fmtMoney(sel.dealer_margin_gst_amount))}</td></tr>
       <tr><th>Final Price</th><td><b>${htmlEscape(fmtMoney(sel.final_price))}</b></td></tr>
       <tr><th>Submitted At</th><td>${htmlEscape(fmtDateTime(sel.submitted_at))}</td></tr>
     </table>
@@ -518,6 +519,7 @@ function buildProductSummaryHtml(d: ProductSummaryData): string {
   <h2>Pricing</h2>
   <table class="kv">
     <tr><th>Dealer Margin</th><td>${htmlEscape(fmtMoney(sel.dealer_margin))}</td></tr>
+    <tr><th>GST on Margin (${htmlEscape(sel.dealer_margin_gst_percent ?? "18")}%)</th><td>${htmlEscape(fmtMoney(sel.dealer_margin_gst_amount))}</td></tr>
     <tr><th>Final Price</th><td><b>${htmlEscape(fmtMoney(sel.final_price))}</b></td></tr>
     <tr><th>Payment Mode</th><td>${htmlEscape(sel.payment_mode)}</td></tr>
     <tr><th>Admin Decision</th><td><span class="badge">${htmlEscape(sel.admin_decision)}</span></td></tr>

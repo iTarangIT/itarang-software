@@ -69,6 +69,13 @@ describe("parseLeadAction", () => {
     );
     expect(parseLeadAction("s4_web:LEAD-20260824-0042")?.action).toBe("s4_web");
   });
+
+  it("reads the Step-4 extra-documents button", () => {
+    expect(parseLeadAction(leadActionId("xd_start", "LEAD-20260824-0042"))).toEqual({
+      action: "xd_start",
+      leadId: "LEAD-20260824-0042",
+    });
+  });
 });
 
 describe("leadActionId", () => {
