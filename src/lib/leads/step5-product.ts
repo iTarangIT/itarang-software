@@ -26,6 +26,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { otpConfirmations, productSelections } from "@/lib/db/schema";
 import { generateId } from "@/lib/api-utils";
+import { finalPriceOf } from "@/components/dealer-portal/lead-wizard/product-cart/pricing";
 import {
   productSelectionColumns,
   type Step5ProductSelectionBody,
@@ -58,6 +59,18 @@ export async function saveStep5ProductSelection(opts: {
   lead: { product_category_id: string | null; product_type_id: string | null };
 }): Promise<Step5SaveResult> {
   const { leadId, body, submittedBy, lead } = opts;
+
+  // E-273: the customer-facing total must include 18% GST on the dealer margin.
+  // Warn (never reject) when a client sends a pre-GST total so a stale bundle
+  // is visible in the logs instead of silently under-charging.
+  if (body.netSubtotal != null && body.dealerMargin > 0) {
+    const expected = finalPriceOf(body.netSubtotal, body.dealerMargin);
+    if (Math.abs(expected - body.finalPrice) > 1) {
+      console.warn(
+        `[step5-product] finalPrice ${body.finalPrice} ≠ net + margin + GST on margin (${expected}) for lead ${leadId}`,
+      );
+    }
+  }
 
   const now = new Date();
   const columns = productSelectionColumns(body);

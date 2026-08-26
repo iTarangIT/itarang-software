@@ -24,7 +24,7 @@
  *    ignored until a real compatibility table exists.
  */
 
-import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -165,7 +165,7 @@ export async function listDealerBatteries(
       gross_amount: inventory.inventory_amount,
       gst_percent: inventory.gst_percent,
       gst_amount: inventory.gst_amount,
-      net_amount: inventory.final_amount,
+      net_amount: sql<string | null>`COALESCE(${inventory.price_inclusive_gst}, ${inventory.final_amount})`,
     })
     .from(inventory)
     .leftJoin(products, eq(inventory.product_id, products.id))
@@ -201,7 +201,7 @@ export async function listDealerChargers(
       gross_amount: inventory.inventory_amount,
       gst_percent: inventory.gst_percent,
       gst_amount: inventory.gst_amount,
-      net_amount: inventory.final_amount,
+      net_amount: sql<string | null>`COALESCE(${inventory.price_inclusive_gst}, ${inventory.final_amount})`,
     })
     .from(inventory)
     .leftJoin(products, eq(inventory.product_id, products.id))

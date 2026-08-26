@@ -158,6 +158,19 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
           mimeType: msg.document?.mime_type,
           fileName: msg.document?.filename,
         };
+      case "video":
+        // Native camera/gallery video. A .mp4 sent "as a file" arrives as
+        // type:"document" with its mime, so only the native kind needs this
+        // case — without it the media id was dropped on the floor as
+        // `unsupported` and the Step-4 extra-documents step could not accept
+        // the videos the web card already does.
+        return {
+          ...base,
+          type: "video",
+          text: msg.video?.caption,
+          mediaProviderId: msg.video?.id,
+          mimeType: msg.video?.mime_type,
+        };
       case "audio":
         return {
           ...base,

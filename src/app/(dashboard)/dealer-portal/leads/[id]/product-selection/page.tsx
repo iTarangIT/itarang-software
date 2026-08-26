@@ -883,6 +883,7 @@ export default function ProductSelectionPage() {
           battery={selectedBattery}
           charger={selectedCharger}
           finalPrice={cart.live.finalPrice}
+          dealerMarginGst={cart.live.dealerMarginGst}
           submitting={submitting}
           error={error}
           onCancel={() => {
@@ -903,6 +904,7 @@ function CashConfirmModal({
   battery,
   charger,
   finalPrice,
+  dealerMarginGst,
   submitting,
   error,
   onCancel,
@@ -912,6 +914,7 @@ function CashConfirmModal({
   battery: BatteryRow;
   charger: ChargerRow;
   finalPrice: number;
+  dealerMarginGst?: number;
   submitting: boolean;
   error?: string | null;
   onCancel: () => void;
@@ -969,8 +972,11 @@ function CashConfirmModal({
             <ConfirmRow
               label="Final Price"
               value={
-                <span className="text-lg font-black text-[#0047AB] tabular-nums">
-                  {inr(finalPrice)}
+                <span className="text-right">
+                  <span className="text-lg font-black text-[#0047AB] tabular-nums">{inr(finalPrice)}</span>
+                  {dealerMarginGst ? (
+                    <span className="block text-[10px] text-gray-400">incl. {inr(dealerMarginGst)} GST on margin</span>
+                  ) : null}
                 </span>
               }
             />
@@ -1217,4 +1223,4 @@ function RangeStat({ label, value }: { label: string; value: string }) {
 // Addendum V0.1 §5.1 — battery/charger photo upload block. Two named slots
 // (serial close-up + unit photo) plus an "Add Another" option for extra
 // shots. Uploads happen one at a time; URLs come back from
-// /api/lead/[id]/product-photo and are tracked by the parent.
+// /api/lead/[id]/product-photo and are tracked by the parent.

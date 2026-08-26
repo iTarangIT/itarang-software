@@ -41,7 +41,7 @@ export const POST = withErrorHandler(
         id: inventory.id,
         serial_number: inventory.serial_number,
         status: inventory.status,
-        invoice_value: inventory.inventory_amount,
+        base_value: inventory.inventory_amount,
       })
       .from(inventory)
       .where(eq(inventory.serial_number, serial))
@@ -53,8 +53,8 @@ export const POST = withErrorHandler(
       return errorResponse("Only available items can be written off.", 409);
     }
 
-    const invoiceValue = Number(row.invoice_value || 0);
-    const writeOffValue = Number(body.writeOffValue ?? invoiceValue);
+    const baseValue = Number(row.base_value || 0);
+    const writeOffValue = Number(body.writeOffValue ?? baseValue);
     const requiresSecondApproval = writeOffValue >= HIGH_VALUE_APPROVAL_THRESHOLD;
     if (requiresSecondApproval && !body.secondApprovedBy) {
       return errorResponse(

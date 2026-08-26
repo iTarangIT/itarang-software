@@ -1,589 +1,315 @@
 "use client";
 
 /**
- * The refurbishment workshop console — BRD §5, §15.
+ * E-270 — the NBFC's refurbishment console.
  *
- * `recovery/refurbishment.ts` is 444 lines of finished service: the four-state
- * lifecycle, the one-open-job-per-battery guard, the mandatory-new accessories
- * with their prices, and the cost roll-up that feeds a lot's base price. Three
- * routes expose it. Nothing had ever called them, so a job could only be raised
- * with curl and the whole "recommended, never mandatory" repair loop existed on
- * paper only.
+ * Before E-270 this screen raised ONE job at a time and then let the NBFC
+ * press "Start work" / "Mark returned" on behalf of a workshop it does not
+ * run. Now it sends a LOT — one or many inspected batteries — and every step
+ * after that is the workshop's, pushed back here as it happens:
  *
- * WHAT THE STATES DRAG WITH THEM
- *   requested   → battery `refurbishing`, case `refurbishable`
- *   returned    → battery `ready` + grade `refurbished`, case `ready_for_auction`
- *   cancelled   → battery `inspected`, case `needs_inspection` (deliberately
- *                 NOT `ready`: nothing was actually repaired)
+ *   send batch → iTarang reviews + proposes timeline & estimate → accept or
+ *   ask for changes → dispatch (docket, photos) → iTarang signs for each
+ *   battery → work → iTarang dispatches back → sign for each battery →
+ *   battery is `ready`, graded `refurbished`, cost rolled into the lot price.
+ *
+ * The detail panel is the same component the admin desk renders, told which
+ * side it is on (src/components/refurbishment/RefurbLotDetail.tsx).
  */
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { nbfcFetch, formatINR } from "@/lib/auction/client";
+import RefurbLotDetail, {
+  LotStatusChip,
+  type LotAction,
+  type LotView,
+  type PhotoTarget,
+} from "@/components/refurbishment/RefurbLotDetail";
 
-interface Accessory {
-  key: string;
-  label: string;
-  unit_cost: number;
-  included: boolean;
-}
-
-interface ChecklistItem {
-  key: string;
-  label: string;
-  done: boolean;
-  note?: string | null;
-}
-
-interface Job {
-  id: string;
-  battery_id: string;
-  battery_serial: string | null;
-  assigned_workshop: string | null;
-  checklist: ChecklistItem[];
-  accessories: Accessory[];
-  estimated_cost: number | null;
-  actual_cost: number | null;
-  total_cost: number | null;
-  status: string;
-  notes: string | null;
-  requested_at: string;
-  started_at: string | null;
-  returned_at: string | null;
-}
-
-const FILTERS = [
+const TABS = [
   { key: "open", label: "Open" },
-  { key: "requested", label: "Requested" },
-  { key: "in_progress", label: "In workshop" },
-  { key: "returned", label: "Returned" },
-  { key: "cancelled", label: "Cancelled" },
+  { key: "proposed", label: "Quote to approve" },
+  { key: "awaiting_advance", label: "Advance due" },
+  { key: "agreed", label: "To dispatch" },
+  { key: "revision_pending", label: "Revision to approve" },
+  { key: "in_transit_return", label: "Coming back" },
+  { key: "balance_due", label: "Balance due" },
+  { key: "settled", label: "Settled" },
   { key: "all", label: "All" },
 ] as const;
 
-/** requested → in_progress → returned, with cancel available from both. */
-const NEXT: Record<string, Array<{ status: string; label: string }>> = {
-  requested: [
-    { status: "in_progress", label: "Start work" },
-    { status: "cancelled", label: "Cancel" },
-  ],
-  in_progress: [
-    { status: "returned", label: "Mark returned" },
-    { status: "cancelled", label: "Cancel" },
-  ],
-  returned: [],
-  cancelled: [],
-};
-
-const TONE: Record<string, string> = {
-  returned: "live",
-  cancelled: "warn",
-  in_progress: "warn",
-};
-
-interface Candidate {
+interface Eligible {
   id: string;
   serial: string;
+  model: string | null;
+  capacity: string | null;
   condition_grade: string | null;
-  state_code: string;
+  soh_pct: number | null;
+  image_urls: string[];
+  blocked_reason: string | null;
+  last_decline_reason: string | null;
+  last_declined_at: string | null;
 }
 
 export default function RefurbishmentConsole() {
-  const qc = useQueryClient();
-  const [filter, setFilter] = useState<string>("open");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draftCost, setDraftCost] = useState("");
-  const [draftWorkshop, setDraftWorkshop] = useState("");
+  const [tab, setTab] = useState<string>("open");
+  const [rows, setRows] = useState<LotView[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<LotView | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // — raise a job —
-  const [raising, setRaising] = useState(false);
-  const [newBattery, setNewBattery] = useState("");
-  const [newWorkshop, setNewWorkshop] = useState("");
-  const [newEstimate, setNewEstimate] = useState("");
-  const [savingNew, setSavingNew] = useState(false);
+  // — new lot —
+  const [composing, setComposing] = useState(false);
+  const [eligible, setEligible] = useState<Eligible[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState("");
 
-  // Only batteries that have been graded can go to the workshop. `inspected`
-  // and `ready` are the two states the service accepts; anything scrapped,
-  // lotted or sold is refused with a readable message.
-  const candidatesQuery = useQuery({
-    queryKey: ["auction", "nbfc", "refurb-candidates"],
-    queryFn: async () => {
-      const [inspected, ready] = await Promise.all([
-        nbfcFetch<{ items: Candidate[] }>(
-          "/api/nbfc/recovery/batteries?state=inspected",
-        ),
-        nbfcFetch<{ items: Candidate[] }>(
-          "/api/nbfc/recovery/batteries?state=ready",
-        ),
-      ]);
-      return [...inspected.items, ...ready.items];
-    },
-    enabled: raising,
-  });
-
-  async function raiseJob() {
-    if (!newBattery) {
-      toast.error("Pick a battery first.");
-      return;
-    }
-    setSavingNew(true);
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const body: Record<string, unknown> = { battery_id: newBattery };
-      if (newWorkshop.trim()) body.assigned_workshop = newWorkshop.trim();
-      if (newEstimate.trim()) body.estimated_cost = Number(newEstimate);
+      const r = await nbfcFetch<{ items: LotView[]; counts: Record<string, number> }>(
+        `/api/nbfc/recovery/refurbishment/lots?status=${encodeURIComponent(tab)}`,
+      );
+      setRows(r.items ?? []);
+      setCounts(r.counts ?? {});
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [tab]);
+  useEffect(() => { void load(); }, [load]);
 
-      await nbfcFetch("/api/nbfc/recovery/refurbishment", {
+  // Deep link from a notification: ?open=<id>
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("open");
+    if (id) setOpenId(id);
+  }, []);
+
+  const loadDetail = useCallback(async (id: string) => {
+    try {
+      const r = await nbfcFetch<{ lot: LotView }>(`/api/nbfc/recovery/refurbishment/lots/${id}`);
+      setDetail(r.lot);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+      setOpenId(null);
+    }
+  }, []);
+  useEffect(() => {
+    if (!openId) { setDetail(null); return; }
+    void loadDetail(openId);
+  }, [openId, loadDetail]);
+
+  useEffect(() => {
+    if (!composing || eligible) return;
+    nbfcFetch<{ items: Eligible[] }>("/api/nbfc/recovery/refurbishment/eligible-batteries")
+      .then((r) => setEligible(r.items))
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)));
+  }, [composing, eligible]);
+
+  async function sendLot() {
+    if (picked.size === 0) { toast.error("Pick at least one battery."); return; }
+    setBusy(true);
+    try {
+      const r = await nbfcFetch<{ lot: LotView }>("/api/nbfc/recovery/refurbishment/lots", {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ battery_ids: Array.from(picked), note: note.trim() || null }),
       });
-      toast.success("Job raised — the battery is now in the workshop");
-      setNewBattery("");
-      setNewWorkshop("");
-      setNewEstimate("");
-      setRaising(false);
-      qc.invalidateQueries({ queryKey: ["auction", "nbfc"] });
+      toast.success(`${r.lot.ref_code} sent to the iTarang workshop`);
+      setComposing(false);
+      setPicked(new Set());
+      setNote("");
+      setEligible(null);
+      setTab("open");
+      setOpenId(r.lot.id);
+      await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
-      setSavingNew(false);
+      setBusy(false);
     }
   }
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["auction", "nbfc", "refurbishment", filter],
-    queryFn: () =>
-      nbfcFetch<{ items: Job[] }>(
-        `/api/nbfc/recovery/refurbishment?status=${filter}`,
-      ),
-    refetchOnWindowFocus: true,
-  });
-
-  async function patch(job: Job, body: Record<string, unknown>, label: string) {
-    setBusy(job.id);
+  async function act(action: LotAction, payload: Record<string, unknown>): Promise<unknown> {
+    if (!detail) return;
+    setBusy(true);
     try {
-      await nbfcFetch(`/api/nbfc/recovery/refurbishment/${job.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
+      const r = await nbfcFetch<{ lot?: LotView; intent?: unknown }>(`/api/nbfc/recovery/refurbishment/lots/${detail.id}`, {
+        method: "POST",
+        body: JSON.stringify({ action, ...payload }),
       });
-      toast.success(label);
-      qc.invalidateQueries({ queryKey: ["auction", "nbfc"] });
+      // `pay-order` answers with a payment intent, not a lot — hand it back to
+      // the pay panel, which opens Checkout with it.
+      if (action === "pay-order") return r;
+      if (r.lot) setDetail(r.lot);
+      const said: Partial<Record<LotAction, string>> = {
+        accept: "Quote approved.",
+        "approve-quote": "Quote approved.",
+        arrive: "Marked arrived — now check each battery.",
+        "pay-verify": "Payment received.",
+        "record-payment": "Recorded — iTarang will confirm the transfer.",
+        "approve-revision": "Revised quote approved.",
+        "reject-revision": "Revision rejected — the approved quote stands.",
+        counter: "Sent to iTarang.",
+        cancel: "Lot cancelled; the batteries are back at inspected.",
+        dispatch: "Dispatch recorded — iTarang will confirm receipt.",
+        "confirm-receipt": "Receipt recorded.",
+        message: "Sent.",
+      };
+      if (said[action]) toast.success(said[action]);
+      await load();
+      return r;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
+      return undefined;
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
-  async function advance(job: Job, status: string, label: string) {
-    if (status === "cancelled") {
-      const ok = await confirmDialog({
-        title: "Cancel this job?",
-        message:
-          "The battery goes back to inspected, not to ready — nothing was " +
-          "repaired, so it must be graded again before it can be sold.",
-        confirmText: "Cancel job",
-        variant: "danger",
-      });
-      if (!ok) return;
+  async function upload(target: PhotoTarget, files: FileList): Promise<string[]> {
+    if (!detail) return [];
+    const form = new FormData();
+    for (const f of Array.from(files)) form.append("file", f);
+    form.append("target", target);
+    const res = await fetch(`/api/nbfc/recovery/refurbishment/lots/${detail.id}/photos`, { method: "POST", body: form });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body?.ok === false) {
+      const m = (typeof body?.error === "string" ? body.error : `HTTP ${res.status}`).replace(/^[A-Z_]+:\s*/, "");
+      toast.error(m);
+      return [];
     }
-    if (status === "returned" && job.actual_cost == null) {
-      const ok = await confirmDialog({
-        title: "Return without an actual cost?",
-        message:
-          "Only returned jobs contribute to a lot's base price. Without an " +
-          "actual cost the estimate is used, and the repair may be underpriced.",
-        confirmText: "Return anyway",
-      });
-      if (!ok) return;
-    }
-    await patch(job, { status }, label);
+    toast.success(`${body.uploaded} photograph(s) added`);
+    return body.paths ?? [];
   }
 
-  function toggleAccessory(job: Job, key: string) {
-    const next = job.accessories.map((a) =>
-      a.key === key ? { ...a, included: !a.included } : a,
-    );
-    void patch(job, { accessories: next }, "Accessories updated");
-  }
-
-  function toggleChecklist(job: Job, key: string) {
-    const next = job.checklist.map((c) =>
-      c.key === key ? { ...c, done: !c.done } : c,
-    );
-    void patch(job, { checklist: next }, "Checklist updated");
-  }
-
-  const jobs = data?.items ?? [];
+  const eligibleOk = useMemo(() => (eligible ?? []).filter((b) => !b.blocked_reason), [eligible]);
+  const needsMe = rows.filter((r) => r.awaiting === "nbfc").length;
 
   return (
     <>
+      <div className="auc-kpis">
+        <div className="auc-kpi" data-tone={needsMe > 0 ? "warn" : undefined}><b>{needsMe}</b><span>Waiting on you</span></div>
+        <div className="auc-kpi"><b>{counts.open ?? 0}</b><span>Open lots</span></div>
+        <div className="auc-kpi"><b>{(counts.received ?? 0) + (counts.in_progress ?? 0) + (counts.ready ?? 0)}</b><span>At the workshop</span></div>
+        <div className="auc-kpi" data-tone={(counts.awaiting_advance ?? 0) + (counts.balance_due ?? 0) > 0 ? "warn" : undefined}><b>{(counts.awaiting_advance ?? 0) + (counts.balance_due ?? 0)}</b><span>Payments due</span></div>
+        <div className="auc-kpi" data-tone="live"><b>{counts.settled ?? 0}</b><span>Settled</span></div>
+      </div>
+
       <div className="auc-toolbar">
         <div className="auc-tabs" role="tablist" style={{ flex: "1 1 auto" }}>
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              role="tab"
-              className="auc-tab"
-              aria-selected={filter === f.key}
-              onClick={() => setFilter(f.key)}
-            >
-              {f.label}
+          {TABS.map((t) => (
+            <button key={t.key} type="button" role="tab" className="auc-tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}>
+              {t.label}
             </button>
           ))}
         </div>
         <div className="auc-toolbar-end">
-          <button
-            type="button"
-            className="auc-btn"
-            onClick={() => setRaising((v) => !v)}
-          >
-            {raising ? "Close" : "Raise a job"}
+          <button type="button" className="auc-btn" onClick={() => setComposing((v) => !v)}>
+            {composing ? "Close" : "Send batteries to refurbish"}
           </button>
         </div>
       </div>
 
-      {raising ? (
+      {composing ? (
         <section className="auc-panel" style={{ marginBlockEnd: "1.5rem" }}>
-          <header>
-            <span className="auc-panel-n">＋</span>
-            <h3>New refurbishment job</h3>
-          </header>
+          <header><span className="auc-panel-n">＋</span><h3>New refurbishment lot</h3></header>
           <div className="auc-panel-body">
-            <div className="auc-field">
-              <label htmlFor="rj-battery">Battery</label>
-              <select
-                id="rj-battery"
-                className="auc-text"
-                value={newBattery}
-                onChange={(e) => setNewBattery(e.target.value)}
-              >
-                <option value="">
-                  {candidatesQuery.isLoading
-                    ? "Loading…"
-                    : "Select a graded battery"}
-                </option>
-                {(candidatesQuery.data ?? []).map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.serial}
-                    {c.condition_grade ? ` — ${c.condition_grade}` : ""} (
-                    {c.state_code})
-                  </option>
-                ))}
-              </select>
-              <span className="auc-hint">
-                Only inspected or ready stock. A battery may have one open job
-                at a time, and one below the 70 % refurbishment threshold is
-                refused — grade it partial working and sell it as it is.
-              </span>
-            </div>
-
-            <div className="auc-dl" style={{ gap: "0.875rem" }}>
-              <div className="auc-field">
-                <label htmlFor="rj-workshop">Workshop</label>
-                <input
-                  id="rj-workshop"
-                  className="auc-text"
-                  value={newWorkshop}
-                  onChange={(e) => setNewWorkshop(e.target.value)}
-                />
-              </div>
-              <div className="auc-field">
-                <label htmlFor="rj-estimate">Estimated cost</label>
-                <input
-                  id="rj-estimate"
-                  className="auc-text"
-                  data-numeric="true"
-                  inputMode="numeric"
-                  value={newEstimate}
-                  onChange={(e) =>
-                    setNewEstimate(e.target.value.replace(/[^\d.]/g, ""))
-                  }
-                />
-              </div>
-            </div>
-
             <span className="auc-hint">
-              The three mandatory new accessories — charger, wiring harness and
-              SOC meter — are added automatically and can be unticked per job.
+              Tick the batteries to send — one lot, one job per battery. Only inspected batteries at or above the 70 % threshold are eligible; iTarang re-checks this on receipt of the request.
             </span>
-
-            <div className="auc-linkrow">
-              <button
-                type="button"
-                className="auc-btn"
-                disabled={savingNew}
-                onClick={raiseJob}
-              >
-                {savingNew ? "Raising…" : "Raise job"}
+            {!eligible ? (
+              <p className="auc-subtle" style={{ marginBlockStart: ".5rem" }}>Loading batteries…</p>
+            ) : eligible.length === 0 ? (
+              <p className="auc-subtle" style={{ marginBlockStart: ".5rem" }}>No inspected batteries. Evaluate recovered batteries on the recovery board first.</p>
+            ) : (
+              <div style={{ overflowX: "auto", marginBlockStart: ".5rem" }}>
+                <table className="auc-table">
+                  <thead>
+                    <tr>
+                      <th>
+                        <input type="checkbox" aria-label="select all eligible" checked={eligibleOk.length > 0 && eligibleOk.every((b) => picked.has(b.id))}
+                          onChange={(e) => setPicked(e.target.checked ? new Set(eligibleOk.map((b) => b.id)) : new Set())} />
+                      </th>
+                      <th>Serial</th><th>Model</th><th>SOH</th><th>Grade</th><th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {eligible.map((b) => (
+                      <tr key={b.id} style={b.blocked_reason ? { opacity: 0.55 } : undefined}>
+                        <td>
+                          <input type="checkbox" disabled={!!b.blocked_reason} checked={picked.has(b.id)}
+                            onChange={(e) => setPicked((s) => { const n = new Set(s); if (e.target.checked) n.add(b.id); else n.delete(b.id); return n; })} />
+                        </td>
+                        <td><span className="auc-pick-serial">{b.serial}</span></td>
+                        <td>{b.model ?? "—"}{b.capacity ? ` · ${b.capacity}` : ""}</td>
+                        <td>{b.soh_pct != null ? `${b.soh_pct}%` : "—"}</td>
+                        <td>{b.condition_grade ?? "—"}</td>
+                        <td className="auc-subtle">
+                          {b.blocked_reason ?? ""}
+                          {b.last_decline_reason ? (
+                            <div style={{ color: "var(--auc-warn)" }}>iTarang declined this before: {b.last_decline_reason}{b.last_declined_at ? ` (${new Date(b.last_declined_at).toLocaleDateString("en-IN")})` : ""} — fix that before resubmitting.</div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="auc-field" style={{ marginBlockStart: ".75rem" }}>
+              <label htmlFor="rl-note">Note to iTarang</label>
+              <textarea id="rl-note" className="auc-text" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Known faults, urgency, where the batteries are." />
+            </div>
+            <div className="auc-linkrow" style={{ marginBlockStart: ".75rem" }}>
+              <button type="button" className="auc-btn" disabled={busy || picked.size === 0} onClick={sendLot}>
+                {busy ? "Sending…" : `Send ${picked.size || ""} ${picked.size === 1 ? "battery" : "batteries"} to refurbish`}
               </button>
-              <button
-                type="button"
-                className="auc-btn"
-                data-variant="ghost"
-                onClick={() => setRaising(false)}
-              >
-                Cancel
-              </button>
+              <button type="button" className="auc-btn" data-variant="ghost" onClick={() => setComposing(false)}>Cancel</button>
             </div>
           </div>
         </section>
       ) : null}
 
-      {isLoading ? (
-        <div className="auc-stack" style={{ marginBlockStart: "1.25rem" }}>
-          {[0, 1].map((i) => (
-            <div key={i} className="auc-skel" style={{ height: "9rem" }} />
-          ))}
-        </div>
-      ) : isError ? (
-        <div className="auc-inline-error" style={{ marginBlockStart: "1.25rem" }}>
-          {(error as Error).message}
-        </div>
-      ) : jobs.length === 0 ? (
+      {loading ? (
+        <div className="auc-stack" style={{ marginBlockStart: "1.25rem" }}>{[0, 1].map((i) => <div key={i} className="auc-skel" style={{ height: "4rem" }} />)}</div>
+      ) : error ? (
+        <div className="auc-inline-error" style={{ marginBlockStart: "1.25rem" }}>{error}</div>
+      ) : rows.length === 0 ? (
         <div className="auc-empty" style={{ marginBlockStart: "1.25rem" }}>
-          <p>No {filter === "all" ? "" : FILTERS.find((f) => f.key === filter)?.label.toLowerCase()} jobs</p>
-          <p className="auc-empty-hint">
-            Raise a refurbishment job from a battery on the recovery board.
-            Repair is recommended, never mandatory — a battery graded partial
-            working can go straight to auction without passing through the
-            workshop at all.
-          </p>
+          <p>No lots in this view</p>
+          <p className="auc-empty-hint">Send inspected batteries to the iTarang workshop with the button above. Repair is recommended, never mandatory — a battery graded partial working can go straight to auction.</p>
         </div>
       ) : (
-        <div className="auc-stack" style={{ marginBlockStart: "1.25rem" }}>
-          {jobs.map((job) => {
-            const accessoriesTotal = job.accessories
-              .filter((a) => a.included)
-              .reduce((s, a) => s + a.unit_cost, 0);
-            const labour = job.actual_cost ?? job.estimated_cost ?? 0;
-            const variance =
-              job.actual_cost != null && job.estimated_cost != null
-                ? job.actual_cost - job.estimated_cost
-                : null;
-
-            return (
-              <article key={job.id} className="auc-mini-card">
-                <header>
-                  <div className="auc-winner">
-                    <span className="auc-pick-serial">
-                      {job.battery_serial ?? job.battery_id.slice(0, 8)}
-                    </span>
-                    {job.assigned_workshop ? (
-                      <span className="auc-subtle">
-                        {job.assigned_workshop}
-                      </span>
-                    ) : null}
-                  </div>
-                  <span className="auc-chip" data-tone={TONE[job.status]}>
-                    {job.status.replace("_", " ")}
-                  </span>
-                </header>
-
-                <dl className="auc-dl">
-                  <div>
-                    <dt>Estimated</dt>
-                    <dd className="auc-num">{formatINR(job.estimated_cost)}</dd>
-                  </div>
-                  <div>
-                    <dt>Actual</dt>
-                    <dd className="auc-num">{formatINR(job.actual_cost)}</dd>
-                  </div>
-                  <div>
-                    <dt>Variance</dt>
-                    <dd
-                      className="auc-num"
-                      style={
-                        variance != null && variance > 0
-                          ? { color: "var(--auc-warn)" }
-                          : undefined
-                      }
-                    >
-                      {variance == null
-                        ? "—"
-                        : `${variance >= 0 ? "+" : ""}${formatINR(variance)}`}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Requested</dt>
-                    <dd className="auc-subtle">
-                      {new Date(job.requested_at).toLocaleDateString("en-IN")}
-                    </dd>
-                  </div>
-                </dl>
-
-                {/* Accessories — BRD §15: always new, costed separately, then
-                    rolled into the lot's base price so the dealer sees one
-                    number. */}
-                <div style={{ marginBlockStart: "0.875rem" }}>
-                  <span className="auc-label">Accessories — new, mandatory</span>
-                  <div className="auc-ledger" style={{ marginBlockStart: "0.5rem" }}>
-                    {job.accessories.map((a) => (
-                      <div key={a.key} className="auc-ledger-row">
-                        <label
-                          style={{
-                            display: "flex",
-                            gap: "0.5rem",
-                            alignItems: "center",
-                            cursor: "pointer",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={a.included}
-                            disabled={
-                              busy === job.id ||
-                              job.status === "returned" ||
-                              job.status === "cancelled"
-                            }
-                            onChange={() => toggleAccessory(job, a.key)}
-                          />
-                          {a.label}
-                        </label>
-                        <b>{formatINR(a.unit_cost)}</b>
-                      </div>
-                    ))}
-                    <div className="auc-ledger-row">
-                      <span>Labour</span>
-                      <b>{formatINR(labour)}</b>
-                    </div>
-                    <div className="auc-ledger-row" data-total="true">
-                      <span>Rolls into base price</span>
-                      <b>{formatINR(labour + accessoriesTotal)}</b>
-                    </div>
-                  </div>
-                  {job.status !== "returned" ? (
-                    <span className="auc-hint">
-                      Counted only once the job is <b>returned</b> — an open job
-                      contributes nothing, so a lot can never be priced on work
-                      that has not happened.
-                    </span>
-                  ) : null}
-                </div>
-
-                {job.checklist.length > 0 ? (
-                  <div style={{ marginBlockStart: "0.875rem" }}>
-                    <span className="auc-label">Checklist</span>
-                    <div className="auc-ledger" style={{ marginBlockStart: "0.5rem" }}>
-                      {job.checklist.map((c) => (
-                        <div key={c.key} className="auc-ledger-row">
-                          <label
-                            style={{
-                              display: "flex",
-                              gap: "0.5rem",
-                              alignItems: "center",
-                              cursor: "pointer",
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={c.done}
-                              disabled={
-                                busy === job.id ||
-                                job.status === "returned" ||
-                                job.status === "cancelled"
-                              }
-                              onChange={() => toggleChecklist(job, c.key)}
-                            />
-                            {c.label}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {editing === job.id ? (
-                  <div style={{ marginBlockStart: "0.875rem" }}>
-                    <div className="auc-field">
-                      <label htmlFor={`cost-${job.id}`}>Actual cost</label>
-                      <input
-                        id={`cost-${job.id}`}
-                        className="auc-text"
-                        data-numeric="true"
-                        inputMode="numeric"
-                        value={draftCost}
-                        onChange={(e) =>
-                          setDraftCost(e.target.value.replace(/[^\d.]/g, ""))
-                        }
-                      />
-                    </div>
-                    <div className="auc-field" style={{ marginBlockStart: "0.5rem" }}>
-                      <label htmlFor={`ws-${job.id}`}>Workshop</label>
-                      <input
-                        id={`ws-${job.id}`}
-                        className="auc-text"
-                        value={draftWorkshop}
-                        onChange={(e) => setDraftWorkshop(e.target.value)}
-                      />
-                    </div>
-                    <div className="auc-linkrow" style={{ marginBlockStart: "0.625rem" }}>
-                      <button
-                        type="button"
-                        className="auc-btn"
-                        disabled={busy === job.id}
-                        onClick={async () => {
-                          const body: Record<string, unknown> = {};
-                          body.actual_cost = draftCost.trim()
-                            ? Number(draftCost)
-                            : null;
-                          body.assigned_workshop =
-                            draftWorkshop.trim() || null;
-                          await patch(job, body, "Job updated");
-                          setEditing(null);
-                        }}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="auc-btn"
-                        data-variant="ghost"
-                        onClick={() => setEditing(null)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="auc-linkrow" style={{ marginBlockStart: "0.875rem" }}>
-                    {(NEXT[job.status] ?? []).map((n) => (
-                      <button
-                        key={n.status}
-                        type="button"
-                        className="auc-btn"
-                        data-variant={n.status === "cancelled" ? "ghost" : undefined}
-                        disabled={busy === job.id}
-                        onClick={() => advance(job, n.status, `${n.label} — done`)}
-                      >
-                        {n.label}
-                      </button>
-                    ))}
-                    {job.status !== "returned" && job.status !== "cancelled" ? (
-                      <button
-                        type="button"
-                        className="auc-btn"
-                        data-variant="ghost"
-                        onClick={() => {
-                          setEditing(job.id);
-                          setDraftCost(
-                            job.actual_cost != null ? String(job.actual_cost) : "",
-                          );
-                          setDraftWorkshop(job.assigned_workshop ?? "");
-                        }}
-                      >
-                        Edit cost / workshop
-                      </button>
-                    ) : null}
-                  </div>
-                )}
-              </article>
-            );
-          })}
+        <div style={{ overflowX: "auto", marginBlockStart: "1rem" }}>
+          <table className="auc-table">
+            <thead><tr><th>Ref</th><th>Batteries</th><th>Status</th><th>Waiting on</th><th>Return by</th><th>Estimate</th><th /></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.ref_code}</td>
+                  <td>{r.battery_count}</td>
+                  <td><LotStatusChip status={r.status} /></td>
+                  <td>{r.awaiting === "nbfc" ? "You" : r.awaiting === "admin" ? "iTarang" : "—"}</td>
+                  <td>{r.expected_return_date ? new Date(r.expected_return_date).toLocaleDateString("en-IN") : "—"}</td>
+                  <td className="auc-num">{formatINR(r.estimated_total)}</td>
+                  <td><button type="button" className="auc-btn" data-variant="ghost" onClick={() => setOpenId(r.id === openId ? null : r.id)}>{r.id === openId ? "Close" : "Open"}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+
+      {detail ? (
+        <div style={{ marginBlockStart: "1rem" }}>
+          <RefurbLotDetail lot={detail} side="nbfc" canAct busy={busy} onAction={act} onUpload={upload} />
+        </div>
+      ) : null}
     </>
   );
 }

@@ -307,6 +307,8 @@ export const inventory = pgTable(
     gst_percent: numeric("gst_percent", { precision: 5, scale: 2 }),
     gst_amount: numeric("gst_amount", { precision: 12, scale: 2 }),
     final_amount: numeric("final_amount", { precision: 12, scale: 2 }),
+    // E-272: Base Value + GST on it. Mirrors final_amount; written by every upload path.
+    price_inclusive_gst: numeric("price_inclusive_gst", { precision: 12, scale: 2 }),
     oem_invoice_number: text("oem_invoice_number"),
     oem_invoice_date: timestamp("oem_invoice_date", { withTimezone: true }),
     oem_invoice_url: text("oem_invoice_url"),
@@ -4186,6 +4188,10 @@ export const productSelections = pgTable("product_selections", {
   charger_price: decimal("charger_price", { precision: 12, scale: 2 }),
   paraphernalia_cost: decimal("paraphernalia_cost", { precision: 12, scale: 2 }),
   dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
+  // E-273: GST on the dealer margin (18%). final_price = net_subtotal + dealer_margin + dealer_margin_gst_amount.
+  // NULL on rows written before E-273 (= 0; their final_price stays what the customer approved).
+  dealer_margin_gst_percent: decimal("dealer_margin_gst_percent", { precision: 5, scale: 2 }),
+  dealer_margin_gst_amount: decimal("dealer_margin_gst_amount", { precision: 12, scale: 2 }),
   final_price: decimal("final_price", { precision: 12, scale: 2 }),
 
   // GST snapshot — per-line gross / GST / net captured at submission so the
@@ -5933,6 +5939,27 @@ export const refurbishmentJobs = pgTable(
     requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
     started_at: timestamp("started_at", { withTimezone: true }),
     returned_at: timestamp("returned_at", { withTimezone: true }),
+    // [E-270] The lot this job travels in. NULL = legacy single job (E-233).
+    lot_id: uuid("lot_id"),
+    decline_reason: text("decline_reason"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decided_by: uuid("decided_by"),
+    // [E-270] received | damaged | missing — workshop receipt of THIS battery.
+    out_received_condition: varchar("out_received_condition", { length: 16 }),
+    out_received_note: text("out_received_note"),
+    out_received_photo_urls: text("out_received_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ready_at: timestamp("ready_at", { withTimezone: true }),
+    // [E-270] received | damaged | missing — NBFC receipt on return.
+    ret_received_condition: varchar("ret_received_condition", { length: 16 }),
+    ret_received_note: text("ret_received_note"),
+    ret_received_photo_urls: text("ret_received_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ret_received_at: timestamp("ret_received_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -5940,6 +5967,173 @@ export const refurbishmentJobs = pgTable(
     tenantIdx: index("refurbishment_jobs_tenant_idx").on(table.tenant_id),
     batteryIdx: index("refurbishment_jobs_battery_idx").on(table.battery_id),
     statusIdx: index("refurbishment_jobs_status_idx").on(table.status),
+    lotIdx: index("refurbishment_jobs_lot_idx").on(table.lot_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-270 — refurbishment_lots + refurbishment_lot_events
+// -----------------------------------------------------------------------------
+// One batch of batteries the NBFC sends to the iTarang workshop. The lot
+// carries the timeline/estimate negotiation and both physical legs; the
+// per-battery items are refurbishment_jobs rows with lot_id set.
+//
+// Mirrors drizzle/E-270_refurbishment_lots.sql, which is the source of truth.
+// No pgEnum and no CHECK on status — the vocabulary lives in
+// src/lib/nbfc/recovery/refurbishment-lot-status.ts (same call as E-258).
+// -----------------------------------------------------------------------------
+
+export const refurbishmentLots = pgTable(
+  "refurbishment_lots",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    ref_code: varchar("ref_code", { length: 24 }).notNull(),
+    // E-271 vocabulary: requested | proposed | countered | agreed |
+    // awaiting_advance | advance_paid | pickup_scheduled | in_transit_out |
+    // delivered | received | in_progress | revision_pending | ready |
+    // in_transit_return | delivered_back | balance_due | settled | cancelled
+    status: varchar("status", { length: 24 }).notNull().default("requested"),
+    battery_count: integer("battery_count").notNull().default(0),
+    note: text("note"),
+
+    current_round: integer("current_round").notNull().default(0),
+    // 'nbfc' | 'admin' — who moved last; the other side owes the next move.
+    last_party: varchar("last_party", { length: 8 }),
+    expected_receipt_date: date("expected_receipt_date"),
+    expected_return_date: date("expected_return_date"),
+    estimated_labour_total: numeric("estimated_labour_total", { precision: 14, scale: 2 }),
+    estimated_accessories_total: numeric("estimated_accessories_total", {
+      precision: 14,
+      scale: 2,
+    }),
+    estimated_total: numeric("estimated_total", { precision: 14, scale: 2 }),
+    proposal_note: text("proposal_note"),
+    agreed_at: timestamp("agreed_at", { withTimezone: true }),
+    agreed_by: uuid("agreed_by"),
+
+    // Leg 1: NBFC -> workshop.
+    out_carrier: varchar("out_carrier", { length: 120 }),
+    out_vehicle_no: varchar("out_vehicle_no", { length: 32 }),
+    out_docket_no: varchar("out_docket_no", { length: 64 }),
+    out_dispatched_on: date("out_dispatched_on"),
+    out_dispatch_note: text("out_dispatch_note"),
+    out_photo_urls: text("out_photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    out_dispatched_at: timestamp("out_dispatched_at", { withTimezone: true }),
+    out_dispatched_by: uuid("out_dispatched_by"),
+    out_received_at: timestamp("out_received_at", { withTimezone: true }),
+    out_received_by: uuid("out_received_by"),
+    out_receipt_note: text("out_receipt_note"),
+    out_receipt_photo_urls: text("out_receipt_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    out_has_mismatch: boolean("out_has_mismatch").notNull().default(false),
+
+    // Leg 2: workshop -> NBFC.
+    ret_carrier: varchar("ret_carrier", { length: 120 }),
+    ret_vehicle_no: varchar("ret_vehicle_no", { length: 32 }),
+    ret_docket_no: varchar("ret_docket_no", { length: 64 }),
+    ret_dispatched_on: date("ret_dispatched_on"),
+    ret_dispatch_note: text("ret_dispatch_note"),
+    ret_photo_urls: text("ret_photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    ret_dispatched_at: timestamp("ret_dispatched_at", { withTimezone: true }),
+    ret_dispatched_by: uuid("ret_dispatched_by"),
+    ret_received_at: timestamp("ret_received_at", { withTimezone: true }),
+    ret_received_by: uuid("ret_received_by"),
+    ret_receipt_note: text("ret_receipt_note"),
+    ret_receipt_photo_urls: text("ret_receipt_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ret_has_mismatch: boolean("ret_has_mismatch").notNull().default(false),
+
+    work_started_at: timestamp("work_started_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
+    cancelled_by: uuid("cancelled_by"),
+    cancelled_by_party: varchar("cancelled_by_party", { length: 8 }),
+    cancel_reason: text("cancel_reason"),
+
+    // ---- E-271: pickup / e-way bill / custody --------------------------------
+    // nbfc_ships | itarang_pickup — part of the quote the NBFC approves.
+    pickup_mode: varchar("pickup_mode", { length: 16 }).notNull().default("nbfc_ships"),
+    pickup_address: text("pickup_address"),
+    workshop_address: text("workshop_address"),
+    scheduled_pickup_date: date("scheduled_pickup_date"),
+    out_eway_bill_no: varchar("out_eway_bill_no", { length: 32 }),
+    out_eway_bill_url: text("out_eway_bill_url"),
+    out_picked_up_at: timestamp("out_picked_up_at", { withTimezone: true }),
+    out_picked_up_by: uuid("out_picked_up_by"),
+    out_delivered_at: timestamp("out_delivered_at", { withTimezone: true }),
+    out_delivered_by: uuid("out_delivered_by"),
+    ret_eway_bill_no: varchar("ret_eway_bill_no", { length: 32 }),
+    ret_eway_bill_url: text("ret_eway_bill_url"),
+    ret_delivered_at: timestamp("ret_delivered_at", { withTimezone: true }),
+    ret_delivered_by: uuid("ret_delivered_by"),
+    // ---- E-271: the quote the NBFC approved + revision round ------------------
+    quote_approved_total: numeric("quote_approved_total", { precision: 14, scale: 2 }),
+    quote_approved_at: timestamp("quote_approved_at", { withTimezone: true }),
+    quote_approved_by: uuid("quote_approved_by"),
+    revised_total: numeric("revised_total", { precision: 14, scale: 2 }),
+    revision_note: text("revision_note"),
+    revision_round: integer("revision_round").notNull().default(0),
+    // ---- E-271: advance (NBFC -> iTarang), E-252 money-block shape -------------
+    advance_pct: numeric("advance_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+    advance_amount: numeric("advance_amount", { precision: 14, scale: 2 }),
+    // not_required | pending | recorded | confirmed
+    advance_status: varchar("advance_status", { length: 16 }).notNull().default("not_required"),
+    advance_provider: varchar("advance_provider", { length: 16 }), // razorpay | offline
+    advance_order_id: varchar("advance_order_id", { length: 64 }),
+    advance_payment_id: varchar("advance_payment_id", { length: 64 }),
+    advance_reference: varchar("advance_reference", { length: 120 }),
+    advance_recorded_at: timestamp("advance_recorded_at", { withTimezone: true }),
+    advance_confirmed_at: timestamp("advance_confirmed_at", { withTimezone: true }),
+    advance_confirmed_by: uuid("advance_confirmed_by"),
+    // ---- E-271: balance = final_total - advance -------------------------------
+    final_total: numeric("final_total", { precision: 14, scale: 2 }),
+    balance_amount: numeric("balance_amount", { precision: 14, scale: 2 }),
+    // not_due | pending | recorded | confirmed
+    balance_status: varchar("balance_status", { length: 16 }).notNull().default("not_due"),
+    balance_provider: varchar("balance_provider", { length: 16 }),
+    balance_order_id: varchar("balance_order_id", { length: 64 }),
+    balance_payment_id: varchar("balance_payment_id", { length: 64 }),
+    balance_reference: varchar("balance_reference", { length: 120 }),
+    balance_recorded_at: timestamp("balance_recorded_at", { withTimezone: true }),
+    balance_confirmed_at: timestamp("balance_confirmed_at", { withTimezone: true }),
+    balance_confirmed_by: uuid("balance_confirmed_by"),
+    settled_at: timestamp("settled_at", { withTimezone: true }),
+
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("refurbishment_lots_ref_uidx").on(table.ref_code),
+    tenantIdx: index("refurbishment_lots_tenant_idx").on(table.tenant_id, table.created_at),
+    statusIdx: index("refurbishment_lots_status_idx").on(table.status, table.created_at),
+  }),
+);
+
+export const refurbishmentLotEvents = pgTable(
+  "refurbishment_lot_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id")
+      .notNull()
+      .references(() => refurbishmentLots.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id").notNull(),
+    seq: integer("seq").notNull(),
+    party: varchar("party", { length: 8 }).notNull(), // nbfc | admin | system
+    kind: varchar("kind", { length: 24 }).notNull(),
+    message: text("message"),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    seqUnique: uniqueIndex("refurbishment_lot_events_seq_uidx").on(table.lot_id, table.seq),
+    lotIdx: index("refurbishment_lot_events_lot_idx").on(table.lot_id, table.created_at),
   }),
 );
 
