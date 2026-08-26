@@ -33,7 +33,11 @@ import { generateId } from "@/lib/api-utils";
 import { db } from "@/lib/db";
 import { leads, otpConfirmations } from "@/lib/db/schema";
 import { sendMsg91Otp } from "@/lib/msg91";
-import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
+import {
+  sendTwoFactorSmsOtp,
+  sendTwoFactorVoiceOtp,
+  twoFactorConfigured,
+} from "@/lib/twofactor";
 
 export const OTP_LIFETIME_MS = 10 * 60 * 1000;
 export const MAX_SENDS = 3;
@@ -172,15 +176,23 @@ export async function sendDispatchOtp(opts: {
     });
   }
 
-  const channel = await deliver(opts.prefer, phone, otp);
+  const delivery = await deliver(opts.prefer, phone, otp);
 
-  if (!channel) {
+  if (!delivery.channel) {
+    // Say WHY. "Please try again" hid a dead provider wallet behind three
+    // identical retries on 2026-08-26; the dealer cannot fix a balance, but the
+    // admin reading the chat can.
+    const reason = delivery.errors.join("; ");
     return {
       ok: false,
       status: 502,
-      error: "We couldn't deliver the code. Please try again.",
+      error:
+        "We couldn't deliver the code" +
+        (reason ? ` (${reason})` : "") +
+        ". Please try again, or ask iTarang support to check the OTP provider balance.",
     };
   }
+  const channel = delivery.channel;
 
   return {
     ok: true,
@@ -192,27 +204,48 @@ export async function sendDispatchOtp(opts: {
   };
 }
 
-/** Try the preferred wire first, then the standing ladder. Null = all failed. */
+/**
+ * Try the preferred wire first, then the standing ladder:
+ *   voice call → 2Factor SMS → MSG91 SMS → WhatsApp → dev.
+ *
+ * WhatsApp sits at the tail (unless preferred) because the button says "call";
+ * it is there so that an exhausted call/SMS wallet still gets the customer a
+ * code when they are reachable on WhatsApp — a free send beats no send.
+ * `errors` collects every provider's reason so the caller can show it.
+ */
 async function deliver(
   prefer: DispatchOtpChannel | undefined,
   phone: string,
   otp: string,
-): Promise<DispatchOtpChannel | null> {
-  if (prefer === "whatsapp") {
+): Promise<{ channel: DispatchOtpChannel | null; errors: string[] }> {
+  const errors: string[] = [];
+
+  const tryWhatsApp = async (): Promise<boolean> => {
     try {
       const { sendDispatchOtpWhatsApp } = await import(
         "@/lib/whatsapp/dispatch-otp-send"
       );
-      if (await sendDispatchOtpWhatsApp(phone, otp)) return "whatsapp";
+      if (await sendDispatchOtpWhatsApp(phone, otp)) return true;
+      errors.push("WhatsApp: not reachable");
     } catch (err) {
       console.error("[dispatch-otp] WhatsApp send failed:", err);
+      errors.push("WhatsApp: send failed");
     }
-  }
+    return false;
+  };
+
+  if (prefer === "whatsapp" && (await tryWhatsApp())) return { channel: "whatsapp", errors };
 
   if (twoFactorConfigured()) {
     const call = await sendTwoFactorVoiceOtp({ mobile_number: phone, otp });
-    if (call.success) return "call";
+    if (call.success) return { channel: "call", errors };
     console.error("[dispatch-otp] voice call failed:", call.error);
+    errors.push(`call: ${call.error}`);
+
+    const sms = await sendTwoFactorSmsOtp({ mobile_number: phone, otp });
+    if (sms.success) return { channel: "sms", errors };
+    console.error("[dispatch-otp] 2Factor SMS failed:", sms.error);
+    errors.push(`SMS: ${sms.error}`);
   }
 
   if (process.env.MSG91_AUTH_KEY?.trim() && process.env.MSG91_TEMPLATE_ID?.trim()) {
@@ -221,16 +254,19 @@ async function deliver(
       otp,
       otp_expiry_minutes: Math.floor(OTP_LIFETIME_MS / 60000),
     });
-    if (sms.success) return "sms";
+    if (sms.success) return { channel: "sms", errors };
     console.error("[dispatch-otp] SMS failed:", sms.error);
+    errors.push(`MSG91: ${sms.error}`);
   }
+
+  if (prefer !== "whatsapp" && (await tryWhatsApp())) return { channel: "whatsapp", errors };
 
   // No provider at all — the hardcoded-OTP dev path the route has always had.
   if (process.env.NODE_ENV !== "production") {
     console.log(`[dispatch-otp] DEV plaintext OTP: ${otp}`);
-    return "dev";
+    return { channel: "dev", errors };
   }
-  return null;
+  return { channel: null, errors };
 }
 
 export type VerifyDispatchOtpResult =
