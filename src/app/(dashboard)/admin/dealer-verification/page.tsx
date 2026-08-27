@@ -77,6 +77,7 @@ type DealerVerificationItem = {
   dealerAccountStatus?: string | null;
   submittedAt?: string | null;
   approvedAt?: string | null;
+  approvedByTag?: "CEO approved" | "Admin approved" | null;
   city?: string | null;
   state?: string | null;
   pincode?: string | null;
@@ -170,6 +171,22 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function ApprovedByTag({ value }: { value?: string | null }) {
+  if (!value) return null;
+  const isCeo = value === "CEO approved";
+  return (
+    <span
+      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
+        isCeo
+          ? "border-violet-200 bg-violet-50 text-violet-700"
+          : "border-sky-200 bg-sky-50 text-sky-700"
+      }`}
+    >
+      {value}
+    </span>
+  );
+}
+
 function AgreementBadge({ value }: { value: string }) {
   const normalized = (value ?? "").toLowerCase();
 
@@ -241,6 +258,7 @@ function DocumentBadge({ value }: { value: string }) {
 export default function DealerVerificationPage() {
   const [applications, setApplications] = useState<DealerVerificationItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -274,10 +292,20 @@ export default function DealerVerificationPage() {
     const loadApplications = async () => {
       try {
         const res = await fetch("/api/admin/dealer-verifications");
-        const data = await res.json();
-        if (data.success) setApplications(data.applications || []);
+        const data = await res.json().catch(() => null);
+        if (res.ok && data?.success) {
+          setApplications(data.applications || []);
+          setLoadError(null);
+        } else {
+          // Don't render a silent empty queue on a 401/403/500 — say why.
+          setLoadError(
+            data?.message ||
+              `Could not load dealer applications (HTTP ${res.status}).`,
+          );
+        }
       } catch (error) {
         console.error("Failed to load dealer verifications", error);
+        setLoadError("Could not load dealer applications. Please refresh.");
       } finally {
         setLoading(false);
       }
@@ -716,6 +744,8 @@ export default function DealerVerificationPage() {
 
         {loading ? (
           <div className="px-6 py-12 text-sm text-slate-500">Loading dealer applications...</div>
+        ) : loadError ? (
+          <div className="px-6 py-12 text-sm text-red-600">{loadError}</div>
         ) : filtered.length === 0 ? (
           <div className="px-6 py-12 text-sm text-slate-500">
             {isFilterActive
@@ -829,7 +859,10 @@ export default function DealerVerificationPage() {
                     </td>
 
                     <td className="px-6 py-5 align-top">
-                      <StatusBadge status={item.status} />
+                      <div className="flex flex-col items-start gap-1.5">
+                        <StatusBadge status={item.status} />
+                        <ApprovedByTag value={item.approvedByTag} />
+                      </div>
                     </td>
 
                     <td className="px-6 py-5 text-right align-top">
