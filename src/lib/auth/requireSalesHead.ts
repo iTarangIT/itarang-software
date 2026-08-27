@@ -10,7 +10,10 @@ import { users } from "@/lib/db/schema";
 // are restricted to sales_head only (product decision — dealer onboarding
 // review is owned solely by sales_head, not the broader admin-capable set).
 
-const SALES_HEAD_ROLES = new Set(["sales_head"]);
+// CEO is granted the same dealer-validation access as sales_head — the page
+// itself is open to both in middleware.ts, so the API must agree or the CEO
+// sees an empty queue (403 swallowed by the page).
+const SALES_HEAD_ROLES = new Set(["sales_head", "ceo"]);
 
 type SalesHeadUser = {
   id: string;
