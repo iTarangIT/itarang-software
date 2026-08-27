@@ -8,6 +8,7 @@ import {
   dealers,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 import { z } from "zod";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
@@ -418,6 +419,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         onboardingStatus: row.onboarding_status,
         reviewStatus: row.review_status,
         submittedAt: row.submitted_at,
+        approvedByTag:
+          row.onboarding_status === "approved" && row.approved_by
+            ? (await approvalTagsFor([row.approved_by])).get(row.approved_by) ?? null
+            : null,
 
         // E-167: collection channel + bot-surfaced warnings. For WhatsApp-
         // collected applications the values were auto-extracted (Gemini) and
