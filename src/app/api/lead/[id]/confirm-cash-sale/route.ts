@@ -40,6 +40,8 @@ const BodySchema = z.object({
   paraphernalia: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   paraphernaliaLines: z.array(ParaLineSchema).optional(),
   dealerMargin: z.number().min(0),
+  dealerMarginGstPercent: z.number().min(0).optional(),
+  dealerMarginGstAmount: z.number().min(0).optional(),
   finalPrice: z.number().min(0),
   batteryPrice: z.number().min(0).optional(),
   chargerPrice: z.number().min(0).optional(),

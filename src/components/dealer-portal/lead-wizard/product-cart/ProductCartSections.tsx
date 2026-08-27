@@ -334,6 +334,8 @@ export function CartPricingSummary({
       gstSubtotal={d.gstSubtotal}
       netSubtotal={d.netSubtotal}
       dealerMargin={d.dealerMargin}
+      dealerMarginGst={d.dealerMarginGst}
+      dealerMarginGstPct={d.dealerMarginGstPct}
       marginMode={cart.marginMode}
       marginInput={cart.marginInput}
       marginPercentInput={cart.marginPercentInput}

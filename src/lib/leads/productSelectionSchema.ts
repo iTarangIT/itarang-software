@@ -45,6 +45,9 @@ export const productSelectionFields = {
   paraphernalia: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   paraphernaliaLines: z.array(paraLineSchema).optional(),
   dealerMargin: z.number().min(0).optional(),
+  // E-273: GST on the margin (rate + rupees), captured with the rest of the snapshot.
+  dealerMarginGstPercent: z.number().min(0).optional(),
+  dealerMarginGstAmount: z.number().min(0).optional(),
   finalPrice: z.number().min(0).optional(),
   batteryPrice: z.number().min(0).optional(),
   chargerPrice: z.number().min(0).optional(),
@@ -135,6 +138,8 @@ export function productSelectionColumns(
     charger_price: body.chargerPrice?.toString(),
     paraphernalia_cost: body.paraphernaliaCost?.toString(),
     dealer_margin: body.dealerMargin?.toString(),
+    dealer_margin_gst_percent: body.dealerMarginGstPercent?.toString(),
+    dealer_margin_gst_amount: body.dealerMarginGstAmount?.toString(),
     final_price: body.finalPrice?.toString(),
     battery_gross: body.batteryGross?.toString(),
     battery_gst_percent: body.batteryGstPercent?.toString(),

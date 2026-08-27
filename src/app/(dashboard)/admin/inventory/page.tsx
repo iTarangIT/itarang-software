@@ -43,7 +43,8 @@ interface InventoryRow {
   supplierName: string | null;
   dealerId: string | null;
   dealerName: string | null;
-  invoiceValue: string | null;
+  baseValue: string | null;
+  priceInclusiveGst: string | null;
   invoiceNumber: string | null;
   invoiceDate: string | null;
   createdAt: string;
@@ -55,7 +56,7 @@ interface KPIs {
   reservedUnits: number;
   soldUnits: number;
   writtenOffUnits: number;
-  totalInvoiceValue: number;
+  totalBaseValue: number;
 }
 
 interface InventoryFilters {
@@ -202,7 +203,7 @@ export default function AdminInventoryDashboard() {
   const totalValueFmt = useMemo(
     () =>
       kpis
-        ? `₹${Math.round(kpis.totalInvoiceValue).toLocaleString("en-IN")}`
+        ? `₹${Math.round(kpis.totalBaseValue).toLocaleString("en-IN")}`
         : "—",
     [kpis],
   );
@@ -472,7 +473,7 @@ export default function AdminInventoryDashboard() {
                     <th className="px-3 py-3 text-left">Dealer</th>
                     <th className="px-3 py-3 text-left">Warehouse</th>
                     <th className="px-3 py-3 text-left">Status</th>
-                    <th className="px-3 py-3 text-right">Value</th>
+                    <th className="px-3 py-3 text-right">Base Value ₹</th>
                     <th className="px-3 py-3 text-right">Age</th>
                   </tr>
                 </thead>
@@ -501,7 +502,7 @@ export default function AdminInventoryDashboard() {
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         ₹
-                        {Number(r.invoiceValue ?? 0).toLocaleString("en-IN", {
+                        {Number(r.baseValue ?? 0).toLocaleString("en-IN", {
                           maximumFractionDigits: 0,
                         })}
                       </td>

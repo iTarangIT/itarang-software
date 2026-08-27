@@ -446,7 +446,28 @@ export async function forwardNbfcDocRequest(opts: {
   //
   // Best-effort and not awaited — the rows above are committed, and a WhatsApp
   // failure must not turn a successful forward into an error.
-  if (created.length > 0) {
+  //
+  // Step-4 extra items go to the Step-4 bucket, not the Step-2/3 "Other
+  // Documentation" list: the message names the battery/serial/date and the
+  // button opens the ≤10 pre-sanction bucket in chat, where each file also
+  // answers the next open child here. The generic ask stays for the rest.
+  if (created.length > 0 && wrapper.request_type === "step4_extra_items") {
+    void import("@/lib/whatsapp/extra-docs-flow")
+      .then(({ pushExtraDocsRequest }) =>
+        pushExtraDocsRequest({
+          leadId: wrapper.lead_id,
+          requestId: wrapper.id,
+          items: created.map((c, i) => ({
+            id: c.id,
+            docLabel: c.doc_label,
+            reason: opts.items[i]?.reason ?? null,
+          })),
+        }),
+      )
+      .catch((err) =>
+        console.error("[nbfc/doc-requests] WhatsApp extra-docs push failed:", err),
+      );
+  } else if (created.length > 0) {
     void import("@/lib/whatsapp/doc-request-flow")
       .then(({ pushDocRequestToWhatsApp }) =>
         pushDocRequestToWhatsApp({

@@ -646,6 +646,15 @@ const roleNavigation: Record<string, any[]> = {
           icon: Recycle,
           href: "/admin/nbfc/scrap",
         },
+        // [E-270] The workshop end of the NBFC refurbishment loop: batches
+        // sent by NBFCs, the timeline/estimate proposal, both trucks, and the
+        // per-battery work panel.
+        {
+          id: "nbfc-refurb-desk",
+          label: "Refurbishment",
+          icon: Wrench,
+          href: "/admin/nbfc/refurbishment",
+        },
         {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",

@@ -48,6 +48,7 @@ import {
   recordNoPreferredPartner,
 } from "@/lib/leads/bajaj-fallback";
 import { loadSectionGOptions, type SectionGNbfc } from "@/lib/leads/section-g";
+import { getPreSanctionBucket } from "@/lib/leads/pre-sanction-bucket";
 import {
   STEP4_UNLOCKED_STATUSES,
   submitStep4ProductSelection,
@@ -576,6 +577,10 @@ async function onStep4Ack(
   }
 
   try {
+    // The extra documents attached over WhatsApp live on the DRAFT selection
+    // row, which the submit below deletes — carry them onto the submitted row
+    // exactly as the web wizard's Submit does.
+    const { items: preSanctionDocs } = await getPreSanctionBucket(leadId);
     await submitStep4ProductSelection({
       leadId,
       lead,
@@ -584,6 +589,7 @@ async function onStep4Ack(
           nbfc_id: String(p.nbfcId),
           loan_product_id: p.productId,
         })),
+        preSanctionDocs,
         // The customer acknowledged it themselves, on the record, one message
         // ago — a stronger attestation than the dealer's checkbox, not a weaker
         // one. See the module header.
