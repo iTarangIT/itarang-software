@@ -192,6 +192,7 @@ type DealerReviewData = {
   financeLive?: boolean;
   onboardingStatus?: string;
   reviewStatus?: string;
+  approvedByTag?: "CEO approved" | "Admin approved" | null;
   submittedAt?: string | null;
   correctionRemarks?: string | null;
   rejectionRemarks?: string | null;
@@ -1875,6 +1876,17 @@ export default function DealerReviewPage() {
             )}
             <StatusBadge value={data.onboardingStatus} />
             <StatusBadge value={data.reviewStatus} />
+            {data.approvedByTag ? (
+              <span
+                className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${
+                  data.approvedByTag === "CEO approved"
+                    ? "border-violet-200 bg-violet-50 text-violet-700"
+                    : "border-sky-200 bg-sky-50 text-sky-700"
+                }`}
+              >
+                {data.approvedByTag}
+              </span>
+            ) : null}
             {data.financeEnabled ? <AgreementBadge value={agreementStatusForUi} /> : null}
             <a
               href={`/admin/dealer-verification/${dealerId}/nbfcs`}

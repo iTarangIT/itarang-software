@@ -618,6 +618,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
           dealer_account_status: "active",
           completion_status: "completed",
           approved_at: new Date(),
+          // Who approved — drives the "CEO approved" / "Admin approved" tag.
+          approved_by: auth.user.id,
           signed_at:
             application.agreement_status === "completed"
               ? application.signed_at || new Date()
