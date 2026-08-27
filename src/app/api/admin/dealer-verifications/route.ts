@@ -6,6 +6,7 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { buildLocationHaystack } from "@/lib/dealer/location-haystack";
+import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 
 export async function GET() {
   const auth = await requireSalesHead();
@@ -33,6 +34,7 @@ export async function GET() {
         isBranchDealer: dealerOnboardingApplications.is_branch_dealer,
         submittedAt: dealerOnboardingApplications.submitted_at,
         approvedAt: dealerOnboardingApplications.approved_at,
+        approvedBy: dealerOnboardingApplications.approved_by,
         updatedAt: dealerOnboardingApplications.updated_at,
         createdAt: dealerOnboardingApplications.created_at,
         city: dealerOnboardingApplications.city,
@@ -71,6 +73,7 @@ export async function GET() {
     }
 
     const applicationIds = applications.map((a) => a.id);
+    const approvalTags = await approvalTagsFor(applications.map((a) => a.approvedBy));
 
     // Count DISTINCT document types per application (not raw rows) and ignore
     // superseded / pending_correction history — so the badge matches the unique
@@ -204,6 +207,11 @@ export async function GET() {
         dealerAccountStatus: (item.dealerAccountStatus || "").toLowerCase(),
         submittedAt: item.submittedAt,
         approvedAt: item.approvedAt,
+        // "CEO approved" | "Admin approved" | null (legacy rows without approved_by)
+        approvedByTag:
+          item.onboardingStatus === "approved" && item.approvedBy
+            ? approvalTags.get(item.approvedBy) ?? null
+            : null,
         city: item.city || "",
         state: item.state || "",
         pincode: item.pincode || "",
