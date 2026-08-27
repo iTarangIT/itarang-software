@@ -6,6 +6,8 @@ import {
   marginAmount,
   marginLabel,
   parseMarginInput,
+  finalPriceOf,
+  marginGst,
 } from "../dealer-margin";
 
 describe("parseMarginInput — rupees", () => {
@@ -71,5 +73,19 @@ describe("marginLabel", () => {
     expect(marginLabel("percent", 7.5)).toBe("7.5%");
     expect(marginLabel("percent", 5)).toBe("5%");
     expect(marginLabel("rupees", 3000)).toBe("₹3,000");
+  });
+});
+
+describe("GST on margin (E-273)", () => {
+  it("marginAmount stays GST-exclusive; the GST is a separate line", () => {
+    const margin = marginAmount("percent", 5, 73080);
+    expect(margin).toBe(3654);
+    expect(marginGst(margin)).toBe(658);
+    expect(finalPriceOf(73080, margin)).toBe(73080 + 3654 + 658);
+  });
+
+  it("no margin → no GST", () => {
+    expect(marginGst(marginAmount("rupees", 0, 73080))).toBe(0);
+    expect(finalPriceOf(73080, 0)).toBe(73080);
   });
 });

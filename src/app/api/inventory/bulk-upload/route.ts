@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { inventory } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler, generateId } from "@/lib/api-utils";
+import { priceInclusiveGst } from "@/lib/inventory/pricing";
 
 const bodySchema = z.object({
   dealerId: z.string().min(1, "dealerId is required"),
@@ -87,7 +88,7 @@ export const POST = withErrorHandler(async (req: Request) => {
       const invoiceValue =
         assetType === "paraphernalia"
           ? toNumberString(r.unit_cost ?? r.inventory_amount)
-          : toNumberString(r.invoice_value ?? r.inventory_amount);
+          : toNumberString(r.base_value ?? r.invoice_value ?? r.inventory_amount);
 
       const invoiceDate =
         assetType === "battery"
@@ -164,7 +165,9 @@ export const POST = withErrorHandler(async (req: Request) => {
           oem_invoice_date: invoiceDate,
 
           inventory_amount: invoiceValue,
-          final_amount: invoiceValue,
+          // GST-inclusive price (Base Value + GST); this legacy route used to store the bare base.
+          final_amount: invoiceValue ? priceInclusiveGst(invoiceValue, r.gst_percent).toFixed(2) : null,
+          price_inclusive_gst: invoiceValue ? priceInclusiveGst(invoiceValue, r.gst_percent).toFixed(2) : null,
 
           warehouse_location: clean(r.warehouse_location),
           physical_condition: clean(r.physical_condition)?.toLowerCase(),

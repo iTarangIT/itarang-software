@@ -97,7 +97,10 @@ import {
 
 import type { ActiveDealer } from "./customer-lead";
 import {
+  finalPriceOf,
+  MARGIN_GST_PCT,
   marginAmount,
+  marginGst,
   marginLabel,
   parseMarginInput,
   type MarginMode,
@@ -527,6 +530,7 @@ async function beginPricing(
     marginMode: null,
     marginValue: null,
     marginAmount: null,
+    marginGst: null,
     orderSentAt: null,
   });
 
@@ -580,6 +584,7 @@ async function onMarginMode(
       marginMode: null,
       marginValue: 0,
       marginAmount: 0,
+      marginGst: 0,
     });
     return await showOrderPreview(session, leadId, picked.battery, picked.charger, 0);
   }
@@ -633,6 +638,7 @@ async function onMarginValue(
   await patchLeadSub(session.id, "dp", {
     marginValue: parsed.value,
     marginAmount: amount,
+    marginGst: marginGst(amount),
   });
 
   await showOrderPreview(
@@ -661,7 +667,8 @@ async function showOrderPreview(
   marginText?: string,
 ): Promise<void> {
   const base = stockValue(battery, charger);
-  const total = base + margin;
+  const gst = marginGst(margin);
+  const total = finalPriceOf(base, margin, gst);
   const facts = await leadFacts(leadId);
   const cash = isCashLead(facts?.payment_method);
 
@@ -672,8 +679,8 @@ async function showOrderPreview(
       `This is exactly what ${firstName(facts)} will see:\n\n` +
       `———\n${customerOrderCard(battery, charger, total)}\n———\n\n` +
       (margin > 0
-        ? `_Stock ${inr(base)} + your margin ${marginText ?? inr(margin)} = ${inr(total)}._\n` +
-          `_That line is yours only — the margin is not in the message above._`
+        ? `_Stock ${inr(base)} + your margin ${marginText ?? inr(margin)} + ${MARGIN_GST_PCT}% GST on margin ${inr(gst)} = ${inr(total)}._\n` +
+          `_That line is yours only — the margin and its GST are not itemised in the message above._`
         : `_No margin added._`),
     [
       { id: "dps_send", title: cash ? "✅ Send & confirm" : "✅ Send to customer" },
@@ -765,7 +772,8 @@ async function completeOrder(
   const batteryNet = lineTotal(battery);
   const chargerNet = charger ? lineTotal(charger) : 0;
   const netSubtotal = batteryNet + chargerNet;
-  const total = netSubtotal + margin;
+  const gst = marginGst(margin);
+  const total = finalPriceOf(netSubtotal, margin, gst);
 
   const num = (v: string | null | undefined): number | undefined => {
     const n = Number(v);
@@ -776,7 +784,7 @@ async function completeOrder(
 
   // The line snapshot both paths write. Built once so a cash sale and a finance
   // selection can never disagree about the price the customer was shown.
-  //
+  // `netSubtotal` is the ITEMS only and `finalPrice` carries the margin plus 18% GST on it — the
   // `netSubtotal` is the ITEMS only and `finalPrice` carries the margin — the
   // same split `computeTotals` uses in the web cart, so the Step-5 screen reads
   // back a row it would itself have written.
@@ -788,6 +796,8 @@ async function completeOrder(
     paraphernaliaLines: [],
     paraphernaliaCost: 0,
     dealerMargin: margin,
+    dealerMarginGstPercent: MARGIN_GST_PCT,
+    dealerMarginGstAmount: gst,
     batteryPrice: batteryNet,
     chargerPrice: chargerNet || undefined,
     finalPrice: total,
@@ -816,6 +826,7 @@ async function completeOrder(
       ? `⚡ ${charger.model_name ?? charger.serial_number} — ${inr(chargerNet)}\n`
       : "") +
     (margin > 0 ? `➕ Your margin — ${inr(margin)}\n` : "") +
+    (gst > 0 ? `➕ GST on margin (${MARGIN_GST_PCT}%) — ${inr(gst)}\n` : "") +
     `\n*Total ${inr(total)}* _(incl. GST)_`;
 
   // --- Cash: the sale closes right here. ---------------------------------
@@ -1378,6 +1389,8 @@ interface DpCtx {
   marginMode?: "percent" | "rupees" | null;
   marginValue?: number | null;
   marginAmount?: number | null;
+  /** 18% GST on marginAmount (E-273). */
+  marginGst?: number | null;
   orderSentAt?: string | null;
 }
 

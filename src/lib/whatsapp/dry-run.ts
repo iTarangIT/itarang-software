@@ -68,6 +68,12 @@ export function dryRunClear(): void {
  */
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 
+/** A 1×1 transparent PNG — the smallest thing that is still a real image. */
+const FIXTURE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 let counter = 0;
 function record(send: Omit<DryRunSend, "at">): SendResult {
   SENT.push({ ...send, at: new Date() });
@@ -105,6 +111,13 @@ export class DryRunWhatsAppAdapter implements WhatsAppAdapter {
     // Document ingest is out of scope for a dry run: it needs real bytes and a
     // real Gemini call. Failing loudly beats returning an empty buffer that
     // silently classifies as an unreadable document.
+    //
+    // WA_DRY_RUN_MEDIA_FIXTURE=1 is the one exception: the Step-4 extra-
+    // documents bucket stores bytes verbatim with no extraction, so a tiny PNG
+    // exercises its whole save → append → notify path for real.
+    if (process.env.WA_DRY_RUN_MEDIA_FIXTURE === "1") {
+      return { buffer: FIXTURE_PNG, mimeType: "image/png", fileName: "fixture.png" };
+    }
     throw new Error("[WA dry-run] downloadMedia is not available without a provider");
   }
 

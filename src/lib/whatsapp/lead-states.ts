@@ -53,10 +53,23 @@ export interface LeadStateOptions {
    * prompt. For those, a greeting is a request to see the message again.
    */
   rerenderOnGreeting?: boolean;
+  /**
+   * Re-render this step from scratch after the journey was parked in Save
+   * Drafts and picked up again (ctx.lead and current_state are already
+   * restored when this runs). States whose input is free text cannot use the
+   * greeting re-render above, so they supply an explicit prompt here.
+   */
+  resume?: LeadStateResumer;
 }
+
+export type LeadStateResumer = (
+  session: SessionRow,
+  dealer: ActiveDealer,
+) => Promise<void>;
 
 const LEAD_STATE_HANDLERS: Record<string, LeadStateHandler> = {};
 const RERENDER_ON_GREETING = new Set<string>();
+const LEAD_STATE_RESUMERS: Record<string, LeadStateResumer> = {};
 
 /**
  * Register one state. Called by a phase module at import time.
@@ -86,6 +99,7 @@ export function registerLeadState(
   }
   LEAD_STATE_HANDLERS[state] = handler;
   if (options.rerenderOnGreeting) RERENDER_ON_GREETING.add(state);
+  if (options.resume) LEAD_STATE_RESUMERS[state] = options.resume;
 }
 
 export function registerLeadStates(
@@ -106,6 +120,11 @@ export function leadStateHandler(state: string): LeadStateHandler | undefined {
  */
 export function rerendersOnGreeting(state: string): boolean {
   return RERENDER_ON_GREETING.has(state);
+}
+
+/** Explicit resume prompt for a state, if the phase registered one. */
+export function leadStateResumer(state: string): LeadStateResumer | undefined {
+  return LEAD_STATE_RESUMERS[state];
 }
 
 /** For diagnostics and tests. */

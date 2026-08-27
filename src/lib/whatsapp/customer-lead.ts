@@ -455,6 +455,31 @@ export async function getDealerDraft(
   dealerCode: string,
   leadId: string,
 ): Promise<DealerDraft | null> {
+  const row = await loadDealerLeadRow(dealerCode, leadId);
+  if (!row) return null;
+  if (row.kycStatus && !DRAFT_KYC_STATUSES.includes(row.kycStatus)) return null;
+  return toDealerDraft(row);
+}
+
+/**
+ * Same shape as getDealerDraft but WITHOUT the "still a draft" filter — for a
+ * lead that has already been submitted and is parked mid-journey (co-borrower,
+ * lender pick, offers, dispatch). Save Drafts needs a name and mobile for the
+ * row; the resume position comes from the parked session snapshot, not the DB.
+ * Still scoped to the dealer.
+ */
+export async function getDealerLeadSummary(
+  dealerCode: string,
+  leadId: string,
+): Promise<DealerDraft | null> {
+  const row = await loadDealerLeadRow(dealerCode, leadId);
+  return row ? toDealerDraft(row) : null;
+}
+
+async function loadDealerLeadRow(
+  dealerCode: string,
+  leadId: string,
+): Promise<(DraftRow & { kycStatus: string | null }) | null> {
   const [row] = await db
     .select({
       id: leads.id,
@@ -472,9 +497,7 @@ export async function getDealerDraft(
     .from(leads)
     .where(and(eq(leads.id, leadId), eq(leads.dealer_id, dealerCode)))
     .limit(1);
-  if (!row) return null;
-  if (row.kycStatus && !DRAFT_KYC_STATUSES.includes(row.kycStatus)) return null;
-  return toDealerDraft(row);
+  return row ?? null;
 }
 
 // ── Dealer console: inventory ────────────────────────────────────────────────

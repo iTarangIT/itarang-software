@@ -22,10 +22,18 @@
  * refuse the things that are not one.
  */
 
-import { resolveMargin } from "@/components/dealer-portal/lead-wizard/product-cart/pricing";
+import {
+  finalPriceOf,
+  MARGIN_GST_PCT,
+  marginGst,
+  resolveMargin,
+} from "@/components/dealer-portal/lead-wizard/product-cart/pricing";
 import type { MarginMode } from "@/components/dealer-portal/lead-wizard/product-cart/types";
 
 export type { MarginMode };
+// Re-exported so the chat flow and the web cart share ONE definition of
+// "GST on margin" and of the customer-facing total.
+export { finalPriceOf, MARGIN_GST_PCT, marginGst };
 
 /**
  * Caps. Both are deliberately far above any real margin — they are typo guards,

@@ -22,7 +22,8 @@ interface AgeingRow {
   serial_number: string | null;
   sold_date: string | null;
   status: string;
-  invoice_value: string | null;
+  base_value: string | null;
+  price_inclusive_gst: string | null;
   star_rating: number | null;
   soc_percent: string | null;
   imei_id: string | null;
@@ -219,7 +220,8 @@ export default function AgeingReportPage() {
                     <th className="px-3 py-3 text-left">Model</th>
                     <th className="px-3 py-3 text-right">Sold Date</th>
                     <th className="px-3 py-3 text-right">Age (d)</th>
-                    <th className="px-3 py-3 text-right">Invoice ₹</th>
+                    <th className="px-3 py-3 text-right">Base Value ₹</th>
+                    <th className="px-3 py-3 text-right">Incl. GST ₹</th>
                     <th className="px-3 py-3 text-left">Status</th>
                     <th className="px-3 py-3 text-left">SOC%</th>
                     <th className="px-3 py-3 text-left">IoT</th>
@@ -241,8 +243,13 @@ export default function AgeingReportPage() {
                         {r.inventory_age_days}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">
-                        {r.invoice_value
-                          ? `₹${Number(r.invoice_value).toLocaleString("en-IN")}`
+                        {r.base_value
+                          ? `₹${Number(r.base_value).toLocaleString("en-IN")}`
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {r.price_inclusive_gst
+                          ? `₹${Number(r.price_inclusive_gst).toLocaleString("en-IN")}`
                           : "—"}
                       </td>
                       <td className="px-3 py-2">

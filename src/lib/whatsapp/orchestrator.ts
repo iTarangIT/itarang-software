@@ -86,6 +86,7 @@ import {
   getDealerProductOptions,
   setLeadProduct,
   getDealerDraft,
+  getDealerLeadSummary,
   listDealerDrafts,
   classifyCustomerLead,
   loadApplication,
@@ -116,7 +117,15 @@ import {
 // E-264 — journey phases register their states here instead of adding cases to
 // the two console switches. Type-only + a lookup; no phase module is imported
 // at eval time, so the one-way dependency rule this file relies on is intact.
-import { leadStateHandler, rerendersOnGreeting } from "./lead-states";
+import { leadStateHandler, leadStateResumer, rerendersOnGreeting } from "./lead-states";
+// Step-4 extra documents. Imported directly (not only via lead-phases) because
+// the ladder below offers the step and the module hands the turn back through
+// registerExtraDocsContinuation — it cannot import this file itself.
+import {
+  askExtraDocs,
+  openExtraDocs,
+  registerExtraDocsContinuation,
+} from "./extra-docs-flow";
 // Static side-effect import: registers every shipped journey phase. Must stay
 // a static import — a dynamic one can fail silently and leave the registry empty.
 import { loadLeadPhases } from "./lead-phases";
@@ -3287,8 +3296,23 @@ async function parkCurrentLead(
 
     if (lead.leadId) {
       const draft = await getDealerDraft(dealer.dealerCode, lead.leadId);
-      // Not a draft any more (sold / submitted) → nothing to park.
-      return draft ? draftLabel(draft) : null;
+      if (draft) return draftLabel(draft);
+      // Past the pre-submit draft states (co-borrower, lender pick, offers,
+      // dispatch). The DB cannot rebuild where the chat was, so snapshot the
+      // exact step + sub-context into ctx.parked; Save Drafts lists it from
+      // there and resumeParkedJourney restores it verbatim.
+      if (!leadStateHandler(fresh.current_state)) return null;
+      const summary = await getDealerLeadSummary(dealer.dealerCode, lead.leadId);
+      if (!summary) return null;
+      const state = fresh.current_state;
+      await mergeContext(session, (ctx) => {
+        ctx.parked = {
+          ...(ctx.parked ?? {}),
+          [lead.leadId as string]: { state, lead, at: new Date().toISOString() },
+        };
+      });
+      console.log(`[WhatsApp/console] parked journey ${lead.leadId} at ${state}`);
+      return draftLabel(summary);
     }
     if (!lead.mobile) return null;
 
@@ -3373,11 +3397,54 @@ function draftRowDescription(d: DealerDraft): string {
 
 // Show the dealer's unsubmitted WhatsApp leads as a tappable list. Tapping one
 // resumes it at the next incomplete step (onDraftSelection → resumeDraft).
+/** Human label for the journey phase a parked lead is sitting in. */
+function phaseLabel(state: string): string {
+  if (state.startsWith("DC_CB_")) return "Co-borrower";
+  if (state.startsWith("DC_S4_")) return "Lender selection";
+  if (state.startsWith("DC_OF_")) return "Offers";
+  if (state.startsWith("DC_DP_")) return "Dispatch";
+  if (state.startsWith("DC_DOCREQ_")) return "Documents requested";
+  if (state.startsWith("DC_XD_")) return "Extra documents";
+  return "In progress";
+}
+
+type DraftListItem = DealerDraft & { parkedState?: string };
+
+/**
+ * Pre-submit drafts from the DB plus journeys parked mid-way in this chat
+ * (ctx.parked). A parked lead that has since been finished elsewhere (sold,
+ * closed) is dropped — getDealerLeadSummary still finds it, but its phase
+ * handler decides what to say. Newest activity first, ≤10 rows (WhatsApp cap).
+ */
+async function listAllDrafts(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<DraftListItem[]> {
+  const drafts: DraftListItem[] = await listDealerDrafts(dealer.dealerCode);
+  const seen = new Set(drafts.map((d) => d.leadId));
+  const fresh = await loadSession(session.id);
+  const parked = ((fresh.context as Ctx)?.parked ?? {}) as NonNullable<Ctx["parked"]>;
+  for (const [leadId, snap] of Object.entries(parked)) {
+    if (seen.has(leadId)) continue;
+    const summary = await getDealerLeadSummary(dealer.dealerCode, leadId);
+    if (!summary) continue;
+    drafts.push({
+      ...summary,
+      updatedAt: new Date(snap.at),
+      parkedState: snap.state,
+    });
+  }
+  drafts.sort(
+    (a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0),
+  );
+  return drafts.slice(0, 10);
+}
+
 async function showDrafts(
   session: SessionRow,
   dealer: ActiveDealer,
 ): Promise<void> {
-  const drafts = await listDealerDrafts(dealer.dealerCode);
+  const drafts = await listAllDrafts(session, dealer);
   if (drafts.length === 0) {
     await setSession(session.id, { current_state: "DC_MENU" });
     await reply(
@@ -3389,7 +3456,9 @@ async function showDrafts(
   const rows: ListRow[] = drafts.map((d) => ({
     id: `draft_${d.leadId}`,
     title: clip(d.customerName, 24),
-    description: draftRowDescription(d),
+    description: d.parkedState
+      ? clip(`${draftRowDescription(d)} · ${phaseLabel(d.parkedState)}`, 72)
+      : draftRowDescription(d),
   }));
   await setSession(session.id, { current_state: "DC_DRAFTS" });
   await replyList(
@@ -3412,14 +3481,60 @@ async function onDraftSelection(
   }
   const leadId = id.slice("draft_".length);
   const draft = await getDealerDraft(dealer.dealerCode, leadId);
-  if (!draft) {
-    await reply(
-      session,
-      "I couldn't find that draft — it may have been submitted already. Send *menu* to go back.",
+  if (draft) return await resumeDraft(session, dealer, draft);
+
+  const fresh = await loadSession(session.id);
+  const snap = ((fresh.context as Ctx)?.parked ?? {})[leadId];
+  if (snap) return await resumeParkedJourney(session, dealer, leadId, snap);
+
+  await reply(
+    session,
+    "I couldn't find that draft — it may have been submitted already. Send *menu* to go back.",
+  );
+  return await showDealerMenu(session, dealer);
+}
+
+/**
+ * Pick a parked post-submit journey back up: restore the lead sub-context and
+ * the exact state, then re-render that step. Phases that registered a `resume`
+ * renderer use it; tap-driven steps re-render on a synthetic greeting (the same
+ * path a typed "hi" takes); anything else just gets a nudge.
+ */
+async function resumeParkedJourney(
+  session: SessionRow,
+  dealer: ActiveDealer,
+  leadId: string,
+  snap: NonNullable<Ctx["parked"]>[string],
+): Promise<void> {
+  const summary = await getDealerLeadSummary(dealer.dealerCode, leadId);
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...snap.lead, leadId };
+    if (ctx.parked) delete ctx.parked[leadId];
+  });
+  await setSession(session.id, { current_state: snap.state });
+  await reply(
+    session,
+    `▶️ Resuming *${summary ? draftLabel(summary) : leadId}* — ${phaseLabel(snap.state)}.`,
+  );
+
+  const live = await loadSession(session.id);
+  const resumer = leadStateResumer(snap.state);
+  if (resumer) return await resumer(live, dealer);
+
+  const handler = leadStateHandler(snap.state);
+  if (handler && rerendersOnGreeting(snap.state)) {
+    return await handler(
+      live,
+      {
+        providerMessageId: `resume:${leadId}:${Date.now()}`,
+        waPhone: session.wa_phone,
+        type: "text",
+        text: "hi",
+      },
+      dealer,
     );
-    return await showDealerMenu(session, dealer);
   }
-  await resumeDraft(session, dealer, draft);
+  await reply(session, "Please reply to the last question above to continue.");
 }
 
 // Reverse of toKycDocType: map a stored kyc_documents.doc_type back to the
@@ -3478,6 +3593,7 @@ async function resumeDraft(
 ): Promise<void> {
   const docs = await loadCustomerDocsAsCtx(draft.leadId);
   await mergeContext(session, (ctx) => {
+    if (ctx.parked) delete ctx.parked[draft.leadId];
     ctx.lead = {
       leadId: draft.leadId,
       mobile: draft.mobile,
@@ -4007,6 +4123,11 @@ const CONSENT_SEND_BUTTON: ReplyButton = {
   id: "consent_send",
   title: "📤 Submit to iTarang",
 };
+/** Open the Step-4 extra-documents bucket from the submit prompt. */
+const EXTRA_DOCS_BUTTON: ReplyButton = {
+  id: "xd_open",
+  title: "📎 Extra docs",
+};
 
 // At the digital-consent wait step the dealer can pull the latest signing status
 // (so they aren't stranded if the async Digio webhook is delayed). Manual path only.
@@ -4329,8 +4450,9 @@ async function promptSubmitToITarang(session: SessionRow): Promise<void> {
   await setSession(session.id, { current_state: "DC_LEAD_CONSENT_REVIEW" });
   await reply(
     session,
-    "Review the signed consent above. When ready, tap *Submit to iTarang* — the documents, extracted details and signed consent all go to the iTarang team for KYC review.",
-    [CONSENT_SEND_BUTTON],
+    "Review the signed consent above. When ready, tap *Submit to iTarang* — the documents, extracted details and signed consent all go to the iTarang team for KYC review.\n\n" +
+      "Need to attach extra files for the lenders (up to 10)? Tap *Extra docs*.",
+    [CONSENT_SEND_BUTTON, EXTRA_DOCS_BUTTON],
   );
 }
 
@@ -4463,10 +4585,16 @@ async function onConsentReview(
   if (id === "consent_send" || /\b(send|submit)\b/.test(id)) {
     return await finalizeLead(session);
   }
+  if (id === "xd_open" || /\bextra\b/.test(id)) {
+    const lead = await getLeadCtx(session);
+    if (lead.leadId) {
+      return await openExtraDocs(session, lead.leadId, { next: "submit" });
+    }
+  }
   await reply(
     session,
-    "Tap *Submit to iTarang* to send the documents and signed consent for KYC review, or send *menu* to exit.",
-    [CONSENT_SEND_BUTTON],
+    "Tap *Submit to iTarang* to send the documents and signed consent for KYC review, *Extra docs* to attach more files, or send *menu* to exit.",
+    [CONSENT_SEND_BUTTON, EXTRA_DOCS_BUTTON],
   );
 }
 
@@ -5329,10 +5457,26 @@ async function proceedToConsent(
   if (missing.length) {
     ack += `\n\n⚠️ Still missing: ${missing.join(", ")}. You can add these later on the dealer portal.`;
   }
-  ack += "\n\nNow let's get the customer's *KYC consent*. Generating the consent form…";
   await reply(session, ack);
-  await startConsent(session, dealer, lead.leadId);
+  // The optional Step-4 extra-documents bucket sits between the KYC documents
+  // and the consent — the same position the web wizard's card occupies
+  // relative to the rest of the ladder. Skip is one tap; the continuation
+  // registered below carries the turn on to startConsent.
+  await askExtraDocs(session, dealer, lead.leadId, "consent");
 }
+
+/** Hand-back from the extra-documents step into this ladder. */
+registerExtraDocsContinuation(async (session, dealer, next, leadId) => {
+  if (next === "consent") {
+    await reply(
+      session,
+      "Now let's get the customer's *KYC consent*. Generating the consent form…",
+    );
+    await startConsent(session, dealer, leadId);
+    return;
+  }
+  await promptSubmitToITarang(session);
+});
 
 async function finalizeLead(session: SessionRow): Promise<void> {
   // Terminal step for a Hot + finance lead: documents collected, consent signed.

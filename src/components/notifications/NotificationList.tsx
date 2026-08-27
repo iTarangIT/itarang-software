@@ -45,6 +45,7 @@ import {
   Settings2,
   ShieldCheck,
   Trash2,
+  Wrench,
   Truck,
   UserPlus,
   Video,
@@ -77,6 +78,12 @@ const CATEGORY_META: Record<NotificationCategory, { icon: LucideIcon; tint: stri
   // feature but never here, which broke the Record<NotificationCategory, …>
   // exhaustiveness the comment above exists to protect.
   "Scrap Sales": { icon: Trash2, tint: "bg-stone-100", fg: "text-stone-600" },
+  // E-270 — the NBFC ⇄ iTarang workshop loop.
+  Refurbishment: { icon: Wrench, tint: "bg-sky-50", fg: "text-sky-700" },
+  // E-262/E-263 — registered in the catalogue without an entry here, which
+  // broke Record<NotificationCategory, …> exhaustiveness (tsc) and sent every
+  // recovery notification to the default icon.
+  Recovery: { icon: Truck, tint: "bg-orange-50", fg: "text-orange-700" },
   // Buyback's own eight, unchanged
   Negotiation: { icon: Handshake, tint: "bg-violet-50", fg: "text-violet-600" },
   "Buyback Requests": { icon: Recycle, tint: "bg-emerald-50", fg: "text-emerald-600" },

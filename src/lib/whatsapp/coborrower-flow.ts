@@ -586,6 +586,25 @@ const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
   { id: "cb_consent_manual", title: "✍ Print & sign" },
 ];
 
+/**
+ * Offered every time we are waiting for the code. A code that never arrives
+ * (call not picked up, SMS delayed) used to leave the dealer with no way out
+ * except five wrong guesses — the primary borrower's consent step has had a
+ * Resend button all along; this is the same thing for the co-borrower.
+ */
+const CB_OTP_WAIT_BUTTONS: ReplyButton[] = [
+  { id: "cb_consent_resend", title: "🔁 Resend code" },
+  { id: "cb_consent_change", title: "✏ Change method" },
+];
+
+function otpSentText(channel: "call" | "sms", fresh = false): string {
+  const via = channel === "call" ? " by voice call" : " by SMS";
+  return fresh
+    ? `🔁 A fresh code has been sent to the co-borrower${via}.\n\nPlease type the 6 digits here.`
+    : `🔐 A 6-digit consent code has been sent to the co-borrower${via}.\n\n` +
+        `Please type the 6 digits here.\n\n_Didn't get it? Tap *Resend code*._`;
+}
+
 function maskPhone(p: string | null): string {
   if (!p) return "their number";
   const d = p.replace(/\D/g, "");
@@ -633,12 +652,7 @@ async function onCoBorrowerConsent(
 
   await patchLeadSub(session.id, "cb", { consentOtpAttempts: 0, consentOtpChannel: channel });
   await setSession(session.id, { current_state: DC_CB_CONSENT_OTP });
-  await reply(
-    session,
-    `🔐 A 6-digit consent code has been sent to the co-borrower` +
-      (channel === "call" ? " by voice call" : " by SMS") +
-      `.\n\nPlease type the 6 digits here.`,
-  );
+  await reply(session, otpSentText(channel), CB_OTP_WAIT_BUTTONS);
 }
 
 /**
@@ -746,9 +760,39 @@ async function onCoBorrowerConsentOtp(
   const { leadId, cb } = cbCtx(session);
   if (!leadId) return await lostTrack(session);
 
-  const digits = text(event).replace(/\D/g, "");
+  const t = text(event).toLowerCase();
+
+  // Pick a different channel (or the printed form).
+  if (t === "cb_consent_change" || t === "change" || t === "manual") {
+    await setSession(session.id, { current_state: DC_CB_CONSENT });
+    await reply(session, "No problem — how should we send the code?", CONSENT_CHANNEL_BUTTONS);
+    return;
+  }
+
+  // Resend on the same channel; typed "resend" works too.
+  if (t === "cb_consent_resend" || /^resend\b/.test(t)) {
+    const channel: "call" | "sms" = cb?.consentOtpChannel === "sms" ? "sms" : "call";
+    const res = await sendConsentOtp({ leadId, channel, consentFor: "borrower" });
+    if (!res.ok) {
+      await reply(
+        session,
+        `I couldn't resend the code${res.error ? ` — ${res.error}` : ""}. Try again, or change the method.`,
+        CB_OTP_WAIT_BUTTONS,
+      );
+      return;
+    }
+    await patchLeadSub(session.id, "cb", { consentOtpAttempts: 0, consentOtpChannel: channel });
+    await reply(session, otpSentText(channel, true), CB_OTP_WAIT_BUTTONS);
+    return;
+  }
+
+  const digits = t.replace(/\D/g, "");
   if (digits.length !== 6) {
-    await reply(session, "Please type the *6-digit* code the co-borrower received.");
+    await reply(
+      session,
+      "Please type the *6-digit* code the co-borrower received, or tap *Resend code*.",
+      CB_OTP_WAIT_BUTTONS,
+    );
     return;
   }
 
@@ -768,10 +812,70 @@ async function onCoBorrowerConsentOtp(
     await reply(
       session,
       `That code didn't match. Please check and try again (${MAX_OTP_ATTEMPTS - attempts} attempts left).`,
+      CB_OTP_WAIT_BUTTONS,
     );
     return;
   }
 
+  await showReview(session, leadId);
+}
+
+// ---------------------------------------------------------------------------
+// Resume from Save Drafts
+// ---------------------------------------------------------------------------
+// The dealer sent *menu* (or started another customer) part-way through the
+// co-borrower, then picked this lead back up. ctx.lead.cb and current_state
+// have been restored from the parked snapshot; each of these just re-asks the
+// question the step was waiting on.
+
+async function resumeField(session: SessionRow): Promise<void> {
+  const { cb } = cbCtx(session);
+  const index = cb?.qIndex ?? 0;
+  if (!CO_BORROWER_QUESTIONS[index]) return await startDocs(session);
+  await reply(session, "👥 *Co-borrower details* — continuing where you left off.");
+  await askQuestion(session, index);
+}
+
+async function resumeDocs(session: SessionRow): Promise<void> {
+  const { leadId, cb } = cbCtx(session);
+  const left = pending(cb?.docs);
+  if (left.length === 0 && leadId) return await startConsent(session, leadId);
+  await reply(
+    session,
+    "📎 *Co-borrower documents* — continuing where you left off.\n\nStill needed:\n" +
+      left.map((d) => `• ${DOC_LABEL[d]}`).join("\n") +
+      "\n\nSend them one at a time, a clear photo of each is fine.",
+  );
+}
+
+async function resumeConsent(session: SessionRow): Promise<void> {
+  const { leadId } = cbCtx(session);
+  if (!leadId) return await lostTrack(session);
+  await startConsent(session, leadId);
+}
+
+async function resumeConsentOtp(session: SessionRow): Promise<void> {
+  const { cb } = cbCtx(session);
+  const channel = cb?.consentOtpChannel === "sms" ? "SMS" : "voice call";
+  await reply(
+    session,
+    `🔐 We were waiting for the co-borrower's consent code (sent by ${channel}).\n\n` +
+      "Please type the 6 digits here — or tap *Resend code* if it didn't arrive.",
+    CB_OTP_WAIT_BUTTONS,
+  );
+}
+
+async function resumeConsentManual(session: SessionRow): Promise<void> {
+  await reply(
+    session,
+    "✍ We were waiting for the *signed* co-borrower consent form. Send it back " +
+      "here as a PDF or a clear photo.\n\nPrefer a code instead? Type *otp*.",
+  );
+}
+
+async function resumeReview(session: SessionRow): Promise<void> {
+  const { leadId } = cbCtx(session);
+  if (!leadId) return await lostTrack(session);
   await showReview(session, leadId);
 }
 
@@ -1238,10 +1342,12 @@ async function lostTrack(session: SessionRow): Promise<void> {
 
 registerLeadAction("cb_start", onCoBorrowerStart);
 registerLeadAction("cb_later", async (session) => onCoBorrowerLater(session));
-registerLeadState(DC_CB_FIELD, onCoBorrowerField);
-registerLeadState(DC_CB_DOCS, onCoBorrowerDocs);
-registerLeadState(DC_CB_CONSENT, onCoBorrowerConsent);
-registerLeadState(DC_CB_CONSENT_OTP, onCoBorrowerConsentOtp);
-registerLeadState(DC_CB_CONSENT_MANUAL, onCoBorrowerConsentManual);
-registerLeadState(DC_CB_REVIEW, onCoBorrowerReview);
-registerLeadState(DC_CB_WAIT, onCoBorrowerWait);
+registerLeadState(DC_CB_FIELD, onCoBorrowerField, { resume: resumeField });
+registerLeadState(DC_CB_DOCS, onCoBorrowerDocs, { resume: resumeDocs });
+registerLeadState(DC_CB_CONSENT, onCoBorrowerConsent, { resume: resumeConsent });
+registerLeadState(DC_CB_CONSENT_OTP, onCoBorrowerConsentOtp, { resume: resumeConsentOtp });
+registerLeadState(DC_CB_CONSENT_MANUAL, onCoBorrowerConsentManual, {
+  resume: resumeConsentManual,
+});
+registerLeadState(DC_CB_REVIEW, onCoBorrowerReview, { resume: resumeReview });
+registerLeadState(DC_CB_WAIT, onCoBorrowerWait, { resume: (s) => onCoBorrowerWait(s) });

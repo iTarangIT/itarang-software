@@ -124,6 +124,49 @@ async function main() {
     return l?.kyc_status ?? "";
   }
 
+  // ---- Step-4 extra documents (≤10 bucket) --------------------------------
+  // Opens the bucket from the push button, ingests one fixture file when
+  // WA_DRY_RUN_MEDIA_FIXTURE=1, then parks it with "later" and checks it is
+  // listed in Save Drafts under "Extra documents".
+  console.log("Extra documents — Step-4 bucket");
+  {
+    const { getPreSanctionBucket } = await import("@/lib/leads/pre-sanction-bucket");
+    const before = (await getPreSanctionBucket(leadId)).items.length;
+    let sends = await send(leadActionId("xd_start", leadId));
+    const st = await state();
+    if (st === "DC_XD_WAIT") pass("xd_start opens the bucket", `state=${st}`);
+    else if (st === "DC_MENU" && before >= 10) pass("xd_start on a full bucket returns to menu");
+    else fail("xd_start opens the bucket", `state=${st}, sends=${sends.length}`);
+
+    if (st === "DC_XD_WAIT" && process.env.WA_DRY_RUN_MEDIA_FIXTURE === "1") {
+      dryRunClear();
+      seq += 1;
+      await runTurn({
+        providerMessageId: `verify-${Date.now()}-${seq}`,
+        waPhone,
+        type: "image",
+        mediaProviderId: "fixture",
+        mimeType: "image/png",
+        raw: { synthetic: true },
+      });
+      const after = (await getPreSanctionBucket(leadId)).items.length;
+      if (after === before + 1) pass("a file lands in pre_sanction_doc_urls", `${before} → ${after}`);
+      else fail("a file lands in pre_sanction_doc_urls", `${before} → ${after}; ${dryRunSends().map((s) => s.body).join(" | ")}`);
+    } else if (st === "DC_XD_WAIT") {
+      skip("file ingest", "set WA_DRY_RUN_MEDIA_FIXTURE=1 to exercise it");
+    }
+
+    if ((await state()) === "DC_XD_WAIT") {
+      sends = await send("later");
+      const parked = (await state()) === "DC_MENU";
+      sends = await send("menu_drafts");
+      const row = lastRows(sends).find((r) => r.id === `draft_${leadId}`);
+      if (parked && row) pass("parked lead is listed in Save Drafts", row.title);
+      else fail("parked lead is listed in Save Drafts", `parked=${parked}, row=${row ? "yes" : "no"}`);
+      await send("menu");
+    }
+  }
+
   // ---- Phase 2: Step 4, routing to lenders -------------------------------
   console.log("Phase 2 — Step 4 (lenders)");
   if (["step_3_cleared", "kyc_approved"].includes(await kycStatus())) {
