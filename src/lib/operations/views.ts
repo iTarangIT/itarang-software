@@ -249,6 +249,30 @@ const DB_METRICS = [
   "db.longest_query_s",
   "db.longest_idle_tx_s",
   "db.dead_tuple_pct",
+  "db.txid_wraparound_pct",
+] as const;
+
+/**
+ * The instance tiles, in render order.
+ *
+ * Everything in DB_METRICS above is what POSTGRES knows about itself. These are
+ * what the HYPERVISOR knows about the box it runs on, and no query can reach
+ * them — which is why they arrive by CloudWatch and are rendered as their own
+ * group rather than mixed into the grid above. The split is by SOURCE, not by
+ * subject, because that is what determines a tile's freshness, its failure mode
+ * and whether it survives the database being unreachable.
+ *
+ * The credit pair is last because it is CONDITIONAL: CloudWatch publishes it
+ * only for T-class burstable instances. Nothing here gates on instance class —
+ * a metric with no sample simply produces no tile (see the filter below).
+ */
+const CW_METRICS = [
+  "rds.cpu_pct",
+  "rds.freeable_memory_bytes",
+  "rds.free_storage_bytes",
+  "rds.disk_queue_depth",
+  "rds.cpu_credit_balance",
+  "rds.cpu_credit_usage",
 ] as const;
 
 /**
@@ -296,6 +320,23 @@ export interface ConnectionClient {
   is_driver_default: boolean;
 }
 
+/**
+ * Whether we could ask CloudWatch at all, and about what.
+ *
+ * Three states rather than a boolean, for the same reason the pg_stat_* card
+ * distinguishes not-configured from unreachable: "nobody switched this on" and
+ * "we tried and were refused" are different facts and want different words on
+ * screen. `identifier` is echoed back so a wrong OPS_RDS_INSTANCE_ID — which
+ * would report another database's health under this one's name, and look
+ * entirely correct doing it — is visible on the card.
+ */
+export interface InstanceMetricsState {
+  configured: boolean;
+  /** Populated when CloudWatch was asked and refused or failed. */
+  error: string | null;
+  identifier: string | null;
+}
+
 export interface DatabaseInstanceView {
   source: string;
   label: string;
@@ -333,6 +374,47 @@ export interface DatabaseInstanceView {
   clients: ConnectionClient[];
   /** Largest tables on THIS instance. */
   tables: TableRow[];
+  /**
+   * Hypervisor-level tiles for this instance, from CloudWatch.
+   *
+   * Empty when the integration is off, unauthorised, or simply has not run —
+   * `instance_metrics_state` says which. Only metrics with an actual sample
+   * appear, so a metric AWS does not publish for this instance class never
+   * becomes a permanently-blank tile.
+   */
+  instance_metrics: MetricReading[];
+  instance_metrics_state: InstanceMetricsState;
+}
+
+/**
+ * Read the CloudWatch collector's own status sample.
+ *
+ * Mirrors how `db.reachable` is interpreted for the Postgres half: a valueless
+ * sample with a "not configured" text means nobody switched it on, 0 with text
+ * means we asked and failed, 1 means it answered. No sample at all means the
+ * collector has never run on this deployment, which reads as not-configured —
+ * the honest default, since claiming an error we never actually hit would be
+ * its own small lie.
+ */
+function instanceMetricsState(
+  sample: LatestSample | undefined,
+): InstanceMetricsState {
+  const identifier =
+    typeof sample?.meta?.instance_id === "string"
+      ? (sample.meta.instance_id as string)
+      : null;
+
+  if (!sample || sample.value_num == null) {
+    return { configured: false, error: null, identifier };
+  }
+  if (sample.value_num === 0) {
+    return {
+      configured: true,
+      error: sample.value_text ?? "CloudWatch could not be reached",
+      identifier,
+    };
+  }
+  return { configured: true, error: null, identifier };
 }
 
 /** Narrow one entry of the collector's `clients` meta array. */
@@ -421,6 +503,9 @@ export async function getDatabaseView(): Promise<DatabaseView> {
     "db.table_count",
     "db.column_count",
     "db.dead_tuples",
+    "db.max_used_txids",
+    ...CW_METRICS,
+    "rds.cloudwatch_ok",
     "db.size_bytes",
     "db.connections_used",
     "db.max_connections",
@@ -440,6 +525,11 @@ export async function getDatabaseView(): Promise<DatabaseView> {
         "db.txns_per_s",
         "db.reads_per_s",
         "db.writes_per_s",
+        "db.txid_wraparound_pct",
+        // Every instance tile gets a trend: a single CPU or free-storage
+        // reading says almost nothing, and the direction of travel is the
+        // whole point of watching memory and disk.
+        ...CW_METRICS,
       ],
       { hours: 24 },
     ),
@@ -581,6 +671,28 @@ export async function getDatabaseView(): Promise<DatabaseView> {
           series.get(`${key}|${source}`),
         ),
       ).filter((m): m is MetricReading => m !== null),
+      // FILTERED TO METRICS THAT ACTUALLY HAVE A SAMPLE, unlike DB_METRICS
+      // above which always renders its full grid.
+      //
+      // This one predicate is what lets the collector request the T-class
+      // credit metrics blind. On a non-burstable instance CloudWatch returns
+      // nothing, no sample is written, and the tile silently never exists —
+      // so there is no instance-class configuration anywhere in this codebase
+      // to drift out of date after a resize. It also means a metric AWS stops
+      // publishing disappears rather than latching to a dashed "No data" box
+      // that trains people to ignore dashed boxes.
+      instance_metrics: CW_METRICS.map((key) =>
+        index.get(`${key}|${source}`)
+          ? reading(
+              key,
+              index.get(`${key}|${source}`),
+              series.get(`${key}|${source}`),
+            )
+          : null,
+      ).filter((m): m is MetricReading => m !== null),
+      instance_metrics_state: instanceMetricsState(
+        index.get(`rds.cloudwatch_ok|${source}`),
+      ),
     };
   });
 

@@ -263,6 +263,66 @@ function LargestTables({ instance }: { instance: DatabaseInstanceView }) {
   );
 }
 
+/**
+ * The hypervisor's view of the instance: CPU, memory, volume, disk queue and
+ * burst credits.
+ *
+ * A SECOND GRID INSIDE THE SAME CARD, not a second card and not a merge into
+ * the grid above. These numbers describe the same database, so they belong on
+ * its card — but they come from a different source with a different freshness
+ * and a different failure mode, and an operator reading a stale CPU figure next
+ * to a live connection count needs to know which is which. The caption line is
+ * the whole of that distinction.
+ */
+function InstanceMetrics({ instance }: { instance: DatabaseInstanceView }) {
+  const { instance_metrics: metrics, instance_metrics_state: state } = instance;
+
+  // Not switched on. One line, not a row of empty tiles — the same reasoning
+  // that gives an unconfigured database prose instead of a blank card.
+  if (!state.configured) {
+    return (
+      <p className="text-xs text-ink-muted">
+        Instance metrics (CPU, memory, storage, disk queue) are not enabled. Set{" "}
+        <code>OPS_RDS_INSTANCE_ID</code> on this host to collect them from
+        CloudWatch. Nothing was asked, so nothing is claimed.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+        Instance · CloudWatch
+        {state.identifier && (
+          <span className="ml-2 font-mono normal-case tracking-normal">
+            {state.identifier}
+          </span>
+        )}
+      </p>
+
+      {state.error ? (
+        /* An IAM, credential or network failure. Said plainly, and pointedly
+           NOT allowed to affect the pg_stat_* tiles above — those come from the
+           database connection and are still true. */
+        <p className="text-xs text-danger" title={state.error}>
+          {state.error}
+        </p>
+      ) : metrics.length === 0 ? (
+        <p className="text-xs text-ink-muted">
+          No readings yet. The <code>db.cloudwatch</code> collector runs every 5
+          minutes.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          {metrics.map((metric) => (
+            <MetricTile key={metric.key} metric={metric} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InstanceCard({
   instance,
   self,
@@ -372,11 +432,25 @@ function InstanceCard({
                 </p>
               )}
 
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-              {instance.metrics.map((metric) => (
-                <MetricTile key={metric.key} metric={metric} />
-              ))}
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                Postgres · pg_stat_*
+              </p>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                {instance.metrics.map((metric) => (
+                  <MetricTile key={metric.key} metric={metric} />
+                ))}
+              </div>
             </div>
+
+            {/* Only the CRM instance. The IoT database is reached through an
+                SSH tunnel to a bastion and lives in a different RDS resource
+                namespace, almost certainly a different AWS account — asking
+                this account's CloudWatch about it would fail every cycle to
+                tell us nothing. */}
+            {instance.source === "rds:crm" && (
+              <InstanceMetrics instance={instance} />
+            )}
 
             {instance.identity.dead_tuples != null && (
               <p className="text-xs text-ink-muted">
@@ -431,8 +505,13 @@ export default async function OperationsDatabasePage() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <p className="max-w-3xl text-xs text-ink-muted">
-          Read from <code>pg_stat_*</code> every 2 minutes. No CloudWatch, no
-          extra IAM.{" "}
+          Postgres tiles are read from <code>pg_stat_*</code> every 2 minutes
+          over the app&apos;s own connection. Instance tiles — CPU, memory,
+          storage, disk queue — come from CloudWatch every 5 minutes and are
+          stamped with the datapoint&apos;s own time, since CloudWatch publishes
+          2-3 minutes late; they are absent unless{" "}
+          <code>OPS_RDS_INSTANCE_ID</code> is set, and a CloudWatch failure
+          never affects the numbers above it.{" "}
           <span className="text-ink">
             The query, transaction, read and write rates, the cache hit ratio,
             the rollback ratio and the deadlock count are all measured{" "}

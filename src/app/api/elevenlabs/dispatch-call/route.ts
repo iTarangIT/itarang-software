@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import {
+  attachBolnaCallId,
+  markCampaignLeadCalling,
+} from "@/lib/queue/campaignTracker";
 
 export const maxDuration = 60;
 
@@ -74,6 +78,24 @@ export async function POST(req: Request) {
     phone: payload.phone,
     leadId: payload.leadId ?? "",
   });
+
+  // Persist the conversation_id on the campaign-lead row, exactly as
+  // /api/elevenlabs/call and advanceCampaign already do. Without it,
+  // runDialerPollOnce — which selects on `bolna_call_id IS NOT NULL` — cannot
+  // see a QStash-scheduled call, so the poll backstop that exists to recover a
+  // dropped webhook silently skips every call dispatched through this route.
+  // Best-effort: a one-off call with no active campaign row is a no-op.
+  if (payload.leadId) {
+    const callId = (result as { call_id?: string })?.call_id;
+    if (result?.success && callId) {
+      try {
+        await markCampaignLeadCalling({ leadId: payload.leadId });
+        await attachBolnaCallId({ leadId: payload.leadId, callId });
+      } catch (err) {
+        console.error("[elevenlabs:dispatch-call] attach failed:", err);
+      }
+    }
+  }
 
   return NextResponse.json(result);
 }

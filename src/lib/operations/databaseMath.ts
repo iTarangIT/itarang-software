@@ -206,3 +206,36 @@ export function connectionCapacityPct(
   if (!Number.isFinite(usable) || usable <= 0) return null;
   return round1((used / usable) * 100);
 }
+
+/**
+ * The transaction-ID budget: 2^31.
+ *
+ * Postgres XIDs are 32-bit and compared modulo 2^32, so a transaction can only
+ * see 2^31 into the past — that half is the whole usable range, not 2^32. When
+ * `age(datfrozenxid)` approaches it the server refuses new writes and the only
+ * exit is single-user-mode VACUUM, i.e. planned downtime on an unplanned
+ * schedule. Autovacuum normally freezes long before this (RDS ships
+ * autovacuum_freeze_max_age at 200M, ~9% of the budget); the number climbing
+ * anyway is the signal that autovacuum is losing, which is what makes it worth
+ * a tile.
+ */
+export const TXID_WRAPAROUND_LIMIT = 2 ** 31;
+
+/**
+ * How much of the transaction-ID budget is spent, 0-100.
+ *
+ * A PERCENTAGE RATHER THAN THE RAW COUNT, on purpose. formatCount renders
+ * through Intl.NumberFormat("en-IN"), so 1000000000 becomes "1,00,00,00,000" —
+ * ten digits and two unfamiliar group breaks in a tile that is one-fifth of a
+ * card row. Nobody reads that as "half the budget". The raw count is still
+ * collected as db.max_used_txids so the history stays exact; this is the number
+ * that gets a threshold.
+ *
+ * Null, never zero, for a missing or nonsensical reading — the same rule the
+ * interval metrics above follow.
+ */
+export function txidWraparoundPct(maxUsedTxids: number | null): number | null {
+  if (maxUsedTxids == null) return null;
+  if (!Number.isFinite(maxUsedTxids) || maxUsedTxids < 0) return null;
+  return round1((maxUsedTxids / TXID_WRAPAROUND_LIMIT) * 100);
+}
