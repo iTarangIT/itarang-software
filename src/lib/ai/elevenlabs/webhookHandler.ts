@@ -9,24 +9,8 @@ import { dialerCampaignLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
-import type {
-  ElevenLabsWebhookEvent,
-  ElevenLabsTranscriptTurn,
-} from "./types";
-
-function transcriptArrayToString(turns?: ElevenLabsTranscriptTurn[]): string {
-  if (!Array.isArray(turns) || turns.length === 0) return "";
-  return turns
-    .map((t) => {
-      const role = (t.role || "").toLowerCase();
-      const speaker =
-        role === "user" ? "user" : role === "agent" ? "agent" : role;
-      const message = (t.message || "").trim();
-      return message ? `${speaker}: ${message}` : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
+import type { ElevenLabsWebhookEvent } from "./types";
+import { normalizePostCall } from "./normalizePostCall";
 
 export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
   try {
@@ -77,39 +61,41 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
       return;
     }
 
-    // post_call_transcription
-    const data = event.data;
-    const conversationId = data.conversation_id;
-    const transcript = transcriptArrayToString(data.transcript);
-    const phone =
-      data.metadata?.phone_call?.external_number ||
-      (data.conversation_initiation_client_data?.dynamic_variables
-        ?.phone_number as string | undefined) ||
-      "";
-    const recordingUrl =
-      (data.metadata as { recording_url?: string | null } | undefined)
-        ?.recording_url ?? null;
-    const duration =
-      typeof (data.metadata as { call_duration_secs?: number } | undefined)
-        ?.call_duration_secs === "number"
-        ? (data.metadata as { call_duration_secs: number }).call_duration_secs
-        : null;
+    // Anything that is not a post-call transcription must not be finalized as
+    // one. There was no default branch here, so an unknown or future event type
+    // fell through into the path below and was recorded as a completed call
+    // with an empty transcript — inventing a call that never happened.
+    //
+    // Read as a plain string on purpose: the declared union has been narrowed
+    // to the transcription variant by the returns above, so TypeScript thinks
+    // this is unreachable. The value arrives over the wire and is only as
+    // narrow as ElevenLabs' API happens to be today.
+    const eventType = (event as { type?: string }).type;
+    if (eventType && eventType !== "post_call_transcription") {
+      console.warn("[elevenlabs:webhook] unhandled event type:", eventType);
+      return;
+    }
+
+    // Every stored field is derived in normalizePostCall.ts, which is pure and
+    // unit-tested. The derivations that were wrong here — provider clock rather
+    // than write time, real status rather than a hardcoded "completed", the
+    // lead-id hint the payload always carried — belong somewhere they can be
+    // asserted on.
+    const call = normalizePostCall(event.data);
 
     console.log("[ELEVENLABS WEBHOOK] Received:", {
-      conversationId,
-      phone,
-      hasTranscript: !!transcript,
-      turns: data.transcript?.length ?? 0,
+      conversationId: call.conversationId,
+      phone: call.phone,
+      leadId: call.leadId,
+      status: call.status,
+      startedAt: call.startedAt?.toISOString() ?? null,
+      hasTranscript: !!call.transcript,
+      turns: event.data.transcript?.length ?? 0,
     });
 
     await finalizeElevenLabsCall({
-      conversationId,
-      status: "completed",
-      transcript: transcript || null,
-      recordingUrl,
-      duration,
-      phone: phone || null,
-      conversation: data.transcript || undefined,
+      ...call,
+      conversation: event.data.transcript || undefined,
     });
   } catch (err) {
     console.error("[elevenlabs:webhook] handler error:", err);
