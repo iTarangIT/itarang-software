@@ -12,6 +12,7 @@
 
 import { appHealthCollector } from "./appHealth";
 import { businessCollector } from "./business";
+import { cloudwatchCollector } from "./cloudwatch";
 import { databaseCollector } from "./database";
 import { hostCollector } from "./host";
 import { jobsCollector } from "./jobs";
@@ -27,6 +28,11 @@ export const COLLECTORS: OpsCollector[] = [
   jobsCollector,
   hostCollector,
   databaseCollector,
+  // The hypervisor's view of the same RDS instance databaseCollector probes
+  // over SQL. Separate on purpose: an IAM or credential failure here must never
+  // cost us the connection-headroom numbers above. Inert until
+  // OPS_RDS_INSTANCE_ID is set.
+  cloudwatchCollector,
   logsCollector,
   spendCollector,
   ...vendorCollectors,

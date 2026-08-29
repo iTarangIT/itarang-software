@@ -86,6 +86,7 @@ Optional:
 | --- | --- |
 | `ENABLE_OPS_MONITOR=0` | disables the collector ticker on this process |
 | `OPS_ALERT_EMAIL` | recipient for email alerts; without it the email channel no-ops |
+| `OPS_RDS_INSTANCE_ID` | RDS instance identifier (`database-1` on sandbox, `database-2` on prod). Enables the CloudWatch instance tiles — CPU, freeable memory, free storage, disk queue, burst credits — on Database Health. **Unset, nothing is collected and the page renders exactly as before**; the `pg_stat_*` tiles never depend on it. Also needs `AWS_REGION`, and an IAM identity allowed `cloudwatch:GetMetricData` |
 
 > **Prod's `shared/.env` is rewritten from the `PROD_ENV_FILE_B64` GitHub secret
 > on every deploy.** Add these to the box **and** re-base64 `.env.production`
@@ -157,7 +158,7 @@ worse than none, because it looks green.
 | --- | --- | --- |
 | `/operations` | Traffic-light board of every `onSlide` metric, live vs yesterday's snapshot, open alerts, deploy SHA per env | everything |
 | `/operations/infrastructure` | CPU, memory, disk, inodes, swap, SSL, pm2 table, 24h sparklines | agent **push** |
-| `/operations/database` | RDS connection headroom, query/idle-tx age, cache hit, top tables, schema drift | `db.rds` collector |
+| `/operations/database` | RDS connection headroom, query/idle-tx age, cache hit, txn-ID wraparound, top tables, schema drift; plus instance CPU/memory/storage/disk-queue/burst-credit tiles when `OPS_RDS_INSTANCE_ID` is set | `db.rds` + `db.cloudwatch` collectors |
 | `/operations/logs` | Errors grouped by fingerprint, filters, rate chart, Excel export | agent **push** |
 | `/operations/system` | Dependency up/down + latency + uptime %, Upstash circuit, job liveness, deploy SHA | `system.app_health` + `system.jobs` |
 | `/operations/spend` | Monthly burn, MoM, vendor credit balances, metered-vs-billed | `spend.*` + `vendor.*` |

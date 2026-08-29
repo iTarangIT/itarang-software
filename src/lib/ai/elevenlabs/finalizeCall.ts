@@ -32,6 +32,20 @@ export type ElevenLabsFinalizePayload = {
   phone: string | null;
   leadId?: string;
   conversation?: unknown[];
+  /**
+   * When the call actually happened, from the provider's own clock.
+   *
+   * These exist because every date-bounded query on /operations/elevenlabs
+   * buckets on `ended_at` (see cost-analytics-query.ts istDayBounds). Stamping
+   * write time instead — which is what this pipeline did — files a webhook that
+   * arrives at 00:05 IST against the wrong day, and a backfilled or retried
+   * call against the wrong month entirely. The provider knows when the call
+   * ended; we should not be guessing from when we got told.
+   */
+  startedAt?: Date | null;
+  endedAt?: Date | null;
+  /** ElevenLabs agent that handled the call. Present on the payload, never stored until now. */
+  agentId?: string | null;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
@@ -68,6 +82,9 @@ export async function finalizeElevenLabsCall(
     phone,
     leadId: leadIdHint,
     conversation,
+    startedAt,
+    endedAt,
+    agentId,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -108,28 +125,39 @@ export async function finalizeElevenLabsCall(
     }
 
     let campaignIdAfterComplete: string | null = null;
+
+    // Logged FIRST, and unconditionally — outside the `if (leadForPhone)` this
+    // used to sit inside. A call we cannot attribute to a dealer_lead is still
+    // a call that was placed, billed and counted by the provider; dropping it
+    // is how the dashboard came to show 0 calls against 738 real ones. Inbound
+    // calls have no lead_id at all and their external_number arrives in local
+    // format (08035315136) that will never match a stored +91 number, so this
+    // branch is the *normal* path for them, not an edge case.
+    await upsertAiCallLog({
+      callId: conversationId,
+      leadId: leadForPhone?.id ?? null,
+      startedAt,
+      endedAt,
+      agentId,
+      status: status || "failed",
+      transcript: null,
+      summary: null,
+      recordingUrl,
+      duration,
+      phone: phone ?? leadForPhone?.phone ?? null,
+      intentScore: null,
+      intentReason: null,
+      nextAction: null,
+    });
+
+    // Even failed calls (initiation_failure, busy, no-answer) accrue partial
+    // cost on ElevenLabs. Best-effort fetch; backfill retries. Also moved out
+    // of the lead check: costStore keys on call_id, which now always exists, so
+    // an unattributed call still gets its cost — and the cost column is what
+    // the Cost tile sums.
+    await fetchAndPersistCallCost("elevenlabs", conversationId);
+
     if (leadForPhone) {
-      await upsertAiCallLog({
-        callId: conversationId,
-        leadId: leadForPhone.id,
-        status: status || "failed",
-        transcript: null,
-        summary: null,
-        recordingUrl,
-        duration,
-        phone: phone ?? leadForPhone.phone,
-        intentScore: null,
-        intentReason: null,
-        nextAction: null,
-        // Usually empty on this path, but a call can fail after turns were
-        // exchanged and those turns are the only record of how far it got.
-        transcriptTurns: conversation ?? null,
-      });
-
-      // Even failed calls (initiation_failure, busy, no-answer) accrue
-      // partial cost on ElevenLabs. Best-effort fetch; backfill retries.
-      await fetchAndPersistCallCost("elevenlabs", conversationId);
-
       // Record it in the CC team's vocabulary. See the Bolna twin for why this
       // sits after the log exists and before completeCampaignLead.
       await writeAiCallTouchpoint({
@@ -228,6 +256,33 @@ export async function finalizeElevenLabsCall(
       phone,
       leadIdHint,
     });
+    // Log the call before giving up on attributing it. The transcript exists
+    // and the provider has already billed for it; only the CRM linkage is
+    // missing. Returning here without a write — which is what this did — meant
+    // a real, paid-for conversation left no trace anywhere in the product.
+    //
+    // Analysis is deliberately skipped: scoring writes back to a dealer_lead,
+    // and there is none. The row carries the transcript so the call can be
+    // attributed by hand later, and re-finalizing after the lead exists will
+    // upsert the score onto this same row.
+    await upsertAiCallLog({
+      callId: conversationId,
+      leadId: null,
+      startedAt,
+      endedAt,
+      agentId,
+      status: status || "completed",
+      transcript,
+      summary: null,
+      recordingUrl,
+      duration,
+      phone,
+      intentScore: null,
+      intentReason: null,
+      nextAction: null,
+      callStatus: "unattributed",
+    });
+    await fetchAndPersistCallCost("elevenlabs", conversationId);
     return;
   }
 
@@ -250,6 +305,9 @@ export async function finalizeElevenLabsCall(
       phone: phone ?? lead.phone,
       conversation: conversation ?? [],
       reason: result.reason,
+      startedAt,
+      endedAt,
+      agentId,
     });
     if (r.campaignId) {
       await advanceCampaign(r.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
@@ -289,6 +347,9 @@ export async function finalizeElevenLabsCall(
     await upsertAiCallLog({
       callId: conversationId,
       leadId: lead.id,
+      startedAt,
+      endedAt,
+      agentId,
       status: status || "call-disconnected",
       transcript,
       summary: "dropped_empty — call cut off before anything was captured",
@@ -401,6 +462,9 @@ export async function finalizeElevenLabsCall(
   await upsertAiCallLog({
     callId: conversationId,
     leadId: lead.id,
+    startedAt,
+    endedAt,
+    agentId,
     status: status || "completed",
     transcript,
     summary,
@@ -592,7 +656,18 @@ async function persistTranscriptTurns(
 
 async function upsertAiCallLog(opts: {
   callId: string;
-  leadId: string;
+  /**
+   * Null when no dealer_leads row matched.
+   *
+   * It used to be impossible to get here without a lead, because every caller
+   * returned early instead — which is how 738 August calls became zero rows.
+   * `lead_id` is nullable in the database; an unattributed call is a real call
+   * and belongs in the log.
+   */
+  leadId: string | null;
+  startedAt?: Date | null;
+  endedAt?: Date | null;
+  agentId?: string | null;
   status: string;
   transcript: string | null;
   summary: string | null;
@@ -621,52 +696,17 @@ async function upsertAiCallLog(opts: {
   transcriptTurns?: unknown[] | null;
 }): Promise<void> {
   try {
-    const existing = opts.callId
-      ? await db
-          .select({ id: aiCallLogs.id })
-          .from(aiCallLogs)
-          .where(eq(aiCallLogs.call_id, opts.callId))
-          .limit(1)
-      : [];
-
     const now = new Date();
-
-    if (existing.length > 0) {
-      await db
-        .update(aiCallLogs)
-        .set({
-          status: opts.status,
-          transcript: opts.transcript,
-          summary: opts.summary,
-          recording_url: opts.recordingUrl,
-          call_duration: opts.duration,
-          intent_score: opts.intentScore,
-          intent_reason: opts.intentReason,
-          next_action: opts.nextAction,
-          scoring_version: opts.scoringVersion ?? null,
-          extraction_version: opts.extractionVersion ?? null,
-          calibration_set_hash: opts.calibrationSetHash ?? null,
-          signals: opts.signals ?? null,
-          score_breakdown: opts.scoreBreakdown ?? null,
-          band: opts.band ?? null,
-          call_status: opts.callStatus ?? null,
-          info_signals_count: opts.infoSignalsCount ?? null,
-          ended_at: now,
-          updated_at: now,
-        })
-        .where(eq(aiCallLogs.id, existing[0].id));
-      await persistTranscriptTurns(opts.callId, opts.transcriptTurns);
-      return;
-    }
-
+    // Prefer the provider's clock; fall back to write time only when the
+    // payload carried no timestamp at all.
+    const endedAt = opts.endedAt ?? now;
     const id = opts.callId ? `AICALL_${opts.callId}` : `AICALL_${Date.now()}`;
-    await db.insert(aiCallLogs).values({
-      id,
-      call_id: opts.callId || id,
-      lead_id: opts.leadId,
-      provider: "elevenlabs",
+
+    // Fields that always reflect the latest word from the provider. A
+    // redelivery carries the same or better information, so overwriting is
+    // correct for these.
+    const latest = {
       status: opts.status,
-      phone_number: opts.phone,
       transcript: opts.transcript,
       summary: opts.summary,
       recording_url: opts.recordingUrl,
@@ -682,8 +722,46 @@ async function upsertAiCallLog(opts: {
       band: opts.band ?? null,
       call_status: opts.callStatus ?? null,
       info_signals_count: opts.infoSignalsCount ?? null,
-      ended_at: now,
-    });
+    };
+
+    // A REAL upsert against ai_call_logs_call_id_unique, not a SELECT then an
+    // INSERT. The old shape had a race between the two statements that the
+    // unique constraint turned into a 23505 — which the catch below swallowed,
+    // silently dropping the second write. ElevenLabs redelivers, and two pm2
+    // workers can finalize the same call when the Redis claim degrades to its
+    // process-local fallback, so that race was reachable in production.
+    //
+    // The conditional spreads are the no-clobber rule: a field the provider did
+    // not send this time must not overwrite a good value stored last time.
+    await db
+      .insert(aiCallLogs)
+      .values({
+        id,
+        call_id: opts.callId || id,
+        lead_id: opts.leadId,
+        provider: "elevenlabs",
+        phone_number: opts.phone,
+        started_at: opts.startedAt ?? null,
+        ended_at: endedAt,
+        agent_id: opts.agentId ?? null,
+        ...latest,
+      })
+      .onConflictDoUpdate({
+        target: aiCallLogs.call_id,
+        set: {
+          ...latest,
+          ended_at: endedAt,
+          updated_at: now,
+          ...(opts.startedAt ? { started_at: opts.startedAt } : {}),
+          ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+          ...(opts.leadId ? { lead_id: opts.leadId } : {}),
+          ...(opts.phone ? { phone_number: opts.phone } : {}),
+        },
+      });
+
+    // E-267 — preserved from origin/main. The branch refactor replaced the
+    // read-then-update body that used to carry this call, so re-attach it to
+    // the upsert path or the provider's verbatim turn array is never stored.
     await persistTranscriptTurns(opts.callId || id, opts.transcriptTurns);
   } catch (err) {
     console.error("[elevenlabs:finalize] ai_call_logs upsert failed:", err);
@@ -704,6 +782,9 @@ async function markLeadNeedsReview(opts: {
   phone: string | null;
   conversation: unknown[];
   reason: string;
+  startedAt?: Date | null;
+  endedAt?: Date | null;
+  agentId?: string | null;
 }): Promise<{ campaignId: string | null }> {
   const history = opts.followUpHistory || [];
   const newEntry = {
@@ -734,6 +815,9 @@ async function markLeadNeedsReview(opts: {
   await upsertAiCallLog({
     callId: opts.callId,
     leadId: opts.leadId,
+    startedAt: opts.startedAt,
+    endedAt: opts.endedAt,
+    agentId: opts.agentId,
     status: "needs_review",
     transcript: opts.transcript,
     summary: `analysis_failed — ${opts.reason}`,
