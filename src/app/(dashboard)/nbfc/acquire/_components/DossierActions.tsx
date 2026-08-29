@@ -6,12 +6,19 @@
 //  • Next — advances the on-page stepper to the Offer step by dispatching the
 //    `nbfc:acquire-open-step` event the stepper listens for (no navigation).
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowRight, Download, Loader2 } from "lucide-react";
 
 export const OPEN_STEP_EVENT = "nbfc:acquire-open-step";
 
-export default function DossierActions({ leadId }: { leadId: string }) {
+export default function DossierActions({
+  leadId,
+  extra,
+}: {
+  leadId: string;
+  /** E-275 — rendered before Next: Offer (the "Reject file" control). */
+  extra?: ReactNode;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,6 +78,7 @@ export default function DossierActions({ leadId }: { leadId: string }) {
         )}
         {busy ? "Preparing ZIP…" : "Download dossier"}
       </button>
+      {extra}
       <button
         type="button"
         onClick={goToOffer}

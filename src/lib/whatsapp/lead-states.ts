@@ -44,9 +44,8 @@ export interface LeadStateOptions {
    *
    * The obvious fix, routing every greeting to the current handler, is wrong.
    * In the states where FREE TEXT IS THE PAYLOAD it would submit the greeting
-   * as data: "hi" typed at DC_OF_MSG is delivered to the lender as the
-   * customer's negotiation message, and at DC_CB_FIELD it is stored as a
-   * co-borrower's name. Those states genuinely want the escape hatch.
+   * as data: "hi" typed at DC_S4_AMT would be parsed as a loan amount, and
+   * at DC_CB_FIELD it is stored as a co-borrower's name. Those states genuinely want the escape hatch.
    *
    * So a state opts in only when its input is a tap — a list row, a button, a
    * document — and arbitrary text is already handled by re-rendering the

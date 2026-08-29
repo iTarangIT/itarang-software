@@ -29,6 +29,13 @@ import { db } from "@/lib/db/index";
 import { otherDocumentRequests } from "@/lib/db/schema";
 
 import type { ActiveDealer } from "./customer-lead";
+import {
+  DOC_NEXT_PROMPT,
+  docBatchButtons,
+  docGotIt,
+  isDocDone,
+  isDocNext,
+} from "./doc-buttons";
 import { getAdapter } from "./index";
 import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
@@ -172,6 +179,7 @@ async function onDocRequestStart(
       (open.length > 1
         ? `\n\n${open.length} documents are pending; send them one at a time and I'll tell you what's left.`
         : ""),
+    docBatchButtons(),
   );
 }
 
@@ -200,7 +208,14 @@ async function onDocRequestWait(
 
   if (event.type !== "image" && event.type !== "document") {
     const text = (event.text ?? "").trim().toLowerCase();
-    if (/^(done|later|stop|bas|ho gaya|hogaya|baad mein|baad me|ruko|band|बस|हो गया|बाद में|रुको|बंद)$/.test(text)) {
+    if (isDocNext(text)) {
+      await reply(session, DOC_NEXT_PROMPT, docBatchButtons());
+      return;
+    }
+    if (
+      isDocDone(text) ||
+      /^(later|stop|baad mein|baad me|ruko|band|बाद में|रुको|बंद)$/.test(text)
+    ) {
       await setSession(session.id, { current_state: "DC_MENU" });
       await reply(
         session,
@@ -211,6 +226,7 @@ async function onDocRequestWait(
     await reply(
       session,
       "Please send the document as a *photo* or a *PDF*. Type *later* to do it another time.",
+      docBatchButtons(),
     );
     return;
   }
@@ -284,7 +300,8 @@ async function onDocRequestWait(
     await patchLeadSub(session.id, "dr", { pending: remaining });
     await reply(
       session,
-      `✅ Got *${target.doc_label}*.\n\nNext, please send *${open[1].doc_label}*.`,
+      `${docGotIt(open.length - remaining)} *${target.doc_label}*\n\nNext, please send *${open[1].doc_label}*.`,
+      docBatchButtons(),
     );
     return;
   }

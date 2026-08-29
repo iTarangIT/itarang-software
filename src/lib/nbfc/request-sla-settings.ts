@@ -51,6 +51,10 @@ export type NbfcRequestSlaSettings = {
   autoForwardToDealer: boolean;
   /** Auto-verify the uploads and push to the NBFC when leg 2 expires. */
   autoPushToNbfc: boolean;
+  /** E-275 — whole minutes the admin has to act on an NBFC file rejection. */
+  rejectionSlaMinutes: number;
+  /** E-275 — auto-push the rejection (with reason) to the dealer on expiry. */
+  autoForwardRejection: boolean;
 };
 
 export const DEFAULT_NBFC_REQUEST_SLA_SETTINGS: NbfcRequestSlaSettings = {
@@ -59,6 +63,8 @@ export const DEFAULT_NBFC_REQUEST_SLA_SETTINGS: NbfcRequestSlaSettings = {
   pushSlaMinutes: 240, // 4 hours
   autoForwardToDealer: true,
   autoPushToNbfc: true,
+  rejectionSlaMinutes: 240, // 4 hours
+  autoForwardRejection: true,
 };
 
 function toBool(raw: unknown, fallback: boolean): boolean {
@@ -89,6 +95,11 @@ export function normalizeNbfcRequestSlaSettings(
         : base.pushSlaMinutes,
     autoForwardToDealer: toBool(patch.autoForwardToDealer, base.autoForwardToDealer),
     autoPushToNbfc: toBool(patch.autoPushToNbfc, base.autoPushToNbfc),
+    rejectionSlaMinutes:
+      patch.rejectionSlaMinutes !== undefined
+        ? clampSlaMinutes(patch.rejectionSlaMinutes)
+        : base.rejectionSlaMinutes,
+    autoForwardRejection: toBool(patch.autoForwardRejection, base.autoForwardRejection),
   };
 }
 
@@ -150,4 +161,16 @@ export function pushDueAtFrom(
 ): Date | null {
   if (!settings.enabled || !settings.autoPushToNbfc) return null;
   return new Date(at.getTime() + settings.pushSlaMinutes * 60_000);
+}
+
+/**
+ * E-275 — the deadline stamped on `nbfc_lead_assignments.rejection_admin_due_at`
+ * when an NBFC rejects a file, or null when the feature / this leg is off.
+ */
+export function rejectionDueAtFrom(
+  at: Date,
+  settings: NbfcRequestSlaSettings,
+): Date | null {
+  if (!settings.enabled || !settings.autoForwardRejection) return null;
+  return new Date(at.getTime() + settings.rejectionSlaMinutes * 60_000);
 }

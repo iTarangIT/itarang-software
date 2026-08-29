@@ -40,6 +40,17 @@ import type {
 } from "@/components/dealer-portal/lead-wizard/product-cart";
 import FinancingOffersSection from "./FinancingOffersSection";
 import NbfcDocRequestsBlock from "./NbfcDocRequestsBlock";
+import {
+  formatRupees,
+  parseRupees,
+} from "@/lib/leads/requested-loan-amount-parse";
+import {
+  BAJAJ_EXTERNAL_LENDER,
+  BAJAJ_FALLBACK,
+  NBFC_RECEIVED_MSG,
+  bajajCardText,
+} from "@/lib/leads/bajaj-fallback-text";
+import type { ExternalLenderId } from "@/lib/leads/bajaj-fallback-text";
 
 // BRD V2 Part E §2.2 — Step 4 Product Selection (dealer side)
 //
@@ -69,6 +80,10 @@ interface AccessData {
   readOnly?: boolean;
   reason?: string;
   priorSelection?: PriorSelection | null;
+  /** E-275 — recall banner inputs (leads.recalled_at / recall_note / resubmitted_at). */
+  recalledAt?: string | null;
+  recallNote?: string | null;
+  resubmittedAt?: string | null;
 }
 
 // Kept byte-identical so browser drafts written before the cart extraction
@@ -90,6 +105,8 @@ export default function ProductSelectionPage() {
     leadStatus: string;
     warrantyId?: string;
     productSelectionId?: string;
+    /** E-275 — set when the file went to Bajaj Finance instead of an NBFC. */
+    externalLender?: { id: string; name: string; loanSanctionId: string } | null;
   }>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
@@ -129,6 +146,14 @@ export default function ProductSelectionPage() {
   const [sectionGError, setSectionGError] = useState<string | null>(null);
   const [selectedNbfcs, setSelectedNbfcs] = useState<{ nbfc_id: string; loan_product_id: number }[]>([]);
   const [customerDisclosureAck, setCustomerDisclosureAck] = useState(false);
+  // E-275 — the Bajaj Finance card. Mutually exclusive with an NBFC pick.
+  const [externalLender, setExternalLender] = useState<ExternalLenderId | null>(null);
+
+  // E-275 — "Up to how much loan do you want?" Asked before the lender list;
+  // the list only loads once an amount is saved, filtered to products whose
+  // loan_amount_max covers it. Persisted on leads.requested_loan_amount.
+  const [requestedLoanAmount, setRequestedLoanAmount] = useState<number | null>(null);
+  const [loanAmountLoaded, setLoanAmountLoaded] = useState(false);
 
   const preSanctionRestoredRef = useRef(false);
 
@@ -217,6 +242,48 @@ export default function ProductSelectionPage() {
     };
   }, [leadId, router]);
 
+  // ── E-275 — load the saved loan amount (prefills the card) ───────────
+  useEffect(() => {
+    if (!access?.allowed || access.paymentMode !== "finance") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/lead/${leadId}/requested-loan-amount`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (json.success && typeof json.data?.amount === "number") {
+          setRequestedLoanAmount(json.data.amount);
+        }
+      } catch {
+        // non-fatal — the dealer can still type an amount.
+      } finally {
+        if (!cancelled) setLoanAmountLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [access, leadId]);
+
+  const saveRequestedLoanAmount = useCallback(
+    async (amount: number) => {
+      const res = await fetch(`/api/lead/${leadId}/requested-loan-amount`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        throw new Error(json?.error?.message || "Could not save the loan amount");
+      }
+      setRequestedLoanAmount(amount);
+      // A new amount can change which lenders qualify — drop any stale pick.
+      setSelectedNbfcs([]);
+      setExternalLender(null);
+    },
+    [leadId],
+  );
+
   // ── Restore the pre-sanction bucket from the submitted selection ─────
   // The cart's own state (serials, quantities, margin, photos) rehydrates
   // inside useProductCart; this bucket stays here because it belongs to the
@@ -237,12 +304,14 @@ export default function ProductSelectionPage() {
   // serial submitted has to be a real available row.
   // Addendum V0.1 §5.2 — Section G applies to finance leads only.
   const isFinanceLead = access?.paymentMode === "finance";
+  // E-275 — exactly ONE NBFC, or the Bajaj Finance external lender.
   const sectionGSatisfied = useMemo(() => {
     if (!isFinanceLead) return true;
-    if (selectedNbfcs.length < 1 || selectedNbfcs.length > 2) return false;
+    const lenderPicked = selectedNbfcs.length === 1 || externalLender != null;
+    if (!lenderPicked) return false;
     if (!customerDisclosureAck) return false;
     return true;
-  }, [isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
+  }, [isFinanceLead, selectedNbfcs.length, externalLender, customerDisclosureAck]);
 
   // A battery is required only for cash, where this page IS the sale. A
   // finance lead is going out for an offer, not shipping anything yet — the
@@ -250,10 +319,11 @@ export default function ProductSelectionPage() {
   const pendingRequirements = useMemo(() => {
     const list: string[] = [];
     if (isCash && !selectedBattery) list.push("Battery serial");
-    if (isFinanceLead && selectedNbfcs.length < 1) list.push("Pick 1 or 2 NBFCs in Section G");
-    if (isFinanceLead && !customerDisclosureAck) list.push("Confirm the customer disclosure in Section G");
+    if (isFinanceLead && requestedLoanAmount == null) list.push("Enter the loan amount");
+    if (isFinanceLead && selectedNbfcs.length < 1 && !externalLender) list.push("Pick a lender in Financing Options");
+    if (isFinanceLead && !customerDisclosureAck) list.push("Confirm the customer disclosure in Financing Options");
     return list;
-  }, [isCash, selectedBattery, isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
+  }, [isCash, selectedBattery, isFinanceLead, requestedLoanAmount, selectedNbfcs.length, externalLender, customerDisclosureAck]);
 
   const canSubmit =
     (!isCash || !!selectedBattery) &&
@@ -265,14 +335,21 @@ export default function ProductSelectionPage() {
   //    of the dealer's assigned NBFCs with active loan products. Phase 3
   //    swaps this for a real customer-attribute BRE match. Re-runs are
   //    cheap so we fetch once when finance access is confirmed.
+  // E-275 — gated on the requested loan amount: no amount, no lender list.
   useEffect(() => {
     if (!access || access.paymentMode !== "finance" || access.readOnly) return;
+    if (requestedLoanAmount == null) {
+      setSectionGOptions([]);
+      return;
+    }
     let cancelled = false;
     setSectionGLoading(true);
     setSectionGError(null);
     (async () => {
       try {
-        const res = await fetch(`/api/lead/${leadId}/section-g-options`);
+        const res = await fetch(
+          `/api/lead/${leadId}/section-g-options?loanAmount=${requestedLoanAmount}`,
+        );
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok || !json.success) {
@@ -291,35 +368,33 @@ export default function ProductSelectionPage() {
     return () => {
       cancelled = true;
     };
-  }, [access, leadId]);
+  }, [access, leadId, requestedLoanAmount]);
 
+  // E-275 — single-select: one NBFC (one product) per lead. Re-clicking the
+  // picked product clears it; any other click replaces the pick. Picking an
+  // NBFC drops the Bajaj card, and vice versa.
   const toggleNbfcPick = useCallback(
     (nbfcId: number, loanProductId: number) => {
+      setExternalLender(null);
       setSelectedNbfcs((prev) => {
         const idStr = String(nbfcId);
-        const idx = prev.findIndex((p) => p.nbfc_id === idStr);
-        if (idx >= 0) {
-          const existing = prev[idx];
-          if (existing.loan_product_id === loanProductId) {
-            // Same product re-clicked — toggle the NBFC off.
-            return prev.filter((_, i) => i !== idx);
-          }
-          // A different product of an already-picked NBFC — swap the product
-          // in place. One product per NBFC, so the pick count is unchanged.
-          const next = [...prev];
-          next[idx] = { nbfc_id: idStr, loan_product_id: loanProductId };
-          return next;
+        const current = prev[0];
+        if (current && current.nbfc_id === idStr && current.loan_product_id === loanProductId) {
+          return [];
         }
-        if (prev.length >= 2) {
-          // Cap at 2 NBFCs per §6.2; replace the oldest pick so dealer can
-          // swap lenders easily.
-          return [...prev.slice(1), { nbfc_id: idStr, loan_product_id: loanProductId }];
-        }
-        return [...prev, { nbfc_id: idStr, loan_product_id: loanProductId }];
+        return [{ nbfc_id: idStr, loan_product_id: loanProductId }];
       });
     },
     [],
   );
+
+  const toggleExternalLender = useCallback(() => {
+    setExternalLender((prev) => {
+      const next = prev ? null : BAJAJ_EXTERNAL_LENDER;
+      if (next) setSelectedNbfcs([]);
+      return next;
+    });
+  }, []);
 
   // E-208/E-209 — persist the current pre-sanction bucket to
   // product_selections.pre_sanction_doc_urls immediately, so uploads survive a
@@ -404,10 +479,14 @@ export default function ProductSelectionPage() {
         // E-130 / Addendum V0.1 §5.2, §5.3 — finance-only.
         ...(mode === "finance"
           ? {
-              selectedNbfcs: selectedNbfcs.map((s) => ({
-                nbfc_id: s.nbfc_id,
-                loan_product_id: s.loan_product_id,
-              })),
+              selectedNbfcs: externalLender
+                ? []
+                : selectedNbfcs.map((s) => ({
+                    nbfc_id: s.nbfc_id,
+                    loan_product_id: s.loan_product_id,
+                  })),
+              // E-275 — Bajaj Finance card: no NBFC fan-out, straight to Step 5.
+              ...(externalLender ? { externalLender } : {}),
               customerDisclosureAck,
               // E-208 — Step-4 pre-sanction document bucket (finance/NBFC only).
               preSanctionDocs,
@@ -501,6 +580,8 @@ export default function ProductSelectionPage() {
 
   if (submitted) {
     const soldOutright = submitted.leadStatus === "sold";
+    const external = submitted.externalLender ?? null;
+    const externalName = external?.name ?? BAJAJ_FALLBACK.name;
     return (
       <div className="min-h-screen bg-[#F8F9FB] flex items-center justify-center p-6">
         <div className="bg-white rounded-3xl border border-gray-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] max-w-xl w-full p-10 text-center">
@@ -516,12 +597,14 @@ export default function ProductSelectionPage() {
             )}
           </div>
           <h2 className="text-2xl font-black text-gray-900 tracking-tight">
-            {soldOutright ? "Sale Confirmed" : "Sent to NBFC"}
+            {soldOutright ? "Sale Confirmed" : external ? `Sent to ${externalName}` : "Sent to NBFC"}
           </h2>
           <p className="text-sm text-gray-500 mt-3 leading-relaxed max-w-sm mx-auto">
             {soldOutright
               ? `Inventory marked SOLD and warranty activated for lead ${leadId}.`
-              : "The selected lender(s) will review this customer and come back with an offer. You'll be notified — then pick the battery and dispatch on Step 5."}
+              : external
+                ? "Continue to Step 5 to pick the battery and confirm with the customer's OTP."
+                : NBFC_RECEIVED_MSG}
           </p>
           {submitted.warrantyId && (
             <div className="mt-6 inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-full">
@@ -535,13 +618,14 @@ export default function ProductSelectionPage() {
             <PrimaryButton onClick={() => router.push("/dealer-portal/leads")}>
               Back to Leads
             </PrimaryButton>
-            {(submitted.leadStatus === "loan_sanctioned" ||
-              submitted.leadStatus === "pending_final_approval") && (
-              <SecondaryButton
+            {/* Step 5 only opens once a sanction exists — never at
+                pending_final_approval, where step-5-access bounces back here. */}
+            {submitted.leadStatus === "loan_sanctioned" && (
+              <PrimaryButton
                 onClick={() => router.push(`/dealer-portal/leads/${leadId}/step-5`)}
               >
                 Go to Step 5 <ChevronRight className="w-4 h-4" />
-              </SecondaryButton>
+              </PrimaryButton>
             )}
           </div>
         </div>
@@ -619,6 +703,21 @@ export default function ProductSelectionPage() {
           </div>
         )}
 
+        {/* E-275 — admin pulled the file back; live until it is resubmitted. */}
+        {isFinanceLead && isRecallActive(access) && (
+          <div className="mb-6 flex items-start gap-3 px-5 py-4 rounded-2xl bg-amber-50 border-2 border-amber-200 text-sm">
+            <AlertCircle className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-black text-amber-900">
+                File recalled by iTarang, changes being made.
+              </p>
+              {access.recallNote && (
+                <p className="text-amber-800 mt-0.5">{access.recallNote}</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* §6.1/§6.2 — firm offers from picked NBFCs + winner selection. Self-hides for cash / un-routed leads. */}
         <FinancingOffersSection leadId={leadId} />
 
@@ -650,12 +749,22 @@ export default function ProductSelectionPage() {
                 customer winner-pick. Mandatory disclosure checkbox confirms
                 the customer was told this. */}
             {isFinanceLead && !access.readOnly && (
+              <LoanAmountCard
+                amount={requestedLoanAmount}
+                loaded={loanAmountLoaded}
+                onSave={saveRequestedLoanAmount}
+              />
+            )}
+            {isFinanceLead && !access.readOnly && (
               <SectionG
                 options={sectionGOptions}
                 loading={sectionGLoading}
                 error={sectionGError}
+                amountEntered={requestedLoanAmount != null}
                 selected={selectedNbfcs}
                 onTogglePick={toggleNbfcPick}
+                externalLender={externalLender}
+                onToggleExternalLender={toggleExternalLender}
                 disclosureAck={customerDisclosureAck}
                 onDisclosureChange={setCustomerDisclosureAck}
               />
@@ -869,7 +978,7 @@ export default function ProductSelectionPage() {
               </button>
             ) : (
               <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-                Send to NBFC
+                {externalLender ? `Continue with ${BAJAJ_FALLBACK.name}` : "Send to NBFC"}
                 <ChevronRight className="w-4 h-4" />
               </PrimaryButton>
             )}
@@ -1037,12 +1146,117 @@ function ConfirmRow({
   );
 }
 
+// E-275 — mirrors `isRecallActive` in src/lib/leads/offers.ts (that module
+// imports the db, so it cannot be pulled into this client page).
+function isRecallActive(a: {
+  recalledAt?: string | null;
+  resubmittedAt?: string | null;
+}): boolean {
+  if (!a.recalledAt) return false;
+  if (!a.resubmittedAt) return true;
+  return new Date(a.resubmittedAt).getTime() < new Date(a.recalledAt).getTime();
+}
+
+// E-275 — "Up to how much loan do you want?" Sits above Financing Options;
+// the lender list only loads once an amount is saved.
+function LoanAmountCard({
+  amount,
+  loaded,
+  onSave,
+}: {
+  amount: number | null;
+  loaded: boolean;
+  onSave: (amount: number) => Promise<void>;
+}) {
+  const [input, setInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Prefill once the saved value arrives (and whenever it changes elsewhere).
+  useEffect(() => {
+    if (amount != null) setInput(String(amount));
+  }, [amount]);
+
+  const parsed = parseRupees(input);
+  const dirty = parsed != null && parsed !== amount;
+
+  const save = async () => {
+    if (parsed == null) {
+      setError("Enter a valid amount, e.g. 60000 or 1.2 lakh");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(parsed);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not save the loan amount");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SectionCard
+      title="Up to how much loan do you want?"
+      action={
+        amount != null ? (
+          <span className="text-xs font-bold text-[#0047AB]">{formatRupees(amount)}</span>
+        ) : null
+      }
+    >
+      <p className="mb-3 text-xs text-gray-500">
+        The amount the customer wants financed. Only lenders whose loan products
+        cover this amount are shown below.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center rounded-xl border-2 border-gray-200 bg-white focus-within:border-[#0047AB]">
+          <span className="pl-3 pr-1 text-sm font-bold text-gray-400">₹</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={input}
+            disabled={!loaded || saving}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void save();
+            }}
+            placeholder="e.g. 60,000"
+            className="w-40 py-2 pr-3 text-sm font-bold text-gray-900 outline-none bg-transparent disabled:opacity-60"
+          />
+        </div>
+        <PrimaryButton
+          onClick={save}
+          disabled={!loaded || saving || parsed == null || !dirty}
+          loading={saving}
+        >
+          {amount == null ? "Save" : "Update"}
+        </PrimaryButton>
+        {parsed != null && input.trim() !== String(parsed) && (
+          <span className="text-xs text-gray-500">= {formatRupees(parsed)}</span>
+        )}
+      </div>
+      {error && (
+        <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+          {error}
+        </p>
+      )}
+    </SectionCard>
+  );
+}
+
 function SectionG({
   options,
   loading,
   error,
+  amountEntered,
   selected,
   onTogglePick,
+  externalLender,
+  onToggleExternalLender,
   disclosureAck,
   onDisclosureChange,
 }: {
@@ -1065,18 +1279,23 @@ function SectionG({
   }>;
   loading: boolean;
   error: string | null;
+  /** E-275 — the lender list is hidden until the loan amount is saved. */
+  amountEntered: boolean;
   selected: Array<{ nbfc_id: string; loan_product_id: number }>;
   onTogglePick: (nbfcId: number, loanProductId: number) => void;
+  externalLender: ExternalLenderId | null;
+  onToggleExternalLender: () => void;
   disclosureAck: boolean;
   onDisclosureChange: (next: boolean) => void;
 }) {
-  // Selection is keyed per product now (one card per loan product), while the
-  // cap is still on distinct NBFCs (max 2). pickedProductIds drives the card's
-  // selected state; pickedNbfcIds gates which NBFCs are still selectable.
+  // Selection is keyed per product (one card per loan product); E-275 caps the
+  // lead at ONE NBFC. pickedProductIds drives the card's selected state;
+  // pickedNbfcIds gates which NBFCs are still selectable.
   const pickedProductIds = new Set(selected.map((s) => s.loan_product_id));
   const pickedNbfcIds = new Set(selected.map((s) => s.nbfc_id));
   const isNbfcPicked = (nbfcId: number) => pickedNbfcIds.has(String(nbfcId));
   const pickCount = selected.length;
+  const bajajPicked = externalLender != null;
 
   return (
     <SectionCard title="Financing Options">
@@ -1084,12 +1303,16 @@ function SectionG({
         <p className="text-[11px] text-amber-800 leading-relaxed">
           <strong>Indicative — subject to verification.</strong> Final terms are
           confirmed by the lender after Field Investigation and Active Video
-          KYC. The customer may select <strong>up to two</strong> lending partners;
-          each verifies independently and submits a firm offer.
+          KYC. The customer selects <strong>one</strong> lending partner; it
+          verifies independently and submits a firm offer.
         </p>
       </div>
 
-      {loading ? (
+      {!amountEntered ? (
+        <div className="py-6 text-center text-xs text-gray-500">
+          Enter the loan amount above to see matching lenders.
+        </div>
+      ) : loading ? (
         <div className="py-6 text-center text-xs text-gray-400">Loading lender options…</div>
       ) : error ? (
         <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs font-medium text-red-700 flex items-start gap-2">
@@ -1097,17 +1320,53 @@ function SectionG({
           <span>{error}</span>
         </div>
       ) : options.length === 0 ? (
-        <div className="py-6 text-center text-xs text-gray-500">
-          No lending partners are currently available for this dealer. The
-          lead will be routed to Manual Handoff after submit.
-        </div>
+        // E-275 — no preferred partner covers this customer: offer Bajaj
+        // Finance. Picking it sends the lead straight to Step 5 with an
+        // external sanction (no NBFC fan-out, no admin gate).
+        <button
+          type="button"
+          onClick={onToggleExternalLender}
+          className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
+            bajajPicked
+              ? "border-[#0047AB] bg-blue-50/60 shadow-sm"
+              : "border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-sm"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-gray-900">{BAJAJ_FALLBACK.name}</div>
+              <p className="mt-1 text-xs text-gray-600 leading-relaxed">{bajajCardText()}</p>
+              <p className="mt-2 text-[11px] text-gray-400">
+                No preferred lending partner covers this customer&apos;s area for this
+                amount. {BAJAJ_FALLBACK.name} is available nationally — picking it takes
+                the lead straight to Step 5.
+              </p>
+            </div>
+            <div
+              className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                bajajPicked ? "border-[#0047AB] bg-[#0047AB]" : "border-gray-300"
+              }`}
+            >
+              {bajajPicked && <CheckCircle2 className="w-3 h-3 text-white" />}
+            </div>
+          </div>
+          <span
+            className={`mt-3 inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-bold ${
+              bajajPicked
+                ? "bg-[#0047AB] text-white"
+                : "bg-gray-100 text-gray-700"
+            }`}
+          >
+            {bajajPicked ? `${BAJAJ_FALLBACK.name} selected` : `Select ${BAJAJ_FALLBACK.name}`}
+          </span>
+        </button>
       ) : (
         <div className="space-y-5">
           {options.map((opt, idx) => {
             const nbfcPicked = isNbfcPicked(opt.nbfcId);
-            // When two NBFCs are already chosen, every product of any other
-            // NBFC is locked (one product per NBFC, max two NBFCs).
-            const nbfcLocked = !nbfcPicked && pickCount >= 2;
+            // E-275 — once one NBFC is chosen, every product of any other
+            // NBFC is locked (one product per NBFC, one NBFC per lead).
+            const nbfcLocked = !nbfcPicked && pickCount >= 1;
             return (
               <div key={opt.nbfcId} className="space-y-2">
                 <div className="flex items-center gap-2 px-1">
@@ -1187,8 +1446,8 @@ function SectionG({
           })}
           <p className="text-[11px] text-gray-400 px-1">
             {pickCount === 0
-              ? "Pick the lender(s) the customer wants to apply with."
-              : `Selected: ${pickCount} of 2 lender${pickCount === 1 ? "" : "s"}.`}
+              ? "Pick the lender the customer wants to apply with."
+              : `Selected: ${pickCount} of 1 lender.`}
           </p>
         </div>
       )}
@@ -1201,7 +1460,7 @@ function SectionG({
           className="mt-0.5 w-4 h-4 rounded border-gray-300 text-[#0047AB] focus:ring-[#0047AB]"
         />
         <span className="text-xs text-gray-700 leading-relaxed">
-          I confirm I have <strong>informed the customer</strong> that each
+          I confirm I have <strong>informed the customer</strong> that the
           selected lending partner will independently verify them (including
           Field Investigation and Active Video KYC), and that final terms may
           differ from the indicative ranges shown above.
@@ -1223,4 +1482,4 @@ function RangeStat({ label, value }: { label: string; value: string }) {
 // Addendum V0.1 §5.1 — battery/charger photo upload block. Two named slots
 // (serial close-up + unit photo) plus an "Add Another" option for extra
 // shots. Uploads happen one at a time; URLs come back from
-// /api/lead/[id]/product-photo and are tracked by the parent.
+// /api/lead/[id]/product-photo and are tracked by the parent.

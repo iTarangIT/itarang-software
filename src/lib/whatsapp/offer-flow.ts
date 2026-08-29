@@ -1,5 +1,9 @@
 /**
- * E-264 Phase 3 — financing offers, negotiation and sanction, over WhatsApp.
+ * E-264 Phase 3 / E-275 — financing offers and sanction, over WhatsApp.
+ *
+ * E-275 removed negotiation from the chat: the customer accepts the lender's
+ * offer or waits. `pushOfferFixedToWhatsApp` stays exported for callers that
+ * still reference it but is no longer wired to a negotiation loop.
  *
  * This is the half of the journey that was missing. Step 4 ended at "sent to
  * your lenders" and the next thing the customer heard was "your loan is
@@ -28,9 +32,8 @@
  *    `listLeadOffers`; this module reads through it and never queries
  *    `nbfc_financing_offers` directly.
  *
- * 3. Once a lender fixes its terms, the "ask for better" affordance disappears.
- *    `negotiateOffer` refuses anyway, but offering a button that always errors
- *    trains the customer to distrust the chat.
+ * 3. There is no "ask for better" in chat (E-275). The only action on an offer
+ *    is to accept it.
  */
 
 import { eq } from "drizzle-orm";
@@ -42,8 +45,7 @@ import {
   listLeadOffers,
   type LeadOfferItem,
 } from "@/lib/leads/offers";
-import { MAX_MESSAGE_LENGTH } from "@/lib/nbfc/offer-negotiation";
-import { OfferActionError, negotiateOffer } from "@/lib/leads/negotiate-offer";
+import { OfferActionError } from "@/lib/leads/negotiate-offer";
 import { selectOfferWinner } from "@/lib/leads/select-winner";
 
 import type { ActiveDealer } from "./customer-lead";
@@ -64,10 +66,9 @@ import type { InboundEvent, ListRow } from "./types";
 import { oneLine } from "./window";
 
 export const DC_OF_VIEW = "DC_OF_VIEW";
-export const DC_OF_MSG = "DC_OF_MSG";
 export const DC_OF_WAIT = "DC_OF_WAIT";
 
-/** Meta's hard cap on interactive list rows. Two offers × two actions fits. */
+/** Meta's hard cap on interactive list rows. */
 const MAX_ROWS = 10;
 
 // ---------------------------------------------------------------------------
@@ -78,11 +79,6 @@ const inr = (v: string | number | null | undefined) => {
   const n = Number(v);
   return Number.isFinite(n) ? `₹${n.toLocaleString("en-IN")}` : "—";
 };
-
-/** True while this lender can still be asked to re-price. */
-function isNegotiable(item: LeadOfferItem): boolean {
-  return item.offer != null && item.negotiation_status !== "fixed";
-}
 
 /** The six numbers, as a borrower reads them. */
 function termsBlock(item: LeadOfferItem, label: string): string {
@@ -125,14 +121,6 @@ function rowsFor(items: LeadOfferItem[], labels: Map<number, string>): ListRow[]
         id: `ofp:${item.nbfc_id}`,
         title: `✅ Accept ${label}`.slice(0, 24),
         description: `EMI ${inr(item.offer!.emi_amount)} × ${item.offer!.tenure_months ?? "—"} months`.slice(0, 72),
-      });
-    }
-    // Rule 3 — no "ask for better" once the lender has fixed its terms.
-    if (isNegotiable(item) && rows.length < MAX_ROWS) {
-      rows.push({
-        id: `ofa:${item.nbfc_id}`,
-        title: `💬 Ask ${label}`.slice(0, 24),
-        description: "Request better terms in your own words".slice(0, 72),
       });
     }
   });
@@ -183,8 +171,8 @@ export async function pushOfferToWhatsApp(
           `${head}\n\n${termsBlock(item, label)}` +
           (note ? `\n\n_"${note}"_` : "") +
           (dealerSide
-            ? `\n\nTap below to see every offer on this application, accept one, or ask for better terms.`
-            : `\n\nTap below to see all your offers, accept one, or ask for better terms.`),
+            ? `\n\nTap below to see the offer on this application and accept it.`
+            : `\n\nTap below to see your offer and accept it.`),
         buttons: [{ id: leadActionId("of_view", leadId), title: "📋 View offers" }],
       },
       nudge: {
@@ -314,8 +302,7 @@ async function showOffers(session: SessionRow, leadId: string): Promise<void> {
   await replyList(
     session,
     `📋 *Your financing offer${live.length > 1 ? "s" : ""}*\n\n${blocks.join("\n\n")}\n\n` +
-      `Accept one to go ahead, or ask a lender for better terms — you can write ` +
-      `to them in your own words.`,
+      `Tap *Choose* and accept to go ahead.`,
     "Choose",
     rowsFor(live, labels),
   );
@@ -333,23 +320,7 @@ async function onOfferChoice(
   }
 
   const raw = (event.text ?? "").trim();
-  const ask = raw.match(/^ofa:(\d{1,10})$/);
   const pick = raw.match(/^ofp:(\d{1,10})$/);
-
-  if (ask) {
-    const nbfcId = Number(ask[1]);
-    await patchLeadSub(session.id, "of", { pickedNbfcId: nbfcId });
-    await setSession(session.id, { current_state: DC_OF_MSG });
-    const labels = await schemeLabelsForLead(leadId);
-    await reply(
-      session,
-      `💬 What would you like to ask *${labelFor(labels, nbfcId, 0)}* for?\n\n` +
-        `Type it in your own words — for example _"Can you reduce the EMI to ` +
-        `₹2,500?"_ or _"Can the tenure be 36 months instead?"_\n\n` +
-        `Your message goes straight to the lender, and their answer comes back here.`,
-    );
-    return;
-  }
 
   if (pick) {
     await acceptOffer(session, leadId, Number(pick[1]));
@@ -359,76 +330,6 @@ async function onOfferChoice(
   // Not a row we recognise — re-render rather than guess. The list may have
   // scrolled out of the customer's view, and a bare "?" helps nobody.
   await showOffers(session, leadId);
-}
-
-/** DC_OF_MSG — the customer's own words, on their way to the lender. */
-async function onOfferMessage(
-  session: SessionRow,
-  event: InboundEvent,
-  dealer: ActiveDealer,
-): Promise<void> {
-  const leadId = leadIdOf(session);
-  if (!leadId) {
-    await reply(session, "I've lost track of this application. Please send *hi* to start again.");
-    return;
-  }
-
-  const ctx = (session.context ?? {}) as {
-    flow?: string;
-    lead?: { of?: { pickedNbfcId?: number } };
-  };
-  const nbfcId = ctx.lead?.of?.pickedNbfcId;
-  if (!nbfcId) {
-    await showOffers(session, leadId);
-    return;
-  }
-
-  const message = (event.text ?? "").trim();
-  if (!message) {
-    await reply(session, "Please type your message for the lender.");
-    return;
-  }
-  if (message.length > MAX_MESSAGE_LENGTH) {
-    await reply(
-      session,
-      `That's a bit long — please keep it under ${MAX_MESSAGE_LENGTH} characters.`,
-    );
-    return;
-  }
-
-  try {
-    await negotiateOffer({
-      leadId,
-      nbfcId,
-      message,
-      actor: {
-        // The borrower typed it themselves when this is a self-serve chat;
-        // otherwise the dealer is relaying, and the thread should say so.
-        kind: ctx.flow === "customer" ? "customer" : "dealer",
-        // A self-serve customer has no `users` row — an honest NULL beats an
-        // invented author. See NegotiationActor for why the audit id is separate.
-        userId: ctx.flow === "customer" ? null : (dealer.uploaderId || null),
-        auditUserId: dealer.uploaderId,
-      },
-    });
-  } catch (err) {
-    if (err instanceof OfferActionError) {
-      // A refusal written for a borrower to read — show it, then re-render so
-      // they can see what they CAN still do.
-      await reply(session, `⚠️ ${err.message}`);
-      await showOffers(session, leadId);
-      return;
-    }
-    throw err;
-  }
-
-  await setSession(session.id, { current_state: DC_OF_WAIT });
-  await reply(
-    session,
-    "✅ *Sent to the lender.*\n\n" +
-      "They'll review your request and come back with revised terms. " +
-      "We'll message you here as soon as they do.",
-  );
 }
 
 /**
@@ -606,8 +507,4 @@ registerLeadAction("of_view", onOfferView);
 registerLeadAction("of_pick", onOfferPick);
 registerLeadAction("sn_ack", onSanctionAck);
 registerLeadState(DC_OF_VIEW, onOfferChoice, { rerenderOnGreeting: true });
-// DC_OF_MSG is deliberately NOT opted in: free text here IS the payload, and a
-// greeting routed to this handler would be delivered to the lender as the
-// customer's negotiation message. The greeting must stay an escape hatch.
-registerLeadState(DC_OF_MSG, onOfferMessage);
 registerLeadState(DC_OF_WAIT, onOfferWait, { rerenderOnGreeting: true });

@@ -12,10 +12,15 @@
  * Role: credit_underwriting | nbfc_admin, scoped to the acting tenant's assignment.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
+
+import { db } from "@/lib/db";
+import { leads } from "@/lib/db/schema";
 
 import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
+import { RECALLED_ERROR, isLeadRecalled } from "@/lib/nbfc/recall";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 import {
   upsertNbfcVerdict,
@@ -64,6 +69,17 @@ export async function POST(
         { ok: false, error: "BAD_REQUEST: no assignment for this lead under this tenant" },
         { status: 400 },
       );
+    }
+    // E-275 — a recalled file is paused for every NBFC until iTarang resubmits it.
+    {
+      const [leadRow] = await db
+        .select({ recalled_at: leads.recalled_at, resubmitted_at: leads.resubmitted_at })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      if (isLeadRecalled(leadRow)) {
+        return NextResponse.json({ ok: false, error: RECALLED_ERROR }, { status: 409 });
+      }
     }
 
     let form: FormData;
