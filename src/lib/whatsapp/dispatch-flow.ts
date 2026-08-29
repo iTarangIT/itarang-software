@@ -894,16 +894,12 @@ async function completeOrder(
   }
 
   // --- Customer picked for themselves: hand over, as always. --------------
+  // Customer-facing: no rupee amounts (E-275) — the same card the dealer path
+  // sends into the customer's chat.
   if (!dealerDriven) {
     await reply(
       session,
-      `🧾 *Your order*\n\n` +
-        `🔋 ${battery.model_name ?? battery.serial_number} — ${inr(batteryNet)}\n` +
-        (charger
-          ? `⚡ ${charger.model_name ?? charger.serial_number} — ${inr(chargerNet)}\n`
-          : "") +
-        `\n*Total ${inr(total)}* _(incl. GST)_\n\n` +
-        HANDOFF,
+      `${customerOrderCard(battery, charger, total)}\n\n` + HANDOFF,
     );
     await setSession(session.id, { current_state: DC_DP_WAIT });
     return;
@@ -1050,24 +1046,24 @@ function refusalMessage(err: unknown): string | null {
 /**
  * The card the customer receives.
  *
- * ONE price on it, deliberately: the total. Listing the battery and charger at
- * their inventory prices next to a total that includes the dealer's margin hands
- * the customer the margin as a subtraction. See the file header.
+ * NO price on it (E-275) — cash or finance. The customer confirms WHAT they are
+ * receiving (model + serial); the money is the dealer's conversation with them,
+ * and a forwardable chat message is not where it belongs. The dealer-facing
+ * preview and receipt keep the full breakdown.
  */
 function customerOrderCard(
   battery: DealerStockItem,
   charger: DealerStockItem | null,
-  total: number,
+  _total: number,
 ): string {
   return (
     `🧾 *Your order*\n\n` +
     `🔋 ${battery.model_name ?? battery.model_type ?? "Battery"}\n` +
-    `   Serial ${battery.serial_number}\n` +
+    `   Serial ${battery.serial_number}` +
     (charger
-      ? `⚡ ${charger.model_name ?? charger.model_type ?? "Charger"}\n` +
-        `   Serial ${charger.serial_number}\n`
-      : "") +
-    `\n*Total ${inr(total)}* _(incl. GST)_`
+      ? `\n⚡ ${charger.model_name ?? charger.model_type ?? "Charger"}\n` +
+        `   Serial ${charger.serial_number}`
+      : "")
   );
 }
 

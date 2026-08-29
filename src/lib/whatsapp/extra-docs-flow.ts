@@ -45,6 +45,13 @@ import {
 import { notifyDocsShared } from "@/lib/notifications/events";
 
 import type { ActiveDealer } from "./customer-lead";
+import {
+  DOC_NEXT_PROMPT,
+  docBatchButtons,
+  docGotIt,
+  isDocDone,
+  isDocNext,
+} from "./doc-buttons";
 import { getAdapter } from "./index";
 import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
@@ -119,7 +126,6 @@ function text(event: InboundEvent): string {
   return (event.text ?? "").trim();
 }
 
-const DONE_RE = /^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya|hogaya|बस|हो गया|पूरा|poora|pura)$/i;
 const LATER_RE = /^(later|stop|baad mein|baad me|ruko|band|बाद में|रुको|बंद)$/i;
 const SKIP_RE = /^(xd_skip|skip|no|nahi|nahin|नहीं|nope|n)$/i;
 const ADD_RE = /^(xd_add|add|yes|haan|ha|हाँ|हां|y|attach|upload)$/i;
@@ -140,7 +146,7 @@ function nextFilePrompt(count: number): string {
   }
   return (
     `Send file *${count + 1}* now — a photo, PDF, Word file, ZIP or video (up to 50 MB each). ` +
-    `Type *done* when you've sent everything, or *later* to come back through *Save Drafts*.`
+    `Tap *Done* when you've sent everything, or type *later* to come back through *Save Drafts*.`
   );
 }
 
@@ -205,7 +211,7 @@ export async function openExtraDocs(
       intro += `The lender asked for:\n${listed.join("\n")}\n\nSend them in that order.\n\n`;
     }
   }
-  await reply(session, intro + nextFilePrompt(items.length));
+  await reply(session, intro + nextFilePrompt(items.length), docBatchButtons());
 }
 
 // ---------------------------------------------------------------------------
@@ -254,12 +260,17 @@ async function onExtraDocsWait(
 
   if (!acceptsMedia(event)) {
     const t = text(event).toLowerCase();
-    if (DONE_RE.test(t)) return await endBatch(session, dealer, leadId);
+    if (isDocDone(t)) return await endBatch(session, dealer, leadId);
     if (LATER_RE.test(t)) return await parkForLater(session, leadId);
+    if (isDocNext(t)) {
+      await reply(session, DOC_NEXT_PROMPT, docBatchButtons());
+      return;
+    }
     await reply(
       session,
       `Please send the file as a *photo*, *PDF*, *document*, *ZIP* or *video*.\n\n` +
-        `Type *done* when finished (${counter(xd.count ?? 0)} attached), or *later* to come back via *Save Drafts*.`,
+        `Tap *Done* when finished (${counter(xd.count ?? 0)} attached), or type *later* to come back via *Save Drafts*.`,
+      docBatchButtons(),
     );
     return;
   }
@@ -331,20 +342,18 @@ async function onExtraDocsWait(
   }
 
   const got = answered
-    ? `✅ Got *${answered}* (${counter(count)}).`
-    : `✅ Saved *${item.name}* (${counter(count)}).`;
+    ? `${docGotIt(count)} *${answered}*`
+    : `${docGotIt(count)} *${item.name}*`;
   let follow = "";
   if (xd.requestId) {
     const pending = await openRequestChildren(xd.requestId);
     if (pending.length > 0) {
       follow = `\n\nNext, please send *${pending[0].doc_label}*.`;
     } else {
-      follow = `\n\nThat covers what the lender asked for. Send more if you like, or type *done*.`;
+      follow = `\n\nThat covers what the lender asked for. Send more if you like, or tap *Done*.`;
     }
-  } else {
-    follow = `\n\nSend the next file, or type *done*.`;
   }
-  await reply(session, got + follow);
+  await reply(session, got + follow, docBatchButtons());
 }
 
 // ---------------------------------------------------------------------------

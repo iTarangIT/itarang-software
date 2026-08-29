@@ -19,6 +19,7 @@ import { fetchQueueRows, countQueueRows } from "@/lib/inside-sales/queryBuilder"
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { QUEUE_TABS, TAB_LABELS, type QueueRow } from "@/lib/inside-sales/types";
 import { LEAD_STATUS_LABEL, readQueueFilters } from "@/lib/leads/queueFilters";
+import { readQueueSort } from "@/lib/leads/queueSort";
 import {
     csvDateTime,
     csvPretty,
@@ -91,7 +92,13 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     };
 
     const [rows, total] = await Promise.all([
-        fetchQueueRows({ ...common, page: 1, limit: QUEUE_EXPORT_ROW_CAP }),
+        // The sheet is ordered the way the screen is — same params, same builder.
+        fetchQueueRows({
+            ...common,
+            sort: readQueueSort(url.searchParams),
+            page: 1,
+            limit: QUEUE_EXPORT_ROW_CAP,
+        }),
         countQueueRows(common),
     ]);
 

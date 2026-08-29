@@ -99,10 +99,17 @@ export const submitProductSelectionSchema = z.object({
         loan_product_id: z.union([z.string(), z.number()]).optional(),
       }),
     )
-    .max(2)
+    // E-275 — one lending partner per submission (was 2).
+    .max(1)
     .optional(),
+  // E-275 — the off-platform "Bajaj Finance" card. Mutually exclusive with
+  // selectedNbfcs; the lead goes straight to Step 5 with an external sanction.
+  externalLender: z.literal("bajaj_finance").optional(),
   customerDisclosureAck: z.boolean().optional(),
-});
+}).refine(
+  (b) => !(b.externalLender && b.selectedNbfcs && b.selectedNbfcs.length > 0),
+  { message: "Pick either an NBFC or the external lender, not both." },
+);
 
 /**
  * Step 5 save. This is where the dealer commits to actual stock, so the serial

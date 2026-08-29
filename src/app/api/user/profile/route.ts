@@ -2,11 +2,31 @@ import { after } from 'next/server';
 import { requireAuthWithSupabaseUser } from '@/lib/auth-utils';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { recordLoginEvent } from '@/lib/usage/track';
 
 export const GET = withErrorHandler(async () => {
     // One shared getUser() — requireAuthWithSupabaseUser returns both the RDS
     // profile and the Supabase auth user (with app_metadata) in a single pass.
     const { dbUser, authUser, synthesized } = await requireAuthWithSupabaseUser();
+
+    // CRM usage (E-214). This route is the login tracker because the login flow
+    // already awaits it and it cannot be lost to a page navigation — unlike the
+    // client-side fetch this replaced, which a browser may silently drop.
+    //
+    // It also runs on every AuthProvider mount, so being called proves nothing
+    // on its own. recordLoginEvent() therefore keys off authUser.last_sign_in_at,
+    // which Supabase moves on a password grant and NOT on a token refresh, and
+    // writes at most one row per distinct sign-in. See lib/usage/track.ts.
+    //
+    // after(): a navigation must not wait on analytics, and this route blocks
+    // every page's first paint. Errors are swallowed inside recordLoginEvent.
+    after(async () => {
+        await recordLoginEvent({
+            id: dbUser.id,
+            role: dbUser.role,
+            lastSignInAt: authUser.last_sign_in_at ?? null,
+        });
+    });
 
     // Keep app_metadata.role (what the middleware reads) in sync with the RDS
     // role. Runs after the response is sent — the admin API write must not

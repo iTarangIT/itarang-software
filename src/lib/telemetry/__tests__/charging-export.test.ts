@@ -112,6 +112,42 @@ async function buildAndLoad() {
     return { buffer, workbook };
 }
 
+/**
+ * The cycle-sheet footer as a label → value map.
+ *
+ * Reads to wherever the block actually ends instead of to a hard-coded last row.
+ * Both callers previously scanned to row 16, which was correct until the spec
+ * added Total CAN Samples, Avg Sampling Interval and Capacity Confidence: the
+ * footer grew to twelve rows ending at 17, so the scan stopped one row short of
+ * "Rated Capacity (Ah)" and the assertion compared against `undefined`. The
+ * exporter was right and the test was wrong, which is the expensive kind of
+ * failure — so the bound is now derived rather than maintained by hand.
+ *
+ * Leading blanks are skipped (the spacer row sits at a different offset on each
+ * sheet, because sheets have different sample counts) and the first blank AFTER
+ * the block ends it — which also stops it swallowing the italic note that
+ * follows.
+ */
+function footerLabels(
+    sheet: ExcelJS.Worksheet,
+    firstRow: number,
+): Map<string, ExcelJS.CellValue> {
+    const labels = new Map<string, ExcelJS.CellValue>();
+
+    for (let r = firstRow; r <= sheet.rowCount; r++) {
+        const label = sheet.getRow(r).getCell(1).value;
+        const blank = label === null || label === undefined || String(label).trim() === "";
+
+        if (blank) {
+            if (labels.size > 0) break;
+            continue;
+        }
+        labels.set(String(label), sheet.getRow(r).getCell(2).value);
+    }
+
+    return labels;
+}
+
 describe("formatIst", () => {
     it("renders UTC instants in IST (+05:30)", () => {
         expect(formatIst(new Date("2026-03-01T00:00:00Z"))).toBe("2026-03-01 05:30:00");
@@ -245,11 +281,27 @@ describe("buildChargingAnalysisWorkbook", () => {
     it("takes cycle-sheet footer totals from the aggregate, not the running sum", async () => {
         const { workbook } = await buildAndLoad();
         const sheet = workbook.getWorksheet("Cycle-01")!;
-        // Rows 2-4 are samples, 5 is the spacer, so the footer starts at row 6 and now runs to
-        // row 16 — the spec added Total CAN Samples, Avg Sampling Interval and Capacity Confidence.
-        const labels = new Map<string, ExcelJS.CellValue>();
-        for (let r = 6; r <= 16; r++) {
-            labels.set(String(sheet.getRow(r).getCell(1).value), sheet.getRow(r).getCell(2).value);
+        // Rows 2-4 are samples and 5 is the spacer, so the footer starts at row 6; its
+        // length is discovered rather than hard-coded — see footerLabels().
+        const labels = footerLabels(sheet, 6);
+        // footerLabels() absorbs a newly ADDED field silently, which is right for a test
+        // about values — but a field that disappears must still fail loudly, so the set is
+        // pinned here rather than inferred from a row count.
+        for (const required of [
+            "Battery Number",
+            "Total Charging Duration",
+            "Total Charged AH",
+            "SOC Difference (%)",
+            "Avg Charging Current (A)",
+            "Peak Charging Current (A)",
+            "Total CAN Samples",
+            "Avg Sampling Interval (s)",
+            "Data Coverage (%)",
+            "Estimated Battery Capacity (Ah)",
+            "Capacity Confidence",
+            "Rated Capacity (Ah)",
+        ]) {
+            expect(labels.has(required), `footer lost "${required}"`).toBe(true);
         }
         expect(labels.get("Total Charging Duration")).toBe("2h 00m");
         // 78.2 from SQL, deliberately NOT the 40 Ah the display rows sum to.
@@ -272,10 +324,8 @@ describe("buildChargingAnalysisWorkbook", () => {
         // while "any error is multiplied 50x" means everything.
         const { workbook } = await buildAndLoad();
         const sheet = workbook.getWorksheet("Cycle-02")!;
-        const labels = new Map<string, ExcelJS.CellValue>();
-        for (let r = 5; r <= 16; r++) {
-            labels.set(String(sheet.getRow(r).getCell(1).value), sheet.getRow(r).getCell(2).value);
-        }
+        // Cycle-02 has fewer sample rows, so its footer starts higher up the sheet.
+        const labels = footerLabels(sheet, 5);
         expect(labels.get("Estimated Battery Capacity (Ah)")).toBe(105);
         const grade = String(labels.get("Capacity Confidence"));
         expect(grade).toContain("LOW");

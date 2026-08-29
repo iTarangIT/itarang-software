@@ -35,6 +35,7 @@
     "risk:test": "node --import tsx --env-file=.env.local scripts/run-test-hypotheses.ts",
     "risk:write": "node --import tsx --env-file=.env.local scripts/run-write-cards.ts",
     "seed:calculator": "node --import tsx --env-file=.env.local scripts/seed-loan-calculator.ts",
+    "seed:operations-user": "node --import tsx --env-file=.env.local scripts/create-operations-user.ts",
     "verify:calculator": "node --import tsx scripts/verify-calculator-engine.ts",
     "verify:duration-histogram": "node --import tsx --env-file=.env.local scripts/verify-duration-histogram.ts",
     "verify:notifications": "node --import tsx --env-file=.env.local scripts/verify-notification-registry.ts",

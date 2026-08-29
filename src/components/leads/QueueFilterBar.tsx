@@ -20,7 +20,13 @@
  * data the user cannot see.
  */
 
-import { ChevronDown, RotateCcw, SlidersHorizontal } from "lucide-react";
+import {
+    ArrowDownWideNarrow,
+    ArrowUpNarrowWide,
+    ChevronDown,
+    RotateCcw,
+    SlidersHorizontal,
+} from "lucide-react";
 import {
     countQueueFilters,
     INTEREST_OPTIONS,
@@ -28,6 +34,14 @@ import {
     type QueueFilters,
     type QueueRegion,
 } from "@/lib/leads/queueFilters";
+import {
+    EMPTY_QUEUE_SORT,
+    QUEUE_SORT_ASC_LABEL,
+    QUEUE_SORT_OPTIONS,
+    hasQueueSort,
+    type QueueSort,
+    type QueueSortKey,
+} from "@/lib/leads/queueSort";
 
 /** Styling only — width belongs to the grid cell, never to the control. */
 export const QUEUE_SELECT_CLASS =
@@ -70,6 +84,14 @@ type Props = {
     children?: React.ReactNode;
     /** How many extra filters `children` contributes, for the badge. */
     extraActiveCount?: number;
+    /**
+     * The sort, held beside the filters because it travels the same route
+     * (URL → API → SQL) and is reset by the same button. It is NOT counted in
+     * the badge: a sort narrows nothing, and "Filters (1)" over a full list
+     * would send the user hunting for a filter that is not there.
+     */
+    sort?: QueueSort;
+    onSortChange?: (next: QueueSort) => void;
 };
 
 export function QueueFilterBar({
@@ -82,8 +104,12 @@ export function QueueFilterBar({
     dateLabel,
     children,
     extraActiveCount = 0,
+    sort = EMPTY_QUEUE_SORT,
+    onSortChange,
 }: Props) {
     const activeCount = countQueueFilters(values) + extraActiveCount;
+    const sorted = hasQueueSort(sort);
+    const canReset = activeCount > 0 || sorted;
     const cities =
         regions.find((r) => r.state === values.state)?.cities ?? [];
 
@@ -223,17 +249,76 @@ export function QueueFilterBar({
                         </QueueFilterField>
 
                         {children}
+
+                        {onSortChange && (
+                            <>
+                                <QueueFilterField label="Sort by">
+                                    <select
+                                        value={sort.sort}
+                                        onChange={(e) =>
+                                            onSortChange({
+                                                sort: e.target.value as QueueSortKey | "",
+                                                // A fresh column starts ascending —
+                                                // keeping "desc" from the previous one
+                                                // would flip A→Z to Z→A unasked.
+                                                dir: "asc",
+                                            })
+                                        }
+                                        className={QUEUE_SELECT_CLASS}
+                                    >
+                                        {QUEUE_SORT_OPTIONS.map((o) => (
+                                            <option key={o.value} value={o.value}>
+                                                {o.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </QueueFilterField>
+
+                                <QueueFilterField label="Order">
+                                    <button
+                                        type="button"
+                                        disabled={!sorted}
+                                        aria-pressed={sort.dir === "desc"}
+                                        onClick={() =>
+                                            onSortChange({
+                                                ...sort,
+                                                dir: sort.dir === "asc" ? "desc" : "asc",
+                                            })
+                                        }
+                                        title={
+                                            sorted
+                                                ? `Ascending = ${QUEUE_SORT_ASC_LABEL[sort.sort as QueueSortKey]} — click to flip`
+                                                : "Choose a column to sort by first"
+                                        }
+                                        className={`${QUEUE_SELECT_CLASS} inline-flex items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400`}
+                                    >
+                                        <span>
+                                            {!sorted
+                                                ? "Choose a column first"
+                                                : sort.dir === "asc"
+                                                  ? "Ascending"
+                                                  : "Descending"}
+                                        </span>
+                                        {sort.dir === "asc" ? (
+                                            <ArrowUpNarrowWide className="h-4 w-4 shrink-0" />
+                                        ) : (
+                                            <ArrowDownWideNarrow className="h-4 w-4 shrink-0" />
+                                        )}
+                                    </button>
+                                </QueueFilterField>
+                            </>
+                        )}
                     </div>
 
                     <div className="mt-3 flex justify-end">
                         <button
                             type="button"
                             onClick={onReset}
-                            disabled={activeCount === 0}
+                            disabled={!canReset}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             <RotateCcw className="h-3.5 w-3.5" />
-                            Clear filters
+                            {sorted ? "Clear filters & sort" : "Clear filters"}
                         </button>
                     </div>
                 </div>

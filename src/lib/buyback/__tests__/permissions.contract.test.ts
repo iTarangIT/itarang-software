@@ -165,18 +165,40 @@ describe("the dealer's activity log hides the vendor leg server-side", () => {
  * This one will not.
  */
 describe("no dealer-facing route so much as MENTIONS a secret column", () => {
-  const DEALER_ROUTES = join(process.cwd(), "src", "app", "api", "buyback");
+  const PORTAL_ROUTES = join(process.cwd(), "src", "app", "api", "buyback");
 
-  const SECRETS = [
+  /**
+   * Never legitimate anywhere under /api/buyback — the margin, the vendor's
+   * prices, the floor, and the line locks are admin-leg concepts. Admin
+   * endpoints live under /api/admin/buyback, which this scan does not cover, so
+   * a reference to any of these here is a leak or a mistake either way.
+   */
+  const ADMIN_ONLY_SECRETS = [
     "margin_value",
     "margin_mode",
     "vendor_price",
     "vendor_ask",
     "floor_total",
-    "vendor_threads",
-    "scrap_vendors",
     "deal_line_locks",
   ];
+
+  /**
+   * The vendor-leg TABLES, which need a different rule.
+   *
+   * `vendor_threads` is in DEALER_FORBIDDEN_KEYS as a payload key a dealer must
+   * never receive — and that still holds. But it is also the name of the table a
+   * VENDOR's own endpoints have to query, and /api/buyback is no longer a
+   * dealer-only tree: /api/buyback/notifications/summary is one role-aware
+   * endpoint serving dealer, vendor and admin from a single file. A flat
+   * file-level ban on the identifier therefore fails legitimate vendor code,
+   * which is precisely what it started doing.
+   *
+   * So these get the STRONGER structural check below instead: not "is the name
+   * absent" but "is every function that touches it reachable only from a
+   * vendor-gated branch". That still fails if somebody moves the vendor query
+   * into the dealer path, which is the leak this guard exists to catch.
+   */
+  const VENDOR_LEG_TABLES = ["vendor_threads", "scrap_vendors"];
 
   /** Every route.ts under the dealer-facing API tree. */
   function routeFiles(dir: string, acc: string[] = []): string[] {
@@ -188,27 +210,78 @@ describe("no dealer-facing route so much as MENTIONS a secret column", () => {
     return acc;
   }
 
-  const files = routeFiles(DEALER_ROUTES);
+  const files = routeFiles(PORTAL_ROUTES);
 
-  it("finds the dealer routes at all (a broken glob would vacuously pass)", () => {
+  /** Strip comments: a route is allowed to EXPLAIN that it must not select the
+   *  margin — this very file's prose names every secret. It is not allowed to
+   *  select it. */
+  const stripComments = (file: string) =>
+    readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+  it("finds the portal routes at all (a broken glob would vacuously pass)", () => {
     expect(files.length).toBeGreaterThan(5);
   });
 
   it.each(files)("%s", (file) => {
-    // Strip comments: this very file's own explanations name the secrets, and so do
-    // the routes' — a route is allowed to EXPLAIN that it must not select the
-    // margin. It is not allowed to select it.
-    const code = readFileSync(file, "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const code = stripComments(file);
 
-    for (const secret of SECRETS) {
+    for (const secret of ADMIN_ONLY_SECRETS) {
       expect(
         code.includes(secret),
-        `${file} references "${secret}" outside a comment. A dealer-facing route must ` +
-          `not touch the margin, the vendor, or the locks — build the payload from a ` +
-          `serializer instead.`,
+        `${file} references "${secret}" outside a comment. No portal route — dealer or ` +
+          `vendor — may touch the margin, the vendor's prices, the floor or the locks. ` +
+          `Build the payload from a serializer instead.`,
       ).toBe(false);
+    }
+  });
+
+  /**
+   * The vendor-leg tables, checked structurally rather than by absence.
+   *
+   * For each helper that queries one, every call site must sit on a line that
+   * gates on the vendor role. A query pulled up into the dealer branch, or into
+   * an ungated helper the dealer branch can reach, fails here — which is the
+   * property the flat identifier ban was really trying to express.
+   */
+  it.each(files)("%s — vendor-leg tables stay behind a vendor-role gate", (file) => {
+    const code = stripComments(file);
+    const touches = VENDOR_LEG_TABLES.filter((t) => code.includes(t));
+    if (touches.length === 0) return;
+
+    // Split on function declarations, keeping the name with its body.
+    const fns = [...code.matchAll(/(?:async\s+)?function\s+(\w+)\s*\([\s\S]*?\n\}/g)];
+    const guilty = fns.filter((m) => touches.some((t) => m[0].includes(t)));
+
+    expect(
+      guilty.length,
+      `${file} references ${touches.join("/")} but not inside any named function, so ` +
+        `its reachability cannot be established. Move the query into a helper called ` +
+        `only from the vendor branch.`,
+    ).toBeGreaterThan(0);
+
+    for (const fn of guilty) {
+      const name = fn[1]!;
+      const callSites = code
+        .split(/\r?\n/)
+        .filter((line) => new RegExp(`\\b${name}\\s*\\(`).test(line))
+        .filter((line) => !/(?:async\s+)?function\s+/.test(line));
+
+      expect(
+        callSites.length,
+        `${file}: ${name}() queries a vendor-leg table but is never called — dead code ` +
+          `touching a secret is still a liability.`,
+      ).toBeGreaterThan(0);
+
+      for (const site of callSites) {
+        expect(
+          /role\s*===\s*"vendor"/.test(site),
+          `${file}: ${name}() queries ${touches.join("/")} but is called from an ` +
+            `ungated line:\n    ${site.trim()}\nA dealer must not be able to reach it. ` +
+            `Gate the call on role === "vendor".`,
+        ).toBe(true);
+      }
     }
   });
 });

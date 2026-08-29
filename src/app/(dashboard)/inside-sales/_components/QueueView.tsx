@@ -21,6 +21,13 @@ import {
     type QueueRegion,
 } from "@/lib/leads/queueFilters";
 import {
+    EMPTY_QUEUE_SORT,
+    hasQueueSort,
+    readQueueSort,
+    writeQueueSort,
+    type QueueSort,
+} from "@/lib/leads/queueSort";
+import {
     QUEUE_TABS,
     type QueueCounts,
     type QueueResponse,
@@ -71,8 +78,15 @@ export function QueueView({ viewerId, viewerRole }: Props) {
     // from a pasted link is never doing invisible work. Derived from the parsed
     // values rather than from param names, so it cannot fall out of step with
     // the filter set.
-    const [filtersOpen, setFiltersOpen] = useState(() =>
-        hasAnyQueueFilter(readQueueFilters(new URLSearchParams(params.toString()))),
+    // Order, seeded from the URL like the filters so a sorted view survives a
+    // reload and can be pasted to a colleague.
+    const [sort, setSort] = useState<QueueSort>(() =>
+        readQueueSort(new URLSearchParams(params.toString())),
+    );
+    const [filtersOpen, setFiltersOpen] = useState(
+        () =>
+            hasAnyQueueFilter(readQueueFilters(new URLSearchParams(params.toString()))) ||
+            hasQueueSort(readQueueSort(new URLSearchParams(params.toString()))),
     );
 
     /**
@@ -87,8 +101,11 @@ export function QueueView({ viewerId, viewerRole }: Props) {
         if (searchDebounced) p.set("q", searchDebounced);
         if (neodoveOnly) p.set("neodove", "1");
         if (callbackOnly) p.set("callback", "1");
+        // The sort rides along: the rows and the CSV honour it, the counts and
+        // facets simply never read it.
+        writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, neodoveOnly, callbackOnly, filters]);
+    }, [searchDebounced, neodoveOnly, callbackOnly, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -115,8 +132,14 @@ export function QueueView({ viewerId, viewerRole }: Props) {
         setPage(1);
     }, []);
 
+    const patchSort = useCallback((next: QueueSort) => {
+        setSort(next);
+        setPage(1);
+    }, []);
+
     const resetFilters = useCallback(() => {
         setFilters(EMPTY_QUEUE_FILTERS);
+        setSort(EMPTY_QUEUE_SORT);
         setPage(1);
     }, []);
 
@@ -285,6 +308,8 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                         // came in over a window, and the queue filters on
                         // created_at to answer it.
                         dateLabel="Created"
+                        sort={sort}
+                        onSortChange={patchSort}
                     />
                     {rowsQuery.isFetching && (
                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />

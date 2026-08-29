@@ -407,6 +407,16 @@ export async function middleware(request: NextRequest) {
     // E-195 — the scrap vendor's own portal. Adding it here also protects the
     // path: isProtectedRoute is derived from these values.
     scrap_vendor: "/vendor-portal",
+    // The Ops Console — infrastructure/DB/spend monitoring for the tech team,
+    // single login operations@itarang.com. Adding it here also protects the
+    // path (isProtectedRoute is derived from these values) and sets the
+    // post-login landing page.
+    //
+    // NOTE: "operations" is ALSO an NBFC *tenant* role in nbfc_users.role
+    // (see src/lib/nbfc/origination-roles.ts). That one is resolved by
+    // resolveActor(headers) against the NBFC tenant and is never compared to
+    // users.role. These two namespaces must not be conflated.
+    operations: "/operations",
   };
 
   // E-212 — /reset-password is reached from an emailed token link by a user who

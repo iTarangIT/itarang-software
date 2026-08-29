@@ -4,7 +4,7 @@
  * Info panel wants the fuller breakdown — the logic steps, which data each card
  * pulls, what it renders, and how its severity is decided.
  *
- * For the five hand-coded (`source='human'`) cards this is authored from the
+ * For the six hand-coded (`source='human'`) cards this is authored from the
  * evaluators in `src/lib/risk/hand-coded-cards.ts` and kept in sync with them.
  * For AI-generated (`llm-v1`) cards — minted at runtime by the LangGraph agent —
  * there is no static entry, so `getCardInfo` falls back to the stored
@@ -344,6 +344,72 @@ const HAND_CODED_INFO: Record<string, RiskCardInfo> = {
       },
       reading:
         "These vehicles are barely being driven despite an active EMI — the operator may have stopped using or sub-let the vehicle, threatening the income that services the loan.",
+    },
+  },
+
+  "outside-assigned-city": {
+    whatItDoes:
+      "Flags financed vehicles whose latest GPS position is outside the city the loan was written for — the borrower's city, or the selling dealer's when the borrower's is blank. Unlike the geo-shift card, which measures against wherever the vehicle has recently been, this measures against a fixed, agreed location, so an asset that has quietly relocated stays flagged.",
+    evaluator: { fn: "evalOutsideAssignedCity()", file: "src/lib/risk/hand-coded-cards.ts" },
+    flow: "IN: each loan's assigned city + each vehicle's latest GPS fix → PROCESS: look up the city's centre, measure the distance to the fix → OUT: the vehicles further from their city centre than the governed radius.",
+    inputTables: [
+      {
+        table: "nbfcLoans → loan_sanctions → leads / accounts",
+        source: "CRM loan slice",
+        provides: "Each active loan's vehicle number and its assigned city (borrower's `leads.city`, falling back to the dealer's `accounts.city`).",
+      },
+      {
+        table: "vehicle_state",
+        source: "IoT telemetry",
+        provides: "Latest lat/lon per vehicle and how long ago it was reported.",
+      },
+      {
+        table: "country-state-city index",
+        source: "Static city centroids",
+        provides: "Centre coordinates for 4,242 Indian cities (no coordinates exist on CRM records).",
+      },
+      {
+        table: "nbfc_risk_rules",
+        source: "Governed thresholds",
+        provides: "city_geofence_km (default 25) and offline_alert_hours (default 24).",
+      },
+    ],
+    logic: [
+      "Resolve each loan's assigned city: the borrower's city on the sanction's lead, else the selling dealer's city.",
+      "Look up the city's centre coordinates; a city name the index does not know is excluded, not guessed.",
+      "Take the vehicle's latest GPS fix; a fix older than the governed offline_alert_hours is excluded — the vehicle's position is unknown, which is the telemetry-silent card's finding, not this one's.",
+      "Flag the vehicle when the great-circle distance from the city centre exceeds the governed city_geofence_km rule.",
+      "Severity is set by the share of assessed vehicles outside their city.",
+    ],
+    dataPulled: [
+      "CRM loan slice — vehicle number + assigned city and its source (nbfcLoans joined to loan_sanctions → leads → accounts).",
+      "IoT telemetry — latest per-vehicle position and fix age (vehicle_state).",
+      "Governed thresholds — city_geofence_km and offline_alert_hours from nbfc_risk_rules.",
+    ],
+    dataShown: [
+      "Count of out-of-city vs assessed vehicles.",
+      "Sample rows: loan, vehicle no., assigned city (and whether it came from the borrower or dealer), distance from the city centre, current lat/lon, last fix time.",
+      "A bar chart of the furthest vehicles.",
+      "Coverage notes: how many loans had no city, an unknown city, no vehicle, no fix, or a stale fix.",
+    ],
+    severityMeaning:
+      "High = ≥0.5% of assessed vehicles are outside their city; Warning = ≥0.1%; OK = tested, all inside; Inconclusive = no loan had both an assigned city and a fresh GPS fix.",
+    thresholds: [
+      "city_geofence_km — governed (nbfc_risk_rules), default 25 km from the city centre.",
+      "offline_alert_hours — governed (nbfc_risk_rules); older fixes are not treated as a position.",
+    ],
+    example: {
+      finding: "2 of 118 assessed vehicles are more than 25 km outside their assigned city.",
+      severity: "High Alert",
+      table: {
+        columns: ["Loan", "Vehicle", "Assigned city", "Now", "Distance"],
+        rows: [
+          ["LN-0412", "UP32KX4410", "Lucknow (borrower)", "Kanpur", "78 km"],
+          ["LN-0388", "DL8SAB2200", "Delhi (dealer)", "Panipat", "84 km"],
+        ],
+      },
+      reading:
+        "These vehicles are operating in a different city from the one the loan was written for — possible relocation or an unreported sale. Confirm with the borrower and the field team before the next EMI falls due.",
     },
   },
 };

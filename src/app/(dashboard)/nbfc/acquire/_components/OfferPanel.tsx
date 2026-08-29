@@ -6,22 +6,13 @@
  * (dealer-mediated) picks a winner the assignment locks and this becomes
  * read-only. Owned by the Credit / Underwriting role.
  *
- * E-238 — the dealer can now push back on these terms instead of only taking or
- * leaving them. `Fix offer` ends the negotiation: the dealer loses Negotiate and
- * this panel loses Edit, deliberately in the same move, because terms the NBFC
- * could still change afterwards would not be fixed in any sense the dealer could
- * rely on.
- *
- * E-245 — the dealer's ask is now free text, not six proposed numbers, so this
- * panel shows what they WROTE and the officer re-prices from it. Pricing lives
- * on this side of the conversation; the dealer only ever supplies the reason.
- * The dealer can also close the deal outright, which lands the assignment on
- * 'withdrawn' and makes everything here read-only via can_act.
+ * E-275 — the offer is PREFILLED from the indicated loan product (best terms
+ * at the customer's requested amount) and the officer has three moves:
+ * Approve & send (POST as-is), Edit (unlock the fields, then Send), or Reject
+ * the file (required note → the rejection waits with the iTarang admin). The
+ * E-238/E-245 dealer ⇄ NBFC negotiation loop and Fix lock are gone.
  */
 import { useCallback, useEffect, useState } from "react";
-
-import OfferNegotiationThread from "@/components/nbfc-portal/OfferNegotiationThread";
-import type { NegotiationRound } from "@/components/nbfc-portal/OfferNegotiationThread";
 
 type Offer = {
   roi_pct: string | null;
@@ -33,21 +24,30 @@ type Offer = {
   conditions: string | null;
   valid_until: string | null;
   submitted_at: string | null;
+  status?: string | null;
   // E-161 — out-of-band deviation gate (§13.3.4).
   ceo_approval_status?: string | null;
   deviation_reason?: string | null;
-  // E-238 — negotiation state.
-  negotiation_status?: string | null;
-  fixed_at?: string | null;
+};
+
+type Defaults = {
+  product_name: string;
+  loan_amount: number;
+  roi_pct: number;
+  tenure_months: number;
+  down_payment: number;
+  processing_fee: number;
+  emi_amount: number;
 };
 
 type Resp = {
   ok: boolean;
   assignment_status?: string;
   can_act?: boolean;
-  can_fix?: boolean;
+  recalled?: boolean;
+  rejection_note?: string | null;
+  defaults?: Defaults | null;
   offer?: Offer | null;
-  rounds?: NegotiationRound[];
   error?: string;
 };
 
@@ -63,27 +63,28 @@ const fields: { key: keyof Offer; label: string; type: string; placeholder: stri
 /** Server errors arrive prefixed with their internal code; strip it for display. */
 const clean = (msg: string) => msg.replace(/^[A-Z_]+:\s*/, "");
 
-const fmtDate = (iso: string) => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(d);
-};
+/** Default validity: 30 days out, as yyyy-mm-dd for the date input. */
+function defaultValidUntil(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 30);
+  return d.toISOString().slice(0, 10);
+}
 
-export default function OfferPanel({ leadId }: { leadId: string }) {
+export default function OfferPanel({
+  leadId,
+  disabled = false,
+}: {
+  leadId: string;
+  /** E-275 — the file is recalled by iTarang; every action is paused. */
+  disabled?: boolean;
+}) {
   const [data, setData] = useState<Resp | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [edit, setEdit] = useState(false);
-  const [confirmFix, setConfirmFix] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -100,6 +101,18 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
           processing_fee: j.offer.processing_fee ?? "",
           conditions: j.offer.conditions ?? "",
           valid_until: j.offer.valid_until ?? "",
+        });
+      } else if (j.defaults) {
+        // E-275 — prefill from the indicated loan product.
+        setForm({
+          loan_amount: String(j.defaults.loan_amount),
+          roi_pct: String(j.defaults.roi_pct),
+          emi_amount: String(j.defaults.emi_amount),
+          tenure_months: String(j.defaults.tenure_months),
+          down_payment: String(j.defaults.down_payment),
+          processing_fee: String(j.defaults.processing_fee),
+          conditions: "",
+          valid_until: defaultValidUntil(),
         });
       }
     } catch (e) {
@@ -140,44 +153,38 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
     }
   }
 
-  async function fixOffer() {
+  async function reject() {
+    const note = rejectNote.trim();
+    if (!note) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/nbfc/offer/${leadId}/fix`, { method: "POST" });
+      const res = await fetch(`/api/nbfc/acquire/${leadId}/reject`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
       const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setConfirmFix(false);
-      await load();
+      setRejecting(false);
+      // The stepper is server-rendered; reload so the Offer node reads Rejected.
+      window.location.reload();
     } catch (e) {
       setError(clean(e instanceof Error ? e.message : String(e)));
-      setConfirmFix(false);
     } finally {
       setBusy(false);
     }
   }
 
   const offer = data?.offer ?? null;
-  const rounds = data?.rounds ?? [];
+  const defaults = data?.defaults ?? null;
   const status = data?.assignment_status ?? "pending";
-  const canAct = data?.can_act ?? false;
-  const canFix = data?.can_fix ?? false;
+  const recalled = disabled || (data?.recalled ?? false);
+  const canAct = (data?.can_act ?? false) && !recalled;
   const decided = status === "selected" || status === "not_selected";
   const closedByDealer = status === "withdrawn";
-  const fixed = offer?.negotiation_status === "fixed";
-
-  // The dealer's most recent ask, if the ball is currently in our court. Read
-  // off the rounds rather than a separate field so it can never disagree with
-  // the history rendered below it.
-  const latestCounter =
-    offer?.negotiation_status === "dealer_countered"
-      ? [...rounds].reverse().find((r) => r.kind === "counter") ?? null
-      : null;
-  // Why the dealer walked, in their own words — the only record this NBFC has
-  // of losing the lead, so it stays on screen after the panel goes read-only.
-  const closeRound = closedByDealer
-    ? [...rounds].reverse().find((r) => r.kind === "close") ?? null
-    : null;
+  const rejected = status === "declined";
+  const pristine = !offer && !edit; // the prefilled, not-yet-sent state
 
   // Every offer detail is mandatory (a real firm offer can't have blanks);
   // only Conditions/notes is optional. The numeric fields must carry a valid
@@ -188,6 +195,9 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
   });
   const validUntilFilled = (form.valid_until ?? "").trim() !== "";
   const canSubmit = numericFilled && validUntilFilled && !busy;
+
+  const inputCls =
+    "mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal disabled:bg-slate-50 disabled:text-slate-500";
 
   return (
     <section className="border border-slate-200 rounded-xl bg-white p-5">
@@ -205,11 +215,8 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         {closedByDealer && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-700">Deal closed by customer</span>
         )}
-        {!decided && fixed && (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700">Fixed</span>
-        )}
-        {!decided && !closedByDealer && offer?.negotiation_status === "dealer_countered" && (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-violet-100 text-violet-700">Revision requested</span>
+        {rejected && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-700">Rejected</span>
         )}
         {offer?.ceo_approval_status === "pending" && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700">Pending iTarang CEO approval</span>
@@ -220,6 +227,26 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
       </div>
 
       {error && <p className="text-[11px] text-red-600 mb-2">{error}</p>}
+
+      {recalled && !rejected && (
+        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2">
+          Recalled by iTarang — changes are being made to this file. Actions are paused until it is resubmitted.
+        </p>
+      )}
+
+      {rejected && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50/60 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">File rejected by this NBFC</p>
+          {data?.rejection_note ? (
+            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
+              {data.rejection_note}
+            </p>
+          ) : null}
+          <p className="mt-2 text-[11px] text-red-700">
+            iTarang will relay the reason to the dealer, who may route the customer to another lender. No further action.
+          </p>
+        </div>
+      )}
 
       {offer?.ceo_approval_status === "pending" && (
         <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2 mb-2">
@@ -232,49 +259,17 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         </p>
       )}
 
-      {/* E-238/E-245 — the dealer is waiting on us. The ask is what they wrote,
-          so the message IS the content of this block; re-pricing it is our job. */}
-      {latestCounter && !edit && (
-        <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-violet-800">
-            Customer asked you to revise this offer
-          </p>
-          {latestCounter.message ? (
-            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
-              {latestCounter.message}
-            </p>
-          ) : (
-            <p className="mt-1 text-xs text-slate-600">No message was left with the request.</p>
-          )}
-          {canAct && (
-            <button
-              onClick={() => setEdit(true)}
-              className="mt-2.5 rounded-md bg-[color:var(--color-brand-navy)] px-3 py-1.5 text-xs font-semibold text-white"
-            >
-              Revise offer
-            </button>
-          )}
-        </div>
-      )}
-
       {/* E-245 — the dealer closed the deal. Terminal; nothing below is actionable. */}
       {closedByDealer && (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50/60 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">
-            Deal closed by customer
-          </p>
-          {closeRound?.message && (
-            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
-              {closeRound.message}
-            </p>
-          )}
+          <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">Deal closed by customer</p>
           <p className="mt-2 text-[11px] text-red-700">
-            This offer is withdrawn and can no longer be revised or fixed. The lead may be routed
-            to another lender.
+            This offer is withdrawn and can no longer be revised. The lead may be routed to another lender.
           </p>
         </div>
       )}
 
+      {/* A submitted offer — read-only terms. */}
       {offer && !edit && (
         <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
           <Row k="Loan amount" v={offer.loan_amount} prefix="₹" />
@@ -292,21 +287,64 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         </dl>
       )}
 
-      {!offer && !edit && (
+      {/* E-275 — no offer yet and no product to prefill from. */}
+      {pristine && !defaults && !rejected && (
         <p className="text-xs text-slate-500">
-          No firm offer submitted yet. {canAct ? "Submit one once verification is satisfactory." : "Credit / Underwriting will submit the firm conditions."}
+          No loan product is pinned to this lead, so the offer cannot be prefilled.{" "}
+          {canAct ? "Enter the firm conditions below." : "Credit / Underwriting will submit the firm conditions."}
         </p>
       )}
 
-      {fixed && !decided && (
-        <p className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
-          Terms fixed{offer?.fixed_at ? ` on ${fmtDate(offer.fixed_at)}` : ""}. The customer can no
-          longer negotiate, and these terms can no longer be revised.
-        </p>
+      {/* E-275 — the prefilled summary card: Approve / Edit / Reject. */}
+      {pristine && defaults && !rejected && !closedByDealer && (
+        <div className="rounded-lg border border-sky-200 bg-sky-50/40 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-sky-800">
+            Loan product: <span className="normal-case tracking-normal text-slate-800">{defaults.product_name}</span>
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Prefilled at the product&apos;s best terms for the customer&apos;s requested amount. Approve to send as-is, or edit first.
+          </p>
+          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+            <Row k="Loan amount" v={form.loan_amount ?? null} prefix="₹" />
+            <Row k="ROI" v={form.roi_pct ?? null} suffix="%" />
+            <Row k="EMI" v={form.emi_amount ?? null} prefix="₹" />
+            <Row k="Tenure" v={form.tenure_months ?? null} suffix=" mo" />
+            <Row k="Down payment" v={form.down_payment ?? null} prefix="₹" />
+            <Row k="Processing fee" v={form.processing_fee ?? null} prefix="₹" />
+            <Row k="Valid until" v={form.valid_until ?? null} />
+          </dl>
+          {canAct && !rejecting && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                onClick={submit}
+                disabled={!canSubmit}
+                className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {busy ? "Sending…" : "Approve & send offer"}
+              </button>
+              <button
+                onClick={() => setEdit(true)}
+                disabled={busy}
+                className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => setRejecting(true)}
+                disabled={busy}
+                className="ml-auto px-3 py-1.5 rounded-md border border-red-300 bg-red-50 text-red-700 text-xs font-semibold hover:bg-red-100"
+              >
+                Reject
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
-      {canAct && !decided && (edit || !offer) && (
-        <div className="space-y-3 mt-1">
+      {/* The editable form — Edit on the prefilled card, no product to prefill
+          from, or revising a submitted offer. */}
+      {canAct && !decided && !rejected && !closedByDealer && (edit || (!offer && !defaults)) && (
+        <div className="space-y-3 mt-3">
           <div className="grid grid-cols-2 gap-3">
             {fields.map((f) => (
               <label key={f.key} className="text-[11px] text-slate-500 font-semibold">
@@ -317,7 +355,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
                   value={form[f.key] ?? ""}
                   onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
                   placeholder={f.placeholder}
-                  className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal"
+                  className={inputCls}
                 />
               </label>
             ))}
@@ -329,7 +367,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
               onChange={(e) => setForm((s) => ({ ...s, conditions: e.target.value }))}
               rows={2}
               placeholder="Any firm conditions attached to this offer…"
-              className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal"
+              className={inputCls}
             />
           </label>
           <label className="text-[11px] text-slate-500 font-semibold block">
@@ -339,7 +377,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
               required
               value={form.valid_until ?? ""}
               onChange={(e) => setForm((s) => ({ ...s, valid_until: e.target.value }))}
-              className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal"
+              className={inputCls}
             />
           </label>
           <div className="flex items-center gap-2">
@@ -349,11 +387,20 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
               title={!canSubmit && !busy ? "Fill in all required offer details first" : undefined}
               className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {busy ? "Saving…" : offer ? "Resubmit offer" : "Submit offer"}
+              {busy ? "Saving…" : offer ? "Resubmit offer" : "Send offer"}
             </button>
-            {offer && (
+            {(offer || defaults) && (
               <button onClick={() => setEdit(false)} disabled={busy} className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold">
                 Cancel
+              </button>
+            )}
+            {!rejecting && !offer && (
+              <button
+                onClick={() => setRejecting(true)}
+                disabled={busy}
+                className="ml-auto px-3 py-1.5 rounded-md border border-red-300 bg-red-50 text-red-700 text-xs font-semibold hover:bg-red-100"
+              >
+                Reject
               </button>
             )}
             {!canSubmit && !busy && (
@@ -363,75 +410,58 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         </div>
       )}
 
-      {canAct && !decided && offer && !edit && (
+      {canAct && !decided && !rejected && offer && !edit && (
         <div className="mt-3 flex items-center gap-3">
           <button onClick={() => setEdit(true)} className="text-[11px] text-[color:var(--color-brand-sky)] underline">
             Edit / resubmit offer
           </button>
-          {canFix && (
+          {!rejecting && (
             <button
-              onClick={() => setConfirmFix(true)}
+              onClick={() => setRejecting(true)}
               disabled={busy}
-              className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+              className="ml-auto rounded-md border border-red-300 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
             >
-              Fix offer
+              Reject file
             </button>
           )}
         </div>
       )}
 
-      <OfferNegotiationThread rounds={rounds} viewer="nbfc" />
-
-      {/* Inline modal rather than @/components/ui/confirm-dialog — the NBFC
-          portal does not import from that directory; this mirrors
-          FlagForRecoveryDialog. */}
-      {confirmFix && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(17,24,39,0.6)",
-            zIndex: 50,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-          }}
-          onClick={() => !busy && setConfirmFix(false)}
-        >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 8,
-              boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1)",
-              maxWidth: 440,
-              width: "100%",
-              padding: 20,
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-bold text-slate-800">Fix these terms?</h3>
-            <p className="mt-2 text-xs text-slate-600">
-              The customer will no longer be able to negotiate, and{" "}
-              <strong>you will not be able to revise them</strong> afterwards. They can still select
-              you as their lender. This cannot be undone.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmFix(false)}
-                disabled={busy}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={fixOffer}
-                disabled={busy}
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
-              >
-                {busy ? "Fixing…" : "Fix offer"}
-              </button>
-            </div>
+      {/* E-275 — rejection needs a reason; it is what the dealer will be told. */}
+      {rejecting && canAct && (
+        <div className="mt-3 rounded-lg border border-red-200 bg-red-50/60 p-3">
+          <label className="block text-[11px] font-semibold text-red-800">
+            Reason for rejecting this file <span className="text-red-500">*</span>
+            <textarea
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              rows={3}
+              maxLength={2000}
+              placeholder="e.g. Bureau score below policy; income proof insufficient for the requested amount…"
+              className="mt-1 w-full rounded-md border border-red-200 bg-white px-2 py-1.5 text-sm font-normal text-slate-800"
+            />
+          </label>
+          <p className="mt-1 text-[11px] text-red-700">
+            This reason goes to iTarang, who relays it to the dealer so the customer can choose another NBFC. It cannot be undone.
+          </p>
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              onClick={() => {
+                setRejecting(false);
+                setRejectNote("");
+              }}
+              disabled={busy}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={reject}
+              disabled={busy || rejectNote.trim().length === 0}
+              className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+            >
+              {busy ? "Rejecting…" : "Reject file"}
+            </button>
           </div>
         </div>
       )}
