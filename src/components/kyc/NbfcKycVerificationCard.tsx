@@ -8,6 +8,8 @@ import {
   useState,
 } from "react";
 
+import NbfcFileRejectionsSection from "./NbfcFileRejectionsSection";
+
 // Change 6 — the admin's "NBFC KYC Verification" card in the KYC case-review.
 // One place where the admin sees, per NBFC: every per-document verdict the NBFC
 // recorded, and every correction / additional-document request it raised — with
@@ -684,6 +686,10 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
           {banner}
         </p>
       ) : null}
+
+      {/* E-275 — whole-file rejections + the admin's Recall / Resubmit
+          controls. Self-fetches; renders its own empty state. */}
+      <NbfcFileRejectionsSection leadId={leadId} />
 
       {isEmpty ? (
         <p className="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-400">

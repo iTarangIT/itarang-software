@@ -2,7 +2,7 @@
 //
 // loadSectionGOptions() runs the BRE, which matches loan products on state and
 // city among other things. When it returns nothing, the honest answer is not
-// "financing is unavailable" — Bajaj Finserv operates nationally and the
+// "financing is unavailable" — Bajaj Finance operates nationally and the
 // customer can be served directly by their local Sales Manager. The lead is not
 // dead; it just leaves our routing.
 //
@@ -16,24 +16,16 @@ import { db } from "@/lib/db";
 import { auditLogs, leads } from "@/lib/db/schema";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 
-/** The nationally-available fallback. Not an NBFC row — we do not route to it. */
-export const BAJAJ_FALLBACK = {
-  name: "Bajaj Finserv",
-  salesManagerPhone: "9217619585",
-} as const;
-
-/**
- * The exact wording to show when no preferred partner covers the customer's
- * area. Kept here rather than inline so the web portal and WhatsApp cannot
- * drift into telling the same customer two different things.
- */
-export function bajajFallbackMessage(): string {
-  return (
-    `🏦 *${BAJAJ_FALLBACK.name} is available in your area.*\n\n` +
-    `Reach out to your local Bajaj Sales Manager for any further details — ` +
-    `you may contact *${BAJAJ_FALLBACK.salesManagerPhone}*.`
-  );
-}
+export {
+  BAJAJ_FALLBACK,
+  BAJAJ_EXTERNAL_LENDER,
+  externalLenderName,
+  bajajCardText,
+  NBFC_RECEIVED_MSG,
+  bajajFallbackMessage,
+} from "@/lib/leads/bajaj-fallback-text";
+export type { ExternalLenderId } from "@/lib/leads/bajaj-fallback-text";
+import { BAJAJ_FALLBACK } from "@/lib/leads/bajaj-fallback-text";
 
 /**
  * Record that this lead's area had no preferred partner.

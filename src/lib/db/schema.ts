@@ -14,6 +14,7 @@ import {
   index,
   uniqueIndex,
   bigint,
+  char,
   date,
   serial,
   bigserial,
@@ -508,6 +509,15 @@ export const leads = pgTable("leads", {
   // decline reason is retained even after §12.3 finance-data purge.
   financing_decline_category: varchar("financing_decline_category", { length: 40 }), // 'all_declined' | 'no_match' | 'handoff_unanswered'
   financing_unavailable_at: timestamp("financing_unavailable_at", { withTimezone: true }),
+  // E-275 — "Up to how much loan do you want?" asked before the lender list.
+  // Products whose loan_amount_max is below this are hidden at Step 4.
+  requested_loan_amount: integer("requested_loan_amount"),
+  // E-275 — admin Recall / Resubmit. Recalled while
+  // recalled_at IS NOT NULL AND (resubmitted_at IS NULL OR resubmitted_at < recalled_at).
+  recalled_at: timestamp("recalled_at", { withTimezone: true }),
+  recalled_by: uuid("recalled_by"),
+  recall_note: text("recall_note"),
+  resubmitted_at: timestamp("resubmitted_at", { withTimezone: true }),
 });
 
 // E-116 — extra products attached to a lead via the new-lead form's
@@ -4234,6 +4244,9 @@ export const productSelections = pgTable("product_selections", {
   // image/video/zip/pdf; a combined PDF counts as one). Array of
   // { url, name, type, size }. Viewable by the NBFC (Acquire dossier) + admin.
   pre_sanction_doc_urls: jsonb("pre_sanction_doc_urls").default(sql`'[]'::jsonb`),
+  // E-275 — off-platform lender ("Bajaj Finance") chosen when no partner
+  // serves the customer. selected_nbfcs is [] and no assignment is created.
+  external_lender: varchar("external_lender", { length: 64 }),
 
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -4274,6 +4287,8 @@ export const loanSanctions = pgTable("loan_sanctions", {
   // records a non-reversible recovery decision by the Risk Head.
   recovery_flagged_at: timestamp("recovery_flagged_at", { withTimezone: true }),
   recovery_reason: text("recovery_reason"),
+  // E-275 — loan written off-platform (e.g. 'Bajaj Finance'); nbfc_id NULL.
+  external_lender: varchar("external_lender", { length: 64 }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -4496,6 +4511,13 @@ export const nbfcLeadAssignments = pgTable(
     // NEW leads only; in-flight leads read this snapshot. Nullable for rows
     // created before E-133.
     service_config_snapshot: jsonb("service_config_snapshot"),
+    // E-275 — NBFC rejected the file (status='declined',
+    // decision_reason='nbfc_rejected'). The rejection waits with the admin
+    // until forwarded to the dealer by a human or by the SLA sweep.
+    rejection_note: text("rejection_note"),
+    rejection_admin_due_at: timestamp("rejection_admin_due_at", { withTimezone: true }),
+    rejection_forwarded_at: timestamp("rejection_forwarded_at", { withTimezone: true }),
+    rejection_forward_source: varchar("rejection_forward_source", { length: 16 }), // 'admin' | 'system'
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -8573,6 +8595,13 @@ export const expenseSubmissions = pgTable(
     // never overwrite a human correction.
     bucket: varchar("bucket", { length: 24 }),
     bucket_source: varchar("bucket_source", { length: 16 }),
+    // WHY `amount` IS ALREADY INR. schema.ts once omitted these columns, and two
+    // independent readings of this codebase concluded expense_submissions has no
+    // currency column — therefore foreign-currency invoices are summed as rupees,
+    // therefore tech-spend is ~94x understated for USD vendors. Not true: a
+    // $1,533.85 invoice is stored as amount = INR 143,648.65, converted at entry.
+    // `amount` is INR for EVERY row. Never apply an FX rate to it a second time;
+    // doing so once turned a $200 Anthropic bill into INR 1.7 lakh.
     // E-217 — multi-currency. `amount` above is ALWAYS INR because every
     // report SUMs it; these record what the document actually said and the
     // arithmetic that connects the two.
@@ -11473,42 +11502,10 @@ export const neodoveSyncEvents = pgTable(
   }),
 );
 
-// ─── module_usage_user_daily (E-251) ────────────────────────────────────────
-// Per-user, per-module, per-day usage rollup.
-//
-// ⚠ NOTHING READS OR WRITES THIS TABLE. It is mirrored here only because
-// CLAUDE.md requires schema.ts to match the migration, and E-251 creates it on
-// production to close a sandbox→prod gap found by `npm run db:drift`. The table
-// exists on sandbox with 7 rows and no `E-*.sql` ever created it — an ad-hoc
-// db:push or hand-run statement — and a `git grep` across every remote branch
-// on 2026-08-18 found zero references to it outside these two files.
-//
-// Mirroring it is safe precisely BECAUSE nothing queries it: Drizzle only
-// expands a column list for tables the code actually selects from, so a model
-// with no call sites cannot 500 a route on a database that lacks the table.
-export const moduleUsageUserDaily = pgTable(
-  "module_usage_user_daily",
-  {
-    day: date("day").notNull(),
-    module: varchar("module", { length: 32 }).notNull(),
-    user_id: uuid("user_id").notNull(),
-    role_at_ping: varchar("role_at_ping", { length: 48 }),
-    role_bucket: varchar("role_bucket", { length: 16 }).notNull(),
-    pings: integer("pings").default(0).notNull(),
-    sessions: integer("sessions").default(0).notNull(),
-    last_ping_at: timestamp("last_ping_at", { withTimezone: true }).defaultNow().notNull(),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({
-    // The grain: one row per user per module per day, which is what makes the
-    // writer an upsert rather than an append.
-    pk: primaryKey({ columns: [t.day, t.module, t.user_id] }),
-    dayIdx: index("module_usage_user_daily_day_idx").on(t.day),
-    moduleIdx: index("module_usage_user_daily_module_idx").on(t.module, t.day.desc()),
-    userIdx: index("module_usage_user_daily_user_idx").on(t.user_id, t.day.desc()),
-  }),
-);
+// module_usage_user_daily is declared ONCE, further down with the ops-console
+// tables (E-216_module_usage_user_daily). The E-251 mirror that used to sit here
+// was written when nothing referenced the table; the /operations/usage drill-down
+// now reads and writes it, so the live declaration is the authoritative one.
 
 // ---------------------------------------------------------------------------
 // E-255 — Google Drive mirror ledger.
@@ -11575,5 +11572,415 @@ export const nbfcScrapPaymentSettings = pgTable(
     tenantUnique: uniqueIndex("nbfc_scrap_payment_settings_tenant_uidx").on(
       table.tenant_id,
     ),
+  }),
+);
+
+// --- OPS CONSOLE (E-210) ---
+//
+// The monitoring spine behind /operations. Mirrors
+// drizzle/E-210_ops_monitoring.sql — that file is the source of truth; these
+// declarations exist so type-checking matches the DB.
+//
+// The partial unique indexes below are load-bearing concurrency control, not
+// decoration:
+//   · ops_collector_runs (collector_id) WHERE status='running'  — single-flight lock
+//   · ops_alerts (metric_key, source) WHERE resolved_at IS NULL — alert dedup
+
+export const opsMetricSamples = pgTable(
+  "ops_metric_samples",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // Stable, dot-namespaced, e.g. "host.prod.disk_used_pct". Matches a
+    // MetricDef.key in src/lib/operations/registry.ts.
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    // "host:prod" | "rds:crm" | "vendor:elevenlabs" | …
+    source: varchar({ length: 80 }).notNull(),
+    captured_at: timestamp("captured_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // numeric throughout: money is INR paise, bytes are bytes, percents 0-100.
+    value_num: numeric("value_num", { precision: 20, scale: 4 }),
+    value_text: text("value_text"),
+    meta: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    keyCapturedIdx: index("ops_metric_samples_key_captured_idx").on(
+      table.metric_key,
+      table.captured_at,
+    ),
+    capturedIdx: index("ops_metric_samples_captured_idx").on(table.captured_at),
+  }),
+);
+
+export const opsDailySnapshots = pgTable(
+  "ops_daily_snapshots",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    snapshot_date: date("snapshot_date").notNull(),
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    source: varchar({ length: 80 }).notNull(),
+    // Representative value for the day (last sample); min/max/avg describe the
+    // spread, so a disk that spiked at 03:00 and settled is still visible.
+    value_num: numeric("value_num", { precision: 20, scale: 4 }),
+    value_min: numeric("value_min", { precision: 20, scale: 4 }),
+    value_max: numeric("value_max", { precision: 20, scale: 4 }),
+    value_avg: numeric("value_avg", { precision: 20, scale: 4 }),
+    sample_count: integer("sample_count").default(0).notNull(),
+    meta: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // What makes runDailySnapshot() re-runnable for the same date.
+    dateKeySourceUniq: uniqueIndex(
+      "ops_daily_snapshots_date_key_source_uniq",
+    ).on(table.snapshot_date, table.metric_key, table.source),
+    keyDateIdx: index("ops_daily_snapshots_key_date_idx").on(
+      table.metric_key,
+      table.snapshot_date,
+    ),
+  }),
+);
+
+export const opsCollectorRuns = pgTable(
+  "ops_collector_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    collector_id: varchar("collector_id", { length: 80 }).notNull(),
+    // 'ticker' | 'manual'. NOT named "trigger" — reserved word in Postgres.
+    triggered_by: varchar("triggered_by", { length: 16 }).notNull(),
+    actor_user_id: uuid("actor_user_id"),
+    status: varchar({ length: 16 }).default("running").notNull(), // running|completed|failed
+    started_at: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    duration_ms: integer("duration_ms"),
+    samples_written: integer("samples_written").default(0).notNull(),
+    error: text(),
+  },
+  (table) => ({
+    // THE LOCK. At most one running row per collector — see E-210 and
+    // src/lib/operations/runner.ts, which catches the 23505 this raises.
+    oneActiveIdx: uniqueIndex("ops_collector_runs_one_active_idx")
+      .on(table.collector_id)
+      .where(sql`status = 'running'`),
+    collectorStartedIdx: index("ops_collector_runs_collector_started_idx").on(
+      table.collector_id,
+      table.started_at,
+    ),
+    startedIdx: index("ops_collector_runs_started_idx").on(table.started_at),
+  }),
+);
+
+export const opsLogEvents = pgTable(
+  "ops_log_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    host: varchar({ length: 32 }).notNull(), // prod | sandbox | iot
+    service: varchar({ length: 120 }).notNull(), // pm2 process name, or 'nginx'
+    level: varchar({ length: 16 }).notNull(), // error | warn | info
+    message: text().notNull(), // truncated to 2000 chars at ingest
+    logged_at: timestamp("logged_at", { withTimezone: true }).notNull(),
+    // Hash of service + level + normalised message, so the UI groups repeats.
+    fingerprint: varchar({ length: 64 }).notNull(),
+    meta: jsonb(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    loggedIdx: index("ops_log_events_logged_idx").on(table.logged_at),
+    levelLoggedIdx: index("ops_log_events_level_logged_idx").on(
+      table.level,
+      table.logged_at,
+    ),
+    fingerprintIdx: index("ops_log_events_fingerprint_idx").on(
+      table.fingerprint,
+    ),
+    hostLoggedIdx: index("ops_log_events_host_logged_idx").on(
+      table.host,
+      table.logged_at,
+    ),
+  }),
+);
+
+export const opsAlertRules = pgTable(
+  "ops_alert_rules",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    // '*' = any source, so one rule covers prod/sandbox/iot.
+    source: varchar({ length: 80 }).default("*").notNull(),
+    // 'gt' = breach when value > threshold (lower_is_better metrics);
+    // 'lt' = breach when value < threshold (higher_is_better metrics).
+    comparator: varchar({ length: 4 }).default("gt").notNull(),
+    warn_threshold: numeric("warn_threshold", { precision: 20, scale: 4 }),
+    crit_threshold: numeric("crit_threshold", { precision: 20, scale: 4 }),
+    enabled: boolean().default(true).notNull(),
+    cooldown_minutes: integer("cooldown_minutes").default(60).notNull(),
+    notify_channels: jsonb("notify_channels")
+      .default(sql`'["inapp"]'::jsonb`)
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    keySourceUniq: uniqueIndex("ops_alert_rules_key_source_uniq").on(
+      table.metric_key,
+      table.source,
+    ),
+  }),
+);
+
+export const opsAlerts = pgTable(
+  "ops_alerts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    rule_id: uuid("rule_id"),
+    metric_key: varchar("metric_key", { length: 120 }).notNull(),
+    source: varchar({ length: 80 }).notNull(),
+    severity: varchar({ length: 8 }).notNull(), // warn | crit
+    value_num: numeric("value_num", { precision: 20, scale: 4 }),
+    threshold: numeric({ precision: 20, scale: 4 }),
+    message: text().notNull(),
+    opened_at: timestamp("opened_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    notified_at: timestamp("notified_at", { withTimezone: true }),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    acknowledged_by: uuid("acknowledged_by"),
+    status: varchar({ length: 16 }).default("open").notNull(), // open|acknowledged|resolved
+  },
+  (table) => ({
+    // Dedup: only one OPEN alert per (metric_key, source). Same trick
+    // telemetry_alerts uses — a flapping metric cannot spawn duplicate rows.
+    openUniq: uniqueIndex("ops_alerts_open_uniq")
+      .on(table.metric_key, table.source)
+      .where(sql`resolved_at IS NULL`),
+    openedIdx: index("ops_alerts_opened_idx").on(table.opened_at),
+    statusOpenedIdx: index("ops_alerts_status_opened_idx").on(
+      table.status,
+      table.opened_at,
+    ),
+  }),
+);
+
+// --- USAGE ANALYTICS (E-214) ---
+//
+// The storage behind /operations/usage. Mirrors drizzle/E-214_usage_analytics.sql
+// — that file is the source of truth; these declarations exist so type-checking
+// matches the DB.
+//
+// SCOPE, because these are the only per-person tables in the codebase:
+// what is recorded is that somebody signed in, and that a session was alive at a
+// point in time. NOT recorded, deliberately: IP, user-agent, page paths, search
+// terms, or failed attempts. Retention is 90 days (logins) / 30 days (sessions),
+// enforced by runDailySnapshot(). Only AGGREGATES survive in ops_daily_snapshots
+// — no per-person row is ever written to the metric series. See the migration
+// header for the full reasoning, and route-guard.ts for who may read it.
+//
+// user_activity_sessions also carries storage parameters (fillfactor 80 +
+// autovacuum tuning) that Drizzle cannot express. Their absence here is
+// expected, not drift — see the migration.
+
+export const userLoginEvents = pgTable(
+  "user_login_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // No .references(): follows the audit_logs.performed_by convention so a
+    // deleted user cannot cascade away or block on historical rows.
+    user_id: uuid("user_id").notNull(),
+    /** Role AT THE TIME — a promotion must not rewrite history. */
+    role_at_login: varchar("role_at_login", { length: 50 }),
+    /** 'password' today; reserved for sso | magic_link | impersonation. */
+    method: varchar({ length: 24 }).default("password").notNull(),
+    occurred_at: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    occurredIdx: index("user_login_events_occurred_idx").on(table.occurred_at),
+    userOccurredIdx: index("user_login_events_user_occurred_idx").on(
+      table.user_id,
+      table.occurred_at,
+    ),
+  }),
+);
+
+export const userActivitySessions = pgTable(
+  "user_activity_sessions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    user_id: uuid("user_id").notNull(),
+    /** Client-minted, held in localStorage. The unique index below is what
+     *  makes the heartbeat an idempotent upsert rather than an append. */
+    session_id: uuid("session_id").notNull(),
+    role_at_start: varchar("role_at_start", { length: 50 }),
+    started_at: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    last_seen_at: timestamp("last_seen_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    /** Heartbeats received. engaged = LEAST(ping_count*300, span+300). */
+    ping_count: integer("ping_count").default(1).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    sessionUniq: uniqueIndex("user_activity_sessions_session_uniq").on(
+      table.session_id,
+    ),
+    lastSeenIdx: index("user_activity_sessions_last_seen_idx").on(
+      table.last_seen_at,
+    ),
+    userStartedIdx: index("user_activity_sessions_user_started_idx").on(
+      table.user_id,
+      table.started_at,
+    ),
+  }),
+);
+
+/**
+ * E-215. Per-module usage counters.
+ *
+ * NOTE THE ABSENCE OF user_id. It is not an oversight and it is not a column
+ * waiting to be added — the whole design of E-215 rests on this table being
+ * incapable of answering "which modules does this person use". Anyone reaching
+ * for a `.user_id` here should read the migration header first.
+ *
+ * `module` intentionally carries no CHECK/enum: an unrecognised label must land
+ * as 'other' and be visible rather than fail a heartbeat. The allow-list is
+ * enforced in normaliseModule() in src/lib/usage/track.ts.
+ *
+ * Storage parameters (fillfactor 70 + autovacuum tuning) are set by the
+ * migration and cannot be expressed in Drizzle. Their absence here is expected
+ * and is NOT drift — same situation as user_activity_sessions above.
+ */
+export const moduleUsageDaily = pgTable(
+  "module_usage_daily",
+  {
+    /** IST, matching every other day boundary in the console. */
+    day: date().notNull(),
+    /** One of MODULES in src/lib/usage/constants.ts, or 'other'. */
+    module: varchar({ length: 32 }).notNull(),
+    /** 'internal' | 'external' — never the role. See the E-215 header. */
+    role_bucket: varchar("role_bucket", { length: 16 }).notNull(),
+    /** Heartbeats attributed here. pings * 300 ≈ engaged seconds. */
+    pings: integer().default(0).notNull(),
+    /** Distinct sessions, deduped via moduleVisitKeys. */
+    sessions: integer().default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.day, table.module, table.role_bucket],
+    }),
+    dayIdx: index("module_usage_daily_day_idx").on(table.day),
+  }),
+);
+
+/**
+ * E-216. Per-user module usage — grain (day, module, user_id).
+ *
+ * The per-person counterpart to moduleUsageDaily, which it does NOT replace:
+ * the aggregate is permanent, this is pruned to 30 days, so only the aggregate
+ * can answer a question about last quarter. Both are written by ONE statement in
+ * recordModuleUsage() so they cannot disagree.
+ *
+ * This reverses E-215's no-user_id design by explicit product decision — read
+ * the E-216 header before extending it. It is read-audited via recordUsageView()
+ * and pruned by runDailySnapshot(), matching the userActivitySessions
+ * conventions rather than the aggregate's.
+ *
+ * Storage parameters (fillfactor 70 + autovacuum tuning) are set by the
+ * migration and cannot be expressed in Drizzle — expected, not drift.
+ */
+export const moduleUsageUserDaily = pgTable(
+  "module_usage_user_daily",
+  {
+    /** IST, matching moduleUsageDaily so the two join on `day` directly. */
+    day: date().notNull(),
+    /** One of MODULES in src/lib/usage/constants.ts, or 'other'. */
+    module: varchar({ length: 32 }).notNull(),
+    /** No FK — same convention as auditLogs.performed_by. */
+    user_id: uuid("user_id").notNull(),
+    /** Role AT PING TIME, so a later promotion cannot rewrite history. */
+    role_at_ping: varchar("role_at_ping", { length: 48 }),
+    /** 'internal' | 'external', stored so it cannot drift from the aggregate. */
+    role_bucket: varchar("role_bucket", { length: 16 }).notNull(),
+    /** Heartbeats attributed to this person here. pings * 300 ≈ seconds. */
+    pings: integer().default(0).notNull(),
+    /** Distinct sessions, deduped via moduleVisitKeys. */
+    sessions: integer().default(0).notNull(),
+    /** Anchor for the 240s guard that E-215's write path lacked. */
+    last_ping_at: timestamp("last_ping_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.day, table.module, table.user_id] }),
+    dayIdx: index("module_usage_user_daily_day_idx").on(table.day),
+    moduleIdx: index("module_usage_user_daily_module_idx").on(
+      table.module,
+      table.day,
+    ),
+    userIdx: index("module_usage_user_daily_user_idx").on(
+      table.user_id,
+      table.day,
+    ),
+  }),
+);
+
+/**
+ * E-215. Two-day dedupe behind moduleUsageDaily.sessions.
+ *
+ * Holds md5(session_id, module, day) and nothing else. Not anonymised — see the
+ * "RESIDUAL EXPOSURE" note in the migration header before describing it as
+ * such. Pruned by runDailySnapshot().
+ *
+ * NOT an attribution source. It resolves only to a session's owner, which on
+ * live data was wrong for every row tested — see the E-216 header.
+ */
+export const moduleVisitKeys = pgTable(
+  "module_visit_keys",
+  {
+    visit_key: char("visit_key", { length: 32 }).primaryKey().notNull(),
+    /** In the clear only so the prune can range-scan. */
+    day: date().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    dayIdx: index("module_visit_keys_day_idx").on(table.day),
   }),
 );

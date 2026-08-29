@@ -17,7 +17,7 @@ import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { dualApprovalRequests, nbfcFinancingOffers, nbfcLeadAssignments, nbfcLoanProducts } from "@/lib/db/schema";
+import { dualApprovalRequests, leads, nbfcFinancingOffers, nbfcLeadAssignments, nbfcLoanProducts } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { createDualApprovalRequest, FINANCING_OFFER_DEVIATION_ACTION } from "@/lib/nbfc/dual-approval/service";
 import { computeOfferDeviation, type DeviationResult } from "@/lib/nbfc/offer-deviation";
@@ -28,6 +28,8 @@ import {
   seedOpeningRoundIfMissing,
 } from "@/lib/nbfc/offer-negotiation";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
+import { computeEmi } from "@/lib/nbfc/emi";
+import { RECALLED_ERROR, isLeadRecalled } from "@/lib/nbfc/recall";
 import { notifyOfferSubmitted } from "@/lib/notifications/events";
 import { tenantDisplayName } from "@/lib/notifications/emit";
 
@@ -39,6 +41,7 @@ function statusFromError(msg: string): number {
   if (msg.startsWith("FORBIDDEN")) return 403;
   if (msg.startsWith("NOT_FOUND")) return 404;
   if (msg.startsWith("BAD_REQUEST")) return 400;
+  if (msg.startsWith("CONFLICT")) return 409;
   return 500;
 }
 
@@ -81,6 +84,48 @@ const Body = z
     }
   });
 
+
+export type OfferDefaults = {
+  product_name: string;
+  loan_amount: number;
+  roi_pct: number;
+  tenure_months: number;
+  down_payment: number;
+  processing_fee: number;
+  emi_amount: number;
+};
+
+async function offerDefaults(
+  loanProductId: number | null,
+  requested: number | null,
+): Promise<OfferDefaults | null> {
+  if (loanProductId == null) return null;
+  const [p] = await db
+    .select()
+    .from(nbfcLoanProducts)
+    .where(eq(nbfcLoanProducts.id, loanProductId))
+    .limit(1);
+  if (!p) return null;
+  const max = Number(p.loan_amount_max);
+  const min = Number(p.loan_amount_min);
+  let loan = requested != null && requested > 0 ? Math.min(requested, max) : max;
+  if (Number.isFinite(min) && loan < min) loan = min;
+  const roi = Number(p.min_roi_pct);
+  const tenure = Number(p.tenure_months_max);
+  const dpPct = Number(p.down_payment_pct ?? 0);
+  const feeFixed = p.file_charge_fixed == null ? null : Number(p.file_charge_fixed);
+  const feePct = Number(p.file_charge_pct ?? 0);
+  return {
+    product_name: p.product_name,
+    loan_amount: loan,
+    roi_pct: roi,
+    tenure_months: tenure,
+    down_payment: Math.round((loan * dpPct) / 100),
+    processing_fee: feeFixed != null ? Math.round(feeFixed) : Math.round((loan * feePct) / 100),
+    emi_amount: computeEmi(loan, roi, tenure),
+  };
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
   try {
     const { leadId } = await params;
@@ -98,22 +143,32 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     // Includes 'withdrawn' — the dealer closing the deal locks this panel just
     // as a decided winner does.
     const locked = isAssignmentDecided(assignment.status);
-    // E-238 — a fixed offer is frozen for the NBFC too, so it drops can_act
-    // exactly as a decided one does.
-    const fixed = offer?.negotiation_status === "fixed";
-    // can_fix mirrors the guards in POST .../fix so the button is never offered
-    // for an action that would 400.
-    const canFix =
-      canAct &&
-      !locked &&
-      !fixed &&
-      offer != null &&
-      offer.ceo_approval_status !== "pending";
+    // E-275 — a recalled file pauses the panel until iTarang resubmits it.
+    const [leadRow] = await db
+      .select({
+        requested_loan_amount: leads.requested_loan_amount,
+        recalled_at: leads.recalled_at,
+        resubmitted_at: leads.resubmitted_at,
+      })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const recalled = isLeadRecalled(leadRow);
+
+    // E-275 — the prefilled offer: the indicated loan product's best terms at
+    // the customer's requested amount. The officer approves as-is, edits, or
+    // rejects. Null when no product is pinned (legacy rows).
+    const defaults = await offerDefaults(assignment.loan_product_id, leadRow?.requested_loan_amount ?? null);
+
     return NextResponse.json({
       ok: true,
       assignment_status: assignment.status,
-      can_act: canAct && !locked && !fixed,
-      can_fix: canFix,
+      can_act: canAct && !locked && !recalled,
+      // E-275 — fixing is retired (410); kept so older clients don't crash.
+      can_fix: false,
+      recalled,
+      rejection_note: assignment.status === "declined" ? assignment.rejection_note ?? null : null,
+      defaults,
       offer: offer ?? null,
       rounds: offer ? await listRounds(db, offer.id) : [],
     });
@@ -161,6 +216,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         },
         { status: 400 },
       );
+    }
+    // E-275 — a recalled file is paused for every NBFC until iTarang resubmits it.
+    {
+      const [leadRow] = await db
+        .select({ recalled_at: leads.recalled_at, resubmitted_at: leads.resubmitted_at })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      if (isLeadRecalled(leadRow)) {
+        return NextResponse.json({ ok: false, error: RECALLED_ERROR }, { status: 409 });
+      }
     }
 
     // E-238 — the negotiation state of the offer as it stands, read before the

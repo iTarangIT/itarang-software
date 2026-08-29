@@ -131,6 +131,13 @@ import {
 import { loadLeadPhases } from "./lead-phases";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 import {
+  DOC_NEXT_PROMPT,
+  docBatchButtons,
+  docGotIt,
+  isDocDone,
+  isDocNext,
+} from "./doc-buttons";
+import {
   DC_ACTIVE_BATT,
   onActiveBatteryPick,
   showActiveBatteries,
@@ -4749,7 +4756,7 @@ function customerDocsChecklistMessage(): string {
     "*Optional* (send if you have them):",
     "▫️ *Bank cheque* (cancelled cheque) or *passbook photo*",
     "",
-    "Type *done* when you've sent everything.",
+    "Tap *Done* when you've sent everything.",
   ].join("\n");
 }
 
@@ -4792,7 +4799,8 @@ async function onLeadDocsMode(
     await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
     await reply(
       session,
-      "📦 Great — attach a *single .zip file* containing all the documents from the list above. I'll read them all. Type *done* when finished.",
+      "📦 Great — attach a *single .zip file* containing all the documents from the list above. I'll read them all. Tap *Done* when finished.",
+      docBatchButtons(),
     );
     return;
   }
@@ -4800,7 +4808,8 @@ async function onLeadDocsMode(
     await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
     await reply(
       session,
-      "📄 No problem — send each document one at a time as a *photo or PDF*. Type *done* when finished.",
+      "📄 No problem — send each document one at a time as a *photo or PDF*. Tap *Done* when finished.",
+      docBatchButtons(),
     );
     return;
   }
@@ -4843,14 +4852,19 @@ async function onLeadDocs(
   event: InboundEvent,
   dealer: ActiveDealer,
 ): Promise<void> {
-  if (event.type === "text") {
+  if (event.type === "text" || event.type === "interactive") {
     const t = (event.text ?? "").trim();
-    if (/^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya|hogaya|बस|हो गया|पूरा|poora|pura)$/i.test(t)) {
+    if (isDocDone(t)) {
       return await proceedToConsent(session, dealer);
+    }
+    if (isDocNext(t)) {
+      await reply(session, DOC_NEXT_PROMPT, docBatchButtons());
+      return;
     }
     await reply(
       session,
-      "Send the customer's documents as photos or PDFs. Type *done* when finished.",
+      "Send the customer's documents as photos or PDFs. Tap *Done* when finished.",
+      docBatchButtons(),
     );
     return;
   }
@@ -4890,7 +4904,11 @@ async function onLeadDocs(
     return;
   }
 
-  await reply(session, "Please send the documents as photos or PDFs, or type *done*.");
+  await reply(
+    session,
+    "Please send the documents as photos or PDFs, or tap *Done*.",
+    docBatchButtons(),
+  );
 }
 
 /** Save a customer document, link it to the lead, and fill its extracted
@@ -5200,7 +5218,8 @@ async function ingestCustomerDoc(
   const haveCount = REQUIRED_CUSTOMER_DOCS.filter((d) => haveDocs.includes(d)).length;
   await reply(
     session,
-    `Got *${customerDocLabel(docType)}* ✅ (${haveCount}/${REQUIRED_CUSTOMER_DOCS.length})`,
+    `${docGotIt(haveCount)} *${customerDocLabel(docType)}* — ${haveCount}/${REQUIRED_CUSTOMER_DOCS.length} required.`,
+    docBatchButtons(),
   );
 }
 

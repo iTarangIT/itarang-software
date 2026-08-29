@@ -16,7 +16,15 @@
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { eq, and, count } from "drizzle-orm";
-import { nbfcLoans, nbfcTenants, nbfcUsers, users } from "@/lib/db/schema";
+import {
+  accounts,
+  leads,
+  loanSanctions,
+  nbfcLoans,
+  nbfcTenants,
+  nbfcUsers,
+  users,
+} from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeNbfcRole } from "@/lib/nbfc/origination-roles";
 
@@ -259,6 +267,17 @@ export async function getCurrentNbfcRole(
 
 /**
  * Returns the loan slice for the given tenant, shaped for the risk evaluators.
+ *
+ * ASSIGNED CITY (E-274). `nbfc_loans.loan_application_id` is the
+ * `loan_sanctions.id` (projectDisbursedLoan keys them 1:1), and the sanction's
+ * lead carries the borrower's city. That is the "assigned geolocation" the
+ * outside-assigned-city card measures against; when the borrower row has no
+ * city, the dealer who sold the battery (`accounts.city`) stands in, and the
+ * source is recorded so the card can say which one it used. Loans that reach
+ * neither (legacy rows keyed to something other than a sanction) come back
+ * with `assigned_city: null` and are excluded from that card's denominator.
+ * The LEFT JOINs cannot drop a loan, so the other evaluators see exactly the
+ * slice they always did.
  */
 export async function getTenantLoanSlice(tenantId: string) {
   const rows = await db
@@ -268,15 +287,45 @@ export async function getTenantLoanSlice(tenantId: string) {
       current_dpd: nbfcLoans.current_dpd,
       emi_amount: nbfcLoans.emi_amount,
       outstanding_amount: nbfcLoans.outstanding_amount,
+      borrower_city: leads.city,
+      borrower_state: leads.state,
+      dealer_city: accounts.city,
+      dealer_state: accounts.state,
     })
     .from(nbfcLoans)
+    .leftJoin(loanSanctions, eq(loanSanctions.id, nbfcLoans.loan_application_id))
+    .leftJoin(leads, eq(leads.id, loanSanctions.lead_id))
+    .leftJoin(accounts, eq(accounts.id, leads.dealer_id))
     .where(and(eq(nbfcLoans.tenant_id, tenantId), eq(nbfcLoans.is_active, true)));
 
-  return rows.map((r) => ({
-    loan_application_id: r.loan_application_id,
-    vehicleno: r.vehicleno,
-    current_dpd: r.current_dpd,
-    emi_amount: r.emi_amount != null ? Number(r.emi_amount) : null,
-    outstanding_amount: r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
-  }));
+  const clean = (v: string | null | undefined) => {
+    const t = (v ?? "").trim();
+    return t === "" ? null : t;
+  };
+
+  return rows.map((r) => {
+    const borrowerCity = clean(r.borrower_city);
+    const dealerCity = clean(r.dealer_city);
+    const assigned_city = borrowerCity ?? dealerCity;
+    const assigned_city_source: "borrower" | "dealer" | null = borrowerCity
+      ? "borrower"
+      : dealerCity
+        ? "dealer"
+        : null;
+    return {
+      loan_application_id: r.loan_application_id,
+      vehicleno: r.vehicleno,
+      current_dpd: r.current_dpd,
+      emi_amount: r.emi_amount != null ? Number(r.emi_amount) : null,
+      outstanding_amount: r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
+      assigned_city,
+      assigned_state:
+        assigned_city_source === "borrower"
+          ? clean(r.borrower_state)
+          : assigned_city_source === "dealer"
+            ? clean(r.dealer_state)
+            : null,
+      assigned_city_source,
+    };
+  });
 }

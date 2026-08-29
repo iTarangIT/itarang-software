@@ -1,5 +1,5 @@
 /**
- * Five hand-coded hypothesis evaluators that run before the LangGraph workflow
+ * Six hand-coded hypothesis evaluators that run before the LangGraph workflow
  * is wired. Each one returns a card "evaluation" — severity + finding +
  * affected_count + evidence — that the Risk page can render directly and that
  * we persist into risk_card_runs so the UI shape matches LLM-produced cards.
@@ -17,6 +17,7 @@ import {
 } from "@/lib/db/iot-queries";
 import type { Severity, VerdictSource } from "@/lib/risk/severity";
 import type { RiskThresholds } from "@/lib/nbfc/risk-thresholds";
+import { cityCentroid, haversineKm } from "@/lib/geo/city-centroid";
 
 
 export type { Severity, VerdictSource } from "@/lib/risk/severity";
@@ -27,6 +28,14 @@ export interface TenantLoanSlice {
   current_dpd: number;
   emi_amount: number | null;
   outstanding_amount: number | null;
+  /**
+   * E-274 — the city this loan is assigned to: the borrower's, else the
+   * selling dealer's. See getTenantLoanSlice(). Optional so a hand-built slice
+   * (scripts, tests) that predates the field still satisfies every evaluator.
+   */
+  assigned_city?: string | null;
+  assigned_state?: string | null;
+  assigned_city_source?: "borrower" | "dealer" | null;
 }
 
 export interface CardEvaluation {
@@ -62,6 +71,7 @@ export const HAND_CODED_CARDS: Record<string, CardEvaluator> = {
   "geo-shift": evalGeoShift,
   "battery-soh-decay": evalBatterySohDecay,
   "low-utilization-active-loan": evalLowUtilizationActiveLoan,
+  "outside-assigned-city": evalOutsideAssignedCity,
 };
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -483,6 +493,147 @@ async function evalLowUtilizationActiveLoan(loans: TenantLoanSlice[]): Promise<C
         ...(thinCoverageNote ? [thinCoverageNote] : []),
         "Phase B: tier this by region (rural vs urban have different utilisation norms).",
       ],
+    },
+  };
+}
+
+// ─── 6. Vehicle outside its assigned city (E-274) ───────────────────────────
+// Different question from geo-shift. Geo-shift asks "is the vehicle far from
+// wherever it USUALLY is" — a learned home base, which quietly follows a
+// diverted asset to its new home after 30 days. This asks "is the vehicle
+// outside the city the loan was WRITTEN for" — a fixed point the NBFC agreed to
+// at sanction, which does not move when the vehicle does.
+
+/**
+ * How stale a GPS fix may be and still count as "where the vehicle is". A fix
+ * older than the governed offline_alert_hours is the silence card's business
+ * (dpd-7-no-telemetry), not a position — measuring distance from it would
+ * report where the vehicle WAS as where it IS.
+ */
+async function evalOutsideAssignedCity(
+  loans: TenantLoanSlice[],
+  thresholds: RiskThresholds,
+): Promise<CardEvaluation> {
+  const radiusKm = thresholds.city_geofence_km;
+  const freshSeconds = thresholds.offline_alert_hours * 3600;
+  const slug = "outside-assigned-city";
+
+  // Coverage, counted so the card can say why each loan was or was not judged.
+  let noCity = 0;
+  let unknownCity = 0;
+  let noVehicle = 0;
+  let noFix = 0;
+  let staleFix = 0;
+
+  type Candidate = {
+    loan: TenantLoanSlice;
+    centre: { lat: number; lng: number };
+  };
+  const candidates: Candidate[] = [];
+  for (const loan of loans) {
+    if (!loan.assigned_city) {
+      noCity += 1;
+      continue;
+    }
+    const centre = cityCentroid(loan.assigned_city);
+    if (!centre) {
+      unknownCity += 1;
+      continue;
+    }
+    if (!loan.vehicleno) {
+      noVehicle += 1;
+      continue;
+    }
+    candidates.push({ loan, centre });
+  }
+
+  const states = await getVehicleStates(candidates.map((c) => c.loan.vehicleno as string));
+  const stateByVno = new Map(states.map((s) => [s.vehicleno, s]));
+
+  const assessed: Array<Record<string, unknown> & { distance_km: number }> = [];
+  for (const { loan, centre } of candidates) {
+    const s = stateByVno.get(loan.vehicleno as string);
+    if (!s || s.lat == null || s.lon == null) {
+      noFix += 1;
+      continue;
+    }
+    if (s.sec_since_gps == null || s.sec_since_gps > freshSeconds) {
+      staleFix += 1;
+      continue;
+    }
+    assessed.push({
+      loan_application_id: loan.loan_application_id,
+      vehicleno: loan.vehicleno,
+      assigned_city: loan.assigned_city,
+      assigned_state: loan.assigned_state ?? null,
+      city_source: loan.assigned_city_source ?? null,
+      distance_km: haversineKm(centre.lat, centre.lng, s.lat, s.lon),
+      current_lat: s.lat,
+      current_lon: s.lon,
+      city_lat: centre.lat,
+      city_lon: centre.lng,
+      last_gps_at: s.last_gps_at ? s.last_gps_at.toISOString() : null,
+    });
+  }
+
+  const excluded = [
+    noCity > 0 ? `${noCity} with no borrower or dealer city on record` : null,
+    unknownCity > 0 ? `${unknownCity} whose city name is not in the centroid index` : null,
+    noVehicle > 0 ? `${noVehicle} with no vehicle number` : null,
+    noFix > 0 ? `${noFix} with no GPS position at all` : null,
+    staleFix > 0
+      ? `${staleFix} whose last fix is older than ${thresholds.offline_alert_hours}h (see the telemetry-silent card)`
+      : null,
+  ].filter((x): x is string => x !== null);
+
+  if (assessed.length === 0) {
+    return notAssessable(
+      slug,
+      `Not assessable — none of the ${loans.length} loans have both an assigned city and a fresh GPS fix to measure against.`,
+      excluded.length ? [`Excluded: ${excluded.join("; ")}.`] : [],
+    );
+  }
+
+  const outside = assessed
+    .filter((r) => r.distance_km > radiusKm)
+    .sort((a, b) => b.distance_km - a.distance_km);
+
+  // Same cutoffs as geo-shift: a single diverted asset in a 200-loan book is a
+  // High Alert, because one vehicle in the wrong city is one repossession.
+  const severity = pickSeverity(outside.length / Math.max(assessed.length, 1), 0.005, 0.001);
+
+  return {
+    slug,
+    severity,
+    verdict_source: "hand_coded",
+    finding_summary:
+      outside.length === 0
+        ? `All ${assessed.length} assessed vehicles are within ${radiusKm} km of their assigned city.`
+        : `${outside.length} of ${assessed.length} assessed vehicles are more than ${radiusKm} km outside their assigned city.`,
+    affected_count: outside.length,
+    total_count: assessed.length,
+    evidence: {
+      sample_rows: outside.slice(0, 10).map((r) => ({
+        ...r,
+        distance_km: Math.round(r.distance_km),
+      })),
+      chart: {
+        kind: "bar",
+        data: outside.slice(0, 10).map((r) => ({ x: r.vehicleno, y: Math.round(r.distance_km) })),
+      },
+      notes: [
+        `Threshold: more than ${radiusKm} km from the assigned city's centre (governed city_geofence_km rule).`,
+        "Assigned city = the borrower's city on the loan's lead, else the selling dealer's city; the sample rows say which.",
+        "Distance is measured from the CITY CENTRE (country-state-city centroids), not a municipal boundary — a large city's outskirts can sit 15–20 km from its centre.",
+        `Only fixes newer than ${thresholds.offline_alert_hours}h count as a position (governed offline_alert_hours rule).`,
+        ...(excluded.length
+          ? [`${loans.length - assessed.length} of ${loans.length} loans excluded — ${excluded.join("; ")}. A coverage gap, not a clean result.`]
+          : []),
+      ],
+      thresholds: {
+        city_geofence_km: radiusKm,
+        offline_alert_hours: thresholds.offline_alert_hours,
+      },
     },
   };
 }
