@@ -5319,6 +5319,8 @@ function digitsOnly(v: unknown): string {
 function resolveStateCity(
   rawState: string,
   rawCity: string,
+  rawDistrict = "",
+  rawFullAddress = "",
 ): { state?: string; city?: string } {
   const out: { state?: string; city?: string } = {};
   const s = rawState.trim().toLowerCase();
@@ -5329,18 +5331,36 @@ function resolveStateCity(
   if (!stateMatch) return out;
   out.state = stateMatch.name;
 
-  const c = rawCity.trim().toLowerCase();
-  if (!c) return out;
   const cities = City.getCitiesOfState("IN", stateMatch.isoCode);
-  // Exact (case-insensitive) first; else tolerate the "Allahabad" ⇄
-  // "Allahabad City" prefix difference between OCR text and the package name.
-  const cityMatch =
-    cities.find((ct) => ct.name.toLowerCase() === c) ||
-    cities.find((ct) => {
-      const n = ct.name.toLowerCase();
-      return c.startsWith(n) || n.startsWith(c);
-    });
-  if (cityMatch) out.city = cityMatch.name;
+  const findCity = (raw: string): string | undefined => {
+    const c = raw.trim().toLowerCase();
+    if (!c) return undefined;
+    // Exact (case-insensitive) first; else tolerate the "Allahabad" ⇄
+    // "Allahabad City" prefix difference between OCR text and the package name.
+    const hit =
+      cities.find((ct) => ct.name.toLowerCase() === c) ||
+      cities.find((ct) => {
+        const n = ct.name.toLowerCase();
+        return c.startsWith(n) || n.startsWith(c);
+      });
+    return hit?.name;
+  };
+
+  // Rural Aadhaar cards print the VILLAGE in the city slot ("Ugaon") and the
+  // real city in the district slot ("Nashik"). The BRE matches NBFC products on
+  // exact state+city, so a village left the lead at city='Unknown' and every
+  // customer fell through to the Bajaj card. Try city → district → each comma
+  // segment of the printed address, so the district/taluka names still resolve.
+  const segments = rawFullAddress
+    .split(/[,\n]/)
+    .map((t) => t.replace(/^\s*(tal|taluka|dist|district|po|post|at)\b[-:. ]*/i, "").trim())
+    .filter((t) => t && !/^\d{6}$/.test(t))
+    .reverse(); // address goes small → large; largest units first
+  const city =
+    findCity(rawCity) ??
+    findCity(rawDistrict) ??
+    segments.map(findCity).find(Boolean);
+  if (city) out.city = city;
   return out;
 }
 
@@ -5443,7 +5463,12 @@ async function fillCustomerLeadFromDoc(
   // names so the wizard's State/City selects pre-populate (overwriting the
   // "Unknown" placeholder set at lead creation).
   if (docType === "aadhaar_back" || docType === "address_proof") {
-    const loc = resolveStateCity(str(fields.state), str(fields.city));
+    const loc = resolveStateCity(
+      str(fields.state),
+      str(fields.city),
+      str(fields.district),
+      str(fields.full_address),
+    );
     if (loc.state) leadPatch.state = loc.state;
     if (loc.city) leadPatch.city = loc.city;
   }

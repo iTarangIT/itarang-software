@@ -2,7 +2,11 @@
  * RDS health, by plain SQL against the databases themselves.
  *
  * No CloudWatch, no new AWS SDK client, no new IAM permission — everything here
- * comes from pg_stat_*, which any connected role can read.
+ * comes from pg_stat_*, which any connected role can read. That property is the
+ * point of this file and is deliberately preserved: the hypervisor-level
+ * metrics (CPU, memory, volume headroom, burst credits) live in the SEPARATE
+ * collectors/cloudwatch.ts, so an expired credential or a missing IAM policy
+ * can never cost us the connection-headroom numbers below.
  *
  * THE HIGHEST-VALUE MONITOR IN THE BUILD. src/lib/db/index.ts caps its pool at
  * `max: 5` with the note "RDS has ~79 max_connections and NO pooler; a deploy
@@ -27,6 +31,8 @@ import {
   connectionCapacityPct,
   intervalMetrics,
   type StatCounters,
+  TXID_WRAPAROUND_LIMIT,
+  txidWraparoundPct,
 } from "@/lib/operations/databaseMath";
 import { rootCauseMessage } from "@/lib/operations/errors";
 import { previousSample } from "@/lib/operations/samples";
@@ -638,6 +644,51 @@ async function probeDatabase(
         meta: { dead: deadTuples, live: liveTuples },
       });
     }
+  }
+
+  // ---- transaction-ID wraparound ------------------------------------------
+  // The one failure on this page that ends in downtime rather than degradation:
+  // exhaust the XID budget and Postgres stops accepting writes until someone
+  // runs VACUUM in single-user mode. Autovacuum is supposed to prevent it, so
+  // this number climbing is really a report that autovacuum is losing — usually
+  // to a long-running transaction or an abandoned replication slot holding the
+  // horizon back.
+  //
+  // Same number AWS publishes as CloudWatch's MaximumUsedTransactionIDs, read
+  // from the instance itself. No CloudWatch, no extra IAM — the property the
+  // rest of this file already has, kept.
+  //
+  // MAX across all databases, not just current_database(): the horizon is
+  // cluster-wide, and a neglected `postgres` or `template1` will wrap the whole
+  // instance while the database we happen to be connected to looks healthy.
+  try {
+    const [frozen] = await rows(
+      client,
+      sql`SELECT MAX(age(datfrozenxid))::bigint AS max_used_txids FROM pg_database`,
+    );
+    const maxUsedTxids = num(frozen?.max_used_txids);
+    if (maxUsedTxids != null) {
+      // Untiled: the exact figure, so the history is precise and auditable.
+      samples.push({
+        metric_key: "db.max_used_txids",
+        source,
+        value_num: maxUsedTxids,
+      });
+      const pct = txidWraparoundPct(maxUsedTxids);
+      if (pct != null) {
+        samples.push({
+          metric_key: "db.txid_wraparound_pct",
+          source,
+          value_num: pct,
+          meta: { max_used_txids: maxUsedTxids, limit: TXID_WRAPAROUND_LIMIT },
+        });
+      }
+    }
+  } catch {
+    // pg_database is world-readable, so this should not fail — but the IoT
+    // bridge is a restricted role on a VPS we do not own. Omit rather than
+    // zero: 0% reads as a freshly vacuumed cluster, which is the most
+    // reassuring possible lie about a metric that only matters near its limit.
   }
 
   return samples;
