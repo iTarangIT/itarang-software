@@ -1,0 +1,494 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+    AlertTriangle,
+    Archive,
+    ArrowLeft,
+    Boxes,
+    ExternalLink,
+    Loader2,
+    ImagePlus,
+    Pencil,
+    Plus,
+    Trash2 as TrashVariant,
+    RotateCcw,
+    Trash2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { formatPrice, formatPriceRange } from "@/lib/ecommerce/format";
+import type { EcommerceProductDetail, EcommerceVariant } from "@/lib/ecommerce/types";
+import { InventoryDialog } from "./InventoryDialog";
+import { DeleteProductDialog } from "./DeleteProductDialog";
+import { AddMediaDialog } from "./AddMediaDialog";
+import { AddVariantDialog } from "./AddVariantDialog";
+import { EditVariantDialog } from "./EditVariantDialog";
+
+export function EcommerceProductDetailView({ productId }: { productId: string }) {
+    const query = useQuery<{ success: true; data: EcommerceProductDetail }>({
+        queryKey: ["ecommerce-product", productId],
+        queryFn: async () => {
+            const res = await fetch(`/api/ecommerce/products/${productId}`, { cache: "no-store" });
+            if (!res.ok) {
+                const body = await res.json().catch(() => null);
+                throw new Error(body?.error?.message ?? "Failed to load product from Hostinger");
+            }
+            return res.json();
+        },
+    });
+
+    const p = query.data?.data;
+    const [stockFor, setStockFor] = useState<EcommerceVariant | null>(null);
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [addMedia, setAddMedia] = useState(false);
+    const [addVariant, setAddVariant] = useState(false);
+    const [editVariant, setEditVariant] = useState<EcommerceVariant | null>(null);
+    const [variantError, setVariantError] = useState<string | null>(null);
+
+    async function removeVariant(v: EcommerceVariant) {
+        setVariantError(null);
+        const res = await fetch(`/api/ecommerce/products/${productId}/variants/${v.id}`, {
+            method: "DELETE",
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+            // Includes the last-variant refusal, which is a 409 the operator needs
+            // to read in full rather than a generic failure.
+            setVariantError(body?.error?.message ?? "Could not delete the variant");
+            return;
+        }
+        await query.refetch();
+    }
+    const [lifecycleBusy, setLifecycleBusy] = useState(false);
+    const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+
+    async function setStatus(status: "archived" | "draft") {
+        setLifecycleBusy(true);
+        setLifecycleError(null);
+        try {
+            const res = await fetch(`/api/ecommerce/products/${productId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status }),
+            });
+            const body = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(body?.error?.message ?? "Update failed");
+            await query.refetch();
+        } catch (e) {
+            setLifecycleError(e instanceof Error ? e.message : "Update failed");
+        } finally {
+            setLifecycleBusy(false);
+        }
+    }
+
+    return (
+        <div className="space-y-5">
+            <Link
+                href="/sales-head/ecommerce/products"
+                className="inline-flex items-center gap-1.5 text-sm text-ink-muted hover:text-ink"
+            >
+                <ArrowLeft className="h-4 w-4" />
+                Back to products
+            </Link>
+
+            {query.isLoading ? (
+                <div className="rounded-xl border border-border bg-surface p-12 text-center shadow-card">
+                    <Loader2 className="mx-auto h-5 w-5 animate-spin text-ink-muted" />
+                </div>
+            ) : null}
+
+            {query.error ? (
+                <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger-bg/50 px-4 py-6 text-sm text-danger">
+                    <AlertTriangle className="h-4 w-4" />
+                    {(query.error as Error).message}
+                </div>
+            ) : null}
+
+            {p ? (
+                <>
+                    <header className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h1 className="text-2xl font-semibold tracking-tight text-ink">
+                                {p.title || "Untitled"}
+                            </h1>
+                            <Badge variant={p.status === "published" ? "success" : "muted"}>
+                                {p.status ?? "unknown"}
+                            </Badge>
+                            {p.type ? <Badge variant="outline">{p.type}</Badge> : null}
+                        </div>
+                        <p className="font-mono text-xs text-ink-muted">{p.id}</p>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                            <Link href={`/sales-head/ecommerce/products/${p.id}/edit`}>
+                                <Button size="sm">
+                                    <Pencil className="h-4 w-4" />
+                                    Edit
+                                </Button>
+                            </Link>
+                            <a href={p.adminUrl} target="_blank" rel="noopener noreferrer">
+                                <Button size="sm" variant="outline">
+                                    Edit in Hostinger
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                </Button>
+                            </a>
+
+                            {p.status === "archived" ? (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={lifecycleBusy}
+                                    onClick={() => setStatus("draft")}
+                                    title="Restores as a draft — publishing is a separate step"
+                                >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    Restore as draft
+                                </Button>
+                            ) : (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={lifecycleBusy}
+                                    onClick={() => {
+                                        if (
+                                            window.confirm(
+                                                `Archive "${p.title}"?
+
+It will be retired and hidden from the storefront. This is reversible — you can restore it as a draft later.`,
+                                            )
+                                        ) {
+                                            void setStatus("archived");
+                                        }
+                                    }}
+                                >
+                                    <Archive className="h-3.5 w-3.5" />
+                                    Archive
+                                </Button>
+                            )}
+
+                            <Button
+                                size="sm"
+                                variant="danger"
+                                disabled={lifecycleBusy}
+                                onClick={() => setConfirmDelete(true)}
+                            >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Delete
+                            </Button>
+                        </div>
+
+                        {lifecycleError ? (
+                            <div className="flex items-center gap-2 rounded-lg bg-danger-bg/50 px-3 py-2 text-sm text-danger">
+                                <AlertTriangle className="h-4 w-4" />
+                                {lifecycleError}
+                            </div>
+                        ) : null}
+                    </header>
+
+                    <section className="grid gap-5 md:grid-cols-3">
+                        <div className="space-y-4 md:col-span-2">
+                            <Panel title="Variants and stock">
+                                {p.options.length ? (
+                                    <div className="border-b border-border px-4 py-2.5 text-xs text-ink-muted">
+                                        {p.options.map((o) => (
+                                            <span key={o.name} className="mr-4">
+                                                <span className="font-semibold text-ink">{o.name}:</span>{" "}
+                                                {o.selections.join(", ")}
+                                            </span>
+                                        ))}
+                                        {p.options.some((o) => o.hasPlaceholder) ? (
+                                            <p className="mt-1 text-[11px]">
+                                                {/* Hostinger's own placeholder, backfilled when a
+                                                    dimension was added to existing variants. */}
+                                                &quot;Default Value&quot; is Hostinger&apos;s placeholder,
+                                                added automatically to variants that predate an option.
+                                                It cannot be renamed or removed.
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+                                <VariantTable
+                                    variants={p.variants}
+                                    onAdjust={setStockFor}
+                                    onEdit={setEditVariant}
+                                    onDelete={removeVariant}
+                                    canDelete={p.variants.length > 1}
+                                />
+                                {variantError ? (
+                                    <div className="flex items-start gap-2 border-t border-border bg-danger-bg/40 px-4 py-3 text-sm text-danger">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                        {variantError}
+                                    </div>
+                                ) : null}
+                                <div className="border-t border-border px-4 py-3">
+                                    <Button size="sm" variant="outline" onClick={() => setAddVariant(true)}>
+                                        <Plus className="h-3.5 w-3.5" />
+                                        Add variant
+                                    </Button>
+                                    <p className="mt-2 text-[11px] text-ink-muted">
+                                        Options and SKU can only be set when a variant is created.
+                                    </p>
+                                </div>
+                            </Panel>
+                        </div>
+
+                        <div className="space-y-4">
+                            <Panel title="Details">
+                                <dl className="divide-y divide-border text-sm">
+                                    <Row label="Type" value={p.type ?? "—"} />
+                                    <Row label="Variants" value={String(p.variantCount)} />
+                                    <Row label="Price range" value={formatPriceRange(p.priceRange)} />
+                                </dl>
+                            </Panel>
+
+                            <Panel title="Media">
+                                {p.media.length ? (
+                                    <div className="grid grid-cols-3 gap-2 px-4 pt-3">
+                                        {p.media.map((m) => (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
+                                            <img
+                                                key={m.url}
+                                                src={m.url}
+                                                alt=""
+                                                className="aspect-square w-full rounded-md border border-border object-cover"
+                                            />
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="px-4 pt-3 text-sm text-ink-muted">No images yet.</p>
+                                )}
+                                <div className="px-4 py-3">
+                                    <Button size="sm" variant="outline" onClick={() => setAddMedia(true)}>
+                                        <ImagePlus className="h-3.5 w-3.5" />
+                                        Add media
+                                    </Button>
+                                    {/* Hostinger exposes no delete-image or reorder endpoint, so
+                                        offering those controls here would be offering something
+                                        that cannot work. */}
+                                    <p className="mt-2 text-[11px] text-ink-muted">
+                                        Images can be added here. Removing or reordering them is
+                                        only possible in Hostinger.
+                                    </p>
+                                </div>
+                            </Panel>
+                        </div>
+                    </section>
+                </>
+            ) : null}
+
+            {addVariant && p ? (
+                <AddVariantDialog
+                    productId={p.id}
+                    existingOptions={p.options}
+                    currency={p.variants[0]?.price?.currencyCode ?? "inr"}
+                    onClose={() => setAddVariant(false)}
+                    onAdded={() => void query.refetch()}
+                />
+            ) : null}
+
+            {editVariant && p ? (
+                <EditVariantDialog
+                    productId={p.id}
+                    variant={editVariant}
+                    onClose={() => setEditVariant(null)}
+                    onSaved={() => void query.refetch()}
+                />
+            ) : null}
+
+            {addMedia && p ? (
+                <AddMediaDialog
+                    productId={p.id}
+                    hasExistingMedia={p.media.length > 0}
+                    onClose={() => setAddMedia(false)}
+                    onAdded={() => void query.refetch()}
+                />
+            ) : null}
+
+            {confirmDelete && p ? (
+                <DeleteProductDialog
+                    productId={p.id}
+                    productTitle={p.title}
+                    onClose={() => setConfirmDelete(false)}
+                />
+            ) : null}
+
+            {stockFor && p ? (
+                <InventoryDialog
+                    productId={p.id}
+                    variant={stockFor}
+                    onClose={() => setStockFor(null)}
+                    onSaved={() => {
+                        // Re-fetch rather than patching local state, so the page shows
+                        // what Hostinger holds rather than what we asked for.
+                        void query.refetch();
+                    }}
+                />
+            ) : null}
+        </div>
+    );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+        <div className="rounded-xl border border-border bg-surface shadow-card">
+            <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                {title}
+            </div>
+            {children}
+        </div>
+    );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
+            <dt className="text-ink-muted">{label}</dt>
+            <dd className="text-ink">{value}</dd>
+        </div>
+    );
+}
+
+function VariantTable({
+    variants,
+    onAdjust,
+    onEdit,
+    onDelete,
+    canDelete,
+}: {
+    variants: EcommerceProductDetail["variants"];
+    onAdjust: (v: EcommerceVariant) => void;
+    onEdit: (v: EcommerceVariant) => void;
+    onDelete: (v: EcommerceVariant) => Promise<void>;
+    /** False for a single-variant product — the service refuses that delete with a 409. */
+    canDelete: boolean;
+}) {
+    // Deleting a variant is irreversible and takes its price and stock with it, so
+    // the button asks once. One row at a time is enough — clicking delete on another
+    // row moves the confirmation rather than opening a second one.
+    const [confirming, setConfirming] = useState<string | null>(null);
+    const [deleting, setDeleting] = useState<string | null>(null);
+
+    if (!variants.length) {
+        return <p className="px-4 py-3 text-sm text-ink-muted">No variants.</p>;
+    }
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+                <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
+                    <tr>
+                        <th className="px-4 py-2.5 text-left font-semibold">Variant</th>
+                        <th className="px-4 py-2.5 text-left font-semibold">SKU</th>
+                        <th className="px-4 py-2.5 text-left font-semibold">Price</th>
+                        <th className="px-4 py-2.5 text-left font-semibold">Stock</th>
+                        <th className="px-4 py-2.5 text-right font-semibold"></th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                    {variants.map((v) => (
+                        <tr key={v.id}>
+                            <td className="px-4 py-2.5">
+                                {v.title}
+                                {v.options.length ? (
+                                    <span className="ml-2 text-xs text-ink-muted">
+                                        {v.options.map((o) => `${o.name}: ${o.value}`).join(", ")}
+                                    </span>
+                                ) : null}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-xs text-ink-muted">
+                                {v.sku ?? "—"}
+                            </td>
+                            <td className="px-4 py-2.5">
+                                {v.price && v.price.saleAmountMinor !== null ? (
+                                    <span className="inline-flex flex-wrap items-baseline gap-1.5">
+                                        <span className="font-medium">
+                                            {formatPrice({
+                                                ...v.price,
+                                                amountMinor: v.price.saleAmountMinor,
+                                            })}
+                                        </span>
+                                        <span className="text-xs text-ink-muted line-through">
+                                            {formatPrice(v.price)}
+                                        </span>
+                                        <Badge variant="info">on sale</Badge>
+                                    </span>
+                                ) : (
+                                    formatPrice(v.price)
+                                )}
+                            </td>
+                            <td className="px-4 py-2.5">
+                                {!v.manageInventory ? (
+                                    <span className="text-ink-muted">Not tracked</span>
+                                ) : (
+                                    (v.inventoryQuantity ?? "—")
+                                )}
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                                {confirming === v.id ? (
+                                    <span className="inline-flex items-center justify-end gap-2">
+                                        <span className="text-xs text-ink-muted">
+                                            Delete this variant?
+                                        </span>
+                                        <Button
+                                            size="sm"
+                                            variant="danger"
+                                            disabled={deleting === v.id}
+                                            onClick={async () => {
+                                                setDeleting(v.id);
+                                                try {
+                                                    await onDelete(v);
+                                                } finally {
+                                                    setDeleting(null);
+                                                    setConfirming(null);
+                                                }
+                                            }}
+                                        >
+                                            {deleting === v.id ? (
+                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                            ) : null}
+                                            Delete
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={deleting === v.id}
+                                            onClick={() => setConfirming(null)}
+                                        >
+                                            Cancel
+                                        </Button>
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center justify-end gap-2">
+                                        <Button size="sm" variant="outline" onClick={() => onAdjust(v)}>
+                                            <Boxes className="h-3.5 w-3.5" />
+                                            Adjust stock
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => onEdit(v)}>
+                                            <Pencil className="h-3.5 w-3.5" />
+                                            Edit
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={!canDelete}
+                                            aria-label="Delete variant"
+                                            title={
+                                                canDelete
+                                                    ? "Delete this variant"
+                                                    : "A product must keep at least one variant. Delete or archive the product instead."
+                                            }
+                                            onClick={() => setConfirming(v.id)}
+                                        >
+                                            <TrashVariant className="h-3.5 w-3.5" />
+                                        </Button>
+                                    </span>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}

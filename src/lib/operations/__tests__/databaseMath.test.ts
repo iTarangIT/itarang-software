@@ -4,6 +4,8 @@ import {
   connectionCapacityPct,
   intervalMetrics,
   type StatCounters,
+  TXID_WRAPAROUND_LIMIT,
+  txidWraparoundPct,
 } from "../databaseMath";
 
 /**
@@ -228,5 +230,46 @@ describe("connectionCapacityPct", () => {
     expect(connectionCapacityPct(9, null, 3)).toBeNull();
     expect(connectionCapacityPct(9, 3, 3)).toBeNull(); // usable = 0
     expect(connectionCapacityPct(9, 2, 3)).toBeNull(); // usable negative
+  });
+});
+
+describe("txidWraparoundPct", () => {
+  it("reports the share of the 2^31 budget, not of 2^32", () => {
+    // XIDs are compared modulo 2^32, so only half the space is reachable.
+    // Dividing by 2^32 would report every reading at half its real severity.
+    expect(txidWraparoundPct(TXID_WRAPAROUND_LIMIT / 2)).toBe(50);
+    expect(TXID_WRAPAROUND_LIMIT).toBe(2147483648);
+  });
+
+  it("puts the warn and crit lines where the thresholds claim they are", () => {
+    // registry.ts seeds warn 50 / crit 75 and documents them as ~1.07B and
+    // ~1.61B. If the denominator ever changes, this is what catches it.
+    expect(txidWraparoundPct(1_073_741_824)).toBe(50);
+    expect(txidWraparoundPct(1_610_612_736)).toBe(75);
+  });
+
+  it("reads near zero for a cluster autovacuum is keeping up with", () => {
+    // autovacuum_freeze_max_age is 200M on RDS, so a healthy instance sits
+    // around 9% and should never approach the warn line.
+    expect(txidWraparoundPct(200_000_000)).toBeCloseTo(9.3, 1);
+  });
+
+  it("does not clamp, so an instance past the budget is visible", () => {
+    // Rounded to one decimal, so it takes ~0.05% over the line to show --
+    // which is still ~1M transactions, not a rounding artefact.
+    expect(txidWraparoundPct(TXID_WRAPAROUND_LIMIT * 1.02)).toBe(102);
+  });
+
+  it("returns null rather than 0 for a reading it cannot use", () => {
+    // 0 would render as a freshly frozen cluster — the most reassuring
+    // possible lie about a metric that only matters near its limit.
+    expect(txidWraparoundPct(null)).toBeNull();
+    expect(txidWraparoundPct(Number.NaN)).toBeNull();
+    expect(txidWraparoundPct(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(txidWraparoundPct(-1)).toBeNull();
+  });
+
+  it("still reports a genuine zero as zero", () => {
+    expect(txidWraparoundPct(0)).toBe(0);
   });
 });

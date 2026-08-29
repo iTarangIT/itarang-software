@@ -1068,7 +1068,17 @@ export const aiCallLogs = pgTable(
     recording_url: text("recording_url"),
     call_duration: integer("call_duration"),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-    call_id: varchar("call_id", { length: 255 }).notNull(),
+    // UNIQUE, and it has been since 0000_eager_black_panther.sql:43 — this
+    // declaration was simply missing, which is drift, not a change. Nothing is
+    // added to the database by writing it here; the constraint
+    // `ai_call_logs_call_id_unique` already exists on the live instance.
+    //
+    // It matters because Drizzle will not offer `onConflictDoUpdate` without a
+    // declared conflict target. Lacking one, the finalize path hand-rolled a
+    // SELECT-then-INSERT whose 23505 was swallowed — so a redelivered webhook
+    // lost its write instead of merging it. Declaring the truth is what makes
+    // the real upsert expressible.
+    call_id: varchar("call_id", { length: 255 }).notNull().unique(),
     // E-110: per-call cost capture from provider APIs. All integer INR paise
     // (E-125) — providers are normalized to INR at fetch time, so the display
     // layer applies no FX conversion.

@@ -437,6 +437,32 @@ export const METRICS: MetricDef[] = [
     help: "Rows awaiting vacuum across all tables. Context for the dead-tuple share beside it, which is the number that scales with the table and therefore the one that alerts.",
   },
   {
+    key: "db.txid_wraparound_pct",
+    label: "Txn ID budget used",
+    module: "database",
+    unit: "percent",
+    direction: "lower_is_better",
+    // 50% is ~1.07B transactions, near the 1B figure AWS recommends alarming
+    // on for the same measurement; 75% is ~1.61B, where a routine VACUUM
+    // FREEZE stops being routine. Autovacuum should hold this near 9%
+    // (autovacuum_freeze_max_age is 200M on RDS), so a steady climb past warn
+    // means autovacuum is being blocked rather than that traffic is high.
+    warn: 50,
+    crit: 75,
+    help: "Share of the 2^31 transaction-ID budget consumed, cluster-wide. Postgres refuses writes when this reaches 100% and the only fix is single-user-mode VACUUM. Climbing usually means autovacuum is blocked — look for a long-running transaction or an abandoned replication slot holding the horizon back.",
+  },
+  {
+    key: "db.max_used_txids",
+    label: "Max used transaction IDs",
+    module: "database",
+    unit: "count",
+    // Tracked, not alerted. The raw count is ten digits and renders through
+    // en-IN grouping as "1,00,00,00,000", which no one reads as half a budget
+    // — db.txid_wraparound_pct carries the alerting for exactly that reason.
+    direction: "neutral",
+    help: "MAX(age(datfrozenxid)) across every database on the instance — the same measurement CloudWatch publishes as MaximumUsedTransactionIDs, read from Postgres itself. Exact context for the wraparound share beside it.",
+  },
+  {
     key: "db.table_bytes",
     label: "Table size",
     module: "database",
@@ -486,6 +512,89 @@ export const METRICS: MetricDef[] = [
     crit: 5,
     onSlide: true,
     help: "Tables declared in schema.ts but absent from this database — i.e. unapplied migrations. Surfaces at runtime as 'relation does not exist', because Drizzle names every column in its INSERTs.",
+  },
+
+  // ------------------------------------------- database: the instance (AWS) --
+  // Everything above is what POSTGRES knows about itself. These are what the
+  // HYPERVISOR knows about the box it runs on — CPU, memory, disk queue, volume
+  // headroom, network — and no query can reach them, which is why they arrive
+  // by CloudWatch instead of pg_stat_*. They are the numbers that explain WHY
+  // the numbers above went bad: a cache hit ratio that collapses because the
+  // working set outgrew an instance whose FreeableMemory has been falling for a
+  // week is a different incident from one caused by a missing index, and until
+  // now this page could not tell those apart.
+  //
+  // Collected by collectors/cloudwatch.ts, which is OPT-IN: with
+  // OPS_RDS_INSTANCE_ID unset it writes nothing and none of these render.
+  //
+  // ALL BUT CPU ARE `neutral` — tracked and charted, never alerted — ON PURPOSE.
+  // An absolute byte threshold encodes one instance size and silently becomes
+  // wrong on a resize, which is the exact lesson db.connections_used records
+  // above; and a threshold chosen before a baseline exists produces noise that
+  // teaches people to stop reading the page. Revisit once ops_daily_snapshots
+  // has a week of these.
+  {
+    key: "rds.cpu_pct",
+    label: "Instance CPU",
+    module: "database",
+    unit: "percent",
+    direction: "lower_is_better",
+    warn: 70,
+    crit: 90,
+    help: "CloudWatch CPUUtilization for the RDS instance, averaged over a minute. Sustained high CPU with a flat query rate usually means a query lost its index; sustained high CPU WITH a high query rate means the instance is undersized. Postgres cannot see this number — no pg_stat_* view reports it.",
+  },
+  {
+    key: "rds.freeable_memory_bytes",
+    label: "Freeable memory",
+    module: "database",
+    unit: "bytes",
+    direction: "neutral",
+    help: "CloudWatch FreeableMemory — RAM the instance could still hand out. Not the same as unused: Postgres deliberately fills memory with page cache. A steady DECLINE across days is the signal, not any single reading, because that is what precedes the working set no longer fitting and the cache hit ratio beside it falling.",
+  },
+  {
+    key: "rds.free_storage_bytes",
+    label: "Free storage",
+    module: "database",
+    unit: "bytes",
+    direction: "neutral",
+    help: "CloudWatch FreeStorageSpace, taken as the MINIMUM over the interval — the trough is what fills a volume, and an average hides it. This is free space on the DATA VOLUME, which is a different question from db.size_bytes beside it: WAL, logs and temporary files consume it too, so the volume can fill while the database itself is not growing.",
+  },
+  {
+    key: "rds.disk_queue_depth",
+    label: "Disk queue depth",
+    module: "database",
+    unit: "count",
+    direction: "neutral",
+    help: "CloudWatch DiskQueueDepth, taken as the MAXIMUM over the interval — I/O requests waiting on the volume. A queue that spiked to 40 for two seconds averages to roughly nothing, so the average would answer a question nobody asked. Sustained depth means the volume, not the CPU, is the bottleneck.",
+  },
+  {
+    key: "rds.cpu_credit_balance",
+    label: "CPU credits left",
+    module: "database",
+    unit: "count",
+    // Neutral at launch, and the FIRST candidate for a threshold once the
+    // instance class is confirmed: the maximum balance is a fixed constant per
+    // class (288 on a t3.micro), so a PERCENTAGE of it would survive a resize
+    // where an absolute count silently would not — the same reasoning that
+    // keeps db.connections_used neutral above.
+    direction: "neutral",
+    help: "CloudWatch CPUCreditBalance — burst capacity remaining on a T-class (burstable) instance. THIS IS THE ONE THE DATABASE CANNOT TELL YOU ABOUT: at zero, the hypervisor throttles the instance to its ~10% baseline, so queries slow down while Instance CPU beside it still reads as moderate and every pg_stat_* tile on this page looks healthy. Absent entirely on non-burstable instance classes, which is why this tile does not appear on one.",
+  },
+  {
+    key: "rds.cpu_credit_usage",
+    label: "CPU credits used",
+    module: "database",
+    unit: "count",
+    direction: "neutral",
+    help: "CloudWatch CPUCreditUsage — credits consumed in the interval. The burn rate that turns the balance beside it into a time-to-empty: a falling balance is only alarming at the rate it is falling. Absent on non-burstable instance classes.",
+  },
+  {
+    key: "rds.cloudwatch_ok",
+    label: "CloudWatch reachable",
+    module: "database",
+    unit: "bool",
+    direction: "neutral",
+    help: "Internal. 1 when CloudWatch answered this cycle, 0 with the reason when it did not, and blank when OPS_RDS_INSTANCE_ID is not set at all. Carried as its own metric — exactly like db.reachable — so 'we could not ask' is a state the page can render rather than something inferred from tiles that happen to be empty.",
   },
 
   // ------------------------------------------------------------------ logs --
@@ -553,6 +662,30 @@ export const METRICS: MetricDef[] = [
     unit: "inr_paise",
     direction: "neutral",
     help: "Month-to-date approved tech spend per vendor, one sample per vendor.",
+  },
+  {
+    key: "vendor.call_log_age_days",
+    label: "Last recorded call",
+    module: "spend",
+    unit: "days",
+    direction: "lower_is_better",
+    // Tuned against the ACTUAL calling cadence, not against how fast we would
+    // like to be told. Dialling here is campaign-driven and bursty: between
+    // June and August 2026 the longest gap between two days with calls was 14
+    // days (20 Jul to 3 Aug), with July carrying just 4 calls across 3 days.
+    //
+    // The first draft of this metric used warn 2 / crit 7, which would have
+    // gone red during that entirely normal quiet spell. A tile that is red when
+    // nothing is wrong gets scrolled past, and this metric exists precisely
+    // because nobody noticed a red-worthy condition for two months — so a false
+    // alarm here is not a small cost, it is the failure mode repeating.
+    //
+    // 7 days is "worth a look", 21 days is longer than any legitimate gap this
+    // system has ever had. That still catches a dead pipeline three weeks in
+    // rather than nine.
+    warn: 7,
+    crit: 21,
+    help: "Days since the most recent call was written to ai_call_logs for this provider, measured on ended_at — the column the ElevenLabs dashboard buckets by. Rising means calls are happening but not being recorded: check that the provider's post-call webhook is still bound, and that the dialer poll backstop can see the call (it needs bolna_call_id on the campaign-lead row).",
   },
   {
     key: "vendor.credits_remaining",
