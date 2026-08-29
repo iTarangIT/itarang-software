@@ -1,5 +1,5 @@
 /**
- * E-264 Phase 2 — choosing the loan product over WhatsApp.
+ * E-264 Phase 2 / E-275 — choosing the loan product over WhatsApp.
  *
  * THE GAP THIS CLOSES.
  *
@@ -12,49 +12,62 @@
  *
  * WHAT IT MUST NOT DO DIFFERENTLY FROM THE PORTAL.
  *
- * Two rules from Section G are load-bearing and are re-stated here rather than
+ * Rules from Section G that are load-bearing and re-stated here rather than
  * re-derived:
  *
- *  1. **At most two LENDERS, one product each.** The cap counts distinct NBFCs,
- *     not products — an NBFC with four schemes is still one pick. Picking a
- *     second product from an already-chosen lender REPLACES that lender's
- *     product; it does not consume the second slot. Getting this wrong routes a
- *     customer to one lender twice and to the second lender never.
+ *  1. **ONE lender** (E-275; was two). A file sits with exactly one NBFC at a
+ *     time. Another lender can be chosen only after that one rejects — the
+ *     `s4_again` button below — and that goes through `reselectFinancing`, the
+ *     same rules the web card binds.
  *
  *  2. **The lender's real name is never shown.** The portal renders
- *     "iTarang Scheme N (NBFC-XXXX)" on purpose. Naming the NBFC in chat would
- *     leak commercial relationships to the customer over a channel they can
+ *     "iTarang Scheme N" on purpose. Naming the NBFC in chat would leak
+ *     commercial relationships to the customer over a channel they can
  *     forward, so the same masking applies here.
  *
- * The disclosure is not decoration either. Each picked lender independently
- * runs Field Investigation and Active Video KYC, and the ROI/tenure shown are
- * indicative bands, not an offer. `customer_disclosure_ack` records that the
- * customer was told so before the lead was routed — on this channel the
- * customer acknowledges it themselves, which is a stronger record than the
- * dealer's checkbox, not a weaker one.
+ *  3. **The loan amount is asked first** (E-275). `leads.requested_loan_amount`
+ *     feeds the BRE so a customer is never shown a product whose ceiling is
+ *     below what they asked for.
+ *
+ *  4. **No partner in the area is not a dead end.** Bajaj Finance operates
+ *     nationally; taking that card sanctions the lead on the spot (no NBFC, no
+ *     admin gate) and the chat rolls straight into Step 5 — cart, margin,
+ *     customer card, OTP — in the same conversation.
  *
  * THE WRITE IS NOT REIMPLEMENTED. submitStep4ProductSelection() is the same
- * function POST /api/lead/[id]/submit-product-selection calls. A second copy of
- * the Acquire fan-out is exactly how a lead ends up submitted but invisible to
- * the lenders it was submitted to.
+ * function POST /api/lead/[id]/submit-product-selection calls, and
+ * reselectFinancing() the same one POST /api/lead/[id]/reselect-financing
+ * calls. A second copy of the Acquire fan-out is exactly how a lead ends up
+ * submitted but invisible to the lender it was submitted to.
  */
 
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
-import { leads } from "@/lib/db/schema";
+import { leads, nbfcLeadAssignments } from "@/lib/db/schema";
 import {
+  BAJAJ_EXTERNAL_LENDER,
+  BAJAJ_FALLBACK,
+  NBFC_RECEIVED_MSG,
   bajajFallbackMessage,
   recordNoPreferredPartner,
+  type ExternalLenderId,
 } from "@/lib/leads/bajaj-fallback";
 import { loadSectionGOptions, type SectionGNbfc } from "@/lib/leads/section-g";
 import { getPreSanctionBucket } from "@/lib/leads/pre-sanction-bucket";
+import {
+  formatRupees,
+  parseRupees,
+  setRequestedLoanAmount,
+} from "@/lib/leads/requested-loan-amount";
+import { ReselectError, reselectFinancing } from "@/lib/leads/reselect-financing";
 import {
   STEP4_UNLOCKED_STATUSES,
   submitStep4ProductSelection,
 } from "@/lib/leads/submit-step4";
 
 import type { ActiveDealer } from "./customer-lead";
+import { startDispatch } from "./dispatch-flow";
 import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
@@ -77,17 +90,19 @@ import {
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 import { oneLine } from "./window";
 
+/** "Up to how much loan do you want?" */
+export const DC_S4_AMT = "DC_S4_AMT";
 /** Choosing a scheme from the matched list. */
 export const DC_S4_PICK = "DC_S4_PICK";
-/** One lender chosen; offering the optional second. */
-export const DC_S4_MORE = "DC_S4_MORE";
-/** Picks made; awaiting the customer's disclosure acknowledgement. */
+/** No partner in the area — the Bajaj Finance card. */
+export const DC_S4_BAJAJ = "DC_S4_BAJAJ";
+/** Pick made; awaiting the customer's disclosure acknowledgement. */
 export const DC_S4_ACK = "DC_S4_ACK";
-/** Routed to the lenders; parked. */
+/** Routed to the lender; parked. */
 export const DC_S4_WAIT = "DC_S4_WAIT";
 
-/** Section G's cap, counted in distinct NBFCs. */
-const MAX_LENDERS = 2;
+/** Section G's cap, counted in distinct NBFCs. E-275: one. */
+export const MAX_LENDERS = 1;
 
 /** Meta caps an interactive list at 10 rows in a single section. */
 const MAX_ROWS = 10;
@@ -99,8 +114,17 @@ interface Pick {
   label: string;
 }
 
+/**
+ * `submit`   — first routing, via submitStep4ProductSelection.
+ * `reselect` — after an NBFC rejection, via reselectFinancing.
+ */
+type S4Mode = "submit" | "reselect";
+
 interface S4Ctx {
   picks?: Pick[];
+  mode?: S4Mode;
+  /** Set when the Bajaj card was taken; the submit carries it instead of picks. */
+  externalLender?: ExternalLenderId;
 }
 
 function s4Ctx(session: SessionRow): { leadId?: string; s4: S4Ctx } {
@@ -122,12 +146,9 @@ function text(e: InboundEvent): string {
  * The lenders and their products, as the customer reads them.
  *
  * Neither the lender NOR its product is named — see ./scheme-format for why the
- * product side matters just as much: printing `p.productName` ("Bajaj Finserv EV
+ * product side matters just as much: printing `p.productName` ("<Lender> EV
  * Loan") identifies the lender exactly as well as its name would, and this
  * message is forwardable.
- *
- * The NBFC code is not printed either. It was, and it read as a bug to the
- * customer: an internal id in the middle of a price comparison.
  */
 function detailBlock(opts: SectionGNbfc[]): string {
   return opts
@@ -138,13 +159,7 @@ function detailBlock(opts: SectionGNbfc[]): string {
     .join("\n\n");
 }
 
-/**
- * One row per loan product, capped at Meta's ten.
- *
- * The cap is announced when it bites (see askPick) rather than silently
- * trimming: a customer who was shown 10 of 14 schemes and told nothing has been
- * quietly steered.
- */
+/** One row per loan product, capped at Meta's ten. */
 function rowsFor(opts: SectionGNbfc[]): ListRow[] {
   const rows: ListRow[] = [];
   opts.forEach((o, i) => {
@@ -154,9 +169,6 @@ function rowsFor(opts: SectionGNbfc[]): ListRow[] {
         // Not a LEAD_ACTIONS prefix, so parseLeadAction leaves it alone and it
         // reaches this phase's state handler as ordinary text.
         id: `s4p:${o.nbfcId}:${p.id}`,
-        // "Scheme 1 · Option A". The row used to be titled with the scheme
-        // alone, so a lender offering two products produced two IDENTICAL rows
-        // and the customer could not tell the offers apart.
         title: rowTitle(i, j),
         description: rowDescription(p),
       });
@@ -174,10 +186,13 @@ function parsePickRow(raw: string): { nbfcId: number; productId: number } | null
   return { nbfcId, productId };
 }
 
+const AMOUNT_PROMPT =
+  "💰 *Up to how much loan do you want?*\n\n" +
+  "Reply with an amount, e.g. 60000 or 1.5 lakh.";
+
 const DISCLOSURE =
   "Before we send your application:\n\n" +
-  "• Each lender you picked will verify you *independently* — that includes a " +
-  "field visit and a short video KYC.\n" +
+  "• The lender will verify you *independently* before making an offer.\n" +
   "• The interest rate, tenure and down payment shown are *indicative ranges*. " +
   "Your final terms may differ.\n\n" +
   "Do you understand and agree?";
@@ -187,10 +202,19 @@ const ACK_BUTTONS: ReplyButton[] = [
   { id: "s4_redo", title: "↩ Start over" },
 ];
 
-const MORE_BUTTONS: ReplyButton[] = [
-  { id: "s4_more_yes", title: "➕ Add a 2nd" },
-  { id: "s4_more_no", title: "✅ Continue" },
+const BAJAJ_BUTTONS: ReplyButton[] = [
+  { id: "s4b_go", title: "✅ Continue with Bajaj" },
+  { id: "s4_redo", title: "↩ Back" },
 ];
+
+/** "Application sent" — the one wording, for both the first pick and a re-pick. */
+function sentMessage(labels: string[]): string {
+  return (
+    `🎉 *Application sent.*\n\n` +
+    `Your application is now with:\n${labels.map((l) => `• ${l}`).join("\n")}\n\n` +
+    NBFC_RECEIVED_MSG
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Entry: Step 3 was approved
@@ -227,14 +251,10 @@ export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
           (dealerSide
             ? `🎉 *${t.customerName}'s KYC is approved!*\n\n` +
               `Hi ${t.greetName}, application ${t.referenceId} has cleared verification.\n\n` +
-              `The next step is choosing who finances the battery. You can pick *one ` +
-              `or two* lending partners — applying to two gives a better chance of ` +
-              `approval and lets you compare the offers that come back.\n\n`
+              `The next step is choosing who finances the battery. Pick one lending partner.\n\n`
             : `🎉 *Your KYC is approved!*\n\n` +
               `Hi ${t.greetName}, application ${t.referenceId} has cleared verification.\n\n` +
-              `The next step is choosing who finances your battery. You can pick *one ` +
-              `or two* lending partners — applying to two gives you a better chance of ` +
-              `approval and lets you compare the offers that come back.\n\n`) +
+              `The next step is choosing who finances your battery. Pick one lending partner.\n\n`) +
           `It takes about a minute.`,
         buttons: [
           { id: leadActionId("s4_start", leadId), title: "🏦 Choose lender" },
@@ -255,16 +275,75 @@ export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Entry: an NBFC rejected the file (E-275)
+// ---------------------------------------------------------------------------
+
+async function rejectionBody(
+  leadId: string,
+  nbfcName: string,
+  note: string,
+): Promise<string | null> {
+  const [lead] = await db
+    .select({
+      full_name: leads.full_name,
+      owner_name: leads.owner_name,
+      mobile: leads.mobile,
+      phone: leads.phone,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return null;
+  const name = lead.full_name || lead.owner_name || "Customer";
+  const mobile = lead.mobile || lead.phone || "—";
+  return (
+    `❌ *${nbfcName} rejected the file*\n\n` +
+    `File: ${name} · ${mobile}\n` +
+    `Reason: ${note.trim() || "—"}\n\n` +
+    `You can choose another lender for this customer.`
+  );
+}
+
+function rejectionButtons(leadId: string): ReplyButton[] {
+  return [{ id: leadActionId("s4_again", leadId), title: "🏦 Choose another NBFC" }];
+}
+
+/**
+ * The admin forwarded an NBFC's rejection to the dealer. Lands in the OWNING
+ * DEALER's chat (`pushToLead` resolves the dealer channel first). The lender
+ * IS named here — this message goes to the dealer, who already knows which
+ * NBFC they routed to, and the reason is theirs to act on.
+ *
+ * Called via dynamic import from the admin route; keep the signature stable.
+ */
+export async function pushRejectionToWhatsApp(
+  leadId: string,
+  opts: { nbfcName: string; note: string },
+): Promise<void> {
+  const body = await rejectionBody(leadId, opts.nbfcName, opts.note);
+  if (!body) return;
+  await pushToLead(leadId, (t) => ({
+    prompt: { kind: "text", body, buttons: rejectionButtons(leadId) },
+    nudge: {
+      template: "lead_action",
+      params: [
+        oneLine(t.greetName),
+        oneLine(t.referenceId),
+        `${opts.nbfcName} rejected ${t.customerName}'s file`,
+      ],
+    },
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
 /**
- * Load the matched lenders, minus any this session has already picked.
- *
- * Re-run on every turn rather than cached in the session context. The list is a
- * live BRE match against loan products an admin can deactivate at any moment,
- * and a stale cached option would submit the lead to a product that no longer
- * accepts it.
+ * Load the matched lenders, minus any this lead already has an assignment
+ * with. Re-run on every turn rather than cached: the list is a live BRE match
+ * against loan products an admin can deactivate at any moment, and a stale
+ * cached option would submit the lead to a product that no longer accepts it.
  */
 async function optionsFor(
   leadId: string,
@@ -276,11 +355,46 @@ async function optionsFor(
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return null;
-  const all = await loadSectionGOptions(lead);
+  const all = await loadSectionGOptions(lead, lead.requested_loan_amount ?? null);
   return {
     lead,
     options: all.filter((o) => !exclude.includes(o.nbfcId)),
   };
+}
+
+/** Every NBFC ever on this lead, in any status — never offered again. */
+async function assignedNbfcIds(leadId: string): Promise<number[]> {
+  const rows = await db
+    .select({ nbfc_id: nbfcLeadAssignments.nbfc_id })
+    .from(nbfcLeadAssignments)
+    .where(eq(nbfcLeadAssignments.lead_id, leadId));
+  return rows.map((r) => r.nbfc_id);
+}
+
+/** The lead's newest assignment, for the wait-state's "was it rejected?" check. */
+async function latestAssignment(leadId: string) {
+  const [row] = await db
+    .select({
+      status: nbfcLeadAssignments.status,
+      rejection_note: nbfcLeadAssignments.rejection_note,
+      rejection_forwarded_at: nbfcLeadAssignments.rejection_forwarded_at,
+      nbfc_id: nbfcLeadAssignments.nbfc_id,
+    })
+    .from(nbfcLeadAssignments)
+    .where(eq(nbfcLeadAssignments.lead_id, leadId))
+    .orderBy(desc(nbfcLeadAssignments.updated_at))
+    .limit(1);
+  return row ?? null;
+}
+
+async function nbfcDisplayName(nbfcId: number): Promise<string> {
+  const { nbfc } = await import("@/lib/db/schema");
+  const [row] = await db
+    .select({ name: nbfc.legal_name })
+    .from(nbfc)
+    .where(eq(nbfc.id, nbfcId))
+    .limit(1);
+  return row?.name || "The lender";
 }
 
 /** `s4_start:<leadId>` */
@@ -290,9 +404,16 @@ async function onStep4Start(
   _dealer: ActiveDealer,
   leadId: string,
 ): Promise<void> {
-  const loaded = await optionsFor(leadId);
-  if (!loaded) return await lostTrack(session);
-  const { lead, options } = loaded;
+  const [lead] = await db
+    .select({
+      payment_method: leads.payment_method,
+      kyc_status: leads.kyc_status,
+      requested_loan_amount: leads.requested_loan_amount,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return await lostTrack(session);
 
   if (String(lead.payment_method || "").toLowerCase() !== "finance") {
     await reply(
@@ -307,58 +428,149 @@ async function onStep4Start(
     await reply(
       session,
       lead.kyc_status === "pending_final_approval"
-        ? "✅ Your application is already with the lenders — we'll message you here as soon as they respond."
+        ? "✅ Your application is already with the lender — we'll message you here as soon as they respond."
         : "Your KYC verification isn't complete yet. We'll message you here the moment it is.",
     );
     return;
   }
 
-  if (options.length === 0) {
-    // No preferred partner covers this customer's state/city. That is not
-    // "financing unavailable" — Bajaj Finserv operates nationally and can serve
-    // them directly, so hand over the local Sales Manager rather than leaving
-    // them with a dead end. The unserved city is recorded either way; a list of
-    // the towns where customers asked and we had no partner is exactly what a
-    // partnership team needs, and it only exists if we write it down now.
-    await recordNoPreferredPartner({ leadId });
-    await setSession(session.id, { current_state: DC_S4_WAIT });
+  await patchLeadSub(session.id, "s4", {
+    picks: [],
+    mode: "submit",
+    externalLender: null,
+  });
+
+  if (lead.requested_loan_amount == null) {
+    return await askAmount(session);
+  }
+  await showLenders(session, leadId, "submit");
+}
+
+/**
+ * `s4_again:<leadId>` — E-275, after an NBFC rejection. Same picker, but the
+ * pick binds through `reselectFinancing` and every NBFC already on the lead
+ * is left off the list.
+ */
+async function onStep4Again(
+  session: SessionRow,
+  _event: InboundEvent,
+  _dealer: ActiveDealer,
+  leadId: string,
+): Promise<void> {
+  const [lead] = await db
+    .select({
+      payment_method: leads.payment_method,
+      requested_loan_amount: leads.requested_loan_amount,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return await lostTrack(session);
+  if (String(lead.payment_method || "").toLowerCase() !== "finance") {
     await reply(
       session,
-      `${bajajFallbackMessage()}\n\n` +
-        `_We've noted your details and the iTarang team will follow up if a ` +
-        `partner becomes available in your area._`,
+      "This application is a cash purchase — there's no lender to choose.",
     );
     return;
   }
 
-  await patchLeadSub(session.id, "s4", { picks: [] });
+  await patchLeadSub(session.id, "s4", {
+    picks: [],
+    mode: "reselect",
+    externalLender: null,
+  });
+
+  if (lead.requested_loan_amount == null) {
+    return await askAmount(session);
+  }
+  await showLenders(session, leadId, "reselect");
+}
+
+async function askAmount(session: SessionRow): Promise<void> {
+  await setSession(session.id, { current_state: DC_S4_AMT });
+  await reply(session, AMOUNT_PROMPT);
+}
+
+/** DC_S4_AMT — the requested loan amount. */
+async function onStep4Amount(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const { leadId, s4 } = s4Ctx(session);
+  if (!leadId) return await lostTrack(session);
+
+  const amount = parseRupees(text(event));
+  if (amount == null) {
+    await reply(
+      session,
+      "I couldn't read that as an amount. " + AMOUNT_PROMPT,
+    );
+    return;
+  }
+
+  const ok = await setRequestedLoanAmount(leadId, amount);
+  if (!ok) return await lostTrack(session);
+
+  await reply(session, `✅ Loan amount noted: *${formatRupees(amount)}*.`);
+  await showLenders(session, leadId, s4.mode ?? "submit");
+}
+
+/**
+ * The lender list, or the Bajaj card when nobody covers this customer.
+ *
+ * In `reselect` mode the NBFCs already on the lead are excluded up front — the
+ * UNIQUE(lead_id, nbfc_id) rule in reselectFinancing would refuse them anyway,
+ * but a customer should not be shown a lender they cannot pick.
+ */
+async function showLenders(
+  session: SessionRow,
+  leadId: string,
+  mode: S4Mode,
+): Promise<void> {
+  const exclude = mode === "reselect" ? await assignedNbfcIds(leadId) : [];
+  const loaded = await optionsFor(leadId, exclude);
+  if (!loaded) return await lostTrack(session);
+
+  if (loaded.options.length === 0) {
+    // No preferred partner covers this customer's state/city (or none is
+    // left). That is not "financing unavailable" — Bajaj Finance operates
+    // nationally and can serve them directly. Taking the card sanctions the
+    // lead on the spot and moves straight to delivery. The unserved city is
+    // recorded either way; a list of the towns where customers asked and we
+    // had no partner is exactly what a partnership team needs, and it only
+    // exists if we write it down now.
+    await recordNoPreferredPartner({ leadId });
+    await setSession(session.id, { current_state: DC_S4_BAJAJ });
+    await reply(
+      session,
+      `${bajajFallbackMessage()}\n\n` +
+        `You can continue with ${BAJAJ_FALLBACK.name} and arrange delivery now.`,
+      BAJAJ_BUTTONS,
+    );
+    return;
+  }
+
   await setSession(session.id, { current_state: DC_S4_PICK });
-  await askPick(session, options, 0);
+  await askPick(session, loaded.options);
 }
 
 async function askPick(
   session: SessionRow,
   options: SectionGNbfc[],
-  alreadyPicked: number,
 ): Promise<void> {
   const rows = rowsFor(options);
   const shownNbfcs = new Set(
     rows.map((r) => Number(r.id.split(":")[1])),
   ).size;
 
-  const heading =
-    alreadyPicked === 0
-      ? "🏦 *Choose your lending partner*"
-      : "🏦 *Choose a second lending partner*";
-
   const truncated =
     shownNbfcs < options.length
-      ? `\n\n_Showing ${shownNbfcs} of ${options.length} partners. Reply *more* if none of these suit you._`
+      ? `\n\n_Showing ${shownNbfcs} of ${options.length} partners._`
       : "";
 
   await replyList(
     session,
-    `${heading}\n\n${detailBlock(options.slice(0, shownNbfcs))}${truncated}\n\n` +
+    `🏦 *Choose your lending partner*\n\n${detailBlock(options.slice(0, shownNbfcs))}${truncated}\n\n` +
       "Tap *Choose* below and pick a scheme.",
     "Choose",
     rows,
@@ -372,28 +584,26 @@ async function onStep4Pick(
 ): Promise<void> {
   const { leadId, s4 } = s4Ctx(session);
   if (!leadId) return await lostTrack(session);
+  const mode = s4.mode ?? "submit";
 
-  const picks = s4.picks ?? [];
   const chosen = parsePickRow(text(event));
+  const exclude = mode === "reselect" ? await assignedNbfcIds(leadId) : [];
+
+  // Re-match rather than trusting the row: the list may have been sent minutes
+  // ago and a product can be deactivated in between.
+  const loaded = await optionsFor(leadId, exclude);
+  if (!loaded) return await lostTrack(session);
 
   if (!chosen) {
-    const loaded = await optionsFor(
-      leadId,
-      picks.map((p) => p.nbfcId),
-    );
-    if (!loaded) return await lostTrack(session);
     await reply(
       session,
       "Please tap *Choose* on the message above and pick one of the schemes.",
     );
-    await askPick(session, loaded.options, picks.length);
+    if (loaded.options.length === 0) return await showLenders(session, leadId, mode);
+    await askPick(session, loaded.options);
     return;
   }
 
-  // Re-match rather than trusting the row: the list may have been sent minutes
-  // ago and a product can be deactivated in between.
-  const loaded = await optionsFor(leadId);
-  if (!loaded) return await lostTrack(session);
   const nbfcIndex = loaded.options.findIndex((o) => o.nbfcId === chosen.nbfcId);
   const optionIndex =
     loaded.options[nbfcIndex]?.activeLoanProducts.findIndex(
@@ -407,100 +617,53 @@ async function onStep4Pick(
       session,
       "That scheme is no longer available. Here are the current options:",
     );
-    await askPick(
-      session,
-      loaded.options.filter((o) => !picks.some((p) => p.nbfcId === o.nbfcId)),
-      picks.length,
-    );
-    return;
+    return await showLenders(session, leadId, mode);
   }
 
-  // Masked on both halves. `product.productName` was rendered here — the second
-  // place the lender's own brand reached a forwardable chat message.
+  // Masked on both halves — see the module header.
   const label = `${schemeName(nbfcIndex)} · ${optionLabel(optionIndex)}`;
-
-  // Section G rule 1: the cap counts LENDERS. A second product from a lender
-  // already picked swaps that lender's product and leaves the count unchanged.
-  const existing = picks.findIndex((p) => p.nbfcId === chosen.nbfcId);
-  const next: Pick[] =
-    existing >= 0
-      ? picks.map((p, i) =>
-          i === existing
-            ? { nbfcId: chosen.nbfcId, productId: chosen.productId, label }
-            : p,
-        )
-      : [
-          ...picks,
-          { nbfcId: chosen.nbfcId, productId: chosen.productId, label },
-        ];
-
-  await patchLeadSub(session.id, "s4", { picks: next });
-
-  const remaining = loaded.options.filter(
-    (o) => !next.some((p) => p.nbfcId === o.nbfcId),
-  );
-
-  if (next.length >= MAX_LENDERS || remaining.length === 0) {
-    return await askDisclosure(session, next);
-  }
-
-  await setSession(session.id, { current_state: DC_S4_MORE });
-  await reply(
-    session,
-    `✅ Selected: *${label}*\n\n` +
-      "Would you like to apply to a *second* lender as well? Two applications " +
-      "run in parallel, and you choose between whatever offers come back.",
-    MORE_BUTTONS,
-  );
+  const picks: Pick[] = [
+    { nbfcId: chosen.nbfcId, productId: chosen.productId, label },
+  ];
+  await patchLeadSub(session.id, "s4", { picks, externalLender: null });
+  return await askDisclosure(session, [label]);
 }
 
-/** DC_S4_MORE — the optional second lender. */
-async function onStep4More(
+/** DC_S4_BAJAJ — the card for an area with no partner. */
+async function onStep4Bajaj(
   session: SessionRow,
   event: InboundEvent,
 ): Promise<void> {
-  const { leadId, s4 } = s4Ctx(session);
+  const { leadId } = s4Ctx(session);
   if (!leadId) return await lostTrack(session);
-  const picks = s4.picks ?? [];
 
   const t = text(event).toLowerCase();
-  if (
-    t === "s4_more_no" ||
-    /^(no|nahi|nahin|नहीं|नही|continue|aage|आगे|bas|बस)$/.test(t)
-  ) {
-    return await askDisclosure(session, picks);
+  if (t === "s4_redo" || t === "back") {
+    // "Back" to the one thing they can change: the amount. A different ceiling
+    // can bring a partner into range.
+    return await askAmount(session);
   }
-  if (t !== "s4_more_yes" && t !== "yes") {
+  if (t !== "s4b_go" && t !== "continue" && t !== "yes") {
     await reply(
       session,
-      "Please tap *Add a 2nd* or *Continue*.",
-      MORE_BUTTONS,
+      `Tap *Continue with Bajaj* to go ahead with ${BAJAJ_FALLBACK.name}, or *Back*.`,
+      BAJAJ_BUTTONS,
     );
     return;
   }
 
-  const loaded = await optionsFor(
-    leadId,
-    picks.map((p) => p.nbfcId),
-  );
-  if (!loaded) return await lostTrack(session);
-  if (loaded.options.length === 0) {
-    await reply(
-      session,
-      "There's only one lending partner matched to your profile right now, so we'll go ahead with that one.",
-    );
-    return await askDisclosure(session, picks);
-  }
-
-  await setSession(session.id, { current_state: DC_S4_PICK });
-  await askPick(session, loaded.options, picks.length);
+  await patchLeadSub(session.id, "s4", {
+    picks: [],
+    externalLender: BAJAJ_EXTERNAL_LENDER,
+  });
+  await askDisclosure(session, [BAJAJ_FALLBACK.name]);
 }
 
 async function askDisclosure(
   session: SessionRow,
-  picks: Pick[],
+  labels: string[],
 ): Promise<void> {
-  if (picks.length === 0) {
+  if (labels.length === 0) {
     await reply(
       session,
       "Nothing is selected yet. Send *hi* and tap *Choose lender* to start again.",
@@ -512,7 +675,7 @@ async function askDisclosure(
   await setSession(session.id, { current_state: DC_S4_ACK });
   await reply(
     session,
-    `📋 *You've chosen:*\n${picks.map((p) => `• ${p.label}`).join("\n")}\n\n` +
+    `📋 *You've chosen:*\n${labels.map((l) => `• ${l}`).join("\n")}\n\n` +
       DISCLOSURE,
     ACK_BUTTONS,
   );
@@ -522,20 +685,19 @@ async function askDisclosure(
 async function onStep4Ack(
   session: SessionRow,
   event: InboundEvent,
+  dealer: ActiveDealer,
 ): Promise<void> {
   const { leadId, s4 } = s4Ctx(session);
   if (!leadId) return await lostTrack(session);
   const picks = s4.picks ?? [];
+  const mode = s4.mode ?? "submit";
+  const external = s4.externalLender ?? null;
 
   const t = text(event).toLowerCase();
 
   if (t === "s4_redo" || t === "restart" || t === "start over") {
-    const loaded = await optionsFor(leadId);
-    if (!loaded) return await lostTrack(session);
-    await patchLeadSub(session.id, "s4", { picks: [] });
-    await setSession(session.id, { current_state: DC_S4_PICK });
-    await askPick(session, loaded.options, 0);
-    return;
+    await patchLeadSub(session.id, "s4", { picks: [], externalLender: null });
+    return await showLenders(session, leadId, mode);
   }
 
   if (t !== "s4_agree" && t !== "agree" && t !== "yes") {
@@ -547,8 +709,8 @@ async function onStep4Ack(
     return;
   }
 
-  if (picks.length === 0) {
-    return await askDisclosure(session, picks);
+  if (!external && picks.length === 0) {
+    return await askDisclosure(session, []);
   }
 
   // Compare-and-swap BEFORE the write. WhatsApp buttons stay tappable after
@@ -568,11 +730,46 @@ async function onStep4Ack(
     .limit(1);
   if (!lead) return await lostTrack(session);
 
-  if (!STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) {
+  // --- Re-route after a rejection (E-275) ---------------------------------
+  if (mode === "reselect" && !external) {
+    const pick = picks[0];
+    try {
+      await reselectFinancing({
+        leadId,
+        nbfcId: pick.nbfcId,
+        loanProductId: pick.productId,
+        dealerCode: lead.dealer_id ?? "",
+      });
+    } catch (err) {
+      if (err instanceof ReselectError) {
+        await setSession(session.id, { current_state: DC_S4_ACK });
+        await reply(session, `⚠️ ${err.message}`, ACK_BUTTONS);
+        return;
+      }
+      console.error("[WhatsApp/step4] reselect failed:", err);
+      await setSession(session.id, { current_state: DC_S4_ACK });
+      await reply(
+        session,
+        "Sorry — something went wrong sending your application. Please tap *I agree* once more.",
+        ACK_BUTTONS,
+      );
+      return;
+    }
+    await reply(session, sentMessage([pick.label]));
+    return;
+  }
+
+  if (!external && !STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) {
     await reply(
       session,
-      "✅ This application has already been sent to the lenders — we'll message you here as soon as they respond.",
+      "✅ This application has already been sent to the lender — we'll message you here as soon as they respond.",
     );
+    return;
+  }
+  if (external && lead.kyc_status === "loan_sanctioned") {
+    // Already sanctioned (double tap after a slow first submit) — just go on.
+    await reply(session, "✅ This application is already sanctioned. Let's arrange delivery.");
+    await startDispatch(session, event, dealer, leadId);
     return;
   }
 
@@ -584,17 +781,23 @@ async function onStep4Ack(
     await submitStep4ProductSelection({
       leadId,
       lead,
-      body: {
-        selectedNbfcs: picks.map((p) => ({
-          nbfc_id: String(p.nbfcId),
-          loan_product_id: p.productId,
-        })),
-        preSanctionDocs,
-        // The customer acknowledged it themselves, on the record, one message
-        // ago — a stronger attestation than the dealer's checkbox, not a weaker
-        // one. See the module header.
-        customerDisclosureAck: true,
-      },
+      body: external
+        ? {
+            externalLender: external,
+            preSanctionDocs,
+            customerDisclosureAck: true,
+          }
+        : {
+            selectedNbfcs: picks.map((p) => ({
+              nbfc_id: String(p.nbfcId),
+              loan_product_id: p.productId,
+            })),
+            preSanctionDocs,
+            // The customer acknowledged it themselves, on the record, one
+            // message ago — a stronger attestation than the dealer's checkbox,
+            // not a weaker one. See the module header.
+            customerDisclosureAck: true,
+          },
       submittedBy: lead.uploader_id ?? "",
       dealerCode: lead.dealer_id,
     });
@@ -611,20 +814,45 @@ async function onStep4Ack(
     return;
   }
 
-  await reply(
-    session,
-    `🎉 *Application sent.*\n\n` +
-      `Your application is now with:\n${picks.map((p) => `• ${p.label}`).join("\n")}\n\n` +
-      "Each lender will verify you independently — expect a field visit and a " +
-      "short video KYC. We'll message you here with their decision.",
-  );
+  if (external) {
+    // Sanctioned on the spot — no NBFC, no admin gate. Roll straight into
+    // Step 5 in the same chat: cart → margin → customer card → OTP.
+    await reply(
+      session,
+      `🎉 *Application sent with ${BAJAJ_FALLBACK.name}.*\n\n` +
+        `Let's pick the battery and confirm delivery.`,
+    );
+    await startDispatch(session, event, dealer, leadId);
+    return;
+  }
+
+  await reply(session, sentMessage(picks.map((p) => p.label)));
 }
 
-/** DC_S4_WAIT — parked. Anything sent here is an unprompted extra. */
+/**
+ * DC_S4_WAIT — parked. Anything sent here is an unprompted extra, unless the
+ * lender has since rejected and the admin forwarded it: then the rejection
+ * (and its button) is what they need to see again.
+ */
 async function onStep4Wait(session: SessionRow): Promise<void> {
+  const { leadId } = s4Ctx(session);
+  if (leadId) {
+    const latest = await latestAssignment(leadId);
+    if (latest?.status === "declined" && latest.rejection_forwarded_at) {
+      const body = await rejectionBody(
+        leadId,
+        await nbfcDisplayName(latest.nbfc_id),
+        latest.rejection_note ?? "",
+      );
+      if (body) {
+        await reply(session, body, rejectionButtons(leadId));
+        return;
+      }
+    }
+  }
   await reply(
     session,
-    "Your application is with the lending partners — nothing more is needed " +
+    "Your application is with the lending partner — nothing more is needed " +
       "right now. We'll message you here as soon as there's a decision.",
   );
 }
@@ -637,10 +865,15 @@ async function lostTrack(session: SessionRow): Promise<void> {
 }
 
 registerLeadAction("s4_start", onStep4Start);
-// All four take a tap, never free text, and already re-render their prompt on
+registerLeadAction("s4_again", onStep4Again);
+// DC_S4_AMT is deliberately NOT opted in to greeting re-render: free text IS
+// the payload there, and "hi" is not an amount — parseRupees rejects it and
+// the prompt is repeated anyway.
+registerLeadState(DC_S4_AMT, onStep4Amount);
+// The rest take a tap, never free text, and already re-render their prompt on
 // anything they don't recognise — so a greeting here means "show me that
 // message again", not "throw my application away".
 registerLeadState(DC_S4_PICK, onStep4Pick, { rerenderOnGreeting: true });
-registerLeadState(DC_S4_MORE, onStep4More, { rerenderOnGreeting: true });
+registerLeadState(DC_S4_BAJAJ, onStep4Bajaj, { rerenderOnGreeting: true });
 registerLeadState(DC_S4_ACK, onStep4Ack, { rerenderOnGreeting: true });
 registerLeadState(DC_S4_WAIT, onStep4Wait, { rerenderOnGreeting: true });

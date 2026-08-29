@@ -13,9 +13,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { kycVerifications } from "@/lib/db/schema";
+import { kycVerifications, leads } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
+import { RECALLED_ERROR, isLeadRecalled } from "@/lib/nbfc/recall";
 import { upsertNbfcVerdict, verdictFromAction } from "@/lib/nbfc/doc-verdict";
 
 export const runtime = "nodejs";
@@ -41,6 +42,17 @@ export async function POST(
         { success: false, error: { message: "No assignment for this lead under this tenant" } },
         { status: 400 },
       );
+    }
+    // E-275 — a recalled file is paused for every NBFC until iTarang resubmits it.
+    {
+      const [leadRow] = await db
+        .select({ recalled_at: leads.recalled_at, resubmitted_at: leads.resubmitted_at })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      if (isLeadRecalled(leadRow)) {
+        return NextResponse.json({ success: false, error: { message: RECALLED_ERROR.replace(/^CONFLICT:\s*/, "") } }, { status: 409 });
+      }
     }
 
     const body = await req.json();

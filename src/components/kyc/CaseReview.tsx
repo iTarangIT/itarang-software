@@ -463,6 +463,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [pdfViewer, setPdfViewer] = useState<{ url: string; title: string } | null>(null);
   const [decision, setDecision] = useState<"approved" | "rejected" | "">("");
   const [decisionNotes, setDecisionNotes] = useState("");
+  // Lets the admin re-submit a verdict on a case that already carries one
+  // (e.g. re-approve after a card was re-accepted). The server has no
+  // "already decided" guard, so this only re-exposes the form.
+  const [reopenDecision, setReopenDecision] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [decisionLoading, setDecisionLoading] = useState(false);
   const [decisionResult, setDecisionResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -877,6 +881,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           success: true,
           message: json.data?.message ?? "Saved.",
         });
+        setReopenDecision(false);
         fetchData();
       } else {
         // Backend (final-decision route) now returns a per-blocker list as
@@ -2038,6 +2043,13 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               Already {metadata.finalDecision.toUpperCase()}
             </span>
           )}
+          {isFinalDecided && !reopenDecision && (
+            <button type="button"
+              onClick={() => { setReopenDecision(true); setDecisionResult(null); }}
+              className="ml-2 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors">
+              Change decision
+            </button>
+          )}
         </div>
 
         {/* Co-Borrower Status Indicator. When gated (dealer hasn't submitted
@@ -2069,7 +2081,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           </div>
         )}
 
-        {!isFinalDecided ? (
+        {!isFinalDecided || reopenDecision ? (
           <div className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {/* Approve */}

@@ -61,11 +61,15 @@ export async function GET(
     // lender-selection flow (E-264 Phase 2) asks the identical question
     // without a dealer session. It returns [] for "no dealer row" and
     // "no candidate products" alike — both mean the same thing to the page.
-    const items = await loadSectionGOptions(lead, loanAmount);
+    // E-275 — when the query param is absent, fall back to the amount the
+    // dealer answered to "Up to how much loan do you want?" so the list is
+    // already filtered to lenders whose loan_amount_max covers the ask.
+    const effectiveAmount = loanAmount ?? lead.requested_loan_amount ?? undefined;
+    const items = await loadSectionGOptions(lead, effectiveAmount);
 
     return NextResponse.json({
       success: true,
-      data: { items, engine: "bre-v1" },
+      data: { items, engine: "bre-v1", loanAmount: effectiveAmount ?? null },
     });
   } catch (err: unknown) {
     // postgres-js / Drizzle errors carry the underlying SQL in `.message`

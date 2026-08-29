@@ -247,6 +247,11 @@ export const TYPE_LABELS: Record<string, string> = {
   // E-245
   "loan.offer_closed": "Dealer closed a financing deal",
   "loan.lead_rerouted": "Lead re-routed to another NBFC",
+  // E-275
+  "nbfc.application_rejected": "NBFC rejected a customer's file",
+  "loan.rejected_by_nbfc": "NBFC rejection forwarded to the dealer",
+  "lead.recalled": "File recalled by iTarang for revision",
+  "lead.resubmitted": "File resubmitted to the NBFC by iTarang",
   "loan.winner_selected": "Winning NBFC selected",
   "loan.not_selected": "NBFC was not selected",
   "loan.sanctioned": "Loan sanctioned",
