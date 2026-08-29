@@ -9,10 +9,12 @@ import { TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 import {
     foldRegionFacets,
     queueFilterClauses,
+    queueSortOrder,
     regionFacetQuery,
     type QueueFilterInput,
 } from "@/lib/leads/queueFilterSql";
 import type { QueueRegion } from "@/lib/leads/queueFilters";
+import type { QueueSort } from "@/lib/leads/queueSort";
 
 const TERMINAL_LIST = sql.raw(
     TERMINAL_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -30,6 +32,8 @@ type BuildArgs = {
     visitStatus?: string | null;
     /** The latest visit's outcome — ASM-only. */
     visitOutcome?: string | null;
+    /** User-chosen column + direction; the tab order stays as the tiebreak. */
+    sort?: QueueSort;
 };
 
 function tabFilter(tab: AsmQueueTab, asmId: string) {
@@ -63,17 +67,18 @@ function tabFilter(tab: AsmQueueTab, asmId: string) {
     }
 }
 
+/** The tab's own order COLUMNS — queueSortOrder() prepends the user's sort. */
 function tabOrder(tab: AsmQueueTab) {
     switch (tab) {
         case "today":
-            return sql`ORDER BY lv.scheduled_date ASC NULLS LAST, dl.final_intent_score DESC NULLS LAST`;
+            return sql`lv.scheduled_date ASC NULLS LAST, dl.final_intent_score DESC NULLS LAST`;
         case "my_closed":
-            return sql`ORDER BY dl.closed_at DESC NULLS LAST`;
+            return sql`dl.closed_at DESC NULLS LAST`;
         case "territory":
-            return sql`ORDER BY dl.final_intent_score DESC NULLS LAST, dl.created_at DESC`;
+            return sql`dl.final_intent_score DESC NULLS LAST, dl.created_at DESC`;
         case "my_visits":
         default:
-            return sql`ORDER BY COALESCE(lv.scheduled_date, dl.assigned_at) ASC NULLS LAST`;
+            return sql`COALESCE(lv.scheduled_date, dl.assigned_at) ASC NULLS LAST`;
     }
 }
 
@@ -147,10 +152,11 @@ export async function fetchAsmQueueRows({
     filters,
     visitStatus,
     visitOutcome,
+    sort,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId);
-    const order = tabOrder(tab);
+    const order = queueSortOrder(sort, tabOrder(tab));
     const search = extraFilters({ q, filters, visitStatus, visitOutcome });
 
     const rows = await db.execute<AsmQueueRow>(sql`

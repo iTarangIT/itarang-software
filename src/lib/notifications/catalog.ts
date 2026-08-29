@@ -215,6 +215,11 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // lead to another.
   "loan.offer_closed": "Loan & Sanction",
   "loan.lead_rerouted": "Loan & Sanction",
+  // E-275 — NBFC rejected the whole file; admin recall / resubmit.
+  "nbfc.application_rejected": "Loan & Sanction",
+  "loan.rejected_by_nbfc": "Loan & Sanction",
+  "lead.recalled": "Loan & Sanction",
+  "lead.resubmitted": "Loan & Sanction",
   "loan.winner_selected": "Loan & Sanction",
   "loan.not_selected": "Loan & Sanction",
   "loan.sanctioned": "Loan & Sanction",
@@ -329,6 +334,10 @@ const CRITICAL = new Set([
   "kyc_rejected_final",
   "loan.rejected",
   "loan_rejected",
+  // E-275 — a lender walked away from the file; both the admin (forward it)
+  // and the dealer (pick another NBFC) must act today.
+  "nbfc.application_rejected",
+  "loan.rejected_by_nbfc",
   "onboarding.rejected",
   "nbfc.doc_rejected",
   "vkyc.rejected",
@@ -368,6 +377,10 @@ const WARNING = new Set([
   // not been made yet. `loan.offer_closed` is NOT amber: nothing the lender can
   // do about it, same reasoning as `auction.lost`.
   "loan.lead_rerouted",
+  // E-275 — a recalled file is paused on the NBFC side until iTarang resubmits;
+  // a resubmitted one is waiting on the NBFC's second look.
+  "lead.recalled",
+  "lead.resubmitted",
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",

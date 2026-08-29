@@ -13,11 +13,12 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { nbfcDocumentVerifications } from "@/lib/db/schema";
+import { leads, nbfcDocumentVerifications } from "@/lib/db/schema";
 import { upsertNbfcVerdict } from "@/lib/nbfc/doc-verdict";
 import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
+import { RECALLED_ERROR, isLeadRecalled } from "@/lib/nbfc/recall";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -102,6 +103,17 @@ export async function POST(
         { ok: false, error: "BAD_REQUEST: no assignment for this lead under this tenant" },
         { status: 400 },
       );
+    }
+    // E-275 — a recalled file is paused for every NBFC until iTarang resubmits it.
+    {
+      const [leadRow] = await db
+        .select({ recalled_at: leads.recalled_at, resubmitted_at: leads.resubmitted_at })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      if (isLeadRecalled(leadRow)) {
+        return NextResponse.json({ ok: false, error: RECALLED_ERROR }, { status: 409 });
+      }
     }
 
     // One shared write (E-254): upsertNbfcVerdict is also where the leg-1 SLA

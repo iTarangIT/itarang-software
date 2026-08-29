@@ -20,7 +20,6 @@
  */
 import { db } from "@/lib/db";
 import { and, eq, sql } from "drizzle-orm";
-import { City } from "country-state-city";
 import {
   accounts,
   auctionLotAudience,
@@ -56,62 +55,17 @@ export type AudienceChannel = (typeof AUDIENCE_CHANNELS)[number];
 // ---------------------------------------------------------------------------
 // `accounts` stores city/state/pincode and NO coordinates, so a radius rule has
 // nothing exact to measure against. Rather than drop the scope or add a
-// geocoding dependency, distance is measured to the CITY CENTROID, using the
-// `country-state-city` package already in the dependency list (4,242 Indian
-// cities, all with lat/lng).
+// geocoding dependency, distance is measured to the CITY CENTROID. The index
+// and the maths now live in src/lib/geo/city-centroid.ts (shared with the risk
+// engine's "outside assigned city" card); re-exported here so the auction
+// routes that import them from this module are unchanged.
 //
 // This is approximate by construction and the approximation is stated wherever
 // the number is shown: a dealer is "in" a 25 km radius if their city's centre
 // is, which is right for a rule whose purpose is "roughly near this warehouse"
 // and wrong for anything that needs metres. It is not silently precise.
-let cityIndex: Map<string, { lat: number; lng: number }> | null = null;
-
-function normaliseCity(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function getCityIndex(): Map<string, { lat: number; lng: number }> {
-  if (cityIndex) return cityIndex;
-  const index = new Map<string, { lat: number; lng: number }>();
-  for (const c of City.getCitiesOfCountry("IN") ?? []) {
-    const lat = Number(c.latitude);
-    const lng = Number(c.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    const key = normaliseCity(c.name);
-    // First writer wins. Duplicated city names across states are common
-    // ("Aurangabad"); without dealer coordinates there is nothing to
-    // disambiguate them with, so the first is as good as any and at least it
-    // is deterministic across processes.
-    if (!index.has(key)) index.set(key, { lat, lng });
-  }
-  cityIndex = index;
-  return index;
-}
-
-/** Great-circle distance in km. */
-export function haversineKm(
-  aLat: number,
-  aLng: number,
-  bLat: number,
-  bLng: number,
-): number {
-  const R = 6371;
-  const dLat = ((bLat - aLat) * Math.PI) / 180;
-  const dLng = ((bLng - aLng) * Math.PI) / 180;
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((aLat * Math.PI) / 180) *
-      Math.cos((bLat * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(s));
-}
-
-export function cityCentroid(
-  city: string | null | undefined,
-): { lat: number; lng: number } | null {
-  if (!city) return null;
-  return getCityIndex().get(normaliseCity(city)) ?? null;
-}
+import { cityCentroid, haversineKm, normaliseCity } from "@/lib/geo/city-centroid";
+export { cityCentroid, haversineKm };
 
 /**
  * Resolves the eligible dealer audience for a visibility rule.
