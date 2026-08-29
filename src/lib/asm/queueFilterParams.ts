@@ -11,12 +11,15 @@
 // ASM-only ones are validated against the vocabularies in ./types.
 
 import { readQueueFilters, type QueueFilters } from "@/lib/leads/queueFilters";
+import { readQueueSort, type QueueSort } from "@/lib/leads/queueSort";
 import { VISIT_OUTCOME, VISIT_STATUS } from "./types";
 
 export type AsmQueueFilterParams = {
     filters: QueueFilters;
     visitStatus: string | null;
     visitOutcome: string | null;
+    /** Order, not a filter — the list and the CSV honour it, the counts ignore it. */
+    sort: QueueSort;
 };
 
 /**
@@ -30,6 +33,7 @@ export function readAsmQueueFilters(sp: URLSearchParams): AsmQueueFilterParams {
     const visitOutcome = sp.get("visit_outcome") ?? "";
     return {
         filters: readQueueFilters(sp),
+        sort: readQueueSort(sp),
         visitStatus: (VISIT_STATUS as readonly string[]).includes(visitStatus)
             ? visitStatus
             : null,

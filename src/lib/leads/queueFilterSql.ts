@@ -15,6 +15,8 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import type { QueueFilters } from "./queueFilters";
+import type { QueueSort } from "./queueSort";
+import { LEAD_STATUS } from "@/lib/lifecycle/transitions";
 
 /** Every field optional and nullable — routes pass whatever the request carried. */
 export type QueueFilterInput = Partial<Record<keyof QueueFilters, string | null>>;
@@ -127,4 +129,62 @@ export function foldRegionFacets(
             cities: [...cities].sort((a, b) => a.localeCompare(b)),
         }))
         .sort((a, b) => a.state.localeCompare(b.state));
+}
+
+// ─── Sort ───────────────────────────────────────────────────────────────────
+
+/**
+ * Pipeline order for `dl.lead_status`, as a CASE expression. Alphabetical would
+ * put "Awaiting Decision" before "Assigned" — a sort by stage has to follow the
+ * stages.
+ */
+function statusRankSql(): SQL {
+    const whens = LEAD_STATUS.map((s, i) => sql`WHEN ${s} THEN ${i}`);
+    return sql`(CASE dl.lead_status ${sql.join(whens, sql` `)} ELSE ${LEAD_STATUS.length} END)`;
+}
+
+/**
+ * Warmth order for `dl.interest_level`. lower() on the column for the same
+ * reason the filter lower()s it — three writers, mixed case.
+ */
+const INTEREST_RANK_SQL = sql`(CASE lower(dl.interest_level)
+    WHEN 'cold' THEN 1
+    WHEN 'warm' THEN 2
+    WHEN 'hot' THEN 3
+    WHEN 'order_placed' THEN 4
+    ELSE 5 END)`;
+
+/**
+ * The ORDER BY for a queue, given the user's sort and the tab's own order.
+ *
+ * @param sort   validated by readQueueSort — the direction is interpolated
+ *               RAW, which is only safe because it is one of two known words.
+ * @param tabOrder the tab's default order COLUMNS (no `ORDER BY` keyword),
+ *               kept as the tiebreak so rows with the same state/city still
+ *               come out in the order the tab was designed around.
+ *
+ * NULLS LAST in both directions: an unset city is "not sortable", not the
+ * first or last name in the alphabet.
+ */
+export function queueSortOrder(sort: QueueSort | undefined, tabOrder: SQL): SQL {
+    if (!sort || !sort.sort) return sql`ORDER BY ${tabOrder}`;
+    const dir = sql.raw(sort.dir === "desc" ? "DESC" : "ASC");
+    let expr: SQL;
+    switch (sort.sort) {
+        case "status":
+            // The rank never IS NULL (ELSE branch), so an unknown/NULL status
+            // sinks by rank rather than by NULLS placement.
+            expr = statusRankSql();
+            break;
+        case "interest":
+            expr = INTEREST_RANK_SQL;
+            break;
+        case "state":
+            expr = sql`NULLIF(btrim(dl.state), '')`;
+            break;
+        case "city":
+            expr = sql`NULLIF(btrim(dl.city), '')`;
+            break;
+    }
+    return sql`ORDER BY ${expr} ${dir} NULLS LAST, ${tabOrder}`;
 }

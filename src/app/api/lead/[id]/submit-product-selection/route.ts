@@ -74,11 +74,14 @@ export async function POST(
       dealerCode: user.dealer_id,
     });
 
+    // E-275 — the Bajaj Finance card bypasses the NBFC fan-out: the lead is
+    // already `loan_sanctioned` (external sanction row) and goes to Step 5.
     return NextResponse.json({
       success: true,
       data: {
-        leadStatus: "pending_final_approval",
+        leadStatus: result.externalLender ? "loan_sanctioned" : "pending_final_approval",
         productSelectionId: result.productSelectionId,
+        externalLender: result.externalLender ?? null,
         // Nothing is locked here any more — inventory is reserved at Step 5
         // dispatch. Kept as an explicit null pair so callers that read the
         // shape see "no reservation" rather than a missing key.

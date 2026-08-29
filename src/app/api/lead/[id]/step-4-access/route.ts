@@ -57,6 +57,10 @@ export async function GET(
         product_category_id: leads.product_category_id,
         product_type_id: leads.product_type_id,
         primary_product_id: leads.primary_product_id,
+        requested_loan_amount: leads.requested_loan_amount,
+        recalled_at: leads.recalled_at,
+        recall_note: leads.recall_note,
+        resubmitted_at: leads.resubmitted_at,
       })
       .from(leads)
       .where(eq(leads.id, leadId))
@@ -194,6 +198,13 @@ export async function GET(
       productTypeName,
       productSku,
       priorSelection,
+      // E-275 — "Up to how much loan do you want?" answer, if already given.
+      requestedLoanAmount: lead.requested_loan_amount ?? null,
+      // E-275 — recall banner inputs. Active while recalled_at is set and the
+      // file has not been resubmitted since.
+      recalledAt: lead.recalled_at ?? null,
+      recallNote: lead.recall_note ?? null,
+      resubmittedAt: lead.resubmitted_at ?? null,
     };
 
     // Cash path — unlocked right after Step 1

@@ -5,15 +5,20 @@
  * src/app/api/inside-sales/lead/[id]/history/export.xlsx/route.ts and produces
  * two sheets for ONE lead. This builds the batch version behind the /leads bulk
  * bar: pick N leads, get one file. Same tables, same joins, same IST rendering —
- * a lead exported both ways must produce identical rows.
+ * a lead exported both ways must produce identical event rows.
  *
- * Three sheets, in the order someone actually reads them:
- *   "Leads"          — one row per selected lead (the headline).
- *   "Touchpoints"    — every touchpoint of every selected lead, flattened.
- *   "Status History" — every status change of every selected lead, flattened.
+ * ONE SHEET, ONE ROW PER EVENT. It used to be three sheets (Leads /
+ * Touchpoints / Status History), each opening with the lead's Dealer / Phone /
+ * Shop / City so a flattened row stayed attributable — which meant the same
+ * four columns three times over and a reader flipping tabs to line a status
+ * change up against the call that caused it. Now the lead's headline columns
+ * appear ONCE, filled on every row (so Excel's filter and pivot keep working),
+ * followed by one event block that a touchpoint and a status change both fit
+ * in: what happened, who did it, when, and what was written about it.
  *
- * The flat sheets carry the lead's identity in their leading columns; without
- * that, flattening many leads into one sheet makes a row unattributable.
+ * Rows are grouped by lead and newest-first within a lead, exactly the order
+ * the Activity timeline on screen reads in. A lead with no events at all still
+ * gets one row, so "I exported 40 leads" always means 40 leads are in the file.
  */
 
 import { sql } from "drizzle-orm";
@@ -30,13 +35,48 @@ import {
 
 /**
  * The caller caps the LEAD count (5,000, same as every other bulk action) but
- * nothing caps the TOUCHPOINT count, and 5,000 chatty leads is six figures of
- * rows. Stop at this many per sheet and say so in the sheet itself — a silently
- * short export reads exactly like a complete one.
+ * nothing caps the EVENT count, and 5,000 chatty leads is six figures of rows.
+ * Each source query stops at this many and the sheet says so in its last row —
+ * a silently short export reads exactly like a complete one.
  */
 const ROW_CAP = 100_000;
 
 const DASH = "—";
+
+// "History" itself is a name Excel reserves (ExcelJS refuses it), hence the prefix.
+export const HISTORY_SHEET_NAME = "Lead History";
+
+/** The header row, exported so the verifier asserts the contract, not a copy. */
+export const HISTORY_COLUMNS = [
+    "Dealer",
+    "Shop",
+    "Phone",
+    "City",
+    "State",
+    "Lead Status",
+    "Interest",
+    "Score",
+    "Source",
+    "Owner",
+    "ASM",
+    "Touchpoints",
+    "Created (IST)",
+    "Event",
+    "Activity",
+    "By",
+    "At (IST)",
+    "Details",
+    "Call Status",
+    "Duration (sec)",
+    "Engaged",
+    "Next Action",
+    "Next Action At (IST)",
+    "Lost Reason",
+    "Type (code)",
+] as const;
+
+/** How many leading columns describe the LEAD (frozen while scrolling). */
+export const HISTORY_LEAD_COLUMN_COUNT = 13;
 
 /**
  * The sheet must read like the Activity timeline on screen, not like the table
@@ -44,7 +84,7 @@ const DASH = "—";
  * a database dump; the person opening this file saw "Quote sent to dealer" and
  * "Assigned", and those are the words that have to arrive in Excel.
  *
- * The raw codes are kept in their own trailing columns rather than dropped —
+ * The raw codes are kept in their own trailing column rather than dropped —
  * they are what anyone pivoting or filtering the sheet by machine value needs.
  */
 const statusText = (v: string | null | undefined) =>
@@ -63,16 +103,12 @@ type LeadRow = {
     source: string | null;
     owner_name: string | null;
     asm_name: string | null;
-    last_touchpoint_at: string | null;
     created_at: string | null;
     touchpoint_count: number | string | null;
 };
 
 type TouchpointRow = {
-    dealer_name: string | null;
-    shop_name: string | null;
-    phone: string | null;
-    city: string | null;
+    lead_id: string;
     touchpoint_type: string | null;
     performed_by_name: string | null;
     performed_at: string | null;
@@ -85,8 +121,7 @@ type TouchpointRow = {
 };
 
 type StatusRow = {
-    dealer_name: string | null;
-    phone: string | null;
+    lead_id: string;
     from_status: string | null;
     to_status: string | null;
     changed_by_name: string | null;
@@ -95,12 +130,91 @@ type StatusRow = {
     reason_notes: string | null;
 };
 
+/** One line of the merged timeline — a touchpoint or a status change. */
+type HistoryEvent = {
+    /** ISO-ish timestamp text from Postgres; sorts correctly as a string within one tz. */
+    at: string | null;
+    cells: {
+        event: string;
+        activity: string;
+        by: string;
+        at: string;
+        details: string;
+        call_status: string;
+        duration: number | string;
+        engaged: string;
+        next_action: string;
+        next_action_at: string;
+        lost_reason: string;
+        type: string;
+    };
+};
+
 /** Appends a single, visible "this file is incomplete" row. */
-function markTruncated(sheet: ExcelJS.Worksheet, cap: number) {
+function markTruncated(sheet: ExcelJS.Worksheet, cap: number, what: string) {
     const row = sheet.addRow([
-        `— truncated at ${cap.toLocaleString("en-IN")} rows —`,
+        `— ${what} truncated at ${cap.toLocaleString("en-IN")} rows —`,
     ]);
     row.font = { bold: true, color: { argb: "FFB45309" } };
+}
+
+const EMPTY_EVENT_CELLS: HistoryEvent["cells"] = {
+    event: DASH,
+    activity: DASH,
+    by: DASH,
+    at: DASH,
+    details: DASH,
+    call_status: DASH,
+    duration: DASH,
+    engaged: DASH,
+    next_action: DASH,
+    next_action_at: DASH,
+    lost_reason: DASH,
+    type: DASH,
+};
+
+function touchpointEvent(r: TouchpointRow): HistoryEvent {
+    return {
+        at: r.performed_at,
+        cells: {
+            event: "Touchpoint",
+            activity: humanise(r.touchpoint_type, TOUCHPOINT_TYPE_LABEL),
+            by: r.performed_by_name ?? "System",
+            at: fmtIst(r.performed_at),
+            details: r.remarks ?? DASH,
+            call_status: humanise(r.call_status, CALL_STATUS_LABEL),
+            duration: r.call_duration_sec ?? DASH,
+            engaged: r.is_engaged == null ? DASH : r.is_engaged ? "Yes" : "No",
+            next_action: humanise(r.next_action, NEXT_ACTION_LABEL),
+            next_action_at: r.next_action_at ? fmtIst(r.next_action_at) : DASH,
+            lost_reason: DASH,
+            type: r.touchpoint_type ?? DASH,
+        },
+    };
+}
+
+function statusEvent(r: StatusRow): HistoryEvent {
+    return {
+        at: r.changed_at,
+        cells: {
+            event: "Status change",
+            activity: `${statusText(r.from_status)} → ${statusText(r.to_status)}`,
+            by: r.changed_by_name ?? "System",
+            at: fmtIst(r.changed_at),
+            details: r.reason_notes ?? DASH,
+            call_status: DASH,
+            duration: DASH,
+            engaged: DASH,
+            next_action: DASH,
+            next_action_at: DASH,
+            lost_reason: r.to_lost_reason
+                ? r.to_lost_reason.replace(/_/g, " ")
+                : DASH,
+            // Raw machine value for the status side, so a pivot on Type (code)
+            // separates the two kinds of event without parsing "Activity".
+            type: r.to_status ? `status:${r.to_status}` : DASH,
+        },
+    };
 }
 
 export async function buildTouchpointWorkbook(
@@ -130,7 +244,6 @@ export async function buildTouchpointWorkbook(
                 dl.source,
                 ow.name  AS owner_name,
                 asm.name AS asm_name,
-                dl.last_touchpoint_at::text AS last_touchpoint_at,
                 dl.created_at::text AS created_at,
                 (
                     SELECT COUNT(*)
@@ -145,10 +258,7 @@ export async function buildTouchpointWorkbook(
         `),
         db.execute<TouchpointRow>(sql`
             SELECT
-                dl.dealer_name,
-                dl.shop_name,
-                dl.phone,
-                dl.city,
+                t.dealer_lead_id AS lead_id,
                 t.touchpoint_type,
                 u.name AS performed_by_name,
                 t.performed_at::text AS performed_at,
@@ -159,19 +269,14 @@ export async function buildTouchpointWorkbook(
                 t.next_action,
                 t.next_action_at::text AS next_action_at
             FROM lead_touchpoints t
-            JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
             LEFT JOIN users u ON u.id::text = t.performed_by
             WHERE t.dealer_lead_id IN ${ids}
-            -- dl.id is the tiebreaker, not decoration: plenty of leads have a
-            -- NULL dealer_name, and without it two unnamed leads interleave
-            -- row-by-row and the sheet stops reading as "one lead at a time".
-            ORDER BY dl.dealer_name NULLS LAST, dl.id, t.performed_at DESC
+            ORDER BY t.dealer_lead_id, t.performed_at DESC
             LIMIT ${fetchCap}
         `),
         db.execute<StatusRow>(sql`
             SELECT
-                dl.dealer_name,
-                dl.phone,
+                h.dealer_lead_id AS lead_id,
                 h.from_status,
                 h.to_status,
                 u.name AS changed_by_name,
@@ -179,10 +284,9 @@ export async function buildTouchpointWorkbook(
                 h.to_lost_reason,
                 h.reason_notes
             FROM dealer_lead_status_history h
-            JOIN dealer_leads dl ON dl.id = h.dealer_lead_id
             LEFT JOIN users u ON u.id::text = h.changed_by
             WHERE h.dealer_lead_id IN ${ids}
-            ORDER BY dl.dealer_name NULLS LAST, dl.id, h.changed_at DESC
+            ORDER BY h.dealer_lead_id, h.changed_at DESC
             LIMIT ${fetchCap}
         `),
     ]);
@@ -203,149 +307,109 @@ export async function buildTouchpointWorkbook(
         );
     }
 
+    // Events by lead, joined on the lead ID — not on Dealer + Phone, which is
+    // not unique and used to be the only link between the sheets.
+    const eventsByLead = new Map<string, HistoryEvent[]>();
+    const push = (leadId: string, ev: HistoryEvent) => {
+        const list = eventsByLead.get(leadId) ?? [];
+        list.push(ev);
+        eventsByLead.set(leadId, list);
+    };
+    for (const r of tpRows) push(r.lead_id, touchpointEvent(r));
+    for (const r of shRows) push(r.lead_id, statusEvent(r));
+
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "iTarang";
     workbook.created = new Date();
 
-    // ── Leads ─────────────────────────────────────────────
-    const leadSheet = workbook.addWorksheet("Leads", {
-        views: [{ state: "frozen", ySplit: 1 }],
+    const sheet = workbook.addWorksheet(HISTORY_SHEET_NAME, {
+        // Header stays put, and so do Dealer / Shop / Phone while the reader
+        // scrolls right through the event block.
+        views: [{ state: "frozen", ySplit: 1, xSplit: 3 }],
     });
-    leadSheet.columns = [
+    sheet.columns = [
         { header: "Dealer", key: "dealer", width: 26 },
         { header: "Shop", key: "shop", width: 24 },
         { header: "Phone", key: "phone", width: 16 },
         { header: "City", key: "city", width: 16 },
         { header: "State", key: "state", width: 16 },
-        { header: "Status", key: "status", width: 20 },
+        { header: "Lead Status", key: "status", width: 20 },
         { header: "Interest", key: "interest", width: 12 },
         { header: "Score", key: "score", width: 8 },
         { header: "Source", key: "source", width: 18 },
         { header: "Owner", key: "owner", width: 20 },
         { header: "ASM", key: "asm", width: 20 },
         { header: "Touchpoints", key: "count", width: 13 },
-        { header: "Last Touch (IST)", key: "last_touch", width: 24 },
         { header: "Created (IST)", key: "created", width: 24 },
-    ];
-    styleHeader(leadSheet.getRow(1));
-    leadRows.forEach((r, i) => {
-        const row = leadSheet.addRow({
-            dealer: r.dealer_name ?? DASH,
-            shop: r.shop_name ?? DASH,
-            phone: r.phone ?? DASH,
-            city: r.city ?? DASH,
-            state: r.state ?? DASH,
-            status: statusText(r.lead_status),
-            interest: r.interest_level
-                ? r.interest_level.charAt(0).toUpperCase() +
-                  r.interest_level.slice(1).replace(/_/g, " ")
-                : DASH,
-            score: r.final_intent_score ?? DASH,
-            source: r.source ?? DASH,
-            owner: r.owner_name ?? DASH,
-            asm: r.asm_name ?? DASH,
-            // COUNT(*) comes back as a bigint string on some drivers.
-            count: Number(r.touchpoint_count ?? 0),
-            last_touch: fmtIst(r.last_touchpoint_at),
-            created: fmtIst(r.created_at),
-        });
-        zebra(row, i);
-    });
-    if (leadRows.length > 0) {
-        leadSheet.autoFilter = {
-            from: { row: 1, column: 1 },
-            to: { row: 1, column: leadSheet.columns.length },
-        };
-    }
-
-    // ── Touchpoints ───────────────────────────────────────
-    const tpSheet = workbook.addWorksheet("Touchpoints", {
-        views: [{ state: "frozen", ySplit: 1 }],
-    });
-    tpSheet.columns = [
-        { header: "Dealer", key: "dealer", width: 26 },
-        { header: "Shop", key: "shop", width: 24 },
-        { header: "Phone", key: "phone", width: 16 },
-        { header: "City", key: "city", width: 16 },
+        // ── event block ──
+        { header: "Event", key: "event", width: 14 },
         // "Activity" + "Details" are the two lines of the timeline card, in the
-        // order they are read there: what happened, then what was written about
-        // it. "Type (code)" trails at the end for machine use.
-        { header: "Activity", key: "activity", width: 26 },
-        { header: "Performed By", key: "by", width: 22 },
-        { header: "Performed At (IST)", key: "at", width: 24 },
-        { header: "Details", key: "remarks", width: 60 },
+        // order they are read there: what happened, then what was written
+        // about it. For a status change Activity is "From → To".
+        { header: "Activity", key: "activity", width: 30 },
+        { header: "By", key: "by", width: 22 },
+        { header: "At (IST)", key: "at", width: 24 },
+        { header: "Details", key: "details", width: 60 },
         { header: "Call Status", key: "call_status", width: 18 },
         { header: "Duration (sec)", key: "duration", width: 14 },
         { header: "Engaged", key: "engaged", width: 10 },
         { header: "Next Action", key: "next_action", width: 20 },
         { header: "Next Action At (IST)", key: "next_action_at", width: 24 },
-        { header: "Type (code)", key: "type", width: 24 },
-    ];
-    styleHeader(tpSheet.getRow(1));
-    tpRows.forEach((r, i) => {
-        const row = tpSheet.addRow({
-            dealer: r.dealer_name ?? DASH,
-            shop: r.shop_name ?? DASH,
-            phone: r.phone ?? DASH,
-            city: r.city ?? DASH,
-            activity: humanise(r.touchpoint_type, TOUCHPOINT_TYPE_LABEL),
-            by: r.performed_by_name ?? "System",
-            at: fmtIst(r.performed_at),
-            remarks: r.remarks ?? DASH,
-            call_status: humanise(r.call_status, CALL_STATUS_LABEL),
-            duration: r.call_duration_sec ?? DASH,
-            engaged: r.is_engaged == null ? DASH : r.is_engaged ? "Yes" : "No",
-            next_action: humanise(r.next_action, NEXT_ACTION_LABEL),
-            next_action_at: r.next_action_at ? fmtIst(r.next_action_at) : DASH,
-            type: r.touchpoint_type ?? DASH,
-        });
-        zebra(row, i);
-    });
-    if (tpRows.length > 0) {
-        tpSheet.autoFilter = {
-            from: { row: 1, column: 1 },
-            to: { row: 1, column: tpSheet.columns.length },
-        };
-    }
-    if (tpTruncated) markTruncated(tpSheet, ROW_CAP);
-
-    // ── Status History ────────────────────────────────────
-    const shSheet = workbook.addWorksheet("Status History", {
-        views: [{ state: "frozen", ySplit: 1 }],
-    });
-    shSheet.columns = [
-        { header: "Dealer", key: "dealer", width: 26 },
-        { header: "Phone", key: "phone", width: 16 },
-        { header: "From", key: "from", width: 24 },
-        { header: "To", key: "to", width: 24 },
-        { header: "Changed By", key: "by", width: 22 },
-        { header: "Changed At (IST)", key: "at", width: 24 },
         { header: "Lost Reason", key: "lost_reason", width: 22 },
-        { header: "Notes", key: "notes", width: 50 },
+        // Trails at the end for machine use.
+        { header: "Type (code)", key: "type", width: 26 },
     ];
-    styleHeader(shSheet.getRow(1));
-    shRows.forEach((r, i) => {
-        const row = shSheet.addRow({
-            dealer: r.dealer_name ?? DASH,
-            phone: r.phone ?? DASH,
-            from: statusText(r.from_status),
-            to: statusText(r.to_status),
-            by: r.changed_by_name ?? "System",
-            at: fmtIst(r.changed_at),
-            lost_reason: r.to_lost_reason
-                ? r.to_lost_reason.replace(/_/g, " ")
+    styleHeader(sheet.getRow(1));
+
+    let i = 0;
+    for (const lead of leadRows) {
+        const leadCells = {
+            dealer: lead.dealer_name ?? DASH,
+            shop: lead.shop_name ?? DASH,
+            phone: lead.phone ?? DASH,
+            city: lead.city ?? DASH,
+            state: lead.state ?? DASH,
+            status: statusText(lead.lead_status),
+            interest: lead.interest_level
+                ? lead.interest_level.charAt(0).toUpperCase() +
+                  lead.interest_level.slice(1).replace(/_/g, " ")
                 : DASH,
-            notes: r.reason_notes ?? DASH,
+            score: lead.final_intent_score ?? DASH,
+            source: lead.source ?? DASH,
+            owner: lead.owner_name ?? DASH,
+            asm: lead.asm_name ?? DASH,
+            // COUNT(*) comes back as a bigint string on some drivers.
+            count: Number(lead.touchpoint_count ?? 0),
+            created: fmtIst(lead.created_at),
+        };
+
+        // Newest first within the lead, whichever table the event came from.
+        // The timestamps are Postgres text in one timezone, so a string compare
+        // orders them correctly; a null `at` sinks to the bottom.
+        const events = (eventsByLead.get(lead.id) ?? []).sort((a, b) => {
+            if (a.at === b.at) return 0;
+            if (a.at == null) return 1;
+            if (b.at == null) return -1;
+            return a.at < b.at ? 1 : -1;
         });
-        zebra(row, i);
-    });
-    if (shRows.length > 0) {
-        shSheet.autoFilter = {
+
+        if (events.length === 0) {
+            zebra(sheet.addRow({ ...leadCells, ...EMPTY_EVENT_CELLS }), i++);
+            continue;
+        }
+        for (const ev of events) {
+            zebra(sheet.addRow({ ...leadCells, ...ev.cells }), i++);
+        }
+    }
+
+    if (i > 0) {
+        sheet.autoFilter = {
             from: { row: 1, column: 1 },
-            to: { row: 1, column: shSheet.columns.length },
+            to: { row: 1, column: sheet.columns.length },
         };
     }
-    if (shTruncated) markTruncated(shSheet, ROW_CAP);
+    if (tpTruncated) markTruncated(sheet, ROW_CAP, "touchpoints");
+    if (shTruncated) markTruncated(sheet, ROW_CAP, "status changes");
 
     return workbook;
 }

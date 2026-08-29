@@ -23,6 +23,7 @@ import {
   useProductScope,
 } from "@/components/dealer-portal/lead-wizard/product-cart";
 import type { PriorSelection } from "@/components/dealer-portal/lead-wizard/product-cart";
+import { externalLenderName } from "@/lib/leads/bajaj-fallback-text";
 
 // BRD V2 Part F — Step 5 OTP + Dispatch Confirmation (finance only).
 // Scenario A: kyc_status = loan_sanctioned → product cart + OTP send/entry + dispatch.
@@ -63,6 +64,28 @@ interface LoanSanction {
   rejection_reason: string | null;
   sanctioned_at: string | null;
   decided_at: string | null;
+  /** E-275 — set when the sanction came from an outside partner (Bajaj Finance). */
+  external_lender?: string | null;
+}
+
+/**
+ * E-275 — who financed this lead. An external sanction carries
+ * `external_lender`; an NBFC sanction carries the lender in `loan_approved_by`.
+ */
+function lenderLabel(loan: LoanSanction | null | undefined): string {
+  if (!loan) return "—";
+  return externalLenderName(loan.external_lender) ?? loan.loan_approved_by ?? "—";
+}
+
+/**
+ * E-275 — an external sanction has no terms on file (the outside partner
+ * quotes off-platform), so zero reads as "not quoted", not as ₹0.
+ */
+function fmtTerm(value: string | number | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(n) || n === 0) return "—";
+  return inrFormatter.format(n);
 }
 
 interface ProductSelection {
@@ -743,7 +766,7 @@ export default function Step5Page() {
                 <h2 className="font-bold text-red-900">Loan Application Rejected</h2>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2 mt-3 text-xs">
                   <KV label="Rejected on" value={fmtDate(loan?.decided_at)} />
-                  <KV label="By lender" value={loan?.loan_approved_by ?? "—"} />
+                  <KV label="By lender" value={lenderLabel(loan)} />
                 </div>
                 <div className="mt-4 bg-red-50 border border-red-100 rounded-lg p-3 text-sm text-red-800">
                   <span className="font-bold">Reason: </span>
@@ -835,7 +858,12 @@ export default function Step5Page() {
             {loan?.decided_at && (
               <span className="text-[11px] text-gray-500">
                 Sanctioned {fmtDateTime(loan.decided_at)}
-                {loan.loan_approved_by ? ` · ${loan.loan_approved_by}` : ""}
+                {lenderLabel(loan) !== "—" ? ` · ${lenderLabel(loan)}` : ""}
+              </span>
+            )}
+            {loan?.external_lender && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10px] font-bold uppercase tracking-wider">
+                <Banknote className="w-3 h-3" /> Financed by {lenderLabel(loan)} (outside partner)
               </span>
             )}
           </div>
@@ -853,19 +881,20 @@ export default function Step5Page() {
           <section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
             <SectionTitle icon={<Banknote className="w-4 h-4" />} title="Loan Details" />
             <p className="text-xs text-gray-500 mb-5">
-              Walk the customer through every term below before requesting their OTP. The OTP is
-              their binding acceptance of these terms.
+              {loan.external_lender
+                ? `The loan terms are agreed directly with ${lenderLabel(loan)} outside iTarang. Confirm the battery and price with the customer before requesting their OTP.`
+                : "Walk the customer through every term below before requesting their OTP. The OTP is their binding acceptance of these terms."}
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 text-sm">
-              <Field label="Loan Amount" value={fmtINR(loan.loan_amount)} highlight />
-              <Field label="Down Payment" value={fmtINR(loan.down_payment)} />
-              <Field label="Disbursement" value={fmtINR(loan.disbursement_amount)} />
-              <Field label="EMI" value={`${fmtINR(loan.emi)} / mo`} highlight />
+              <Field label="Loan Amount" value={fmtTerm(loan.loan_amount)} highlight />
+              <Field label="Down Payment" value={fmtTerm(loan.down_payment)} />
+              <Field label="Disbursement" value={fmtTerm(loan.disbursement_amount)} />
+              <Field label="EMI" value={fmtTerm(loan.emi) === "—" ? "—" : `${fmtTerm(loan.emi)} / mo`} highlight />
               <Field label="Tenure" value={loan.tenure_months ? `${loan.tenure_months} months` : "—"} />
-              <Field label="ROI" value={loan.roi ? `${loan.roi}% p.a.` : "—"} />
-              <Field label="File Charge" value={fmtINR(loan.file_charge)} />
-              <Field label="Subvention" value={fmtINR(loan.subvention)} />
-              <Field label="Lender" value={loan.loan_approved_by ?? "—"} />
+              <Field label="ROI" value={loan.roi && Number(loan.roi) > 0 ? `${loan.roi}% p.a.` : "—"} />
+              <Field label="File Charge" value={fmtTerm(loan.file_charge)} />
+              <Field label="Subvention" value={fmtTerm(loan.subvention)} />
+              <Field label="Lender" value={lenderLabel(loan)} />
               <Field
                 label="Loan File #"
                 value={
