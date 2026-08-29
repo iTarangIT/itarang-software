@@ -193,7 +193,17 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to update commercials");
-            toast.success(`Commercials v${(currentCommercials?.version_no ?? 0) + 1} saved.`);
+            // E-226 — a quote either went to the dealer just now or is waiting
+            // on the CEO, and which one it is changes what the rep does next.
+            // Saying only "saved" leaves them to guess.
+            const version = `v${(currentCommercials?.version_no ?? 0) + 1}`;
+            if (json?.data?.auto_approved) {
+                toast.success(`Commercials ${version} saved — quote auto-approved and sent.`);
+            } else if (json?.data?.approval_status === "pending") {
+                toast.success(`Commercials ${version} saved — awaiting CEO approval.`);
+            } else {
+                toast.success(`Commercials ${version} saved.`);
+            }
             onSuccess();
         } catch (err) {
             toast.error((err as Error).message);
@@ -425,6 +435,15 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                         onChange={(e) => setDealNotes(e.target.value)}
                         placeholder="Any context not captured by the product list above"
                     />
+                    {/*
+                      * This field prints on the quotation PDF the dealer
+                      * receives. It reads as an internal field and is not one,
+                      * and the only thing standing between an internal remark
+                      * and a dealer's inbox is the author knowing that.
+                      */}
+                    <p className="mt-1 text-[11px] text-amber-700">
+                        Printed on the quotation the dealer receives — keep internal remarks in Version notes below.
+                    </p>
                 </div>
                 <div>
                     <Label>Version notes (this commercial event)</Label>

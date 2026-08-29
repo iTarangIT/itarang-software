@@ -14,6 +14,10 @@ export default function ScrapeRunDetailPage() {
         <RunDetailView
           runId={runId}
           onBack={() => router.push("/leads?tab=scraper")}
+          // A route change, so /leads mounts fresh and seeds its tab from
+          // ?tab= — the "tab state is not URL-synced after mount" caveat only
+          // applies to switching tabs in place, which this is not.
+          onCampaignStarted={() => router.push("/leads?tab=campaigns")}
         />
       </div>
     </div>

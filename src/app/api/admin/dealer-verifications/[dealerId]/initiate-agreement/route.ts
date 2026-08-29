@@ -13,11 +13,18 @@ import {
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { backfillMissingAgreementFields } from "@/lib/agreement/document-backfill";
 import { defaultDealerDesignation } from "@/lib/onboarding/dealer-address";
-import { normalizeAccountType } from "@/lib/onboarding/account-type";
+import {
+  companyAddressParts,
+  resolveScheduleThreeDefaults,
+} from "@/lib/onboarding/agreement-defaults";
+import { resolveAccountType } from "@/lib/onboarding/account-type";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 import { getAdapter } from "@/lib/whatsapp";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
+import { notifyDealerAgreementInitiated } from "@/lib/notifications/events";
 
 type AgreementParty = {
   name?: string | null;
@@ -302,6 +309,23 @@ export async function POST(
       );
     }
 
+    // E-225 — scrap and new+scrap dealers sign on paper. There is no scrap
+    // agreement template to generate, and sending them through Digio would
+    // e-sign the NEW-battery finance agreement, i.e. bind them to the wrong
+    // contract. Checked before finance_enabled because a scrap dealer usually
+    // has finance off, and "finance not enabled" would be a misleading reason.
+    if (usesManualAgreement(application.dealer_type)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            `${dealerTypeLabel(application.dealer_type)} agreements are signed manually — ` +
+            "upload the signed copy instead of initiating an e-sign.",
+        },
+        { status: 400 }
+      );
+    }
+
     if (!application.finance_enabled) {
       return NextResponse.json(
         {
@@ -524,8 +548,28 @@ export async function POST(
     // the stored extraction for free and only re-calling Gemini when needed. This
     // mutates application.provider_raw_response in memory and persists the fill,
     // and is best-effort (never blocks initiation).
-    const { ownershipSnapshot, dealerOfficeAddress } =
+    const { ownershipSnapshot, gstAddressesSnapshot, dealerOfficeAddress } =
       await backfillMissingAgreementFields(application);
+
+    // Schedule 3's Vehicle Type / Manufacturer / Brand / State (Presence) are
+    // only captured by the web Step-5 form when OEM financing is ticked, so for
+    // every other dealer those four cells printed blank. Derive them (the state
+    // from the dealer's own address; the product fields are constants) while
+    // letting any explicitly-captured value win.
+    const scheduleThree = resolveScheduleThreeDefaults({
+      vehicleType: agreement.vehicleType,
+      manufacturer: agreement.manufacturer,
+      brand: agreement.brand,
+      statePresence: agreement.statePresence,
+      ownershipSnapshot,
+      gstAddressesSnapshot,
+      businessAddress: application.business_address,
+    });
+
+    // Structured office-address parts the template joins onto the company
+    // address line — previously never sent, so a thin business_address produced
+    // a thin "having its office at …".
+    const companyParts = companyAddressParts(gstAddressesSnapshot);
 
     // Dealer designation: keep an explicitly-captured value (web Step-5), else
     // default by firm type (WhatsApp dealers never capture one).
@@ -550,9 +594,13 @@ export async function POST(
       company: {
         companyName: application.company_name || "",
         companyType: application.company_type || "",
-        // Full reconstructed office address (the template joins address parts,
-        // so the single joined string is sufficient).
+        // Full reconstructed office address, plus the structured parts the
+        // template joins onto it when the single line is thin.
         companyAddress: dealerOfficeAddress,
+        companyCity: companyParts.companyCity,
+        companyDistrict: companyParts.companyDistrict,
+        companyState: companyParts.companyState,
+        companyPinCode: companyParts.companyPinCode,
         gstNumber: application.gst_number || "",
         panNumber: application.pan_number || "",
       },
@@ -572,7 +620,15 @@ export async function POST(
         ifscCode: application.ifsc_code || "",
         beneficiaryName: application.beneficiary_name || "",
         branch: ownershipSnapshot?.branch || "",
-        accountType: normalizeAccountType(ownershipSnapshot?.accountType),
+        // Indian cancelled cheques and many statements never print the account
+        // type, so a pure normalise left Schedule 3's cell blank. resolveAccountType
+        // falls back to inferring from the holder / firm name (RBI bars business
+        // entities from savings accounts) and only returns "" when it truly can't tell.
+        accountType: resolveAccountType(
+          ownershipSnapshot?.accountType,
+          application.beneficiary_name,
+          application.company_name,
+        ),
       },
       agreement: {
         agreementName:
@@ -599,10 +655,10 @@ export async function POST(
           : null,
         signingOrder: finalSigningOrder,
         isOemFinancing: !!agreement.isOemFinancing,
-        vehicleType: cleanString(agreement.vehicleType),
-        manufacturer: cleanString(agreement.manufacturer),
-        brand: cleanString(agreement.brand),
-        statePresence: cleanString(agreement.statePresence),
+        vehicleType: scheduleThree.vehicleType,
+        manufacturer: scheduleThree.manufacturer,
+        brand: scheduleThree.brand,
+        statePresence: scheduleThree.statePresence,
         signers,
         sequential: true,
         expireInDays: 30,
@@ -613,8 +669,9 @@ export async function POST(
         suppressSignerEmails: false,
       },
       applicationId: dealerId,
-      // Dealer business type (new | scrap | both) — selects the agreement
-      // template in create-agreement (E-202). Same template for all three today.
+      // Dealer business type — selects the agreement template in
+      // create-agreement (E-202). Always 'new' in practice: the manual-mode
+      // guard above turns scrap / both away before we get here (E-225).
       dealerType: application.dealer_type ?? null,
       // Persist the unsigned PDF only for WhatsApp dealers — we send it as a
       // WhatsApp document below. Web dealers don't need the extra storage.
@@ -719,6 +776,14 @@ export async function POST(
       );
     }
 
+    // Post-approval finance enablement (enable-finance route): the dealer is
+    // ALREADY approved and live, and is only now signing the finance agreement.
+    // Resetting review_status/completion_status would drop them back into the
+    // admin's pending-review queue and contradict their approved state, so the
+    // review fields are left alone for an approved application. Only the
+    // agreement-tracking fields below move.
+    const isPostApprovalRun = application.onboarding_status === "approved";
+
     await db
       .update(dealerOnboardingApplications)
       .set({
@@ -726,8 +791,12 @@ export async function POST(
           agreementStatus === "requested"
             ? "sent_to_external_party"
             : agreementStatus,
-        review_status: "pending_admin_review",
-        completion_status: "pending",
+        ...(isPostApprovalRun
+          ? {}
+          : {
+              review_status: "pending_admin_review",
+              completion_status: "pending",
+            }),
         provider_document_id: providerDocumentId || null,
         request_id: requestId,
         provider_signing_url: signingUrl || null,
@@ -917,6 +986,18 @@ export async function POST(
         console.error("[INITIATE] WhatsApp agreement send threw:", waErr);
       }
     }
+
+    // Bell rows for both sides. Names BOTH signers on purpose: the question
+    // everyone asks at this point is who it is waiting on, and the dealer's
+    // signer and the iTarang counter-signatory are two different people on two
+    // different channels (WhatsApp/email vs Digio email).
+    await notifyDealerAgreementInitiated({
+      dealerId,
+      businessName: application.company_name || "the dealer",
+      dealerSigner: dealerSigner.name || null,
+      itarangSigner: itarangSigner1.name || null,
+      channel: isWhatsappDealer ? "whatsapp" : "email",
+    });
 
     return NextResponse.json({
       success: true,

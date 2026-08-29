@@ -5,8 +5,23 @@
  * submits the firm financing conditions for this lead. Once the customer
  * (dealer-mediated) picks a winner the assignment locks and this becomes
  * read-only. Owned by the Credit / Underwriting role.
+ *
+ * E-238 — the dealer can now push back on these terms instead of only taking or
+ * leaving them. `Fix offer` ends the negotiation: the dealer loses Negotiate and
+ * this panel loses Edit, deliberately in the same move, because terms the NBFC
+ * could still change afterwards would not be fixed in any sense the dealer could
+ * rely on.
+ *
+ * E-245 — the dealer's ask is now free text, not six proposed numbers, so this
+ * panel shows what they WROTE and the officer re-prices from it. Pricing lives
+ * on this side of the conversation; the dealer only ever supplies the reason.
+ * The dealer can also close the deal outright, which lands the assignment on
+ * 'withdrawn' and makes everything here read-only via can_act.
  */
 import { useCallback, useEffect, useState } from "react";
+
+import OfferNegotiationThread from "@/components/nbfc-portal/OfferNegotiationThread";
+import type { NegotiationRound } from "@/components/nbfc-portal/OfferNegotiationThread";
 
 type Offer = {
   roi_pct: string | null;
@@ -21,13 +36,18 @@ type Offer = {
   // E-161 — out-of-band deviation gate (§13.3.4).
   ceo_approval_status?: string | null;
   deviation_reason?: string | null;
+  // E-238 — negotiation state.
+  negotiation_status?: string | null;
+  fixed_at?: string | null;
 };
 
 type Resp = {
   ok: boolean;
   assignment_status?: string;
   can_act?: boolean;
+  can_fix?: boolean;
   offer?: Offer | null;
+  rounds?: NegotiationRound[];
   error?: string;
 };
 
@@ -40,16 +60,34 @@ const fields: { key: keyof Offer; label: string; type: string; placeholder: stri
   { key: "processing_fee", label: "Processing fee (₹)", type: "number", placeholder: "2500" },
 ];
 
+/** Server errors arrive prefixed with their internal code; strip it for display. */
+const clean = (msg: string) => msg.replace(/^[A-Z_]+:\s*/, "");
+
+const fmtDate = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+};
+
 export default function OfferPanel({ leadId }: { leadId: string }) {
   const [data, setData] = useState<Resp | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [edit, setEdit] = useState(false);
+  const [confirmFix, setConfirmFix] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/nbfc/offer/${leadId}`);
+      const res = await fetch(`/api/nbfc/offer/${leadId}`, { cache: "no-store" });
       const j = (await res.json()) as Resp;
       setData(j);
       if (j.offer) {
@@ -96,16 +134,50 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
       setEdit(false);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(clean(e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fixOffer() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/nbfc/offer/${leadId}/fix`, { method: "POST" });
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
+      setConfirmFix(false);
+      await load();
+    } catch (e) {
+      setError(clean(e instanceof Error ? e.message : String(e)));
+      setConfirmFix(false);
     } finally {
       setBusy(false);
     }
   }
 
   const offer = data?.offer ?? null;
+  const rounds = data?.rounds ?? [];
   const status = data?.assignment_status ?? "pending";
   const canAct = data?.can_act ?? false;
+  const canFix = data?.can_fix ?? false;
   const decided = status === "selected" || status === "not_selected";
+  const closedByDealer = status === "withdrawn";
+  const fixed = offer?.negotiation_status === "fixed";
+
+  // The dealer's most recent ask, if the ball is currently in our court. Read
+  // off the rounds rather than a separate field so it can never disagree with
+  // the history rendered below it.
+  const latestCounter =
+    offer?.negotiation_status === "dealer_countered"
+      ? [...rounds].reverse().find((r) => r.kind === "counter") ?? null
+      : null;
+  // Why the dealer walked, in their own words — the only record this NBFC has
+  // of losing the lead, so it stays on screen after the panel goes read-only.
+  const closeRound = closedByDealer
+    ? [...rounds].reverse().find((r) => r.kind === "close") ?? null
+    : null;
 
   // Every offer detail is mandatory (a real firm offer can't have blanks);
   // only Conditions/notes is optional. The numeric fields must carry a valid
@@ -130,6 +202,15 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         {status === "not_selected" && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-200 text-slate-600">Not selected</span>
         )}
+        {closedByDealer && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-700">Deal closed by customer</span>
+        )}
+        {!decided && fixed && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700">Fixed</span>
+        )}
+        {!decided && !closedByDealer && offer?.negotiation_status === "dealer_countered" && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-violet-100 text-violet-700">Revision requested</span>
+        )}
         {offer?.ceo_approval_status === "pending" && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700">Pending iTarang CEO approval</span>
         )}
@@ -149,6 +230,49 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         <p className="text-[11px] text-red-700 bg-red-50 border border-red-100 rounded-md px-3 py-2 mb-2">
           The iTarang CEO rejected this out-of-band offer{offer.deviation_reason ? ` (${offer.deviation_reason})` : ""}. Revise the terms within band and resubmit.
         </p>
+      )}
+
+      {/* E-238/E-245 — the dealer is waiting on us. The ask is what they wrote,
+          so the message IS the content of this block; re-pricing it is our job. */}
+      {latestCounter && !edit && (
+        <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-violet-800">
+            Customer asked you to revise this offer
+          </p>
+          {latestCounter.message ? (
+            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
+              {latestCounter.message}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-600">No message was left with the request.</p>
+          )}
+          {canAct && (
+            <button
+              onClick={() => setEdit(true)}
+              className="mt-2.5 rounded-md bg-[color:var(--color-brand-navy)] px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              Revise offer
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* E-245 — the dealer closed the deal. Terminal; nothing below is actionable. */}
+      {closedByDealer && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50/60 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">
+            Deal closed by customer
+          </p>
+          {closeRound?.message && (
+            <p className="mt-2 whitespace-pre-line rounded-md bg-white/70 px-2.5 py-1.5 text-sm text-slate-700">
+              {closeRound.message}
+            </p>
+          )}
+          <p className="mt-2 text-[11px] text-red-700">
+            This offer is withdrawn and can no longer be revised or fixed. The lead may be routed
+            to another lender.
+          </p>
+        </div>
       )}
 
       {offer && !edit && (
@@ -171,6 +295,13 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
       {!offer && !edit && (
         <p className="text-xs text-slate-500">
           No firm offer submitted yet. {canAct ? "Submit one once verification is satisfactory." : "Credit / Underwriting will submit the firm conditions."}
+        </p>
+      )}
+
+      {fixed && !decided && (
+        <p className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
+          Terms fixed{offer?.fixed_at ? ` on ${fmtDate(offer.fixed_at)}` : ""}. The customer can no
+          longer negotiate, and these terms can no longer be revised.
         </p>
       )}
 
@@ -233,9 +364,76 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
       )}
 
       {canAct && !decided && offer && !edit && (
-        <button onClick={() => setEdit(true)} className="mt-3 text-[11px] text-[color:var(--color-brand-sky)] underline">
-          Edit / resubmit offer
-        </button>
+        <div className="mt-3 flex items-center gap-3">
+          <button onClick={() => setEdit(true)} className="text-[11px] text-[color:var(--color-brand-sky)] underline">
+            Edit / resubmit offer
+          </button>
+          {canFix && (
+            <button
+              onClick={() => setConfirmFix(true)}
+              disabled={busy}
+              className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              Fix offer
+            </button>
+          )}
+        </div>
+      )}
+
+      <OfferNegotiationThread rounds={rounds} viewer="nbfc" />
+
+      {/* Inline modal rather than @/components/ui/confirm-dialog — the NBFC
+          portal does not import from that directory; this mirrors
+          FlagForRecoveryDialog. */}
+      {confirmFix && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(17,24,39,0.6)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => !busy && setConfirmFix(false)}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 8,
+              boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1)",
+              maxWidth: 440,
+              width: "100%",
+              padding: 20,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-slate-800">Fix these terms?</h3>
+            <p className="mt-2 text-xs text-slate-600">
+              The customer will no longer be able to negotiate, and{" "}
+              <strong>you will not be able to revise them</strong> afterwards. They can still select
+              you as their lender. This cannot be undone.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmFix(false)}
+                disabled={busy}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={fixOffer}
+                disabled={busy}
+                className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+              >
+                {busy ? "Fixing…" : "Fix offer"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

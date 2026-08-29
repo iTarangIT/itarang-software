@@ -119,6 +119,11 @@ export const productMasterBatteries = pgTable(
     warranty_months: integer("warranty_months").default(0).notNull(),
     iot_compatible: boolean("iot_compatible").default(false).notNull(),
     compatible_charger_models: jsonb("compatible_charger_models").default([]).notNull(),
+    // E-242 — what the GST proforma quotation prints per line. Nullable with no
+    // backfill: a guessed rate is a wrong number on a tax document, so NULL
+    // means "not set yet" and the renderer shows it as unset, never as zero.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -142,6 +147,9 @@ export const productMasterChargers = pgTable(
     compatible_battery_models: jsonb("compatible_battery_models").default([]).notNull(),
     base_price: numeric("base_price", { precision: 12, scale: 2 }),
     warranty_months: integer("warranty_months").default(0).notNull(),
+    // E-242 — see product_master_batteries.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -162,6 +170,9 @@ export const productMasterParaphernalia = pgTable(
     compatible_categories: jsonb("compatible_categories").default([]).notNull(),
     max_qty_per_lead: integer("max_qty_per_lead").default(0).notNull(),
     harness_variant: boolean("harness_variant").default(false).notNull(),
+    // E-242 — see product_master_batteries.
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    gst_rate_pct: numeric("gst_rate_pct", { precision: 5, scale: 2 }),
     status: varchar("status", { length: 20 }).default("active").notNull(),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -170,6 +181,58 @@ export const productMasterParaphernalia = pgTable(
   (table) => ({
     pmParaItemTypeUnique: unique("pm_para_item_type_unique").on(table.item_type_code),
     pmParaStatusIdx: index("pm_para_status_idx").on(table.status),
+  }),
+);
+
+// E-226 + E-230 — the OEM reference price book. Append-only: a revision closes
+// the row it replaces (effective_to) and inserts a new one, so history survives
+// for audit.
+//
+// E-230 made it DATED. Each open row (effective_to IS NULL) owns a half-open
+// window [effective_from, valid_until) and one product's windows never overlap,
+// so a product may hold the price in force PLUS any scheduled successors —
+// which is how "my next pricing for the next period would be 52,000" is
+// represented. The non-overlap is held by setOemPrice() locking the product's
+// open rows FOR UPDATE; the partial unique index
+// oem_reference_prices_open_from_uniq is the backstop and, being partial, lives
+// only in the migration.
+//
+// product_id is TEXT, not uuid, on purpose: it joins to
+// dealer_lead_commercials.product_lines[].product_id, which the picker emits as
+// product_master_*.id::text. No FK — the parent is one of three tables chosen
+// by asset_type.
+export const oemReferencePrices = pgTable(
+  "oem_reference_prices",
+  {
+    price_id: uuid("price_id").primaryKey().defaultRandom(),
+    asset_type: varchar("asset_type", { length: 30 }).notNull(),
+    product_id: text("product_id").notNull(),
+    model_id: varchar("model_id", { length: 100 }),
+    product_name: varchar("product_name", { length: 200 }),
+    oem_price: numeric("oem_price", { precision: 14, scale: 2 }).notNull(),
+    // May be in the future since E-230 — that is a queued successor line.
+    effective_from: timestamp("effective_from", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Superseded-at. Bookkeeping, never chosen by the admin.
+    effective_to: timestamp("effective_to", { withTimezone: true }),
+    // E-230 — the DECLARED expiry, exclusive. NULL means open-ended, which is
+    // every pre-E-230 row. Not the same thing as effective_to: a row can expire
+    // without ever being superseded, and that is the state the notification
+    // exists to catch.
+    valid_until: timestamp("valid_until", { withTimezone: true }),
+    expiry_notified_at: timestamp("expiry_notified_at", { withTimezone: true }),
+    note: text(),
+    created_by: text("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    oemPriceProductIdx: index("oem_reference_prices_product_idx").on(
+      table.product_id,
+      table.effective_from,
+    ),
   }),
 );
 
@@ -245,6 +308,8 @@ export const inventory = pgTable(
     gst_percent: numeric("gst_percent", { precision: 5, scale: 2 }),
     gst_amount: numeric("gst_amount", { precision: 12, scale: 2 }),
     final_amount: numeric("final_amount", { precision: 12, scale: 2 }),
+    // E-272: Base Value + GST on it. Mirrors final_amount; written by every upload path.
+    price_inclusive_gst: numeric("price_inclusive_gst", { precision: 12, scale: 2 }),
     oem_invoice_number: text("oem_invoice_number"),
     oem_invoice_date: timestamp("oem_invoice_date", { withTimezone: true }),
     oem_invoice_url: text("oem_invoice_url"),
@@ -314,6 +379,17 @@ export const leads = pgTable("leads", {
   consent_status: varchar("consent_status", { length: 20 }).default('pending'),
   has_co_borrower: boolean("has_co_borrower").default(false),
   has_additional_docs_required: boolean("has_additional_docs_required").default(false),
+  // E-264 — 'unassigned' | 'assigned'. A customer who self-onboards over
+  // WhatsApp has no dealer, but dealer_id can NOT be left NULL: nearly every
+  // read path compares it against the caller's dealer code, so a NULL would make
+  // the lead invisible to the very queue meant to rescue it. dealer_id therefore
+  // points at the house dealer as a holding pen, and ownership is expressed
+  // here. Step 4 refuses to start while this is 'unassigned'.
+  assignment_status: varchar("assignment_status", { length: 24 })
+    .default('assigned')
+    .notNull(),
+  dealer_assigned_at: timestamp("dealer_assigned_at", { withTimezone: true }),
+  dealer_assigned_by: uuid("dealer_assigned_by"),
   interim_step_status: varchar("interim_step_status", { length: 20 }).default('pending'),
   kyc_draft_data: jsonb("kyc_draft_data"),
   step_status: jsonb("step_status"),
@@ -1019,6 +1095,33 @@ export const aiCallLogs = pgTable(
     band: varchar("band", { length: 20 }),
     call_status: varchar("call_status", { length: 20 }),
     info_signals_count: integer("info_signals_count"),
+    // E-168 ends here. --- E-250 below ---
+    // Which PROMPT produced `signals`. scoring_version already records which BAND
+    // RULE ran; this is its extraction-side counterpart, so an audit can tell
+    // whether a shift came from a new rule or from new teaching.
+    extraction_version: varchar("extraction_version", { length: 40 }),
+    // Hash of the active calibration examples at extraction time. Once that set
+    // lives in the DB and can change without a deploy, EXTRACTION_VERSION alone
+    // no longer identifies the prompt — two calls can share a version and have
+    // been scored by different examples.
+    calibration_set_hash: varchar("calibration_set_hash", { length: 64 }),
+    // The band a human reviewer says this call really was. Deliberately SEPARATE
+    // from `band`, which stays the AI's answer forever: overwriting it would let
+    // the eval harness replay the human's own correction as the AI's output and
+    // report perfect agreement on every corrected call.
+    human_band: varchar("human_band", { length: 20 }),
+    human_reviewed_by: uuid("human_reviewed_by"),
+    human_reviewed_at: timestamp("human_reviewed_at", { withTimezone: true }),
+    // E-267 — `transcript_turns jsonb` is DELIBERATELY ABSENT from this object,
+    // the same rule E-250/E-242/E-224/E-236 follow. Drizzle names every column
+    // of a mirrored table in its generated SQL, so declaring it here would make
+    // all 21 aiCallLogs call sites — including three bare `db.insert()` on the
+    // call-finalize path — hard-fail with `column "transcript_turns" does not
+    // exist` on any database where E-267 has not been applied. Since there is
+    // no auto-runner and the per-environment ticks drift, that would trade one
+    // dark metric for the entire AI call-logging pipeline. It is written
+    // instead by a guarded raw UPDATE in elevenlabs/finalizeCall.ts, which
+    // confines an unapplied E-267 to the feature that needs it.
   },
   (table) => {
     return {
@@ -1065,11 +1168,182 @@ export const intentScoreFeedback = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // --- E-250 ---
+    // The AI's BAND at correction time. E-159 snapshotted original_intent_score
+    // but not the band, so "did the human agree" could only be reconstructed by
+    // re-deriving it from the score — which breaks the moment BAND_LEAD_SCORE
+    // changes.
+    ai_band: varchar("ai_band", { length: 20 }),
+    // The reviewer's role AT REVIEW TIME. Stored rather than joined because roles
+    // change: an ASM promoted to sales_head would otherwise retroactively rewrite
+    // the provenance of every correction they ever made.
+    reviewer_role: varchar("reviewer_role", { length: 50 }),
+    // 'correction' carries a real human label and is eligible for the golden set.
+    // 'note' is prose with no parseable band (the Google Sheet import). Every
+    // consumer filters to 'correction' so notes never fabricate ground truth.
+    review_kind: varchar("review_kind", { length: 20 }).default("correction").notNull(),
+    // 'app' | 'sheet_import'
+    source: varchar("source", { length: 20 }).default("app").notNull(),
+    // Idempotency key for imported rows: 'sheet:<call_id>:<reviewer>'. NULL for
+    // app corrections. ⚠ ON CONFLICT against its PARTIAL unique index must repeat
+    // the `WHERE external_key IS NOT NULL` predicate or Postgres won't match it.
+    external_key: text("external_key"),
+    // lead_call_recordings.id when the reviewer attached audio instead of typing.
+    recording_id: uuid("recording_id"),
+    // Did the human land on the same band as the AI. Stored so the disagreement
+    // queue is an index scan, not a case-expression over every row.
+    agreed: boolean("agreed"),
+    // Was this written THROUGH to dealer_leads, or recorded as training only.
+    // False for imported Sheet history — replaying months-old commentary onto
+    // live leads would rewrite the pipeline from an archive.
+    applied_to_lead: boolean("applied_to_lead").default(false).notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
   },
   (table) => ({
     callIdIdx: index("intent_score_feedback_call_id_idx").on(table.call_id),
     leadIdIdx: index("intent_score_feedback_lead_id_idx").on(table.lead_id),
     createdAtIdx: index("intent_score_feedback_created_at_idx").on(
+      table.created_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-250 — Attached call recordings.
+//
+// One audio file a reviewer attached to a dealer lead, plus its transcription
+// job and the signals/band derived from it. THIS TABLE IS ITS OWN QUEUE: one
+// recording is one transcription job, one-to-one, so a separate job table (the
+// shape E-241 needed for the scraper) would be a join with no cardinality
+// behind it. Drained by startRecordingTranscriptionTicker() in
+// src/instrumentation-node.ts, which claims with FOR UPDATE SKIP LOCKED.
+//
+// Attaching audio does NOT move the lead. The recording gets its own band; a
+// human still has to accept it by submitting a correction.
+// =============================================================================
+export const leadCallRecordings = pgTable(
+  "lead_call_recordings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // dealer_leads.id — soft FK, varchar to match that table's text id (same
+    // shape ai_call_logs.lead_id uses).
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    // ai_call_logs.call_id when this audio belongs to an existing AI call. NULL
+    // for a human follow-up the dialer never made.
+    call_id: varchar("call_id", { length: 255 }),
+    // human_call     — a follow-up the user recorded: transcribe and score it
+    //                  through the SAME analyzeTranscript() the dialer uses.
+    // ai_reanalysis  — the provider transcript was garbled; re-transcribe the
+    //                  stored audio rather than trusting its text.
+    // evidence       — stored and playable as proof behind a correction, never
+    //                  transcribed (goes straight to status 'skipped').
+    purpose: varchar("purpose", { length: 20 }).default("human_call").notNull(),
+
+    // Key under the 'call-recordings' LOGICAL bucket (a key prefix in the one
+    // physical AWS_S3_BUCKET — see src/lib/storage/s3.ts). Served back through
+    // /api/files/call-recordings/<key>, already an allowed AND auth-required
+    // bucket, so no new serving route was needed.
+    s3_key: text("s3_key").notNull(),
+    content_type: varchar("content_type", { length: 100 }),
+    // Capped at 25 MB on upload — not arbitrary: OpenAI's transcription endpoint
+    // rejects anything larger, so a bigger file could be stored but never
+    // transcribed. ~50 minutes at 64 kbps m4a.
+    size_bytes: bigint("size_bytes", { mode: "number" }),
+    duration_sec: integer("duration_sec"),
+    original_filename: text("original_filename"),
+
+    // ── Transcription lifecycle (the queue) ──
+    // pending | running | done | failed | skipped. No enum — the vocabulary lives
+    // in src/lib/ai/transcription/ and is enforced by zod at the write path.
+    status: varchar("status", { length: 20 }).default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    claimed_at: timestamp("claimed_at", { withTimezone: true }),
+    // ⚠ Always SET from now() + an interval IN SQL, never from a JS Date: pm2
+    // clock drift, and a JS Date in a raw drizzle sql`` template throws
+    // ERR_INVALID_ARG_TYPE at runtime.
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    error: text("error"),
+
+    // ── What came back ──
+    transcript: text("transcript"),
+    // Timestamped segments when the model returns them. NULL under the default
+    // gpt-4o-transcribe (text only); populated when INTENT_TRANSCRIBE_MODEL is
+    // whisper-1, which supports verbose_json.
+    transcript_segments: jsonb("transcript_segments"),
+    language: varchar("language", { length: 20 }),
+    transcribe_model: varchar("transcribe_model", { length: 50 }),
+
+    // ── What the scoring engine made of it ──
+    signals: jsonb("signals"),
+    score_breakdown: jsonb("score_breakdown"),
+    band: varchar("band", { length: 20 }),
+    intent_score: integer("intent_score"),
+    info_signals_count: integer("info_signals_count"),
+    call_summary: text("call_summary"),
+    scoring_version: varchar("scoring_version", { length: 20 }),
+    extraction_version: varchar("extraction_version", { length: 40 }),
+
+    uploaded_by: uuid("uploaded_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    transcribed_at: timestamp("transcribed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    claimIdx: index("lead_call_recordings_claim_idx").on(table.next_attempt_at),
+    leadIdx: index("lead_call_recordings_lead_idx").on(
+      table.lead_id,
+      table.created_at,
+    ),
+    callIdx: index("lead_call_recordings_call_idx").on(table.call_id),
+  }),
+);
+
+// =============================================================================
+// E-250 — DB-driven calibration examples.
+//
+// Admin-promoted few-shot examples injected into the extraction prompt AT
+// RUNTIME (src/lib/ai/analysis/calibrationStore.ts). This replaces the
+// hand-authored array in calibrationExamples.ts as the source of NEW teaching —
+// that array stays as the built-in SEED, and the loader falls back to it
+// whenever this table is empty or unreachable, so a DB problem degrades the
+// prompt to today's behaviour rather than sending an example-less prompt.
+// =============================================================================
+export const intentCalibrationExamples = pgTable(
+  "intent_calibration_examples",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Shown TO THE MODEL as the example's heading — part of the prompt, not an
+    // internal note. This is the sentence that actually does the teaching.
+    why: text("why").notNull(),
+    transcript: text("transcript").notNull(),
+    // The CORRECT QualificationSignals for this transcript, shaped like
+    // ai_call_logs.signals.
+    signals: jsonb("signals").notNull(),
+    // Only active rows enter the prompt. Deactivating is the instant undo for a
+    // bad example — effective on the next cache expiry, no deploy. That is the
+    // whole reason this set moved out of TypeScript.
+    active: boolean("active").default(true).notNull(),
+    // Prompt order, ascending. Few-shot examples are read in sequence and the
+    // last ones carry the most weight, so the curator controls which rule the
+    // model sees last.
+    sort_order: integer("sort_order").default(100).notNull(),
+    source_feedback_id: uuid("source_feedback_id"),
+    source_call_id: varchar("source_call_id", { length: 255 }),
+    extraction_version: varchar("extraction_version", { length: 20 }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    activeIdx: index("intent_calibration_examples_active_idx").on(
+      table.sort_order,
       table.created_at,
     ),
   }),
@@ -1494,6 +1768,11 @@ export const kycVerifications = pgTable(
     admin_action_by: uuid("admin_action_by"),
     admin_action_at: timestamp("admin_action_at", { withTimezone: true }),
     admin_action_notes: text("admin_action_notes"),
+    // E-246 — 'admin' (a human clicked Accept/Reject) | 'system' (the KYC
+    // auto-approval SLA sweep accepted it WITHOUT calling the provider).
+    // admin_action_by is NULL for a system action, but NULL is also what
+    // legacy rows carry, so this is the only reliable discriminator.
+    admin_action_source: varchar("admin_action_source", { length: 16 }).default('admin'),
     verification_for: varchar("verification_for", { length: 20 }).default('customer').notNull(),
     applicant: varchar({ length: 20 }).default('primary').notNull(),
   },
@@ -1589,6 +1868,14 @@ export const consentRecords = pgTable("consent_records", {
   signed_consent_url: text("signed_consent_url"),
   verified_by: uuid("verified_by"),
   verified_at: timestamp("verified_at", { withTimezone: true }),
+  // E-246 — 'admin' (KYC review panel) | 'system' (auto-verified by the sweep).
+  verification_source: varchar("verification_source", { length: 16 }).default('admin'),
+  // E-247 — the consent auto-verify deadline, STAMPED when the consent enters a
+  // signed-but-unverified state. NULL = never auto-verify, which is what stops
+  // enabling the feature from reaching back over old consents. Do not backfill.
+  // NOTE the sweep's partial index (consent_records_auto_verify_due_idx) is
+  // migration-only; drizzle's index builder has no WHERE clause.
+  auto_verify_due_at: timestamp("auto_verify_due_at", { withTimezone: true }),
   consent_link_expires_at: timestamp("consent_link_expires_at", { withTimezone: true }),
   consent_delivery_channel: varchar("consent_delivery_channel", { length: 20 }),
   sign_method: varchar("sign_method", { length: 30 }),
@@ -1841,6 +2128,8 @@ export const otherDocumentRequests = pgTable("other_document_requests", {
   rejection_reason: text("rejection_reason"),
   reviewed_by: uuid("reviewed_by"),
   reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+  // E-246 — 'admin' | 'system' (KYC auto-approval SLA sweep).
+  review_source: varchar("review_source", { length: 16 }).default('admin'),
   document_name: text("document_name"),
   document_url: text("document_url"),
   status: varchar({ length: 20 }).default('pending'),
@@ -1870,9 +2159,36 @@ export const nbfcDocRequests = pgTable(
     target_doc_key: varchar("target_doc_key", { length: 120 }),
     nbfc_comments: text("nbfc_comments"),
     admin_notes: text("admin_notes"),
+    // E-210 — documents the ADMIN uploaded with this request/message and sent
+    // straight to the NBFC (list of { url, name, type, size }).
+    attachments: jsonb("attachments").default(sql`'[]'::jsonb`),
+    // E-210 — the NBFC verdict (nbfc_document_verifications.id) this admin reply
+    // answers; NULL for a free-standing admin→NBFC message.
+    verdict_id: integer("verdict_id"),
     // nbfc_raised → admin_review → forwarded_to_dealer → with_customer →
     // dealer_review → admin_review_upload → pushed_to_nbfc | closed | rejected.
     status: varchar({ length: 32 }).default('nbfc_raised').notNull(),
+    // E-240 — TRUE when the NBFC sent this straight to the dealer, skipping the
+    // admin forward gate. Such a wrapper has NO otherDocumentRequests children
+    // (the files ride on nbfcDocRequestMessages.attachments), so
+    // recomputeWrapperStatus() early-returns on it. The admin still sees the
+    // thread and is still notified on both legs.
+    dealer_direct: boolean("dealer_direct").default(false).notNull(),
+    // E-257 — the NBFC request SLA clock. Deadline of the CURRENT leg (status
+    // 'nbfc_raised' → auto-forward to dealer; 'admin_review_upload' → auto-push
+    // to NBFC). Stamped on entering the leg, NULLed by any admin action or by
+    // the sweep's claim. NULL = no clock. Never backfill.
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    // E-257 — 'admin' | 'system': who forwarded / pushed. Default 'admin'.
+    forward_source: varchar("forward_source", { length: 16 }).default('admin'),
+    push_source: varchar("push_source", { length: 16 }).default('admin'),
+    auto_forwarded_at: timestamp("auto_forwarded_at", { withTimezone: true }),
+    auto_pushed_at: timestamp("auto_pushed_at", { withTimezone: true }),
+    // E-257 — last sweep error; the request stays with the admin, no retry.
+    sla_failure: text("sla_failure"),
+    // E-257 — structured items the NBFC asked for ([{doc_label, reason,
+    // is_required}]) so an auto-forward does not have to parse nbfc_comments.
+    requested_items: jsonb("requested_items").default(sql`'[]'::jsonb`),
     item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
     raised_by: uuid("raised_by").notNull(), // NBFC actor
     reviewed_by: uuid("reviewed_by"), // admin who forwarded / pushed
@@ -1895,6 +2211,38 @@ export const nbfcDocRequests = pgTable(
       table.nbfc_id,
       table.status,
     ),
+    verdictIdx: index("nbfc_doc_requests_verdict_idx").on(table.verdict_id),
+  }),
+);
+
+// E-240 — append-only NBFC ⇄ Dealer conversation hanging off an nbfcDocRequests
+// wrapper (one row per thing one party said, with any files attached). Exists
+// because the wrapper holds exactly one `nbfc_comments` and one `admin_notes`,
+// so a dealer reply — or a second round from either side — has nowhere to live
+// without overwriting the question it answers. Same shape as E-238's
+// nbfcOfferNegotiations.
+export const nbfcDocRequestMessages = pgTable(
+  "nbfc_doc_request_messages",
+  {
+    id: varchar({ length: 255 }).primaryKey().notNull(), // 'NBFCMSG-YYYYMMDD-SSSS'
+    request_id: varchar("request_id", { length: 255 }).notNull(), // nbfc_doc_requests.id
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    // 'nbfc' | 'dealer' | 'admin' — no CHECK, per the nbfc_* family convention.
+    party: varchar({ length: 16 }).notNull(),
+    author_user_id: uuid("author_user_id"),
+    message: text("message"),
+    // [{ url, name, type, size }]. A dealer reply's files are ALSO appended to
+    // product_selections.pre_sanction_doc_urls, but THIS copy is canonical —
+    // that bucket is capped at 10 and the cap must never block a reply.
+    attachments: jsonb("attachments").default(sql`'[]'::jsonb`),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    requestCreatedIdx: index("nbfc_doc_request_messages_request_created_idx").on(
+      table.request_id,
+      table.created_at,
+    ),
+    leadIdx: index("nbfc_doc_request_messages_lead_idx").on(table.lead_id),
   }),
 );
 
@@ -1924,6 +2272,12 @@ export const nbfcDocumentVerifications = pgTable(
     forwarded_at: timestamp("forwarded_at", { withTimezone: true }),
     forwarded_request_id: varchar("forwarded_request_id", { length: 255 }),
     forwarded_by: uuid("forwarded_by"),
+    // E-257 — when the SLA sweep may auto-forward this queried/rejected verdict
+    // to the dealer. NULL = no clock. Never backfill.
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    // E-257 — 'admin' | 'system': who forwarded it. Default 'admin'.
+    forward_source: varchar("forward_source", { length: 16 }).default('admin'),
+    sla_failure: text("sla_failure"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1954,6 +2308,46 @@ export const coBorrowerRequests = pgTable(
     coBorrowerRequestsLeadIdx: index("co_borrower_requests_lead_id_idx").on(
       table.lead_id,
     ),
+  }),
+);
+
+// E-264 — hashed, purpose-scoped magic links handed to a customer over WhatsApp
+// so they can finish a step on a mobile web page without a login.
+//
+// This is a third token system on purpose, because neither existing one fits:
+// nbfc_doc_requests.act_token_hash hashes correctly but its consumer page still
+// wants an admin browser session, and other_document_requests.upload_token has
+// the right no-session semantics but stores the secret in PLAINTEXT across three
+// duplicated generators. This takes the hashing from the first and the audience
+// from the second. The upload_token surface is deliberately left untouched.
+export const leadActionTokens = pgTable(
+  "lead_action_tokens",
+  {
+    id: uuid().primaryKey().defaultRandom().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    /** co_borrower | step4 | offers | step5 — vocabulary owned by action-token.ts */
+    purpose: varchar({ length: 32 }).notNull(),
+    /** sha256(raw). The raw token exists only in the WhatsApp message. */
+    token_hash: varchar("token_hash", { length: 64 }).notNull(),
+    audience: varchar({ length: 16 }).default('customer').notNull(),
+    /** The number it was issued to — audit only; forwarding a link is normal. */
+    wa_phone: varchar("wa_phone", { length: 20 }),
+    ref_id: varchar("ref_id", { length: 255 }),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** Nullable: step4/offers links are legitimately re-openable in their window. */
+    consumed_at: timestamp("consumed_at", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    leadActionTokensHashUnique: uniqueIndex("lead_action_tokens_hash_unique").on(
+      table.token_hash,
+    ),
+    leadActionTokensLeadPurposeIdx: index(
+      "lead_action_tokens_lead_purpose_idx",
+    ).on(table.lead_id, table.purpose, table.expires_at),
   }),
 );
 
@@ -2023,6 +2417,23 @@ export const adminVerificationQueue = pgTable(
     reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-246 — the KYC auto-approval SLA clock. `sla_due_at` is stamped at
+    // dealer submit as submitted_at + the configured window; NULL means never
+    // auto-approve (every pre-E-246 row, and anything submitted while the
+    // feature is off). `auto_approved_at` is the idempotency guard — a row is
+    // claimed at most once, whatever the outcome.
+    // NOTE the sweep's partial index (admin_verification_queue_sla_due_idx) is
+    // migration-only; drizzle's index builder has no WHERE clause.
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    auto_approved_at: timestamp("auto_approved_at", { withTimezone: true }),
+    auto_approval_result: varchar("auto_approval_result", { length: 24 }),
+    // E-248 — per-card windows. `sla_card_due_at` is the snapshot of each
+    // card's own deadline taken at submit ({aadhaar: ISO, …}); `sla_next_due_at`
+    // is the earliest deadline still to act on, which the sweep selects by and
+    // advances as cards mature. Both NULL on pre-E-248 rows, which fall back to
+    // `sla_due_at` — never backfill either.
+    sla_card_due_at: jsonb("sla_card_due_at"),
+    sla_next_due_at: timestamp("sla_next_due_at", { withTimezone: true }),
   },
   (table) => ({
     adminVerificationQueueLeadIdx: index(
@@ -2058,6 +2469,8 @@ export const kycVerificationMetadata = pgTable(
     final_decision_at: timestamp("final_decision_at", { withTimezone: true }),
     final_decision_by: uuid("final_decision_by"),
     final_decision_notes: text("final_decision_notes"),
+    // E-246 — 'admin' | 'system' (KYC auto-approval SLA sweep).
+    final_decision_source: varchar("final_decision_source", { length: 16 }).default('admin'),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -2103,6 +2516,9 @@ export const deployedAssets = pgTable(
     total_cycles: integer("total_cycles"),
     warranty_start_date: timestamp("warranty_start_date", { withTimezone: true }),
     warranty_end_date: timestamp("warranty_end_date", { withTimezone: true }),
+    // E-268 — the duration applied at dispatch, so a reader never has to
+    // re-derive it from the two dates (and get month arithmetic wrong).
+    warranty_months: integer("warranty_months"),
     warranty_status: varchar("warranty_status", { length: 20 }).default('active'),
     status: varchar({ length: 20 }).default('active').notNull(),
     last_maintenance_at: timestamp("last_maintenance_at", { withTimezone: true }),
@@ -2544,6 +2960,30 @@ export const appSettings = pgTable("app_settings", {
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
+// --- WHATSAPP TRANSLATIONS (E-269) ---
+// Gemini translation cache for outbound bot copy. See src/lib/whatsapp/translate.ts.
+// Optional at runtime: every access is guarded, so an unapplied DB degrades to
+// the in-process cache.
+
+export const whatsappTranslations = pgTable(
+  "whatsapp_translations",
+  {
+    id: bigserial({ mode: "number" }).primaryKey().notNull(),
+    source_hash: varchar("source_hash", { length: 64 }).notNull(),
+    language: varchar("language", { length: 16 }).notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(),
+    source_text: text("source_text").notNull(),
+    translated_text: text("translated_text").notNull(),
+    model: varchar("model", { length: 64 }),
+    hit_count: integer("hit_count").default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    last_used_at: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("whatsapp_translations_hash_lang_uidx").on(t.source_hash, t.language),
+  ],
+);
+
 // --- DEALER LEAD SCRAPER MODULE ---
 
 export const scraperRuns = pgTable(
@@ -2801,6 +3241,14 @@ export const dealerOnboardingApplications = pgTable(
     signed_agreement_storage_path: text("signed_agreement_storage_path"),
     audit_trail_storage_path: text("audit_trail_storage_path"),
     agreement_status: varchar("agreement_status", { length: 50 }).default('not_generated'),
+    // E-225 — HOW the agreement is executed, orthogonal to agreement_status
+    // (which says WHETHER it is done). 'esign' = Digio, new-battery dealers;
+    // 'manual' = admin uploads a signed scan, scrap / new+scrap dealers.
+    // agreement_ref is the reference on the paper — never a Digio document id,
+    // that stays provider_document_id (cf. E-223 scrap_vendors.agreement_ref).
+    agreement_mode: varchar("agreement_mode", { length: 16 }),
+    agreement_ref: text("agreement_ref"),
+    agreement_signed_on: date("agreement_signed_on"),
     provider_raw_response: jsonb("provider_raw_response"),
     signed_agreement_url: text("signed_agreement_url"),
     audit_trail_url: text("audit_trail_url"),
@@ -2845,6 +3293,21 @@ export const dealerOnboardingApplications = pgTable(
     // signed with a different person's Aadhaar. Mirrors the customer-consent gate.
     owner_aadhaar_no: varchar("owner_aadhaar_no", { length: 12 }),
     owner_aadhaar_verified: boolean("owner_aadhaar_verified").default(false).notNull(),
+    // ---- E-216 internal WhatsApp onboarding operator ----
+    // The internal team member who created this file over WhatsApp. Deliberately
+    // NOT dealer_user_id: the approve route overwrites that column with the
+    // DEALER's Supabase auth id, which destroys creator attribution.
+    onboarding_operator_id: uuid("onboarding_operator_id"),
+    // 'self' | 'operator' | 'operator_handoff' — which channel currently owns the
+    // file. 'self' reproduces every pre-E-216 row.
+    onboarding_channel: varchar("onboarding_channel", { length: 24 })
+      .default('self')
+      .notNull(),
+    // The OPERATOR's per-dealer file session. wa_session_id above keeps its
+    // existing meaning (the DEALER's own session); after a handoff both are set.
+    wa_operator_session_id: uuid("wa_operator_session_id"),
+    operator_invited_at: timestamp("operator_invited_at", { withTimezone: true }),
+    operator_handoff_at: timestamp("operator_handoff_at", { withTimezone: true }),
   },
 );
 
@@ -2947,6 +3410,40 @@ export const dealerOnboardingDocuments = pgTable(
   }),
 );
 
+// ── E-216 internal WhatsApp onboarding operators ────────────────────────────
+// Admin-managed allowlist of internal team members who may onboard MANY dealers
+// from their own WhatsApp number. Identity is the phone alone — user_id is an
+// optional attribution link, NOT the key, so a team member with no CRM login
+// still works. Deliberately not users.role: resolveKnownContact() already
+// matches users.phone for a cosmetic greeting, and making that load-bearing
+// would silently promote every staff member with a mobile on file.
+export const whatsappOperators = pgTable(
+  "whatsapp_operators",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // E.164 WITHOUT '+', exactly as Meta delivers it ('919876543210').
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    display_name: text("display_name").notNull(),
+    user_id: uuid("user_id"),
+    email: varchar("email", { length: 150 }),
+    is_active: boolean("is_active").default(true).notNull(),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    deactivated_by: uuid("deactivated_by"),
+    created_by: uuid("created_by"),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    waPhoneKey: uniqueIndex("whatsapp_operators_wa_phone_key").on(table.wa_phone),
+    activeIdx: index("whatsapp_operators_active_idx").on(table.wa_phone),
+  }),
+);
+
 // ── E-167 WhatsApp dealer-onboarding chatbot ────────────────────────────────
 // One row per dealer conversation. Persists the conversation state machine so a
 // dropped chat resumes exactly where it left off (design §4). State values are
@@ -2974,6 +3471,29 @@ export const whatsappOnboardingSessions = pgTable(
     session_status: varchar("session_status", { length: 24 })
       .default('active')
       .notNull(),
+    // ---- E-216 operator sessions ----
+    // 'dealer'        — every pre-E-216 row, and every self-onboarding dealer
+    // 'operator_hub'  — one per operator number; holds the OP_* menu state
+    // 'operator_file' — one per dealer file an operator has open. Carries the
+    //                   OPERATOR's wa_phone (so replies reach them) while
+    //                   application_id points at a dealer's file, which is what
+    //                   lets the unmodified onboarding handlers run per dealer.
+    session_kind: varchar("session_kind", { length: 16 })
+      .default('dealer')
+      .notNull(),
+    operator_id: uuid("operator_id"),
+    parent_session_id: uuid("parent_session_id"),
+    // E-264 — the interactive prompt we could not send because Meta's 24-hour
+    // service window was shut. A template cannot carry a list or more than three
+    // buttons, so out-of-window we send a generic template nudge and stash the
+    // real prompt here; the customer's next inbound re-opens the window and the
+    // orchestrator replays it verbatim. Sending the template does NOT re-open
+    // the window — only their reply does.
+    pending_prompt: jsonb("pending_prompt"),
+    pending_prompt_at: timestamp("pending_prompt_at", { withTimezone: true }),
+    // E-264 — unanswered template nudges since the last inbound. Meta scores the
+    // business down for these, so they are capped. Reset on inbound.
+    window_nudges_sent: integer("window_nudges_sent").default(0).notNull(),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2991,6 +3511,13 @@ export const whatsappOnboardingSessions = pgTable(
     applicationIdIdx: index(
       "whatsapp_onboarding_sessions_application_id_idx",
     ).on(table.application_id),
+    phoneKindIdx: index("whatsapp_onboarding_sessions_phone_kind_idx").on(
+      table.wa_phone,
+      table.session_kind,
+    ),
+    operatorIdx: index("whatsapp_onboarding_sessions_operator_idx").on(
+      table.operator_id,
+    ),
   }),
 );
 
@@ -3098,18 +3625,137 @@ export const scrapeRuns = pgTable("scraper_runs", {
   new_leads_skipped_invalid_phone: integer(
     "new_leads_skipped_invalid_phone",
   ).default(0),
+  // ⚠ `last_progress_at` WAS DECLARED HERE AND HAS BEEN REMOVED. Do not add it
+  // back without first writing the migration that creates it.
+  //
+  // It was added for a liveness heartbeat — executeChunk() would bump it and
+  // reapStuckRuns() would reap on silence rather than on total run age, so a
+  // legitimately long multi-query run isn't force-failed at minute 11. That is
+  // still a good idea, but NONE of it was built: no code writes the column, no
+  // code reads it, reapStuckRuns() still compares `started_at`, and the E-227
+  // migration the old comment here credited does not exist in drizzle/.
+  //
+  // So the column existed in exactly one place — this object — and drizzle
+  // names EVERY column of a table object in its INSERT. The result was that
+  // starting any scrape died with
+  //   column "last_progress_at" of relation "scraper_runs" does not exist
+  // on every database, because no database has ever had it. Same failure mode
+  // E-224 / E-226 / E-236 each call out at length: a column that is not
+  // guaranteed present must not be named on the drizzle object.
+  //
+  // To build the heartbeat: write the migration (column + a partial
+  // idx_scraper_runs_running WHERE status = 'running'), apply it everywhere,
+  // THEN add the column back here — or write it by raw sql`` and leave this
+  // object alone, which is what the three migrations above chose.
 });
 
-export const scraperRunChunks = pgTable("scraper_run_chunks", {
-  id: text().primaryKey().notNull(),
-  run_id: text("run_id").notNull(),
-  combination_query: text("combination_query").notNull(),
-  status: text().default('pending').notNull(),
-  leads_count: integer("leads_count").default(0),
-  error_message: text("error_message"),
-  created_at: timestamp("created_at").defaultNow(),
-  completed_at: timestamp("completed_at"),
-});
+export const scraperRunChunks = pgTable(
+  "scraper_run_chunks",
+  {
+    id: text().primaryKey().notNull(),
+    run_id: text("run_id").notNull(),
+    combination_query: text("combination_query").notNull(),
+    status: text().default('pending').notNull(),
+    leads_count: integer("leads_count").default(0),
+    error_message: text("error_message"),
+    created_at: timestamp("created_at").defaultNow(),
+    completed_at: timestamp("completed_at"),
+    // E-227 — the two components of combination_query, stored at fan-out time.
+    // combination_query may itself contain " in ", so it can't be parsed back
+    // apart reliably. NULL on chunks created before E-227.
+    query_text: text("query_text"),
+    city: text(),
+  },
+  (t) => ({
+    // E-227 — the progress poll runs WHERE run_id = ? GROUP BY status every few
+    // seconds against ~1,500 rows per run; this table had no index at all.
+    runIdIdx: index("idx_scraper_run_chunks_run_id").on(t.run_id),
+    // Serves the chunk-drain ticker's claim query. Partial (WHERE status =
+    // 'pending') in the migration — Drizzle's builder can't express that, so
+    // E-227 is the source of truth for the WHERE clause.
+    pendingIdx: index("idx_scraper_run_chunks_pending").on(
+      t.status,
+      t.created_at,
+    ),
+  }),
+);
+
+// E-241 — the scraper batch job queue. One row = one (query, city) pair waiting
+// to become a scraper_runs row. The dispatcher ticker
+// (startScraperQueueTicker in src/instrumentation-node.ts →
+// jobQueue.dispatchOnce()) claims the oldest eligible row, creates an ordinary
+// scraper_runs row for it, and calls the existing startChunkedRun().
+//
+// Safe to mirror in full — unlike the scrapeRuns landmine above, this table is
+// brand new, so there is no pre-existing statement an extra column could break.
+// On a database without E-241 the /api/scraper/batch routes 500 loudly and the
+// single-query scraper keeps working; that is the whole reason the queue is its
+// own relation rather than seven more columns on scraper_runs.
+export const scraperJobQueue = pgTable(
+  "scraper_job_queue",
+  {
+    id: text().primaryKey().notNull(),
+    // Groups the rows of one submission. A LABEL for the UI only — there is no
+    // batch entity and nothing rolls up through it.
+    batch_id: text("batch_id").notNull(),
+    // Position within the batch, 0-based. Dispatch orders by
+    // (created_at, seq) — created_at FIRST: a whole submission is inserted in
+    // one statement and shares created_at exactly, so that reads as "oldest
+    // batch first, then the operator's own row order" and batches drain FIFO.
+    // seq alone cannot express order (shared timestamp), and seq FIRST would
+    // round-robin across batches because seq restarts at 0 for each one.
+    seq: integer().default(0).notNull(),
+    query_text: text("query_text").notNull(),
+    // NULL = no city list supplied, so generateCitiesForQuery() picks them,
+    // i.e. exactly the pre-E-241 single-query behaviour.
+    city: text(),
+    max_results: integer("max_results"),
+    // false (the default, and the UI default) = use query_text literally, one
+    // chunk per job. true = expand into ~15 Gemini variations first.
+    expand_with_ai: boolean("expand_with_ai").default(false).notNull(),
+    // queued | running | done | failed | cancelled. No CHECK, no pgEnum — the
+    // vocabulary lives in src/lib/scraper/jobQueue.ts and is enforced by zod at
+    // the write path, per this table family's convention.
+    status: varchar({ length: 16 }).default('queued').notNull(),
+    // Soft FK to scraper_runs.id — no DB-level constraint on purpose.
+    run_id: varchar("run_id", { length: 255 }),
+    attempts: integer().default(0).notNull(),
+    last_error: text("last_error"),
+    // now | once | daily. See E-241's header — 'daily' is the whole of the
+    // recurring model and needs no pause/resume state: queued rows just sit
+    // here while the window is shut.
+    schedule_mode: varchar("schedule_mode", { length: 16 })
+      .default('now')
+      .notNull(),
+    run_after: timestamp("run_after", { withTimezone: true }),
+    // 'HH:MM' IST. Same shape as dialer_campaigns.window_start (E-228) and
+    // assignment_config.working_hours_start (E-120). window_end < window_start
+    // is legal and means an overnight window; the reader handles the wrap.
+    window_start: varchar("window_start", { length: 5 }),
+    window_end: varchar("window_end", { length: 5 }),
+    // ["mon","tue",…]; NULL = every day. Same vocabulary as
+    // assignment_config.working_days and dialer_campaigns.window_days.
+    window_days: jsonb("window_days"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatched_at: timestamp("dispatched_at", { withTimezone: true }),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    // Copied off scraper_runs.new_leads_promoted by reconcileFinishedJobs() so
+    // batch totals need no join.
+    leads_promoted: integer("leads_promoted").default(0).notNull(),
+  },
+  (t) => ({
+    // Serves dispatchOnce()'s claim. PARTIAL (WHERE status = 'queued') in the
+    // migration — Drizzle's index builder has no WHERE syntax, so E-241 is the
+    // source of truth for the predicate.
+    claimIdx: index("idx_scraper_job_queue_claim").on(t.created_at, t.seq),
+    batchIdx: index("idx_scraper_job_queue_batch").on(t.batch_id, t.seq),
+    // Also PARTIAL in the migration (WHERE run_id IS NOT NULL) — same caveat.
+    runIdx: index("idx_scraper_job_queue_run").on(t.run_id),
+  }),
+);
 
 export const scraperLeads = pgTable("scraper_leads", {
   id: text().primaryKey().notNull(),
@@ -3138,6 +3784,17 @@ export const dealerLeads = pgTable("dealer_leads", {
   // to conflict on. The constraint already exists in the DB (migration
   // 0002_cute_devos.sql); mirror it here so future `db:push` runs preserve it.
   phone: text().unique("dealer_leads_phone_unique"),
+  // E-242 adds `contact_email` and `gstin` to this table and they are
+  // DELIBERATELY ABSENT HERE, exactly as E-224's and E-236's columns are.
+  //
+  // Drizzle names every column of a table object in a bare
+  // `db.select().from(dealerLeads)`, and there are ~20 of those across the
+  // leads list, the AI dialer, the CEO overview and the dashboards. Listing a
+  // column here therefore hard-fails all of them at PARSE time on any database
+  // without the migration — the whole leads screen goes down to add an email
+  // field. The quotation code reads both columns by name in raw `sql``
+  // projections instead (quoteDraft.ts, the send route), so an unapplied E-242
+  // costs the quotation feature and nothing else.
   language: text(),
   follow_up_history: jsonb("follow_up_history").default([]),
   current_status: text("current_status"),
@@ -3185,6 +3842,19 @@ export const dealerLeads = pgTable("dealer_leads", {
   intent_band: varchar("intent_band", { length: 20 }),
   call_status: varchar("call_status", { length: 20 }),
   info_signals_count: integer("info_signals_count"),
+  // E-250 adds `intent_band_source`, `intent_overridden_by` and
+  // `intent_overridden_at` to this table, and they are DELIBERATELY ABSENT
+  // HERE — same reason as E-242's and E-224's columns above.
+  //
+  // The human override writes THROUGH to intent_band / final_intent_score
+  // (that is the whole design: every existing reader picks up the corrected
+  // value with no change). These three columns only record PROVENANCE, and are
+  // read by one panel and one API route. Listing them here would hard-fail
+  // every bare `db.select().from(dealerLeads)` at parse time on any database
+  // without E-250 applied — taking the leads screen, the AI dialer and the CEO
+  // overview down to add a label. Written and read via raw `sql` projections in
+  // src/lib/leads/intentOverride.ts instead, so an unapplied E-250 costs the
+  // intent-review feature and nothing else.
   preliminary_payment_intent: text("preliminary_payment_intent"),
   pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
   brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
@@ -3214,6 +3884,30 @@ export const dealerLeads = pgTable("dealer_leads", {
   // Soft delete (BRD §0.13)
   is_active: boolean("is_active").default(true),
   deleted_at: timestamp("deleted_at", { withTimezone: true }),
+  // E-224 adds two more columns here — `neodove_synced_at` and
+  // `neodove_sync_status` — that are DELIBERATELY NOT MIRRORED in this object.
+  //
+  // The usual rule is to mirror every migration here so types match the DB.
+  // These two are the exception, because of how this table is read: ~20 call
+  // sites do a bare `db.select().from(dealerLeads)` (the /leads list, the edit
+  // page, both call schedulers, the CEO and role dashboards, the DigiLocker
+  // callback, sales-insight, the converted-leads download). Drizzle expands a
+  // bare select into an explicit column list, so naming a column here makes
+  // EVERY one of those queries hard-fail with "column does not exist" until the
+  // migration is hand-applied — and this repo has no migration runner, applies
+  // by hand per environment, and has a documented history of migrations
+  // silently not landing (the E-145 drift). Mirroring them traded a
+  // write-only convenience column for a whole-app outage on any environment
+  // that hadn't run E-224 yet. That is exactly what happened on database-1.
+  //
+  // They are written exclusively through raw `sql` UPDATEs in
+  // src/lib/neodove/* and the NeoDove routes, all of which are unreachable
+  // unless NEODOVE_ENABLED is set — so the coupling stays contained to the
+  // feature that needs it. Same treatment as `duplicate_merge_requests`, which
+  // is likewise absent here and written via raw SQL.
+  //
+  // If a future change needs to READ them through Drizzle, add them here AND
+  // make E-224 a hard prerequisite in the deploy notes.
 });
 
 // Org-wide saved region groups for the AI dialer modal. `regions` is a
@@ -3297,6 +3991,29 @@ export const dialerCampaigns = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // E-254 — execution type. Decides what happens when the window CLOSES:
+    //   "now"       unscheduled, dial continuously (default, pre-E-228 behaviour)
+    //   "single"    dial today's window once, then status="paused" until a human
+    //   "recurring" dial every window_days day, auto-resuming, until the queue empties
+    // Short-circuits the window predicate, so a "now" row ignores the columns below.
+    schedule_mode: varchar("schedule_mode", { length: 16 })
+      .notNull()
+      .default("now"),
+    // E-228 — per-campaign calling window. NULL on all three means UNSCHEDULED:
+    // the campaign dials continuously, exactly as it did before E-228. Defaults
+    // are pre-filled in the UI from assignment_config (E-120), not stored here.
+    window_start: varchar("window_start", { length: 5 }), // "HH:MM" IST
+    window_end: varchar("window_end", { length: 5 }), // "HH:MM" IST
+    window_days: jsonb("window_days"), // ["mon","tue",…]
+    // E-228 — pause/resume bookkeeping. status flips to 'scheduled' when the
+    // window closes; the resume ticker claims on resume_after <= now().
+    paused_at: timestamp("paused_at", { withTimezone: true }),
+    resume_after: timestamp("resume_after", { withTimezone: true }),
+    // E-228 — real activity timestamp. The stall watchdog measures inactivity
+    // from COALESCE(last_advanced_at, started_at); without it, a campaign
+    // resumed the morning after an overnight pause carries yesterday's
+    // started_at and is force-stopped before placing its first call.
+    last_advanced_at: timestamp("last_advanced_at", { withTimezone: true }),
   },
   (t) => ({
     statusIdx: index("idx_dialer_campaigns_status").on(t.status),
@@ -3304,6 +4021,10 @@ export const dialerCampaigns = pgTable(
       "idx_dialer_campaigns_triggered_by_started",
     ).on(t.triggered_by, t.started_at),
     startedAtIdx: index("idx_dialer_campaigns_started_at").on(t.started_at),
+    // E-228 — the resume ticker's only predicate. Partial in the migration
+    // (WHERE status = 'scheduled'); Drizzle's builder can't express that, so the
+    // migration file is the source of truth for the WHERE clause.
+    resumeIdx: index("idx_dialer_campaigns_resume").on(t.resume_after),
   }),
 );
 
@@ -3361,23 +4082,73 @@ export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
 
 // --- NOTIFICATIONS ---
 
-export const notifications = pgTable("notifications", {
-  id: text().primaryKey().notNull(),
-  user_id: uuid("user_id"),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  lead_id: varchar("lead_id", { length: 100 }),
-  type: varchar({ length: 50 }).notNull(),
-  title: text().notNull(),
-  message: text().notNull(),
-  data: jsonb(),
-  read: boolean().default(false),
-  read_at: timestamp("read_at", { withTimezone: true }),
-  // E-200 — soft archive/delete for the buyback notification centre. NULL =
-  // active / not deleted, so no backfill was needed. Both apply CRM-wide.
-  archived_at: timestamp("archived_at", { withTimezone: true }),
-  deleted_at: timestamp("deleted_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
-});
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text().primaryKey().notNull(),
+    // The recipient LOGIN. Every row the notification hub writes sets this —
+    // /api/notifications is scoped by user_id, so a row without it is invisible
+    // in the bell. (That is exactly why dealer notifications, which used to set
+    // only dealer_id, never appeared.) See src/lib/notifications/emit.ts.
+    user_id: uuid("user_id"),
+    dealer_id: varchar("dealer_id", { length: 255 }),
+    lead_id: varchar("lead_id", { length: 100 }),
+    // `<domain>.<event>` — src/lib/notifications/catalog.ts. varchar(50): a
+    // longer type string fails the INSERT with 22001.
+    type: varchar({ length: 50 }).notNull(),
+    title: text().notNull(),
+    message: text().notNull(),
+    // Carries the deep link (`href`), the provenance pair (`from`/`to`/`stage`)
+    // and any inline `actions` the bell renders as buttons. Deliberately jsonb
+    // rather than columns — see the E-211 header.
+    data: jsonb(),
+    read: boolean().default(false),
+    read_at: timestamp("read_at", { withTimezone: true }),
+    // E-200 — soft archive/delete for the buyback notification centre. NULL =
+    // active / not deleted, so no backfill was needed. Both apply CRM-wide.
+    archived_at: timestamp("archived_at", { withTimezone: true }),
+    deleted_at: timestamp("deleted_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  // E-211 — the four access paths the CRM-wide bell runs on every page load.
+  (table) => ({
+    userCreatedIdx: index("notifications_user_created_idx").on(table.user_id, table.created_at),
+    leadIdx: index("notifications_lead_idx").on(table.lead_id, table.created_at),
+    // The two partial indexes (user_unread, legacy_dealer) are created by the
+    // migration; drizzle's builder has no partial-index syntax, so they are
+    // intentionally absent here. The migration file is the source of truth.
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-231 — per-dashboard control of which notification types reach the bell
+// -----------------------------------------------------------------------------
+// NO ROW = ENABLED. The table holds only decisions a human actually made, so a
+// newly-added notification type is on everywhere the moment it exists and an
+// unapplied migration is indistinguishable from today's behaviour. The reader
+// (src/lib/notifications/access.ts) loads ONLY the enabled=false rows and fails
+// open on any error — see the E-231 file for why that is not negotiable.
+//
+// `dashboard` is LOWER(users.role). The CHECK enforcing lowercase lives in the
+// migration; drizzle's builder has no CHECK syntax, so it is intentionally
+// absent here and the migration is the source of truth.
+// -----------------------------------------------------------------------------
+
+export const notificationAccess = pgTable(
+  "notification_access",
+  {
+    dashboard: varchar({ length: 50 }).notNull(),
+    notification_type: varchar("notification_type", { length: 50 }).notNull(),
+    enabled: boolean().notNull().default(true),
+    // users.id AS TEXT — matches assignment_config.updated_by on the same
+    // settings screen, which joins u.id::text.
+    updated_by: text("updated_by"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.dashboard, table.notification_type] }),
+  }),
+);
 
 export const scraperCityQueue = pgTable("scraper_city_queue", {
   id: text().primaryKey().notNull(),
@@ -3418,6 +4189,10 @@ export const productSelections = pgTable("product_selections", {
   charger_price: decimal("charger_price", { precision: 12, scale: 2 }),
   paraphernalia_cost: decimal("paraphernalia_cost", { precision: 12, scale: 2 }),
   dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
+  // E-273: GST on the dealer margin (18%). final_price = net_subtotal + dealer_margin + dealer_margin_gst_amount.
+  // NULL on rows written before E-273 (= 0; their final_price stays what the customer approved).
+  dealer_margin_gst_percent: decimal("dealer_margin_gst_percent", { precision: 5, scale: 2 }),
+  dealer_margin_gst_amount: decimal("dealer_margin_gst_amount", { precision: 12, scale: 2 }),
   final_price: decimal("final_price", { precision: 12, scale: 2 }),
 
   // GST snapshot — per-line gross / GST / net captured at submission so the
@@ -3709,6 +4484,10 @@ export const nbfcLeadAssignments = pgTable(
     // Lifecycle: pending → in_progress → offer_submitted → selected |
     // not_selected | declined | withdrawn. A1 only writes 'pending'; later
     // phases drive the rest. CHECK constraint lives on the DB side (E-131).
+    // E-245: 'withdrawn' = the DEALER closed the deal with this lender
+    // (decision_reason='dealer_closed_deal'), freeing one of the two lender
+    // slots so the lead can be re-routed. Distinct from 'not_selected', which
+    // means it lost to a chosen winner.
     status: varchar({ length: 30 }).default("pending").notNull(),
     assigned_at: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
     decided_at: timestamp("decided_at", { withTimezone: true }),
@@ -3770,6 +4549,18 @@ export const nbfcFinancingOffers = pgTable(
     ceo_decided_at: timestamp("ceo_decided_at", { withTimezone: true }),
     submitted_by: uuid("submitted_by"),
     submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-238 — dealer <-> NBFC negotiation state for THIS offer. The round-by-round
+    // history lives in nbfcOfferNegotiations; these four are the current state.
+    // negotiation_status: open (dealer may ask for a revision) | dealer_countered
+    // (NBFC to respond) | fixed (NBFC froze the terms — neither side can change
+    // them and the dealer's Negotiate action disappears; winner selection still
+    // allowed) | closed (E-245: the dealer ended the deal — terminal, set with
+    // status='withdrawn' here and on the assignment). A fixed offer can still be
+    // closed: fixing freezes the numbers, not the customer's decision.
+    negotiation_status: varchar("negotiation_status", { length: 16 }).default("open").notNull(),
+    negotiation_round: integer("negotiation_round").default(0).notNull(),
+    fixed_at: timestamp("fixed_at", { withTimezone: true }),
+    fixed_by: uuid("fixed_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3778,6 +4569,59 @@ export const nbfcFinancingOffers = pgTable(
     leadIdx: index("nbfc_financing_offers_lead_idx").on(table.lead_id),
     tenantIdx: index("nbfc_financing_offers_tenant_idx").on(table.tenant_id),
     ceoStatusIdx: index("nbfc_financing_offers_ceo_status_idx").on(table.ceo_approval_status),
+  }),
+);
+
+// E-238 — append-only round log of the dealer <-> NBFC negotiation over one firm
+// financing offer. nbfcFinancingOffers is UNIQUE on assignment_id and the submit
+// route upserts in place, so every resubmit destroys the previous terms — this
+// table is where the history that a disputed sanction turns on actually lives.
+//
+// Each row is a FULL snapshot of the terms one party put on the table at one
+// moment (not a per-field ask/counter pair like vendorThreadLines): a financing
+// offer is six interdependent numbers negotiated as a set, and the UI diffs
+// consecutive rounds to surface only what changed.
+//
+// INVARIANT: a round is written only when its terms are visible to the dealer.
+// While E-161 holds an out-of-band offer at ceo_approval_status='pending' the
+// dealer cannot see it, so no round is appended until the iTarang CEO approves.
+//
+// The unique index on (offer_id, round) is a concurrency guard, not tidiness —
+// the round written is always negotiation_round + 1, so two simultaneous submits
+// must collide with 23505 rather than both claim the same round.
+export const nbfcOfferNegotiations = pgTable(
+  "nbfc_offer_negotiations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    offer_id: uuid("offer_id").notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    round: integer("round").notNull(),
+    // 'nbfc' | 'dealer' | 'customer' (E-265 — the borrower writing from their
+    // own WhatsApp chat). No CHECK; the vocabulary is enforced in the service.
+    party: varchar("party", { length: 8 }).notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(), // 'offer' | 'counter' | 'fix'
+    loan_amount: numeric("loan_amount", { precision: 14, scale: 2 }),
+    roi_pct: numeric("roi_pct", { precision: 5, scale: 2 }),
+    emi_amount: numeric("emi_amount", { precision: 14, scale: 2 }),
+    tenure_months: integer("tenure_months"),
+    down_payment: numeric("down_payment", { precision: 14, scale: 2 }),
+    processing_fee: numeric("processing_fee", { precision: 14, scale: 2 }),
+    conditions: text("conditions"),
+    message: text("message"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    offerRoundUnique: uniqueIndex("nbfc_offer_negotiations_offer_round_uidx").on(
+      table.offer_id,
+      table.round,
+    ),
+    offerIdx: index("nbfc_offer_negotiations_offer_idx").on(table.offer_id),
+    leadIdx: index("nbfc_offer_negotiations_lead_idx").on(table.lead_id),
+    tenantIdx: index("nbfc_offer_negotiations_tenant_idx").on(table.tenant_id),
   }),
 );
 
@@ -4494,11 +5338,527 @@ export const nbfcRecoveryPipeline = pgTable(
     estimated_recovery_value: numeric("estimated_recovery_value", { precision: 12, scale: 2 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    // [E-232] recovery_batteries.id — the real key that replaces the string
+    // join in settlements.ts, which matched battery_serial against
+    // auction_lots.lot_code. Those two values are never equal, so marking a
+    // battery 'resold' has never once worked.
+    battery_id: uuid("battery_id"),
   },
   (table) => ({
     tenantIdx: index("nbfc_recovery_pipeline_tenant_idx").on(table.tenant_id),
     stageIdx: index("nbfc_recovery_pipeline_stage_idx").on(table.stage),
     tenantStageIdx: index("nbfc_recovery_pipeline_tenant_stage_idx").on(table.tenant_id, table.stage),
+    batteryIdx: index("nbfc_recovery_pipeline_battery_idx").on(table.battery_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-232 — recovery_batteries: the battery master (Battery Auction BRD §3)
+// -----------------------------------------------------------------------------
+// Deliberately a SEPARATE table from nbfc_recovery_pipeline rather than twelve
+// more columns on it, because the two have different lifetimes. A pipeline row
+// is a workflow position that ends at 'resold'. A battery is a physical asset
+// that outlives it — refurbished, auctioned, refinanced, and recovered again
+// later. One battery, many pipeline passes.
+//
+// `state_code` is named that way because `state` on this same row is the
+// geographic state. Values: draft | intaken | inspected | refurbishing | ready
+// | lotted | sold | scrapped. No pgEnum and no CHECK, matching every other
+// status column in this family — the vocabulary lives in
+// src/lib/nbfc/recovery/battery.ts so it can move without a migration on a
+// drifting database.
+// -----------------------------------------------------------------------------
+
+export const recoveryBatteries = pgTable(
+  "recovery_batteries",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // Global, not per-tenant: the serial is what an operator reads off the
+    // casing, and the same battery must not exist twice because it changed
+    // hands.
+    serial: varchar("serial", { length: 64 }).notNull().unique(),
+    model: varchar("model", { length: 120 }),
+    capacity: varchar("capacity", { length: 32 }),
+    manufacturing_date: date("manufacturing_date"),
+    condition_grade: varchar("condition_grade", { length: 24 }),
+    recovery_date: timestamp("recovery_date", { withTimezone: true }),
+    warehouse: varchar("warehouse", { length: 160 }),
+    lat: numeric("lat", { precision: 10, scale: 7 }),
+    lng: numeric("lng", { precision: 10, scale: 7 }),
+    city: varchar("city", { length: 120 }),
+    state: varchar("state", { length: 120 }),
+    // varchar(255), NOT uuid — `loan_sanctions.id` is character varying here.
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }),
+    recovery_pipeline_id: uuid("recovery_pipeline_id"),
+    // Relative /api/files/<bucket>/<key> strings, never absolute URLs — the
+    // backend flips between Supabase and S3 behind STORAGE_BACKEND and the
+    // proxy route is the only stable address. Captured once at inspection and
+    // reused verbatim as the auction images (BRD §20).
+    image_urls: text("image_urls").array().notNull().default(sql`'{}'::text[]`),
+    state_code: varchar("state_code", { length: 24 }).notNull().default("draft"),
+    notes: text("notes"),
+    // [E-258] Set when this battery was sold to iTarang as scrap. Turns
+    // state_code='scrapped' from a bare status into "sold under SCR-000123",
+    // which is what anyone auditing a scrapped battery actually asks.
+    scrap_consignment_id: uuid("scrap_consignment_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("recovery_batteries_tenant_idx").on(table.tenant_id),
+    stateIdx: index("recovery_batteries_state_idx").on(table.state_code),
+    pipelineIdx: index("recovery_batteries_pipeline_idx").on(table.recovery_pipeline_id),
+    loanIdx: index("recovery_batteries_loan_idx").on(table.loan_sanction_id),
+    scrapConsignmentIdx: index("recovery_batteries_scrap_consignment_idx").on(
+      table.scrap_consignment_id,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-262 — recovery agent dispatch: the physical leg between flag and bench
+// -----------------------------------------------------------------------------
+// Flagging a loan for recovery writes the flag, a pipeline row at
+// 'needs_inspection' and a battery stub; inspection then assumes the battery is
+// already on a bench. The job in between — somebody drives to the borrower,
+// finds the battery, photographs it and brings it back — had no record at all.
+//
+// The NBFC keeps a directory of recovery agents (no logins, contacts only),
+// dispatches one with a single-use link, and the agent's phone captures live
+// GPS and watermarked photos at the address. The NBFC reviews and approves,
+// which stamps the battery master and hands it to the inspection wizard.
+//
+// Modelled on field_investigations / nbfc_fi_agents (E-148), which already
+// solved assign → tokenised link → GPS + photo capture → reviewer decision.
+//
+// Mirrors drizzle/E-262_recovery_agent_dispatch.sql, which is the source of
+// truth. No pgEnum and no CHECK on the status columns — same decision as every
+// other status column in this family (see the E-232 header).
+//
+// THREE INDEXES LIVE ONLY IN THE SQL. Drizzle's index builder cannot express a
+// partial index, and all three of these carry a rule rather than a lookup:
+//   recovery_assignments_open_unique         one live assignment per loan
+//   recovery_assignments_link_token_unique   the token is a credential
+//   recovery_assignment_photos_slot_unique   one photo per named slot
+// -----------------------------------------------------------------------------
+export const nbfcRecoveryAgents = pgTable(
+  "nbfc_recovery_agents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    nbfc_id: integer("nbfc_id"),
+    name: varchar("name", { length: 200 }).notNull(),
+    // Phone required, email optional — an agent is reached on a phone; email is
+    // the link wire when they have one.
+    phone: varchar("phone", { length: 20 }).notNull(),
+    email: varchar("email", { length: 200 }),
+    city: varchar("city", { length: 120 }),
+    /** Free text — "Ranchi + 60km". Not a geofence; it helps a human pick. */
+    coverage_area: text("coverage_area"),
+    preferred_channel: varchar("preferred_channel", { length: 12 })
+      .default("email")
+      .notNull(), // email|sms|whatsapp
+    /** Compared against the selfie the field form captures. */
+    reference_photo_url: text("reference_photo_url"),
+    /** Soft delete — assignments reference these rows. */
+    active: boolean("active").default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantActiveIdx: index("nbfc_recovery_agents_tenant_active_idx").on(
+      table.tenant_id,
+      table.active,
+    ),
+  }),
+);
+
+export const recoveryAssignments = pgTable(
+  "recovery_assignments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // varchar(255), NOT uuid — `loan_sanctions.id` is character varying here.
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    recovery_pipeline_id: uuid("recovery_pipeline_id"),
+    battery_id: uuid("battery_id"),
+    /**
+     * Nullable: a flag raised with no serial has none, and the agent supplies
+     * it on the field form — they are the one holding the battery.
+     */
+    battery_serial: varchar("battery_serial", { length: 64 }),
+
+    attempt_no: integer("attempt_no").default(1).notNull(),
+    is_current: boolean("is_current").default(true).notNull(),
+    /**
+     * assigned | in_progress | collected | completed | rejected | cancelled
+     *
+     * `assigned` means the link exists but the send was never confirmed;
+     * `in_progress` means the agent has it. Without that distinction a bounced
+     * email looks exactly like an agent who has not set off yet.
+     */
+    status: varchar("status", { length: 24 }).default("assigned").notNull(),
+
+    agent_id: uuid("agent_id"),
+    /** Denormalised so renaming an agent does not rewrite history. */
+    agent_name: varchar("agent_name", { length: 200 }),
+    agent_phone: varchar("agent_phone", { length: 20 }),
+    assigned_by: uuid("assigned_by"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    due_at: timestamp("due_at", { withTimezone: true }),
+
+    link_token: varchar("link_token", { length: 80 }),
+    link_sent_at: timestamp("link_sent_at", { withTimezone: true }),
+    link_channel: varchar("link_channel", { length: 12 }), // email|sms|whatsapp
+    link_expires_at: timestamp("link_expires_at", { withTimezone: true }),
+    /** Why nobody was reached, so the queue never shows a silent 'assigned'. */
+    dispatch_error: text("dispatch_error"),
+
+    collected_at: timestamp("collected_at", { withTimezone: true }),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_accuracy_m: numeric("gps_accuracy_m", { precision: 8, scale: 2 }),
+    /**
+     * Server clock, not the handset's — a phone's time is user-settable and
+     * this is evidence.
+     */
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    /**
+     * Geocoded borrower address, frozen at assign. NULL when no geocoding key
+     * is configured — say so in the UI rather than rendering a bare dash.
+     */
+    stated_lat: numeric("stated_lat", { precision: 10, scale: 7 }),
+    stated_lng: numeric("stated_lng", { precision: 10, scale: 7 }),
+    distance_from_address_m: numeric("distance_from_address_m", { precision: 10, scale: 2 }),
+    condition_notes: text("condition_notes"),
+    agent_declaration_at: timestamp("agent_declaration_at", { withTimezone: true }),
+
+    reviewed_by: uuid("reviewed_by"),
+    reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+    review_decision: varchar("review_decision", { length: 16 }), // approve|reject
+    review_notes: text("review_notes"),
+
+    cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
+    /** NULL when the system cancelled it — nobody clicked, the borrower paid. */
+    cancelled_by: uuid("cancelled_by"),
+    cancel_reason: text("cancel_reason"),
+    cancel_source: varchar("cancel_source", { length: 24 }), // manual|emi_payment|reassigned
+
+    // [E-263] A cache of the visit log, for the queue. The log is authoritative.
+    next_visit_at: timestamp("next_visit_at", { withTimezone: true }),
+    visit_attempt_count: integer("visit_attempt_count").default(0).notNull(),
+
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantStatusIdx: index("recovery_assignments_tenant_status_idx").on(
+      table.tenant_id,
+      table.status,
+    ),
+    loanIdx: index("recovery_assignments_loan_idx").on(table.loan_sanction_id),
+    // recovery_assignments_open_unique and recovery_assignments_link_token_unique
+    // are PARTIAL and therefore SQL-only. See the header.
+  }),
+);
+
+export const recoveryAssignmentPhotos = pgTable(
+  "recovery_assignment_photos",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    // serial | battery | vehicle | agent_selfie | extra
+    photo_type: varchar("photo_type", { length: 24 }).notNull(),
+    /**
+     * Relative storage path, never an absolute URL — the backend flips between
+     * Supabase and S3 behind STORAGE_BACKEND and a signed URL would rot.
+     */
+    image_url: text("image_url").notNull(),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    /**
+     * watermarkPhoto() never throws; it reports whether it managed to stamp the
+     * image. An unstamped photo is still evidence — flagged, not dropped.
+     */
+    watermark_applied: boolean("watermark_applied").default(false).notNull(),
+    uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    assignmentIdx: index("recovery_assignment_photos_assignment_idx").on(
+      table.assignment_id,
+    ),
+    // recovery_assignment_photos_slot_unique is PARTIAL — SQL-only.
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-263 — recovery_visit_attempts: the doorstep nobody answered
+// -----------------------------------------------------------------------------
+// E-262 modelled a collection as one event. Real repossession is not: the agent
+// drives out, knocks, and the customer is not home — or refuses, or the address
+// is wrong. None of those is a collection, and until this table there was no way
+// to record any of them, so an agent who went and found nobody looked identical
+// to one who never left.
+//
+// Append-only, one row per journey, each with its own GPS fix. A set of columns
+// on the assignment would let a third visit overwrite the second, and "we
+// attended twice at the agreed time" is exactly the history a disputed
+// repossession turns on.
+//
+// Mirrors drizzle/E-263_recovery_visit_attempts.sql, which is the source of
+// truth. `recovery_visit_attempts_no_unique` is a plain unique index and IS
+// expressible here; `recovery_assignments_next_visit_idx` is partial and stays
+// SQL-only.
+// -----------------------------------------------------------------------------
+export const recoveryVisitAttempts = pgTable(
+  "recovery_visit_attempts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    /** The agent's count of journeys, not a sequence — it reads that way in the UI. */
+    attempt_no: integer("attempt_no").default(1).notNull(),
+    /**
+     * not_present | refused | address_not_found | battery_missing | other
+     *
+     * Never `collected`: a successful collection is the assignment's own
+     * terminal write, and duplicating it here would create two disagreeing
+     * records of one fact.
+     */
+    outcome: varchar("outcome", { length: 24 }).notNull(),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_accuracy_m: numeric("gps_accuracy_m", { precision: 8, scale: 2 }),
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    distance_from_address_m: numeric("distance_from_address_m", { precision: 10, scale: 2 }),
+    notes: text("notes"),
+    /** NULL is a real answer — "nobody home and I am not going back". */
+    next_visit_at: timestamp("next_visit_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    assignmentIdx: index("recovery_visit_attempts_assignment_idx").on(
+      table.assignment_id,
+      table.created_at,
+    ),
+    tenantIdx: index("recovery_visit_attempts_tenant_idx").on(
+      table.tenant_id,
+      table.created_at,
+    ),
+    attemptUnique: uniqueIndex("recovery_visit_attempts_no_unique").on(
+      table.assignment_id,
+      table.attempt_no,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-258 — scrap consignments: the NBFC → iTarang sale of scrapped batteries
+// -----------------------------------------------------------------------------
+// `nbfc_recovery_pipeline.stage = 'scrap'` is terminal and has no buyer behind
+// it: the auction path sells refurbished stock to dealers and excludes scrap by
+// design (SOH < 55%). iTarang buys that scrap directly.
+//
+// The NBFC bundles one or many scrap batteries into a consignment with photos
+// and a RATE PER BATTERY; admin answers with its own rate; either side may
+// counter; on acceptance the rate freezes and amount = rate × battery_count;
+// iTarang then pays (RazorpayX payout or a recorded offline transfer) and the
+// batteries transfer.
+//
+// Mirrors drizzle/E-258_scrap_consignments.sql, which is the source of truth.
+// No pgEnum and no CHECK on the status columns — same decision as every other
+// status column in this family (see the E-232 header): the vocabulary lives in
+// src/lib/nbfc/scrap/consignment.ts so it can move without a migration against
+// a drifting database.
+// -----------------------------------------------------------------------------
+
+export const scrapConsignments = pgTable(
+  "scrap_consignments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    ref_code: varchar("ref_code", { length: 24 }).notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // draft | submitted | negotiating | agreed | paid | rejected | withdrawn
+    status: varchar("status", { length: 24 }).notNull().default("draft"),
+    battery_count: integer("battery_count").notNull().default(0),
+    // [E-260] flat = one rate for every battery; itemised = a rate per item.
+    pricing_mode: varchar("pricing_mode", { length: 16 })
+      .notNull()
+      .default("flat"),
+    asking_rate_per_battery: numeric("asking_rate_per_battery", { precision: 12, scale: 2 }),
+    // [E-260] The total asked, written in BOTH modes — flat stores
+    // rate × count, itemised the sum of the item rates. The negotiation runs
+    // on this column, which is what keeps every downstream read from having to
+    // ask which of the two price fields is authoritative.
+    asking_amount: numeric("asking_amount", { precision: 14, scale: 2 }),
+    agreed_rate_per_battery: numeric("agreed_rate_per_battery", { precision: 12, scale: 2 }),
+    agreed_amount: numeric("agreed_amount", { precision: 14, scale: 2 }),
+    current_round: integer("current_round").notNull().default(0),
+    // Who spoke last ('nbfc' | 'admin') — the other side owes the next answer.
+    last_party: varchar("last_party", { length: 8 }),
+    pickup_city: varchar("pickup_city", { length: 120 }),
+    pickup_state: varchar("pickup_state", { length: 120 }),
+    warehouse: varchar("warehouse", { length: 160 }),
+    // Relative /api/files/<bucket>/<key> paths, never absolute URLs. Per-battery
+    // shots stay on recovery_batteries.image_urls and are not copied here.
+    photo_urls: text("photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    note: text("note"),
+    // Where iTarang sends the money. On the deal rather than on nbfc_tenants,
+    // which carries no bank columns at all.
+    payee_name: varchar("payee_name", { length: 160 }),
+    payee_account_number: varchar("payee_account_number", { length: 40 }),
+    payee_ifsc: varchar("payee_ifsc", { length: 11 }),
+    // unpaid | processing | paid | failed
+    payment_status: varchar("payment_status", { length: 24 }).notNull().default("unpaid"),
+    payment_provider: varchar("payment_provider", { length: 16 }),
+    payment_ref: text("payment_ref"),
+    payment_utr: varchar("payment_utr", { length: 64 }),
+    payment_failure_reason: text("payment_failure_reason"),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    paid_by: uuid("paid_by"),
+    created_by: uuid("created_by"),
+    agreed_by: uuid("agreed_by"),
+    submitted_at: timestamp("submitted_at", { withTimezone: true }),
+    agreed_at: timestamp("agreed_at", { withTimezone: true }),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    // [E-259] When the batteries physically reached iTarang. Under a post_lot
+    // payment term this is a hard gate on the payout; under pre_lot it is
+    // still recorded, because paid-on / arrived-on is the pair of dates a
+    // reconciliation needs.
+    received_at: timestamp("received_at", { withTimezone: true }),
+    received_by: uuid("received_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("scrap_consignments_ref_uidx").on(table.ref_code),
+    tenantIdx: index("scrap_consignments_tenant_idx").on(table.tenant_id, table.created_at),
+    statusIdx: index("scrap_consignments_status_idx").on(table.status, table.created_at),
+    // The partial "open" index (scrap_consignments_open_idx) is created by the
+    // migration; drizzle's builder has no partial-index syntax, so it is
+    // intentionally absent here.
+  }),
+);
+
+export const scrapConsignmentItems = pgTable(
+  "scrap_consignment_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    consignment_id: uuid("consignment_id")
+      .notNull()
+      .references(() => scrapConsignments.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_id: uuid("battery_id"),
+    // Snapshotted, not joined: the serial is what a dispute is argued in and
+    // the battery row can be re-pointed by a later recovery.
+    serial: varchar("serial", { length: 64 }).notNull(),
+    // [E-260] The NBFC's price for this one battery; NULL in flat mode. Never
+    // rewritten after submission — it is the breakdown behind the asking
+    // total, not a per-battery negotiation of its own.
+    asking_rate: numeric("asking_rate", { precision: 12, scale: 2 }),
+    // [E-261] This battery's share of the settled deal, frozen at acceptance
+    // when the accepted round was itemised — and cleared when it was not, so a
+    // stale breakdown can never disagree with agreed_amount.
+    agreed_rate: numeric("agreed_rate", { precision: 12, scale: 2 }),
+    model: varchar("model", { length: 120 }),
+    capacity: varchar("capacity", { length: 32 }),
+    soh_pct: numeric("soh_pct", { precision: 5, scale: 2 }),
+    condition_note: text("condition_note"),
+    // TRUE while the parent deal is live. The migration's partial unique index
+    // on (battery_id) WHERE is_open is what stops one battery being sold twice.
+    is_open: boolean("is_open").notNull().default(true),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    consignmentIdx: index("scrap_consignment_items_consignment_idx").on(table.consignment_id),
+    batteryIdx: index("scrap_consignment_items_battery_idx").on(table.battery_id),
+    itemUnique: uniqueIndex("scrap_consignment_items_uidx").on(
+      table.consignment_id,
+      table.battery_id,
+    ),
+  }),
+);
+
+// Append-only round log, modelled on nbfcOfferNegotiations (E-238) for the same
+// reason: the header row is overwritten with each new rate, so without this the
+// history a disputed payment turns on is gone. The unique (consignment_id,
+// round) is a concurrency guard — a round is always current_round + 1, so two
+// simultaneous counters must collide with 23505 rather than both claim round 3.
+export const scrapConsignmentOffers = pgTable(
+  "scrap_consignment_offers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    consignment_id: uuid("consignment_id")
+      .notNull()
+      .references(() => scrapConsignments.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id").notNull(),
+    round: integer("round").notNull(),
+    party: varchar("party", { length: 8 }).notNull(), // 'nbfc' | 'admin'
+    kind: varchar("kind", { length: 16 }).notNull(), // quote|counter|accept|reject|withdraw
+    // [E-261] How THIS round was expressed: 'lot' = one number for the pile,
+    // 'itemised' = a rate per battery in scrap_consignment_offer_items. On the
+    // round rather than the consignment, because either side may switch at any
+    // round — an itemised ask can be answered with a lot price and vice versa.
+    pricing_mode: varchar("pricing_mode", { length: 16 })
+      .notNull()
+      .default("lot"),
+    rate_per_battery: numeric("rate_per_battery", { precision: 12, scale: 2 }),
+    battery_count: integer("battery_count"),
+    amount: numeric("amount", { precision: 14, scale: 2 }),
+    message: text("message"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    roundUnique: uniqueIndex("scrap_consignment_offers_round_uidx").on(
+      table.consignment_id,
+      table.round,
+    ),
+    consignmentIdx: index("scrap_consignment_offers_consignment_idx").on(
+      table.consignment_id,
+      table.created_at,
+    ),
+  }),
+);
+
+/**
+ * [E-261] The per-battery breakdown of one negotiation round.
+ *
+ * Append-only, like the round log it hangs off: a superseded round keeps its
+ * numbers, so "what did they say about THIS battery three rounds ago" stays
+ * answerable. SUM(rate) equals the parent offer's `amount`, which is what
+ * acceptance and payment actually read.
+ */
+export const scrapConsignmentOfferItems = pgTable(
+  "scrap_consignment_offer_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    offer_id: uuid("offer_id")
+      .notNull()
+      .references(() => scrapConsignmentOffers.id, { onDelete: "cascade" }),
+    // Denormalised so a consignment's whole breakdown is one indexed read
+    // rather than a join through every round.
+    consignment_id: uuid("consignment_id").notNull(),
+    item_id: uuid("item_id")
+      .notNull()
+      .references(() => scrapConsignmentItems.id, { onDelete: "cascade" }),
+    battery_id: uuid("battery_id"),
+    rate: numeric("rate", { precision: 12, scale: 2 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // One rate per battery per round: without it a retried write would double
+    // the round's total, which is a SUM over these rows.
+    offerItemUnique: uniqueIndex("scrap_consignment_offer_items_uidx").on(
+      table.offer_id,
+      table.item_id,
+    ),
+    consignmentIdx: index("scrap_consignment_offer_items_consignment_idx").on(
+      table.consignment_id,
+      table.created_at,
+    ),
   }),
 );
 
@@ -4526,10 +5886,255 @@ export const nbfcBatteryEvaluations = pgTable(
     base_auction_price: numeric("base_auction_price", { precision: 12, scale: 2 }),
     rejected: boolean("rejected").notNull().default(false),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // [E-233] What THIS evaluation saw. recovery_batteries.image_urls is the
+    // canonical gallery; this column exists so a re-inspection after
+    // refurbishment does not overwrite the before shots.
+    photo_urls: text("photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    // [E-233] new | refurbished | partial_working (BRD §6). Stored rather than
+    // recomputed from SOH — the bands may be retuned, and a battery already
+    // sold as partial_working must not silently re-grade itself.
+    condition_grade: varchar("condition_grade", { length: 24 }),
   },
   (table) => ({
     tenantIdx: index("nbfc_battery_evaluations_tenant_idx").on(table.tenant_id),
     pipelineIdx: index("nbfc_battery_evaluations_pipeline_idx").on(table.recovery_pipeline_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-233 — refurbishment_jobs (Battery Auction BRD §5, §15)
+// -----------------------------------------------------------------------------
+// One workshop job per recovered battery. The NBFC raises it, the iTarang
+// workshop works it, and the battery re-enters the pipeline at
+// ready_for_auction.
+//
+// Refurbishment is RECOMMENDED, NEVER MANDATORY — see the bypass edge
+// needs_inspection -> ready_for_auction in src/lib/nbfc/recovery/stages.ts.
+//
+// `estimated_cost` and `actual_cost` are deliberately two columns: the estimate
+// is what the NBFC agreed to, the actual is what the workshop spent, and the
+// pair is the only thing a workshop can be audited against.
+//
+// The partial unique index enforcing at most one OPEN job per battery lives in
+// the migration only — drizzle's builder cannot express a WHERE clause on an
+// index (same treatment as E-093, E-226, E-230, E-232).
+// -----------------------------------------------------------------------------
+
+export const refurbishmentJobs = pgTable(
+  "refurbishment_jobs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_id: uuid("battery_id").notNull(),
+    recovery_pipeline_id: uuid("recovery_pipeline_id"),
+    requested_by_user_id: uuid("requested_by_user_id"),
+    assigned_workshop: varchar("assigned_workshop", { length: 160 }),
+    checklist: jsonb("checklist").notNull().default(sql`'[]'::jsonb`),
+    // BRD §15 — charger, harness, SOC meter, always new (~₹7–8k), costed here
+    // and rolled into the lot base price so the dealer sees one number.
+    accessories: jsonb("accessories").notNull().default(sql`'[]'::jsonb`),
+    estimated_cost: numeric("estimated_cost", { precision: 12, scale: 2 }),
+    actual_cost: numeric("actual_cost", { precision: 12, scale: 2 }),
+    status: varchar("status", { length: 24 }).notNull().default("requested"),
+    notes: text("notes"),
+    requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    returned_at: timestamp("returned_at", { withTimezone: true }),
+    // [E-270] The lot this job travels in. NULL = legacy single job (E-233).
+    lot_id: uuid("lot_id"),
+    decline_reason: text("decline_reason"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decided_by: uuid("decided_by"),
+    // [E-270] received | damaged | missing — workshop receipt of THIS battery.
+    out_received_condition: varchar("out_received_condition", { length: 16 }),
+    out_received_note: text("out_received_note"),
+    out_received_photo_urls: text("out_received_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ready_at: timestamp("ready_at", { withTimezone: true }),
+    // [E-270] received | damaged | missing — NBFC receipt on return.
+    ret_received_condition: varchar("ret_received_condition", { length: 16 }),
+    ret_received_note: text("ret_received_note"),
+    ret_received_photo_urls: text("ret_received_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ret_received_at: timestamp("ret_received_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("refurbishment_jobs_tenant_idx").on(table.tenant_id),
+    batteryIdx: index("refurbishment_jobs_battery_idx").on(table.battery_id),
+    statusIdx: index("refurbishment_jobs_status_idx").on(table.status),
+    lotIdx: index("refurbishment_jobs_lot_idx").on(table.lot_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-270 — refurbishment_lots + refurbishment_lot_events
+// -----------------------------------------------------------------------------
+// One batch of batteries the NBFC sends to the iTarang workshop. The lot
+// carries the timeline/estimate negotiation and both physical legs; the
+// per-battery items are refurbishment_jobs rows with lot_id set.
+//
+// Mirrors drizzle/E-270_refurbishment_lots.sql, which is the source of truth.
+// No pgEnum and no CHECK on status — the vocabulary lives in
+// src/lib/nbfc/recovery/refurbishment-lot-status.ts (same call as E-258).
+// -----------------------------------------------------------------------------
+
+export const refurbishmentLots = pgTable(
+  "refurbishment_lots",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    ref_code: varchar("ref_code", { length: 24 }).notNull(),
+    // E-271 vocabulary: requested | proposed | countered | agreed |
+    // awaiting_advance | advance_paid | pickup_scheduled | in_transit_out |
+    // delivered | received | in_progress | revision_pending | ready |
+    // in_transit_return | delivered_back | balance_due | settled | cancelled
+    status: varchar("status", { length: 24 }).notNull().default("requested"),
+    battery_count: integer("battery_count").notNull().default(0),
+    note: text("note"),
+
+    current_round: integer("current_round").notNull().default(0),
+    // 'nbfc' | 'admin' — who moved last; the other side owes the next move.
+    last_party: varchar("last_party", { length: 8 }),
+    expected_receipt_date: date("expected_receipt_date"),
+    expected_return_date: date("expected_return_date"),
+    estimated_labour_total: numeric("estimated_labour_total", { precision: 14, scale: 2 }),
+    estimated_accessories_total: numeric("estimated_accessories_total", {
+      precision: 14,
+      scale: 2,
+    }),
+    estimated_total: numeric("estimated_total", { precision: 14, scale: 2 }),
+    proposal_note: text("proposal_note"),
+    agreed_at: timestamp("agreed_at", { withTimezone: true }),
+    agreed_by: uuid("agreed_by"),
+
+    // Leg 1: NBFC -> workshop.
+    out_carrier: varchar("out_carrier", { length: 120 }),
+    out_vehicle_no: varchar("out_vehicle_no", { length: 32 }),
+    out_docket_no: varchar("out_docket_no", { length: 64 }),
+    out_dispatched_on: date("out_dispatched_on"),
+    out_dispatch_note: text("out_dispatch_note"),
+    out_photo_urls: text("out_photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    out_dispatched_at: timestamp("out_dispatched_at", { withTimezone: true }),
+    out_dispatched_by: uuid("out_dispatched_by"),
+    out_received_at: timestamp("out_received_at", { withTimezone: true }),
+    out_received_by: uuid("out_received_by"),
+    out_receipt_note: text("out_receipt_note"),
+    out_receipt_photo_urls: text("out_receipt_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    out_has_mismatch: boolean("out_has_mismatch").notNull().default(false),
+
+    // Leg 2: workshop -> NBFC.
+    ret_carrier: varchar("ret_carrier", { length: 120 }),
+    ret_vehicle_no: varchar("ret_vehicle_no", { length: 32 }),
+    ret_docket_no: varchar("ret_docket_no", { length: 64 }),
+    ret_dispatched_on: date("ret_dispatched_on"),
+    ret_dispatch_note: text("ret_dispatch_note"),
+    ret_photo_urls: text("ret_photo_urls").array().notNull().default(sql`'{}'::text[]`),
+    ret_dispatched_at: timestamp("ret_dispatched_at", { withTimezone: true }),
+    ret_dispatched_by: uuid("ret_dispatched_by"),
+    ret_received_at: timestamp("ret_received_at", { withTimezone: true }),
+    ret_received_by: uuid("ret_received_by"),
+    ret_receipt_note: text("ret_receipt_note"),
+    ret_receipt_photo_urls: text("ret_receipt_photo_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ret_has_mismatch: boolean("ret_has_mismatch").notNull().default(false),
+
+    work_started_at: timestamp("work_started_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
+    cancelled_by: uuid("cancelled_by"),
+    cancelled_by_party: varchar("cancelled_by_party", { length: 8 }),
+    cancel_reason: text("cancel_reason"),
+
+    // ---- E-271: pickup / e-way bill / custody --------------------------------
+    // nbfc_ships | itarang_pickup — part of the quote the NBFC approves.
+    pickup_mode: varchar("pickup_mode", { length: 16 }).notNull().default("nbfc_ships"),
+    pickup_address: text("pickup_address"),
+    workshop_address: text("workshop_address"),
+    scheduled_pickup_date: date("scheduled_pickup_date"),
+    out_eway_bill_no: varchar("out_eway_bill_no", { length: 32 }),
+    out_eway_bill_url: text("out_eway_bill_url"),
+    out_picked_up_at: timestamp("out_picked_up_at", { withTimezone: true }),
+    out_picked_up_by: uuid("out_picked_up_by"),
+    out_delivered_at: timestamp("out_delivered_at", { withTimezone: true }),
+    out_delivered_by: uuid("out_delivered_by"),
+    ret_eway_bill_no: varchar("ret_eway_bill_no", { length: 32 }),
+    ret_eway_bill_url: text("ret_eway_bill_url"),
+    ret_delivered_at: timestamp("ret_delivered_at", { withTimezone: true }),
+    ret_delivered_by: uuid("ret_delivered_by"),
+    // ---- E-271: the quote the NBFC approved + revision round ------------------
+    quote_approved_total: numeric("quote_approved_total", { precision: 14, scale: 2 }),
+    quote_approved_at: timestamp("quote_approved_at", { withTimezone: true }),
+    quote_approved_by: uuid("quote_approved_by"),
+    revised_total: numeric("revised_total", { precision: 14, scale: 2 }),
+    revision_note: text("revision_note"),
+    revision_round: integer("revision_round").notNull().default(0),
+    // ---- E-271: advance (NBFC -> iTarang), E-252 money-block shape -------------
+    advance_pct: numeric("advance_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+    advance_amount: numeric("advance_amount", { precision: 14, scale: 2 }),
+    // not_required | pending | recorded | confirmed
+    advance_status: varchar("advance_status", { length: 16 }).notNull().default("not_required"),
+    advance_provider: varchar("advance_provider", { length: 16 }), // razorpay | offline
+    advance_order_id: varchar("advance_order_id", { length: 64 }),
+    advance_payment_id: varchar("advance_payment_id", { length: 64 }),
+    advance_reference: varchar("advance_reference", { length: 120 }),
+    advance_recorded_at: timestamp("advance_recorded_at", { withTimezone: true }),
+    advance_confirmed_at: timestamp("advance_confirmed_at", { withTimezone: true }),
+    advance_confirmed_by: uuid("advance_confirmed_by"),
+    // ---- E-271: balance = final_total - advance -------------------------------
+    final_total: numeric("final_total", { precision: 14, scale: 2 }),
+    balance_amount: numeric("balance_amount", { precision: 14, scale: 2 }),
+    // not_due | pending | recorded | confirmed
+    balance_status: varchar("balance_status", { length: 16 }).notNull().default("not_due"),
+    balance_provider: varchar("balance_provider", { length: 16 }),
+    balance_order_id: varchar("balance_order_id", { length: 64 }),
+    balance_payment_id: varchar("balance_payment_id", { length: 64 }),
+    balance_reference: varchar("balance_reference", { length: 120 }),
+    balance_recorded_at: timestamp("balance_recorded_at", { withTimezone: true }),
+    balance_confirmed_at: timestamp("balance_confirmed_at", { withTimezone: true }),
+    balance_confirmed_by: uuid("balance_confirmed_by"),
+    settled_at: timestamp("settled_at", { withTimezone: true }),
+
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("refurbishment_lots_ref_uidx").on(table.ref_code),
+    tenantIdx: index("refurbishment_lots_tenant_idx").on(table.tenant_id, table.created_at),
+    statusIdx: index("refurbishment_lots_status_idx").on(table.status, table.created_at),
+  }),
+);
+
+export const refurbishmentLotEvents = pgTable(
+  "refurbishment_lot_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id")
+      .notNull()
+      .references(() => refurbishmentLots.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id").notNull(),
+    seq: integer("seq").notNull(),
+    party: varchar("party", { length: 8 }).notNull(), // nbfc | admin | system
+    kind: varchar("kind", { length: 24 }).notNull(),
+    message: text("message"),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    seqUnique: uniqueIndex("refurbishment_lot_events_seq_uidx").on(table.lot_id, table.seq),
+    lotIdx: index("refurbishment_lot_events_lot_idx").on(table.lot_id, table.created_at),
   }),
 );
 
@@ -6013,10 +7618,27 @@ export const auctionLots = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // [E-232] Lot composition, scheduling and the seller identity.
+    // status now spans draft | scheduled | live | paused | ended | cancelled;
+    // the DEFAULT stays 'live' in SQL on purpose (changing it would silently
+    // alter every INSERT that omits the column) and the draft default is
+    // applied in src/lib/nbfc/auction/composeLot.ts instead.
+    seller_tenant_id: uuid("seller_tenant_id"),
+    auction_type: varchar("auction_type", { length: 24 })
+      .notNull()
+      .default("cash"),
+    starts_at: timestamp("starts_at", { withTimezone: true }),
+    anti_snipe_seconds: integer("anti_snipe_seconds").notNull().default(120),
+    reserve_price: numeric("reserve_price", { precision: 12, scale: 2 }),
+    title: varchar("title", { length: 160 }),
+    published_at: timestamp("published_at", { withTimezone: true }),
   },
   (table) => ({
     statusIdx: index("auction_lots_status_idx").on(table.status),
     endsAtIdx: index("auction_lots_ends_at_idx").on(table.ends_at),
+    sellerTenantIdx: index("auction_lots_seller_tenant_idx").on(
+      table.seller_tenant_id,
+    ),
   }),
 );
 
@@ -6030,11 +7652,108 @@ export const auctionBids = pgTable(
     placed_at: timestamp("placed_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // [E-232] The bidder re-point (BRD §9 — dealers only, never other NBFCs).
+    // Added ALONGSIDE tenant_id, not instead of it. On a dealer bid BOTH are
+    // populated: bidder_dealer_id is the dealer account, and tenant_id carries
+    // the SELLER's tenant so the nbfc_audit_log row lands in the right log and
+    // every existing tenant-scoped query on this table stays meaningful.
+    // bidder_kind says which one is authoritative, so nothing infers it from
+    // NULLness.
+    // varchar(255), NOT uuid — `accounts.id` holds application-issued strings
+    // like 'ACC-ITARANG-20260409-971', and so does `users.dealer_id`.
+    bidder_dealer_id: varchar("bidder_dealer_id", { length: 255 }),
+    bidder_kind: varchar("bidder_kind", { length: 16 })
+      .notNull()
+      .default("nbfc"),
   },
   (table) => ({
     lotIdx: index("auction_bids_lot_idx").on(table.lot_id),
     tenantIdx: index("auction_bids_tenant_idx").on(table.tenant_id),
     placedAtIdx: index("auction_bids_placed_at_idx").on(table.placed_at),
+    bidderDealerIdx: index("auction_bids_bidder_dealer_idx").on(
+      table.bidder_dealer_id,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-234 — multi-battery lots, visibility, and the frozen audience
+// -----------------------------------------------------------------------------
+// `auction_lot_items` is what makes "5 batteries, one lot" expressible;
+// `auction_lots.quantity` was an integer that publishLotFromRecovery() hard-
+// coded to 1. `condition` lives on the ITEM, not the lot, because a pallet may
+// mix grades and a dealer who bid on "refurbished" and received
+// "partial_working" has been mis-sold.
+//
+// It is also the real key that replaces two string joins on `lot_code` — in
+// settlements.ts and in the cancel service — which matched zero rows every time
+// because `lot_code` is "LOT-" + 8 hex of a pipeline uuid and is never equal to
+// a battery serial or an inventory serial number.
+//
+// `auction_lot_audience` is resolved ONCE at publish and frozen. Re-evaluating
+// on read would make the audience a moving target and "who did we tell?"
+// unanswerable, which is the question a disputed auction turns on.
+//
+// The partial index `auction_lot_audience_pending_idx` lives only in the
+// migration — drizzle cannot express a WHERE clause on an index.
+// -----------------------------------------------------------------------------
+
+export const auctionLotItems = pgTable(
+  "auction_lot_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    battery_id: uuid("battery_id").notNull(),
+    condition: varchar("condition", { length: 24 }).notNull().default("refurbished"),
+    item_price: numeric("item_price", { precision: 12, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_lot_items_lot_idx").on(table.lot_id),
+    batteryIdx: index("auction_lot_items_battery_idx").on(table.battery_id),
+    lotBatteryUniq: unique("auction_lot_items_lot_battery_key").on(
+      table.lot_id,
+      table.battery_id,
+    ),
+  }),
+);
+
+export const auctionLotVisibility = pgTable("auction_lot_visibility", {
+  lot_id: uuid("lot_id").primaryKey().notNull(),
+  scope: varchar("scope", { length: 16 }).notNull().default("india"),
+  states: text("states").array().notNull().default(sql`'{}'::text[]`),
+  cities: text("cities").array().notNull().default(sql`'{}'::text[]`),
+  centre_lat: numeric("centre_lat", { precision: 10, scale: 7 }),
+  centre_lng: numeric("centre_lng", { precision: 10, scale: 7 }),
+  radius_km: integer("radius_km"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const auctionLotAudience = pgTable(
+  "auction_lot_audience",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    // accounts.id — character varying, NOT uuid.
+    dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
+    dealer_name: varchar("dealer_name", { length: 255 }),
+    city: varchar("city", { length: 120 }),
+    state: varchar("state", { length: 120 }),
+    distance_km: numeric("distance_km", { precision: 8, scale: 2 }),
+    channel: varchar("channel", { length: 16 }).notNull().default("in_app"),
+    status: varchar("status", { length: 16 }).notNull().default("pending"),
+    sent_at: timestamp("sent_at", { withTimezone: true }),
+    error: text("error"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_lot_audience_lot_idx").on(table.lot_id),
+    dealerIdx: index("auction_lot_audience_dealer_idx").on(table.dealer_id),
+    lotDealerChannelUniq: unique("auction_lot_audience_lot_dealer_channel_key").on(
+      table.lot_id,
+      table.dealer_id,
+      table.channel,
+    ),
   }),
 );
 
@@ -6397,11 +8116,37 @@ export const auctionSettlements = pgTable(
     updated_at: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // [E-232] accounts.id of the winning DEALER, mirroring
+    // auction_bids.bidder_dealer_id. winner_tenant_id stays NOT NULL and
+    // carries the seller's tenant on a dealer win.
+    winner_dealer_id: varchar("winner_dealer_id", { length: 255 }),
+
+    // [E-252] The money. Until these landed, the three-state ladder above
+    // recorded no evidence that payment had happened — `in_transit` was a
+    // manual flip by the seller. `paid_at` is now the gate on that transition.
+    //
+    // `refinance_loan_id` is varchar, not uuid, because `loan_sanctions.id` is
+    // character varying. E-232 had to ship a correction block for exactly this
+    // mistake on `winner_dealer_id`.
+    payment_ref: varchar("payment_ref", { length: 120 }),
+    payment_provider: varchar("payment_provider", { length: 24 }),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    refinance_loan_id: varchar("refinance_loan_id", { length: 255 }),
+    failure_reason: text("failure_reason"),
   },
   (table) => ({
     lotIdx: index("auction_settlements_lot_idx").on(table.lot_id),
+    paymentRefIdx: index("auction_settlements_payment_ref_idx").on(
+      table.payment_ref,
+    ),
+    refinanceLoanIdx: index("auction_settlements_refinance_loan_idx").on(
+      table.refinance_loan_id,
+    ),
     sellerTenantIdx: index("auction_settlements_seller_tenant_idx").on(
       table.seller_tenant_id,
+    ),
+    winnerDealerIdx: index("auction_settlements_winner_dealer_idx").on(
+      table.winner_dealer_id,
     ),
     winnerTenantIdx: index("auction_settlements_winner_tenant_idx").on(
       table.winner_tenant_id,
@@ -6420,6 +8165,13 @@ export const auctionAutoBids = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     lot_id: uuid("lot_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
+    // [E-234] Required after the E-232 re-point: a dealer bid writes the
+    // SELLER's tenant into auction_bids.tenant_id, so every dealer bidding on
+    // one lot shares a tenant_id and it can no longer identify a bidder.
+    // Without this the proxy engine cannot tell whose standing order is whose,
+    // and E-093's (lot_id, tenant_id) unique index would let the second dealer
+    // to set a maximum silently cancel the first one's.
+    bidder_dealer_id: varchar("bidder_dealer_id", { length: 255 }),
     max_amount: numeric("max_amount", { precision: 12, scale: 2 }).notNull(),
     status: varchar({ length: 16 }).notNull().default("active"),
     created_at: timestamp("created_at", { withTimezone: true })
@@ -6804,48 +8556,39 @@ export const expenseSubmissions = pgTable(
     // E-172 — invoice number (dedup key for AI rows) + original upload filename.
     invoice_number: varchar("invoice_number", { length: 120 }),
     file_name: varchar("file_name", { length: 255 }),
-    // ---------------------------------------------------------------------
-    // DECLARED TO MATCH THE DEPLOYED DATABASES, which already have all of the
-    // below. This block is a DECLARATION ONLY — there is no accompanying
-    // migration here, because the columns were shipped to the databases ahead
-    // of this branch. Verified against sandbox information_schema, types and
-    // lengths exactly as listed.
-    //
-    // WHY IT MATTERS THAT THESE ARE HERE. While they were missing, schema.ts
-    // actively said something false about money: two independent readings of
-    // this codebase concluded that expense_submissions has no currency column,
-    // therefore foreign-currency invoices are summed as if they were rupees,
-    // therefore every tech-spend total is ~94x understated for USD vendors.
-    // It is not true — the deployed table carries currency, original_amount
-    // and fx_rate, and a $1,533.85 invoice is stored as amount = ₹143,648.65,
-    // already converted at entry. `amount` is INR for every row. Never apply an
-    // FX rate to it a second time; doing so once turned a $200 Anthropic bill
-    // into ₹1.7 lakh.
-    //
-    // Note that db.migration_drift on /operations/database compares TABLE names
-    // only, so a column-level drift like this one was invisible there.
-    // ---------------------------------------------------------------------
-    // Google Drive ingestion provenance for the AI invoice tracker.
+    // E-216 — Google Drive provenance. `source` stays 'ai' for Drive rows (all
+    // four existing consumers filter on it); drive_file_id is what tells a
+    // scanned row apart from a hand-uploaded one.
     drive_file_id: varchar("drive_file_id", { length: 128 }),
+    // Identity of one row inside a costing spreadsheet, since sheet rows carry
+    // no invoice number. NULL for invoices.
     drive_row_ref: varchar("drive_row_ref", { length: 64 }),
-    // Flagged for a human to look at — a low-confidence AI extraction.
+    // Imported but not fully trusted. Still counts towards dashboard totals —
+    // the flag routes the row to a human, it does not withhold it.
     needs_attention: boolean("needs_attention").default(false).notNull(),
     attention_reason: text("attention_reason"),
-    // Original currency and the conversion applied at entry. `amount` above is
-    // the INR result; these preserve what the invoice actually said.
+    // E-218 — coarse spend bucket (tech | rm | misc | others), the layer the
+    // CEO reads at a glance above `department`. NULL until the backfill runs;
+    // the dashboard renders those as "Unclassified". `bucket_source` records
+    // who decided it — rule | ai | manual | default — so the backfill can
+    // never overwrite a human correction.
+    bucket: varchar("bucket", { length: 24 }),
+    bucket_source: varchar("bucket_source", { length: 16 }),
+    // WHY `amount` IS ALREADY INR. schema.ts once omitted these columns, and two
+    // independent readings of this codebase concluded expense_submissions has no
+    // currency column — therefore foreign-currency invoices are summed as rupees,
+    // therefore tech-spend is ~94x understated for USD vendors. Not true: a
+    // $1,533.85 invoice is stored as amount = INR 143,648.65, converted at entry.
+    // `amount` is INR for EVERY row. Never apply an FX rate to it a second time;
+    // doing so once turned a $200 Anthropic bill into INR 1.7 lakh.
+    // E-217 — multi-currency. `amount` above is ALWAYS INR because every
+    // report SUMs it; these record what the document actually said and the
+    // arithmetic that connects the two.
     currency: varchar("currency", { length: 8 }),
     original_amount: numeric("original_amount", { precision: 14, scale: 2 }),
     fx_rate: numeric("fx_rate", { precision: 18, scale: 8 }),
     fx_rate_date: date("fx_rate_date"),
     fx_source: varchar("fx_source", { length: 16 }),
-    // Spend classification. `bucket` is what /operations/spend filters on for
-    // tech spend ('tech' | 'rm' | 'misc'); bucket_source records whether a rule
-    // or the AI decided. techFilterColumn() probes information_schema for this
-    // column at runtime and falls back to `department` — that probe is
-    // load-bearing, not dead code: it is what lets the spend module work on a
-    // database built from schema.ts alone.
-    bucket: varchar("bucket", { length: 24 }),
-    bucket_source: varchar("bucket_source", { length: 16 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6870,6 +8613,199 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsInvoiceNumberIdx: index(
       "expense_submissions_invoice_number_idx",
     ).on(sql`lower(${table.invoice_number})`),
+    // E-216 — the three indexes below are declared here for drizzle's benefit,
+    // but their partial predicates (WHERE drive_file_id IS NOT NULL / WHERE
+    // needs_attention / WHERE status = 'approved') live in the migration only:
+    // drizzle has no partial-index syntax. The migration is the source of truth.
+    expenseSubmissionsDriveRowUnique: uniqueIndex(
+      "expense_submissions_drive_row_unique",
+    ).on(table.drive_file_id, table.drive_row_ref),
+    expenseSubmissionsNeedsAttentionIdx: index(
+      "expense_submissions_needs_attention_idx",
+    ).on(table.created_at),
+    // NOT an expression index on COALESCE(expense_date, approved_at::date):
+    // timestamptz::date is STABLE, so Postgres rejects that with 42P17. The
+    // readers split it into an OR over two plain columns instead — this index
+    // serves the expense_date branch, E-105's approved_at index the other.
+    expenseSubmissionsApprovedExpenseDateIdx: index(
+      "expense_submissions_approved_expense_date_idx",
+    ).on(table.expense_date),
+    // E-218 — bucket rollups on the CEO dashboard. Both carry partial
+    // predicates (WHERE status = 'approved' / WHERE bucket_source IS NOT NULL)
+    // that live in the migration only; declared plain here for drizzle.
+    expenseSubmissionsBucketDateIdx: index(
+      "expense_submissions_bucket_date_idx",
+    ).on(table.bucket, table.expense_date),
+    expenseSubmissionsBucketSourceIdx: index(
+      "expense_submissions_bucket_source_idx",
+    ).on(table.bucket_source),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-217 — cached FX rates, keyed by date.
+// -----------------------------------------------------------------------------
+// One row per (base, quote, date), populated on demand from the ECB daily
+// reference rates. Keyed by date rather than "latest" so a given invoice always
+// converts to the same rupee figure — otherwise last month's expense total
+// would drift every time it was recomputed.
+// -----------------------------------------------------------------------------
+
+export const fxRates = pgTable(
+  "fx_rates",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    base_currency: varchar("base_currency", { length: 8 }).notNull(),
+    quote_currency: varchar("quote_currency", { length: 8 }).default("INR").notNull(),
+    // The date the rate APPLIES to — the date the provider returned, which for
+    // a weekend invoice is the preceding business day.
+    rate_date: date("rate_date").notNull(),
+    rate: numeric("rate", { precision: 18, scale: 8 }).notNull(),
+    // 'ecb' (fetched) | 'fallback' (configured default) | 'manual' (typed in)
+    source: varchar("source", { length: 16 }).default("ecb").notNull(),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    fxRatesPairDateUnique: uniqueIndex("fx_rates_pair_date_unique").on(
+      table.base_currency,
+      table.quote_currency,
+      table.rate_date,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-216 — Google Drive → CEO Expenses ingestion
+// -----------------------------------------------------------------------------
+// A scheduled scanner reads configured Drive folders, extracts each invoice or
+// costing sheet, and writes the result into `expense_submissions` above as an
+// ordinary source='ai' row. These three tables hold the state that ingestion
+// needs: which folders to read, what each run did, and what happened to every
+// individual file. See drizzle/E-216_drive_expense_ingestion.sql for the full
+// rationale, including why Drive rows keep source='ai' and how the three dedup
+// layers stack.
+// -----------------------------------------------------------------------------
+
+export const driveExpenseFolders = pgTable(
+  "drive_expense_folders",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    drive_folder_id: varchar("drive_folder_id", { length: 128 }).notNull(),
+    label: varchar("label", { length: 160 }),
+    is_active: boolean("is_active").default(true).notNull(),
+    recursive: boolean("recursive").default(true).notNull(),
+    // ALLOWLIST — only files at or below a folder matching one of these are
+    // imported, scope inherited by descendants. Defaults to 'purchase': only
+    // the purchase side of an accounts folder is an expense, and an allowlist
+    // fails closed where a denylist would fail open.
+    include_names: text("include_names").default("purchase").notNull(),
+    // Denylist, applied even inside an allowlisted branch — catches a sales
+    // folder misfiled under Purchase.
+    exclude_names: text("exclude_names").default("sale").notNull(),
+    last_scanned_at: timestamp("last_scanned_at", { withTimezone: true }),
+    // Also the fallback submitted_by/approved_by for ticker runs, which have
+    // no human actor.
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    driveExpenseFoldersFolderIdUnique: uniqueIndex(
+      "drive_expense_folders_folder_id_unique",
+    ).on(table.drive_folder_id),
+    // Partial (WHERE is_active) in the migration only.
+    driveExpenseFoldersActiveIdx: index("drive_expense_folders_active_idx").on(
+      table.is_active,
+    ),
+  }),
+);
+
+export const driveScanRuns = pgTable(
+  "drive_scan_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // NULL = scanned every active folder.
+    folder_id: uuid("folder_id"),
+    // NULL = triggered by the in-process ticker rather than a person.
+    triggered_by: uuid("triggered_by"),
+    // text + CHECK, not pgEnum — ALTER TYPE on a shared drifting DB is what the
+    // migration conventions exist to avoid. 'running' | 'success' | 'failed'.
+    status: text().default("running").notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    duration_ms: integer("duration_ms"),
+    files_seen: integer("files_seen").default(0).notNull(),
+    // Files that got past the md5 check and actually cost a download + a model
+    // call. files_seen minus files_new is what the dedup saved.
+    files_new: integer("files_new").default(0).notNull(),
+    imported: integer("imported").default(0).notNull(),
+    skipped_duplicate: integer("skipped_duplicate").default(0).notNull(),
+    needs_attention: integer("needs_attention").default(0).notNull(),
+    unsupported: integer("unsupported").default(0).notNull(),
+    failed: integer("failed").default(0).notNull(),
+    // Set only when the RUN died. A single failing file increments `failed`
+    // and the run still completes.
+    error_message: text("error_message"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Partial (WHERE status = 'running') in the migration only — this is the
+    // concurrency guard's index.
+    driveScanRunsRunningIdx: index("drive_scan_runs_running_idx").on(
+      table.started_at,
+    ),
+    driveScanRunsStartedIdx: index("drive_scan_runs_started_idx").on(
+      table.started_at,
+    ),
+  }),
+);
+
+export const driveExpenseFiles = pgTable(
+  "drive_expense_files",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    run_id: uuid("run_id"),
+    folder_id: uuid("folder_id"),
+    drive_file_id: varchar("drive_file_id", { length: 128 }).notNull(),
+    drive_file_name: varchar("drive_file_name", { length: 512 }),
+    // "2026 / March 2026 / Purchase / iTarang account / Trontek" — in an
+    // accounts folder the path carries the month, the entity and the
+    // purchase-vs-sale distinction, so it is the audit trail's best column.
+    folder_path: text("folder_path"),
+    mime_type: varchar("mime_type", { length: 160 }),
+    // Google's content hash. Native Google Sheets/Docs have none — the code
+    // stores the RFC3339 modifiedTime instead, so this is never null and the
+    // unique index below actually bites.
+    md5_checksum: varchar("md5_checksum", { length: 128 }),
+    drive_modified_time: timestamp("drive_modified_time", { withTimezone: true }),
+    // 'imported' | 'duplicate' | 'needs_attention' | 'unsupported' | 'failed'
+    status: text().notNull(),
+    // Shown verbatim in the needs-attention panel — write it for the person
+    // who has to fix the row.
+    reason: text(),
+    // Array: a costing sheet yields many expense ids, an invoice yields one.
+    expense_ids: jsonb("expense_ids").default([]).notNull(),
+    storage_key: text("storage_key"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Dedup layer 1 — an unchanged file is never re-downloaded or re-sent to
+    // the model. This is what makes re-scanning a folder free.
+    driveExpenseFilesFileVersionUnique: uniqueIndex(
+      "drive_expense_files_file_version_unique",
+    ).on(table.drive_file_id, table.md5_checksum),
+    driveExpenseFilesFileIdx: index("drive_expense_files_file_idx").on(
+      table.drive_file_id,
+    ),
+    driveExpenseFilesRunIdx: index("drive_expense_files_run_idx").on(
+      table.run_id,
+      table.created_at,
+    ),
+    // Partial (WHERE status IN ('needs_attention','failed')) in the migration only.
+    driveExpenseFilesAttentionIdx: index("drive_expense_files_attention_idx").on(
+      table.created_at,
+    ),
   }),
 );
 
@@ -6932,6 +8868,16 @@ export const leadTouchpoints = pgTable(
     external_system: varchar("external_system", { length: 50 }),
     external_event_id: text("external_event_id"),
     sync_method: varchar("sync_method", { length: 30 }).default("manual"),
+    // E-226 added lead_touchpoints.recording_url and .external_agent_name and
+    // they are DELIBERATELY ABSENT HERE. This is the one table in the family
+    // written through Drizzle (db.insert below in touchpoints/write.ts), and
+    // Drizzle names every column of the table object in its INSERT — so listing
+    // them would break every touchpoint write (calls, status changes,
+    // escalations, reactivations) on any DB without E-226 applied, which today
+    // includes prod. They are written by a best-effort raw UPDATE in
+    // src/lib/neodove/inbound.ts after the transaction commits, and read via
+    // `to_jsonb(t) ->> '...'`. Same treatment, same reason, as E-224's two
+    // dealer_leads columns.
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -6967,6 +8913,10 @@ export const leadVisits = pgTable(
     visit_status: varchar("visit_status", { length: 30 }).notNull(),
     visit_outcome: varchar("visit_outcome", { length: 30 }),
     visit_remarks: text("visit_remarks"),
+    // E-220 — how the meeting happened: ground | calling | whatsapp. Free text
+    // (vocabulary in src/lib/admin/types.ts MEETING_MODES) per this family's
+    // convention; see the migration for why it is not a CHECK or an enum.
+    meeting_mode: varchar("meeting_mode", { length: 16 }).default("ground"),
     photos: jsonb().default([]),
     gps_check_in_lat: numeric("gps_check_in_lat", { precision: 10, scale: 6 }),
     gps_check_in_lng: numeric("gps_check_in_lng", { precision: 10, scale: 6 }),
@@ -7051,6 +9001,44 @@ export const dealerLeadCommercials = pgTable(
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+    // E-221 — CEO approval gate. Only quote_issue / quote_revision are written
+    // 'pending'; every other event type, and every pre-E-221 row, is
+    // 'approved'. Vocabulary in src/lib/leads/quoteApproval.ts.
+    approval_status: varchar("approval_status", { length: 16 }).default("approved"),
+    approved_by: text("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    // E-226 — how that status was reached, and the price check behind it.
+    // 'auto' | 'manual'; NULL on pre-E-226 rows and on ungated events.
+    // oem_evaluation snapshots the OEM prices used (incl. their price_id), so a
+    // quote stays auditable after the price book moves on.
+    approval_mode: varchar("approval_mode", { length: 16 }),
+    oem_evaluation: jsonb("oem_evaluation"),
+    // E-242 — the generated quotation draft. Distinct from quote_document_url,
+    // which is whatever file the rep attached by hand; these are written only
+    // by generateQuotationDraft() and only after approval. quote_snapshot is
+    // the view the PDF was rendered from, kept for the same reason as
+    // oem_evaluation: the masters and the price book move, the document must
+    // not. quote_pdf_error records a render that failed after the approval
+    // transaction had already committed.
+    quote_number: varchar("quote_number", { length: 40 }),
+    quote_pdf_url: text("quote_pdf_url"),
+    quote_pdf_generated_at: timestamp("quote_pdf_generated_at", {
+      withTimezone: true,
+    }),
+    quote_pdf_error: text("quote_pdf_error"),
+    quote_snapshot: jsonb("quote_snapshot"),
+    // E-243 — the DEALER's answer, orthogonal to approval_status above. That
+    // column is iTarang's internal gate; this is what the dealer said about the
+    // quotation we released. A quote can be approved by us and declined by
+    // them, and both facts have to be readable at once. NULL = no answer yet.
+    // `via` and `actor` carry the evidence, because this is a claim about
+    // somebody outside the company.
+    dealer_decision: varchar("dealer_decision", { length: 16 }),
+    dealer_decision_at: timestamp("dealer_decision_at", { withTimezone: true }),
+    dealer_decision_via: varchar("dealer_decision_via", { length: 20 }),
+    dealer_decision_actor: text("dealer_decision_actor"),
+    dealer_decision_note: text("dealer_decision_note"),
   },
   (t) => ({
     leadVersionUniq: uniqueIndex(
@@ -7061,6 +9049,48 @@ export const dealerLeadCommercials = pgTable(
     ).on(t.dealer_lead_id, t.version_no),
     currentIdx: index("dealer_lead_commercials_current_idx").on(
       t.dealer_lead_id,
+    ),
+  }),
+);
+
+// E-242 — one row per channel per send attempt of a quotation draft.
+//
+// Append-only: a resend is a new row, never an update, so "we sent this three
+// times and the first two bounced" stays answerable. The two channels are
+// dispatched independently — WhatsApp failing must not undo a delivered email —
+// so a single send can write one `sent` row and one `failed` row.
+//
+// Not buyback_notification_events, which is the closest existing thing but is
+// NOT NULL on request_id with an FK to buyback_requests. No FKs here, matching
+// dealer_lead_commercials.
+export const quotationDispatches = pgTable(
+  "quotation_dispatches",
+  {
+    dispatch_id: uuid("dispatch_id").primaryKey().defaultRandom(),
+    commercial_id: uuid("commercial_id").notNull(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    // email | whatsapp — free text, vocabulary in src/lib/leads/quoteDispatch.ts
+    channel: varchar("channel", { length: 20 }).notNull(),
+    // The address or number actually used, snapshotted: the lead's email can be
+    // corrected later, this stays what the message went to.
+    recipient: text("recipient").notNull(),
+    // sent | failed
+    status: varchar("status", { length: 20 }).notNull(),
+    provider_message_id: text("provider_message_id"),
+    error: text("error"),
+    sent_by: text("sent_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    commercialIdx: index("quotation_dispatches_commercial_idx").on(
+      t.commercial_id,
+      t.created_at,
+    ),
+    leadIdx: index("quotation_dispatches_lead_idx").on(
+      t.dealer_lead_id,
+      t.created_at,
     ),
   }),
 );
@@ -8273,12 +10303,95 @@ export const scrapVendors = pgTable(
     payment_terms: text("payment_terms"),
     credit_limit: numeric("credit_limit", { precision: 14, scale: 2 }),
     active: boolean().default(true).notNull(),
+    // E-223 — captured by the admin onboarding form. The registered ADDRESS
+    // lives on `accounts` (address_line1/2, city, state, pincode already exist
+    // there); only these three are vendor-specific.
+    udyam_number: text("udyam_number"),
+    /**
+     * Reference on the MANUALLY signed vendor agreement (E-223). Deliberately
+     * NOT business_entity_roles.agreement_id, which is reserved for the Digio
+     * document id (M19): "we hold a scan" and "eSign completed" are different
+     * assurances, and one column would let the weaker satisfy a check written
+     * for the stronger.
+     */
+    agreement_ref: text("agreement_ref"),
+    agreement_signed_on: date("agreement_signed_on"),
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     entityUnique: uniqueIndex("scrap_vendors_entity_unique").on(t.entity_id),
+  }),
+);
+
+/**
+ * E-223 — the documents captured at vendor onboarding: GSTIN certificate, PAN
+ * card, Udyam certificate (all three mandatory) and an optional manually
+ * signed agreement.
+ *
+ * `entity_id` IS NULLABLE ON PURPOSE. The files are picked before the vendor
+ * exists, so the upload route inserts an UNCLAIMED row and hands back its id;
+ * submitting the form claims it (entity_id + claimed_at). The alternative —
+ * letting the browser hand a storage key back at submit — would make a
+ * client-supplied string a storage path, which is exactly what
+ * src/lib/buyback/storage.ts refuses to allow.
+ *
+ * `doc_type` is free text (GSTIN | PAN | UDYAM | AGREEMENT), per this family's
+ * convention; the vocabulary lives in src/lib/buyback/vendor-docs.ts and is
+ * enforced by zod at the write path.
+ */
+export const scrapVendorDocuments = pgTable(
+  "scrap_vendor_documents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 }).references(() => accounts.id, {
+      onDelete: "cascade",
+    }),
+    doc_type: text("doc_type").notNull(),
+    s3_key: text("s3_key").notNull(),
+    file_name: text("file_name"),
+    content_type: text("content_type"),
+    uploaded_by: uuid("uploaded_by"),
+    claimed_at: timestamp("claimed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("scrap_vendor_documents_entity_idx").on(t.entity_id),
+    // The two partial indexes from E-223 (one current doc per type; unclaimed
+    // sweep) cannot be expressed here — Drizzle has no partial index. They
+    // live only in the migration.
+  }),
+);
+
+/**
+ * E-223 — the record of emailing a vendor their generated portal password.
+ * Modelled on nbfcPortalCredentials (E-002), including its most important
+ * property: NO PASSWORD COLUMN. The plaintext is emailed and never persisted.
+ *
+ * One row per dispatch ATTEMPT. A retry after a bounced email is the normal
+ * case this table exists to make visible, and overwriting the failed row would
+ * erase the only evidence the first send was tried. Latest by created_at is
+ * the current state.
+ */
+export const vendorPortalCredentials = pgTable(
+  "vendor_portal_credentials",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    entity_id: varchar("entity_id", { length: 255 })
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    supabase_user_id: uuid("supabase_user_id").notNull(),
+    /** pending | dispatched | credential_dispatch_failed */
+    dispatch_status: varchar("dispatch_status", { length: 32 }).notNull(),
+    /** The mailer's own sentence — shown to the admin beside the retry button. */
+    last_error: text("last_error"),
+    email_dispatched_at: timestamp("email_dispatched_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    entityIdx: index("vendor_portal_credentials_entity_idx").on(t.entity_id, t.created_at),
+    statusIdx: index("vendor_portal_credentials_status_idx").on(t.dispatch_status),
   }),
 );
 
@@ -8893,6 +11006,551 @@ export const bankStatementRows = pgTable(
   (t) => ({
     importIdx: index("bank_statement_rows_import_idx").on(t.import_id),
     refIdx: index("bank_statement_rows_ref_idx").on(t.txn_ref),
+  }),
+);
+
+// --- E-212: FORGOT PASSWORD ---
+//
+// Single-use, sha256-hashed password-reset tokens backing the "Forgot
+// password?" flow on /login. See drizzle/E-212_password_reset_tokens.sql for
+// the full rationale (two password stores, why we don't use Supabase's own
+// recovery link). A token is usable iff:
+//   used_at IS NULL AND invalidated_at IS NULL AND expires_at > now()
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // users.id === Supabase auth user id.
+    user_id: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Audit only. NEVER look a user up by this — Supabase lower-cases emails
+    // while users.email may be mixed-case and Postgres `=` is case-sensitive.
+    email: text().notNull(),
+    token_hash: varchar("token_hash", { length: 64 }).notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    used_at: timestamp("used_at", { withTimezone: true }),
+    invalidated_at: timestamp("invalidated_at", { withTimezone: true }),
+    requested_ip: varchar("requested_ip", { length: 64 }),
+    requested_ua: text("requested_ua"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    hashKey: uniqueIndex("password_reset_tokens_hash_key").on(t.token_hash),
+    userCreatedIdx: index("password_reset_tokens_user_created_idx").on(
+      t.user_id,
+      t.created_at,
+    ),
+    // password_reset_tokens_live_idx is partial — migration-only, drizzle's
+    // builder has no partial-index syntax (same note as E-211).
+  }),
+);
+
+// --- E-213: IN-APP CHANGE PASSWORD (OTP) ---
+//
+// 4-digit email OTP sessions for the Change Password modal. See
+// drizzle/E-213_password_change_otps.sql for why this is a new table rather
+// than a reuse of consent_otp_verifications / calc_otp_verifications /
+// otp_confirmations (all three are lead-scoped, and one stores an email in a
+// column named `phone`).
+//
+// A session is usable for verify iff:
+//   verified_at IS NULL AND consumed_at IS NULL AND expires_at > now()
+// and usable for confirm iff:
+//   verified_at IS NOT NULL AND consumed_at IS NULL AND expires_at > now()
+export const passwordChangeOtps = pgTable(
+  "password_change_otps",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // users.id === Supabase auth user id.
+    user_id: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Audit only. NEVER look a user up by this — users.email can be mixed-case.
+    email: text().notNull(),
+    otp_hash: varchar("otp_hash", { length: 64 }).notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    send_count: integer("send_count").default(1).notNull(),
+    attempt_count: integer("attempt_count").default(0).notNull(),
+    locked_until: timestamp("locked_until", { withTimezone: true }),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    consumed_at: timestamp("consumed_at", { withTimezone: true }),
+    delivery_status: varchar("delivery_status", { length: 20 })
+      .default("sent")
+      .notNull(),
+    requested_ip: varchar("requested_ip", { length: 64 }),
+    requested_ua: text("requested_ua"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("password_change_otps_user_created_idx").on(
+      t.user_id,
+      t.created_at,
+    ),
+    // password_change_otps_open_idx and _verified_idx are partial —
+    // migration-only, drizzle's builder has no partial-index syntax (same note
+    // as E-211/E-212).
+  }),
+);
+
+// --- E-215: CRM SECURITY SCANNER (standalone agent) ---
+//
+// A NEW, self-contained security-testing agent: it drives Playwright through
+// the CRM (starting at dealer onboarding), actively probes for vulnerabilities,
+// and records findings. INDEPENDENT of the NBFC risk engine (risk_hypotheses /
+// risk_card_runs / the Python sandbox) — shares no tables, no code. Do not join
+// these to the risk_* family. See drizzle/E-215_security_scanner.sql.
+
+// One row per scan. The partial unique index (target_env) WHERE status='running'
+// is the single-flight lock (migration-only) — see src/lib/security/scan-run.ts.
+export const securityScanRuns = pgTable(
+  "security_scan_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    target_base_url: text("target_base_url").notNull(),
+    // 'local' | 'sandbox' | 'prod' — derived from the URL host.
+    target_env: varchar("target_env", { length: 16 }).notNull(),
+    // 'safe' | 'aggressive'. safe skips state-mutating probes.
+    mode: varchar({ length: 12 }).default("safe").notNull(),
+    // 'manual' | 'cron' | 'cli'
+    triggered_by: varchar("triggered_by", { length: 12 }).notNull(),
+    actor_user_id: uuid("actor_user_id"),
+    // 'running' | 'completed' | 'failed'
+    status: varchar({ length: 16 }).default("running").notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    surfaces_walked: integer("surfaces_walked").default(0).notNull(),
+    findings_total: integer("findings_total").default(0).notNull(),
+    findings_critical: integer("findings_critical").default(0).notNull(),
+    findings_high: integer("findings_high").default(0).notNull(),
+    findings_medium: integer("findings_medium").default(0).notNull(),
+    findings_low: integer("findings_low").default(0).notNull(),
+    findings_info: integer("findings_info").default(0).notNull(),
+    prompt_tokens: integer("prompt_tokens").default(0).notNull(),
+    completion_tokens: integer("completion_tokens").default(0).notNull(),
+    error: text("error"),
+  },
+  (t) => ({
+    startedIdx: index("security_scan_runs_started_idx").on(t.started_at),
+    // security_scan_runs_env_running_uidx is partial — migration-only.
+  }),
+);
+
+// Catalogue of checks the agent knows how to run, keyed by slug. Seeded by the
+// app on first run.
+export const securityChecks = pgTable(
+  "security_checks",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    slug: varchar({ length: 64 }).notNull(),
+    // 'authz' | 'exposure' | 'injection' | 'upload_headers'
+    category: varchar({ length: 24 }).notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    // critical | high | medium | low | info
+    default_severity: varchar("default_severity", { length: 12 }).default("medium").notNull(),
+    owasp_ref: varchar("owasp_ref", { length: 32 }),
+    cwe_ref: varchar("cwe_ref", { length: 16 }),
+    // Whether running this check mutates server state (skipped in safe mode).
+    mutating: boolean().default(false).notNull(),
+    retired_at: timestamp("retired_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    slugUidx: uniqueIndex("security_checks_slug_uidx").on(t.slug),
+  }),
+);
+
+// One row per vulnerability the scan surfaced. severity/confidence are set by
+// deterministic probe rules, never by the LLM. Open findings are deduped by
+// fingerprint (partial unique WHERE status <> 'resolved', migration-only).
+export const securityFindings = pgTable(
+  "security_findings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    run_id: uuid("run_id")
+      .notNull()
+      .references(() => securityScanRuns.id, { onDelete: "cascade" }),
+    check_slug: varchar("check_slug", { length: 64 }).notNull(),
+    category: varchar({ length: 24 }).notNull(),
+    // critical | high | medium | low | info
+    severity: varchar({ length: 12 }).notNull(),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    target_url: text("target_url").notNull(),
+    http_method: varchar("http_method", { length: 8 }),
+    evidence_json: jsonb("evidence_json"),
+    reproduction: text("reproduction"),
+    remediation: text("remediation"),
+    owasp_ref: varchar("owasp_ref", { length: 32 }),
+    cwe_ref: varchar("cwe_ref", { length: 16 }),
+    // 'confirmed' | 'likely' | 'possible'
+    confidence: varchar({ length: 10 }).default("possible").notNull(),
+    // 'open' | 'acknowledged' | 'resolved' | 'false_positive'
+    status: varchar({ length: 16 }).default("open").notNull(),
+    fingerprint: varchar({ length: 64 }).notNull(),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    llm_model: varchar("llm_model", { length: 64 }),
+    prompt_tokens: integer("prompt_tokens"),
+    completion_tokens: integer("completion_tokens"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-218: resolution bookkeeping — filled when a finding is resolved via the
+    // AI resolution chat (auto-apply) or the manual triage buttons.
+    resolution_summary: text("resolution_summary"),
+    resolution_report: jsonb("resolution_report"),
+    resolved_by: uuid("resolved_by"),
+    // 'auto_apply' | 'manual'
+    resolution_method: varchar("resolution_method", { length: 16 }),
+    // E-219: denormalised origin of the LATEST resolution, so the History tab
+    // renders "resolved by X from IP Y" without a join. The full append-only
+    // trail lives in security_finding_actions.
+    resolved_ip: varchar("resolved_ip", { length: 64 }),
+    resolved_user_agent: text("resolved_user_agent"),
+    resolved_by_email: text("resolved_by_email"),
+  },
+  (t) => ({
+    runIdx: index("security_findings_run_idx").on(t.run_id),
+    severityIdx: index("security_findings_severity_idx").on(t.severity),
+    statusIdx: index("security_findings_status_idx").on(t.status),
+    // security_findings_open_fingerprint_uidx is partial — migration-only.
+  }),
+);
+
+// E-218 — per-finding AI remediation chat. One row per turn (mirrors
+// conversation_messages). An assistant turn that proposes an applyable edit
+// carries proposed_fix = { file, search, replace, explanation }; the Resolve
+// step applies it to disk as a deterministic single-occurrence replacement.
+export const securityFindingMessages = pgTable(
+  "security_finding_messages",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    finding_id: uuid("finding_id")
+      .notNull()
+      .references(() => securityFindings.id, { onDelete: "cascade" }),
+    // 'user' | 'assistant' | 'system'
+    role: text().notNull(),
+    message: text().notNull(),
+    proposed_fix: jsonb("proposed_fix"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    findingIdx: index("security_finding_messages_finding_idx").on(t.finding_id, t.created_at),
+  }),
+);
+
+// E-219 — append-only triage/resolution audit trail per finding. One row per
+// action (acknowledged | resolved | false_positive | reopened | auto_apply) with
+// the actor AND the request origin it came from (ip/user_agent). A reopen adds a
+// row rather than erasing history, so the History tab can show the full story.
+export const securityFindingActions = pgTable(
+  "security_finding_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    finding_id: uuid("finding_id")
+      .notNull()
+      .references(() => securityFindings.id, { onDelete: "cascade" }),
+    // 'acknowledged' | 'resolved' | 'false_positive' | 'reopened' | 'auto_apply'
+    action: varchar({ length: 24 }).notNull(),
+    // 'auto_apply' | 'manual' | null
+    method: varchar({ length: 16 }),
+    actor_user_id: uuid("actor_user_id"),
+    actor_email: text("actor_email"),
+    actor_role: varchar("actor_role", { length: 32 }),
+    ip: varchar({ length: 64 }),
+    user_agent: text("user_agent"),
+    summary: text("summary"),
+    detail: jsonb("detail"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    findingIdx: index("security_finding_actions_finding_idx").on(t.finding_id, t.created_at),
+    actionIdx: index("security_finding_actions_action_idx").on(t.action, t.created_at),
+    ipIdx: index("security_finding_actions_ip_idx").on(t.ip),
+  }),
+);
+
+// --- E-216: LIVE-ATTACK EVENT LOG (runtime intrusion detection) ---
+//
+// Companion to E-215's scanner. One row per suspicious request caught in real
+// time by the detection layer in src/middleware.ts. Written via the Node route
+// POST /api/internal/security-events (Edge middleware can't reach Postgres).
+// See drizzle/E-216_security_events.sql.
+export const securityEvents = pgTable(
+  "security_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    occurred_at: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+    // Payload rules (src/lib/security/detect.ts):
+    //   'sql_injection' | 'xss' | 'path_traversal' | 'null_byte' | 'scanner_ua'
+    //   | 'sensitive_unauth' | 'command_injection' | 'ssrf' | 'lfi_rfi'
+    //   | 'jndi_injection' | 'nosql_injection' | 'crlf_injection'
+    //   | 'proto_pollution' | 'xxe' | 'open_redirect' | 'sensitive_file_probe'
+    //   | 'method_abuse'
+    // Volumetric rules (src/lib/security/rate-watch.ts):
+    //   'rate_flood' | 'path_enumeration' | 'auth_bruteforce'
+    // Auto-block (src/lib/security/blocklist.ts):
+    //   'ip_blocked' — a request refused because its source IP is under a ban
+    // Legacy: 'burst'
+    event_type: varchar("event_type", { length: 32 }).notNull(),
+    // critical | high | medium | low | info
+    severity: varchar({ length: 12 }).notNull(),
+    // 'blocked' | 'logged'
+    action: varchar({ length: 12 }).default("logged").notNull(),
+    ip: varchar({ length: 64 }),
+    actor_user_id: uuid("actor_user_id"),
+    actor_role: varchar("actor_role", { length: 32 }),
+    method: varchar({ length: 8 }),
+    path: text("path").notNull(),
+    query: text("query"),
+    user_agent: text("user_agent"),
+    matched_rule: varchar("matched_rule", { length: 64 }),
+    // The rule's matched payload, plus request context under fixed keys:
+    //   net (source-IP provenance + proxy chain) | client (sender fingerprint)
+    //   | geo | request | flags | ban | body_sample | provenance (detector-raised
+    //   vs hand-POSTed — decides whether `ip` is observed or merely claimed).
+    // Written by src/middleware.ts via src/lib/security/fingerprint.ts.
+    evidence: jsonb("evidence"),
+    // 'new' | 'reviewed' | 'ignored'
+    status: varchar({ length: 16 }).default("new").notNull(),
+    alerted_at: timestamp("alerted_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    occurredIdx: index("security_events_occurred_idx").on(t.occurred_at),
+    severityIdx: index("security_events_severity_idx").on(t.severity),
+    ipOccurredIdx: index("security_events_ip_occurred_idx").on(t.ip, t.occurred_at),
+    statusIdx: index("security_events_status_idx").on(t.status),
+    // E-217 — the volumetric rules grow this table much faster, and the
+    // dashboard filters by attack type.
+    typeOccurredIdx: index("security_events_type_occurred_idx").on(t.event_type, t.occurred_at),
+  }),
+);
+
+// ── E-224: NeoDove ⇄ iTarang two-way lead sync ─────────────────────────────
+//
+// NeoDove has no read API. Its whole programmable surface is a per-campaign
+// "Custom Integration" endpoint we POST leads to (the URL *is* the credential —
+// no key or header auth exists) plus Workflows → Send Webhook firing back at us
+// on lead created / call connected / call not connected. Nothing can be queried.
+//
+// Deliberately NOT folded into dialer_campaigns: that table drives the AI voice
+// dialer (advanceCampaign claims rows FOR UPDATE SKIP LOCKED and places real
+// Bolna calls; /api/cron/ai-dialer sweeps for status='running'). A NeoDove row
+// parked there would eventually be robot-dialled against an audience meant for
+// human agents. The two are UNIONed at the API layer instead.
+//
+// See drizzle/E-224_neodove_integration.sql.
+
+export const neodoveCampaigns = pgTable(
+  "neodove_campaigns",
+  {
+    id: text().primaryKey().notNull(),
+    name: text().notNull(),
+    // The campaign's name in the NeoDove UI. Free text because NeoDove exposes
+    // no campaign id over any API — this is the only human-checkable link.
+    neodove_campaign_name: text("neodove_campaign_name"),
+    // NAME of the env var holding the Custom Integration URL, never the URL.
+    // That URL is the only credential NeoDove issues, so a DB read must not
+    // confer write access to their system.
+    push_endpoint_ref: text("push_endpoint_ref"),
+    update_endpoint_ref: text("update_endpoint_ref"),
+    // Same RegionSelection shape the AI-dialer start modal already emits, so
+    // the existing audience builder is reused unchanged.
+    audience_filter: jsonb("audience_filter"),
+    // E-225: human-recorded mirror of the campaign's settings INSIDE NeoDove
+    // (pipeline, managing user, agents, lead distribution). DESCRIPTIVE ONLY —
+    // NeoDove has neither a campaign-creation nor a read API, so this can only
+    // ever be what somebody observed in their UI. Writing it changes nothing on
+    // their side, and the form says so on every field.
+    // Safe to mirror here despite E-225 possibly being unapplied: every access
+    // to this table is raw `sql`, so no bare db.select().from() can break.
+    mirror_config: jsonb("mirror_config"),
+    // E-226: marks the ONE campaign the per-lead "Call now" action pushes into.
+    // A partial unique index (not expressible here) enforces the "at most one"
+    // half. NeoDove has no dial API — what makes such a lead urgent is the
+    // NeoDove-side lead distribution on that campaign, not anything we send.
+    // Safe to mirror despite E-226 possibly being unapplied for the same reason
+    // mirror_config is: every access to this table is raw `sql`.
+    is_priority_dial: boolean("is_priority_dial").default(false).notNull(),
+    // E-237: the CRM user who should own leads pushed into this campaign — the
+    // CRM-side counterpart of the NeoDove campaign-member assignment, which has
+    // no API and can be neither read nor written from here. ACTED ON (a push
+    // assigns to it), unlike the purely descriptive mirror_config above.
+    // text, matching dealer_leads.current_owner_id, so the two owner columns
+    // compare directly; users.id is uuid, hence every join's ::text cast.
+    // Safe to mirror despite E-237 possibly being unapplied for the same reason
+    // mirror_config is: every access to this table is raw `sql`. Reads still go
+    // through to_jsonb, because a missing column fails at PARSE time.
+    crm_owner_user_id: text("crm_owner_user_id"),
+    // draft | pushing | active | paused | completed
+    status: varchar({ length: 20 }).default("draft").notNull(),
+    total_pushed: integer("total_pushed").default(0).notNull(),
+    push_failed: integer("push_failed").default(0).notNull(),
+    dispositions_received: integer("dispositions_received").default(0).notNull(),
+    created_by: uuid("created_by"),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    statusIdx: index("neodove_campaigns_status_idx").on(t.status, t.created_at),
+    createdByIdx: index("neodove_campaigns_created_by_idx").on(t.created_by, t.created_at),
+  }),
+);
+
+// One row per (lead, campaign). A lead can legitimately sit in several NeoDove
+// campaigns over time, so this cannot be columns on dealer_leads without
+// collapsing to the most recent push and destroying the per-campaign counters.
+// dealer_lead_id is a soft FK, matching the dialer_campaign_leads precedent.
+export const neodoveLeadLinks = pgTable(
+  "neodove_lead_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom().notNull(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    neodove_campaign_id: text("neodove_campaign_id")
+      .notNull()
+      .references(() => neodoveCampaigns.id, { onDelete: "cascade" }),
+    // NeoDove's own lead id, IF its create response returns one — unknown until
+    // the contract is probed. When absent the inbound handler falls back to
+    // matching on normalised phone.
+    neodove_lead_id: text("neodove_lead_id"),
+    // pending | pushed | failed | skipped_dedup | skipped_excluded
+    push_status: varchar("push_status", { length: 24 }).default("pending").notNull(),
+    push_error: text("push_error"),
+    pushed_at: timestamp("pushed_at", { withTimezone: true }),
+    // E-237: who this push assigned the lead to in the CRM, and when.
+    // Historical by design — NOT kept in step with dealer_leads.current_owner_id
+    // if the lead is reassigned later, because the question these answer is
+    // "what did this campaign hand over", which a later reassignment must not
+    // rewrite. Also the only place the outcome survives: push-batch acks before
+    // its drain runs, so the count cannot travel in the HTTP response.
+    assigned_owner_id: text("assigned_owner_id"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    last_event_at: timestamp("last_event_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    campaignStatusIdx: index("neodove_lead_links_campaign_status_idx").on(
+      t.neodove_campaign_id,
+      t.push_status,
+    ),
+    leadIdx: index("neodove_lead_links_lead_idx").on(t.dealer_lead_id, t.last_event_at),
+  }),
+);
+
+// Append-only ledger, both directions. NOT a debug log: because NeoDove cannot
+// be queried, a dropped webhook is unrecoverable — this table is what a NeoDove
+// CSV export is diffed against to find and backfill the gap.
+// The partial unique index on external_event_id (inbound only) is the
+// idempotency guard; see the migration.
+export const neodoveSyncEvents = pgTable(
+  "neodove_sync_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom().notNull(),
+    // 'outbound' (we pushed) | 'inbound' (NeoDove called us)
+    direction: varchar({ length: 10 }).notNull(),
+    event_type: varchar("event_type", { length: 50 }),
+    neodove_campaign_id: text("neodove_campaign_id"),
+    dealer_lead_id: text("dealer_lead_id"),
+    // NeoDove's event id. Idempotency key for inbound deliveries, and the value
+    // written to lead_touchpoints.external_event_id — whose own partial unique
+    // index (E-113) is the second, independent line of defence against replay.
+    external_event_id: text("external_event_id"),
+    http_status: integer("http_status"),
+    request_payload: jsonb("request_payload"),
+    response_payload: jsonb("response_payload"),
+    error: text("error"),
+    attempts: integer("attempts").default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    campaignIdx: index("neodove_sync_events_campaign_idx").on(
+      t.neodove_campaign_id,
+      t.created_at,
+    ),
+    leadIdx: index("neodove_sync_events_lead_idx").on(t.dealer_lead_id, t.created_at),
+  }),
+);
+
+// module_usage_user_daily is declared ONCE, further down with the ops-console
+// tables (E-216_module_usage_user_daily). The E-251 mirror that used to sit here
+// was written when nothing referenced the table; the /operations/usage drill-down
+// now reads and writes it, so the live declaration is the authoritative one.
+
+// ---------------------------------------------------------------------------
+// E-255 — Google Drive mirror ledger.
+//
+// One row per S3 object (logical bucket + key), written the moment an object
+// lands in S3 (see src/lib/storage/s3.ts → drive-mirror.ts) and by the backfill
+// sweep for objects that pre-date the feature. Nothing in the app READS
+// documents through this table — the S3 copy remains the served one; this is
+// the queue + receipt for the Drive backup copy.
+// ---------------------------------------------------------------------------
+export const storageDriveMirror = pgTable(
+  "storage_drive_mirror",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey().notNull(),
+    bucket: varchar("bucket", { length: 64 }).notNull(),
+    object_key: text("object_key").notNull(),
+    content_type: varchar("content_type", { length: 255 }),
+    size_bytes: bigint("size_bytes", { mode: "number" }),
+    // pending | uploading | done | failed | source_deleted
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    drive_file_id: text("drive_file_id"),
+    drive_folder_id: text("drive_folder_id"),
+    drive_web_view_link: text("drive_web_view_link"),
+    drive_md5: text("drive_md5"),
+    last_error: text("last_error"),
+    mirrored_at: timestamp("mirrored_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    bucketKeyUq: uniqueIndex("storage_drive_mirror_bucket_key_uq").on(t.bucket, t.object_key),
+    dueIdx: index("storage_drive_mirror_due_idx").on(t.status, t.next_attempt_at),
+    statusIdx: index("storage_drive_mirror_status_idx").on(t.status),
+  }),
+);
+
+/**
+ * [E-259] Per-NBFC scrap payment term — WHEN iTarang pays for a consignment.
+ *
+ * 'pre_lot' pays before the batteries arrive, 'post_lot' only once they are
+ * marked received. Absence of a row is meaningful and is NOT backfilled: an
+ * NBFC nobody has decided about is read as post_lot, the safer of the two.
+ *
+ * The CHECK constraint on payment_timing lives in the migration; the
+ * vocabulary that mirrors it is SCRAP_PAYMENT_TIMINGS in
+ * src/lib/nbfc/scrap/payment-settings.ts.
+ */
+export const nbfcScrapPaymentSettings = pgTable(
+  "nbfc_scrap_payment_settings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    payment_timing: varchar("payment_timing", { length: 16 })
+      .notNull()
+      .default("post_lot"),
+    note: text("note"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantUnique: uniqueIndex("nbfc_scrap_payment_settings_tenant_uidx").on(
+      table.tenant_id,
+    ),
   }),
 );
 

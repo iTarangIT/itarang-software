@@ -5,13 +5,57 @@ import { inArray } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
-import { requireAuth } from "@/lib/auth-utils";
+import { requireAuth, requireRole } from "@/lib/auth-utils";
+import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
+import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
 
 const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
 
 export async function POST(req: NextRequest) {
+  // ⚠ SECURITY: this route had NO auth gate. Middleware does not cover /api/*,
+  // and the only user lookup below is a best-effort requireAuth() inside a
+  // try/catch that swallows failure and proceeds — so an unauthenticated caller
+  // could start a campaign that places real, billable calls. Same class of hole
+  // that was found and fixed on the /leads list (see the note in
+  // src/app/api/dealer-leads/route.ts).
+  //
+  // LEADS_OVERSIGHT_ROLES rather than the wider LEADS_PAGE_ROLES: spending money
+  // on a dialer run is not something an inside_sales_rep or finance_controller
+  // should be able to trigger. The best-effort requireAuth() below is kept for
+  // the genuinely system-fired case, where triggered_by is legitimately absent.
+  await requireRole([...LEADS_OVERSIGHT_ROLES]);
+
   const body = await req.json();
-  const { queueIds, provider: rawProvider, category, location, region } = body;
+  const {
+    queueIds,
+    provider: rawProvider,
+    category,
+    location,
+    region,
+    schedule: rawSchedule,
+  } = body;
+
+  // E-254 — the calling window. Zod here rather than hand-destructuring like
+  // the rest of this route: a malformed window is the one field that can put a
+  // campaign into a state nothing recovers it from (a zero-length window parks
+  // it forever), so it is worth refusing at the door with a real message.
+  //
+  // Absent means unscheduled, which is the pre-E-228 behaviour and stays the
+  // default for every caller that has not been taught about windows.
+  let schedule = null as ReturnType<typeof campaignScheduleSchema.parse> | null;
+  if (rawSchedule != null) {
+    const parsed = campaignScheduleSchema.safeParse(rawSchedule);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: parsed.error.issues[0]?.message ?? "Invalid calling window",
+        },
+        { status: 400 },
+      );
+    }
+    schedule = parsed.data;
+  }
 
   if (!Array.isArray(queueIds) || queueIds.length === 0) {
     return NextResponse.json(
@@ -72,16 +116,40 @@ export async function POST(req: NextRequest) {
 
   // Insert campaign + per-lead rows BEFORE starting the session so the
   // banner's first poll already sees a campaignId. createCampaign is
-  // best-effort — failure returns null and the session still starts.
-  const campaignId = await createCampaign({
+  // best-effort — failure returns a null campaignId and the session still starts.
+  //
+  // createCampaign also scrubs leads the AI has already had a connected call
+  // with. That matters here specifically: this route trusts the client's
+  // queueIds as authoritative, so a modal left open for ten minutes can carry
+  // ids that became ineligible in the meantime.
+  const { campaignId, queued, blockedAiConnected } = await createCampaign({
     queueIds,
     provider,
     category: typeof category === "string" ? category : null,
     region: regionToPersist,
     triggeredBy,
+    schedule,
   });
 
-  await dialerSession.start(queueIds, {
+  // Every lead in the queue had already been reached by AI. Say so plainly
+  // rather than starting a campaign with nothing in it.
+  if (!campaignId && blockedAiConnected.length > 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          "Every lead in this selection has already been contacted by the AI. They need manual follow-up — the AI cannot call them again.",
+        blockedAiConnected: blockedAiConnected.length,
+      },
+      { status: 409 },
+    );
+  }
+
+  // The session drives the banner, so it must reflect what will actually be
+  // dialled — not the pre-scrub selection.
+  const dialedIds = queueIds.filter((id) => !blockedAiConnected.includes(id));
+
+  await dialerSession.start(dialedIds, {
     provider,
     category: typeof category === "string" ? category : undefined,
     campaignId: campaignId ?? undefined,
@@ -91,10 +159,12 @@ export async function POST(req: NextRequest) {
   //  1. The catch-up cron routes them to the correct provider's scheduler
   //  2. Any in-flight follow-ups land on the same provider
   try {
-    await db
-      .update(dealerLeads)
-      .set({ provider })
-      .where(inArray(dealerLeads.id, queueIds));
+    if (dialedIds.length > 0) {
+      await db
+        .update(dealerLeads)
+        .set({ provider })
+        .where(inArray(dealerLeads.id, dialedIds));
+    }
   } catch (err) {
     console.error("[AI DIALER] Failed to bulk-tag dealer_leads.provider:", err);
   }
@@ -107,12 +177,20 @@ export async function POST(req: NextRequest) {
   // block the redirect/banner update.
   let firstCallPlaced = false;
   let firstCallError: string | null = null;
+  // E-254 — set when the campaign was started outside its window. Not an error:
+  // advanceCampaign parked it and it will run on its own.
+  let armedStatus: "scheduled" | "paused" | null = null;
+  let resumeAt: string | null = null;
   if (campaignId) {
     try {
       const r = await advanceCampaign(campaignId);
       firstCallPlaced = r.kind === "placed";
       if (r.kind === "error") {
         firstCallError = r.error;
+      }
+      if (r.kind === "window-closed") {
+        armedStatus = r.status;
+        resumeAt = r.resumeAt ? r.resumeAt.toISOString() : null;
       }
     } catch (err) {
       firstCallError = err instanceof Error ? err.message : "advance threw";
@@ -124,9 +202,17 @@ export async function POST(req: NextRequest) {
     success: true,
     provider,
     category: category ?? null,
-    queued: queueIds.length,
+    queued,
+    // How many of the requested leads were dropped because the AI has already
+    // spoken to them. The modal shows this so a shrunken queue is explained
+    // rather than just smaller than the preview said.
+    blockedAiConnected: blockedAiConnected.length,
     campaignId,
     firstCallPlaced,
     firstCallError,
+    // null unless the window was shut at start time. 'scheduled' = it will wake
+    // itself at resumeAt; 'paused' = a single run waiting for a human.
+    armedStatus,
+    resumeAt,
   });
 }

@@ -10,7 +10,6 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import {
     LOST_REASON,
-    canTransition,
     isHighImpactLostReason,
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
@@ -64,14 +63,11 @@ export const POST = withErrorHandler(
         const stateRows = await db.execute<{ lead_status: string | null }>(sql`
             SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
         `);
+        if (stateRows.length === 0) return errorResponse("Lead not found", 404);
+        // Reachable from ANY status, for any role — a Converted lead (the
+        // onboarding-dropout loopback, no longer admin-only) and a lead with no
+        // status included. The reason itself is still mandatory.
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
-        if (!fromStatus) return errorResponse("Lead not found", 404);
-
-        const t = canTransition(fromStatus, "Lost", {
-            actorRole: user.role,
-            lostReason: body.lost_reason,
-        });
-        if (!t.ok) return errorResponse(t.reason, 400);
 
         // BRD §0.7 side effect: business_closed permanently excludes from AI dialer.
         if (body.lost_reason === "business_closed") {

@@ -10,10 +10,11 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
+import { leads, nbfcLoanAgreements } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getWinningAssignment } from "@/lib/nbfc/enach";
 import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreement";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { syncLoanAgreementStatusFromDigio } from "@/lib/nbfc/sync-loan-agreement-status";
 
 export const runtime = "nodejs";
@@ -33,18 +34,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     const winner = await getWinningAssignment(leadId);
     const isOurs = !!winner && winner.tenant_id === actor.tenant_id;
 
-    // The signing mechanism comes from the per-lead snapshot first (so an
-    // in-flight lead is unaffected by later edits), falling back to live config.
-    const snap = (winner?.snapshot ?? {}) as { doc_agreement_method?: AgreementMethod | null };
-    let method: AgreementMethod | null = snap.doc_agreement_method ?? null;
-    if (!method && isOurs) {
-      const [cfg] = await db
-        .select({ m: nbfcServiceConfig.doc_agreement_method })
-        .from(nbfcServiceConfig)
-        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-        .limit(1);
-      method = (cfg?.m ?? null) as AgreementMethod | null;
-    }
+    // The signing mechanism is read LIVE from Settings -> Document Handling, so
+    // "Not through iTarang" removes the rail from in-flight leads too.
+    const method: AgreementMethod | null = isOurs
+      ? (await resolveServiceOptIn(actor.tenant_id, winner?.snapshot))
+          .doc_agreement_method
+      : null;
 
     // Reconcile against the eSign provider first so a fully-signed agreement
     // surfaces its success UI + downloads even when the Digio webhook never

@@ -1,41 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq } from "drizzle-orm";
-import crypto from "crypto";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import {
-  leads,
-  loanSanctions,
-  otpConfirmations,
-  productSelections,
-} from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { finalizeSale } from "@/lib/sales/sale-finalization";
-import { projectDisbursedLoan } from "@/lib/nbfc/servicing/projectDisbursedLoan";
-import { toPaymentMode } from "@/lib/sales/payment-mode";
-import { notifyDispatchConfirmed } from "@/lib/notifications";
-import { sendKycSms } from "@/lib/sms";
+import { InventoryLifecycleError } from "@/lib/inventory/lifecycle";
+import { DispatchError, confirmDispatch } from "@/lib/leads/confirm-dispatch";
 
 // BRD V2 §3.3 — Step 5 OTP validation + dispatch confirmation.
-// On success, a single DB transaction finalizes the sale:
-//   - inventory → sold (battery + charger)
-//   - product_selection → dealer_confirmed
-//   - loan_sanction → dealer_approved
-//   - lead → sold
-//   - warranty + after-sales records created
-//   - otp row → is_used = true
+//
+// The transaction lives in `src/lib/leads/confirm-dispatch.ts`: the customer can
+// confirm the same dispatch from their WhatsApp chat, and this is the one step
+// of the journey where a second implementation would move stock and money
+// twice. This route keeps auth, ownership and HTTP shaping.
 
 const BodySchema = z.object({
   otp: z.string().regex(/^\d{6}$/, "OTP must be 6 digits"),
 });
-
-const MAX_ATTEMPTS = 3;
-const LOCK_MS = 5 * 60 * 1000; // 5-minute lockout after MAX_ATTEMPTS wrong attempts
-
-function hashOtp(otp: string): string {
-  return crypto.createHash("sha256").update(otp).digest("hex");
-}
 
 export async function POST(
   req: NextRequest,
@@ -46,7 +28,11 @@ export async function POST(
     const { id: leadId } = await params;
     const { otp } = BodySchema.parse(await req.json());
 
-    const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
+    const [lead] = await db
+      .select({ id: leads.id, dealer_id: leads.dealer_id })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
     if (!lead) {
       return NextResponse.json(
         { success: false, error: { message: "Lead not found" } },
@@ -59,202 +45,53 @@ export async function POST(
         { status: 403 },
       );
     }
-    if (lead.kyc_status !== "loan_sanctioned") {
-      return NextResponse.json(
-        { success: false, error: { message: `Lead not awaiting dispatch (kyc_status=${lead.kyc_status})` } },
-        { status: 400 },
-      );
-    }
 
-    const [otpRecord] = await db
-      .select()
-      .from(otpConfirmations)
-      .where(
-        and(
-          eq(otpConfirmations.lead_id, leadId),
-          eq(otpConfirmations.is_used, false),
-        ),
-      )
-      .orderBy(desc(otpConfirmations.created_at))
-      .limit(1);
-
-    if (!otpRecord) {
-      return NextResponse.json(
-        { success: false, error: { message: "No active OTP. Please request a new one." } },
-        { status: 400 },
-      );
-    }
-
-    const now = new Date();
-    if (otpRecord.locked_until && now < otpRecord.locked_until) {
-      const mins = Math.ceil((otpRecord.locked_until.getTime() - now.getTime()) / 60000);
-      return NextResponse.json(
-        { success: false, error: { message: `Too many attempts. Locked for ${mins} more minute(s).` } },
-        { status: 429 },
-      );
-    }
-    if (now >= otpRecord.expires_at) {
-      return NextResponse.json(
-        { success: false, error: { message: "OTP expired. Please resend." } },
-        { status: 400 },
-      );
-    }
-
-    if (otpRecord.otp_hash !== hashOtp(otp)) {
-      const attempts = otpRecord.attempt_count + 1;
-      const update: Partial<typeof otpConfirmations.$inferInsert> = { attempt_count: attempts };
-      if (attempts >= MAX_ATTEMPTS) {
-        update.locked_until = new Date(now.getTime() + LOCK_MS);
-      }
-      await db
-        .update(otpConfirmations)
-        .set(update)
-        .where(eq(otpConfirmations.id, otpRecord.id));
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            message: attempts >= MAX_ATTEMPTS
-              ? "Incorrect OTP. Too many attempts — locked for 5 minutes."
-              : `Incorrect OTP. ${MAX_ATTEMPTS - attempts} attempt(s) remaining.`,
-          },
-        },
-        { status: 400 },
-      );
-    }
-
-    // OTP valid — run the finalization transaction
-    const [selection] = await db
-      .select()
-      .from(productSelections)
-      .where(eq(productSelections.lead_id, leadId))
-      .orderBy(desc(productSelections.created_at))
-      .limit(1);
-    if (!selection || !selection.battery_serial) {
-      return NextResponse.json(
-        { success: false, error: { message: "No product selection on this lead" } },
-        { status: 400 },
-      );
-    }
-
-    const [loan] = await db
-      .select()
-      .from(loanSanctions)
-      .where(
-        and(
-          eq(loanSanctions.lead_id, leadId),
-          eq(loanSanctions.status, "sanctioned"),
-        ),
-      )
-      .orderBy(desc(loanSanctions.created_at))
-      .limit(1);
-
-    const result = await db.transaction(async (tx) => {
-      // Mark OTP used
-      await tx
-        .update(otpConfirmations)
-        .set({ is_used: true, used_at: now, used_by: user.id })
-        .where(eq(otpConfirmations.id, otpRecord.id));
-
-      // Product selection → dealer_confirmed
-      await tx
-        .update(productSelections)
-        .set({ admin_decision: "dealer_confirmed", updated_at: now })
-        .where(eq(productSelections.id, selection.id));
-
-      // Loan sanction → disbursed (dispatch confirmation = funds released).
-      // Keeps the legacy dealer_approved_* audit fields populated; collapses
-      // status straight to 'disbursed' so the NBFC Portfolio Overview cards
-      // (which filter on status='disbursed') reflect the live book.
-      if (loan) {
-        await tx
-          .update(loanSanctions)
-          .set({
-            status: "disbursed",
-            disbursed_at: now,
-            dealer_approved: true,
-            dealer_approved_at: now,
-            dealer_approved_by: user.id,
-            updated_at: now,
-          })
-          .where(eq(loanSanctions.id, loan.id));
-
-        // Project the disbursed loan into the NBFC servicing ledger so the
-        // partner portal (portfolio, batteries, leads, recovery) lights up
-        // from real loan data. No-ops for cash sales / unmapped lenders.
-        await projectDisbursedLoan(tx, loan.id);
-      }
-
-      // Inventory sold + warranty + after-sales.
-      // BRD §3.5: finance flow goes to 'dispatched' first. Warranty +
-      // after-sales are still created (BRD §3.6 says creation is triggered
-      // on dispatch, not on sold). Inventory.sold_at stays null until the
-      // dealer hits Mark Delivered or the daily cron fires.
-      // E-101: paymentMode is collapsed from leads.payment_method via the
-      // canonical utility — never inline. Step 5 only ever fires after a
-      // loan_sanctioned lead, so the collapsed value is expected to be
-      // 'finance'; we still derive it through the utility so warranty and
-      // after-sales rows can never disagree with the lead.
-      const collapsedPaymentMode = toPaymentMode(lead.payment_method);
-      const sale = await finalizeSale({
-        tx,
-        leadId,
-        batterySerial: selection.battery_serial!,
-        chargerSerial: selection.charger_serial ?? null,
-        dealerId: user.dealer_id!,
-        customerName: lead.full_name || lead.owner_name || null,
-        customerPhone: lead.phone || lead.mobile || null,
-        paymentMode: collapsedPaymentMode,
-        performedBy: user.id,
-        soldAt: now,
-        phase: "dispatched",
-      });
-
-      // Lead enters the dispatched state. sold_at stays null.
-      await tx
-        .update(leads)
-        .set({ kyc_status: "dispatched", updated_at: now })
-        .where(eq(leads.id, leadId));
-
-      return sale;
-    });
-
-    // Post-commit: notifications + customer SMS
-    notifyDispatchConfirmed({
+    const result = await confirmDispatch({
       leadId,
-      warrantyId: result.warrantyId,
-      batterySerial: selection.battery_serial!,
-    }).catch(() => {});
-
-    // BRD §3.5: customer is told their battery is dispatched. The "fully
-    // sold" SMS goes out later from mark-delivered / cron.
-    if (lead.phone || lead.mobile) {
-      sendKycSms({
-        mobile_number: (lead.phone || lead.mobile) as string,
-        message: `Your iTarang battery ${selection.battery_serial} has been dispatched. Warranty ${result.warrantyId} is now active. Loan ref: ${loan?.loan_file_number ?? "—"}. Track delivery in your iTarang portal.`,
-        reference_id: `dispatch-${leadId}-${Date.now()}`,
-      }).catch(() => {});
-    }
+      otp,
+      performedBy: user.id,
+      dealerId: user.dealer_id!,
+    });
 
     return NextResponse.json({
       success: true,
       data: {
-        leadStatus: "dispatched",
+        leadStatus: result.leadStatus,
         warrantyId: result.warrantyId,
         warrantyStart: result.warrantyStart.toISOString(),
         warrantyEnd: result.warrantyEnd.toISOString(),
         afterSalesId: result.afterSalesId,
-        loanStatus: "dealer_approved",
+        // The value actually written to loan_sanctions.status. This field used
+        // to report the legacy 'dealer_approved' while the row was set to
+        // 'disbursed' — nothing consumed it, so it was corrected rather than
+        // kept lying.
+        loanStatus: result.loanStatus,
         message:
           "Dispatch confirmed. Inventory dispatched. Warranty activated. Lead will auto-finalize on delivery (or click Mark Delivered when handed over).",
       },
     });
   } catch (error) {
     console.error("[Step 5 Confirm Dispatch] Error:", error);
+    // The serial was taken by another lead between the dealer's Step-5 save and
+    // this confirm. Surface the lifecycle message and its own status (409) so
+    // the dealer is told to pick different stock rather than seeing a generic
+    // dispatch failure.
+    if (error instanceof InventoryLifecycleError) {
+      return NextResponse.json(
+        { success: false, error: { message: error.message } },
+        { status: error.statusCode },
+      );
+    }
+    if (error instanceof DispatchError) {
+      return NextResponse.json(
+        { success: false, error: { message: error.message } },
+        { status: error.status },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to confirm dispatch";
     // E-101: bad payment_method on the lead is a client-mappable input error,
-    // not a server crash. Surface it as 400 so the dealer can be told to fix
-    // the lead before retrying dispatch.
+    // not a server crash. Surface it as 400 so the dealer can be told to fix the
+    // lead before retrying dispatch.
     const status =
       error instanceof Error && error.name === "PaymentModeMappingError" ? 400 : 500;
     return NextResponse.json(

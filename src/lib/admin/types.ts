@@ -261,6 +261,9 @@ export const REPORT_TYPES = [
     "ai_score_accuracy",
     "source_performance",
     "asm_handoff",
+    // E-220 — the two CEO leads reports.
+    "meetings_mtd",
+    "funnel_by_owner",
 ] as const;
 export type ReportType = (typeof REPORT_TYPES)[number];
 
@@ -271,7 +274,35 @@ export const REPORT_LABELS: Record<ReportType, string> = {
     ai_score_accuracy: "AI Score Accuracy",
     source_performance: "Source Performance",
     asm_handoff: "ASM Handoff Report",
+    meetings_mtd: "Meetings (MTD)",
+    funnel_by_owner: "Funnel by Owner",
 };
+
+// ──────────────────────────── E-220 meetings ──────────────────────────────
+
+/**
+ * How a meeting happened. Free text in the DB (see the E-220 migration for
+ * why); this array is the vocabulary, and the order is the column order in the
+ * Meetings report.
+ */
+export const MEETING_MODES = ["ground", "calling", "whatsapp"] as const;
+export type MeetingMode = (typeof MEETING_MODES)[number];
+
+export const MEETING_MODE_LABELS: Record<MeetingMode, string> = {
+    ground: "Ground",
+    calling: "Calling",
+    whatsapp: "WhatsApp",
+};
+
+/**
+ * Lead statuses that count as "connected but not yet converted", in funnel
+ * order. Compared case-insensitively — `current_status` holds both 'new' and
+ * 'New' on db-1, and an exact match would split every count in two.
+ */
+export const FUNNEL_TEMPERATURES = ["hot", "warm", "cold"] as const;
+
+/** Statuses that count as converted. `ai_qualified` is the dialer's own label. */
+export const CONVERTED_STATUSES = ["qualified", "ai_qualified", "converted"] as const;
 
 export type ReportColumn = { key: string; label: string; numeric?: boolean };
 export type ReportRow = Record<string, string | number | null>;

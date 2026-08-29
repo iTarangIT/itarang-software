@@ -7,13 +7,18 @@
  *
  * Returns one row per routed NBFC with its assignment status and submitted
  * offer (null until that NBFC submits). Role: dealer (owns this lead).
+ *
+ * The read itself lives in `src/lib/leads/offers.ts` so the WhatsApp offer flow
+ * shows the customer exactly what this shows the dealer — including the E-161
+ * filter that withholds a CEO-held offer.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, nbfc, nbfcFinancingOffers, nbfcLeadAssignments } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { listLeadOffers } from "@/lib/leads/offers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +29,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const { id: leadId } = await params;
 
     const [lead] = await db
-      .select({ id: leads.id, dealer_id: leads.dealer_id, kyc_status: leads.kyc_status })
+      .select({ id: leads.id, dealer_id: leads.dealer_id })
       .from(leads)
       .where(eq(leads.id, leadId))
       .limit(1);
@@ -35,58 +40,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: false, error: { message: "Access denied" } }, { status: 403 });
     }
 
-    const assignments = await db
-      .select({
-        id: nbfcLeadAssignments.id,
-        nbfc_id: nbfcLeadAssignments.nbfc_id,
-        status: nbfcLeadAssignments.status,
-      })
-      .from(nbfcLeadAssignments)
-      .where(eq(nbfcLeadAssignments.lead_id, leadId));
-
-    const nbfcIds = assignments.map((a) => a.nbfc_id);
-    const nbfcRows = nbfcIds.length
-      ? await db
-          .select({ id: nbfc.id, nbfc_id_code: nbfc.nbfc_id, short_name: nbfc.short_name, legal_name: nbfc.legal_name })
-          .from(nbfc)
-          .where(inArray(nbfc.id, nbfcIds))
-      : [];
-    const nameById = new Map(nbfcRows.map((r) => [r.id, r] as const));
-
-    const offerRows = nbfcIds.length
-      ? await db
-          .select()
-          .from(nbfcFinancingOffers)
-          .where(inArray(nbfcFinancingOffers.nbfc_id, nbfcIds))
-      : [];
-    // E-161 — only surface RELEASED offers to the dealer. An out-of-band offer
-    // held for iTarang CEO approval (pending) or rejected is withheld until
-    // approved. Legacy rows default to 'not_required' → shown, as before.
-    const released = offerRows.filter(
-      (o) => o.ceo_approval_status === "not_required" || o.ceo_approval_status === "approved",
-    );
-    const offerByAssignment = new Map(released.map((o) => [o.assignment_id, o] as const));
-
-    const items = assignments.map((a) => ({
-      nbfc_id: a.nbfc_id,
-      nbfc_id_code: nameById.get(a.nbfc_id)?.nbfc_id_code ?? null,
-      nbfc_short_name: nameById.get(a.nbfc_id)?.short_name ?? null,
-      nbfc_legal_name: nameById.get(a.nbfc_id)?.legal_name ?? null,
-      status: a.status,
-      offer: offerByAssignment.get(a.id) ?? null,
-    }));
-
-    const winner = assignments.find((a) => a.status === "selected") ?? null;
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        leadId,
-        kycStatus: lead.kyc_status,
-        winnerNbfcId: winner?.nbfc_id ?? null,
-        items,
-      },
-    });
+    const data = await listLeadOffers(leadId);
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load offers";
     return NextResponse.json({ success: false, error: { message } }, { status: 500 });

@@ -3,6 +3,7 @@
 // same source of truth.
 
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
+import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 import type {
     CallStatus,
     NextAction,
@@ -45,6 +46,21 @@ export type QueueRow = {
     assigned_at: string | null;
     created_at: string | null;
     updated_at: string | null;
+    /**
+     * `dealer_leads.neodove_sync_status` — pushed | inbound | priority_dial |
+     * failed, or null for a lead that has never been near NeoDove. Drives the
+     * row's NeoDove chip. Null on any database without E-224 (it is read through
+     * to_jsonb precisely so that is a null and not a 500).
+     */
+    neodove_sync_status: string | null;
+    /**
+     * Who handed this lead to its current owner — the "sent by CEO Test [CEO]"
+     * stamp. Decorated onto the page in the route, not selected in the queue
+     * query (see fetchAssignedByForLeads), which is why it is OPTIONAL: every
+     * other consumer of this type — LeadDetailLead extends it — would otherwise
+     * be claiming a field its own query never selects.
+     */
+    assigned_by?: LeadAssignedBy | null;
 };
 
 export type QueueResponse = {
@@ -159,6 +175,24 @@ export type LeadDetailCommercials = {
     created_by: string | null;
     created_at: string;
     withdrawn_at: string | null;
+    // E-221 / E-226 approval gate. Nullable because a pre-E-221 row carries
+    // nothing, and approval_mode is deliberately NULL on ungated events.
+    approval_status: string | null;
+    approval_mode: string | null;
+    approved_at: string | null;
+    rejection_reason: string | null;
+    // E-242 generated draft. quote_pdf_url is the SYSTEM document; the separate
+    // quote_document_url above is whatever the rep attached by hand.
+    quote_number: string | null;
+    quote_pdf_url: string | null;
+    quote_pdf_generated_at: string | null;
+    quote_pdf_error: string | null;
+    // E-243 — what the DEALER said, orthogonal to approval_status above (which
+    // is iTarang's own gate). NULL until they answer.
+    dealer_decision: string | null;
+    dealer_decision_at: string | null;
+    dealer_decision_via: string | null;
+    dealer_decision_note: string | null;
 };
 
 export type LeadDetailStatusHistory = {
@@ -179,6 +213,12 @@ export type LeadDetailBundle = {
     commercials_history: LeadDetailCommercials[];
     touchpoints: LeadDetailTouchpoint[];
     status_history: LeadDetailStatusHistory[];
+    /**
+     * Newest dialer campaign this lead appeared in, or null if it was never
+     * dialled. Used only as a route parameter by the AI Call History tab — the
+     * transcript endpoint returns attempts across ALL campaigns regardless.
+     */
+    latest_campaign_id: string | null;
 };
 
 // ───────────────────────────── action payloads ────────────────────────────

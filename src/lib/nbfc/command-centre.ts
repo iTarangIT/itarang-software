@@ -682,6 +682,7 @@ const ACTION_LABELS: Record<string, string> = {
   field_visit: "Field visits",
   loan_restructuring: "Restructuring reviews",
   flag_for_recovery: "Flagged for recovery",
+  unflag_for_recovery: "Recovery flags withdrawn",
   battery_immobilisation: "Immobilisations",
   bulk_immobilisation: "Bulk immobilisations",
 };

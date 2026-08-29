@@ -158,6 +158,19 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
           mimeType: msg.document?.mime_type,
           fileName: msg.document?.filename,
         };
+      case "video":
+        // Native camera/gallery video. A .mp4 sent "as a file" arrives as
+        // type:"document" with its mime, so only the native kind needs this
+        // case — without it the media id was dropped on the floor as
+        // `unsupported` and the Step-4 extra-documents step could not accept
+        // the videos the web card already does.
+        return {
+          ...base,
+          type: "video",
+          text: msg.video?.caption,
+          mediaProviderId: msg.video?.id,
+          mimeType: msg.video?.mime_type,
+        };
       case "audio":
         return {
           ...base,
@@ -176,6 +189,18 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
           text: reply?.id ?? reply?.title ?? "",
         };
       }
+      case "button":
+        // A tap on a TEMPLATE quick-reply button. Meta delivers this as its own
+        // top-level type with `button.payload`, NOT wrapped in an `interactive`
+        // envelope — so without this case every template CTA fell through to
+        // `unsupported` and was discarded. Normalising to "interactive" means
+        // the payload lands in `text` and every existing id-matching handler
+        // works on it unchanged.
+        return {
+          ...base,
+          type: "interactive",
+          text: msg.button?.payload ?? msg.button?.text ?? "",
+        };
       default:
         return { ...base, type: "unsupported", text: msg.type };
     }
@@ -262,6 +287,59 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
             },
           ]
         : [];
+    return this.send({
+      to: normalizePhone(to),
+      type: "template",
+      template: {
+        name,
+        language: { code: languageCode },
+        ...(components.length ? { components } : {}),
+      },
+    });
+  }
+
+  /**
+   * [E-234] Template with an image header. See the interface doc-block for why
+   * this cannot be folded into `sendTemplate`.
+   *
+   * The upload is best-effort: if Meta rejects the media we send the template
+   * WITHOUT the header component rather than failing the whole message. That
+   * is only correct when the template's header is optional at Meta's end — if
+   * it is not, Meta rejects the send and the caller sees `ok: false`, which is
+   * the same outcome as not trying. Never worse, sometimes better.
+   */
+  async sendTemplateWithImageHeader(
+    to: string,
+    name: string,
+    languageCode: string,
+    bodyParams: string[],
+    image?: { bytes: Buffer; mimeType: string; filename: string } | null,
+  ): Promise<SendResult> {
+    let mediaId: string | null = null;
+    if (image?.bytes?.length) {
+      const up = await this.uploadMedia(image.bytes, image.mimeType, image.filename);
+      mediaId = up.id;
+      if (!up.id) {
+        console.warn(
+          `[WhatsApp/meta] template "${name}": image header dropped (${up.error ?? "upload failed"})`,
+        );
+      }
+    }
+
+    const components: Record<string, unknown>[] = [];
+    if (mediaId) {
+      components.push({
+        type: "header",
+        parameters: [{ type: "image", image: { id: mediaId } }],
+      });
+    }
+    if (bodyParams.length > 0) {
+      components.push({
+        type: "body",
+        parameters: bodyParams.map((text) => ({ type: "text", text })),
+      });
+    }
+
     return this.send({
       to: normalizePhone(to),
       type: "template",

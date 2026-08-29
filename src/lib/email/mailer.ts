@@ -38,8 +38,34 @@ export interface SendMailOptions {
   attachments?: MailAttachment[];
 }
 
+/**
+ * What a send reports back.
+ *
+ * `messageId` is the only field every provider has. The rest are nodemailer's
+ * per-recipient SMTP result and are absent on AgentMail (a stateless HTTP API
+ * with no envelope-level accept/reject) — hence optional.
+ *
+ * THEY ARE HERE BECAUSE THEY WERE ALREADY BEING READ. Three call sites
+ * (sendNbfcWelcomeEmail, sendDealerWelcomeEmail, sendVendorWelcomeEmail) guard
+ * on `info.rejected.length > 0` to turn a refused recipient into a thrown
+ * error. The SMTP adapter below used to narrow its return to `{ messageId }`,
+ * so `rejected` was `undefined` at runtime and every one of those guards was
+ * dead: a credentials email the server accepted but refused to deliver looked
+ * exactly like a success. Passing the fields through is what makes those
+ * guards real.
+ */
+export interface SendMailResult {
+  messageId: string;
+  /** SMTP only — recipients the server took. */
+  accepted?: Array<string | { address: string }>;
+  /** SMTP only — recipients the server refused. A non-empty array is a failure. */
+  rejected?: Array<string | { address: string }>;
+  response?: string;
+  envelope?: unknown;
+}
+
 export interface Mailer {
-  sendMail(opts: SendMailOptions): Promise<{ messageId: string }>;
+  sendMail(opts: SendMailOptions): Promise<SendMailResult>;
   verify(): Promise<true>;
 }
 
@@ -121,6 +147,16 @@ async function agentMailSend(cfg: AgentMailConfig, opts: SendMailOptions): Promi
 
 let smtpVerified = false;
 
+/** True when SMTP_* is complete enough to build a transport. */
+function smtpConfigured(): boolean {
+  return Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_PORT &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS,
+  );
+}
+
 function smtpMailer(): Mailer {
   const host = process.env.SMTP_HOST;
   const portRaw = process.env.SMTP_PORT;
@@ -146,7 +182,16 @@ function smtpMailer(): Mailer {
     async sendMail(opts) {
       // nodemailer's attachment field is `contentType`, matching our shape.
       const info = await transporter.sendMail(opts as nodemailer.SendMailOptions);
-      return { messageId: info.messageId };
+      // Pass the per-recipient result through — see SendMailResult for why
+      // narrowing this to `{ messageId }` silently disabled every caller's
+      // rejected-recipient check.
+      return {
+        messageId: info.messageId,
+        accepted: info.accepted,
+        rejected: info.rejected,
+        response: info.response,
+        envelope: info.envelope,
+      };
     },
     async verify() {
       if (!smtpVerified) {
@@ -161,12 +206,42 @@ function smtpMailer(): Mailer {
 /**
  * Returns the active mailer. AgentMail when configured, else SMTP. Synchronous
  * so both `getMailer()` and `await getMailer()` call styles work.
+ *
+ * AgentMail FALLS BACK TO SMTP when a send fails and SMTP is configured.
+ *
+ * The provider is chosen once, at construction, from which env vars are set —
+ * which is fine until the chosen provider starts refusing. AgentMail's plan
+ * carries a DAILY SEND CAP (100 on the developer tier), and when it is reached
+ * every send in the application 429s at once: agent links, FI links, dealer
+ * approvals, password resets. That is not a per-feature outage, it is the whole
+ * outbound channel, and it lasts until the window rolls.
+ *
+ * So a failed AgentMail send is retried over SMTP rather than surfaced. The
+ * fallback is deliberately silent about WHY it fell back — the caller wanted an
+ * email delivered, not a lecture about quotas — but it logs, so the cap does
+ * not become invisible.
+ *
+ * When SMTP is not configured the original error is rethrown untouched. A
+ * confusing "missing email configuration" would replace the real reason, and
+ * the real reason (a rate limit, with a reset time in it) is exactly what
+ * somebody needs to read.
  */
 export function getMailer(): Mailer {
   const am = agentMailConfig();
   if (am) {
     return {
-      sendMail: (opts) => agentMailSend(am, opts),
+      sendMail: async (opts) => {
+        try {
+          return await agentMailSend(am, opts);
+        } catch (err) {
+          if (!smtpConfigured()) throw err;
+          console.warn(
+            "[mailer] AgentMail send failed, falling back to SMTP:",
+            err instanceof Error ? err.message : err,
+          );
+          return smtpMailer().sendMail(opts);
+        }
+      },
       // AgentMail is a stateless HTTP API — nothing to pre-verify.
       verify: async () => true as const,
     };
@@ -175,6 +250,6 @@ export function getMailer(): Mailer {
 }
 
 /** Convenience one-shot send used where a full transporter handle isn't needed. */
-export async function sendEmail(opts: SendMailOptions): Promise<{ messageId: string }> {
+export async function sendEmail(opts: SendMailOptions): Promise<SendMailResult> {
   return getMailer().sendMail(opts);
 }

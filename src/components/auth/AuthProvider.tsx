@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { clearSnapshots } from "@/lib/session-snapshot";
 
 type AppUser = {
   id: string;
@@ -35,7 +36,12 @@ const AuthContext = createContext<AuthContextType>({
 // provider and would otherwise block the whole tree on a fresh
 // /api/user/profile round-trip; the snapshot renders immediately while the
 // fetch below revalidates in the background. Cleared on sign-out/logout.
-const PROFILE_SNAPSHOT_KEY = "itarang:profile:v1";
+// v2: /api/user/profile used to return the whole users row including
+// `password_hash`, so every browser that loaded the app cached a bcrypt hash
+// here. The server side is fixed (auth-utils.ts USER_COLUMNS), but bumping the
+// key is what actually evicts the already-poisoned snapshots — a stale v1 entry
+// would otherwise survive for the life of the tab.
+const PROFILE_SNAPSHOT_KEY = "itarang:profile:v2";
 
 function readProfileSnapshot(): AppUser | null {
   try {
@@ -116,6 +122,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === "SIGNED_OUT") {
         setUser(null);
         writeProfileSnapshot(null);
+        // Drop every other module's session snapshot too (e.g. the sidebar's
+        // dealer menu gating). Without this the next user to sign in on this
+        // tab paints the previous user's chrome until their own fetch lands.
+        clearSnapshots();
         return;
       }
       // Only refetch the profile on real identity changes. INITIAL_SESSION
@@ -136,6 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setUser(null);
       writeProfileSnapshot(null);
+      clearSnapshots();
       // Route through /api/auth/logout — relative, hits the current public
       // host. Server clears sb-* cookies and redirects to /login using
       // X-Forwarded-Host so browsers never land on the internal upstream.

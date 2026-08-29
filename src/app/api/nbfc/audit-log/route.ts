@@ -43,11 +43,17 @@ const ACTION_CODES = [
   "battery_immobilisation",
   "loan_restructuring",
   "flag_for_recovery",
+  "unflag_for_recovery",
   "bulk_immobilisation",
   "pii_data_access",
   "audit_log_export",
   "risk_rule_threshold_change",
   "risk_score_run",
+  // E-238 — offer negotiation. `offer_negotiate` rows are written with the
+  // DEALER's users.id against this tenant, so the NBFC's own log shows who
+  // asked for what; `offer_fix` is the officer who froze the terms.
+  "offer_negotiate",
+  "offer_fix",
 ] as const;
 
 const STATUS_CODES = [
@@ -99,6 +105,7 @@ const ACTION_LABELS: Record<string, string> = {
   battery_immobilisation: "Battery immobilisation (IoT)",
   loan_restructuring: "Loan restructuring",
   flag_for_recovery: "Flag for recovery",
+  unflag_for_recovery: "Recovery flag withdrawn",
   bulk_immobilisation: "Bulk immobilisation",
   pii_data_access: "PII access",
   audit_log_export: "Audit log export",

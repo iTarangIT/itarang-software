@@ -41,6 +41,10 @@
       "schedule": "*/2 * * * *"
     },
     {
+      "path": "/api/cron/campaign-resume",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/dialer-poll",
       "schedule": "* * * * *"
     },
@@ -63,6 +67,22 @@
     {
       "path": "/api/cron/nbfc/run-emi-autodebit",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/kyc-auto-approval",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/nbfc-request-sla",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/gdrive-mirror",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/gdrive-mirror?backfill=1",
+      "schedule": "40 2 * * *"
     }
   ],
   "functions": {

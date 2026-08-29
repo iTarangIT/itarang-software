@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { IntentReviewCard } from "@/components/leads/intent-review/IntentReviewCard";
 import {
     ChevronDown,
     User2,
@@ -11,6 +12,13 @@ import {
     History,
 } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import {
+    CommercialsDetail,
+    CommercialsVersionHistory,
+    Field,
+    fmtDate,
+} from "./CommercialsDetail";
+import { QuotationSendDialog } from "./QuotationSendDialog";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -27,22 +35,6 @@ type Props = {
     bundle: LeadDetailBundle;
 };
 
-function fmtDate(iso: string | null | undefined): string {
-    if (!iso) return "—";
-    return new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-}
-
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
-    return (
-        <div>
-            <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">{label}</div>
-            <div className="text-sm text-gray-900 break-words">
-                {value === null || value === undefined || value === "" ? <span className="text-gray-400">—</span> : value}
-            </div>
-        </div>
-    );
-}
-
 export function LeadDetailRightPane({ bundle }: Props) {
     const [open, setOpen] = useState<Record<GroupKey, boolean>>({
         snapshot: true,
@@ -53,12 +45,21 @@ export function LeadDetailRightPane({ bundle }: Props) {
         ownership: false,
     });
 
+    // E-242 — which quotation the send dialog is open for, if any.
+    const [sendFor, setSendFor] = useState<string | null>(null);
+
     const lead = bundle.lead;
     const cc = bundle.current_commercials;
 
     return (
         <div className="overflow-y-auto bg-gray-50/30">
             <div className="px-5 py-4 space-y-3">
+                {/* Always visible, not behind a collapsible group: burying what
+                    the AI already learned inside a closed accordion is how it
+                    stayed invisible to the rep who has to act on it. Renders
+                    nothing when the AI has never called this lead. */}
+                <IntentReviewCard leadId={lead.id} />
+
                 {GROUPS.map((g) => {
                     const Icon = g.icon;
                     const isOpen = open[g.key];
@@ -123,90 +124,13 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                         <span>Current version: <span className="font-semibold text-gray-800">v{cc.version_no}</span> · {cc.event_type}</span>
                                                         <span>{fmtDate(cc.created_at)}</span>
                                                     </div>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <Field label="Price Quoted" value={cc.price_quoted ? `₹${cc.price_quoted}` : null} />
-                                                        <Field label="Final Price" value={cc.final_price ? `₹${cc.final_price}` : null} />
-                                                        <Field label="Payment Method" value={cc.payment_method} />
-                                                        <Field label="Credit Terms" value={cc.credit_terms} />
-                                                        <Field label="Delivery Terms" value={cc.delivery_terms} />
-                                                        <Field label="Warranty" value={cc.warranty_terms} />
-                                                        {cc.product_lines?.length ? (
-                                                            <div className="col-span-2">
-                                                                <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Products</div>
-                                                                <ul className="space-y-1">
-                                                                    {cc.product_lines.map((p, i) => (
-                                                                        <li
-                                                                            key={`${p.asset_type}-${p.product_id}-${i}`}
-                                                                            className="flex items-center gap-2 rounded border border-gray-100 bg-gray-50/60 px-2 py-1 text-xs"
-                                                                        >
-                                                                            <span className="shrink-0 rounded bg-gray-200 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-gray-600">
-                                                                                {p.asset_type}
-                                                                            </span>
-                                                                            <span className="flex-1 truncate text-gray-800">{p.product_name}</span>
-                                                                            <span className="shrink-0 tabular-nums text-gray-600">× {p.quantity}</span>
-                                                                            {p.unit_price != null && (
-                                                                                <span className="shrink-0 tabular-nums text-gray-900">
-                                                                                    ₹{(p.unit_price * p.quantity).toLocaleString("en-IN")}
-                                                                                </span>
-                                                                            )}
-                                                                        </li>
-                                                                    ))}
-                                                                </ul>
-                                                                <div className="mt-1 flex items-center justify-end gap-2 text-xs">
-                                                                    <span className="text-gray-500">Total</span>
-                                                                    <span className="font-semibold tabular-nums text-gray-900">
-                                                                        ₹{cc.product_lines
-                                                                            .reduce((s, p) => s + (p.unit_price != null ? p.unit_price * p.quantity : 0), 0)
-                                                                            .toLocaleString("en-IN")}
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-                                                        ) : null}
-                                                        <div className="col-span-2">
-                                                            <Field label="Deal Notes" value={cc.deal_notes ? <p className="whitespace-pre-wrap">{cc.deal_notes}</p> : null} />
-                                                        </div>
-                                                        {cc.quote_document_url && (
-                                                            <div className="col-span-2">
-                                                                <Field
-                                                                    label="Quote Document"
-                                                                    value={
-                                                                        <a href={cc.quote_document_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-sm">
-                                                                            Open quote
-                                                                        </a>
-                                                                    }
-                                                                />
-                                                            </div>
-                                                        )}
-                                                        {cc.brochure_url && (
-                                                            <div className="col-span-2">
-                                                                <Field
-                                                                    label="Brochure"
-                                                                    value={
-                                                                        <a href={cc.brochure_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-sm">
-                                                                            Open brochure
-                                                                        </a>
-                                                                    }
-                                                                />
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    {bundle.commercials_history.length > 1 && (
-                                                        <details className="rounded-md border border-gray-100 bg-gray-50/50 px-3 py-2 text-xs">
-                                                            <summary className="cursor-pointer text-gray-700 font-medium">
-                                                                Version history ({bundle.commercials_history.length} versions)
-                                                            </summary>
-                                                            <ol className="mt-2 space-y-1">
-                                                                {bundle.commercials_history.map((c) => (
-                                                                    <li key={c.commercial_id} className="flex items-center justify-between gap-3">
-                                                                        <span className={c.is_current ? "font-semibold text-gray-900" : "text-gray-600"}>
-                                                                            v{c.version_no} · {c.event_type}
-                                                                        </span>
-                                                                        <span className="text-gray-500">{fmtDate(c.created_at)}</span>
-                                                                    </li>
-                                                                ))}
-                                                            </ol>
-                                                        </details>
-                                                    )}
+                                                    <CommercialsDetail
+                                                        cc={cc}
+                                                        onSend={() => setSendFor(cc.commercial_id)}
+                                                    />
+                                                    <CommercialsVersionHistory
+                                                        history={bundle.commercials_history}
+                                                    />
                                                 </>
                                             ) : (
                                                 <div className="text-sm text-gray-500">No commercials logged yet. Use Update Commercials to record the first event.</div>
@@ -265,6 +189,15 @@ export function LeadDetailRightPane({ bundle }: Props) {
                     );
                 })}
             </div>
+
+            {sendFor && (
+                <QuotationSendDialog
+                    leadId={lead.id}
+                    commercialId={sendFor}
+                    terms={cc}
+                    onClose={() => setSendFor(null)}
+                />
+            )}
         </div>
     );
 }

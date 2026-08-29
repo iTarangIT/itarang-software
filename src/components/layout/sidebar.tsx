@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -23,6 +23,7 @@ import {
   Battery,
   Wrench,
   CreditCard,
+  GraduationCap,
   Megaphone,
   Shield,
   TrendingUp,
@@ -30,9 +31,10 @@ import {
   MapPinned,
   AlertTriangle,
   Upload,
-  Settings,
   BarChart3,
   GitMerge,
+  MessageSquare,
+  Languages,
   UserMinus,
   History,
   X,
@@ -44,15 +46,50 @@ import {
   FolderOpen,
   Wallet,
   Bell,
+  ShieldAlert,
+  Radar,
+  ChevronDown,
+  Gavel,
+  ShieldCheck,
+  Timer,
+  CloudUpload,
   Server,
   Database,
   Activity,
   AudioLines,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
 import { useBuybackNotificationSummary } from "@/hooks/useBuybackNotificationSummary";
+import { useNavActivity } from "@/hooks/useNavActivity";
+import {
+  normalizeDealerType,
+  type DealerTypeValue,
+} from "@/lib/dealer/dealer-type";
+import { capabilitiesFor } from "@/lib/dealer/dealer-capabilities";
+import { readSnapshot, writeSnapshot } from "@/lib/session-snapshot";
+
+/**
+ * Session snapshot of the two flags that decide which dealer menu items exist.
+ * Non-sensitive (a boolean and an enum), and cleared on sign-out by
+ * clearSnapshots() so one user's menu gating can't leak into the next
+ * user's session in the same tab.
+ */
+const DEALER_GATE_SNAPSHOT_KEY = "itarang:sidebar:dealer-gate:v1";
+
+/** Loan entries, hidden when the dealer's finance enablement is off. */
+const FINANCE_GATED_ITEM_IDS = new Set(["loans", "loan-mgmt"]);
+/** Section headings gated by dealer type (E-202). */
+const BUYBACK_SECTION = "BATTERY BUYBACK";
+const NEW_BATTERY_SECTIONS = new Set(["SALES", "OPERATIONS"]);
+/**
+ * A scrap dealer's /dealer-portal IS the buyback dashboard, so the "Buyback
+ * Dashboard" item would be a second link to the page "Dashboard" already
+ * points at.
+ */
+const REDUNDANT_FOR_SCRAP_ITEM_IDS = new Set(["buyback"]);
 
 /**
  * peakAmp Battery Buyback — the iTarang-staff side.
@@ -129,6 +166,53 @@ const BUYBACK_ADMIN_SECTION = {
   ],
 };
 
+/**
+ * E-224 — NeoDove, the external telecalling vendor the business runs its
+ * calling in. Shown to exactly the roles NEODOVE_ADMIN_ROLES lets through
+ * (src/lib/neodove/roles.ts: admin, sales_head, business_head, ceo,
+ * sales_manager) — pushing the prospect pool to an outside vendor consumes
+ * their plan quota, so it is not an individual-rep capability.
+ *
+ * One shared const rather than five copies, for the same reason
+ * BUYBACK_ADMIN_SECTION is: a link a role can see but not open is worse than
+ * no link, and five hand-maintained copies guarantee that drift eventually.
+ *
+ * Its own section rather than items inside LEAD MANAGEMENT because this
+ * integration has a failure mode nothing else there has — NeoDove cannot be
+ * queried, so a dropped webhook is silent and unrecoverable. Sync Activity and
+ * Reconcile exist only to make that visible, and they are useless if you have
+ * to go hunting for them.
+ */
+const NEODOVE_SECTION = {
+  section: "NEODOVE",
+  items: [
+    {
+      id: "neodove-campaigns",
+      label: "Campaigns",
+      icon: Megaphone,
+      href: "/leads/neodove-campaigns",
+      // Deliberately NOT `exact`. getActiveItemId is longest-match-wins, so
+      // /activity and /reconcile already beat this item on their own pages
+      // (their paths are longer), while campaign DETAIL routes —
+      // /leads/neodove-campaigns/NDC-… — match only this one and correctly keep
+      // Campaigns lit. Marking it exact would black the sidebar out on every
+      // detail page, which is precisely the U5 bug documented further down.
+    },
+    {
+      id: "neodove-activity",
+      label: "Sync Activity",
+      icon: History,
+      href: "/leads/neodove-campaigns/activity",
+    },
+    {
+      id: "neodove-reconcile",
+      label: "Reconcile",
+      icon: Upload,
+      href: "/leads/neodove-campaigns/reconcile",
+    },
+  ],
+};
+
 // Items appended to every role's sidebar — universal actions any logged-in
 // user can take (currently: submit a business expense → CEO approves).
 const COMMON_ITEMS = [
@@ -144,6 +228,118 @@ const COMMON_ITEMS = [
     ],
   },
 ];
+
+
+/**
+ * [E-259] Settings → NBFC, a sub-navigation node rather than four more
+ * top-level entries.
+ *
+ * Settings had grown a flat list in which "NBFC Request SLA" sat between "KYC
+ * Automation" and "Drive Backup" with nothing marking it as being about a
+ * different counterparty. Grouping the NBFC-facing settings under one node
+ * makes room for Payments without the list becoming a wall.
+ *
+ * Ids and hrefs of the moved entries are unchanged — `getActiveItemId` is
+ * longest-href-wins over a flattened list, the badge mapping keys on item.id,
+ * and `data-testid="nav-…"` is unchanged for both.
+ */
+function nbfcSettingsSubnav(idPrefix: string) {
+  return {
+    id: `${idPrefix}-nbfc-settings`,
+    label: "NBFC",
+    icon: Landmark,
+    // A node, not a route. Never used for matching; present because every
+    // other item in the tree has one.
+    href: "/admin/settings",
+    children: [
+      {
+        // E-259 — when iTarang pays each NBFC for the scrap batteries it buys.
+        id: `${idPrefix}-nbfc-payments`,
+        label: "Payments",
+        icon: Wallet,
+        href: "/admin/settings/payments",
+      },
+      {
+        // E-254 — NBFC request SLA (auto-forward to dealer / auto-push to
+        // NBFC). Moved under NBFC; same id, same route.
+        id: `${idPrefix}-nbfc-request-sla`,
+        label: "Request SLA",
+        icon: Timer,
+        href: "/admin/settings/nbfc-request-sla",
+      },
+    ],
+  };
+}
+
+// Settings → WhatsApp. Same shape as nbfcSettingsSubnav: one factory, called
+// once per role that shows the settings group, so both roles stay in step.
+function whatsappSettingsSubnav(idPrefix: string) {
+  return {
+    id: `${idPrefix}-whatsapp-settings`,
+    label: "WhatsApp",
+    icon: MessageSquare,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: "/admin/settings",
+    children: [
+      {
+        // Bot reply language: English / Hindi / Hinglish. Global for every flow.
+        id: `${idPrefix}-whatsapp-language`,
+        label: "Language",
+        icon: Languages,
+        href: "/admin/settings/whatsapp/language",
+      },
+    ],
+  };
+}
+
+// Per-role sections pinned BELOW COMMON_ITEMS.
+//
+// COMMON_ITEMS is appended to every role at the end of the build (see
+// `menuItems` below), so anything inside a role's own array can only ever
+// render ABOVE "EXPENSES / Submit Expense". A role whose last item must
+// genuinely BE last goes here instead.
+//
+// Only sales_head uses this today; every other role's rendered nav is unchanged.
+// The item keeps the id `sh-settings` on purpose — getActiveItemId() is
+// longest-href-wins so /admin/settings still beats /admin, and the badge mapping
+// further down keys on item.id.
+const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
+  sales_head: [
+    {
+      section: "Settings",
+      items: [
+        {
+          // id and href keep their old "settings" spelling on purpose — the id
+          // backs `data-testid="nav-sh-settings"` and the badge mapping below,
+          // and the route is unchanged. Only the label the user reads differs.
+          id: "sh-settings",
+          label: "Notifications",
+          icon: Bell,
+          href: "/admin/settings",
+        },
+        {
+          // E-246 — its own entry rather than a tab inside Notifications.
+          // getActiveItemId() is longest-href-wins, so this beats
+          // /admin/settings (which in turn beats /admin) when it is active.
+          id: "sh-kyc-automation",
+          label: "KYC Automation",
+          icon: ShieldCheck,
+          href: "/admin/settings/kyc-automation",
+        },
+        nbfcSettingsSubnav("sh"),
+        whatsappSettingsSubnav("sh"),
+        {
+          // E-255 — Google Drive backup of every stored document. Own entry
+          // beside the NBFC group, same reasoning.
+          id: "sh-gdrive-mirror",
+          label: "Drive Backup",
+          icon: CloudUpload,
+          href: "/admin/settings/gdrive-mirror",
+        },
+      ],
+    },
+  ],
+};
 
 const roleNavigation: Record<string, any[]> = {
   ceo: [
@@ -190,7 +386,16 @@ const roleNavigation: Record<string, any[]> = {
           icon: Package,
           href: "/product-catalog",
         },
-        { id: "oems", label: "OEMs", icon: Landmark, href: "/oem-onboarding" },
+        // E-230 — OEM Onboarding came off this slot and OEM Inventory Pricing
+        // took its place, as asked on the 2026-08-06 call. The onboarding form
+        // is not deleted: it still lives at /oem-onboarding and is still linked
+        // from the sales_order_manager sidebar, which is who actually uses it.
+        {
+          id: "oem-pricing",
+          label: "OEM Inventory Pricing",
+          icon: Landmark,
+          href: "/oem-pricing",
+        },
         {
           id: "inventory-reports",
           label: "Inventory",
@@ -212,15 +417,9 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "intellicar",
-          label: "Intellicar Dashboard",
+          label: "IoT Dashboard",
           icon: Battery,
           href: "/ceo/intellicar",
-        },
-        {
-          id: "ai-dialer",
-          label: "AI Dialer (Bolna)",
-          icon: Phone,
-          href: "/ceo/ai-dialer",
         },
       ],
     },
@@ -274,14 +473,29 @@ const roleNavigation: Record<string, any[]> = {
           icon: Package,
           href: "/admin/product-review",
         },
+        // Same console the Ops/sales_head persona uses at
+        // /admin/dealer-verification — CEO gets the identical entry rather than
+        // a parallel /ceo copy, so there is one queue and one set of actions.
+        {
+          id: "dealer-validation",
+          label: "Dealer Validation",
+          icon: ClipboardCheck,
+          href: "/admin/dealer-verification",
+        },
         {
           id: "expense-approvals",
           label: "Expense Approvals",
           icon: ClipboardCheck,
           href: "/ceo/expenses",
         },
+        // E-230 — E-226's "OEM Price List" entry pointed at /ceo/oem-prices,
+        // which now redirects to /oem-pricing under BUSINESS above. Two sidebar
+        // entries onto one table is exactly the "multiple gates to reach one
+        // single place" the same call objected to, so this one is gone rather
+        // than repointed.
       ],
     },
+    NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
@@ -306,11 +520,27 @@ const roleNavigation: Record<string, any[]> = {
           icon: LayoutDashboard,
           href: "/admin",
         },
+        // "Leads Info" merged into /leads — one screen, one lead, one row.
+        // sales_head was the only role carrying both entries.
         {
-          id: "sh-leads-info",
-          label: "Leads Info",
-          icon: ListChecks,
-          href: "/admin/leads-info",
+          id: "sh-leads",
+          label: "Leads",
+          icon: Users,
+          href: "/leads",
+        },
+        {
+          id: "sh-ai-intent",
+          label: "AI Intent Learning",
+          icon: GraduationCap,
+          href: "/admin/ai-intent",
+        },
+        {
+          id: "sh-ai-campaigns",
+          label: "AI Campaigns",
+          icon: Megaphone,
+          href: "/sales-head/campaigns",
+          // Not `exact` — the detail route /sales-head/campaigns/[id] must
+          // keep this item lit, same as the ASM twin.
         },
         {
           id: "sh-escalations",
@@ -331,6 +561,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/onboarding-dropouts",
         },
         {
+          id: "sh-whatsapp-onboarding",
+          label: "WhatsApp Onboarding",
+          icon: MessageSquare,
+          href: "/admin/whatsapp-onboarding",
+        },
+        {
           id: "sh-lead-upload",
           label: "Bulk Lead Upload",
           icon: Upload,
@@ -342,18 +578,14 @@ const roleNavigation: Record<string, any[]> = {
           icon: BarChart3,
           href: "/admin/reports",
         },
-        {
-          id: "sh-settings",
-          label: "Settings",
-          icon: Settings,
-          href: "/admin/settings",
-        },
+        // "Notifications" (formerly "Settings") used to sit here, buried in
+        // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
+        // last — see the note there.
       ],
     },
     {
       section: "SALES",
       items: [
-        { id: "leads", label: "Leads", icon: Users, href: "/leads" },
         { id: "deals", label: "Deals", icon: FileCheck, href: "/deals" },
         {
           id: "approvals",
@@ -389,6 +621,44 @@ const roleNavigation: Record<string, any[]> = {
           label: "Risk Cards",
           icon: AlertTriangle,
           href: "/admin/nbfc/risk-cards",
+        },
+        // [E-234] The Auction Control Centre. Its eight endpoints have existed
+        // since E-069/E-070 with no screen and no nav entry, so pause / extend /
+        // reduce / reserve-price / approve-winner / cancel were reachable only
+        // by hand-written curl. This is the first way in.
+        {
+          id: "nbfc-auction-control",
+          label: "Auction Control",
+          icon: Gavel,
+          href: "/admin/nbfc/auction",
+        },
+        // BRD §19-adjacent: sell-through, realisation, and the scheduler health
+        // card. That ticker is the only thing that closes an auction and it has
+        // no other surface — if it stops, bidding runs past every deadline and
+        // nothing says so.
+        {
+          id: "nbfc-auction-analytics",
+          label: "Auction Performance",
+          icon: Gavel,
+          href: "/admin/nbfc/auction/analytics",
+        },
+        // [E-258] The buying end of the NBFC scrap trade. A battery that fails
+        // inspection is excluded from the auction by design, so the `scrap`
+        // stage had no buyer at all until this desk existed.
+        {
+          id: "nbfc-scrap-desk",
+          label: "Scrap Purchase",
+          icon: Recycle,
+          href: "/admin/nbfc/scrap",
+        },
+        // [E-270] The workshop end of the NBFC refurbishment loop: batches
+        // sent by NBFCs, the timeline/estimate proposal, both trucks, and the
+        // per-battery work panel.
+        {
+          id: "nbfc-refurb-desk",
+          label: "Refurbishment",
+          icon: Wrench,
+          href: "/admin/nbfc/refurbishment",
         },
         {
           id: "nbfc-my-drafts",
@@ -491,6 +761,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
@@ -520,6 +791,7 @@ const roleNavigation: Record<string, any[]> = {
       ],
     },
     // Dealer Prospecting section removed — scraped leads now live inside /leads as a tab
+    NEODOVE_SECTION,
   ],
 
   inventory_manager: [
@@ -592,11 +864,14 @@ const roleNavigation: Record<string, any[]> = {
     {
       section: "LEAD MANAGEMENT",
       items: [
+        // Repointed, not deleted: this was admin's ONLY route into leads —
+        // the admin nav had no /leads entry — so removing it would have taken
+        // admin off the merged screen entirely.
         {
-          id: "admin-leads-info",
-          label: "Leads Info",
-          icon: ListChecks,
-          href: "/admin/leads-info",
+          id: "admin-leads",
+          label: "Leads",
+          icon: Users,
+          href: "/leads",
         },
         {
           id: "admin-escalations",
@@ -617,6 +892,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/onboarding-dropouts",
         },
         {
+          id: "admin-whatsapp-onboarding",
+          label: "WhatsApp Onboarding",
+          icon: MessageSquare,
+          href: "/admin/whatsapp-onboarding",
+        },
+        {
           id: "admin-lead-upload",
           label: "Bulk Lead Upload",
           icon: Upload,
@@ -630,12 +911,38 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-settings",
-          label: "Settings",
-          icon: Settings,
+          label: "Notifications",
+          icon: Bell,
           href: "/admin/settings",
+        },
+        {
+          // E-250 — where AI-call corrections become model instructions.
+          // Curator-only (admin / ceo / sales_head), unlike the correcting
+          // itself, which every reviewer role can do from a lead.
+          id: "admin-ai-intent",
+          label: "AI Intent Learning",
+          icon: GraduationCap,
+          href: "/admin/ai-intent",
+        },
+        {
+          // E-246 — own entry, not a tab. See the sales_head block above.
+          id: "admin-kyc-automation",
+          label: "KYC Automation",
+          icon: ShieldCheck,
+          href: "/admin/settings/kyc-automation",
+        },
+        nbfcSettingsSubnav("admin"),
+        whatsappSettingsSubnav("admin"),
+        {
+          // E-255 — own entry, not a tab. See the sales_head block above.
+          id: "admin-gdrive-mirror",
+          label: "Drive Backup",
+          icon: CloudUpload,
+          href: "/admin/settings/gdrive-mirror",
         },
       ],
     },
+    NEODOVE_SECTION,
     {
       section: "REVIEW",
       items: [
@@ -667,6 +974,24 @@ const roleNavigation: Record<string, any[]> = {
           label: "Product Master",
           icon: Package,
           href: "/admin/product-master",
+        },
+        // E-230 — the same screen the CEO reaches under BUSINESS. Admin is
+        // authorised for it everywhere else (the API allows ceo + admin, the
+        // middleware gate allows ceo + admin, and both price notifications go
+        // to PRICE_KEEPERS = admin + ceo with href "/oem-pricing"), so without
+        // this entry an admin could follow a notification INTO the screen and
+        // then have no way back to it.
+        //
+        // Next to Product Master rather than with the stock movements below:
+        // both are reference data about what we sell, and this screen prices
+        // exactly the models that one defines. Deliberately NOT added to the
+        // sales_head or inventory_manager copies of this section — the route
+        // gate admits ceo and admin only, so a link there would just bounce.
+        {
+          id: "admin-oem-pricing",
+          label: "OEM Inventory Pricing",
+          icon: Landmark,
+          href: "/oem-pricing",
         },
         {
           id: "admin-inventory-upload",
@@ -723,6 +1048,43 @@ const roleNavigation: Record<string, any[]> = {
       ],
     },
     BUYBACK_ADMIN_SECTION,
+  ],
+
+  /**
+   * IT Dashboard — the security surface, split out of the admin and CEO navs so
+   * the vulnerability detail (live exploit reproductions, unauthenticated PII
+   * endpoints) sits behind its own login rather than every business one. The
+   * `it` role has no other pages by design.
+   */
+  it: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "it-dashboard",
+          label: "IT Dashboard",
+          icon: LayoutDashboard,
+          href: "/it",
+        },
+      ],
+    },
+    {
+      section: "SECURITY",
+      items: [
+        {
+          id: "it-security",
+          label: "Security Risk",
+          icon: ShieldAlert,
+          href: "/it/security",
+        },
+        {
+          id: "it-security-live",
+          label: "Live Attacks",
+          icon: Radar,
+          href: "/it/security/live",
+        },
+      ],
+    },
   ],
 
   service_engineer: [
@@ -796,6 +1158,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    NEODOVE_SECTION,
     BUYBACK_ADMIN_SECTION,
   ],
 
@@ -924,6 +1287,16 @@ const roleNavigation: Record<string, any[]> = {
           icon: ListChecks,
           href: "/inside-sales",
         },
+        {
+          id: "is-campaigns",
+          label: "Campaigns",
+          icon: Megaphone,
+          href: "/inside-sales/campaigns",
+          // NOT `exact`. getActiveItemId is longest-match-wins, so the campaign
+          // DETAIL route keeps this item lit on its own; marking it exact is the
+          // U5 bug documented on NEODOVE_SECTION — the sidebar goes dark as soon
+          // as you open a campaign.
+        },
       ],
     },
   ],
@@ -937,6 +1310,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Visits",
           icon: MapPinned,
           href: "/asm",
+        },
+        {
+          id: "asm-campaigns",
+          label: "Campaigns",
+          icon: Megaphone,
+          href: "/asm/campaigns",
+          // Not `exact`, for the same reason as the inside-sales twin above.
         },
       ],
     },
@@ -1137,6 +1517,42 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      // [E-234] The dealer BUYS recovered stock from an NBFC partner here.
+      //
+      // Its own section for the same reason BUYBACK got one: direction. Buyback
+      // is the dealer selling dead batteries to iTarang; this is the dealer
+      // buying recovered ones at auction. Filing them together would put two
+      // opposite money flows under one heading.
+      section: "BATTERY AUCTIONS",
+      items: [
+        {
+          id: "auctions",
+          label: "Live Auctions",
+          icon: Gavel,
+          // Deliberately NOT `exact`. The detail route
+          // /dealer-portal/auctions/[id] should highlight this item, and the
+          // default startsWith match does that for free. `my-bids` sits below
+          // and is longer, so getActiveItemId's longest-match rule picks it
+          // correctly when the dealer is there.
+        href: "/dealer-portal/auctions",
+        },
+        {
+          id: "auction-my-bids",
+          label: "My Bids",
+          icon: Gavel,
+          href: "/dealer-portal/auctions/my-bids",
+        },
+        {
+          // The buyer's half of a settlement. Winning a lot used to be a dead
+          // end: "My Bids" said "won" and there was nowhere to pay.
+          id: "auction-purchases",
+          label: "Purchases",
+          icon: Gavel,
+          href: "/dealer-portal/auctions/purchases",
+        },
+      ],
+    },
   ],
 
   // The Ops Console — one screen per question the tech team actually asks.
@@ -1279,10 +1695,28 @@ const roleNavigation: Record<string, any[]> = {
  * "/admin/buyback" matches at all, so it wins by default — unchanged from
  * before.
  */
+/**
+ * [E-259] A rendered sub-navigation child. The surrounding file types nav
+ * entries as `any`; the sub-navigation block is new, so it does not.
+ */
+interface SubNavItem {
+  id: string;
+  label: string;
+  href: string;
+  icon: LucideIcon;
+}
+
 interface NavItemForActive {
   id: string;
   href: string;
   exact?: boolean;
+  /**
+   * [E-259] A nested sub-navigation node — an item that is a heading with its
+   * own items under it (Settings → NBFC → Payments). The node itself has no
+   * route; `href` on such an item is ignored by the matcher below, which
+   * flattens children in so a child can still win longest-match.
+   */
+  children?: NavItemForActive[];
 }
 interface NavGroupForActive {
   items: NavItemForActive[];
@@ -1302,7 +1736,16 @@ function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): stri
   let winnerId: string | null = null;
   let winnerLength = -1;
   for (const group of menuItems) {
+    // Flatten one level of sub-navigation: a child route has to compete in the
+    // same longest-match contest as everything else, or the sidebar goes dark
+    // on it. Sub-navigation NODES are dropped rather than flattened — they
+    // carry no route of their own.
+    const flat: NavItemForActive[] = [];
     for (const item of group.items) {
+      if (item.children?.length) flat.push(...item.children);
+      else flat.push(item);
+    }
+    for (const item of flat) {
       // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
       const itemPath = item.href.split("?")[0];
       const matches = item.exact
@@ -1327,6 +1770,12 @@ function getActiveItemId(menuItems: NavGroupForActive[], pathname: string): stri
   }
 
   return winnerId;
+}
+
+// Section names are display strings ("BATTERY BUYBACK"); this makes them safe
+// for the aria-controls id linking a group header to its panel.
+function slugifySection(section: string) {
+  return section.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 }
 
 // Shared inner content rendered by BOTH the desktop sidebar and the mobile
@@ -1356,6 +1805,35 @@ function SidebarNav({
     [menuItems, pathname],
   );
 
+  // The group holding the current route. Open by default, so landing on a page
+  // always reveals where you are.
+  const activeSection = useMemo(
+    () =>
+      menuItems.find((group) =>
+        group.items.some((item: any) => item.id === activeItemId),
+      )?.section ?? null,
+    [menuItems, activeItemId],
+  );
+
+  // Explicit user toggles ONLY — a section absent from this map falls back to
+  // `section === activeSection`. Storing the full open-set instead would need an
+  // effect to re-open the active group after every navigation, and a setState in
+  // an effect body is a cascading render (react-hooks/set-state-in-effect).
+  // Deriving gets the same behaviour for free.
+  const [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
+
+  const isSectionOpen = (section: string) =>
+    toggled.has(section) ? (toggled.get(section) as boolean) : section === activeSection;
+
+  const toggleSection = (section: string) => {
+    const next = !isSectionOpen(section);
+    setToggled((prev) => new Map(prev).set(section, next));
+  };
+
+  // Desktop sidebar and mobile drawer both render this component at the same
+  // time, so the aria-controls ids have to be per-instance.
+  const navId = useId();
+
   return (
     <>
       {/* Logo lockup */}
@@ -1368,50 +1846,160 @@ function SidebarNav({
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto py-6 space-y-7">
-        {menuItems.map((group: any) => (
-          <div key={group.section}>
-            <h3 className="sidebar-section-label px-5 mb-2">
-              {group.section}
-            </h3>
-            <div>
-              {group.items.map((item: any) => {
-                const isActive = item.id === activeItemId;
-                return (
-                  <Link
-                    key={item.id}
-                    href={item.href}
-                    onClick={onNavigate}
-                    data-testid={`nav-${item.id}`}
-                    className={cn(
-                      isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
-                    )}
-                  >
-                    <item.icon
-                      className={cn(
-                        "w-[18px] h-[18px] shrink-0",
-                        isActive ? "text-white" : "text-white/55",
-                      )}
-                      strokeWidth={1.75}
-                    />
-                    <span className="truncate flex-1">{item.label}</span>
-                    {item.badge ? (
-                      <span
-                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
-                        style={{
-                          background: "var(--color-brand-sky)",
-                          color: "#fff",
-                        }}
-                      >
-                        {item.badge}
-                      </span>
-                    ) : null}
-                  </Link>
-                );
-              })}
+      <div className="sidebar-scroll flex-1 overflow-y-auto py-2">
+        {menuItems.map((group: any) => {
+          const isOpen = isSectionOpen(group.section);
+          const hasActive = group.items.some(
+            (item: any) =>
+              item.id === activeItemId ||
+              item.children?.some((c: SubNavItem) => c.id === activeItemId),
+          );
+          const panelId = `${navId}-${slugifySection(group.section)}`;
+          return (
+            <div key={group.section} className="sidebar-section">
+              <button
+                type="button"
+                onClick={() => toggleSection(group.section)}
+                aria-expanded={isOpen}
+                aria-controls={panelId}
+                data-has-active={hasActive ? "true" : undefined}
+                className="sidebar-section-toggle"
+              >
+                <span className="truncate">{group.section}</span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className={cn(
+                    "w-4 h-4 ml-auto shrink-0 opacity-70 transition-transform duration-200",
+                    isOpen ? "rotate-180" : "rotate-0",
+                  )}
+                  strokeWidth={2}
+                />
+              </button>
+              {/* 0fr → 1fr grid row is the only way to transition to an
+                  auto height without measuring the panel. */}
+              <div
+                id={panelId}
+                className={cn(
+                  "grid transition-[grid-template-rows] duration-200 ease-out",
+                  isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+                )}
+              >
+                {/* Items stay mounted so the collapse can animate; `inert`
+                    keeps the hidden ones out of the tab order. */}
+                <div className="min-h-0 overflow-hidden" inert={!isOpen}>
+                  <div className="pb-2">
+                    {group.items.map((item: any) => {
+                      const isActive = item.id === activeItemId;
+
+                      // [E-259] A sub-navigation node: a heading with its own
+                      // items under it, not a link. Rendered as a details/
+                      // summary rather than more useState, so it needs no
+                      // extra state to stay open across a navigation and is
+                      // keyboard-operable for free. It starts open whenever
+                      // one of its children is the active route — a collapsed
+                      // group hiding the page you are on reads as the sidebar
+                      // having lost you.
+                      if (item.children?.length) {
+                        const childActive = item.children.some(
+                          (c: SubNavItem) => c.id === activeItemId,
+                        );
+                        return (
+                          <details
+                            key={item.id}
+                            open={childActive || undefined}
+                            className="sidebar-subnav"
+                          >
+                            <summary
+                              data-testid={`nav-${item.id}`}
+                              data-has-active={childActive ? "true" : undefined}
+                              className="sidebar-nav-item cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                            >
+                              <item.icon
+                                className="w-[18px] h-[18px] shrink-0 text-white/55"
+                                strokeWidth={1.75}
+                              />
+                              <span className="truncate flex-1">{item.label}</span>
+                              <ChevronDown
+                                aria-hidden="true"
+                                className="w-3.5 h-3.5 ml-auto shrink-0 opacity-60 transition-transform duration-200 [details[open]_&]:rotate-180"
+                                strokeWidth={2}
+                              />
+                            </summary>
+                            <div className="pl-4">
+                              {item.children.map((child: SubNavItem) => {
+                                const childIsActive = child.id === activeItemId;
+                                return (
+                                  <Link
+                                    key={child.id}
+                                    href={child.href}
+                                    onClick={onNavigate}
+                                    data-testid={`nav-${child.id}`}
+                                    className={cn(
+                                      childIsActive
+                                        ? "sidebar-nav-item-active"
+                                        : "sidebar-nav-item",
+                                    )}
+                                  >
+                                    <child.icon
+                                      className={cn(
+                                        "w-[18px] h-[18px] shrink-0",
+                                        childIsActive
+                                          ? "text-white"
+                                          : "text-white/55",
+                                      )}
+                                      strokeWidth={1.75}
+                                    />
+                                    <span className="truncate flex-1">
+                                      {child.label}
+                                    </span>
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          </details>
+                        );
+                      }
+
+                      return (
+                        <Link
+                          key={item.id}
+                          href={item.href}
+                          onClick={onNavigate}
+                          data-testid={`nav-${item.id}`}
+                          className={cn(
+                            isActive
+                              ? "sidebar-nav-item-active"
+                              : "sidebar-nav-item",
+                          )}
+                        >
+                          <item.icon
+                            className={cn(
+                              "w-[18px] h-[18px] shrink-0",
+                              isActive ? "text-white" : "text-white/55",
+                            )}
+                            strokeWidth={1.75}
+                          />
+                          <span className="truncate flex-1">{item.label}</span>
+                          {item.badge ? (
+                            <span
+                              className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                              style={{
+                                background: "var(--color-brand-sky)",
+                                color: "#fff",
+                              }}
+                            >
+                              {item.badge}
+                            </span>
+                          ) : null}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Profile mini-card — NOTE: `displayRole` is sourced from users.role
@@ -1491,56 +2079,147 @@ export function Sidebar() {
     if (pathname.startsWith("/sales-insight")) return "sales_insight";
     if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
     if (pathname.startsWith("/asm")) return "asm";
+    if (pathname.startsWith("/it")) return "it";
     if (pathname.startsWith("/operations")) return "operations";
     return "user";
   })();
 
-  const rawMenuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
-
   // For the dealer role, loan-related entries must hide when the dealer's
   // onboarding application has financeEnabled=false. Source the flag from
   // /api/dealer/stats (already the authoritative finance-enabled endpoint).
+  // The SAME response carries dealerType (E-202), which gates whole sections
+  // below — one request, two gates, so they can never disagree.
   const [dealerFinanceEnabled, setDealerFinanceEnabled] = useState<boolean | null>(null);
+  const [dealerType, setDealerType] = useState<DealerTypeValue>("new");
 
   useEffect(() => {
     if (inferredRole !== "dealer") return;
     let cancelled = false;
+
+    // These two flags gate WHICH menu items render, so until the fetch below
+    // lands the dealer sees an incomplete menu — and this component remounts on
+    // every hard navigation, so they see it every time. Seeding from the
+    // session snapshot paints the last-known-good menu immediately while the
+    // fetch revalidates behind it.
+    //
+    // Read here in the effect, NOT in a useState initialiser: this client
+    // component is still server-rendered, where sessionStorage does not exist,
+    // so seeding during render would make the client's first paint disagree
+    // with the server HTML and trip a hydration mismatch. AuthProvider's
+    // profile snapshot is read from an effect for exactly this reason.
+    const snapshot = readSnapshot<{
+      financeEnabled: boolean;
+      dealerType: DealerTypeValue;
+    }>(DEALER_GATE_SNAPSHOT_KEY);
+    if (snapshot) {
+      setDealerFinanceEnabled(snapshot.financeEnabled);
+      setDealerType(snapshot.dealerType);
+    }
+
     fetch("/api/dealer/stats", { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
         const flag = json?.data?.dealer?.financeEnabled;
-        setDealerFinanceEnabled(typeof flag === "boolean" ? flag : false);
+        const financeEnabled = typeof flag === "boolean" ? flag : false;
+        // `dealer` is null when no onboarding application is found. Default to
+        // 'new' — the safe direction: a dealer we can't classify keeps the
+        // portal they have today rather than losing every menu.
+        const resolvedType = normalizeDealerType(json?.data?.dealer?.dealerType) ?? "new";
+        setDealerFinanceEnabled(financeEnabled);
+        setDealerType(resolvedType);
+        writeSnapshot(DEALER_GATE_SNAPSHOT_KEY, {
+          financeEnabled,
+          dealerType: resolvedType,
+        });
       })
       .catch(() => {
-        if (!cancelled) setDealerFinanceEnabled(false);
+        // Only fall back to the closed state if there was no snapshot to show.
+        // A transient network blip must not blank out a menu we were already
+        // rendering correctly from cache.
+        if (!cancelled && !snapshot) setDealerFinanceEnabled(false);
       });
     return () => {
       cancelled = true;
     };
   }, [inferredRole]);
 
-  const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
-  const filteredMenuItems =
-    inferredRole === "dealer" && dealerFinanceEnabled === false
-      ? rawMenuItems.map((group: any) => ({
-          ...group,
-          items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
-        }))
-      : rawMenuItems;
+  // E-202 / E-225 — which modules this dealer type has at all.
+  //  · new   → no buyback (they don't sell old batteries back to us)
+  //  · scrap → ONLY buyback (no leads, loans, assets, orders, inventory…)
+  //  · both  → everything, i.e. exactly today's menu
+  const dealerCaps = capabilitiesFor(dealerType);
+
+  const filteredMenuItems = useMemo(() => {
+    // Resolved inside the memo, not read from an outer `||` expression: that
+    // would be a new array identity on every render and defeat the memo.
+    const rawMenuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
+    if (inferredRole !== "dealer") return rawMenuItems;
+
+    const caps = capabilitiesFor(dealerType);
+
+    return rawMenuItems
+      .filter((group: any) => {
+        if (!caps.buyback && group.section === BUYBACK_SECTION) return false;
+        if (!caps.newBattery && NEW_BATTERY_SECTIONS.has(group.section)) return false;
+        return true;
+      })
+      .map((group: any) => ({
+        ...group,
+        items: group.items.filter((item: any) => {
+          // Both filters apply together — a scrap dealer must not regain
+          // "Loan Processing" just because the finance filter is the one that
+          // would normally drop it.
+          if (dealerFinanceEnabled === false && FINANCE_GATED_ITEM_IDS.has(item.id)) return false;
+          if (!caps.newBattery && REDUNDANT_FOR_SCRAP_ITEM_IDS.has(item.id)) return false;
+          return true;
+        }),
+      }))
+      // A section whose every item was filtered out would otherwise render as a
+      // bare heading with nothing under it.
+      .filter((group: any) => group.items.length > 0);
+  }, [inferredRole, dealerFinanceEnabled, dealerType]);
 
   // Universal nav items (e.g. Submit Expense) appended to every role except:
   //  · "user" — the unauthenticated path-inferred fallback view;
   //  · "scrap_vendor" — a vendor is a COUNTERPARTY, not staff. "Submit Expense"
   //    files a business expense for a CEO to approve; offering that to the firm
   //    we are selling scrap to is not a universal action, it is a wrong one.
+  //  · "it" — the IT console is a single-purpose security surface (scanner
+  //    findings + live attacks); expense filing is out of scope for it.
   //  · "operations" — a shared monitoring login, not a person. Nobody files an
   //    expense as operations@itarang.com, and the console is meant to be one
   //    screen with nothing on it that isn't monitoring.
-  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "operations"]);
-  let menuItems = NO_COMMON_ITEMS.has(inferredRole)
-    ? filteredMenuItems
-    : [...filteredMenuItems, ...COMMON_ITEMS];
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it", "operations"]);
+  let menuItems = [
+    ...filteredMenuItems,
+    ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),
+    // Anything that must render below the shared EXPENSES group. Empty for
+    // every role but sales_head, so this is a no-op elsewhere.
+    ...(ROLE_TRAILING_SECTIONS[inferredRole] ?? []),
+  ];
+
+  // Merge duplicate EXPENSES groups so a role with its own EXPENSES section
+  // gets the shared "Submit Expense" item inside it instead of rendering two
+  // separate headings.
+  menuItems = menuItems.reduce((acc: any[], group: any) => {
+    if (group.section !== "EXPENSES") {
+      acc.push(group);
+      return acc;
+    }
+
+    const existingExpenses = acc.find((item) => item.section === "EXPENSES");
+    if (!existingExpenses) {
+      acc.push({
+        section: "EXPENSES",
+        items: [...group.items],
+      });
+      return acc;
+    }
+
+    existingExpenses.items.push(...group.items);
+    return acc;
+  }, []);
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue
@@ -1559,6 +2238,29 @@ export function Sidebar() {
       });
     return () => {
       cancelled = true;
+    };
+  }, [inferredRole]);
+
+  // Live-attack badge (E-216) — count of NEW security events, polled so the
+  // "Live Attacks" link lights up in near-real-time when the detector fires.
+  const [securityEventCount, setSecurityEventCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "it") return;
+    let cancelled = false;
+    const load = () =>
+      fetch("/api/it/security/events/count", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then((j) => {
+          if (!cancelled) setSecurityEventCount(Number(j.count ?? 0));
+        })
+        .catch(() => {
+          /* silent — badge stays absent on failure */
+        });
+    load();
+    const id = setInterval(load, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
     };
   }, [inferredRole]);
 
@@ -1588,17 +2290,38 @@ export function Sidebar() {
   // (same query key → one request) and updates live, so a mark-read anywhere
   // decrements these. Gated to roles that actually have a buyback surface so a
   // finance/service login never fires the request.
-  const isBuybackRole = [
-    "dealer",
-    "scrap_vendor",
-    "admin",
-    "ceo",
-    "business_head",
-    "sales_head",
-  ].includes(inferredRole);
+  const isBuybackRole =
+    [
+      "dealer",
+      "scrap_vendor",
+      "admin",
+      "ceo",
+      "business_head",
+      "sales_head",
+    ].includes(inferredRole) &&
+    // A NEW-battery dealer has no buyback surface at all (E-202), so polling
+    // their unread counts is a request whose answer can only ever be zero.
+    (inferredRole !== "dealer" || dealerCaps.buyback);
   const notifSummary = useBuybackNotificationSummary(isBuybackRole);
   const totalUnread = notifSummary.unread.total;
   const negotiationUnread = notifSummary.unread.byCategory.Negotiation ?? 0;
+
+  // New arrivals in the admin work queues since this person last opened each
+  // page — Dealer Validation, KYC Review, WhatsApp Onboarding. Clears on visit.
+  const navActivity = useNavActivity(
+    ["admin", "sales_head", "ceo", "business_head"].includes(inferredRole),
+    pathname,
+  );
+
+  if (Object.keys(navActivity).length > 0) {
+    menuItems = menuItems.map((group) => ({
+      ...group,
+      items: group.items.map((item: { id: string }) => {
+        const n = navActivity[item.id];
+        return n ? { ...item, badge: n > 99 ? "99+" : n } : item;
+      }),
+    }));
+  }
 
   if (pendingNbfcCount && pendingNbfcCount > 0) {
     menuItems = menuItems.map((group: any) => ({
@@ -1616,6 +2339,16 @@ export function Sidebar() {
       ...group,
       items: group.items.map((item: any) =>
         item.id === "vendor-inbox" ? { ...item, badge: vendorInboxCount } : item,
+      ),
+    }));
+  }
+
+  if (securityEventCount && securityEventCount > 0) {
+    const badge = securityEventCount > 99 ? "99+" : securityEventCount;
+    menuItems = menuItems.map((group) => ({
+      ...group,
+      items: group.items.map((item: { id: string }) =>
+        item.id === "it-security-live" ? { ...item, badge } : item,
       ),
     }));
   }
@@ -1640,19 +2373,6 @@ export function Sidebar() {
     }));
   }
 
-  // The mobile drawer shows on the dealer portal, the shared /expenses pages
-  // (a common route reachable by any role — without this the user lands there
-  // on mobile with no way to open navigation) and the Ops Console (whoever is
-  // on call reads it from a phone). The desktop sidebar is unchanged for every
-  // role.
-  //
-  // Keep in step with `showMobileNav` in components/layout/header.tsx — that is
-  // an independent copy of this condition and the hamburger comes from there.
-  const showMobileDrawer =
-    pathname.startsWith("/dealer-portal") ||
-    pathname.startsWith("/expenses") ||
-    pathname.startsWith("/operations");
-
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
   // left border, active = `rgba(19,143,198,0.15)` bg + `#138fc6` left border
@@ -1670,51 +2390,54 @@ export function Sidebar() {
         />
       </div>
 
-      {/* Mobile drawer — phone-only (md:hidden), shown on dealer portal + shared
-          /expenses pages. Mirrors the NbfcPortalSidebar pattern: backdrop + left
-          slide-in panel, driven by the shared uiStore and the header hamburger. */}
-      {showMobileDrawer && (
+      {/* Mobile drawer — phone-only (md:hidden), rendered on EVERY route this
+          sidebar serves. It was previously gated to /dealer-portal, /expenses
+          and /it, which meant the header hamburger had nothing to open anywhere
+          else (sales-head, admin, ceo, …) — the desktop sidebar is `hidden
+          md:flex`, so those roles had no navigation at all on a phone. The
+          drawer is already role-aware (it renders the same computed menuItems),
+          so no per-role work is needed. Mirrors the NbfcPortalSidebar pattern:
+          backdrop + left slide-in panel, driven by the shared uiStore. */}
+      <div
+        className={`md:hidden fixed inset-0 z-50 ${
+          sidebarOpen ? "" : "pointer-events-none"
+        }`}
+        aria-hidden={!sidebarOpen}
+      >
+        {/* Backdrop */}
         <div
-          className={`md:hidden fixed inset-0 z-50 ${
-            sidebarOpen ? "" : "pointer-events-none"
+          onClick={closeSidebar}
+          className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+            sidebarOpen ? "opacity-100" : "opacity-0"
           }`}
-          aria-hidden={!sidebarOpen}
+        />
+        {/* Panel */}
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label="Main navigation"
+          className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
+            sidebarOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
         >
-          {/* Backdrop */}
-          <div
+          <button
+            type="button"
             onClick={closeSidebar}
-            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
-              sidebarOpen ? "opacity-100" : "opacity-0"
-            }`}
-          />
-          {/* Panel */}
-          <aside
-            role="dialog"
-            aria-modal="true"
-            aria-label="Dealer portal navigation"
-            className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
-              sidebarOpen ? "translate-x-0" : "-translate-x-full"
-            }`}
+            aria-label="Close navigation"
+            className="absolute right-3 top-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
           >
-            <button
-              type="button"
-              onClick={closeSidebar}
-              aria-label="Close navigation"
-              className="absolute right-3 top-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <SidebarNav
-              menuItems={menuItems}
-              pathname={pathname}
-              user={user}
-              loading={loading}
-              inferredRole={inferredRole}
-              onNavigate={closeSidebar}
-            />
-          </aside>
-        </div>
-      )}
+            <X className="w-5 h-5" />
+          </button>
+          <SidebarNav
+            menuItems={menuItems}
+            pathname={pathname}
+            user={user}
+            loading={loading}
+            inferredRole={inferredRole}
+            onNavigate={closeSidebar}
+          />
+        </aside>
+      </div>
     </>
   );
 }

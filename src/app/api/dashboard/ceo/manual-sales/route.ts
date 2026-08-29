@@ -36,7 +36,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     const sp = new URL(req.url).searchParams;
     const { startStr, endStr } = resolveWindow(sp.get("month"), sp.get("period"));
 
-    const conds = [gte(manualDealerSales.sale_date, startStr)];
+    const conds = [];
+    if (startStr) conds.push(gte(manualDealerSales.sale_date, startStr));
     if (endStr) conds.push(lt(manualDealerSales.sale_date, endStr));
 
     const rows = await db

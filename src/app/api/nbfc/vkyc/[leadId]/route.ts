@@ -13,9 +13,10 @@ import { clientError } from "@/lib/nbfc/http-error";
 import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { nbfcServiceConfig, videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
+import { videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { activeVideoLivenessResult } from "@/lib/decentro";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getActiveAssignment, getVkycAttempts, getVkycTrack } from "@/lib/nbfc/vkyc";
 
 export const runtime = "nodejs";
@@ -61,18 +62,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       return NextResponse.json({ ok: true, track: null, reason: "No assignment for this tenant." });
     }
 
-    // Opt-in state (mirrors the initiate route): per-lead snapshot first, live
-    // config fallback when the snapshot carries no mode (§7.4). Lets the UI show
-    // a clear "not opted in" notice rather than a button that 400s on click.
-    let enabled = assignment.snapshot.vkyc_enabled ?? false;
-    if (!assignment.snapshot.vkyc_mode) {
-      const cfg = await db
-        .select({ enabled: nbfcServiceConfig.vkyc_enabled, mode: nbfcServiceConfig.vkyc_mode })
-        .from(nbfcServiceConfig)
-        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-        .limit(1);
-      enabled = cfg[0]?.enabled ?? false;
-    }
+    // Opt-in state (mirrors the initiate route) is read LIVE — switching Video
+    // KYC off in Settings takes the track out of in-flight leads too. Lets the
+    // UI show a clear "not opted in" notice rather than a button that 400s.
+    const enabled = (
+      await resolveServiceOptIn(actor.tenant_id, assignment.snapshot)
+    ).vkyc_enabled;
     const canAct = actor.role === "operations" || actor.role === "nbfc_admin";
 
     let track = await getVkycTrack(leadId, assignment.nbfc_id);

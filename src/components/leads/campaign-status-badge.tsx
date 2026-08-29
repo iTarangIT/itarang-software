@@ -1,13 +1,36 @@
 // Status pills for dialer campaigns. CampaignStatusBadge is for the parent
-// (running / completed / stopped / failed); CampaignLeadStatusBadge is for
-// per-lead status (pending / calling / completed / failed / skipped).
+// (running / scheduled / paused / completed / stopped / failed);
+// CampaignLeadStatusBadge is for per-lead status (pending / calling /
+// completed / failed / skipped).
+//
+// KEEP ParentStatus IN STEP WITH WHAT THE BACKEND WRITES. The unknown-status
+// fallback below is PARENT_STYLES.running, so a status missing from this map
+// renders as a spinning amber "Running" -- a campaign parked until 11am would
+// look like it is dialling right now. That is why E-254's 'scheduled' and
+// 'paused' landed here in the same change as the code that first writes them.
 //
 // Color scheme cloned from src/components/scraper/ExplorationStatusBadge.tsx
 // to stay visually consistent with the scraper-runs UX.
 
-import { Loader2, CheckCircle2, XCircle, Ban, Clock, PhoneCall } from "lucide-react";
+import {
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Ban,
+  Clock,
+  PhoneCall,
+  CalendarClock,
+  PauseCircle,
+} from "lucide-react";
 
-type ParentStatus = "draft" | "running" | "completed" | "stopped" | "failed";
+type ParentStatus =
+  | "draft"
+  | "running"
+  | "scheduled"
+  | "paused"
+  | "completed"
+  | "stopped"
+  | "failed";
 type LeadStatus = "pending" | "calling" | "completed" | "failed" | "skipped";
 
 const PARENT_STYLES: Record<
@@ -25,6 +48,23 @@ const PARENT_STYLES: Record<
     text: "text-amber-800",
     label: "Running",
     Icon: Loader2,
+  },
+  // E-254 — waiting for its calling window to open. Blue, not grey: this
+  // campaign is live and will start itself, unlike 'stopped' which needs a
+  // human. The two must not look alike.
+  scheduled: {
+    bg: "bg-blue-100",
+    text: "text-blue-700",
+    label: "Scheduled",
+    Icon: CalendarClock,
+  },
+  // E-254 — a single run that reached its window end time. Nothing will resume
+  // it automatically; that is the whole difference from 'scheduled'.
+  paused: {
+    bg: "bg-slate-200",
+    text: "text-slate-700",
+    label: "Paused",
+    Icon: PauseCircle,
   },
   completed: {
     bg: "bg-emerald-100",
@@ -160,7 +200,55 @@ const OUTCOME_STYLES: Record<string, { bg: string; text: string; label: string }
   },
 };
 
-export function CampaignOutcomeBadge({ outcome }: { outcome: string | null }) {
+export function CampaignOutcomeBadge({
+  outcome,
+  failureReason,
+}: {
+  outcome: string | null;
+  /**
+   * The derived reason this call produced no conversation, from
+   * src/lib/ai-dialer/failureReason.ts. When present it REPLACES the raw
+   * outcome chip: "Trigger failed" was covering a busy line, a voicemail, a
+   * silent call and — in the largest bucket by far — our own dialer
+   * misconfiguration, all under one word.
+   */
+  failureReason?: {
+    code: string;
+    label: string;
+    hint: string;
+    detail: string | null;
+    retryable: boolean;
+    ourFault: boolean;
+  } | null;
+}) {
+  if (failureReason) {
+    // Our own fault gets its own colour. Amber rather than red because the row
+    // is not a bad lead — it is a broken dialer, and it should not be read as
+    // "this dealer is unreachable".
+    const tone = failureReason.ourFault
+      ? "bg-amber-50 text-amber-800 border border-amber-200"
+      : failureReason.retryable
+        ? "bg-rose-50 text-rose-700"
+        : "bg-zinc-100 text-zinc-600";
+    const title = [
+      failureReason.hint,
+      failureReason.detail ? `
+
+Provider said: ${failureReason.detail}` : "",
+    ]
+      .join("")
+      .trim();
+    return (
+      <span
+        title={title}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium cursor-help ${tone}`}
+      >
+        {failureReason.label}
+        {failureReason.detail ? " ⓘ" : ""}
+      </span>
+    );
+  }
+
   if (!outcome) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-500">

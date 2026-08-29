@@ -9,8 +9,17 @@
  * BatteryEvaluationWizard renders inline. A fresh `key` per battery resets the
  * wizard on switch; on completion the page is refreshed so the evaluated
  * battery leaves the "needs inspection" set.
+ *
+ * DEEP-LINKABLE. The recovery board's cards link here as
+ * `?evaluate=<pipeline id>#battery-evaluation` when a stage move is blocked
+ * on a missing evaluation — the wizard is in a different section of the page
+ * from the buttons it unlocks, and an operator who only saw the greyed-out
+ * buttons had no path to it. `#battery-evaluation` scrolls; `?evaluate=`
+ * preselects. The param is only the INITIAL selection: once the operator picks
+ * something else in the dropdown their choice wins, and an id that is no
+ * longer awaiting inspection falls back to the first candidate.
  */
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { BatteryEvaluationWizard } from "@/components/nbfc-portal/BatteryEvaluationWizard";
 
@@ -20,6 +29,8 @@ export type PendingEvaluationRow = {
   borrower_name: string | null;
   live_soh_pct: number | null;
   age_days: number;
+  /** null until the battery master row exists — the wizard offers to make it. */
+  battery_id: string | null;
 };
 
 export default function BatteryEvaluationPanel({
@@ -28,13 +39,18 @@ export default function BatteryEvaluationPanel({
   candidates: PendingEvaluationRow[];
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requested = searchParams.get("evaluate");
   const [selectedId, setSelectedId] = useState<string>(
-    candidates[0]?.id ?? "",
+    (requested && candidates.some((c) => c.id === requested)
+      ? requested
+      : candidates[0]?.id) ?? "",
   );
+  const selected = candidates.find((c) => c.id === selectedId) ?? null;
 
   if (candidates.length === 0) {
     return (
-      <div className="card-iTarang p-4">
+      <div id="battery-evaluation" className="card-iTarang p-4 scroll-mt-6">
         <p className="section-label-muted">Battery evaluation</p>
         <p className="mt-1 text-sm font-semibold text-[color:var(--color-brand-navy)]">
           3-step inspection
@@ -47,7 +63,7 @@ export default function BatteryEvaluationPanel({
   }
 
   return (
-    <div className="card-iTarang p-4 space-y-3">
+    <div id="battery-evaluation" className="card-iTarang p-4 space-y-3 scroll-mt-6">
       <div>
         <p className="section-label-muted">Battery evaluation</p>
         <p className="mt-1 text-sm font-semibold text-[color:var(--color-brand-navy)]">
@@ -82,10 +98,12 @@ export default function BatteryEvaluationPanel({
       </div>
 
       <div className="border-t border-[color:var(--color-border)] pt-3">
-        {selectedId ? (
+        {selected ? (
           <BatteryEvaluationWizard
-            key={selectedId}
-            recoveryPipelineId={selectedId}
+            key={selected.id}
+            recoveryPipelineId={selected.id}
+            batteryId={selected.battery_id}
+            batterySerial={selected.battery_serial}
             onComplete={() => router.refresh()}
           />
         ) : null}

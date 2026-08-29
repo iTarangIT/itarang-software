@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from 'lucide-react';
+import { Search, LogOut, User, ChevronDown, Settings, Menu } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import NotificationBell from '@/components/shared/NotificationBell';
+import type { NotificationRole } from '@/lib/notifications/catalog';
 // Dependency-free by design (middleware runs it on Edge), so a client component
 // can share the one list rather than keep a second copy that drifts.
 import { BUYBACK_ADMIN_ROLES } from '@/lib/buyback/roles';
@@ -16,22 +17,18 @@ import { toast } from 'sonner';
 
 export function Header() {
     const router = useRouter();
-    const pathname = usePathname() ?? '';
     const supabase = createClient();
     const { user } = useAuth();
-    // Mobile hamburger → opens the shared nav drawer. Shown on the dealer portal,
-    // on the shared /expenses pages (a common route any role can reach, where
-    // the user would otherwise be stranded with no way to open navigation), and
-    // on the Ops Console (read from a phone when something is on fire).
-    //
-    // Keep in step with `showMobileDrawer` in components/layout/sidebar.tsx —
-    // that is an independent copy, and if only one of the two knows about a
-    // route you get a hamburger that opens nothing, or a drawer with no way in.
+    // Mobile hamburger → opens the shared nav drawer. Shown on EVERY route this
+    // header renders on. It used to be an allowlist of three prefixes
+    // (/dealer-portal, /expenses, /it), which left every other role — sales_head,
+    // admin, ceo, business_head… — stranded on a phone with the desktop sidebar
+    // hidden (md:hidden) and no way to open navigation. The stated reason for the
+    // allowlist was exactly that failure mode, so it applies everywhere.
+    // /nbfc/* and /risk-head/* never reach here (LayoutWrapper hands them to
+    // their own shells, which carry their own hamburgers).
     const openSidebar = useUIStore((s) => s.openSidebar);
-    const showMobileNav =
-        pathname.startsWith('/dealer-portal') ||
-        pathname.startsWith('/expenses') ||
-        pathname.startsWith('/operations');
+    const openChangePassword = useUIStore((s) => s.openChangePassword);
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
@@ -45,6 +42,17 @@ export function Header() {
     // docs/nbfc/NOTES.md for the seed-personas fix path.
     const displayRole = user?.role || 'user';
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+
+    // Which portal's "View all notifications" page this viewer belongs on.
+    const role = (user?.role ?? '').toLowerCase();
+    const portalRole: NotificationRole =
+        role === 'scrap_vendor'
+            ? 'vendor'
+            : role.startsWith('nbfc') || role === 'risk_head'
+                ? 'nbfc'
+                : BUYBACK_ADMIN_ROLES.includes(role)
+                    ? 'admin'
+                    : 'dealer';
 
     const handleLogout = () => {
         if (loggingOut) return;
@@ -86,16 +94,14 @@ export function Header() {
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
             <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                {showMobileNav && (
-                    <button
-                        type="button"
-                        onClick={openSidebar}
-                        aria-label="Open navigation menu"
-                        className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                        <Menu className="w-6 h-6" />
-                    </button>
-                )}
+                <button
+                    type="button"
+                    onClick={openSidebar}
+                    aria-label="Open navigation menu"
+                    className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                    <Menu className="w-6 h-6" />
+                </button>
                 <img
                     src="/itarang-logo.png"
                     alt="iTarang"
@@ -118,29 +124,19 @@ export function Header() {
             {/* Right Actions */}
             <div className="flex items-center gap-4">
                 {/* Single unified in-app bell. Reads /api/notifications, which
-                    returns EVERY notification row keyed to the signed-in user —
-                    KYC verification arrivals, NBFC Acquire events, buyback,
-                    dealer validation, inventory uploads, escalations, etc. The
-                    former separate BuybackBell was a scoped subset of the same
-                    table; folding it in removes the duplicate bell and gives one
-                    place that holds all notifications.
+                    returns EVERY notification row addressed to the signed-in
+                    user — leads, KYC and consent, the NBFC request loop, FI /
+                    VKYC / E-NACH / agreement, product selection, sanction and
+                    disbursal, dealer onboarding, inventory, buyback,
+                    escalations.
 
-                    portalRole shapes the buyback deep links, which differ per
-                    role: admin and dealer each open the request on their own
-                    page, and a vendor — who has neither — is sent to the
-                    matching vendor-portal surface. isAdmin still drives the
-                    non-buyback admin/dealer split. */}
-                <NotificationBell
-                    variant="admin"
-                    isAdmin={BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())}
-                    portalRole={
-                        (user?.role ?? '').toLowerCase() === 'scrap_vendor'
-                            ? 'vendor'
-                            : BUYBACK_ADMIN_ROLES.includes((user?.role ?? '').toLowerCase())
-                                ? 'admin'
-                                : 'dealer'
-                    }
-                />
+                    Each row arrives with its deep link already resolved for
+                    THIS viewer's portal, so portalRole is only needed for the
+                    "View all" destination. NBFC users get their bell from
+                    NbfcPortalHeader, not here — /nbfc/* renders its own chrome
+                    (see LayoutWrapper) — but the role is mapped anyway so a
+                    dual-role login lands on the right page. */}
+                <NotificationBell portalRole={portalRole} />
 
                 {/* Profile Dropdown */}
                 <div className="relative" ref={dropdownRef}>
@@ -178,18 +174,25 @@ export function Header() {
                             </div>
 
                             <div className="py-1">
-                                <Link href="/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
+                                <Link
+                                    href="/profile"
+                                    onClick={() => setIsProfileOpen(false)}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors"
+                                >
                                     <User className="w-4 h-4" />
                                     View Profile
                                 </Link>
-                                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
+                                <button
+                                    type="button"
+                                    onClick={() => { setIsProfileOpen(false); openChangePassword(); }}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors"
+                                >
                                     <Settings className="w-4 h-4" />
                                     Change Password
                                 </button>
-                                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition-colors">
-                                    <CreditCard className="w-4 h-4" />
-                                    Subscription: <span className="text-green-600 font-medium text-xs bg-green-50 px-1.5 py-0.5 rounded-full">Active</span>
-                                </button>
+                                {/* The "Subscription: Active" item that used to sit here was a
+                                    dead button advertising a state that exists nowhere in the
+                                    schema. Removed rather than left next to a live one. */}
                             </div>
 
                             <div className="border-t border-gray-100 my-1"></div>

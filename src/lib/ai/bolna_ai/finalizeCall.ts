@@ -19,10 +19,15 @@ import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleCall } from "@/lib/queue/scheduler";
-import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
+import {
+  appendSalesCallLog,
+  appendCallReview,
+  callReviewSheetEnabled,
+} from "@/lib/google/sheet";
 import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import { rehostRecording } from "@/lib/ai/storage/recordingStore";
 
 export type BolnaFinalizePayload = {
@@ -125,6 +130,20 @@ export async function finalizeBolnaCall(
       // Bolna's side. Best-effort fetch; backfill cron retries on race.
       await fetchAndPersistCallCost("bolna", callId);
 
+      // Record it in the CC team's vocabulary — "Did not pick", "Switch off",
+      // etc. Placed after the log exists (so external_event_id and
+      // ai_call_logs.call_id agree) and before completeCampaignLead, so a
+      // failure in here can never stall the campaign advance that follows.
+      await writeAiCallTouchpoint({
+        leadId: leadForPhone.id,
+        provider: "bolna",
+        callId,
+        transcript: null,
+        providerStatus: status || "failed",
+        durationSec: duration ?? null,
+        recordingUrl,
+      });
+
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
         success: false,
@@ -155,6 +174,11 @@ export async function finalizeBolnaCall(
             .limit(1);
           campaign = c[0]?.name ?? reviewCampaignId;
         }
+        // E-250 — the Campaign_Call_Review sheet is retired by default. The
+        // guard sits ABOVE rehostRecording because that call downloads the
+        // audio and re-uploads it purely so the sheet has a playable link;
+        // with the sheet off, that is a wasted round-trip on every call.
+        if (!callReviewSheetEnabled()) return;
         const playableUrl = await rehostRecording({
           provider: "bolna",
           callId,
@@ -284,6 +308,8 @@ export async function finalizeBolnaCall(
       intentReason: null,
       nextAction: "auto_retry",
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       band: null,
@@ -292,6 +318,23 @@ export async function finalizeBolnaCall(
     });
 
     await fetchAndPersistCallCost("bolna", callId);
+
+    // A transcript exists, so this is CONNECTED — and the sheet has exactly the
+    // right words for it: Cold › Short Hang up.
+    await writeAiCallTouchpoint({
+      leadId: lead.id,
+      provider: "bolna",
+      callId,
+      transcript,
+      providerStatus: status || "completed",
+      bandCallStatus: "dropped_empty",
+      band: null,
+      infoSignalsCount: 0,
+      durationSec: duration ?? null,
+      recordingUrl,
+      summary: analysis.memory?.intent_summary ?? null,
+    });
+
     // dropped_empty connected and produced a transcript — the line just dropped
     // before any qualifying info was captured. It is NOT a telephony failure, so
     // the campaign row is marked completed ("Done"), not failed. The Outcome
@@ -334,6 +377,8 @@ export async function finalizeBolnaCall(
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       hardNegative,
     },
   );
@@ -384,6 +429,8 @@ export async function finalizeBolnaCall(
     intentReason: analysis.memory?.intent_summary ?? null,
     nextAction: action ?? null,
     scoringVersion: analysis.scoring_version,
+    extractionVersion: analysis.extraction_version,
+    calibrationSetHash: analysis.calibration_set_hash,
     signals: analysis.signals,
     scoreBreakdown: analysis.score_breakdown,
     band: analysis.band,
@@ -394,6 +441,29 @@ export async function finalizeBolnaCall(
   // Capture per-call cost from Bolna /executions/{id}. Best-effort: failure
   // is logged, never thrown. Backfill cron is the recovery path.
   await fetchAndPersistCallCost("bolna", callId);
+
+  // The scored path — the one that produces a real disposition. Note the band
+  // is passed but does NOT decide the L2 bucket: an AI call maxes out at Warm
+  // because every label in the sheet's Hot bucket names a commercial artefact
+  // only a human produces. The band rides on external_tag instead.
+  await writeAiCallTouchpoint({
+    leadId: lead.id,
+    provider: "bolna",
+    callId,
+    transcript,
+    providerStatus: status || "completed",
+    band: analysis.band,
+    bandCallStatus: analysis.call_status,
+    infoSignalsCount: analysis.info_signals_count,
+    disqualifier: analysis.signals?.disqualifier ?? null,
+    callbackAgreed: analysis.signals?.callback_agreed === "yes",
+    relevantDealer: analysis.signals?.relevant_dealer === "yes",
+    pitchHeard: analysis.signals?.pitch_heard === "yes",
+    durationSec: duration ?? null,
+    recordingUrl,
+    summary: analysis.memory?.intent_summary ?? null,
+    nextCallAt: nextCallAt ?? null,
+  });
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
@@ -450,6 +520,8 @@ export async function finalizeBolnaCall(
         .limit(1);
       campaign = c[0]?.name ?? reviewCampaignId;
     }
+    // E-250 — see the note on the sibling closure above.
+    if (!callReviewSheetEnabled()) return;
     const playableUrl = await rehostRecording({
       provider: "bolna",
       callId,
@@ -536,6 +608,12 @@ async function upsertAiCallLog(opts: {
   intentReason: string | null;
   nextAction: string | null;
   scoringVersion?: string | null;
+  // E-250 — which PROMPT read the transcript, alongside which band rule scored
+  // it. The hash is required because the calibration set now lives in the DB
+  // and changes without a deploy, so EXTRACTION_VERSION alone stops identifying
+  // the prompt that produced these signals.
+  extractionVersion?: string | null;
+  calibrationSetHash?: string | null;
   signals?: unknown;
   scoreBreakdown?: unknown;
   band?: string | null;
@@ -566,6 +644,8 @@ async function upsertAiCallLog(opts: {
           intent_reason: opts.intentReason,
           next_action: opts.nextAction,
           scoring_version: opts.scoringVersion ?? null,
+          extraction_version: opts.extractionVersion ?? null,
+          calibration_set_hash: opts.calibrationSetHash ?? null,
           signals: opts.signals ?? null,
           score_breakdown: opts.scoreBreakdown ?? null,
           band: opts.band ?? null,
@@ -594,6 +674,8 @@ async function upsertAiCallLog(opts: {
       intent_reason: opts.intentReason,
       next_action: opts.nextAction,
       scoring_version: opts.scoringVersion ?? null,
+      extraction_version: opts.extractionVersion ?? null,
+      calibration_set_hash: opts.calibrationSetHash ?? null,
       signals: opts.signals ?? null,
       score_breakdown: opts.scoreBreakdown ?? null,
       band: opts.band ?? null,
@@ -663,6 +745,25 @@ async function markLeadNeedsReview(opts: {
   });
 
   await fetchAndPersistCallCost("bolna", opts.callId);
+
+  // A transcript exists, so the dealer WAS reached — the failure is ours, not
+  // theirs. Recorded as connected with a NULL L3, because no label in the sheet
+  // says "we don't know what was said" and every candidate would put words in
+  // the dealer's mouth. That null is also the measurement:
+  //   SELECT COUNT(*) FROM lead_touchpoints
+  //    WHERE touchpoint_type='ai_call' AND connect_status='connected'
+  //      AND disposition IS NULL
+  // is the extraction-failure rate, visible in the CRM rather than only in logs.
+  await writeAiCallTouchpoint({
+    leadId: opts.leadId,
+    provider: "bolna",
+    callId: opts.callId,
+    transcript: opts.transcript,
+    providerStatus: opts.status || "needs_review",
+    analysisFailed: true,
+    durationSec: opts.duration,
+    recordingUrl: opts.recordingUrl,
+  });
 
   const r = await completeCampaignLead({
     leadId: opts.leadId,

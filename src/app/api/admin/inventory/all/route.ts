@@ -122,7 +122,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     warehouseLocation: string | null;
     invoiceNumber: string | null;
     invoiceDate: Date | null;
-    invoiceValue: string | null;
+    baseValue: string | null;
+    priceInclusiveGst: string | null;
     supplierName: string | null;
     physicalCondition: string | null;
     oemWarrantyDate: string | null;
@@ -156,7 +157,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         warehouseLocation: inventory.warehouse_location,
         invoiceNumber: inventory.oem_invoice_number,
         invoiceDate: inventory.oem_invoice_date,
-        invoiceValue: inventory.inventory_amount,
+        baseValue: inventory.inventory_amount,
+        priceInclusiveGst: sql<string | null>`COALESCE(${inventory.price_inclusive_gst}, ${inventory.final_amount})`,
         supplierName: inventory.oem_name,
         physicalCondition: inventory.physical_condition,
         oemWarrantyDate: inventory.oem_warranty_date,
@@ -198,7 +200,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         warehouseLocation: inventory.warehouse_location,
         invoiceNumber: inventory.oem_invoice_number,
         invoiceDate: inventory.oem_invoice_date,
-        invoiceValue: inventory.inventory_amount,
+        baseValue: inventory.inventory_amount,
+        priceInclusiveGst: sql<string | null>`COALESCE(${inventory.price_inclusive_gst}, ${inventory.final_amount})`,
         supplierName: inventory.oem_name,
         physicalCondition: sql<string | null>`NULL::text`,
         oemWarrantyDate: sql<string | null>`NULL::text`,
@@ -228,7 +231,8 @@ export const GET = withErrorHandler(async (req: Request) => {
       "dealerName",
       "invoiceNumber",
       "invoiceDate",
-      "invoiceValue",
+      "baseValue",
+      "priceInclusiveGst",
       "inventoryAgeDays",
     ];
     const csvEscape = (v: unknown) => {
@@ -250,7 +254,8 @@ export const GET = withErrorHandler(async (req: Request) => {
           row.dealerName,
           row.invoiceNumber,
           row.invoiceDate ? new Date(row.invoiceDate).toISOString().slice(0, 10) : "",
-          row.invoiceValue,
+          row.baseValue,
+          row.priceInclusiveGst,
           row.inventoryAgeDays,
         ]
           .map(csvEscape)
@@ -313,7 +318,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     reservedUnits: summary.reservedUnits,
     soldUnits: summary.soldUnits,
     writtenOffUnits: summary.writtenOffUnits,
-    totalInvoiceValue: summary.stockValue,
+    totalBaseValue: summary.stockValue,
   };
 
   return successResponse({

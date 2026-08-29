@@ -1,36 +1,18 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-  useRef,
-  useDeferredValue,
-} from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   CheckCircle2,
-  ChevronLeft,
   ChevronRight,
-  Search,
   AlertCircle,
   Banknote,
-  CalendarDays,
-  Battery as BatteryIcon,
-  Plug,
   Package,
-  Sparkles,
-  Minus,
   Plus,
   RefreshCw,
   Clock,
   X,
   ShieldCheck,
-  Wallet,
-  TrendingUp,
-  ChevronDown,
-  Pencil,
 } from "lucide-react";
 
 import {
@@ -43,135 +25,34 @@ import {
   ErrorBanner,
   FullPageLoader,
 } from "@/components/dealer-portal/lead-wizard/shared";
+import {
+  CartPricingSummary,
+  ProductCartSections,
+  ProductCategoryCard,
+  inr,
+  useProductCart,
+  useProductScope,
+} from "@/components/dealer-portal/lead-wizard/product-cart";
+import type {
+  BatteryRow,
+  ChargerRow,
+  PriorSelection,
+} from "@/components/dealer-portal/lead-wizard/product-cart";
 import FinancingOffersSection from "./FinancingOffersSection";
+import NbfcDocRequestsBlock from "./NbfcDocRequestsBlock";
 
 // BRD V2 Part E §2.2 — Step 4 Product Selection (dealer side)
-// Sections:
-//   A. Category/Sub-Category
-//   B. Battery Selection (ageing-sorted)
-//   C. Charger Selection (compatibility filtered)
-//   D. Paraphernalia (count-tracked)
-//   E. Pricing & Margin
-//   F. Submit (Finance: for final approval / Cash: confirm sale)
-
-interface BatteryRow {
-  id: string;
-  serial_number: string;
-  model_name: string | null;
-  model_type: string | null;
-  product_id?: string | null;
-  invoice_date: string | null;
-  inventory_age_days: number;
-  age_badge: "fresh" | "ageing" | "old";
-  soc_percent: string | null;
-  soc_last_sync_at?: string | null;
-  status?: string | null;
-  price: number | null;
-  voltage_v?: number | null;
-  capacity_ah?: number | null;
-  warranty_months?: number | null;
-  // GST snapshot from inventory.
-  gross_amount?: string | number | null;
-  gst_percent?: string | number | null;
-  gst_amount?: string | number | null;
-  net_amount?: string | number | null;
-  recommended: boolean;
-}
-
-interface ChargerRow {
-  id: string;
-  serial_number: string;
-  model_name: string | null;
-  model_type: string | null;
-  product_id?: string | null;
-  invoice_date?: string | null;
-  inventory_age_days: number;
-  age_badge: "fresh" | "ageing" | "old";
-  status?: string | null;
-  price: number | null;
-  warranty_months?: number | null;
-  gross_amount?: string | number | null;
-  gst_percent?: string | number | null;
-  gst_amount?: string | number | null;
-  net_amount?: string | number | null;
-  recommended: boolean;
-}
-
-interface ParaRow {
-  product_id?: string | null;
-  asset_type: string;
-  model_type: string | null;
-  product_name: string | null;
-  available_qty: number;
-  unit_price: number | null;
-  unit_gross?: number | null;
-  gst_percent?: string | number | null;
-  unit_gst_amount?: number | null;
-  unit_net?: number | null;
-}
-
-/** Classify a product option by its inventory asset_type. */
-function productClass(
-  assetType: string | null | undefined,
-): "battery" | "charger" | "paraphernalia" {
-  const t = (assetType ?? "").trim().toLowerCase();
-  if (t === "battery") return "battery";
-  if (t === "charger") return "charger";
-  return "paraphernalia";
-}
-
-/** Normalise a SKU / type string for tolerant comparison. */
-function normKey(s: string | null | undefined): string {
-  return (s ?? "").trim().toLowerCase();
-}
-
-/** Dropdown label for a product type — mirrors Step 1, with the avail count. */
-function productOptionLabel(p: {
-  name: string;
-  sku: string;
-  voltage_v: number | null;
-  capacity_ah: number | null;
-  available_quantity?: number;
-}): string {
-  const base =
-    `${p.name}${p.voltage_v ? ` — ${p.voltage_v}V` : ""}` +
-    `${p.capacity_ah ? ` / ${p.capacity_ah}Ah` : ""} | SKU: ${p.sku}`;
-  const avail =
-    typeof p.available_quantity === "number"
-      ? ` · ${p.available_quantity} avail.`
-      : "";
-  const oos = p.available_quantity === 0 ? " (Out of Stock)" : "";
-  return base + avail + oos;
-}
-
-interface PriorSelection {
-  id: string;
-  battery_serial: string | null;
-  charger_serial: string | null;
-  paraphernalia: Record<string, number | string> | null;
-  paraphernalia_lines: unknown;
-  category: string | null;
-  sub_category: string | null;
-  battery_price: string | null;
-  charger_price: string | null;
-  paraphernalia_cost: string | null;
-  dealer_margin: string | null;
-  final_price: string | null;
-  battery_gross: string | null;
-  battery_gst_percent: string | null;
-  battery_gst_amount: string | null;
-  battery_net: string | null;
-  charger_gross: string | null;
-  charger_gst_percent: string | null;
-  charger_gst_amount: string | null;
-  charger_net: string | null;
-  gross_subtotal: string | null;
-  gst_subtotal: string | null;
-  net_subtotal: string | null;
-  admin_decision: string | null;
-  submitted_at: string | null;
-  pre_sanction_doc_urls?: { url: string; name: string; type: string; size: number }[] | null;
-}
+//
+// Since the Step-4/Step-5 split this page means "send this customer to the
+// lenders". For a FINANCE lead it keeps only:
+//   G. Financing Options — the 1–2 NBFC picks + customer disclosure
+//   Pre-sanction documents
+//   The Financing Offers thread once lenders respond
+//
+// Category / Product Type AND the Battery / Charger / Paraphernalia / Pricing
+// cart all moved to Step 5, where the dealer picks real stock once the lender
+// has quoted. A CASH lead still does all of it HERE, because a cash lead
+// completes at Step 4 and never reaches Step 5 (see step-5-access).
 
 interface AccessData {
   allowed: boolean;
@@ -190,19 +71,9 @@ interface AccessData {
   priorSelection?: PriorSelection | null;
 }
 
-const DRAFT_KEY = (leadId: string) => `step4-draft-${leadId}`;
-
-// Cards per page for battery / charger lists. Above this count we paginate
-// (search + filter chips remain global). Tuned for the 2-column md grid.
-const PAGE_SIZE = 12;
-
-const inrFormatter = new Intl.NumberFormat("en-IN", {
-  style: "currency",
-  currency: "INR",
-  maximumFractionDigits: 0,
-});
-
-const inr = (n: number) => inrFormatter.format(Number.isFinite(n) ? n : 0);
+// Kept byte-identical so browser drafts written before the cart extraction
+// still rehydrate. The cart hook namespaces its own key off this prefix.
+const DRAFT_KEY_PREFIX = "step4-draft";
 
 export default function ProductSelectionPage() {
   const params = useParams();
@@ -211,51 +82,6 @@ export default function ProductSelectionPage() {
 
   const [access, setAccess] = useState<AccessData | null>(null);
   const [dealerId, setDealerId] = useState<string | null>(null);
-
-  const [batteries, setBatteries] = useState<BatteryRow[]>([]);
-  const [chargers, setChargers] = useState<ChargerRow[]>([]);
-  const [paraphernalia, setParaphernalia] = useState<ParaRow[]>([]);
-
-  const [selectedBattery, setSelectedBattery] = useState<BatteryRow | null>(null);
-  const [selectedCharger, setSelectedCharger] = useState<ChargerRow | null>(null);
-  const [paraQty, setParaQty] = useState<Record<string, number>>({});
-  // Dealer margin can be entered as flat rupees OR as a % of the net subtotal.
-  // The actual rupee value is derived (see dealerMargin useMemo below) so the
-  // two inputs stay in sync with the live cart total.
-  const [marginMode, setMarginMode] = useState<"rupees" | "percent">("rupees");
-  const [marginInput, setMarginInput] = useState<string>("0");
-  const [marginPercentInput, setMarginPercentInput] = useState<string>("0");
-
-  const [batteryFilter, setBatteryFilter] = useState<"all" | "recommended" | "ageing" | "old">("all");
-  const [chargerFilter, setChargerFilter] = useState<"all" | "recommended" | "ageing" | "old">("all");
-  const [batterySearch, setBatterySearch] = useState("");
-  const [chargerSearch, setChargerSearch] = useState("");
-  const deferredBatterySearch = useDeferredValue(batterySearch);
-  const deferredChargerSearch = useDeferredValue(chargerSearch);
-  const [batteryPage, setBatteryPage] = useState(1);
-  const [chargerPage, setChargerPage] = useState(1);
-  const [batteriesLoading, setBatteriesLoading] = useState(false);
-  const [chargersLoading, setChargersLoading] = useState(false);
-
-  // Section A — editable Category / Product Type. Lists feed the dropdowns.
-  // Edits PATCH the lead row, so the change propagates back to Step 1.
-  type CatOption = { id: string; name: string; slug: string; available_count?: number };
-  type ProdOption = {
-    id: string;
-    name: string;
-    sku: string;
-    asset_type: string;
-    voltage_v: number | null;
-    capacity_ah: number | null;
-    warranty_months?: number | null;
-    available_quantity?: number;
-  };
-  const [categories, setCategories] = useState<CatOption[]>([]);
-  const [productsList, setProductsList] = useState<ProdOption[]>([]);
-  // Extra "Add Another Product" rows — narrow the inventory card sections to
-  // the chosen product types. Client-side filter scope (localStorage-persisted).
-  const [extraProductIds, setExtraProductIds] = useState<string[]>([]);
-  const [savingCategory, setSavingCategory] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -267,15 +93,6 @@ export default function ProductSelectionPage() {
   }>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
-
-  // E-130 / Addendum V0.1 §5.1 — dealer-captured product photos. Each upload
-  // returns a public URL that's pushed into the corresponding array; the
-  // arrays are sent with the submit payload. Stored as JSON on
-  // product_selections.battery_photo_urls / charger_photo_urls.
-  const [batteryPhotoUrls, setBatteryPhotoUrls] = useState<string[]>([]);
-  const [chargerPhotoUrls, setChargerPhotoUrls] = useState<string[]>([]);
-  const [photoUploading, setPhotoUploading] = useState<string | null>(null);
-  const [photoError, setPhotoError] = useState<string | null>(null);
 
   // E-208 — Step-4 pre-sanction document bucket (≤10 items, all formats). Items
   // are uploaded immediately and held here; sent with the submit / draft payload
@@ -313,8 +130,60 @@ export default function ProductSelectionPage() {
   const [selectedNbfcs, setSelectedNbfcs] = useState<{ nbfc_id: string; loan_product_id: number }[]>([]);
   const [customerDisclosureAck, setCustomerDisclosureAck] = useState(false);
 
-  const draftRestoredRef = useRef(false);
-  const extraProductsRestoredRef = useRef(false);
+  const preSanctionRestoredRef = useRef(false);
+
+  // Refetch step-4-access so categoryName / productTypeName / productId
+  // re-resolve on the page after a Section A edit.
+  const refetchAccess = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/lead/${leadId}/step-4-access`);
+      const json = await res.json();
+      if (json.success) setAccess(json.data);
+    } catch {
+      setError("Failed to refresh lead context");
+    }
+  }, [leadId]);
+
+  // The scope narrows the cart, and a category change clears the cart — so the
+  // two reference each other. The ref breaks the cycle: the scope hook is
+  // declared first and reaches the cart's reset indirectly.
+  const resetCartRef = useRef<() => void>(() => {});
+
+  // Category / Product Type. Cash only — a finance lead sets these on Step 5.
+  const scope = useProductScope({
+    leadId,
+    category: access?.category ?? null,
+    productId: access?.productId ?? null,
+    refetchLead: refetchAccess,
+    onSelectionInvalidated: () => resetCartRef.current(),
+    onError: setError,
+  });
+
+  // ── The product cart ────────────────────────────────────────────────
+  // Cash leads pick their category and stock here (they complete at Step 4 and
+  // never see Step 5). Finance leads do both on Step 5 once a lender has
+  // quoted, so the hook gets a null dealerId and never fetches inventory here.
+  const isCash = access?.paymentMode === "cash";
+  const cart = useProductCart({
+    leadId,
+    dealerId: isCash ? dealerId : null,
+    category: access?.category ?? null,
+    scopeProducts: scope.selectedProducts,
+    prior: (access?.priorSelection as PriorSelection | null) ?? null,
+    readOnly: !!access?.readOnly,
+    includeSerials: {
+      battery: access?.priorSelection?.battery_serial ?? null,
+      charger: access?.priorSelection?.charger_serial ?? null,
+    },
+    draftKeyPrefix: DRAFT_KEY_PREFIX,
+    onError: setError,
+  });
+  const { selectedBattery, selectedCharger, resetSelection } = cart;
+
+  useEffect(() => {
+    resetCartRef.current = resetSelection;
+  }, [resetSelection]);
+
 
   // ── Load access + dealer id ─────────────────────────────────────────
   useEffect(() => {
@@ -348,626 +217,19 @@ export default function ProductSelectionPage() {
     };
   }, [leadId, router]);
 
-  // ── Load Category list once for the editable dropdown ───────────────
-  // Uses the dealer-scoped, canonicalized list so Step 4 mirrors Step 1.
+  // ── Restore the pre-sanction bucket from the submitted selection ─────
+  // The cart's own state (serials, quantities, margin, photos) rehydrates
+  // inside useProductCart; this bucket stays here because it belongs to the
+  // finance section, not the cart.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/dealer/leads/categories");
-        const json = await res.json();
-        if (cancelled) return;
-        if (json.success) setCategories(json.data || []);
-      } catch {
-        // non-fatal — Section A just falls back to read-only display.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // ── Load Product Type list whenever the active category changes ──────
-  useEffect(() => {
-    let cancelled = false;
-    if (!access?.category) {
-      setProductsList([]);
-      return;
+    if (preSanctionRestoredRef.current) return;
+    if (!access?.allowed) return;
+    const prior = access.priorSelection;
+    if (prior && Array.isArray(prior.pre_sanction_doc_urls)) {
+      setPreSanctionDocs(prior.pre_sanction_doc_urls);
     }
-    // Prefer matching by canonical UUID (new leads). Fall back to slug match
-    // for leads created during the brief window when slug was stored in
-    // product_category_id by mistake.
-    const cat =
-      categories.find((c) => c.id === access.category) ??
-      categories.find((c) => c.slug === access.category);
-    if (!cat) return; // wait for categories to arrive
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/dealer/leads/products?category=${encodeURIComponent(cat.slug)}`,
-        );
-        const json = await res.json();
-        if (cancelled) return;
-        if (json.success) setProductsList(json.data || []);
-      } catch {
-        // non-fatal
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [access?.category, categories]);
-
-  // Refetch step-4-access so categoryName / productTypeName / productId
-  // re-resolve on the page after a Section A edit.
-  const refetchAccess = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/lead/${leadId}/step-4-access`);
-      const json = await res.json();
-      if (json.success) setAccess(json.data);
-    } catch {
-      setError("Failed to refresh lead context");
-    }
-  }, [leadId]);
-
-  // PATCH the lead with new category/product. Per BRD §3077–3080, switching
-  // category clears any previously chosen battery / charger / paraphernalia
-  // (their compatibility no longer holds).
-  const patchLead = useCallback(
-    async (body: {
-      product_category_id?: string;
-      primary_product_id?: string | null;
-    }) => {
-      const res = await fetch(`/api/dealer/leads/${leadId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = await res.json();
-      if (!json.success) {
-        throw new Error(json.error?.message || "Failed to update lead");
-      }
-    },
-    [leadId],
-  );
-
-  const handleCategoryChange = useCallback(
-    async (newCategoryId: string) => {
-      if (!newCategoryId || newCategoryId === access?.category) return;
-      setSavingCategory(true);
-      try {
-        // Changing category invalidates the previously picked product.
-        await patchLead({
-          product_category_id: newCategoryId,
-          primary_product_id: null,
-        });
-        setSelectedBattery(null);
-        setSelectedCharger(null);
-        setParaQty({});
-        await refetchAccess();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to update category");
-      } finally {
-        setSavingCategory(false);
-      }
-    },
-    [access?.category, patchLead, refetchAccess],
-  );
-
-  const handleProductChange = useCallback(
-    async (newProductId: string) => {
-      if (!newProductId || newProductId === access?.productId) return;
-      setSavingCategory(true);
-      try {
-        await patchLead({ primary_product_id: newProductId });
-        // Different product → previous battery serial is no longer valid.
-        setSelectedBattery(null);
-        setSelectedCharger(null);
-        await refetchAccess();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to update product type");
-      } finally {
-        setSavingCategory(false);
-      }
-    },
-    [access?.productId, patchLead, refetchAccess],
-  );
-
-  // ── Load battery + paraphernalia inventory once dealer ready ─────────
-  const loadBatteriesAndPara = useCallback(async () => {
-    if (!dealerId || !access?.allowed) return;
-    setBatteriesLoading(true);
-    try {
-      const batQs = new URLSearchParams();
-      if (access.category) batQs.set("category", access.category);
-      // Step 4 lists every available battery in the category so the dealer can
-      // pick — it is NOT narrowed to the Step-1 product type (which may be a
-      // charger/paraphernalia).
-      const paraQs = new URLSearchParams();
-      if (access.category) paraQs.set("category", access.category);
-
-      const [batRes, paraRes] = await Promise.all([
-        fetch(`/api/inventory/dealer/${dealerId}/batteries?${batQs.toString()}`),
-        fetch(`/api/inventory/dealer/${dealerId}/paraphernalia?${paraQs.toString()}`),
-      ]);
-      const batJson = await batRes.json();
-      const paraJson = await paraRes.json();
-      if (batJson.success) setBatteries(batJson.data || []);
-      if (paraJson.success) setParaphernalia(paraJson.data || []);
-    } catch {
-      setError("Failed to load inventory");
-    } finally {
-      setBatteriesLoading(false);
-    }
-  }, [dealerId, access]);
-
-  useEffect(() => {
-    void loadBatteriesAndPara();
-  }, [loadBatteriesAndPara]);
-
-  // ── Hydrate prior selection (server-side first, then localStorage) ───
-  // Server-side (productSelections) is the source of truth once the dealer
-  // has submitted Step 4 — those choices must persist across devices,
-  // browsers, incognito sessions and cache clears. localStorage is only a
-  // fallback for in-progress drafts that were never submitted.
-  useEffect(() => {
-    if (draftRestoredRef.current) return;
-    if (!batteries.length || !access?.allowed) return;
-    try {
-      const prior = access.priorSelection;
-      if (prior) {
-        const b = batteries.find((x) => x.serial_number === prior.battery_serial);
-        if (b) setSelectedBattery(b);
-        const para = prior.paraphernalia as Record<string, number | string> | null;
-        if (para && typeof para === "object") {
-          const normalised: Record<string, number> = {};
-          for (const [k, v] of Object.entries(para)) {
-            const n = Number(v);
-            if (Number.isFinite(n) && n > 0) normalised[k] = n;
-          }
-          if (Object.keys(normalised).length > 0) setParaQty(normalised);
-        }
-        if (prior.dealer_margin) {
-          setMarginMode("rupees");
-          setMarginInput(String(prior.dealer_margin));
-        }
-        if (prior.submitted_at) {
-          setLastSaved(formatLastSaved(new Date(prior.submitted_at)));
-        }
-        // E-208 — restore the pre-sanction bucket.
-        if (Array.isArray(prior.pre_sanction_doc_urls)) {
-          setPreSanctionDocs(prior.pre_sanction_doc_urls);
-        }
-        draftRestoredRef.current = true;
-        return;
-      }
-
-      const raw = localStorage.getItem(DRAFT_KEY(leadId));
-      if (!raw) {
-        draftRestoredRef.current = true;
-        return;
-      }
-      const draft = JSON.parse(raw) as {
-        batterySerial?: string;
-        chargerSerial?: string;
-        paraQty?: Record<string, number>;
-        dealerMargin?: number;
-        marginMode?: "rupees" | "percent";
-        marginInput?: string;
-        marginPercentInput?: string;
-        savedAt?: string;
-      };
-      const b = batteries.find((x) => x.serial_number === draft.batterySerial);
-      if (b) setSelectedBattery(b);
-      if (draft.paraQty) setParaQty(draft.paraQty);
-      if (draft.marginMode === "percent" || draft.marginMode === "rupees") {
-        setMarginMode(draft.marginMode);
-      }
-      if (typeof draft.marginInput === "string") {
-        setMarginInput(draft.marginInput);
-      } else if (typeof draft.dealerMargin === "number") {
-        // legacy drafts (rupees-only)
-        setMarginInput(String(draft.dealerMargin));
-      }
-      if (typeof draft.marginPercentInput === "string") {
-        setMarginPercentInput(draft.marginPercentInput);
-      }
-      if (draft.savedAt) setLastSaved(formatLastSaved(new Date(draft.savedAt)));
-    } catch {
-      // ignore corrupted draft
-    } finally {
-      draftRestoredRef.current = true;
-    }
-  }, [batteries, access, leadId]);
-
-  // ── Restore / persist the Step-4 additional product-type filter ──────
-  // Client-side only (localStorage) — same as Step 1's "Add Another Product".
-  useEffect(() => {
-    if (extraProductsRestoredRef.current) return;
-    try {
-      const raw = localStorage.getItem(`step4-extra-products:${leadId}`);
-      if (raw) {
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) {
-          setExtraProductIds(arr.filter((x): x is string => typeof x === "string"));
-        }
-      }
-    } catch {
-      // ignore corrupted value
-    }
-    extraProductsRestoredRef.current = true;
-  }, [leadId]);
-
-  useEffect(() => {
-    if (!extraProductsRestoredRef.current) return;
-    try {
-      localStorage.setItem(
-        `step4-extra-products:${leadId}`,
-        JSON.stringify(extraProductIds),
-      );
-    } catch {
-      // ignore storage quota / private-mode errors
-    }
-  }, [extraProductIds, leadId]);
-
-  // ── Load chargers once a battery is selected ────────────────────────
-  useEffect(() => {
-    if (!dealerId || !selectedBattery) {
-      setChargers([]);
-      setSelectedCharger(null);
-      return;
-    }
-    let cancelled = false;
-    setChargersLoading(true);
-    (async () => {
-      try {
-        const qs = new URLSearchParams();
-        if (access?.category) qs.set("category", access.category);
-        // Pragmatic compatibility filter: only chargers whose voltage matches
-        // the selected battery's voltage are considered safe to pair.
-        if (selectedBattery?.voltage_v) {
-          qs.set("batteryVoltage", String(selectedBattery.voltage_v));
-        }
-        const res = await fetch(`/api/inventory/dealer/${dealerId}/chargers?${qs.toString()}`);
-        const json = await res.json();
-        if (cancelled) return;
-        if (json.success) {
-          setChargers(json.data || []);
-          // Restore selected charger — prefer the server-side priorSelection
-          // (the canonical record once the dealer has submitted) and fall back
-          // to localStorage drafts for unsubmitted in-progress sessions.
-          try {
-            const priorChargerSerial = access?.priorSelection?.charger_serial ?? null;
-            let serial: string | null = priorChargerSerial;
-            if (!serial) {
-              const raw = localStorage.getItem(DRAFT_KEY(leadId));
-              if (raw) {
-                const draft = JSON.parse(raw) as { chargerSerial?: string };
-                serial = draft.chargerSerial ?? null;
-              }
-            }
-            if (serial) {
-              const c = (json.data || []).find(
-                (x: ChargerRow) => x.serial_number === serial,
-              );
-              if (c) setSelectedCharger(c);
-            }
-          } catch {
-            // ignore
-          }
-        }
-      } catch {
-        if (!cancelled) setError("Failed to load chargers");
-      } finally {
-        if (!cancelled) setChargersLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [dealerId, selectedBattery, access, leadId]);
-
-  // ── Pricing calculations (per-line gross/GST/net + totals) ──────────
-  const batteryPriceTriple = useMemo(() => triple(selectedBattery), [selectedBattery]);
-  const chargerPriceTriple = useMemo(() => triple(selectedCharger), [selectedCharger]);
-
-  const paraLines = useMemo(() => {
-    return paraphernalia
-      .map((p) => {
-        const qty = paraQty[paraKey(p)] || 0;
-        const unitGross = Number(p.unit_gross ?? p.unit_price ?? 0);
-        const gstPct = Number(p.gst_percent ?? 0);
-        const unitGstAmt =
-          Number(p.unit_gst_amount) || Math.round((unitGross * gstPct) / 100);
-        const unitNet = Number(p.unit_net) || unitGross + unitGstAmt;
-        return {
-          asset_type: p.asset_type,
-          model_type: p.model_type,
-          product_name: p.product_name,
-          product_id: p.product_id ?? null,
-          qty,
-          unit_gross: unitGross,
-          gst_percent: gstPct,
-          gst_amount: unitGstAmt,
-          unit_net: unitNet,
-          line_gross: qty * unitGross,
-          line_gst: qty * unitGstAmt,
-          line_net: qty * unitNet,
-        };
-      })
-      .filter((l) => l.qty > 0);
-  }, [paraphernalia, paraQty]);
-
-  const paraCost = useMemo(
-    () => paraLines.reduce((s, l) => s + l.line_net, 0),
-    [paraLines],
-  );
-  const paraGross = useMemo(
-    () => paraLines.reduce((s, l) => s + l.line_gross, 0),
-    [paraLines],
-  );
-  const paraGst = useMemo(
-    () => paraLines.reduce((s, l) => s + l.line_gst, 0),
-    [paraLines],
-  );
-
-  const grossSubtotal =
-    batteryPriceTriple.gross + chargerPriceTriple.gross + paraGross;
-  const gstSubtotal =
-    batteryPriceTriple.gst + chargerPriceTriple.gst + paraGst;
-  const netSubtotal =
-    batteryPriceTriple.net + chargerPriceTriple.net + paraCost;
-
-  // Backward-compat aliases used by existing UI fragments.
-  const batteryPrice = batteryPriceTriple.net;
-  const chargerPrice = chargerPriceTriple.net;
-
-  // Effective margin in rupees. In percent mode it's a live function of
-  // netSubtotal so changing the cart auto-updates the margin amount.
-  const dealerMargin = useMemo(() => {
-    if (marginMode === "percent") {
-      const p = parseFloat(marginPercentInput);
-      if (!Number.isFinite(p) || p < 0) return 0;
-      return Math.round((netSubtotal * p) / 100);
-    }
-    const r = parseFloat(marginInput);
-    return Number.isFinite(r) && r >= 0 ? r : 0;
-  }, [marginMode, marginPercentInput, marginInput, netSubtotal]);
-
-  const finalPrice = netSubtotal + Number(dealerMargin || 0);
-
-  // ── Display pricing (read-only fallback to the submitted snapshot) ───
-  // On submit the battery/charger are RESERVED and drop out of the
-  // available-inventory list, so once the lead is read-only the cart can no
-  // longer rehydrate and the live-computed pricing above collapses to 0. Fall
-  // back to the snapshot captured at submit (access.priorSelection) so the
-  // Pricing card always shows exactly what the dealer submitted.
-  const prior = access?.priorSelection ?? null;
-  const usePriorPricing = !!access?.readOnly && !!prior;
-  const toNum = (v: string | null | undefined): number => {
-    const x = Number(v);
-    return Number.isFinite(x) ? x : 0;
-  };
-  const dispBatteryPrice = usePriorPricing ? toNum(prior!.battery_net ?? prior!.battery_price) : batteryPrice;
-  const dispChargerPrice = usePriorPricing ? toNum(prior!.charger_net ?? prior!.charger_price) : chargerPrice;
-  const dispParaCost = usePriorPricing ? toNum(prior!.paraphernalia_cost) : paraCost;
-  const dispGrossSubtotal = usePriorPricing ? toNum(prior!.gross_subtotal) : grossSubtotal;
-  const dispGstSubtotal = usePriorPricing ? toNum(prior!.gst_subtotal) : gstSubtotal;
-  const dispNetSubtotal = usePriorPricing ? toNum(prior!.net_subtotal) : netSubtotal;
-  const dispDealerMargin = usePriorPricing ? toNum(prior!.dealer_margin) : dealerMargin;
-  const dispFinalPrice = usePriorPricing ? toNum(prior!.final_price) : finalPrice;
-
-  // ── Product-type scope ──────────────────────────────────────────────
-  // The primary Product Type + any "Add Another Product" rows narrow the
-  // Battery / Charger / Paraphernalia card sections to just those products'
-  // available stock. Empty scope ⇒ no narrowing (every section lists all).
-  const selectedProducts = useMemo(() => {
-    const ids = [access?.productId, ...extraProductIds].filter(
-      (id): id is string => !!id,
-    );
-    const seen = new Set<string>();
-    const out: ProdOption[] = [];
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const p = productsList.find((x) => x.id === id);
-      if (p) out.push(p);
-    }
-    return out;
-  }, [access?.productId, extraProductIds, productsList]);
-
-  const batterySkus = useMemo(
-    () =>
-      new Set(
-        selectedProducts
-          .filter((p) => productClass(p.asset_type) === "battery")
-          .map((p) => normKey(p.sku)),
-      ),
-    [selectedProducts],
-  );
-  const chargerSkus = useMemo(
-    () =>
-      new Set(
-        selectedProducts
-          .filter((p) => productClass(p.asset_type) === "charger")
-          .map((p) => normKey(p.sku)),
-      ),
-    [selectedProducts],
-  );
-  // Stable product-id scope keys. products.sku and inventory.model_type diverge
-  // in real data (sku is set on the products row, model_type on the inventory
-  // row), which silently emptied the scoped list. Matching inventory.product_id
-  // against the selected products' ids is exact; the SKU sets stay as a fallback
-  // for inventory rows that have no product_id (they were resolved by SKU).
-  const batteryProductIds = useMemo(
-    () =>
-      new Set(
-        selectedProducts
-          .filter((p) => productClass(p.asset_type) === "battery")
-          .map((p) => p.id),
-      ),
-    [selectedProducts],
-  );
-  const chargerProductIds = useMemo(
-    () =>
-      new Set(
-        selectedProducts
-          .filter((p) => productClass(p.asset_type) === "charger")
-          .map((p) => p.id),
-      ),
-    [selectedProducts],
-  );
-  const paraTypes = useMemo(
-    () =>
-      new Set(
-        selectedProducts
-          .filter((p) => productClass(p.asset_type) === "paraphernalia")
-          .map((p) => normKey(p.asset_type)),
-      ),
-    [selectedProducts],
-  );
-
-  const scopedBatteries = useMemo(
-    () =>
-      batterySkus.size === 0 && batteryProductIds.size === 0
-        ? batteries
-        : batteries.filter(
-            (b) =>
-              (b.product_id != null && batteryProductIds.has(b.product_id)) ||
-              batterySkus.has(normKey(b.model_type)),
-          ),
-    [batteries, batterySkus, batteryProductIds],
-  );
-  const scopedChargers = useMemo(
-    () =>
-      chargerSkus.size === 0 && chargerProductIds.size === 0
-        ? chargers
-        : chargers.filter(
-            (c) =>
-              (c.product_id != null && chargerProductIds.has(c.product_id)) ||
-              chargerSkus.has(normKey(c.model_type)),
-          ),
-    [chargers, chargerSkus, chargerProductIds],
-  );
-  const scopedParaphernalia = useMemo(
-    () =>
-      paraTypes.size === 0
-        ? paraphernalia
-        : paraphernalia.filter((p) => paraTypes.has(normKey(p.asset_type))),
-    [paraphernalia, paraTypes],
-  );
-
-  // ── Filter battery list ─────────────────────────────────────────────
-  // Apply age-bucket filter first, then case-insensitive substring search
-  // against serial / model / model_type. Pagination slices the result.
-  const filteredBatteries = useMemo(() => {
-    const byBucket = (() => {
-      switch (batteryFilter) {
-        case "recommended":
-          return scopedBatteries.filter((b) => b.recommended);
-        case "ageing":
-          return scopedBatteries.filter((b) => b.age_badge === "ageing");
-        case "old":
-          return scopedBatteries.filter((b) => b.age_badge === "old");
-        default:
-          return scopedBatteries;
-      }
-    })();
-    const q = deferredBatterySearch.trim().toLowerCase();
-    if (!q) return byBucket;
-    return byBucket.filter((b) => {
-      const hay = [b.serial_number, b.model_name, b.model_type]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
-    });
-  }, [scopedBatteries, batteryFilter, deferredBatterySearch]);
-
-  const ageingCount = scopedBatteries.filter((b) => b.age_badge === "ageing").length;
-  const oldCount = scopedBatteries.filter((b) => b.age_badge === "old").length;
-  const recommendedCount = scopedBatteries.filter((b) => b.recommended).length;
-
-  // ── Filter charger list (mirrors battery: chips + search) ────────────
-  const filteredChargers = useMemo(() => {
-    const byBucket = (() => {
-      switch (chargerFilter) {
-        case "recommended":
-          return scopedChargers.filter((c) => c.recommended);
-        case "ageing":
-          return scopedChargers.filter((c) => c.age_badge === "ageing");
-        case "old":
-          return scopedChargers.filter((c) => c.age_badge === "old");
-        default:
-          return scopedChargers;
-      }
-    })();
-    const q = deferredChargerSearch.trim().toLowerCase();
-    if (!q) return byBucket;
-    return byBucket.filter((c) => {
-      const hay = [c.serial_number, c.model_name, c.model_type]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
-    });
-  }, [scopedChargers, chargerFilter, deferredChargerSearch]);
-
-  const chargerAgeingCount = scopedChargers.filter((c) => c.age_badge === "ageing").length;
-  const chargerOldCount = scopedChargers.filter((c) => c.age_badge === "old").length;
-  const chargerRecommendedCount = scopedChargers.filter((c) => c.recommended).length;
-
-  // ── Pagination slices ───────────────────────────────────────────────
-  const batteryPageCount = Math.max(1, Math.ceil(filteredBatteries.length / PAGE_SIZE));
-  const chargerPageCount = Math.max(1, Math.ceil(filteredChargers.length / PAGE_SIZE));
-  const safeBatteryPage = Math.min(batteryPage, batteryPageCount);
-  const safeChargerPage = Math.min(chargerPage, chargerPageCount);
-  const paginatedBatteries = useMemo(
-    () =>
-      filteredBatteries.slice(
-        (safeBatteryPage - 1) * PAGE_SIZE,
-        safeBatteryPage * PAGE_SIZE,
-      ),
-    [filteredBatteries, safeBatteryPage],
-  );
-  const paginatedChargers = useMemo(
-    () =>
-      filteredChargers.slice(
-        (safeChargerPage - 1) * PAGE_SIZE,
-        safeChargerPage * PAGE_SIZE,
-      ),
-    [filteredChargers, safeChargerPage],
-  );
-
-  // Reset to page 1 when filters/search change or the underlying list reloads.
-  useEffect(() => {
-    setBatteryPage(1);
-  }, [batteryFilter, deferredBatterySearch, scopedBatteries.length]);
-  useEffect(() => {
-    setChargerPage(1);
-  }, [chargerFilter, deferredChargerSearch, scopedChargers.length]);
-
-  // Drop a battery/charger pick that the active product-type scope excludes.
-  // The scope is active when either key set is non-empty (mirrors the
-  // scopedBatteries/scopedChargers guard above).
-  useEffect(() => {
-    if (
-      (batterySkus.size > 0 || batteryProductIds.size > 0) &&
-      selectedBattery &&
-      !scopedBatteries.some((b) => b.id === selectedBattery.id)
-    ) {
-      setSelectedBattery(null);
-    }
-  }, [scopedBatteries, batterySkus, batteryProductIds, selectedBattery]);
-  useEffect(() => {
-    if (
-      (chargerSkus.size > 0 || chargerProductIds.size > 0) &&
-      selectedCharger &&
-      !scopedChargers.some((c) => c.id === selectedCharger.id)
-    ) {
-      setSelectedCharger(null);
-    }
-  }, [scopedChargers, chargerSkus, chargerProductIds, selectedCharger]);
+    preSanctionRestoredRef.current = true;
+  }, [access]);
 
   // ── Submit gating ───────────────────────────────────────────────────
   // Charger is optional — a battery-only sale (with or without paraphernalia)
@@ -982,28 +244,22 @@ export default function ProductSelectionPage() {
     return true;
   }, [isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
 
+  // A battery is required only for cash, where this page IS the sale. A
+  // finance lead is going out for an offer, not shipping anything yet — the
+  // serial is picked on Step 5.
   const pendingRequirements = useMemo(() => {
     const list: string[] = [];
-    if (!selectedBattery) list.push("Battery serial");
+    if (isCash && !selectedBattery) list.push("Battery serial");
     if (isFinanceLead && selectedNbfcs.length < 1) list.push("Pick 1 or 2 NBFCs in Section G");
     if (isFinanceLead && !customerDisclosureAck) list.push("Confirm the customer disclosure in Section G");
     return list;
-  }, [selectedBattery, isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
+  }, [isCash, selectedBattery, isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
 
   const canSubmit =
-    !!selectedBattery &&
+    (!isCash || !!selectedBattery) &&
     !submitting &&
     !access?.readOnly &&
     sectionGSatisfied;
-
-  const paramList = useMemo(() => {
-    const result: Record<string, number | string> = {};
-    paraphernalia.forEach((p) => {
-      const k = paraKey(p);
-      if (paraQty[k] > 0) result[k] = paraQty[k];
-    });
-    return result;
-  }, [paraphernalia, paraQty]);
 
   // ── Section G — load BRE-matched NBFCs (Addendum §5.2). Stub returns all
   //    of the dealer's assigned NBFCs with active loan products. Phase 3
@@ -1063,44 +319,6 @@ export default function ProductSelectionPage() {
       });
     },
     [],
-  );
-
-  // ── Product photo upload (Addendum §5.1) ─────────────────────────────
-  // POSTs the file to /api/lead/[id]/product-photo; on success appends the
-  // returned URL to the right array. label is a short slug used in the
-  // storage path so admins/NBFCs can tell serial vs unit photos apart.
-  const uploadProductPhoto = useCallback(
-    async (kind: "battery" | "charger", label: string, file: File) => {
-      setPhotoError(null);
-      const tag = `${kind}:${label}`;
-      setPhotoUploading(tag);
-      try {
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("kind", kind);
-        fd.append("label", label);
-        const res = await fetch(`/api/lead/${leadId}/product-photo`, {
-          method: "POST",
-          body: fd,
-        });
-        const json = await res.json();
-        if (!res.ok || !json.success) {
-          throw new Error(json?.error?.message || "Upload failed");
-        }
-        const url = json.data.url as string;
-        if (kind === "battery") {
-          setBatteryPhotoUrls((prev) => [...prev, url]);
-        } else {
-          setChargerPhotoUrls((prev) => [...prev, url]);
-        }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Upload failed";
-        setPhotoError(message);
-      } finally {
-        setPhotoUploading(null);
-      }
-    },
-    [leadId],
   );
 
   // E-208/E-209 — persist the current pre-sanction bucket to
@@ -1163,8 +381,9 @@ export default function ProductSelectionPage() {
 
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!canSubmit || !selectedBattery) return;
-    if (access?.paymentMode === "cash") {
+    if (!canSubmit) return;
+    if (isCash) {
+      if (!selectedBattery) return;
       setConfirmOpen(true);
       return;
     }
@@ -1175,33 +394,13 @@ export default function ProductSelectionPage() {
     setSubmitting(true);
     setError(null);
     try {
+      // The cart contributes serials, the GST snapshot and the totals. On a
+      // finance lead it is empty — that is the point of the split; the API
+      // accepts a submission with no product on it.
       const body = {
-        batterySerial: selectedBattery!.serial_number,
-        chargerSerial: selectedCharger?.serial_number ?? null,
-        paraphernalia: paramList,
-        paraphernaliaLines: paraLines,
-        dealerMargin: Number(dealerMargin || 0),
-        finalPrice,
-        batteryPrice,
-        chargerPrice,
-        paraphernaliaCost: paraCost,
-        // GST snapshot — captured exactly as displayed.
-        batteryGross: batteryPriceTriple.gross,
-        batteryGstPercent: batteryPriceTriple.gstPct,
-        batteryGstAmount: batteryPriceTriple.gst,
-        batteryNet: batteryPriceTriple.net,
-        chargerGross: chargerPriceTriple.gross,
-        chargerGstPercent: chargerPriceTriple.gstPct,
-        chargerGstAmount: chargerPriceTriple.gst,
-        chargerNet: chargerPriceTriple.net,
-        grossSubtotal,
-        gstSubtotal,
-        netSubtotal,
+        ...cart.toSubmitPayload(),
         category: access?.category ?? undefined,
         productId: access?.productId ?? undefined,
-        // E-130 / Addendum V0.1 §5.1
-        batteryPhotoUrls,
-        chargerPhotoUrls,
         // E-130 / Addendum V0.1 §5.2, §5.3 — finance-only.
         ...(mode === "finance"
           ? {
@@ -1228,11 +427,7 @@ export default function ProductSelectionPage() {
       if (json.success) {
         setSubmitted(json.data);
         setConfirmOpen(false);
-        try {
-          localStorage.removeItem(DRAFT_KEY(leadId));
-        } catch {
-          // ignore
-        }
+        cart.clearLocalDraft();
       } else {
         setError(json.error?.message || "Submit failed");
       }
@@ -1246,48 +441,14 @@ export default function ProductSelectionPage() {
   const handleSaveDraft = async () => {
     // Local snapshot first — keeps the page hydrated on reload without a
     // round-trip and survives offline.
-    try {
-      const localPayload = {
-        batterySerial: selectedBattery?.serial_number ?? null,
-        chargerSerial: selectedCharger?.serial_number ?? null,
-        paraQty,
-        dealerMargin,
-        marginMode,
-        marginInput,
-        marginPercentInput,
-        savedAt: new Date().toISOString(),
-      };
-      localStorage.setItem(DRAFT_KEY(leadId), JSON.stringify(localPayload));
-      setLastSaved(formatLastSaved(new Date()));
-    } catch {
-      // ignore storage quota / private-mode errors
-    }
+    setLastSaved(cart.saveLocalDraft());
 
     // Server persist — this is what makes the lead show up in /My Drafts.
     // Mirrors the submit body shape, but every field is optional on the API
     // so partial drafts work.
     try {
       const body: Record<string, unknown> = {
-        batterySerial: selectedBattery?.serial_number ?? null,
-        chargerSerial: selectedCharger?.serial_number ?? null,
-        paraphernalia: paramList,
-        paraphernaliaLines: paraLines,
-        dealerMargin: Number(dealerMargin || 0),
-        finalPrice,
-        batteryPrice,
-        chargerPrice,
-        paraphernaliaCost: paraCost,
-        batteryGross: batteryPriceTriple.gross,
-        batteryGstPercent: batteryPriceTriple.gstPct,
-        batteryGstAmount: batteryPriceTriple.gst,
-        batteryNet: batteryPriceTriple.net,
-        chargerGross: chargerPriceTriple.gross,
-        chargerGstPercent: chargerPriceTriple.gstPct,
-        chargerGstAmount: chargerPriceTriple.gst,
-        chargerNet: chargerPriceTriple.net,
-        grossSubtotal,
-        gstSubtotal,
-        netSubtotal,
+        ...cart.toSubmitPayload(),
         category: access?.category ?? undefined,
         subCategory: access?.productId ?? undefined,
         // E-208 — persist the pre-sanction bucket across Save Draft.
@@ -1339,28 +500,28 @@ export default function ProductSelectionPage() {
     );
 
   if (submitted) {
-    const isCash = submitted.leadStatus === "sold";
+    const soldOutright = submitted.leadStatus === "sold";
     return (
       <div className="min-h-screen bg-[#F8F9FB] flex items-center justify-center p-6">
         <div className="bg-white rounded-3xl border border-gray-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] max-w-xl w-full p-10 text-center">
           <div
             className={`w-20 h-20 mx-auto mb-6 rounded-full flex items-center justify-center ${
-              isCash ? "bg-emerald-50" : "bg-blue-50"
+              soldOutright ? "bg-emerald-50" : "bg-blue-50"
             }`}
           >
-            {isCash ? (
+            {soldOutright ? (
               <CheckCircle2 className="w-12 h-12 text-emerald-600" />
             ) : (
               <Clock className="w-12 h-12 text-[#0047AB]" />
             )}
           </div>
           <h2 className="text-2xl font-black text-gray-900 tracking-tight">
-            {isCash ? "Sale Confirmed" : "Submitted for Final Approval"}
+            {soldOutright ? "Sale Confirmed" : "Sent to NBFC"}
           </h2>
           <p className="text-sm text-gray-500 mt-3 leading-relaxed max-w-sm mx-auto">
-            {isCash
+            {soldOutright
               ? `Inventory marked SOLD and warranty activated for lead ${leadId}.`
-              : "Admin will review your submission and respond with the loan decision. You'll be notified."}
+              : "The selected lender(s) will review this customer and come back with an offer. You'll be notified — then pick the battery and dispatch on Step 5."}
           </p>
           {submitted.warrantyId && (
             <div className="mt-6 inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-full">
@@ -1388,8 +549,6 @@ export default function ProductSelectionPage() {
     );
   }
 
-  const paymentMode = access.paymentMode || "finance";
-  const isCash = paymentMode === "cash";
   const subtitleParts = [`Lead #${leadId}`];
   if (access.customerName) subtitleParts.push(access.customerName);
 
@@ -1410,12 +569,17 @@ export default function ProductSelectionPage() {
           onStepClick={handleStepClick}
           rightAction={
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => loadBatteriesAndPara()}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold text-gray-700"
-              >
-                <RefreshCw className={`w-4 h-4 ${batteriesLoading ? "animate-spin" : ""}`} /> Refresh
-              </button>
+              {isCash && (
+                <button
+                  onClick={() => cart.reload()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold text-gray-700"
+                >
+                  <RefreshCw
+                    className={`w-4 h-4 ${cart.batteryList.loading ? "animate-spin" : ""}`}
+                  />{" "}
+                  Refresh
+                </button>
+              )}
               <span
                 className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border ${
                   isCash
@@ -1460,394 +624,23 @@ export default function ProductSelectionPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-8 space-y-6">
-            {/* Section A — Category & Product Type (editable; mirrors Step 1) */}
-            <SectionCard title="Category">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {access.readOnly ? (
-                  <ReadOnlyField
-                    label="Product Category"
-                    value={access.categoryName || access.category || "—"}
-                  />
-                ) : (
-                  <EditableSelectField
-                    label="Product Category"
-                    value={(() => {
-                      // Map slug-stored legacy values back to the canonical UUID
-                      // so the dropdown's value matches one of the options.
-                      const cat =
-                        categories.find((c) => c.id === access.category) ??
-                        categories.find((c) => c.slug === access.category);
-                      return cat?.id ?? access.category ?? "";
-                    })()}
-                    options={categories.map((c) => ({
-                      value: c.id,
-                      label:
-                        typeof c.available_count === "number"
-                          ? `${c.name} (${c.available_count} in stock)`
-                          : c.name,
-                    }))}
-                    onChange={handleCategoryChange}
-                    saving={savingCategory}
-                    disabled={!categories.length}
-                  />
-                )}
-                {access.readOnly ? (
-                  <ReadOnlyField
-                    label="Product Type"
-                    value={
-                      access.productTypeName ||
-                      (access.productSku ? `SKU ${access.productSku}` : "—")
-                    }
-                  />
-                ) : (
-                  <EditableSelectField
-                    label="Product Type"
-                    value={access.productId ?? ""}
-                    options={productsList.map((p) => ({
-                      value: p.id,
-                      label: productOptionLabel(p),
-                    }))}
-                    onChange={handleProductChange}
-                    saving={savingCategory}
-                    disabled={!productsList.length}
-                    emptyText={
-                      !access.category
-                        ? "Pick a category first"
-                        : "No products in this category"
-                    }
-                  />
-                )}
-              </div>
-
-              {!access.readOnly && (
-                <div className="mt-4 space-y-3">
-                  {extraProductIds.map((pid, idx) => (
-                    <div key={idx} className="flex items-end gap-2">
-                      <div className="flex-1">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">
-                          Additional Product {idx + 1}
-                        </label>
-                        <div className="mt-1.5 relative">
-                          <select
-                            value={pid}
-                            onChange={(e) =>
-                              setExtraProductIds((prev) =>
-                                prev.map((v, i) => (i === idx ? e.target.value : v)),
-                              )
-                            }
-                            disabled={!productsList.length}
-                            className="w-full h-11 px-4 pr-10 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm font-bold outline-none appearance-none text-gray-900 focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50 disabled:bg-gray-50 disabled:text-gray-400"
-                          >
-                            <option value="">Select a product type…</option>
-                            {productsList.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {productOptionLabel(p)}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setExtraProductIds((prev) =>
-                            prev.filter((_, i) => i !== idx),
-                          )
-                        }
-                        className="h-11 px-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                        aria-label={`Remove additional product ${idx + 1}`}
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => setExtraProductIds((prev) => [...prev, ""])}
-                    disabled={!productsList.length}
-                    className="flex items-center gap-2 text-sm font-bold text-[#0047AB] hover:text-[#003580] disabled:opacity-40 disabled:cursor-not-allowed px-1"
-                  >
-                    <Plus className="w-4 h-4" /> Add Another Product
-                  </button>
-                </div>
-              )}
-
-              <p className="text-[11px] text-gray-400 mt-3">
-                {access.readOnly
-                  ? "Category and product type were set in Step 1. Inventory below is filtered to match."
-                  : "Pick one or more product types — the Battery, Charger and Paraphernalia lists below show only the available stock for those products. Switching category clears the chosen battery, charger, and paraphernalia."}
-              </p>
-            </SectionCard>
-
-            {/* Section B — Battery */}
-            <SectionCard
-              title="Battery"
-              action={
-                <div className="flex items-center gap-2 flex-wrap">
-                  <FilterChip
-                    label={`All ${scopedBatteries.length}`}
-                    active={batteryFilter === "all"}
-                    onClick={() => setBatteryFilter("all")}
-                  />
-                  {recommendedCount > 0 && (
-                    <FilterChip
-                      label={`Recommended ${recommendedCount}`}
-                      active={batteryFilter === "recommended"}
-                      tone="emerald"
-                      onClick={() => setBatteryFilter("recommended")}
-                    />
-                  )}
-                  {ageingCount > 0 && (
-                    <FilterChip
-                      label={`Ageing ${ageingCount}`}
-                      active={batteryFilter === "ageing"}
-                      tone="amber"
-                      onClick={() => setBatteryFilter("ageing")}
-                    />
-                  )}
-                  {oldCount > 0 && (
-                    <FilterChip
-                      label={`Old ${oldCount}`}
-                      active={batteryFilter === "old"}
-                      tone="red"
-                      onClick={() => setBatteryFilter("old")}
-                    />
-                  )}
-                </div>
-              }
-            >
-              {batteriesLoading ? (
-                <SkeletonCardGrid />
-              ) : batteries.length === 0 ? (
-                <EmptyState
-                  icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
-                  title="No battery stock in this category"
-                  hint="Your dealership has no available batteries in this category yet. Ask your admin to add inventory (Inventory → Add Item / Bulk Upload) for this category, then refresh."
-                />
-              ) : scopedBatteries.length === 0 ? (
-                <EmptyState
-                  icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
-                  title="No batteries match the selected product type"
-                  hint="Your dealership has battery stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching battery."
-                />
-              ) : (
-                <>
-                  <CardSearchBar
-                    value={batterySearch}
-                    onChange={setBatterySearch}
-                    placeholder="Search by serial or model"
-                  />
-                  {filteredBatteries.length === 0 ? (
-                    <EmptyState
-                      icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
-                      title="No batteries match this filter"
-                      hint="Try clearing the search or selecting a different age filter."
-                    />
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {paginatedBatteries.map((b) => (
-                          <BatteryCard
-                            key={b.id}
-                            battery={b}
-                            selected={selectedBattery?.id === b.id}
-                            onSelect={() => setSelectedBattery(b)}
-                            disabled={!!access.readOnly}
-                          />
-                        ))}
-                      </div>
-                      <CardPagination
-                        page={safeBatteryPage}
-                        pageCount={batteryPageCount}
-                        total={filteredBatteries.length}
-                        pageSize={PAGE_SIZE}
-                        onChange={setBatteryPage}
-                      />
-                    </>
-                  )}
-                </>
-              )}
-            </SectionCard>
-
-            {/* Selected Battery summary — drives the downstream cards */}
-            {selectedBattery && (
-              <SelectedBatterySummary
-                battery={selectedBattery}
-                price={batteryPriceTriple.net}
+            {/* Section A — Category & Product Type. Cash only: a finance
+                lead sets these on Step 5 alongside the stock it scopes. */}
+            {isCash && (
+              <ProductCategoryCard
+                scope={scope}
+                category={access.category ?? null}
+                categoryName={access.categoryName}
+                productId={access.productId ?? null}
+                productTypeName={access.productTypeName}
+                productSku={access.productSku}
+                readOnly={!!access.readOnly}
               />
             )}
 
-            {/* Section B (cont.) — dealer-captured battery photos.
-                Addendum V0.1 §5.1: serial close-up + unit photo. */}
-            {selectedBattery && !access.readOnly && (
-              <ProductPhotoSection
-                title="Battery Photos"
-                subtitle="Take a clear photo of the battery serial sticker and the battery itself, at your premises."
-                kind="battery"
-                urls={batteryPhotoUrls}
-                onAdd={(label, file) => uploadProductPhoto("battery", label, file)}
-                onRemove={(idx) =>
-                  setBatteryPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
-                }
-                uploadingTag={photoUploading}
-              />
-            )}
-
-            {/* Section C — Charger */}
-            <SectionCard
-              title="Charger"
-              action={
-                selectedBattery && scopedChargers.length > 0 ? (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <FilterChip
-                      label={`All ${scopedChargers.length}`}
-                      active={chargerFilter === "all"}
-                      onClick={() => setChargerFilter("all")}
-                    />
-                    {chargerRecommendedCount > 0 && (
-                      <FilterChip
-                        label={`Recommended ${chargerRecommendedCount}`}
-                        active={chargerFilter === "recommended"}
-                        tone="emerald"
-                        onClick={() => setChargerFilter("recommended")}
-                      />
-                    )}
-                    {chargerAgeingCount > 0 && (
-                      <FilterChip
-                        label={`Ageing ${chargerAgeingCount}`}
-                        active={chargerFilter === "ageing"}
-                        tone="amber"
-                        onClick={() => setChargerFilter("ageing")}
-                      />
-                    )}
-                    {chargerOldCount > 0 && (
-                      <FilterChip
-                        label={`Old ${chargerOldCount}`}
-                        active={chargerFilter === "old"}
-                        tone="red"
-                        onClick={() => setChargerFilter("old")}
-                      />
-                    )}
-                  </div>
-                ) : null
-              }
-            >
-              {!selectedBattery ? (
-                <EmptyState
-                  icon={<Plug className="w-10 h-10 text-gray-300" />}
-                  title="Select a battery first"
-                  hint="Available chargers from your inventory will appear once a battery is selected."
-                />
-              ) : chargersLoading ? (
-                <SkeletonCardGrid />
-              ) : chargers.length === 0 ? (
-                <EmptyState
-                  icon={<Plug className="w-10 h-10 text-gray-300" />}
-                  title="No chargers available in your inventory"
-                  hint="Contact your inventory manager to add chargers for this category."
-                />
-              ) : scopedChargers.length === 0 ? (
-                <EmptyState
-                  icon={<Plug className="w-10 h-10 text-gray-300" />}
-                  title="No chargers match the selected product type"
-                  hint="Your dealership has charger stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching charger."
-                />
-              ) : (
-                <>
-                  <p className="text-[11px] text-gray-400 mb-3 px-1">
-                    Pair with{" "}
-                    <strong className="text-gray-700">
-                      {selectedBattery.model_name || selectedBattery.model_type || "the selected battery"}
-                    </strong>
-                    . Oldest stock surfaces first (FIFO).
-                  </p>
-                  <CardSearchBar
-                    value={chargerSearch}
-                    onChange={setChargerSearch}
-                    placeholder="Search by serial or model"
-                  />
-                  {filteredChargers.length === 0 ? (
-                    <EmptyState
-                      icon={<Plug className="w-10 h-10 text-gray-300" />}
-                      title="No chargers match this filter"
-                      hint="Try clearing the search or selecting a different age filter."
-                    />
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {paginatedChargers.map((c) => (
-                          <ChargerCard
-                            key={c.id}
-                            charger={c}
-                            selected={selectedCharger?.id === c.id}
-                            onSelect={() => setSelectedCharger(c)}
-                            disabled={!!access.readOnly}
-                          />
-                        ))}
-                      </div>
-                      <CardPagination
-                        page={safeChargerPage}
-                        pageCount={chargerPageCount}
-                        total={filteredChargers.length}
-                        pageSize={PAGE_SIZE}
-                        onChange={setChargerPage}
-                      />
-                    </>
-                  )}
-                </>
-              )}
-            </SectionCard>
-
-            {/* Section C (cont.) — dealer-captured charger photos.
-                Addendum V0.1 §5.1: serial close-up + unit photo. */}
-            {selectedCharger && !access.readOnly && (
-              <ProductPhotoSection
-                title="Charger Photos"
-                subtitle="Take a clear photo of the charger serial sticker and the charger itself, at your premises."
-                kind="charger"
-                urls={chargerPhotoUrls}
-                onAdd={(label, file) => uploadProductPhoto("charger", label, file)}
-                onRemove={(idx) =>
-                  setChargerPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
-                }
-                uploadingTag={photoUploading}
-              />
-            )}
-
-            {photoError && (
-              <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs font-medium text-red-700 flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                <span>{photoError}</span>
-              </div>
-            )}
-
-            {/* Section D — Paraphernalia */}
-            <SectionCard title="Paraphernalia">
-              {scopedParaphernalia.length === 0 ? (
-                <EmptyState
-                  icon={<Package className="w-10 h-10 text-gray-300" />}
-                  title="No paraphernalia available"
-                  hint={
-                    paraphernalia.length > 0
-                      ? "No paraphernalia matches the selected product types."
-                      : "No add-on items in this category for your inventory."
-                  }
-                />
-              ) : (
-                <ParaphernaliaList
-                  items={scopedParaphernalia}
-                  paraQty={paraQty}
-                  onChangeQty={(k, n, max) =>
-                    setParaQty((prev) => ({
-                      ...prev,
-                      [k]: Math.max(0, Math.min(max, n)),
-                    }))
-                  }
-                  disabled={!!access.readOnly}
-                />
-              )}
-            </SectionCard>
+            {/* Sections B–D — the product cart. Cash only: a finance lead
+                picks its stock on Step 5, once the lender has quoted. */}
+            {isCash && <ProductCartSections cart={cart} />}
 
             {/* Section G — Financing Options (Addendum V0.1 §5.2).
                 Finance leads only. The customer picks 1 or 2 NBFCs from the
@@ -1883,6 +676,14 @@ export default function ProductSelectionPage() {
                   </span>
                 }
               >
+                {/* E-240 — anything the lender asked for DIRECTLY, answered in
+                    place. Renders above the generic controls because it is the
+                    one thing here someone is actually waiting on; self-hides
+                    when there are no open requests. */}
+                <NbfcDocRequestsBlock
+                  leadId={leadId}
+                  onDocsMirrored={(items) => setPreSanctionDocs(items)}
+                />
                 <p className="mb-3 text-xs text-slate-500">
                   Attach anything the lender needs before sanction — installation
                   images, NBFC-signed docs, agreements. Any format (image, video,
@@ -1990,52 +791,18 @@ export default function ProductSelectionPage() {
           {/* Right rail — Pricing summary (sticky on desktop, stays pinned
               while the dealer scrolls through battery/charger/paraphernalia).
               max-h + overflow lets a tall card scroll internally instead of
-              getting clipped under the viewport. */}
-          <div className="lg:col-span-4">
-            <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
-              <PricingSummary
-                batteryPrice={dispBatteryPrice}
-                chargerPrice={dispChargerPrice}
-                paraCost={dispParaCost}
-                grossSubtotal={dispGrossSubtotal}
-                gstSubtotal={dispGstSubtotal}
-                netSubtotal={dispNetSubtotal}
-                dealerMargin={dispDealerMargin}
-                marginMode={marginMode}
-                marginInput={marginInput}
-                marginPercentInput={marginPercentInput}
-                onMarginChange={(raw) => {
-                  setMarginInput(raw.replace(/[^0-9.]/g, ""));
-                }}
-                onMarginPercentChange={(raw) => {
-                  setMarginPercentInput(raw.replace(/[^0-9.]/g, ""));
-                }}
-                onMarginModeChange={(next) => {
-                  // Convert the current value to the new mode so the displayed
-                  // margin amount stays roughly the same when the user toggles.
-                  if (next === marginMode) return;
-                  if (next === "percent") {
-                    if (netSubtotal > 0) {
-                      const pct = (dealerMargin / netSubtotal) * 100;
-                      setMarginPercentInput(
-                        pct > 0 ? (Math.round(pct * 100) / 100).toString() : "0",
-                      );
-                    }
-                  } else {
-                    setMarginInput(dealerMargin > 0 ? String(dealerMargin) : "0");
-                  }
-                  setMarginMode(next);
-                }}
-                finalPrice={dispFinalPrice}
-                inventoryNote={
-                  isCash
-                    ? "Inventory will be marked SOLD on confirm"
-                    : "Inventory will be reserved on submit"
-                }
-                disabled={!!access.readOnly}
-              />
+              getting clipped under the viewport.
+              Cash only — a finance lead has no price at this stage. */}
+          {isCash && (
+            <div className="lg:col-span-4">
+              <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+                <CartPricingSummary
+                  cart={cart}
+                  inventoryNote="Inventory will be marked SOLD on confirm"
+                />
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {pendingRequirements.length > 0 && !access.readOnly && (
@@ -2102,7 +869,7 @@ export default function ProductSelectionPage() {
               </button>
             ) : (
               <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-                Submit for Final Approval
+                Send to NBFC
                 <ChevronRight className="w-4 h-4" />
               </PrimaryButton>
             )}
@@ -2115,7 +882,8 @@ export default function ProductSelectionPage() {
           customerName={access.customerName || "—"}
           battery={selectedBattery}
           charger={selectedCharger}
-          finalPrice={finalPrice}
+          finalPrice={cart.live.finalPrice}
+          dealerMarginGst={cart.live.dealerMarginGst}
           submitting={submitting}
           error={error}
           onCancel={() => {
@@ -2131,1266 +899,12 @@ export default function ProductSelectionPage() {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function paraKey(p: ParaRow): string {
-  return `${p.asset_type}|${p.model_type || ""}`;
-}
-
-// Returns the per-line { gross, gst%, gst, net } for a battery or charger row.
-// Falls back to legacy `price` (treated as net) when GST snapshot is absent.
-function triple(
-  row: { price?: number | null; gross_amount?: string | number | null; gst_percent?: string | number | null; gst_amount?: string | number | null; net_amount?: string | number | null } | null,
-): { gross: number; gstPct: number; gst: number; net: number } {
-  if (!row) return { gross: 0, gstPct: 0, gst: 0, net: 0 };
-  const gross = Number(row.gross_amount ?? 0);
-  const gstPct = Number(row.gst_percent ?? 0);
-  const gstAmt = Number(row.gst_amount ?? 0);
-  const net = Number(row.net_amount ?? 0);
-  if (gross > 0 || net > 0) {
-    return { gross, gstPct, gst: gstAmt, net: net || gross + gstAmt };
-  }
-  // Legacy fallback: treat `price` as net, infer no GST split.
-  const fallback = Number(row.price ?? 0);
-  return { gross: fallback, gstPct: 0, gst: 0, net: fallback };
-}
-
-function formatGstPct(v: string | number | null | undefined): string {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n) || n === 0) return "0%";
-  return `${Number.isInteger(n) ? n : n.toFixed(2)}%`;
-}
-
-function formatLastSaved(d: Date): string {
-  const time = d.toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
-  return `Auto-saved at ${time}`;
-}
-
-// ── Sub-components ───────────────────────────────────────────────────
-
-function ReadOnlyField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">
-        {label}
-      </label>
-      <div className="mt-1.5 h-11 px-4 rounded-xl bg-gray-50 border-2 border-[#F1F2F4] flex items-center text-sm font-bold text-gray-800">
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function EditableSelectField({
-  label,
-  value,
-  options,
-  onChange,
-  saving,
-  disabled,
-  emptyText,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (next: string) => void;
-  saving?: boolean;
-  disabled?: boolean;
-  emptyText?: string;
-}) {
-  const isDisabled = disabled || saving;
-  return (
-    <div>
-      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1 flex items-center gap-1.5">
-        <Pencil className="w-3 h-3" /> {label}
-      </label>
-      <div className="mt-1.5 relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={isDisabled}
-          className={`w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl text-sm font-bold outline-none appearance-none transition-colors ${
-            isDisabled
-              ? "border-[#F1F2F4] bg-gray-50 text-gray-400 cursor-not-allowed"
-              : "border-[#EBEBEB] text-gray-900 focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50"
-          }`}
-        >
-          {!options.length && (
-            <option value="">{emptyText || "No options available"}</option>
-          )}
-          {options.length > 0 && !value && (
-            <option value="">Select…</option>
-          )}
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-        {saving && (
-          <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[#0047AB]">
-            Saving…
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function FilterChip({
-  label,
-  active,
-  tone = "blue",
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  tone?: "blue" | "emerald" | "amber" | "red";
-  onClick: () => void;
-}) {
-  const styles = active
-    ? {
-        blue: "bg-[#0047AB] text-white border-[#0047AB]",
-        emerald: "bg-emerald-600 text-white border-emerald-600",
-        amber: "bg-amber-500 text-white border-amber-500",
-        red: "bg-red-500 text-white border-red-500",
-      }[tone]
-    : "bg-white text-gray-600 border-gray-200 hover:border-gray-300";
-  return (
-    <button
-      onClick={onClick}
-      className={`px-3 py-1.5 rounded-full text-[11px] font-bold border-2 transition-all ${styles}`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function CardSearchBar({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div className="relative mb-3">
-      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full pl-9 pr-9 py-2 text-[12px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#0047AB]/20 focus:border-[#0047AB]"
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => onChange("")}
-          aria-label="Clear search"
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-// Compact pager for the card grids. Renders nothing when there's only one
-// page; otherwise shows a "Showing X–Y of Z" line plus prev / page-numbers /
-// next controls. Page numbers collapse to first / last + neighbors when there
-// are many pages so the row stays a single line on mobile.
-function CardPagination({
-  page,
-  pageCount,
-  total,
-  pageSize,
-  onChange,
-}: {
-  page: number;
-  pageCount: number;
-  total: number;
-  pageSize: number;
-  onChange: (p: number) => void;
-}) {
-  if (pageCount <= 1) return null;
-
-  const start = (page - 1) * pageSize + 1;
-  const end = Math.min(page * pageSize, total);
-
-  // Build a windowed list of page numbers: always show 1, last, and a window
-  // around the current page. Insert a `null` as a "…" gap.
-  const pages: (number | null)[] = [];
-  const window = 1;
-  for (let p = 1; p <= pageCount; p++) {
-    if (p === 1 || p === pageCount || (p >= page - window && p <= page + window)) {
-      pages.push(p);
-    } else if (pages[pages.length - 1] !== null) {
-      pages.push(null);
-    }
-  }
-
-  return (
-    <div className="mt-4 flex items-center justify-between flex-wrap gap-2">
-      <span className="text-[11px] text-gray-500">
-        Showing <strong className="text-gray-700">{start}</strong>–
-        <strong className="text-gray-700">{end}</strong> of{" "}
-        <strong className="text-gray-700">{total}</strong>
-      </span>
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onChange(Math.max(1, page - 1))}
-          disabled={page === 1}
-          aria-label="Previous page"
-          className="p-1.5 rounded-md border border-gray-200 text-gray-600 hover:border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        {pages.map((p, idx) =>
-          p === null ? (
-            <span key={`gap-${idx}`} className="px-1 text-[11px] text-gray-400">
-              …
-            </span>
-          ) : (
-            <button
-              key={p}
-              type="button"
-              onClick={() => onChange(p)}
-              className={`min-w-[28px] px-2 py-1 rounded-md text-[11px] font-bold border transition-colors ${
-                p === page
-                  ? "bg-[#0047AB] text-white border-[#0047AB]"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
-              }`}
-            >
-              {p}
-            </button>
-          ),
-        )}
-        <button
-          type="button"
-          onClick={() => onChange(Math.min(pageCount, page + 1))}
-          disabled={page === pageCount}
-          aria-label="Next page"
-          className="p-1.5 rounded-md border border-gray-200 text-gray-600 hover:border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function AgeBadge({
-  badge,
-  days,
-}: {
-  badge: "fresh" | "ageing" | "old";
-  days: number;
-}) {
-  const styles = {
-    fresh: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    ageing: "bg-amber-50 text-amber-700 border-amber-200",
-    old: "bg-red-50 text-red-700 border-red-200",
-  }[badge];
-  const label =
-    badge === "fresh" ? "Fresh" : badge === "ageing" ? "Ageing" : "Old Stock";
-  return (
-    <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-black ${styles}`}
-    >
-      <CalendarDays className="w-3 h-3" />
-      {days}d · {label}
-    </span>
-  );
-}
-
-function SocBar({
-  socPercent,
-  lastSyncAt,
-}: {
-  socPercent: string | null;
-  lastSyncAt?: string | null;
-}) {
-  if (socPercent == null) {
-    return (
-      <div className="text-[11px] text-gray-400 font-medium">SOC: N/A</div>
-    );
-  }
-  const n = Math.max(0, Math.min(100, Number(socPercent)));
-  const tone = n >= 60 ? "emerald" : n >= 30 ? "amber" : "red";
-  const barColor = {
-    emerald: "bg-emerald-500",
-    amber: "bg-amber-500",
-    red: "bg-red-500",
-  }[tone];
-  let syncLabel = "";
-  let stale = false;
-  if (lastSyncAt) {
-    const diffMs = Date.now() - new Date(lastSyncAt).getTime();
-    if (Number.isFinite(diffMs) && diffMs >= 0) {
-      const hours = Math.floor(diffMs / (1000 * 60 * 60));
-      if (hours >= 24) {
-        stale = true;
-        syncLabel = `Last sync >24h ago — data may be outdated`;
-      } else if (hours >= 1) {
-        syncLabel = `Last sync: ${hours}h ago`;
-      } else {
-        syncLabel = `Last sync: just now`;
-      }
-    }
-  }
-  return (
-    <div className="flex flex-col gap-1 w-full">
-      <div className="flex items-center justify-between text-[10px] font-bold text-gray-600">
-        <span>SOC</span>
-        <span className={stale ? "text-amber-600" : "text-gray-700"}>{n}%</span>
-      </div>
-      <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full ${barColor} transition-all`}
-          style={{ width: `${n}%` }}
-        />
-      </div>
-      {syncLabel && (
-        <span className={`text-[9px] ${stale ? "text-amber-600" : "text-gray-400"}`}>
-          {syncLabel}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function SelectedBatterySummary({
-  battery,
-  price,
-}: {
-  battery: BatteryRow;
-  price: number;
-}) {
-  const specs: { label: string; value: string }[] = [];
-  if (battery.voltage_v) specs.push({ label: "Voltage", value: `${battery.voltage_v}V` });
-  if (battery.capacity_ah) specs.push({ label: "Capacity", value: `${battery.capacity_ah}Ah` });
-  if (battery.warranty_months) specs.push({ label: "Warranty", value: `${battery.warranty_months} mo` });
-  if (battery.soc_percent != null) specs.push({ label: "SoC", value: `${battery.soc_percent}%` });
-  return (
-    <div className="rounded-2xl border-2 border-[#0047AB]/20 bg-gradient-to-r from-blue-50 to-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-[#0047AB] text-white flex items-center justify-center flex-shrink-0">
-            <BatteryIcon className="w-5 h-5" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] font-black text-[#0047AB] uppercase tracking-widest">Selected Battery</p>
-            <p className="text-sm font-black text-gray-900 truncate">
-              {battery.model_name || battery.model_type || "Battery"}
-            </p>
-            <p className="text-[11px] text-gray-500 font-mono truncate">{battery.serial_number}</p>
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-lg font-black text-[#0047AB]">{inr(price)}</div>
-          <div className="text-[10px] text-gray-400 font-medium">incl. GST</div>
-        </div>
-      </div>
-      {specs.length > 0 && (
-        <div className="mt-3 flex items-center gap-2 flex-wrap">
-          {specs.map((s) => (
-            <span
-              key={s.label}
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-[#0047AB]/15 rounded-full text-[11px] font-bold text-gray-700"
-            >
-              <span className="text-gray-400">{s.label}:</span> {s.value}
-            </span>
-          ))}
-          <AgeBadge badge={battery.age_badge} days={battery.inventory_age_days} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BatteryCard({
-  battery,
-  selected,
-  onSelect,
-  disabled,
-}: {
-  battery: BatteryRow;
-  selected: boolean;
-  onSelect: () => void;
-  disabled?: boolean;
-}) {
-  const ageBorder = selected
-    ? "border-[#0047AB] bg-blue-50/50 ring-4 ring-blue-100"
-    : battery.age_badge === "old"
-      ? "border-red-200 hover:border-red-400"
-      : battery.age_badge === "ageing"
-        ? "border-amber-200 hover:border-amber-400"
-        : "border-gray-100 hover:border-gray-300";
-  return (
-    <button
-      onClick={onSelect}
-      disabled={disabled}
-      aria-disabled={disabled}
-      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 ${ageBorder}`}
-    >
-      {battery.recommended && (
-        <span className="absolute -top-2 -right-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm">
-          <Sparkles className="w-3 h-3" /> Recommended
-        </span>
-      )}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="font-black text-gray-900 font-mono tracking-tight truncate">
-            {battery.serial_number}
-          </div>
-          <div className="text-[11px] text-gray-500 mt-1 font-medium truncate">
-            {battery.model_name || battery.model_type || "Battery"}
-          </div>
-          <SpecChips
-            voltage={battery.voltage_v}
-            capacity={battery.capacity_ah}
-            warrantyMonths={battery.warranty_months}
-            status={battery.status}
-          />
-        </div>
-        <div className="text-right flex-shrink-0">
-          <div className="text-base font-black text-[#0047AB]">
-            {inr(Number(battery.net_amount ?? battery.price ?? 0))}
-          </div>
-          <div className="text-[10px] text-gray-400 font-medium">incl. GST</div>
-        </div>
-      </div>
-      <div className="mt-3 flex items-center gap-2 flex-wrap">
-        <AgeBadge badge={battery.age_badge} days={battery.inventory_age_days} />
-        {battery.invoice_date && (
-          <span className="text-[10px] text-gray-500 font-medium">
-            Invoiced {formatShortDate(battery.invoice_date)}
-          </span>
-        )}
-      </div>
-      <div className="mt-3">
-        <SocBar
-          socPercent={battery.soc_percent}
-          lastSyncAt={battery.soc_last_sync_at}
-        />
-      </div>
-      <GstLine
-        gross={battery.gross_amount}
-        gstPercent={battery.gst_percent}
-        gstAmount={battery.gst_amount}
-        net={battery.net_amount}
-      />
-    </button>
-  );
-}
-
-function ChargerCard({
-  charger,
-  selected,
-  onSelect,
-  disabled,
-}: {
-  charger: ChargerRow;
-  selected: boolean;
-  onSelect: () => void;
-  disabled?: boolean;
-}) {
-  const border = selected
-    ? "border-[#0047AB] bg-blue-50/50 ring-4 ring-blue-100"
-    : "border-gray-100 hover:border-gray-300";
-  return (
-    <button
-      onClick={onSelect}
-      disabled={disabled}
-      aria-disabled={disabled}
-      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 ${border}`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="font-black text-gray-900 font-mono tracking-tight truncate">
-            {charger.serial_number}
-          </div>
-          <div className="text-[11px] text-gray-500 mt-1 font-medium truncate">
-            {charger.model_name || charger.model_type || "Charger"}
-          </div>
-          <SpecChips
-            warrantyMonths={charger.warranty_months}
-            status={charger.status}
-          />
-        </div>
-        <div className="text-right flex-shrink-0">
-          <div className="text-base font-black text-[#0047AB]">
-            {inr(Number(charger.net_amount ?? charger.price ?? 0))}
-          </div>
-          <div className="text-[10px] text-gray-400 font-medium">incl. GST</div>
-        </div>
-      </div>
-      <div className="mt-3 flex items-center gap-2 flex-wrap">
-        <AgeBadge badge={charger.age_badge} days={charger.inventory_age_days} />
-        {charger.invoice_date && (
-          <span className="text-[10px] text-gray-500 font-medium">
-            Invoiced {formatShortDate(charger.invoice_date)}
-          </span>
-        )}
-      </div>
-      <GstLine
-        gross={charger.gross_amount}
-        gstPercent={charger.gst_percent}
-        gstAmount={charger.gst_amount}
-        net={charger.net_amount}
-      />
-    </button>
-  );
-}
-
-function SpecChips({
-  voltage,
-  capacity,
-  warrantyMonths,
-  status,
-}: {
-  voltage?: number | null;
-  capacity?: number | null;
-  warrantyMonths?: number | null;
-  status?: string | null;
-}) {
-  const chips: string[] = [];
-  if (voltage) chips.push(`${voltage}V`);
-  if (capacity) chips.push(`${capacity}AH`);
-  if (warrantyMonths && warrantyMonths > 0) {
-    const years = warrantyMonths / 12;
-    chips.push(
-      Number.isInteger(years) ? `${years} yr warranty` : `${warrantyMonths} mo warranty`,
-    );
-  }
-  const norm = (status ?? "").toLowerCase();
-  const statusChip =
-    norm === "available"
-      ? { label: "Available", tone: "emerald" as const }
-      : norm === "reserved"
-        ? { label: "Reserved", tone: "amber" as const }
-        : norm
-          ? { label: status as string, tone: "gray" as const }
-          : null;
-  if (chips.length === 0 && !statusChip) return null;
-  const toneClass: Record<string, string> = {
-    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
-    amber: "bg-amber-50 text-amber-700 border-amber-100",
-    gray: "bg-gray-50 text-gray-600 border-gray-100",
-  };
-  return (
-    <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-      {chips.map((c) => (
-        <span
-          key={c}
-          className="px-2 py-0.5 rounded-md bg-gray-50 border border-gray-100 text-[10px] font-bold text-gray-700 tracking-wide"
-        >
-          {c}
-        </span>
-      ))}
-      {statusChip && (
-        <span
-          className={`px-2 py-0.5 rounded-md border text-[10px] font-bold tracking-wide ${toneClass[statusChip.tone]}`}
-        >
-          {statusChip.label}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function GstLine({
-  gross,
-  gstPercent,
-  gstAmount,
-  net,
-}: {
-  gross?: string | number | null;
-  gstPercent?: string | number | null;
-  gstAmount?: string | number | null;
-  net?: string | number | null;
-}) {
-  const grossN = Number(gross ?? 0);
-  const gstAmtN = Number(gstAmount ?? 0);
-  const netN = Number(net ?? 0);
-  if (grossN <= 0 && netN <= 0) return null;
-  return (
-    <div className="mt-3 grid grid-cols-3 gap-2 text-[10px] font-medium">
-      <div className="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-        <div className="text-gray-400 uppercase tracking-wider">Gross</div>
-        <div className="text-gray-900 font-bold tabular-nums">{inr(grossN)}</div>
-      </div>
-      <div className="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-        <div className="text-gray-400 uppercase tracking-wider">
-          GST {formatGstPct(gstPercent)}
-        </div>
-        <div className="text-gray-900 font-bold tabular-nums">{inr(gstAmtN)}</div>
-      </div>
-      <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-2 py-1.5">
-        <div className="text-emerald-600 uppercase tracking-wider">Net</div>
-        <div className="text-emerald-800 font-bold tabular-nums">{inr(netN || grossN + gstAmtN)}</div>
-      </div>
-    </div>
-  );
-}
-
-function ParaphernaliaList({
-  items,
-  paraQty,
-  onChangeQty,
-  disabled,
-}: {
-  items: ParaRow[];
-  paraQty: Record<string, number>;
-  onChangeQty: (k: string, n: number, max: number) => void;
-  disabled?: boolean;
-}) {
-  // BRD §SECTION D — four input types:
-  //   1. Digital SOC      → quantity 0..N
-  //   2. Volt SOC         → quantity 0..N
-  //   3. Harness Variant  → dropdown (Type A / B / C / None), one variant per lead
-  //   4. Additional Accessories → free multi-select over the rest of the
-  //                               dealer's paraphernalia inventory.
-  const digitalSoc = items.filter((p) => p.asset_type === "DigitalSOC");
-  const voltSoc = items.filter((p) => p.asset_type === "VoltSOC");
-  const harness = items.filter((p) => p.asset_type === "Harness");
-  const additional = items.filter(
-    (p) =>
-      p.asset_type !== "DigitalSOC" &&
-      p.asset_type !== "VoltSOC" &&
-      p.asset_type !== "Harness",
-  );
-
-  return (
-    <div className="space-y-5">
-      {digitalSoc.length > 0 && (
-        <ParaSubsection title="Digital SOC" hint="Count of digital SOC units. Validated against dealer stock.">
-          {digitalSoc.map((p) => {
-            const k = paraKey(p);
-            return (
-              <ParaItemRow
-                key={k}
-                item={p}
-                qty={paraQty[k] || 0}
-                onChange={(n) => onChangeQty(k, n, p.available_qty)}
-                disabled={disabled}
-              />
-            );
-          })}
-        </ParaSubsection>
-      )}
-
-      {voltSoc.length > 0 && (
-        <ParaSubsection title="Volt SOC" hint="Count of volt SOC units.">
-          {voltSoc.map((p) => {
-            const k = paraKey(p);
-            return (
-              <ParaItemRow
-                key={k}
-                item={p}
-                qty={paraQty[k] || 0}
-                onChange={(n) => onChangeQty(k, n, p.available_qty)}
-                disabled={disabled}
-              />
-            );
-          })}
-        </ParaSubsection>
-      )}
-
-      {harness.length > 0 && (
-        <ParaSubsection title="Harness Variant" hint="Pick one variant per lead.">
-          <HarnessVariantPicker
-            options={harness}
-            paraQty={paraQty}
-            onChangeQty={onChangeQty}
-            disabled={disabled}
-          />
-        </ParaSubsection>
-      )}
-
-      {additional.length > 0 && (
-        <ParaSubsection
-          title="Additional Accessories"
-          hint="Free multi-select — pick any other items from your paraphernalia stock."
-        >
-          <AdditionalAccessoriesPicker
-            options={additional}
-            paraQty={paraQty}
-            onChangeQty={onChangeQty}
-            disabled={disabled}
-          />
-        </ParaSubsection>
-      )}
-    </div>
-  );
-}
-
-function ParaSubsection({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="px-1 mb-2">
-        <div className="text-[11px] font-black text-gray-700 uppercase tracking-widest">
-          {title}
-        </div>
-        {hint && <div className="text-[11px] text-gray-400 mt-0.5">{hint}</div>}
-      </div>
-      <div className="space-y-3">{children}</div>
-    </div>
-  );
-}
-
-function AdditionalAccessoriesPicker({
-  options,
-  paraQty,
-  onChangeQty,
-  disabled,
-}: {
-  options: ParaRow[];
-  paraQty: Record<string, number>;
-  onChangeQty: (k: string, n: number, max: number) => void;
-  disabled?: boolean;
-}) {
-  // BRD §SECTION D — "Free multi-select. Other items from dealer's
-  // paraphernalia inventory. Shown dynamically from backend."
-  // An accessory is included when its qty > 0; toggling the checkbox
-  // sets qty to 1 (or back to 0). Per-row stepper appears once selected.
-  const selected = options.filter((o) => (paraQty[paraKey(o)] || 0) > 0);
-  const unselected = options.filter((o) => (paraQty[paraKey(o)] || 0) <= 0);
-
-  return (
-    <div className="space-y-3">
-      {unselected.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-1">
-          {unselected.map((o) => {
-            const k = paraKey(o);
-            const label =
-              o.product_name ||
-              `${o.asset_type} ${o.model_type ?? ""}`.trim();
-            const outOfStock = o.available_qty <= 0;
-            return (
-              <button
-                key={k}
-                type="button"
-                disabled={disabled || outOfStock}
-                onClick={() => onChangeQty(k, 1, o.available_qty)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border-2 text-xs font-bold transition-colors ${
-                  outOfStock
-                    ? "border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed"
-                    : "border-[#EBEBEB] bg-white text-gray-700 hover:border-[#0047AB] hover:text-[#0047AB]"
-                }`}
-              >
-                <Plus className="w-3 h-3" /> {label}
-                <span className="text-[10px] text-gray-400 font-medium">
-                  ({o.available_qty})
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {selected.map((p) => {
-        const k = paraKey(p);
-        return (
-          <ParaItemRow
-            key={k}
-            item={p}
-            qty={paraQty[k] || 0}
-            onChange={(n) => onChangeQty(k, n, p.available_qty)}
-            disabled={disabled}
-            removable
-            onRemove={() => onChangeQty(k, 0, p.available_qty)}
-          />
-        );
-      })}
-
-      {selected.length === 0 && unselected.length === 0 && (
-        <div className="text-[11px] text-gray-400 px-1">
-          No additional accessories in stock.
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ParaItemRow({
-  item,
-  qty,
-  onChange,
-  disabled,
-  removable,
-  onRemove,
-}: {
-  item: ParaRow;
-  qty: number;
-  onChange: (n: number) => void;
-  disabled?: boolean;
-  removable?: boolean;
-  onRemove?: () => void;
-}) {
-  const unitGross = Number(item.unit_gross ?? item.unit_price ?? 0);
-  const gstPct = Number(item.gst_percent ?? 0);
-  const unitGst = Number(item.unit_gst_amount ?? 0);
-  const unitNet = Number(item.unit_net ?? unitGross + unitGst);
-  return (
-    <div className="px-4 py-3 rounded-xl border border-gray-100 hover:border-gray-200 transition-colors bg-gray-50/40">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-start gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-white border border-gray-100 flex items-center justify-center flex-shrink-0">
-            <Package className="w-4 h-4 text-gray-500" />
-          </div>
-          <div className="min-w-0">
-            <div className="font-bold text-sm text-gray-900 truncate">
-              {item.product_name || `${item.asset_type} ${item.model_type ?? ""}`.trim()}
-            </div>
-            <div className="text-[11px] text-gray-500 mt-0.5">
-              Available: {item.available_qty}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <QuantityStepper
-            value={qty}
-            max={item.available_qty}
-            onChange={onChange}
-            disabled={disabled}
-          />
-          {removable && (
-            <button
-              type="button"
-              onClick={onRemove}
-              disabled={disabled}
-              aria-label="Remove accessory"
-              className="w-8 h-8 rounded-lg border-2 border-gray-100 bg-white text-gray-400 hover:border-red-200 hover:text-red-500 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="mt-2.5 grid grid-cols-4 gap-2 text-[10px] font-medium">
-        <div className="bg-white border border-gray-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-400 uppercase tracking-wider">Gross</div>
-          <div className="text-gray-900 font-bold tabular-nums">{inr(unitGross)}</div>
-        </div>
-        <div className="bg-white border border-gray-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-400 uppercase tracking-wider">
-            GST {formatGstPct(gstPct)}
-          </div>
-          <div className="text-gray-900 font-bold tabular-nums">{inr(unitGst)}</div>
-        </div>
-        <div className="bg-white border border-gray-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-400 uppercase tracking-wider">Net / unit</div>
-          <div className="text-gray-900 font-bold tabular-nums">{inr(unitNet)}</div>
-        </div>
-        <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-2 py-1.5">
-          <div className="text-emerald-600 uppercase tracking-wider">Line ×{qty}</div>
-          <div className="text-emerald-800 font-bold tabular-nums">
-            {inr(qty * unitNet)}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function HarnessVariantPicker({
-  options,
-  paraQty,
-  onChangeQty,
-  disabled,
-}: {
-  options: ParaRow[];
-  paraQty: Record<string, number>;
-  onChangeQty: (k: string, n: number, max: number) => void;
-  disabled?: boolean;
-}) {
-  // Pick whichever harness variant currently has qty > 0 (only one allowed).
-  const active = options.find((o) => (paraQty[paraKey(o)] || 0) > 0) || null;
-  const activeKey = active ? paraKey(active) : "";
-  const activeQty = active ? paraQty[activeKey] || 0 : 0;
-  const max = active?.available_qty ?? 0;
-
-  const handleSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newKey = e.target.value;
-    // Zero all other variants, set 1 on the chosen one.
-    options.forEach((o) => {
-      const k = paraKey(o);
-      if (k === newKey) onChangeQty(k, 1, o.available_qty);
-      else if ((paraQty[k] || 0) > 0) onChangeQty(k, 0, o.available_qty);
-    });
-  };
-
-  const unitGross = active ? Number(active.unit_gross ?? active.unit_price ?? 0) : 0;
-  const gstPct = active ? Number(active.gst_percent ?? 0) : 0;
-  const unitGst = active ? Number(active.unit_gst_amount ?? 0) : 0;
-  const unitNet = active ? Number(active.unit_net ?? unitGross + unitGst) : 0;
-
-  return (
-    <div className="px-4 py-3 rounded-xl border border-gray-100 bg-gray-50/40">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-start gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-white border border-gray-100 flex items-center justify-center flex-shrink-0">
-            <Package className="w-4 h-4 text-gray-500" />
-          </div>
-          <div className="min-w-0">
-            <div className="font-bold text-sm text-gray-900">Harness</div>
-            <div className="text-[11px] text-gray-500 mt-0.5">
-              Pick one variant per lead.
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <select
-            value={activeKey}
-            onChange={handleSelect}
-            disabled={disabled}
-            className="h-10 px-3 rounded-xl bg-white border-2 border-gray-100 text-sm font-bold text-gray-900 outline-none focus:border-[#1D4ED8] disabled:bg-gray-50"
-          >
-            <option value="">None</option>
-            {options.map((o) => {
-              const k = paraKey(o);
-              const label = o.product_name || `Harness ${o.model_type ?? ""}`.trim() || `Harness ${k}`;
-              return (
-                <option key={k} value={k} disabled={o.available_qty <= 0}>
-                  {label} (avail {o.available_qty})
-                </option>
-              );
-            })}
-          </select>
-          {active && (
-            <QuantityStepper
-              value={activeQty}
-              max={max}
-              onChange={(n) => onChangeQty(activeKey, n, max)}
-              disabled={disabled}
-            />
-          )}
-        </div>
-      </div>
-      {active && (
-        <div className="mt-2.5 grid grid-cols-4 gap-2 text-[10px] font-medium">
-          <div className="bg-white border border-gray-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-400 uppercase tracking-wider">Gross</div>
-            <div className="text-gray-900 font-bold tabular-nums">{inr(unitGross)}</div>
-          </div>
-          <div className="bg-white border border-gray-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-400 uppercase tracking-wider">
-              GST {formatGstPct(gstPct)}
-            </div>
-            <div className="text-gray-900 font-bold tabular-nums">{inr(unitGst)}</div>
-          </div>
-          <div className="bg-white border border-gray-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-400 uppercase tracking-wider">Net / unit</div>
-            <div className="text-gray-900 font-bold tabular-nums">{inr(unitNet)}</div>
-          </div>
-          <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-2 py-1.5">
-            <div className="text-emerald-600 uppercase tracking-wider">Line ×{activeQty}</div>
-            <div className="text-emerald-800 font-bold tabular-nums">
-              {inr(activeQty * unitNet)}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function QuantityStepper({
-  value,
-  max,
-  onChange,
-  disabled,
-}: {
-  value: number;
-  max: number;
-  onChange: (n: number) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="inline-flex items-center bg-white border-2 border-gray-100 rounded-xl overflow-hidden">
-      <button
-        onClick={() => onChange(value - 1)}
-        disabled={disabled || value <= 0}
-        className="w-9 h-9 flex items-center justify-center text-gray-600 hover:bg-gray-50 disabled:opacity-30 transition-colors"
-        aria-label="Decrease quantity"
-      >
-        <Minus className="w-4 h-4" />
-      </button>
-      <input
-        type="number"
-        min={0}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value || 0))}
-        disabled={disabled}
-        className="w-12 h-9 text-center text-sm font-bold text-gray-900 outline-none border-x border-gray-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-      />
-      <button
-        onClick={() => onChange(value + 1)}
-        disabled={disabled || value >= max}
-        className="w-9 h-9 flex items-center justify-center text-gray-600 hover:bg-gray-50 disabled:opacity-30 transition-colors"
-        aria-label="Increase quantity"
-      >
-        <Plus className="w-4 h-4" />
-      </button>
-    </div>
-  );
-}
-
-function PricingSummary({
-  batteryPrice,
-  chargerPrice,
-  paraCost,
-  grossSubtotal,
-  gstSubtotal,
-  netSubtotal,
-  dealerMargin,
-  marginMode,
-  marginInput,
-  marginPercentInput,
-  onMarginChange,
-  onMarginPercentChange,
-  onMarginModeChange,
-  finalPrice,
-  inventoryNote,
-  disabled,
-}: {
-  batteryPrice: number;
-  chargerPrice: number;
-  paraCost: number;
-  grossSubtotal: number;
-  gstSubtotal: number;
-  netSubtotal: number;
-  dealerMargin: number;
-  marginMode: "rupees" | "percent";
-  marginInput: string;
-  marginPercentInput: string;
-  onMarginChange: (raw: string) => void;
-  onMarginPercentChange: (raw: string) => void;
-  onMarginModeChange: (next: "rupees" | "percent") => void;
-  finalPrice: number;
-  inventoryNote: string;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="bg-white rounded-[24px] border border-[#E9ECEF] shadow-[0_8px_30px_rgb(0,0,0,0.02)] overflow-hidden">
-      <div className="px-6 pt-6 pb-3 flex items-center gap-3">
-        <div className="w-[3px] h-6 bg-[#0047AB] rounded-full" />
-        <h3 className="text-base font-black text-gray-900 tracking-tight">Pricing</h3>
-      </div>
-      <div className="px-6 pb-6 space-y-3">
-        <PriceLine label="Battery (incl. GST)" value={batteryPrice} />
-        <PriceLine label="Charger (incl. GST)" value={chargerPrice} />
-        <PriceLine label="Paraphernalia (incl. GST)" value={paraCost} />
-
-        <div className="pt-3 border-t border-gray-100 space-y-1.5">
-          <PriceLine label="Gross subtotal" value={grossSubtotal} muted />
-          <PriceLine label="GST subtotal" value={gstSubtotal} muted />
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-700 font-bold">Net subtotal</span>
-            <span className="text-gray-900 font-black tabular-nums">
-              {inrFormatter.format(netSubtotal)}
-            </span>
-          </div>
-        </div>
-
-        <div className="pt-3 border-t border-gray-100">
-          <div className="flex items-center justify-between px-1">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
-              <TrendingUp className="w-3 h-3" /> Dealer Margin
-            </label>
-            <div className="inline-flex rounded-lg border border-[#EBEBEB] bg-gray-50 p-0.5">
-              <button
-                type="button"
-                onClick={() => onMarginModeChange("rupees")}
-                disabled={disabled}
-                className={`px-2.5 py-1 text-[10px] font-black rounded-md transition-colors ${
-                  marginMode === "rupees"
-                    ? "bg-white text-[#0047AB] shadow-sm"
-                    : "text-gray-400 hover:text-gray-600"
-                } disabled:cursor-not-allowed`}
-                aria-pressed={marginMode === "rupees"}
-              >
-                ₹
-              </button>
-              <button
-                type="button"
-                onClick={() => onMarginModeChange("percent")}
-                disabled={disabled}
-                className={`px-2.5 py-1 text-[10px] font-black rounded-md transition-colors ${
-                  marginMode === "percent"
-                    ? "bg-white text-[#0047AB] shadow-sm"
-                    : "text-gray-400 hover:text-gray-600"
-                } disabled:cursor-not-allowed`}
-                aria-pressed={marginMode === "percent"}
-              >
-                %
-              </button>
-            </div>
-          </div>
-          <div className="mt-1.5 relative">
-            {marginMode === "rupees" ? (
-              <>
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">
-                  ₹
-                </span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={marginInput}
-                  onChange={(e) => onMarginChange(e.target.value)}
-                  disabled={disabled}
-                  className="w-full h-11 pl-8 pr-4 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50 disabled:bg-gray-50 disabled:text-gray-400"
-                  placeholder="0"
-                />
-              </>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={marginPercentInput}
-                  onChange={(e) => onMarginPercentChange(e.target.value)}
-                  disabled={disabled}
-                  className="w-full h-11 pl-4 pr-10 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50 disabled:bg-gray-50 disabled:text-gray-400"
-                  placeholder="0"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">
-                  %
-                </span>
-              </>
-            )}
-          </div>
-          {marginMode === "percent" ? (
-            <p className="text-[10px] text-gray-500 mt-1.5 px-1 tabular-nums">
-              {marginPercentInput && parseFloat(marginPercentInput) > 0
-                ? `${marginPercentInput}% of net subtotal = `
-                : "% of net subtotal = "}
-              <span className="font-bold text-gray-700">
-                {inrFormatter.format(dealerMargin)}
-              </span>
-            </p>
-          ) : (
-            <p className="text-[10px] text-gray-400 mt-1.5 px-1">
-              Your earnings on this sale
-            </p>
-          )}
-        </div>
-
-        <div className="pt-4 mt-2 border-t-2 border-gray-100">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-gray-500 uppercase tracking-widest">
-              Final Price
-            </span>
-            <span className="text-2xl font-black text-[#0047AB] tabular-nums">
-              {inr(finalPrice)}
-            </span>
-          </div>
-          <p className="text-[10px] text-gray-400 mt-2 flex items-center gap-1.5">
-            <Wallet className="w-3 h-3" /> {inventoryNote}
-          </p>
-        </div>
-
-        {/* Compact margin breakdown stat — only shown in rupees mode (in
-            percent mode the helper line above already shows this), and always
-            measured against net subtotal so it agrees with the % input. */}
-        {marginMode === "rupees" && dealerMargin > 0 && netSubtotal > 0 && (
-          <div className="px-3 py-2 bg-emerald-50 border border-emerald-100 rounded-lg">
-            <p className="text-[10px] text-emerald-700 font-bold">
-              Margin = {((dealerMargin / netSubtotal) * 100).toFixed(1)}% of net subtotal
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function PriceLine({
-  label,
-  value,
-  muted,
-}: {
-  label: string;
-  value: number;
-  muted?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span className={muted ? "text-gray-400 font-medium text-xs" : "text-gray-500 font-medium"}>
-        {label}
-      </span>
-      <span
-        className={`tabular-nums ${muted ? "text-gray-500 font-bold text-xs" : "text-gray-900 font-bold"}`}
-      >
-        {inr(value)}
-      </span>
-    </div>
-  );
-}
-
-function EmptyState({
-  icon,
-  title,
-  hint,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  hint?: string;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-10 text-center">
-      <div className="mb-3">{icon}</div>
-      <p className="text-sm font-bold text-gray-700">{title}</p>
-      {hint && <p className="text-[11px] text-gray-400 mt-1 max-w-xs">{hint}</p>}
-    </div>
-  );
-}
-
-function SkeletonCardGrid() {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      {[0, 1, 2].map((i) => (
-        <div
-          key={i}
-          className="p-4 rounded-2xl border-2 border-gray-100 bg-white animate-pulse"
-        >
-          <div className="flex justify-between">
-            <div className="space-y-2 flex-1">
-              <div className="h-4 w-32 bg-gray-100 rounded" />
-              <div className="h-3 w-24 bg-gray-100 rounded" />
-            </div>
-            <div className="h-5 w-16 bg-gray-100 rounded" />
-          </div>
-          <div className="mt-4 h-2 w-full bg-gray-100 rounded" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function CashConfirmModal({
   customerName,
   battery,
   charger,
   finalPrice,
+  dealerMarginGst,
   submitting,
   error,
   onCancel,
@@ -3400,6 +914,7 @@ function CashConfirmModal({
   battery: BatteryRow;
   charger: ChargerRow;
   finalPrice: number;
+  dealerMarginGst?: number;
   submitting: boolean;
   error?: string | null;
   onCancel: () => void;
@@ -3457,8 +972,11 @@ function CashConfirmModal({
             <ConfirmRow
               label="Final Price"
               value={
-                <span className="text-lg font-black text-[#0047AB] tabular-nums">
-                  {inr(finalPrice)}
+                <span className="text-right">
+                  <span className="text-lg font-black text-[#0047AB] tabular-nums">{inr(finalPrice)}</span>
+                  {dealerMarginGst ? (
+                    <span className="block text-[10px] text-gray-400">incl. {inr(dealerMarginGst)} GST on margin</span>
+                  ) : null}
                 </span>
               }
             />
@@ -3519,21 +1037,6 @@ function ConfirmRow({
   );
 }
 
-function formatShortDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-// Addendum V0.1 §5.2 — Section G Financing Options.
-// Renders the BRE-matched NBFCs with indicative ranges (ROI, EMI band,
-// tenure, DP) labelled "indicative — subject to verification" and lets the
-// dealer record the customer's pick of 1 or 2 NBFCs. The final winner is
-// chosen later (Phase 5) after each picked NBFC submits firm conditions.
 function SectionG({
   options,
   loading,
@@ -3720,113 +1223,4 @@ function RangeStat({ label, value }: { label: string; value: string }) {
 // Addendum V0.1 §5.1 — battery/charger photo upload block. Two named slots
 // (serial close-up + unit photo) plus an "Add Another" option for extra
 // shots. Uploads happen one at a time; URLs come back from
-// /api/lead/[id]/product-photo and are tracked by the parent.
-function ProductPhotoSection({
-  title,
-  subtitle,
-  kind,
-  urls,
-  onAdd,
-  onRemove,
-  uploadingTag,
-}: {
-  title: string;
-  subtitle: string;
-  kind: "battery" | "charger";
-  urls: string[];
-  onAdd: (label: string, file: File) => Promise<void> | void;
-  onRemove: (idx: number) => void;
-  uploadingTag: string | null;
-}) {
-  const slots = [
-    { label: "serial", caption: "Serial close-up" },
-    { label: "unit", caption: "Unit photo" },
-  ];
-  return (
-    <SectionCard title={title}>
-      <p className="text-[11px] text-gray-400 mb-4 px-1">{subtitle}</p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {slots.map((slot) => {
-          const isUploading = uploadingTag === `${kind}:${slot.label}`;
-          return (
-            <label
-              key={slot.label}
-              className={`flex flex-col items-center justify-center h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all px-3 ${
-                isUploading
-                  ? "border-blue-300 bg-blue-50 cursor-wait"
-                  : "border-gray-200 hover:border-[#0047AB] hover:bg-blue-50/30"
-              }`}
-            >
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/jpg"
-                className="hidden"
-                disabled={isUploading}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onAdd(slot.label, file);
-                  e.currentTarget.value = "";
-                }}
-              />
-              {isUploading ? (
-                <span className="text-xs font-bold text-blue-700">Uploading…</span>
-              ) : (
-                <>
-                  <Plus className="w-5 h-5 text-gray-400 mb-1" />
-                  <span className="text-xs font-bold text-gray-700">{slot.caption}</span>
-                  <span className="text-[10px] text-gray-400 mt-0.5">JPG/PNG · 5 MB max</span>
-                </>
-              )}
-            </label>
-          );
-        })}
-        <label
-          className={`flex flex-col items-center justify-center h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all px-3 ${
-            uploadingTag?.startsWith(`${kind}:extra_`)
-              ? "border-blue-300 bg-blue-50 cursor-wait"
-              : "border-gray-200 hover:border-[#0047AB] hover:bg-blue-50/30"
-          }`}
-        >
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/jpg"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) onAdd(`extra_${Date.now()}`, file);
-              e.currentTarget.value = "";
-            }}
-          />
-          <Plus className="w-5 h-5 text-gray-400 mb-1" />
-          <span className="text-xs font-bold text-gray-700">Add another</span>
-          <span className="text-[10px] text-gray-400 mt-0.5">Optional</span>
-        </label>
-      </div>
-      {urls.length > 0 && (
-        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {urls.map((url, idx) => (
-            <div
-              key={`${url}-${idx}`}
-              className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50 group"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={url}
-                alt={`${title} ${idx + 1}`}
-                className="w-full h-full object-cover"
-              />
-              <button
-                type="button"
-                onClick={() => onRemove(idx)}
-                className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                aria-label="Remove"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </SectionCard>
-  );
-}
+// /api/lead/[id]/product-photo and are tracked by the parent.

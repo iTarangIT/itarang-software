@@ -7,6 +7,7 @@ import { leads, loanSanctions, nbfc, productSelections } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanSanctioned } from "@/lib/notifications";
+import { notifyLoanSanctionedEvent } from "@/lib/notifications/events";
 
 // BRD V2 §2.7 — admin Step 4 "Loan Sanctioned" action.
 // Inserts a loan_sanctions row and advances lead to 'loan_sanctioned' so the
@@ -160,6 +161,14 @@ async function _POST_ORIGINAL_IMPL(
       emi: body.emi,
       tenureMonths: body.tenureMonths,
     }).catch(() => {});
+
+    // Admin + the NBFC(s) routed to this lead. The call above is the dealer's
+    // Step-5 nudge only; neither the admin team nor the lender had any signal.
+    await notifyLoanSanctionedEvent({
+      leadId,
+      lenderName: body.loanApprovedBy,
+      loanAmount: body.loanAmount,
+    });
 
     return NextResponse.json({
       success: true,

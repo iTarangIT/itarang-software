@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Battery Recovery &amp; Auction — Flow Diagrams</title>
+<style>*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}img,svg{max-width:100%}</style>
+</head>
+<body>
+
+<style>
+  :root {
+    --paper:  #E9ECF0;
+    --board:  #FBFCFD;
+    --card:   #FFFFFF;
+    --ink:    #14181E;
+    --ink-2:  #4C5665;
+    --rule:   #C3CCD9;
+    --nbfc:   #24409B;
+    --ops:    #0B6B62;
+    --dealer: #8A5200;
+    --sys:    #5A4B8A;
+    --warn:   #9C3A1E;
+    --tint:   #F2F5F9;
+    --display: Constantia, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --body: Corbel, "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", Consolas, "SFMono-Regular", ui-monospace, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#0F1319; --board:#161B23; --card:#1B212A; --ink:#E4E9F0; --ink-2:#98A3B3;
+      --rule:#303A49; --nbfc:#8CA1FF; --ops:#46C2AE; --dealer:#E0B15C; --sys:#B3A0F0;
+      --warn:#E9906F; --tint:#141A22;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#0F1319; --board:#161B23; --card:#1B212A; --ink:#E4E9F0; --ink-2:#98A3B3;
+    --rule:#303A49; --nbfc:#8CA1FF; --ops:#46C2AE; --dealer:#E0B15C; --sys:#B3A0F0;
+    --warn:#E9906F; --tint:#141A22;
+  }
+  :root[data-theme="light"] {
+    --paper:#E9ECF0; --board:#FBFCFD; --card:#FFFFFF; --ink:#14181E; --ink-2:#4C5665;
+    --rule:#C3CCD9; --nbfc:#24409B; --ops:#0B6B62; --dealer:#8A5200; --sys:#5A4B8A;
+    --warn:#9C3A1E; --tint:#F2F5F9;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    line-height: 1.5;
+    padding: 32px 24px 72px;
+  }
+
+  .sheet { max-width: 1600px; margin: 0 auto; display: flex; flex-direction: column; gap: 30px; }
+
+  /* — title block, set like the corner block of an engineering drawing — */
+  .titleblock {
+    display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 16px 40px;
+    align-items: end; border-bottom: 2px solid var(--ink); padding-bottom: 14px;
+  }
+  .titleblock h1 {
+    font-family: var(--display); font-size: clamp(28px,4vw,46px); font-weight: 600;
+    letter-spacing: -0.015em; line-height: 1.05; text-wrap: balance;
+  }
+  .titleblock p { color: var(--ink-2); font-size: 15px; max-width: 66ch; margin-top: 8px; }
+  .stamp {
+    display: flex; gap: 28px; font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .stamp span { display: block; }
+  .stamp b { display: block; color: var(--ink); font-weight: 600; letter-spacing: 0.04em; }
+
+  section > h2 {
+    font-family: var(--display); font-size: 23px; font-weight: 600; letter-spacing: -0.01em;
+    padding-bottom: 8px; border-bottom: 1px solid var(--rule); margin-bottom: 14px;
+  }
+  section > h2 small {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 400; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.1em; margin-left: 12px;
+  }
+  section > p { color: var(--ink-2); font-size: 14.5px; max-width: 92ch; margin-bottom: 14px; }
+  section > p b { color: var(--ink); font-weight: 600; }
+
+  figure { background: var(--board); border: 1px solid var(--rule); padding: 8px; overflow-x: auto; }
+  figure svg { display: block; min-width: 1180px; width: 100%; height: auto; }
+  figcaption { margin-top: 10px; padding: 0 6px 4px; font-size: 13px; color: var(--ink-2); }
+
+  /* — the pivot callout — */
+  .pivot {
+    border: 1px solid var(--rule); border-left: 4px solid var(--warn);
+    background: var(--card); padding: 18px 22px;
+  }
+  .pivot h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .pivot p { font-size: 14px; color: var(--ink-2); max-width: 100ch; }
+  .pivot p + p { margin-top: 8px; }
+  .pivot code, code {
+    font-family: var(--mono); font-size: 0.88em; color: var(--ink);
+    background: var(--tint); padding: 1px 5px; border: 1px solid var(--rule);
+  }
+
+  /* — svg type scale — */
+  .h   { font: 600 12.5px var(--body); fill: var(--ink); }
+  .n   { font: 10.5px var(--body); fill: var(--ink); }
+  .nn  { font: 10px var(--body); fill: var(--ink-2); }
+  .m   { font: 10px var(--mono); fill: var(--ink); }
+  .mm  { font: 9.5px var(--mono); fill: var(--ink-2); }
+  .lbl { font: 9.5px var(--body); fill: var(--ink-2); letter-spacing: 0.05em; }
+  .eyebrow { font: 600 11px var(--body); fill: var(--ink); letter-spacing: 0.14em; text-transform: uppercase; }
+  .lane-h  { font: 600 11.5px var(--body); fill: var(--ink); }
+  .lane-s  { font: 9.5px var(--mono); fill: var(--ink-2); }
+  .chip-t  { font: 600 10.5px var(--body); fill: var(--ink); }
+  .w   { font: 600 10px var(--body); fill: var(--warn); }
+
+  .card-r { fill: var(--card); stroke: var(--rule); stroke-width: 1; }
+  .band-r { fill: var(--tint); stroke: var(--rule); stroke-width: 1; }
+  .ghost  { fill: none; stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 5 4; }
+  .t-nbfc { fill: var(--nbfc); }
+  .t-ops  { fill: var(--ops); }
+  .t-deal { fill: var(--dealer); }
+  .t-sys  { fill: var(--sys); }
+  .t-warn { fill: var(--warn); }
+
+  .flow  { stroke: var(--ink-2); stroke-width: 1.6; fill: none; }
+  .flow-w{ stroke: var(--warn);  stroke-width: 1.4; fill: none; }
+  .flow-l{ stroke: var(--sys);   stroke-width: 1.4; fill: none; stroke-dasharray: 6 4; }
+
+  /* — tables — */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--card); }
+  caption { text-align: left; font-size: 13px; color: var(--ink-2); padding-bottom: 10px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font: 600 10.5px var(--mono); text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--ink-2); border-bottom: 1px solid var(--ink);
+  }
+  tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
+  td.num { font-family: var(--mono); font-size: 11px; color: var(--ink-2); white-space: nowrap; }
+  td.ref { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+
+  .tag {
+    display: inline-block; font: 600 9.5px var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 2px 7px; border: 1px solid currentColor; white-space: nowrap;
+  }
+  .tag.built  { color: var(--ops); }
+  .tag.extend { color: var(--nbfc); }
+  .tag.new    { color: var(--warn); }
+  .tag.change { color: var(--dealer); }
+  .tag.later  { color: var(--ink-2); }
+
+  .key {
+    display: flex; flex-wrap: wrap; gap: 10px 28px; font-size: 12.5px; color: var(--ink-2);
+    border-top: 1px solid var(--rule); padding: 12px 2px 0;
+  }
+  .key div { display: flex; align-items: center; gap: 8px; }
+  .key svg { flex: none; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+  .note { border: 1px solid var(--rule); background: var(--card); padding: 16px 18px; }
+  .note h4 { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; }
+  .note ul { list-style: none; font-size: 13px; color: var(--ink-2); }
+  .note li { padding-left: 14px; text-indent: -14px; margin-top: 5px; }
+  .note li::before { content: "— "; color: var(--rule); }
+
+  footer { font-size: 12.5px; color: var(--ink-2); border-top: 1px solid var(--rule); padding-top: 12px; }
+</style>
+
+<div class="sheet">
+
+  <header class="titleblock">
+    <div>
+      <h1>Battery Recovery &amp; Auction</h1>
+    </div>
+  </header>
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2>1 — The flow, end to end <small>who does what, in order</small></h2>
+    <p>Five actors, seven stages. The battery only ever moves left to right; the money and the
+      finance loop come back the other way.</p>
+
+    <figure>
+      <svg viewBox="0 0 1540 910" role="img"
+           aria-label="Swimlane diagram of the battery recovery and auction flow across five actors — NBFC, collection centre, refurbishment workshop, the platform, and the dealer — and seven stages: default and recover, intake, inspect and grade, optional refurbishment, build and publish the lot, live bidding, and award and hand over. A dashed loop returns from the handover stage to the start, representing the battery being financed again and redeployed.">
+
+        <defs>
+          <marker id="a-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-2)" />
+          </marker>
+          <marker id="a-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--warn)" />
+          </marker>
+          <marker id="a-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--sys)" />
+          </marker>
+        </defs>
+
+        <rect x="36" y="24" width="4" height="14" class="t-nbfc" />
+        <text x="50" y="36" class="eyebrow">Master flow · one battery, start to finish</text>
+
+        <!-- stage headers -->
+        <rect x="176"  y="58" width="180" height="3" class="t-nbfc" />
+        <text x="176"  y="80" class="h">1 · Default &amp; recover</text>
+        <rect x="370"  y="58" width="180" height="3" class="t-ops" />
+        <text x="370"  y="80" class="h">2 · Intake</text>
+        <rect x="564"  y="58" width="180" height="3" class="t-ops" />
+        <text x="564"  y="80" class="h">3 · Inspect &amp; grade</text>
+        <rect x="758"  y="58" width="180" height="3" class="t-ops" />
+        <text x="758"  y="80" class="h">4 · Refurbish</text>
+        <rect x="952"  y="58" width="180" height="3" class="t-nbfc" />
+        <text x="952"  y="80" class="h">5 · Build &amp; publish</text>
+        <rect x="1146" y="58" width="180" height="3" class="t-deal" />
+        <text x="1146" y="80" class="h">6 · Live bidding</text>
+        <rect x="1340" y="58" width="180" height="3" class="t-deal" />
+        <text x="1340" y="80" class="h">7 · Award &amp; hand over</text>
+
+        <!-- lanes -->
+        <rect x="36" y="96"  width="1484" height="132" class="band-r" />
+        <rect x="36" y="248" width="1484" height="132" class="band-r" />
+        <rect x="36" y="400" width="1484" height="132" class="band-r" />
+        <rect x="36" y="552" width="1484" height="132" class="band-r" />
+        <rect x="36" y="704" width="1484" height="132" class="band-r" />
+
+        <rect x="36" y="96"  width="4" height="132" class="t-nbfc" />
+        <rect x="36" y="248" width="4" height="132" class="t-ops" />
+        <rect x="36" y="400" width="4" height="132" class="t-ops" />
+        <rect x="36" y="552" width="4" height="132" class="t-sys" />
+        <rect x="36" y="704" width="4" height="132" class="t-deal" />
+
+        <text x="52" y="132" class="lane-h">NBFC</text>
+        <text x="52" y="150" class="lane-s">owns asset</text>
+        <text x="52" y="164" class="lane-s">owns the lot</text>
+
+        <text x="52" y="284" class="lane-h">Collection centre</text>
+        <text x="52" y="302" class="lane-s">intake +</text>
+        <text x="52" y="316" class="lane-s">inspection</text>
+
+        <text x="52" y="436" class="lane-h">Workshop</text>
+        <text x="52" y="454" class="lane-s">iTarang repair</text>
+        <text x="52" y="468" class="lane-s">or scrap</text>
+
+        <text x="52" y="588" class="lane-h">Platform</text>
+        <text x="52" y="606" class="lane-s">automatic</text>
+        <text x="52" y="620" class="lane-s">no human</text>
+
+        <text x="52" y="740" class="lane-h">Dealer</text>
+        <text x="52" y="758" class="lane-s">the only</text>
+        <text x="52" y="772" class="lane-s">bidder</text>
+
+        <!-- A · flag for recovery -->
+        <rect x="176" y="106" width="180" height="112" class="card-r" />
+        <rect x="176" y="106" width="180" height="3" class="t-nbfc" />
+        <text x="190" y="130" class="h">Flag for Recovery</text>
+        <text x="190" y="152" class="n">EMI default · Risk Head</text>
+        <text x="190" y="170" class="n">flags the loan</text>
+        <text x="190" y="188" class="mm">recovery_flagged_at</text>
+        <text x="190" y="206" class="nn">Team collects battery</text>
+
+        <!-- B · intake -->
+        <rect x="370" y="258" width="180" height="112" class="card-r" />
+        <rect x="370" y="258" width="180" height="3" class="t-ops" />
+        <text x="384" y="282" class="h">Intake at centre</text>
+        <text x="384" y="304" class="n">Serial · condition · GPS</text>
+        <text x="384" y="322" class="n">Recovery date · photos</text>
+        <text x="384" y="340" class="mm">recovery_batteries</text>
+        <text x="384" y="358" class="w">NEW · row per battery</text>
+
+        <!-- C · inspect -->
+        <rect x="564" y="258" width="180" height="112" class="card-r" />
+        <rect x="564" y="258" width="180" height="3" class="t-ops" />
+        <text x="578" y="282" class="h">Inspect &amp; grade</text>
+        <text x="578" y="304" class="n">3-step form → SOH,</text>
+        <text x="578" y="322" class="n">repair plan, base price</text>
+        <text x="578" y="340" class="mm">battery_evaluations</text>
+        <text x="578" y="358" class="nn">BUILT · add photos</text>
+
+        <!-- scrap -->
+        <rect x="564" y="410" width="180" height="112" class="ghost" />
+        <text x="578" y="434" class="h">Scrap · terminal</text>
+        <text x="578" y="456" class="n">SOH &lt; 55%, or damage</text>
+        <text x="578" y="474" class="n">beyond repair</text>
+        <text x="578" y="492" class="mm">stage='scrap'</text>
+        <text x="578" y="510" class="nn">Scrap vendor · E-223</text>
+
+        <!-- D · refurbish -->
+        <rect x="758" y="410" width="180" height="112" class="card-r" />
+        <rect x="758" y="410" width="180" height="3" class="t-ops" />
+        <text x="772" y="434" class="h">Refurbish · optional</text>
+        <text x="772" y="456" class="n">NBFC raises request →</text>
+        <text x="772" y="474" class="n">iTarang repairs, returns</text>
+        <text x="772" y="492" class="mm">refurbishment_jobs</text>
+        <text x="772" y="510" class="w">NEW · cost + checklist</text>
+
+        <!-- E · build lot -->
+        <rect x="952" y="106" width="180" height="112" class="card-r" />
+        <rect x="952" y="106" width="180" height="3" class="t-nbfc" />
+        <text x="966" y="130" class="h">Build the lot</text>
+        <text x="966" y="152" class="n">Name · type · items · qty</text>
+        <text x="966" y="170" class="n">Base price · 2/12/24/48h</text>
+        <text x="966" y="188" class="n">Visibility: India→radius</text>
+        <text x="966" y="206" class="mm">auction_lots + items</text>
+
+        <!-- F · publish -->
+        <rect x="952" y="562" width="180" height="112" class="card-r" />
+        <rect x="952" y="562" width="180" height="3" class="t-sys" />
+        <text x="966" y="586" class="h">Open &amp; fan out</text>
+        <text x="966" y="608" class="n">Scheduler opens at</text>
+        <text x="966" y="626" class="n">start, closes at end</text>
+        <text x="966" y="644" class="n">BullMQ · repeatable job</text>
+        <text x="966" y="662" class="mm">wa · sms · mail · card</text>
+
+        <!-- H · bid engine -->
+        <rect x="1146" y="562" width="180" height="112" class="card-r" />
+        <rect x="1146" y="562" width="180" height="3" class="t-sys" />
+        <text x="1160" y="586" class="h">Bid engine</text>
+        <text x="1160" y="608" class="n">≥ current + increment</text>
+        <text x="1160" y="626" class="n">Anti-snipe: extend 2 min</text>
+        <text x="1160" y="644" class="n">Auto-bid proxy · audit</text>
+        <text x="1160" y="662" class="mm">bids / auto_bids</text>
+
+        <!-- G · dealer bids -->
+        <rect x="1146" y="714" width="180" height="112" class="card-r" />
+        <rect x="1146" y="714" width="180" height="3" class="t-deal" />
+        <text x="1160" y="738" class="h">Dealer bids</text>
+        <text x="1160" y="760" class="n">Photos, SOH, quantity,</text>
+        <text x="1160" y="778" class="n">location, highest bid —</text>
+        <text x="1160" y="796" class="n">never the rival's name</text>
+        <text x="1160" y="814" class="w">NEW · dealer auction UI</text>
+
+        <!-- I · award -->
+        <rect x="1340" y="106" width="180" height="112" class="card-r" />
+        <rect x="1340" y="106" width="180" height="3" class="t-nbfc" />
+        <text x="1354" y="130" class="h">Approve the winner</text>
+        <text x="1354" y="152" class="n">Top bid is suggested;</text>
+        <text x="1354" y="170" class="n">NBFC has the final say</text>
+        <text x="1354" y="188" class="mm">approve-winning-bid</text>
+        <text x="1354" y="206" class="nn">BUILT · admin can too</text>
+
+        <!-- J · settle -->
+        <rect x="1340" y="714" width="180" height="112" class="card-r" />
+        <rect x="1340" y="714" width="180" height="3" class="t-deal" />
+        <text x="1354" y="738" class="h">Pay, collect, redeploy</text>
+        <text x="1354" y="760" class="n">Cash in full — or</text>
+        <text x="1354" y="778" class="n">cash + refinance loan</text>
+        <text x="1354" y="796" class="n">Pickup → delivery → done</text>
+        <text x="1354" y="814" class="mm">auction_settlements</text>
+
+        <!-- connectors -->
+        <path d="M356 162 H363 V314 H364" class="flow" marker-end="url(#a-flow)" />
+        <text x="356" y="240" class="lbl" text-anchor="end">recovered</text>
+
+        <path d="M550 314 H558" class="flow" marker-end="url(#a-flow)" />
+
+        <path d="M744 340 H751 V466 H752" class="flow" marker-end="url(#a-flow)" />
+        <text x="747" y="396" class="lbl" text-anchor="end">needs repair</text>
+
+        <path d="M744 288 H945 V168" class="flow" marker-end="url(#a-flow)" />
+        <text x="850" y="282" class="lbl" text-anchor="middle">no repair needed</text>
+
+        <path d="M938 466 H945 V168" class="flow" marker-end="url(#a-flow)" />
+        <text x="951" y="430" class="lbl">refurb done</text>
+
+        <path d="M654 380 V404" class="flow-w" marker-end="url(#a-warn)" />
+        <text x="662" y="396" class="lbl">reject</text>
+
+        <path d="M1042 218 V556" class="flow" marker-end="url(#a-flow)" />
+        <text x="1048" y="392" class="lbl">publish → live</text>
+
+        <path d="M1132 618 H1139 V770 H1140" class="flow" marker-end="url(#a-flow)" />
+        <text x="1133" y="694" class="lbl" text-anchor="end">notified</text>
+
+        <path d="M1230 714 V680" class="flow" marker-end="url(#a-flow)" />
+        <path d="M1242 674 V708" class="flow" marker-end="url(#a-flow)" />
+        <text x="1252" y="698" class="lbl">bid ⇄ validate</text>
+
+        <path d="M1326 618 H1333 V168" class="flow" marker-end="url(#a-flow)" />
+        <text x="1329" y="400" class="lbl" text-anchor="end">auction ends</text>
+
+        <path d="M1430 218 V708" class="flow" marker-end="url(#a-flow)" />
+        <text x="1436" y="470" class="lbl">awarded</text>
+
+        <path d="M1430 826 V872 H166 V168" class="flow-l" marker-end="url(#a-loop)" />
+        <text x="800" y="864" class="lbl" text-anchor="middle">Cash + refinance — the battery is financed again and redeployed to a new driver</text>
+
+      </svg>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2>2 — Status machine <small>one row per battery, one row per lot</small></h2>
+    <figure>
+      <svg viewBox="0 0 1490 258" role="img"
+           aria-label="Status machine. Nine statuses in a chain: draft, inspection pending, refurbishment pending, ready for auction, auction live, auction closed, winner selected, payment pending, completed. A bypass arc skips refurbishment when no repair is needed. Scrap branches off inspection, cancellation branches off the live and closed states, and refinance branches off completed. Below each status is the database column that holds it.">
+
+        <defs>
+          <marker id="b-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-2)" />
+          </marker>
+          <marker id="b-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--warn)" />
+          </marker>
+        </defs>
+
+        <rect x="24" y="14" width="4" height="14" class="t-ops" />
+        <text x="38" y="26" class="eyebrow">Battery states → lot states</text>
+
+        <text x="24" y="60" class="lane-s">BATTERY · nbfc_recovery_pipeline.stage</text>
+        <text x="672" y="60" class="lane-s">LOT · auction_lots.status → auction_settlements.status</text>
+
+        <!-- chips -->
+        <rect x="24"   y="72" width="140" height="46" class="card-r" /><rect x="24"   y="72" width="140" height="3" class="t-ops" />
+        <rect x="186"  y="72" width="140" height="46" class="card-r" /><rect x="186"  y="72" width="140" height="3" class="t-ops" />
+        <rect x="348"  y="72" width="140" height="46" class="card-r" /><rect x="348"  y="72" width="140" height="3" class="t-warn" />
+        <rect x="510"  y="72" width="140" height="46" class="card-r" /><rect x="510"  y="72" width="140" height="3" class="t-ops" />
+        <rect x="672"  y="72" width="140" height="46" class="card-r" /><rect x="672"  y="72" width="140" height="3" class="t-nbfc" />
+        <rect x="834"  y="72" width="140" height="46" class="card-r" /><rect x="834"  y="72" width="140" height="3" class="t-nbfc" />
+        <rect x="996"  y="72" width="140" height="46" class="card-r" /><rect x="996"  y="72" width="140" height="3" class="t-nbfc" />
+        <rect x="1158" y="72" width="140" height="46" class="card-r" /><rect x="1158" y="72" width="140" height="3" class="t-deal" />
+        <rect x="1320" y="72" width="140" height="46" class="card-r" /><rect x="1320" y="72" width="140" height="3" class="t-deal" />
+
+        <text x="94"   y="101" class="chip-t" text-anchor="middle">Draft</text>
+        <text x="256"  y="101" class="chip-t" text-anchor="middle">Inspection Pending</text>
+        <text x="418"  y="101" class="chip-t" text-anchor="middle">Refurb Pending</text>
+        <text x="580"  y="101" class="chip-t" text-anchor="middle">Ready for Auction</text>
+        <text x="742"  y="101" class="chip-t" text-anchor="middle">Auction Live</text>
+        <text x="904"  y="101" class="chip-t" text-anchor="middle">Auction Closed</text>
+        <text x="1066" y="101" class="chip-t" text-anchor="middle">Winner Selected</text>
+        <text x="1228" y="101" class="chip-t" text-anchor="middle">Payment Pending</text>
+        <text x="1390" y="101" class="chip-t" text-anchor="middle">Completed</text>
+
+        <!-- db mapping -->
+        <text x="94"   y="140" class="mm" text-anchor="middle">recovery_batteries</text>
+        <text x="94"   y="155" class="mm" text-anchor="middle">state='draft' · NEW</text>
+        <text x="256"  y="140" class="mm" text-anchor="middle">stage=</text>
+        <text x="256"  y="155" class="mm" text-anchor="middle">'needs_inspection'</text>
+        <text x="418"  y="140" class="mm" text-anchor="middle">stage='refurbishable'</text>
+        <text x="418"  y="155" class="mm" text-anchor="middle">+ job · NEW</text>
+        <text x="580"  y="140" class="mm" text-anchor="middle">stage=</text>
+        <text x="580"  y="155" class="mm" text-anchor="middle">'ready_for_auction'</text>
+        <text x="742"  y="140" class="mm" text-anchor="middle">status='live'</text>
+        <text x="742"  y="155" class="mm" text-anchor="middle">ends_at set</text>
+        <text x="904"  y="140" class="mm" text-anchor="middle">status='ended'</text>
+        <text x="904"  y="155" class="mm" text-anchor="middle">scheduler writes it</text>
+        <text x="1066" y="140" class="mm" text-anchor="middle">settlement row</text>
+        <text x="1066" y="155" class="mm" text-anchor="middle">winner_dealer_id</text>
+        <text x="1228" y="140" class="mm" text-anchor="middle">status=</text>
+        <text x="1228" y="155" class="mm" text-anchor="middle">'payment_pending'</text>
+        <text x="1390" y="140" class="mm" text-anchor="middle">'delivered' +</text>
+        <text x="1390" y="155" class="mm" text-anchor="middle">battery 'resold'</text>
+
+        <!-- chain arrows -->
+        <path d="M164 95 H180"   class="flow" marker-end="url(#b-flow)" />
+        <path d="M326 95 H342"   class="flow" marker-end="url(#b-flow)" />
+        <path d="M488 95 H504"   class="flow" marker-end="url(#b-flow)" />
+        <path d="M650 95 H666"   class="flow" marker-end="url(#b-flow)" />
+        <path d="M812 95 H828"   class="flow" marker-end="url(#b-flow)" />
+        <path d="M974 95 H990"   class="flow" marker-end="url(#b-flow)" />
+        <path d="M1136 95 H1152" class="flow" marker-end="url(#b-flow)" />
+        <path d="M1298 95 H1314" class="flow" marker-end="url(#b-flow)" />
+
+        <!-- bypass arc -->
+        <path d="M256 72 C 300 20, 536 20, 578 66" class="flow" marker-end="url(#b-flow)" />
+        <text x="418" y="30" class="lbl" text-anchor="middle">no repair needed — refurbishment is recommended, never mandatory</text>
+
+        <!-- branches -->
+        <rect x="186" y="196" width="140" height="42" class="ghost" />
+        <text x="256" y="222" class="chip-t" text-anchor="middle">Scrap</text>
+        <path d="M256 170 V190" class="flow-w" marker-end="url(#b-warn)" />
+        <text x="264" y="186" class="lbl">SOH &lt; 55%</text>
+
+        <rect x="834" y="196" width="140" height="42" class="ghost" />
+        <text x="904" y="222" class="chip-t" text-anchor="middle">Cancelled</text>
+        <path d="M742 170 V210 H828" class="flow-w" marker-end="url(#b-warn)" />
+        <path d="M904 170 V190"      class="flow-w" marker-end="url(#b-warn)" />
+
+        <rect x="1320" y="196" width="140" height="42" class="card-r" />
+        <rect x="1320" y="196" width="140" height="3" class="t-sys" />
+        <text x="1390" y="224" class="chip-t" text-anchor="middle">Refinanced</text>
+        <path d="M1390 170 V190" class="flow" marker-end="url(#b-flow)" />
+      </svg>
+
+      <figcaption>Draft, Refurbishment Pending and everything after Winner Selected need new
+        storage. The middle of the chain already exists and already enforces its transitions.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2>3 — Who sees the lot, and how they hear about it <small>visibility + notification</small></h2>
+    <figure>
+      <svg viewBox="0 0 1490 450" role="img"
+           aria-label="Visibility and notification fan-out. A published lot passes through a visibility rule — entire India, selected states, selected cities, or a radius in kilometres — into an eligibility resolver that keeps only active approved dealer, admin and driver accounts and excludes all NBFC users. The resulting audience is then notified over four channels: WhatsApp, SMS, email, and a dashboard carousel card.">
+
+        <defs>
+          <marker id="c-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-2)" />
+          </marker>
+        </defs>
+
+        <rect x="24" y="14" width="4" height="14" class="t-deal" />
+        <text x="38" y="26" class="eyebrow">Resolved once at publish · stored as a snapshot</text>
+
+        <!-- lot -->
+        <rect x="24" y="56" width="440" height="200" class="card-r" />
+        <rect x="24" y="56" width="440" height="3" class="t-nbfc" />
+        <text x="40" y="82" class="h">Lot goes live</text>
+        <text x="40" y="106" class="n">Lot code · auction name</text>
+        <text x="40" y="124" class="n">Cash only, or cash +</text>
+        <text x="40" y="142" class="n">refinance</text>
+        <text x="40" y="166" class="n">Battery items, quantity,</text>
+        <text x="40" y="184" class="n">condition mix, base price</text>
+        <text x="40" y="208" class="n">Window: 2 / 12 / 24 / 48 h</text>
+        <text x="40" y="232" class="mm">auction_lots · E-227</text>
+
+        <!-- visibility -->
+        <rect x="524" y="56" width="440" height="200" class="card-r" />
+        <rect x="524" y="56" width="440" height="3" class="t-deal" />
+        <text x="540" y="82" class="h">Visibility rule — pick one</text>
+        <text x="540" y="108" class="m">scope='india'</text>
+        <text x="540" y="126" class="nn">everyone, no filter</text>
+        <text x="540" y="150" class="m">scope='state'   states[]</text>
+        <text x="540" y="168" class="nn">one or many</text>
+        <text x="540" y="192" class="m">scope='city'    cities[]</text>
+        <text x="540" y="210" class="nn">one or many</text>
+        <text x="540" y="234" class="m">scope='radius'  lat/lng/km</text>
+
+        <!-- resolver -->
+        <rect x="1024" y="56" width="442" height="200" class="card-r" />
+        <rect x="1024" y="56" width="442" height="3" class="t-sys" />
+        <text x="1040" y="82" class="h">Eligibility resolver</text>
+        <text x="1040" y="106" class="n">Keep an account only if:</text>
+        <text x="1040" y="128" class="n">· role = dealer / admin / driver</text>
+        <text x="1040" y="146" class="n">· status = active</text>
+        <text x="1040" y="164" class="n">· onboarding approved</text>
+        <text x="1040" y="182" class="n">· geography matches</text>
+        <text x="1040" y="206" class="w">NBFC users are excluded</text>
+        <text x="1040" y="224" class="w">by role, not by geography</text>
+        <text x="1040" y="244" class="mm">resolveAuctionAudience()</text>
+
+        <path d="M464 156 H518" class="flow" marker-end="url(#c-flow)" />
+        <text x="491" y="148" class="lbl" text-anchor="middle">apply</text>
+        <path d="M964 156 H1018" class="flow" marker-end="url(#c-flow)" />
+        <text x="991" y="148" class="lbl" text-anchor="middle">filter</text>
+
+        <!-- bus -->
+        <path d="M1245 256 V300" class="flow" />
+        <path d="M149 300 H1265" class="flow" />
+        <path d="M149 300 V336"  class="flow" marker-end="url(#c-flow)" />
+        <path d="M521 300 V336"  class="flow" marker-end="url(#c-flow)" />
+        <path d="M893 300 V336"  class="flow" marker-end="url(#c-flow)" />
+        <path d="M1265 300 V336" class="flow" marker-end="url(#c-flow)" />
+        <text x="1253" y="284" class="lbl">queued to BullMQ, never sent inline</text>
+
+        <!-- channels -->
+        <rect x="24" y="342" width="250" height="94" class="card-r" />
+        <rect x="24" y="342" width="250" height="3" class="t-ops" />
+        <text x="40" y="368" class="h">WhatsApp</text>
+        <text x="40" y="390" class="n">Template + lot image</text>
+        <text x="40" y="408" class="nn">Reuses the Meta Cloud API</text>
+        <text x="40" y="426" class="nn">wiring already in the app</text>
+
+        <rect x="396" y="342" width="250" height="94" class="card-r" />
+        <rect x="396" y="342" width="250" height="3" class="t-ops" />
+        <text x="412" y="368" class="h">SMS</text>
+        <text x="412" y="390" class="n">Short form + deep link</text>
+        <text x="412" y="408" class="nn">DLT-registered template</text>
+        <text x="412" y="426" class="nn">Fallback when WA fails</text>
+
+        <rect x="768" y="342" width="250" height="94" class="card-r" />
+        <rect x="768" y="342" width="250" height="3" class="t-ops" />
+        <text x="784" y="368" class="h">Email</text>
+        <text x="784" y="390" class="n">Full lot sheet, photos</text>
+        <text x="784" y="408" class="nn">Same SMTP path as NBFC</text>
+        <text x="784" y="426" class="nn">activation mail</text>
+
+        <rect x="1140" y="342" width="250" height="94" class="card-r" />
+        <rect x="1140" y="342" width="250" height="3" class="t-deal" />
+        <text x="1156" y="368" class="h">Dashboard carousel</text>
+        <text x="1156" y="390" class="n">🔥 5 batteries · ends 6 h</text>
+        <text x="1156" y="408" class="nn">Card on the dealer home,</text>
+        <text x="1156" y="426" class="nn">polls the countdown</text>
+      </svg>
+
+    </figure>
+  </section>
+
+  <div class="key">
+    <div><svg width="34" height="10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" class="flow" marker-end="url(#a-flow)" /></svg> Asset or control moves forward</div>
+    <div><svg width="34" height="10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" class="flow-w" marker-end="url(#a-warn)" /></svg> Terminal or reversing branch</div>
+    <div><svg width="34" height="10" aria-hidden="true"><line x1="0" y1="5" x2="26" y2="5" class="flow-l" marker-end="url(#a-loop)" /></svg> Refinance loop — asset re-enters the book</div>
+  </div>
+
+</div>
+</body>
+</html>

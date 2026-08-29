@@ -2,10 +2,17 @@
 // All tabs join lead_visits to surface the latest visit row's status/date —
 // the queue exists to drive the ASM's visit cadence, not just owner status.
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import type { AsmQueueRow, AsmQueueTab } from "./types";
 import { TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
+import {
+    foldRegionFacets,
+    queueFilterClauses,
+    regionFacetQuery,
+    type QueueFilterInput,
+} from "@/lib/leads/queueFilterSql";
+import type { QueueRegion } from "@/lib/leads/queueFilters";
 
 const TERMINAL_LIST = sql.raw(
     TERMINAL_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -17,6 +24,12 @@ type BuildArgs = {
     page: number;
     limit: number;
     q?: string | null;
+    /** Stage / interest / region / date range — see @/lib/leads/queueFilters. */
+    filters?: QueueFilterInput;
+    /** The latest visit's lifecycle state — ASM-only. */
+    visitStatus?: string | null;
+    /** The latest visit's outcome — ASM-only. */
+    visitOutcome?: string | null;
 };
 
 function tabFilter(tab: AsmQueueTab, asmId: string) {
@@ -77,19 +90,68 @@ const LATEST_VISIT_JOIN = sql`
     ) lv ON true
 `;
 
+/**
+ * The date a `from`/`to` range means on THIS queue.
+ *
+ * The VISIT date, not `created_at`. An ASM's range question is "what am I out
+ * seeing this week", and a lead created in March that is being visited tomorrow
+ * belongs in tomorrow's answer. COALESCE puts a logged visit first, so a
+ * completed one is dated when it happened rather than when it was planned. (The
+ * Inside Sales queue ranges over intake instead — see ISR_DATE_COLUMN there.)
+ */
+const ASM_DATE_COLUMN = sql`COALESCE(lv.actual_visit_date, lv.scheduled_date)`;
+
+/**
+ * The filters that apply on top of the tab — the search box, the five shared
+ * with the Inside Sales queue, and the two that only exist here.
+ *
+ * One helper rather than the clause being written out at each call site: the
+ * search predicate was already duplicated verbatim between fetchAsmQueueRows and
+ * countAsmQueueRows, and the list disagreeing with its own "Showing 1–N of T" is
+ * exactly what a second copy drifting produces.
+ *
+ * ⚠ EVERY CALLER MUST HAVE LATEST_VISIT_JOIN IN SCOPE. The visit filters and the
+ * date range read `lv`, and a missing alias fails at PARSE time — which is why
+ * the count and tab-badge queries join the lateral while selecting nothing from
+ * it.
+ */
+function extraFilters({
+    q,
+    filters,
+    visitStatus,
+    visitOutcome,
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome">): SQL {
+    const parts: SQL[] = [];
+    if (q) {
+        const like = `%${q}%`;
+        parts.push(
+            sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`,
+        );
+    }
+    if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
+    // The LATEST visit's state, which is what the row's Visit column shows. A
+    // lead whose most recent visit was cancelled is a cancelled row here even if
+    // an earlier one was productive — filtering on "any visit ever" would answer
+    // a question nobody looking at this queue is asking.
+    if (visitStatus) parts.push(sql` AND lv.visit_status = ${visitStatus}`);
+    if (visitOutcome) parts.push(sql` AND lv.visit_outcome = ${visitOutcome}`);
+    return parts.length ? sql.join(parts, sql``) : sql``;
+}
+
 export async function fetchAsmQueueRows({
     tab,
     asmId,
     page,
     limit,
     q,
+    filters,
+    visitStatus,
+    visitOutcome,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId);
     const order = tabOrder(tab);
-    const search = q
-        ? sql` AND (dl.dealer_name ILIKE ${"%" + q + "%"} OR dl.phone ILIKE ${"%" + q + "%"} OR dl.shop_name ILIKE ${"%" + q + "%"})`
-        : sql``;
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -128,18 +190,38 @@ export async function countAsmQueueRows({
     tab,
     asmId,
     q,
-}: Pick<BuildArgs, "tab" | "asmId" | "q">): Promise<number> {
+    filters,
+    visitStatus,
+    visitOutcome,
+}: Pick<
+    BuildArgs,
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome"
+>): Promise<number> {
     const where = tabFilter(tab, asmId);
-    const search = q
-        ? sql` AND (dl.dealer_name ILIKE ${"%" + q + "%"} OR dl.phone ILIKE ${"%" + q + "%"} OR dl.shop_name ILIKE ${"%" + q + "%"})`
-        : sql``;
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
     return Number(rows[0]?.c ?? 0);
 }
 
-export async function fetchAllAsmTabCounts(asmId: string): Promise<Record<AsmQueueTab, number>> {
+/**
+ * Badge counts for all four tabs in one round trip.
+ *
+ * The filters are threaded through for the same reason the Inside Sales badges
+ * take them: a badge reading "My Active Visits 3" above a table filtered down to
+ * nothing reads as a broken screen rather than as a filter doing its job. The
+ * search box stays excluded — pre-existing behaviour on both queues.
+ */
+export async function fetchAllAsmTabCounts(
+    asmId: string,
+    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome">,
+): Promise<Record<AsmQueueTab, number>> {
+    const extra = extraFilters({
+        filters: opts?.filters,
+        visitStatus: opts?.visitStatus,
+        visitOutcome: opts?.visitOutcome,
+    });
     const rows = await db.execute<{
         my_visits: string;
         today: string;
@@ -147,10 +229,10 @@ export async function fetchAllAsmTabCounts(asmId: string): Promise<Record<AsmQue
         my_closed: string;
     }>(sql`
         SELECT
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId)}) AS my_visits,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId)}) AS today,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)}) AS territory,
-            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId)}) AS my_closed
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId)} ${extra}) AS my_visits,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId)} ${extra}) AS today,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)} ${extra}) AS territory,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId)} ${extra}) AS my_closed
     `);
     const r = rows[0]!;
     return {
@@ -159,4 +241,25 @@ export async function fetchAllAsmTabCounts(asmId: string): Promise<Record<AsmQue
         territory: Number(r.territory ?? 0),
         my_closed: Number(r.my_closed ?? 0),
     };
+}
+
+/**
+ * The states and cities this ASM's queue actually spans, per tab.
+ *
+ * Feeds the region selects. Deliberately NOT narrowed by the other filters: a
+ * dropdown that removes the option you are about to pick as you pick it is
+ * unusable, and it would cost a DISTINCT scan per keystroke to do it. The
+ * lateral is joined because tabFilter("today", ...) reads `lv`, and a WHERE that
+ * names a missing alias fails at parse time rather than returning nothing.
+ */
+export async function fetchAsmQueueRegions(
+    asmId: string,
+    tab: AsmQueueTab,
+): Promise<QueueRegion[]> {
+    const rows = await db.execute<{ state: string | null; city: string | null }>(
+        regionFacetQuery(tabFilter(tab, asmId), LATEST_VISIT_JOIN),
+    );
+    return foldRegionFacets(
+        rows as unknown as { state: string | null; city: string | null }[],
+    );
 }

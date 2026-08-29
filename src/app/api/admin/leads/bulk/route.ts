@@ -2,7 +2,8 @@
 // admin operation (the documented exception to the single-owner rule, §0.12).
 // One audited touchpoint per affected lead.
 //
-// Actions: reassign · mark_lost · push_to_ai · reactivate · export(CSV).
+// Actions: reassign · mark_lost · push_to_ai · reactivate · export(CSV) ·
+// export_touchpoints(XLSX).
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -14,22 +15,33 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { buildTouchpointWorkbook } from "@/lib/leads/touchpointWorkbook";
 import { reactivateLead } from "@/lib/leads/reactivation";
+import { assignLeadOwner, resolveAssignTarget } from "@/lib/leads/assignOwner";
 import {
     LOST_REASON,
-    canTransition,
     isOpen,
-    isTerminal,
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// 300, not 60: export_touchpoints may assemble a workbook for up to 5,000 leads
+// and their whole activity log, which is well past what 60s comfortably covers.
+export const maxDuration = 300;
 
-const MUTATE_ROLES = ["admin", "sales_head"];
+// ⚠ MUST stay equal to LEADS_BULK_ROLES in src/lib/leads/access.ts — that list
+// decides whether the bulk bar renders, this one decides whether it works.
+const MUTATE_ROLES = ["admin", "sales_head", "ceo"];
 
 const BodySchema = z.object({
-    action: z.enum(["reassign", "mark_lost", "push_to_ai", "reactivate", "export"]),
+    action: z.enum([
+        "reassign",
+        "mark_lost",
+        "push_to_ai",
+        "reactivate",
+        "export",
+        "export_touchpoints",
+    ]),
     lead_ids: z.array(z.string().min(1)).min(1).max(5000),
     target_user_id: z.string().min(1).optional(),
     lost_reason: z.enum(LOST_REASON).optional(),
@@ -81,6 +93,26 @@ export const POST = withErrorHandler(async (req: Request) => {
         });
     }
 
+    // ── Export touchpoints — return an .xlsx download. ─────────────────────
+    // Read-only, like `export` above: it must return BEFORE the mutating paths,
+    // and it writes no touchpoint of its own (exporting the log is not an event
+    // in the log).
+    if (body.action === "export_touchpoints") {
+        const workbook = await buildTouchpointWorkbook(ids);
+        const buffer = await workbook.xlsx.writeBuffer();
+        return new Response(Buffer.from(buffer), {
+            status: 200,
+            headers: {
+                "Content-Type":
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "Content-Disposition":
+                    'attachment; filename="lead_touchpoint_history.xlsx"',
+                "Content-Length": buffer.byteLength.toString(),
+                "Cache-Control": "no-store",
+            },
+        });
+    }
+
     // Load the selected leads' current state.
     const leads = (await db.execute<{
         id: string;
@@ -96,153 +128,27 @@ export const POST = withErrorHandler(async (req: Request) => {
         if (!body.target_user_id) {
             return errorResponse("target_user_id is required to reassign.", 400);
         }
-        const targets = await db.execute<{
-            id: string;
-            is_active: boolean | null;
-            role: string | null;
-        }>(sql`
-            SELECT id::text AS id, is_active, role FROM users
-            WHERE id::text = ${body.target_user_id} LIMIT 1
-        `);
-        if (!targets[0]) return errorResponse("Target user not found.", 404);
-        if (targets[0].is_active === false) {
-            return errorResponse("Target user is inactive.", 400);
+        const resolved = await resolveAssignTarget(body.target_user_id);
+        if (!resolved.ok) {
+            return errorResponse(resolved.message, resolved.status);
         }
-        const targetRole = targets[0].role;
+        const target = resolved.target;
         const remarks = body.reason ?? "Bulk reassign (admin).";
 
         // Reassign isn't just "swap the owner": for the lead to actually land
         // on the new owner's workspace, both asm_id (for ASMs) and lead_status
-        // need to match what those queues filter on. Mirrors the canonical
-        // /inside-sales/lead/[id]/transfer-asm + /claim flows; falls back to a
-        // plain owner swap when the transition isn't allowed (e.g. terminal
-        // leads or roles without a workspace queue).
+        // need to match what those queues filter on. That role-dependent
+        // sequence now lives in assignLeadOwner() — shared with the NeoDove
+        // push, which needs byte-identical semantics so a lead handed to a
+        // calling campaign lands on the same queue an admin reassign would put
+        // it on. See src/lib/leads/assignOwner.ts for the full rationale.
         for (const lead of leads) {
-            const fromStatus = lead.lead_status as LeadStatus | null;
-            // A lead is "in the BRD pipeline" only once it carries a real
-            // lifecycle status. Manual-upload / scraped leads start life with
-            // lead_status = NULL (kept NULL on purpose so the AI dialer can
-            // cold-dial them — see ai-dialer/exclusionFilter) and therefore
-            // belong to no workspace queue (every tab filters by lead_status).
-            // Assigning such a lead must LIFT it into the pipeline, not just
-            // swap the owner — otherwise it lands on nobody's page.
-            const inPipeline =
-                !!fromStatus && (isOpen(fromStatus) || isTerminal(fromStatus));
-
-            // ── ASM target: mirror the inside-sales "transfer to ASM" flow.
-            //
-            // BRD §0.7's transition map only allows Transferred_to_ASM from
-            // Under_Discussion / Commercials_Explained / Commercials_Finalised
-            // — that's an engagement-first rule for inside-sales reps. The
-            // admin / sales_head bulk reassign is explicitly the BRD §0.12
-            // documented exception to ownership / transition rules (e.g. CEO
-            // "Recommend Reassign" after an escalation must be actionable
-            // even when the lead is still Assigned_Not_Contacted). We rely on
-            // the required reason text as the audit trail, and stamp
-            // pre_transfer_status so the original state can be restored if
-            // the transfer is later rejected.
-            if (targetRole === "asm") {
-                if (fromStatus === "Transferred_to_ASM") {
-                    // Already an ASM lead — just swap which ASM owns it.
-                    await db.execute(sql`
-                        UPDATE dealer_leads
-                        SET current_owner_id = ${body.target_user_id},
-                            asm_id = ${body.target_user_id},
-                            assigned_at = NOW(), updated_at = NOW()
-                        WHERE id = ${lead.id}
-                    `);
-                    await writeTouchpoint({
-                        dealerLeadId: lead.id,
-                        touchpointType: "asm_transfer",
-                        performedBy: user.id,
-                        remarks,
-                    });
-                    affected++;
-                    continue;
-                }
-                if ((fromStatus && isOpen(fromStatus)) || !inPipeline) {
-                    // Open lead — or a not-yet-in-pipeline manual / scraped
-                    // lead (NULL / legacy status) — admin override flip to
-                    // Transferred_to_ASM so it lands on the ASM's queue.
-                    await db.execute(sql`
-                        UPDATE dealer_leads
-                        SET pre_transfer_status = lead_status,
-                            current_owner_id = ${body.target_user_id},
-                            asm_id = ${body.target_user_id},
-                            assigned_at = NOW(), updated_at = NOW()
-                        WHERE id = ${lead.id}
-                    `);
-                    await writeTouchpoint({
-                        dealerLeadId: lead.id,
-                        touchpointType: "asm_transfer",
-                        performedBy: user.id,
-                        remarks,
-                        statusChange: {
-                            from: fromStatus ?? "New_Unassigned",
-                            to: "Transferred_to_ASM",
-                        },
-                    });
-                    affected++;
-                    continue;
-                }
-                // Terminal lead (Converted / Lost) — leave lead_status alone
-                // and fall through to the plain ownership swap below, which
-                // still records the audit touchpoint (no silent reactivation).
-            }
-
-            // ── Inside Sales Rep target: lift an unassigned lead into the
-            // rep's "active" queue by promoting New_Unassigned →
-            // Assigned_Not_Contacted (matches /api/inside-sales/lead/[id]/claim).
-            if (
-                targetRole === "inside_sales_rep" &&
-                (fromStatus === "New_Unassigned" || !inPipeline)
-            ) {
-                // New_Unassigned → Assigned_Not_Contacted is a guarded BRD
-                // transition; a not-yet-in-pipeline lead (NULL / legacy status)
-                // is an admin lift-in (§0.12) with no prior state to validate.
-                const transition =
-                    fromStatus === "New_Unassigned"
-                        ? canTransition(
-                              "New_Unassigned",
-                              "Assigned_Not_Contacted",
-                              { actorRole: user.role },
-                          )
-                        : { ok: true as const };
-                if (transition.ok) {
-                    await db.execute(sql`
-                        UPDATE dealer_leads
-                        SET current_owner_id = ${body.target_user_id},
-                            originator_id = COALESCE(originator_id, ${body.target_user_id}),
-                            assigned_at = NOW(), updated_at = NOW()
-                        WHERE id = ${lead.id}
-                    `);
-                    await writeTouchpoint({
-                        dealerLeadId: lead.id,
-                        touchpointType: "ownership_transfer",
-                        performedBy: user.id,
-                        remarks,
-                        statusChange: {
-                            from: fromStatus ?? "New_Unassigned",
-                            to: "Assigned_Not_Contacted",
-                        },
-                    });
-                    affected++;
-                    continue;
-                }
-            }
-
-            // ── Default: plain ownership swap (other roles, terminal leads,
-            // or any case where the role-specific status flip was skipped).
-            await db.execute(sql`
-                UPDATE dealer_leads
-                SET current_owner_id = ${body.target_user_id},
-                    assigned_at = NOW(), updated_at = NOW()
-                WHERE id = ${lead.id}
-            `);
-            await writeTouchpoint({
-                dealerLeadId: lead.id,
-                touchpointType: "ownership_transfer",
-                performedBy: user.id,
+            await assignLeadOwner({
+                leadId: lead.id,
+                fromStatus: lead.lead_status as LeadStatus | null,
+                target,
+                actorId: user.id,
+                actorRole: user.role,
                 remarks,
             });
             affected++;

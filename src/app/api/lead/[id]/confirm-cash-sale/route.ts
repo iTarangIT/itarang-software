@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { inventory, leads, productSelections } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { generateId, storedFileUrl } from "@/lib/api-utils";
-import { finalizeSale } from "@/lib/sales/sale-finalization";
-import { toPaymentMode } from "@/lib/sales/payment-mode";
-import { notifyProductSelectionSubmitted } from "@/lib/notifications";
+import { storedFileUrl } from "@/lib/api-utils";
+import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
 // No admin approval step. All writes (product_selection + inventory + warranty
 // + after-sales) execute in a single transaction.
+//
+// The transaction lives in `src/lib/leads/confirm-cash-sale.ts`: a cash sale can
+// now also be completed from a WhatsApp turn, and this is one of only two places
+// in the app where stock and money move. This route keeps auth, ownership,
+// body validation and HTTP shaping.
 
 const ParaLineSchema = z.object({
   asset_type: z.string(),
@@ -37,6 +40,8 @@ const BodySchema = z.object({
   paraphernalia: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   paraphernaliaLines: z.array(ParaLineSchema).optional(),
   dealerMargin: z.number().min(0),
+  dealerMarginGstPercent: z.number().min(0).optional(),
+  dealerMarginGstAmount: z.number().min(0).optional(),
   finalPrice: z.number().min(0),
   batteryPrice: z.number().min(0).optional(),
   chargerPrice: z.number().min(0).optional(),
@@ -72,7 +77,11 @@ export async function POST(
     const { id: leadId } = await params;
     const body = BodySchema.parse(await req.json());
 
-    const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
+    const [lead] = await db
+      .select({ id: leads.id, dealer_id: leads.dealer_id })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
     if (!lead) {
       return NextResponse.json(
         { success: false, error: { message: "Lead not found" } },
@@ -85,164 +94,37 @@ export async function POST(
         { status: 403 },
       );
     }
-    // E-101: collapse the 3-value leads.payment_method ENUM through the
-    // canonical utility — never inline. Cash route requires the collapsed
-    // value to be 'cash'; anything that resolves to 'finance' goes through
-    // submit-product-selection instead.
-    let paymentMode: "cash" | "finance";
-    try {
-      paymentMode = toPaymentMode(lead.payment_method);
-    } catch (e) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            message:
-              e instanceof Error ? e.message : "Unrecognised payment_method on lead",
-          },
-        },
-        { status: 400 },
-      );
-    }
-    if (paymentMode !== "cash") {
-      return NextResponse.json(
-        { success: false, error: { message: "Not a cash lead — use submit-product-selection for finance" } },
-        { status: 400 },
-      );
-    }
 
-    const productSelectionId = await generateId("PS");
-    const now = new Date();
-
-    const result = await db.transaction(async (tx) => {
-      // 1. Race-condition guards on inventory
-      const [battery] = await tx
-        .select()
-        .from(inventory)
-        .where(
-          and(
-            eq(inventory.serial_number, body.batterySerial),
-            eq(inventory.dealer_id, user.dealer_id!),
-          ),
-        )
-        .limit(1);
-      if (!battery || battery.status !== "available") {
-        throw new Error(`Battery ${body.batterySerial} is not available`);
-      }
-      if (body.chargerSerial) {
-        const [charger] = await tx
-          .select()
-          .from(inventory)
-          .where(
-            and(
-              eq(inventory.serial_number, body.chargerSerial),
-              eq(inventory.dealer_id, user.dealer_id!),
-            ),
-          )
-          .limit(1);
-        if (!charger || charger.status !== "available") {
-          throw new Error(`Charger ${body.chargerSerial} is not available`);
-        }
-      }
-
-      // Clear any existing draft so this lead disappears from /My Drafts.
-      await tx
-        .delete(productSelections)
-        .where(
-          and(
-            eq(productSelections.lead_id, leadId),
-            eq(productSelections.admin_decision, "draft"),
-          ),
-        );
-
-      // 2. Product selection — dealer_confirmed immediately (no admin step)
-      await tx.insert(productSelections).values({
-        id: productSelectionId,
-        lead_id: leadId,
-        battery_serial: body.batterySerial,
-        charger_serial: body.chargerSerial,
-        paraphernalia: body.paraphernalia ?? {},
-        paraphernalia_lines: body.paraphernaliaLines ?? [],
-        category: body.category || lead.product_category_id,
-        model_number: body.modelNumber || lead.product_type_id,
-        battery_price: body.batteryPrice?.toString(),
-        charger_price: body.chargerPrice?.toString(),
-        paraphernalia_cost: body.paraphernaliaCost?.toString(),
-        dealer_margin: body.dealerMargin.toString(),
-        final_price: body.finalPrice.toString(),
-        battery_gross: body.batteryGross?.toString(),
-        battery_gst_percent: body.batteryGstPercent?.toString(),
-        battery_gst_amount: body.batteryGstAmount?.toString(),
-        battery_net: body.batteryNet?.toString(),
-        charger_gross: body.chargerGross?.toString(),
-        charger_gst_percent: body.chargerGstPercent?.toString(),
-        charger_gst_amount: body.chargerGstAmount?.toString(),
-        charger_net: body.chargerNet?.toString(),
-        gross_subtotal: body.grossSubtotal?.toString(),
-        gst_subtotal: body.gstSubtotal?.toString(),
-        net_subtotal: body.netSubtotal?.toString(),
-        payment_mode: "cash",
-        admin_decision: "dealer_confirmed",
-        // E-130 / Addendum V0.1 §5.1 — dealer-captured photos (cash path).
-        battery_photo_urls: body.batteryPhotoUrls ?? [],
-        charger_photo_urls: body.chargerPhotoUrls ?? [],
-        submitted_by: user.id,
-        submitted_at: now,
-        created_at: now,
-        updated_at: now,
-      });
-
-      // 3. Finalize sale: inventory sold + warranty + after-sales.
-      //    paymentMode comes from the E-101 canonical mapping above — not a
-      //    hard-coded literal — so warranty and after-sales rows always
-      //    reflect the lead's collapsed payment_method.
-      //    BRD §3.5: cash flow skips 'dispatched' entirely — inventory goes
-      //    straight to 'sold' on dealer confirmation.
-      const sale = await finalizeSale({
-        tx,
-        leadId,
-        batterySerial: body.batterySerial,
-        chargerSerial: body.chargerSerial ?? null,
-        dealerId: user.dealer_id!,
-        customerName: lead.full_name || lead.owner_name || null,
-        customerPhone: lead.phone || lead.mobile || null,
-        paymentMode,
-        performedBy: user.id,
-        soldAt: now,
-        phase: "sold",
-      });
-
-      // 4. Close lead
-      await tx
-        .update(leads)
-        .set({ kyc_status: "sold", sold_at: now, updated_at: now })
-        .where(eq(leads.id, leadId));
-
-      return sale;
-    });
-
-    notifyProductSelectionSubmitted({
+    const result = await confirmCashSale({
       leadId,
-      productSelectionId,
-      paymentMode,
-      finalPrice: body.finalPrice,
-    }).catch(() => {});
+      body,
+      performedBy: user.id,
+      dealerId: user.dealer_id!,
+    });
 
     return NextResponse.json({
       success: true,
       data: {
-        leadStatus: "sold",
-        productSelectionId,
+        leadStatus: result.leadStatus,
+        productSelectionId: result.productSelectionId,
         warrantyId: result.warrantyId,
         warrantyStart: result.warrantyStart.toISOString(),
         warrantyEnd: result.warrantyEnd.toISOString(),
         afterSalesId: result.afterSalesId,
-        paymentMode,
+        paymentMode: result.paymentMode,
         message: "Sale confirmed. Inventory sold. Warranty activated.",
       },
     });
   } catch (error) {
     console.error("[Confirm Cash Sale] Error:", error);
+    // Every failure was a flat 400 before the extraction; the service now
+    // distinguishes a stolen serial (409) and a missing lead (404).
+    if (error instanceof CashSaleError) {
+      return NextResponse.json(
+        { success: false, error: { message: error.message } },
+        { status: error.status },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to confirm sale";
     return NextResponse.json(
       { success: false, error: { message } },

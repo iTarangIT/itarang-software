@@ -589,7 +589,7 @@ export default function AddInventoryItemPage() {
               <TextField label="Star Rating (1–5)" name="star_rating" type="number" form={form} setField={setField} />
               <TextField label="Invoice Number" name="invoice_number" form={form} setField={setField} />
               <TextField label="Sold / Invoice Date" name="sold_date" type="date" form={form} setField={setField} />
-              <TextField label="Invoice Value (₹, pre-GST)" name="invoice_value" type="number" form={form} setField={setField} />
+              <TextField label="Base Value (₹, pre-GST)" name="base_value" type="number" form={form} setField={setField} />
               <TextField label="HSN Code (8 digits)" name="hsn_code" form={form} setField={setField} />
               <TextField label="GST %" name="gst_percent" type="number" form={form} setField={setField} />
               <TextField label="Supplier / OEM Name" name="supplier_name" form={form} setField={setField} />
@@ -635,7 +635,7 @@ export default function AddInventoryItemPage() {
                       ? "Disabled — model is not IoT-compatible"
                       : !iotEnabled
                         ? "Enable IoT to enter IMEI"
-                        : "15-digit IMEI"
+                        : "16-character alphanumeric IMEI"
                   }
                   className={
                     !selectedBattery.iot_compatible || !iotEnabled
@@ -669,7 +669,7 @@ export default function AddInventoryItemPage() {
             </div>
             <TextField label="Invoice Number" name="invoice_number" form={form} setField={setField} />
             <TextField label="Sold / Invoice Date" name="sold_date" type="date" form={form} setField={setField} />
-            <TextField label="Invoice Value (₹, pre-GST)" name="invoice_value" type="number" form={form} setField={setField} />
+            <TextField label="Base Value (₹, pre-GST)" name="base_value" type="number" form={form} setField={setField} />
             <TextField label="HSN Code (8 digits)" name="hsn_code" form={form} setField={setField} />
             <TextField label="GST %" name="gst_percent" type="number" form={form} setField={setField} />
             <TextField label="Supplier / OEM Name" name="supplier_name" form={form} setField={setField} />

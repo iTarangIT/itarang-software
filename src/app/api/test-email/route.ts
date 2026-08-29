@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
+import { requireDebugAccess } from "@/lib/auth/requireDebugAccess";
 
+// Sends a REAL email through the production mailer on a bare GET. Ungated,
+// that is an open spam relay pointed at whatever TEST_EMAIL_TO holds, and a
+// way to burn the sending domain's reputation. 404s in production and without
+// an admin/IT session.
 export async function GET() {
+  const access = await requireDebugAccess();
+  if (!access.ok) return access.response;
+
   try {
     const testEmail = process.env.TEST_EMAIL_TO;
     if (!testEmail) {

@@ -9,6 +9,8 @@ import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { dialerSession, type DialerProvider } from "./dialerSession";
 import { summarizeRegion } from "@/lib/leads/regionSummary";
+import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
+import { scheduleColumns, type ValidatedSchedule } from "./campaignWindow";
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
 // webhook the call is effectively orphaned — flip the row to failed and let
@@ -47,6 +49,15 @@ function autoName(opts: {
   return `${segment} · ${summarizeRegion(opts.region)} · ${ts}`;
 }
 
+export type CreateCampaignResult = {
+  /** null when the insert failed, or when nothing was left to dial. */
+  campaignId: string | null;
+  /** Rows actually inserted — never more than queueIds.length. */
+  queued: number;
+  /** Lead ids dropped because the AI has already had a connected call. */
+  blockedAiConnected: string[];
+};
+
 export async function createCampaign(opts: {
   queueIds: string[];
   provider: DialerProvider;
@@ -60,8 +71,41 @@ export async function createCampaign(opts: {
   // Explicit campaign name. Defaults to the auto-generated "Segment · Region ·
   // time" label. The List flow passes the user-typed list name.
   name?: string;
-}): Promise<string | null> {
+  // E-254 — the calling window. Omitted (or mode 'now') means unscheduled: the
+  // campaign dials continuously, exactly as it did before E-228. Callers pass
+  // the zod-validated shape; scheduleColumns() decides which columns that
+  // becomes, so no call site has to remember the mode<->columns coupling.
+  schedule?: ValidatedSchedule | null;
+}): Promise<CreateCampaignResult> {
   try {
+    // THE HARD GUARANTEE for the AI-connected block.
+    //
+    // This is the single insert point for dialer_campaign_leads, so scrubbing
+    // here — unconditionally, for every caller — is what makes it impossible for
+    // a connected lead to be enrolled at all. It matters because
+    // /api/ai-dialer/start explicitly "trusts queueIds as authoritative": a modal
+    // left open for ten minutes, or a hand-crafted POST, would otherwise walk
+    // straight past the preview-time filter.
+    //
+    // Unconditional, not flag-driven: every caller of this function is an AI
+    // dialer campaign. The NeoDove human push does not come through here.
+    const { dialable: queueIds, blockedAiConnected } = await partitionAiConnected(
+      opts.queueIds,
+    );
+
+    if (blockedAiConnected.length > 0) {
+      console.warn(
+        `[campaignTracker.createCampaign] dropped ${blockedAiConnected.length} lead(s) the AI has already spoken to`,
+      );
+    }
+
+    // Nothing left to dial. Do NOT create the campaign — an empty queue would
+    // finalize on its first advance and leave a confusing zero-lead row in the
+    // history. The caller turns this into an honest error message.
+    if (queueIds.length === 0) {
+      return { campaignId: null, queued: 0, blockedAiConnected };
+    }
+
     const campaignId = newId("camp");
     const name =
       opts.name?.trim() ||
@@ -75,11 +119,14 @@ export async function createCampaign(opts: {
       category: opts.category ?? null,
       region_filter: opts.region ?? null,
       status: opts.status ?? "running",
-      total_leads: opts.queueIds.length,
+      total_leads: queueIds.length,
+      // E-254 — schedule_mode + the three window columns, or the unscheduled
+      // quartet when no schedule was supplied.
+      ...scheduleColumns(opts.schedule),
     });
 
-    if (opts.queueIds.length > 0) {
-      const rows = opts.queueIds.map((leadId, idx) => ({
+    if (queueIds.length > 0) {
+      const rows = queueIds.map((leadId, idx) => ({
         id: newId("cl"),
         campaign_id: campaignId,
         lead_id: leadId,
@@ -95,10 +142,10 @@ export async function createCampaign(opts: {
       }
     }
 
-    return campaignId;
+    return { campaignId, queued: queueIds.length, blockedAiConnected };
   } catch (err) {
     console.error("[campaignTracker.createCampaign] failed:", err);
-    return null;
+    return { campaignId: null, queued: 0, blockedAiConnected: [] };
   }
 }
 
@@ -201,6 +248,67 @@ export async function markCampaignLeadCalling(opts: {
 // the in-flight campaign-lead row as completed/failed, bump parent counters.
 // Falls back to "most recent calling/pending row for this lead" when the
 // Redis session has been GC'd (campaign already wrapped up via timeout).
+// Recompute a campaign's roll-up counters from its rows.
+//
+// These used to be maintained as ±1 bumps issued in a second statement right
+// after each row update, with no transaction around the pair. Anything that
+// interrupted the process between the two writes (deploy, PM2 reload, crash,
+// a swallowed error) drifted the counters from the rows permanently, and
+// nothing ever reconciled them — prod was showing "Completed 71" on a campaign
+// with 3 completed rows. Concurrent advances double-counted for the same
+// reason.
+//
+// Deriving them instead makes the counters pure projected state: every call
+// re-states the truth for the whole campaign, so a lost update self-heals on
+// the next event and manual SQL repairs are picked up automatically. Cost is
+// one indexed aggregate per campaign event (idx_dialer_campaign_leads_campaign_status).
+//
+// calls_made COUNTS ATTEMPTS — completed plus failed — and used to be defined
+// as an alias of completed_leads, which had two visible consequences.
+//
+//   · The campaign detail header showed "Calls made 71" beside "Completed 71"
+//     on a 146-lead campaign where 75 had in fact been dialled and failed. Two
+//     cards carrying the same number, one of them mislabelled.
+//   · The progress bar is `calls_made / total_eligible`. A campaign whose leads
+//     all fail therefore sat at 0% for its entire run and stayed at 0% after
+//     finishing: sandbox camp_mpx is 25 leads, 25 failed, status completed,
+//     progress bar 0%.
+//
+// Cost per call is unaffected: cost-analytics divides by its own COUNT of
+// ai_call_logs rows (`cost_calls`), never by this column.
+//
+// Deriving rather than bumping is the older fix and still the important one:
+// these used to be maintained as ±1 bumps issued in a second statement right
+// after each row update, with no transaction around the pair, so any
+// interruption between the two writes drifted the counters permanently. As a
+// full re-derive, a lost update self-heals on the next campaign event and
+// manual SQL repairs are picked up automatically — which is also why the
+// E-266 backfill only has to touch campaigns that will never fire another
+// event.
+export async function syncCampaignCounters(
+  campaignId: string | null,
+): Promise<void> {
+  if (!campaignId) return;
+  try {
+    await db.execute(sql`
+      UPDATE dialer_campaigns c
+      SET completed_leads = t.comp,
+          failed_leads    = t.fail,
+          calls_made      = t.comp + t.fail
+      FROM (
+        SELECT
+          count(*) FILTER (WHERE status = 'completed')::int AS comp,
+          count(*) FILTER (WHERE status = 'failed')::int    AS fail
+        FROM dialer_campaign_leads
+        WHERE campaign_id = ${campaignId}
+      ) t
+      WHERE c.id = ${campaignId}
+    `);
+  } catch (err) {
+    console.error("[campaignTracker.syncCampaignCounters] failed:", err);
+  }
+}
+
 export async function completeCampaignLead(opts: {
   leadId: string;
   success: boolean;
@@ -265,24 +373,9 @@ export async function completeCampaignLead(opts: {
       })
       .where(eq(dialerCampaignLeads.id, targetRowId));
 
-    // calls_made = "calls that actually connected and completed". A failed
-    // attempt (no answer, trigger error, no webhook, etc.) bumps failed_leads
-    // but NOT calls_made — users were seeing total=4, calls_made=4, failed=1
-    // and rightfully asking how 4 calls were made when 1 never happened.
-    await db
-      .update(dialerCampaigns)
-      .set({
-        calls_made: opts.success
-          ? sql`${dialerCampaigns.calls_made} + 1`
-          : sql`${dialerCampaigns.calls_made}`,
-        completed_leads: opts.success
-          ? sql`${dialerCampaigns.completed_leads} + 1`
-          : sql`${dialerCampaigns.completed_leads}`,
-        failed_leads: opts.success
-          ? sql`${dialerCampaigns.failed_leads}`
-          : sql`${dialerCampaigns.failed_leads} + 1`,
-      })
-      .where(eq(dialerCampaigns.id, campaignId));
+    // Counters are derived from the rows we just wrote — see
+    // syncCampaignCounters for why this is a recompute and not a ±1 bump.
+    await syncCampaignCounters(campaignId);
 
     return { campaignId };
   } catch (err) {
@@ -350,25 +443,11 @@ export async function sweepStalledCallingLeads(
       })
       .where(inArray(dialerCampaignLeads.id, ids));
 
-    // Bump parent counters per-campaign — a sweep across all campaigns can
-    // touch multiple, so group by campaign_id.
-    const perCampaign = new Map<string, number>();
-    for (const row of stalled) {
-      perCampaign.set(
-        row.campaign_id,
-        (perCampaign.get(row.campaign_id) ?? 0) + 1,
-      );
-    }
-
-    // No-webhook sweeps are failures — bump failed_leads only. calls_made
-    // stays unchanged so it reflects "calls that actually went through".
-    for (const [cId, n] of perCampaign) {
-      await db
-        .update(dialerCampaigns)
-        .set({
-          failed_leads: sql`${dialerCampaigns.failed_leads} + ${n}`,
-        })
-        .where(eq(dialerCampaigns.id, cId));
+    // Resync parent counters per-campaign — a sweep across all campaigns can
+    // touch multiple, so collect the distinct ids first.
+    const touched = new Set(stalled.map((r) => r.campaign_id));
+    for (const cId of touched) {
+      await syncCampaignCounters(cId);
     }
 
     console.log(
@@ -443,15 +522,7 @@ export async function drainActiveCampaignLeads(
         ),
       );
 
-    // User-stopped drain is a failure path — bump failed_leads only, not
-    // calls_made.
-    const n = callingRows.length;
-    await db
-      .update(dialerCampaigns)
-      .set({
-        failed_leads: sql`${dialerCampaigns.failed_leads} + ${n}`,
-      })
-      .where(eq(dialerCampaigns.id, campaignId));
+    await syncCampaignCounters(campaignId);
   } catch (err) {
     console.error("[campaignTracker.drainActiveCampaignLeads] failed:", err);
   }

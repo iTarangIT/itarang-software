@@ -48,3 +48,18 @@ export function statementKey(importId: string, ext: string): string {
 export function evidenceKeyFor(requestId: string, kind: string, contentType: string): string {
   return `buyback/${requestId}/evidence/${kind}-${crypto.randomUUID()}${extensionFor(contentType)}`;
 }
+
+/**
+ * A vendor onboarding document — GST certificate, PAN card, Udyam certificate,
+ * signed agreement (E-223).
+ *
+ * NOT scoped to the vendor, because at upload time there is no vendor: the
+ * admin picks these files before the entity exists. So the key is scoped to a
+ * fresh uuid instead, and the DB row that records it (scrap_vendor_documents)
+ * is what later gets claimed by an entity_id. A random prefix rather than a
+ * flat folder so listing one vendor's staging bytes is never a prefix scan
+ * over everyone's.
+ */
+export function vendorDocKeyFor(kind: string, contentType: string): string {
+  return `buyback/vendors/staging/${crypto.randomUUID()}/${kind.toLowerCase()}-${crypto.randomUUID()}${extensionFor(contentType)}`;
+}

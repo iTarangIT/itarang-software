@@ -20,6 +20,9 @@ import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { getNbfcObject } from "@/lib/nbfc/nbfc-storage";
 import { sendConsentForLead, sendConsentOtp } from "@/lib/kyc/consent-service";
+import { notifyConsentSent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
+import { nbfcParty } from "@/lib/notifications/provenance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,6 +130,11 @@ export async function POST(
         documentOverride,
         initiatedByTenantId: actor.tenant_id,
       });
+      await notifyConsentSent({
+        leadId,
+        channel: d.channel,
+        sentBy: nbfcParty(await tenantDisplayName(actor.tenant_id)),
+      });
       return NextResponse.json({ ok: true, method: "esign", result });
     }
 
@@ -138,6 +146,11 @@ export async function POST(
       requestedBy: actor.user_id,
       documentOverride,
       initiatedByTenantId: actor.tenant_id,
+    });
+    await notifyConsentSent({
+      leadId,
+      channel: d.channel,
+      sentBy: nbfcParty(await tenantDisplayName(actor.tenant_id)),
     });
     return NextResponse.json({ ok: true, method: "otp", result });
   } catch (e) {

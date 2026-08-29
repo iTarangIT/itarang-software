@@ -6,9 +6,11 @@ import {
   leads,
   inventory,
   loanApplications,
+  dealers,
 } from "@/lib/db/schema";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { findLatestDealerOnboardingApplication } from "@/lib/dealer-onboarding";
+import { normalizeDealerType } from "@/lib/dealer/dealer-type";
 
 export async function GET() {
   try {
@@ -53,6 +55,39 @@ export async function GET() {
       email: authUser.email,
     });
     const dealerId = appUser.dealer_id || dealerApp?.dealer_code || null;
+
+    // Canonical finance flag — see the financeEnabled comment in the response
+    // below. dealers.dealer_id is the dealer CODE (same value as
+    // users.dealer_id / applications.dealer_code).
+    let financeLive = false;
+    // E-202 business type. Read from the same canonical row as the finance flag
+    // (one query, not two) and fall back to the application, which is the only
+    // source for a dealer who has not been approved yet.
+    let dealerTypeLive: string | null = null;
+    if (dealerId) {
+      try {
+        const [dealerRow] = await db
+          .select({
+            financeEnabled: dealers.finance_enabled,
+            dealerType: dealers.dealer_type,
+          })
+          .from(dealers)
+          .where(eq(dealers.dealer_id, dealerId))
+          .limit(1);
+        financeLive = Boolean(dealerRow?.financeEnabled);
+        dealerTypeLive = dealerRow?.dealerType ?? null;
+      } catch {
+        financeLive = false;
+      }
+    }
+
+    // Never null: the sidebar and dashboard gate module visibility on this, and
+    // an absent value must mean "behave exactly as today" rather than "hide
+    // everything". 'new' is also what E-202 backfilled every pre-existing row to.
+    const dealerType =
+      normalizeDealerType(dealerTypeLive) ??
+      normalizeDealerType(dealerApp?.dealer_type) ??
+      "new";
 
     // Safe defaults so dashboard always loads
     let totalLeads = 0;
@@ -130,7 +165,17 @@ export async function GET() {
               dealerAccountStatus: dealerApp.dealer_account_status,
               approvedAt: dealerApp.approved_at,
               submittedAt: dealerApp.submitted_at,
-              financeEnabled: dealerApp.finance_enabled ?? false,
+              // Canonical dealers.finance_enabled, NOT the application flag.
+              // The two diverge during post-approval finance enablement: the
+              // application flag flips when the admin enables finance, but
+              // financing isn't usable until the agreement is signed. Showing
+              // the application flag here would advertise "Financing: Yes"
+              // while /api/leads/create still rejects finance leads with
+              // FINANCE_NOT_ENABLED.
+              financeEnabled: financeLive,
+              // E-202 — 'new' | 'scrap' | 'both'. Drives which modules the
+              // sidebar and dashboard show (see lib/dealer/dealer-capabilities).
+              dealerType,
               isApproved:
                 dealerApp.onboarding_status === "approved" ||
                 dealerApp.review_status === "approved" ||

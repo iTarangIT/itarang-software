@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications, users, accounts, dealers } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
+import { notifyOnboardingDecision } from "@/lib/notifications/events";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 import { ensureDealerAuditTrailUrl } from "@/lib/digio/ensure-audit-trail";
@@ -13,7 +14,14 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
-import { sendDealerWelcomeWhatsApp, type WhatsAppDelivery } from "@/lib/whatsapp/notifications";
+import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
+import {
+  maskPhone,
+  sendDealerWelcomeWhatsApp,
+  sendOperatorApprovalConfirmationWhatsApp,
+  type WhatsAppDelivery,
+} from "@/lib/whatsapp/notifications";
+import { bindDealerSession } from "@/lib/whatsapp/operator-handoff";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -30,6 +38,73 @@ function generateDealerCode() {
     .toString(16)
     .padStart(6, "0");
   return `ACC-ITARANG-${yyyy}${mm}${dd}-${random}`;
+}
+
+/**
+ * Guards the narrow varchar columns on `accounts` that the approval
+ * transaction writes verbatim from the onboarding record. Returns a list of
+ * human-readable problems ("" when everything fits).
+ *
+ * These are NOT re-derivable from the application row's own column types —
+ * dealer_onboarding_applications stores them wider (or as text), so an
+ * over-long value is only rejected at the moment we copy it across.
+ */
+function validateAccountFields(application: any): string[] {
+  const problems: string[] = [];
+
+  const addressObj =
+    typeof application.business_address === "object" &&
+    application.business_address
+      ? (application.business_address as Record<string, any>)
+      : null;
+
+  const ifsc =
+    typeof application.ifsc_code === "string"
+      ? application.ifsc_code.trim().toUpperCase()
+      : "";
+  if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+    problems.push(
+      `Bank IFSC "${application.ifsc_code}" is invalid (${ifsc.length} characters) — an IFSC is exactly 11: 4 letters, then 0, then 6 letters/digits (e.g. HDFC0000516).`
+    );
+  }
+
+  const gstin =
+    typeof application.gst_number === "string"
+      ? application.gst_number.trim()
+      : "";
+  if (gstin && gstin.length > 15) {
+    problems.push(
+      `GSTIN "${gstin}" is ${gstin.length} characters — a GSTIN is exactly 15.`
+    );
+  }
+
+  const pan =
+    typeof application.pan_number === "string"
+      ? application.pan_number.trim()
+      : "";
+  if (pan && pan.length > 10) {
+    problems.push(
+      `PAN "${pan}" is ${pan.length} characters — a PAN is exactly 10.`
+    );
+  }
+
+  const pincode =
+    typeof addressObj?.pincode === "string" ? addressObj.pincode.trim() : "";
+  if (pincode && pincode.length > 6) {
+    problems.push(
+      `Business address PIN code "${pincode}" is ${pincode.length} digits — a PIN code is 6.`
+    );
+  }
+
+  const phone =
+    typeof application.owner_phone === "string"
+      ? application.owner_phone.trim()
+      : "";
+  if (phone && phone.length > 20) {
+    problems.push(`Owner phone "${phone}" is longer than 20 characters.`);
+  }
+
+  return problems;
 }
 
 function resolveDealerLoginEmail(application: any) {
@@ -129,7 +204,26 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (application.finance_enabled && !devBypassAgreement) {
+    // E-225 — this gate is an E-SIGN gate, and two of its three conditions are
+    // unsatisfiable for a manual-mode dealer: `provider_document_id` only ever
+    // exists for a Digio document, and scrap / new+scrap dealers never reach
+    // Digio. Applying it to them would make approval impossible rather than
+    // conditional.
+    //
+    // Per the product decision, a missing paper agreement WARNS rather than
+    // blocks (the same treatment E-223 gives the scrap-vendor agreement): the
+    // review page shows "no signed agreement on file" on the approve action,
+    // and the admin decides. Approving without one is a deliberate,
+    // attributable choice, not an oversight the system failed to catch.
+    //
+    // The gate is unchanged for 'new' dealers — a finance-enabled new-battery
+    // dealer still cannot be approved without a completed, e-signed agreement.
+    const agreementGateApplies =
+      application.finance_enabled &&
+      !devBypassAgreement &&
+      !usesManualAgreement(application.dealer_type);
+
+    if (agreementGateApplies) {
       if (
         application.agreement_status !== "completed" ||
         application.review_status !== "agreement_completed" ||
@@ -144,6 +238,28 @@ export async function POST(req: NextRequest, context: RouteContext) {
           { status: 400 }
         );
       }
+    }
+
+    // Pre-flight the fields that get copied verbatim into `accounts`, whose
+    // columns are narrow varchars (gstin 15, pan 10, pincode 6, ifsc_code 11,
+    // contact_phone 20). WhatsApp-onboarded dealers have these OCR-extracted
+    // from document photos, so a stray digit is common — and without this
+    // check the only symptom is a 500 with a raw "value too long for type
+    // character varying(N)" halfway through the approval transaction, which
+    // names no field. Fail early and say exactly what to fix.
+    const accountFieldProblems = validateAccountFields(application);
+
+    if (accountFieldProblems.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Cannot approve — fix these details in the dealer record first: ${accountFieldProblems.join(
+            " "
+          )}`,
+          fieldErrors: accountFieldProblems,
+        },
+        { status: 400 }
+      );
     }
 
     // GSTIN duplicate detection. We classify BEFORE any auth-user work so a
@@ -223,16 +339,26 @@ export async function POST(req: NextRequest, context: RouteContext) {
     let signedAgreementUrl: string | null = null;
     let auditTrailUrl: string | null = null;
 
-    if (application.finance_enabled && !devBypassAgreement) {
+    // E-225 — manual-mode dealers are included in the FETCH (an uploaded paper
+    // agreement should still reach the welcome email) but excluded from the
+    // hard block below, per the same warn-don't-block decision as the status
+    // gate above. A scrap dealer with finance off gets here too, which is the
+    // point: their agreement is not a finance agreement.
+    const isManualAgreement = usesManualAgreement(application.dealer_type);
+
+    if ((application.finance_enabled || isManualAgreement) && !devBypassAgreement) {
       const [signedUrl, auditUrl] = await Promise.all([
         ensureDealerSignedAgreementUrl(application).catch((err) => {
           console.error("ENSURE SIGNED AGREEMENT ERROR:", err);
           return null;
         }),
-        ensureDealerAuditTrailUrl(application).catch((err) => {
-          console.error("ENSURE AUDIT TRAIL ERROR:", err);
-          return null;
-        }),
+        // Digio-only artefact; a paper agreement has none, so don't go asking.
+        isManualAgreement
+          ? Promise.resolve(null)
+          : ensureDealerAuditTrailUrl(application).catch((err) => {
+              console.error("ENSURE AUDIT TRAIL ERROR:", err);
+              return null;
+            }),
       ]);
 
       const [signedBuf, auditBuf] = await Promise.all([
@@ -250,7 +376,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
       // status is "completed"). A missing audit trail must NOT block dealer
       // activation — it's attached when available and silently omitted
       // otherwise (downloadPdfBuffer already returns null gracefully).
-      if (!signedBuf) {
+      //
+      // A MANUAL-mode dealer is exempt: there may legitimately be no signed
+      // copy yet, and the decision is the admin's to make (the review page
+      // warns). Their welcome email simply goes out without the attachment
+      // rather than approval failing.
+      if (!signedBuf && !isManualAgreement) {
         console.warn("APPROVE BLOCKED — signed agreement PDF not ready", {
           applicationId: application.id,
           hasSignedUrl: Boolean(signedUrl),
@@ -309,6 +440,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
     );
 
     let authUserId: string;
+    // Tracks whether THIS request minted the auth user. If the DB transaction
+    // below then fails, we delete it again — an auth user is not covered by
+    // the pg rollback, and leaving one behind wedges every future retry on the
+    // "email already exists" gate above.
+    let createdAuthUserInThisRequest = false;
 
     if (existingAuthUser) {
       // Prevent account takeover: only reuse an existing Supabase Auth user if
@@ -321,10 +457,91 @@ export async function POST(req: NextRequest, context: RouteContext) {
         typeof meta.dealer_code === "string" ? meta.dealer_code : null;
       const existingAppDealerUserId = application.dealer_user_id || null;
 
-      const isThisDealer =
+      let isThisDealer =
         metaRole === "dealer" &&
         (metaDealerCode === dealerCode ||
           existingAuthUser.id === existingAppDealerUserId);
+
+      // A previous approve attempt for THIS application can die after the auth
+      // user is created but before the DB transaction commits (the auth user
+      // lives outside the pg transaction, so a rollback does not remove it).
+      // That leaves a role=dealer auth user stamped with a dealer_code that
+      // exists nowhere in the DB, while the application still has
+      // dealer_code = NULL / dealer_user_id = NULL. Every retry then mints a
+      // FRESH random dealer code, so neither branch above can ever match and
+      // the admin is permanently locked out with "email already exists".
+      //
+      // Adopt such an orphan — but only after proving nothing else claims it:
+      // no users row (by id or email), no other application, and no
+      // accounts/dealers row keyed by its stamped dealer_code. If any claim
+      // exists it really is someone else's account and we still hard-block.
+      if (!isThisDealer && metaRole === "dealer") {
+        const [
+          claimedByAuthId,
+          claimedByEmail,
+          claimedByOtherApp,
+          claimedAccount,
+          claimedDealer,
+        ] = await Promise.all([
+          db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, existingAuthUser.id))
+            .limit(1),
+          db
+            .select({ id: users.id })
+            .from(users)
+            .where(sql`lower(${users.email}) = lower(${dealerLoginEmail})`)
+            .limit(1),
+          db
+            .select({ id: dealerOnboardingApplications.id })
+            .from(dealerOnboardingApplications)
+            .where(
+              and(
+                eq(
+                  dealerOnboardingApplications.dealer_user_id,
+                  existingAuthUser.id
+                ),
+                ne(dealerOnboardingApplications.id, dealerId)
+              )
+            )
+            .limit(1),
+          metaDealerCode
+            ? db
+                .select({ id: accounts.id })
+                .from(accounts)
+                .where(eq(accounts.id, metaDealerCode))
+                .limit(1)
+            : Promise.resolve([] as { id: string }[]),
+          metaDealerCode
+            ? db
+                .select({ id: dealers.dealer_id })
+                .from(dealers)
+                .where(eq(dealers.dealer_id, metaDealerCode))
+                .limit(1)
+            : Promise.resolve([] as { id: string }[]),
+        ]);
+
+        const isOrphan =
+          claimedByAuthId.length === 0 &&
+          claimedByEmail.length === 0 &&
+          claimedByOtherApp.length === 0 &&
+          claimedAccount.length === 0 &&
+          claimedDealer.length === 0;
+
+        if (isOrphan) {
+          console.warn(
+            "APPROVE — adopting orphaned auth user left by a failed prior attempt",
+            {
+              applicationId: application.id,
+              authUserId: existingAuthUser.id,
+              staleDealerCode: metaDealerCode,
+              newDealerCode: dealerCode,
+            }
+          );
+          isThisDealer = true;
+        }
+      }
 
       if (!isThisDealer) {
         return NextResponse.json(
@@ -383,6 +600,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
 
       authUserId = createdAuthUser.user.id;
+      createdAuthUserInThisRequest = true;
     }
 
     // Run the local DB side of approval atomically: if any of the three
@@ -400,6 +618,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
           dealer_account_status: "active",
           completion_status: "completed",
           approved_at: new Date(),
+          // Who approved — drives the "CEO approved" / "Admin approved" tag.
+          approved_by: auth.user.id,
           signed_at:
             application.agreement_status === "completed"
               ? application.signed_at || new Date()
@@ -501,7 +721,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
           pincode: addressObj?.pincode || null,
           bank_name: application.bank_name || null,
           bank_account_number: application.account_number || null,
-          ifsc_code: application.ifsc_code || null,
+          ifsc_code: application.ifsc_code?.trim().toUpperCase() || null,
           status: "active",
           onboarding_status: "approved",
           created_by: authUserId,
@@ -547,6 +767,20 @@ export async function POST(req: NextRequest, context: RouteContext) {
           updated_at: new Date(),
         });
       }
+    }).catch(async (txError) => {
+      // The pg rollback cannot undo the Supabase Auth user created above.
+      // Remove it so the next retry starts clean instead of colliding with
+      // its own leftover on the "email already exists" gate.
+      if (createdAuthUserInThisRequest) {
+        const { error: cleanupError } =
+          await supabaseAdmin.auth.admin.deleteUser(authUserId);
+        console.error("APPROVE — transaction failed, rolled back auth user", {
+          applicationId: application.id,
+          authUserId,
+          cleanupError: cleanupError?.message || null,
+        });
+      }
+      throw txError;
     });
 
     let emailSent = false;
@@ -651,12 +885,31 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // dealer/account/auth rows.
     let whatsappDelivery: WhatsAppDelivery | null = null;
     if (
-      (application.source || "web").toLowerCase() === "whatsapp" &&
-      application.wa_phone
+      application.wa_phone &&
+      ((application.source || "web").toLowerCase() === "whatsapp" ||
+        // E-214: a file an internal operator created or handed off is a WhatsApp
+        // dealer regardless of how `source` was stamped.
+        ((application.onboarding_channel as string | null) ?? "self") !== "self")
     ) {
+      // E-214: bind (or re-point) a session on the DEALER's own number to this
+      // approved application BEFORE sending. In operator-upload mode the dealer
+      // has no session at all, so without this the welcome message logs against
+      // no conversation and the dealer's first "hi" has to fall through to the
+      // slower phone-matched console gate.
+      let dealerSessionId = application.wa_session_id ?? null;
+      try {
+        dealerSessionId = await bindDealerSession(
+          application.id as string,
+          application.wa_phone as string,
+          (application.owner_name || application.company_name) as string | null,
+        );
+      } catch (bindErr) {
+        console.error("[approve] dealer session bind failed:", bindErr);
+      }
+
       whatsappDelivery = await sendDealerWelcomeWhatsApp({
+        waSessionId: dealerSessionId,
         waPhone: application.wa_phone,
-        waSessionId: application.wa_session_id ?? null,
         dealerName: application.owner_name || application.company_name || "Dealer",
         companyName: application.company_name || "iTarang Dealer",
         dealerCode,
@@ -672,6 +925,46 @@ export async function POST(req: NextRequest, context: RouteContext) {
       console.log("DEALER WELCOME WHATSAPP:", { dealerId, whatsappDelivery });
     }
 
+    // E-214 — confirmation copy to the internal operator who onboarded this
+    // dealer, so they know the file closed and can start the next one. It
+    // carries NO password: sendOperatorApprovalConfirmationWhatsApp's params
+    // type has no such field. Attribution comes from onboarding_operator_id —
+    // NEVER from dealer_user_id, which the transaction above just overwrote with
+    // the dealer's own Supabase auth id.
+    let operatorDelivery: WhatsAppDelivery | null = null;
+    if (application.onboarding_operator_id) {
+      try {
+        const [op] = await db
+          .select({
+            waPhone: whatsappOperators.wa_phone,
+            displayName: whatsappOperators.display_name,
+          })
+          .from(whatsappOperators)
+          .where(
+            eq(
+              whatsappOperators.id,
+              application.onboarding_operator_id as string,
+            ),
+          )
+          .limit(1);
+        if (op?.waPhone) {
+          operatorDelivery = await sendOperatorApprovalConfirmationWhatsApp({
+            waPhone: op.waPhone,
+            waSessionId:
+              (application.wa_operator_session_id as string | null) ?? null,
+            operatorName: op.displayName,
+            companyName: application.company_name || "The dealer",
+            dealerCode,
+            dealerPhoneMasked: maskPhone(application.wa_phone as string | null),
+            dealerEmail: dealerLoginEmail,
+            financeEnabled: Boolean(application.finance_enabled),
+          });
+        }
+      } catch (opErr) {
+        console.error("[approve] operator confirmation failed:", opErr);
+      }
+    }
+
     console.log("DEALER APPROVED:", {
       dealerId,
       dealerCode,
@@ -679,6 +972,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
       email: dealerLoginEmail,
       approvedAt: new Date().toISOString(),
       notificationRecipients,
+    });
+
+    // In-app row for the new dealer's bell + an audit copy for the admins.
+    // Keyed to `dealerCode`, not the application id: dealerCode IS the value
+    // written to users.dealer_id just above, and that is what the bell resolves
+    // a dealer audience by. The welcome EMAIL already went out, so this sends
+    // no second one.
+    await notifyOnboardingDecision({
+      dealerId: dealerCode,
+      businessName: application.company_name || "Your company",
+      decision: "approved",
     });
 
     return NextResponse.json({
@@ -696,6 +1000,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       attachedAuditTrail: Boolean(mailResult?.attachedAuditTrail),
       isBranchDealer,
       whatsappDelivery,
+      operatorDelivery,
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);

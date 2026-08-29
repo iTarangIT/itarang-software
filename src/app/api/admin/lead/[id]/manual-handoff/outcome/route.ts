@@ -23,6 +23,14 @@ export const dynamic = "force-dynamic";
 const Body = z.object({
   result: z.enum(["accepted", "declined", "exhausted"]),
   winning_nbfc_name: z.string().max(200).optional(),
+  // The sanctioned amount, as told to us by the off-platform lender.
+  //
+  // Since the Step-4/Step-5 split the product selection carries no price at
+  // this point in the flow (the dealer picks stock and settles the price on
+  // Step 5, after a lender quotes), so `final_price` can no longer stand in
+  // for the loan amount. It is still used as the fallback for older leads
+  // that do carry one.
+  loan_amount: z.number().min(0).optional(),
   declining_nbfcs: z.array(z.string().max(200)).optional(),
   outcome: z.string().max(2000).optional(),
 });
@@ -73,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           id: loanSanctionId,
           lead_id: leadId,
           product_selection_id: selection?.id ?? null,
-          loan_amount: selection?.final_price ?? null,
+          loan_amount: d.loan_amount != null ? String(d.loan_amount) : (selection?.final_price ?? null),
           status: "sanctioned",
           loan_approved_by: d.winning_nbfc_name ?? "Off-platform NBFC",
           // off-platform NBFC — not an in-system user

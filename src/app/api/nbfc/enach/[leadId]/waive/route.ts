@@ -15,6 +15,8 @@ import { db } from "@/lib/db";
 import { enachMandates } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { generateEnachRef, getWinningAssignment } from "@/lib/nbfc/enach";
+import { notifyEnachEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -75,6 +77,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         updated_at: now,
       })
       .returning({ id: enachMandates.id });
+
+    await notifyEnachEvent({
+      leadId,
+      event: "waived",
+      nbfcName: await tenantDisplayName(actor.tenant_id),
+      tenantId: actor.tenant_id,
+      reason: parsed.data.reason,
+    });
 
     return NextResponse.json({ ok: true, mandate_id: created.id, status: "skipped" });
   } catch (e) {

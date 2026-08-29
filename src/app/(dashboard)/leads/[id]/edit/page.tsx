@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { requireAuth } from "@/lib/auth-utils";
-import { redirect } from "next/navigation";
+import { requireRole } from "@/lib/auth-utils";
+import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { EditLeadForm } from "@/components/leads/edit-lead-form";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,10 @@ export default async function EditLeadPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const user = await requireAuth();
-  if (!user) redirect("/login");
+  // Same gate as the list and PATCH /api/dealer-leads/[id]. This was
+  // requireAuth() — any signed-in user of any role, including dealers and
+  // vendors, could open the edit form for any prospect.
+  await requireRole([...LEADS_PAGE_ROLES]);
 
   const { id } = await params;
 

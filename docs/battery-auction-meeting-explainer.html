@@ -1,0 +1,466 @@
+<title>Battery Auction Walkthrough</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#F4F8F7; --surface:#FFFFFF; --ink:#182B33; --muted:#5B6E74;
+    --line:#D9E4E1; --line-strong:#B9CCC8;
+    --accent:#0E7C74; --accent-soft:#E3F1EF;
+    --done:#2E7D4F; --done-soft:#E6F2EA;
+    --warn:#A96A10; --warn-soft:#F7EEDD;
+    --miss:#B3402E; --miss-soft:#F8E8E4;
+    --navy:#23507C;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0E1719; --surface:#152124; --ink:#E3EDEB; --muted:#93A6A4;
+      --line:#24393C; --line-strong:#3A5458;
+      --accent:#46B8AC; --accent-soft:#173430;
+      --done:#5CB97F; --done-soft:#16301F;
+      --warn:#E0A94E; --warn-soft:#33270F;
+      --miss:#E07A64; --miss-soft:#391A13;
+      --navy:#7FA8D0;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E1719; --surface:#152124; --ink:#E3EDEB; --muted:#93A6A4;
+    --line:#24393C; --line-strong:#3A5458;
+    --accent:#46B8AC; --accent-soft:#173430;
+    --done:#5CB97F; --done-soft:#16301F;
+    --warn:#E0A94E; --warn-soft:#33270F;
+    --miss:#E07A64; --miss-soft:#391A13;
+    --navy:#7FA8D0;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.6;
+  }
+  .wrap{max-width:920px; margin:0 auto; padding:48px 24px 80px}
+  header.hero{padding:16px 0 8px; border-bottom:2px solid var(--ink); margin-bottom:8px}
+  .eyebrow{
+    font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); font-weight:500;
+  }
+  h1{
+    font-family:Archivo,"IBM Plex Sans",sans-serif; font-weight:800;
+    font-size:clamp(30px,5vw,44px); line-height:1.08; margin:.35em 0 .3em; text-wrap:balance;
+  }
+  .lede{font-size:18px; color:var(--muted); max-width:62ch; margin:0 0 20px}
+  .lede strong{color:var(--ink)}
+  .statrow{display:flex; flex-wrap:wrap; gap:12px; margin:20px 0 4px}
+  .stat{
+    flex:1 1 130px; background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; padding:12px 14px;
+  }
+  .stat b{font-family:Archivo,sans-serif; font-size:26px; font-weight:800; display:block; line-height:1.1}
+  .stat span{font-size:12.5px; color:var(--muted)}
+  section{margin-top:52px}
+  .sec-head{display:flex; align-items:baseline; gap:14px; border-bottom:1px solid var(--line-strong); padding-bottom:8px; margin-bottom:18px}
+  .sec-num{
+    font-family:Archivo,sans-serif; font-weight:800; font-size:15px; color:var(--bg);
+    background:var(--accent); border-radius:6px; padding:2px 9px; flex:none; transform:translateY(-2px);
+  }
+  h2{font-family:Archivo,sans-serif; font-weight:700; font-size:24px; margin:0; text-wrap:balance}
+  h3{font-family:Archivo,sans-serif; font-weight:700; font-size:17px; margin:22px 0 8px}
+  p{max-width:70ch}
+  .note{color:var(--muted); font-size:14px; max-width:74ch}
+  figure{margin:20px 0; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 12px 8px; overflow-x:auto}
+  figure svg{display:block; min-width:960px; max-width:100%; height:auto; margin:0 auto}
+  figcaption{font-size:13px; color:var(--muted); padding:8px 8px 6px; min-width:0}
+  /* SVG classes */
+  .sv-box{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.2; rx:8}
+  .sv-box-accent{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.4}
+  .sv-box-miss{fill:var(--miss-soft); stroke:var(--miss); stroke-width:1.2}
+  .sv-box-dash{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.2; stroke-dasharray:5 4}
+  .sv-t{font-family:"IBM Plex Sans",sans-serif; font-size:12.5px; font-weight:600; fill:var(--ink)}
+  .sv-ts{font-family:"IBM Plex Sans",sans-serif; font-size:10.5px; fill:var(--muted)}
+  .sv-lane{font-family:Archivo,sans-serif; font-size:11px; font-weight:700; letter-spacing:.08em; fill:var(--muted); text-transform:uppercase}
+  .sv-lbl{font-family:"IBM Plex Sans",sans-serif; font-size:10.5px; fill:var(--muted)}
+  .sv-grp{font-family:"IBM Plex Mono",monospace; font-size:10.5px; fill:var(--accent); letter-spacing:.06em}
+  .sv-edge{stroke:var(--ink); stroke-width:1.4; fill:none; opacity:.75}
+  .sv-edge-dash{stroke:var(--ink); stroke-width:1.4; fill:none; opacity:.6; stroke-dasharray:6 5}
+  .sv-sep{stroke:var(--line); stroke-width:1}
+  /* panels */
+  .cols3{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; margin:18px 0}
+  .panel{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 18px}
+  .panel h4{font-family:Archivo,sans-serif; font-size:15px; font-weight:700; margin:0 0 4px}
+  .panel .who{font-size:12px; color:var(--accent); font-family:"IBM Plex Mono",monospace; letter-spacing:.05em}
+  .panel ul{margin:10px 0 0; padding-left:18px; font-size:14px}
+  .panel li{margin:5px 0}
+  .panel li::marker{color:var(--accent)}
+  /* scoreboard */
+  .board{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; margin:18px 0}
+  .card{border-radius:12px; padding:18px 20px; border:1px solid var(--line); background:var(--surface)}
+  .card.done{border-top:4px solid var(--done)}
+  .card.left{border-top:4px solid var(--warn)}
+  .card h4{font-family:Archivo,sans-serif; font-size:16px; margin:0 0 10px}
+  .card ul{margin:0; padding-left:18px; font-size:14.5px}
+  .card li{margin:7px 0}
+  .chip{
+    display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500;
+    padding:1px 8px; border-radius:999px; vertical-align:1px; margin-right:6px;
+  }
+  .chip.p0{background:var(--miss-soft); color:var(--miss)}
+  .chip.p1{background:var(--warn-soft); color:var(--warn)}
+  .chip.p2{background:var(--accent-soft); color:var(--accent)}
+  .chip.p3{background:var(--line); color:var(--muted)}
+  .chip.ok{background:var(--done-soft); color:var(--done)}
+  /* decisions */
+  .decision{background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--navy); border-radius:0 10px 10px 0; padding:14px 18px; margin:12px 0}
+  .decision b{font-family:Archivo,sans-serif}
+  .decision .q{font-size:15.5px}
+  .decision .ctx{font-size:13.5px; color:var(--muted); margin-top:4px}
+  code{font-family:"IBM Plex Mono",monospace; font-size:.88em; background:var(--accent-soft); color:var(--ink); padding:1px 5px; border-radius:4px}
+  .alert{
+    background:var(--miss-soft); border:1px solid var(--miss); border-radius:10px;
+    padding:12px 16px; font-size:14.5px; margin:16px 0;
+  }
+  .alert b{color:var(--miss)}
+  footer{margin-top:64px; padding-top:16px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px}
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">iTarang · NBFC Dashboard · Meeting walkthrough · 20 Aug 2026</div>
+  <h1>Battery Recovery &amp; Auction — how it works, what's live, what's left</h1>
+  <p class="lede">When a financed battery loan defaults, the NBFC recovers the battery, iTarang inspects and optionally refurbishes it, and it is <strong>auctioned to dealers</strong> on the platform — paid in cash or financed again as a new loan. This document walks the whole flow in one pass.</p>
+  <div class="statrow">
+    <div class="stat"><b>7</b><span>stages, recovery → resale</span></div>
+    <div class="stat"><b>3</b><span>portals: NBFC · Admin · Dealer</span></div>
+    <div class="stat"><b>45</b><span>API routes live</span></div>
+    <div class="stat"><b>~90%</b><span>of the BRD is built &amp; working</span></div>
+  </div>
+</header>
+
+<!-- ============ 1 · PITCH ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">1</span><h2>The one-line pitch</h2></div>
+  <p><strong>A defaulted battery is dead money. This module turns it back into a performing asset</strong> — recovered, health-checked, optionally repaired, then sold to the highest-bidding dealer in a timed online auction. If the winning dealer takes finance instead of paying cash, the same battery starts a <em>new</em> loan and goes back on the road.</p>
+  <p class="note">Only dealers can bid — never other NBFCs. The NBFC that owns the battery runs the auction; iTarang admin supervises; the platform automates the clock, the bidding rules and the notifications.</p>
+</section>
+
+<!-- ============ 2 · SWIMLANE ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">2</span><h2>The whole flow in one picture</h2></div>
+  <figure>
+    <svg viewBox="0 0 1160 512" role="img" aria-label="Swimlane diagram: five actors — NBFC, collection centre, workshop, platform, dealer — across seven stages from flag-for-recovery to pay-and-collect, with a dashed refinance loop back to the start.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <!-- lane separators -->
+      <line class="sv-sep" x1="0" y1="124" x2="1160" y2="124"/>
+      <line class="sv-sep" x1="0" y1="208" x2="1160" y2="208"/>
+      <line class="sv-sep" x1="0" y1="292" x2="1160" y2="292"/>
+      <line class="sv-sep" x1="0" y1="376" x2="1160" y2="376"/>
+      <!-- lane labels -->
+      <text class="sv-lane" x="12" y="78">NBFC</text>
+      <text class="sv-lane" x="12" y="160">Collection</text>
+      <text class="sv-lane" x="12" y="174">centre</text>
+      <text class="sv-lane" x="12" y="244">Workshop</text>
+      <text class="sv-lane" x="12" y="258">(iTarang)</text>
+      <text class="sv-lane" x="12" y="330">Platform</text>
+      <text class="sv-lane" x="12" y="344">(automatic)</text>
+      <text class="sv-lane" x="12" y="414">Dealer</text>
+      <!-- boxes -->
+      <rect class="sv-box" x="110" y="59" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="172" y="78" text-anchor="middle">1 · Flag for</text>
+      <text class="sv-t" x="172" y="94" text-anchor="middle">recovery</text>
+
+      <rect class="sv-box" x="252" y="143" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="314" y="162" text-anchor="middle">2 · Intake</text>
+      <text class="sv-ts" x="314" y="178" text-anchor="middle">serial · GPS · photos</text>
+
+      <rect class="sv-box" x="394" y="143" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="456" y="162" text-anchor="middle">3 · Inspect &amp; grade</text>
+      <text class="sv-ts" x="456" y="178" text-anchor="middle">SOH → base price</text>
+
+      <rect class="sv-box-miss" x="394" y="232" width="124" height="36" rx="8"/>
+      <text class="sv-t" x="456" y="254" text-anchor="middle">Scrap · terminal</text>
+
+      <rect class="sv-box-dash" x="536" y="227" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="598" y="246" text-anchor="middle">4 · Refurbish</text>
+      <text class="sv-ts" x="598" y="262" text-anchor="middle">optional, never forced</text>
+
+      <rect class="sv-box" x="678" y="59" width="130" height="46" rx="8"/>
+      <text class="sv-t" x="743" y="78" text-anchor="middle">5 · Build &amp; publish</text>
+      <text class="sv-ts" x="743" y="94" text-anchor="middle">lot · window · audience</text>
+
+      <rect class="sv-box-accent" x="664" y="308" width="220" height="52" rx="8"/>
+      <text class="sv-t" x="774" y="329" text-anchor="middle">Scheduler &amp; bid engine</text>
+      <text class="sv-ts" x="774" y="345" text-anchor="middle">open · close · anti-snipe · proxy bids</text>
+
+      <rect class="sv-box" x="806" y="395" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="868" y="414" text-anchor="middle">6 · Browse &amp; bid</text>
+      <text class="sv-ts" x="868" y="430" text-anchor="middle">names never shown</text>
+
+      <rect class="sv-box" x="950" y="59" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="1012" y="78" text-anchor="middle">7 · Approve winner</text>
+      <text class="sv-ts" x="1012" y="94" text-anchor="middle">reserve must be met</text>
+
+      <rect class="sv-box" x="950" y="395" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="1012" y="414" text-anchor="middle">Pay &amp; collect</text>
+      <text class="sv-ts" x="1012" y="430" text-anchor="middle">cash or refinance</text>
+
+      <!-- edges -->
+      <path class="sv-edge" d="M172 105 V166 H244" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="188" y="161">recovered</text>
+      <path class="sv-edge" d="M376 166 H386" marker-end="url(#ar)"/>
+      <path class="sv-edge" d="M480 189 V250 H528" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="488" y="245">needs repair</text>
+      <path class="sv-edge" d="M430 189 V224" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="366" y="214" text-anchor="end">SOH &lt; 55%</text>
+      <path class="sv-edge-dash" d="M456 143 V30 H743 V51" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="500" y="24">no repair needed — bypass straight to lot</text>
+      <path class="sv-edge" d="M660 250 H700 V113" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="666" y="244">returned</text>
+      <path class="sv-edge" d="M743 105 V300" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="750" y="200">publish → audience frozen</text>
+      <path class="sv-edge" d="M743 360 V418 H798" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="620" y="412" text-anchor="end">notified · WhatsApp / email / in-app</text>
+      <path class="sv-edge" d="M850 395 V368" marker-end="url(#ar)"/>
+      <path class="sv-edge" d="M866 360 V387" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="880" y="381">bid ⇄ validate</text>
+      <path class="sv-edge" d="M884 334 H990 V113" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="998" y="240">auction ends</text>
+      <path class="sv-edge" d="M1030 105 V387" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="1038" y="250">awarded</text>
+      <path class="sv-edge-dash" d="M1012 441 V478 H172 V113" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="593" y="472" text-anchor="middle">cash + refinance — the battery is financed again and redeployed to a new driver</text>
+    </svg>
+    <figcaption>Five actors, seven stages. The battery only moves left to right; the money — and the refinance loop — come back the other way. Dashed = optional path.</figcaption>
+  </figure>
+  <p class="note">Two rules worth saying out loud: <strong>refurbishment is recommended, never mandatory</strong> (the bypass arrow is deliberate), and a battery below <strong>55% state-of-health is scrapped</strong>, never auctioned.</p>
+</section>
+
+<!-- ============ 3 · STATUS JOURNEY ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">3</span><h2>The status journey</h2></div>
+  <p>Every battery, lot and sale moves through a fixed set of statuses. The platform enforces each transition — you cannot skip a step or move backwards.</p>
+  <figure>
+    <svg viewBox="0 0 1160 330" role="img" aria-label="Status chain: battery statuses intaken to ready-for-auction with scrap branch and bypass; lot statuses draft to ended with cancel branch; settlement statuses payment-pending to delivered with an optional refinanced outcome.">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <text class="sv-grp" x="110" y="16">BATTERY · recovery pipeline</text>
+      <rect class="sv-box" x="110" y="44" width="130" height="36" rx="18"/>
+      <text class="sv-t" x="175" y="66" text-anchor="middle">Intaken</text>
+      <rect class="sv-box" x="270" y="44" width="140" height="36" rx="18"/>
+      <text class="sv-t" x="340" y="66" text-anchor="middle">Under inspection</text>
+      <rect class="sv-box-dash" x="440" y="44" width="140" height="36" rx="18"/>
+      <text class="sv-t" x="510" y="66" text-anchor="middle">Refurb pending</text>
+      <rect class="sv-box-accent" x="610" y="44" width="150" height="36" rx="18"/>
+      <text class="sv-t" x="685" y="66" text-anchor="middle">Ready for auction</text>
+      <path class="sv-edge" d="M240 62 H262" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M410 62 H432" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M580 62 H602" marker-end="url(#ar2)"/>
+      <path class="sv-edge-dash" d="M340 44 V30 H685 V36" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="512" y="26" text-anchor="middle">no repair needed — bypass</text>
+      <rect class="sv-box-miss" x="270" y="104" width="140" height="34" rx="17"/>
+      <text class="sv-t" x="340" y="125" text-anchor="middle">Scrap</text>
+      <path class="sv-edge" d="M340 80 V96" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="420" y="126">SOH &lt; 55% · terminal — sold to scrap vendor</text>
+
+      <path class="sv-edge" d="M685 80 V168 H175 V188" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="430" y="162" text-anchor="middle">batteries added to a lot</text>
+
+      <text class="sv-grp" x="110" y="188">LOT · auction_lots</text>
+      <text class="sv-grp" x="710" y="188">SALE · auction_settlements</text>
+
+      <rect class="sv-box" x="110" y="196" width="130" height="36" rx="18"/>
+      <text class="sv-t" x="175" y="218" text-anchor="middle">Draft lot</text>
+      <rect class="sv-box-dash" x="270" y="196" width="130" height="36" rx="18"/>
+      <text class="sv-t" x="335" y="218" text-anchor="middle">Scheduled</text>
+      <rect class="sv-box-accent" x="430" y="196" width="110" height="36" rx="18"/>
+      <text class="sv-t" x="485" y="218" text-anchor="middle">Live</text>
+      <rect class="sv-box" x="570" y="196" width="110" height="36" rx="18"/>
+      <text class="sv-t" x="625" y="218" text-anchor="middle">Ended</text>
+      <rect class="sv-box" x="710" y="196" width="150" height="36" rx="18"/>
+      <text class="sv-t" x="785" y="218" text-anchor="middle">Payment pending</text>
+      <rect class="sv-box" x="890" y="196" width="120" height="36" rx="18"/>
+      <text class="sv-t" x="950" y="218" text-anchor="middle">In transit</text>
+      <rect class="sv-box-accent" x="1040" y="196" width="110" height="36" rx="18"/>
+      <text class="sv-t" x="1095" y="218" text-anchor="middle">Delivered</text>
+      <path class="sv-edge" d="M240 214 H262" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M400 214 H422" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M540 214 H562" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M680 214 H702" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M860 214 H882" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M1010 214 H1032" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="691" y="244" text-anchor="middle">winner approved</text>
+      <text class="sv-lbl" x="871" y="244" text-anchor="middle">payment recorded</text>
+      <rect class="sv-box-miss" x="430" y="268" width="140" height="34" rx="17"/>
+      <text class="sv-t" x="500" y="289" text-anchor="middle">Cancelled</text>
+      <path class="sv-edge" d="M470 232 V260" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M610 232 V250 H530 V260" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="580" y="292">needs two admins + MFA</text>
+      <rect class="sv-box-dash" x="1040" y="268" width="110" height="34" rx="17"/>
+      <text class="sv-t" x="1095" y="289" text-anchor="middle">Refinanced ↺</text>
+      <path class="sv-edge-dash" d="M1095 232 V260" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="1030" y="292" text-anchor="end">optional — a new loan is raised</text>
+    </svg>
+    <figcaption>Three chained state machines: the battery, the lot, the sale. Solid pills are enforced today; dashed pills are optional stops. A no-bid or below-reserve auction returns its batteries to "Ready for auction" for re-listing.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 4 · WHO SEES WHAT ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">4</span><h2>Who sees what — the three portals</h2></div>
+  <div class="cols3">
+    <div class="panel">
+      <div class="who">NBFC · seller</div>
+      <h4>Runs the recovery &amp; the auction</h4>
+      <ul>
+        <li>Flags a defaulted loan → recovery board (kanban)</li>
+        <li>Registers the battery: serial, photos, location</li>
+        <li>3-step inspection → health score → suggested price</li>
+        <li>Raises a refurbishment job (checklist, cost, new accessories)</li>
+        <li>Composes the lot: batteries, price, 2/12/24/48&nbsp;h window, audience</li>
+        <li>Approves the winner, tracks the sale to delivery</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="who">iTarang · admin</div>
+      <h4>Supervises every live auction</h4>
+      <ul>
+        <li>Auction Control Centre: pause / resume / extend time</li>
+        <li>Sets a reserve floor (before the first bid)</li>
+        <li>Can approve the winning bid on the NBFC's behalf</li>
+        <li>Ending an auction early needs a reason + MFA</li>
+        <li>Cancelling needs a <em>second</em> admin's approval</li>
+        <li>Analytics: sell-through, realisation, no-bid rate, engine health</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <div class="who">Dealer · only bidder</div>
+      <h4>Bids, wins, pays, redeploys</h4>
+      <ul>
+        <li>Live-auction carousel on the dashboard home</li>
+        <li>Browse with filters: condition, price, state, city, distance</li>
+        <li>Sees photos, health score, highest bid — <strong>never rival names</strong></li>
+        <li>Bids live; can set a standing maximum (auto-bid)</li>
+        <li>Sees an EMI estimate <em>before</em> bidding on refinance lots</li>
+        <li>Pays by Razorpay; tracks purchases to delivery</li>
+      </ul>
+    </div>
+  </div>
+  <p class="note">There is also a public showcase page at <code>/auctions</code> — read-only, no prices below base, no bidder data. Bidding always requires a dealer login.</p>
+</section>
+
+<!-- ============ 5 · HOW DEALERS HEAR ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">5</span><h2>How dealers hear about a lot</h2></div>
+  <p>When the NBFC publishes, they pick <strong>one</strong> visibility rule. The platform resolves it into a frozen list of eligible dealers and notifies each of them — once.</p>
+  <figure>
+    <svg viewBox="0 0 1160 240" role="img" aria-label="Pipeline: lot published, visibility scope chosen, eligibility filter applied, audience frozen, then fan-out to WhatsApp, email, in-app, and SMS channels.">
+      <defs>
+        <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <rect class="sv-box" x="40" y="40" width="140" height="56" rx="8"/>
+      <text class="sv-t" x="110" y="63" text-anchor="middle">Lot published</text>
+      <text class="sv-ts" x="110" y="80" text-anchor="middle">by the NBFC</text>
+
+      <rect class="sv-box" x="220" y="40" width="220" height="56" rx="8"/>
+      <text class="sv-t" x="330" y="63" text-anchor="middle">Visibility — pick one</text>
+      <text class="sv-ts" x="330" y="80" text-anchor="middle">All India · states · cities · radius (km)</text>
+      <text class="sv-lbl" x="330" y="122" text-anchor="middle">reach preview shown while composing —</text>
+      <text class="sv-lbl" x="330" y="137" text-anchor="middle">publish is blocked if it reaches 0 dealers</text>
+
+      <rect class="sv-box" x="480" y="40" width="220" height="56" rx="8"/>
+      <text class="sv-t" x="590" y="63" text-anchor="middle">Eligibility filter</text>
+      <text class="sv-ts" x="590" y="80" text-anchor="middle">active, approved dealers only</text>
+      <text class="sv-lbl" x="590" y="122" text-anchor="middle">NBFC users are excluded by role —</text>
+      <text class="sv-lbl" x="590" y="137" text-anchor="middle">never by geography</text>
+
+      <rect class="sv-box-accent" x="740" y="40" width="220" height="56" rx="8"/>
+      <text class="sv-t" x="850" y="63" text-anchor="middle">Frozen audience snapshot</text>
+      <text class="sv-ts" x="850" y="80" text-anchor="middle">who may see &amp; bid on this lot</text>
+      <text class="sv-lbl" x="850" y="122" text-anchor="middle">frozen once at publish —</text>
+      <text class="sv-lbl" x="850" y="137" text-anchor="middle">re-publish never re-notifies</text>
+
+      <path class="sv-edge" d="M180 68 H212" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M440 68 H472" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M700 68 H732" marker-end="url(#ar3)"/>
+
+      <rect class="sv-box" x="1020" y="16" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="35" text-anchor="middle">WhatsApp ✓</text>
+      <rect class="sv-box" x="1020" y="72" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="91" text-anchor="middle">Email ✓</text>
+      <rect class="sv-box" x="1020" y="128" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="147" text-anchor="middle">In-app ✓</text>
+      <rect class="sv-box-dash" x="1020" y="184" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="203" text-anchor="middle">SMS · pending</text>
+      <path class="sv-edge" d="M960 52 H992 V31 H1012" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M960 66 H1000 V87 H1012" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M960 80 H992 V143 H1012" marker-end="url(#ar3)"/>
+      <path class="sv-edge-dash" d="M960 94 H1000 V199 H1012" marker-end="url(#ar3)"/>
+    </svg>
+    <figcaption>One publish event → four channels. Notifications also fire on outbid, ending-soon, won, lost, paused, resumed and cancelled. SMS is wired but switched off until the DLT template is registered.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 6 · SCOREBOARD ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">6</span><h2>What's done ✅ vs what's left ⏳</h2></div>
+  <p>We audited every screen, API route, database migration and background job against the BRD on 20 Aug 2026. <strong>The flow that is built is correct</strong> — it follows the approved design, and it fixed 8 of the 10 known engine defects along the way. Here is the honest scoreboard.</p>
+  <div class="board">
+    <div class="card done">
+      <h4>✅ Built and working</h4>
+      <ul>
+        <li><span class="chip ok">DONE</span>Full recovery pipeline — flag → collect → intake with photos → inspection with health grading → optional refurbishment with checklist &amp; cost tracking</li>
+        <li><span class="chip ok">DONE</span>Lot building — drafts, multi-battery lots, derived pricing, reserve price, 2/12/24/48&nbsp;h windows (48&nbsp;h hard max)</li>
+        <li><span class="chip ok">DONE</span>Audience targeting — India / states / cities / radius, with a live reach preview before publishing</li>
+        <li><span class="chip ok">DONE</span>The engine — opens &amp; closes auctions automatically every 15&nbsp;s, anti-snipe extensions, proxy auto-bidding, ties broken by earliest bid</li>
+        <li><span class="chip ok">DONE</span>Dealers-only bidding — the old NBFC bid route is shut; bidder names are never shown</li>
+        <li><span class="chip ok">DONE</span>Dealer experience — browse + 9 filters, live countdown, bid history, my-bids, purchases, Razorpay payment, dashboard carousel</li>
+        <li><span class="chip ok">DONE</span>Admin supervision — control centre, two-admin cancellation, analytics + engine health</li>
+        <li><span class="chip ok">DONE</span>Notifications — WhatsApp, email, in-app on publish / outbid / ending-soon / won / lost</li>
+        <li><span class="chip ok">DONE</span>Public showcase page (read-only)</li>
+      </ul>
+    </div>
+    <div class="card left">
+      <h4>⏳ Left to do</h4>
+      <ul>
+        <li><span class="chip p0">P0</span><strong>Production database update.</strong> Two migrations (E-252/E-253) are live on sandbox but <em>not on production</em>. Until they run, deploying this code crashes the NBFC recovery page and the dealer purchases screen. One script, five minutes.</li>
+        <li><span class="chip p1">P1</span><strong>Recording offline payments.</strong> Dealers are told they can pay by bank transfer, but the seller has no screen to record it — an offline sale is currently a dead end.</li>
+        <li><span class="chip p1">P1</span><strong>The refinance button.</strong> Everything exists — the lot type, the EMI preview, the loan-creation service — but no screen actually triggers it. Refinance wins currently settle as plain cash.</li>
+        <li><span class="chip p2">P2</span><strong>Failed-sale record.</strong> If a winner never pays, the sale is deleted instead of being marked failed — no audit trail.</li>
+        <li><span class="chip p2">P2</span><strong>Refinance → disbursement handoff.</strong> The new loan stops at "sanctioned"; nothing pushes it into disbursement.</li>
+        <li><span class="chip p2">P2</span><strong>Real MFA.</strong> The code admins type before destructive actions is not actually verified yet — any 6–8 digits pass.</li>
+        <li><span class="chip p3">P3</span>Polish: link the public page from somewhere, register the SMS (DLT) template, add automated tests for the bidding engine, small code clean-ups.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="alert"><b>The one thing that cannot wait:</b> run the E-252/E-253 migrations on production <em>before</em> this branch deploys. Everything else can be scheduled; this one is a crash on day one.</div>
+</section>
+
+<!-- ============ 7 · DECISIONS ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">7</span><h2>Three decisions we need from this meeting</h2></div>
+  <div class="decision">
+    <div class="q"><b>1 · Who owns the refinance loan?</b></div>
+    <div class="ctx">The code currently assumes the <em>selling</em> NBFC finances the battery again. The alternative is to route it competitively, like a fresh origination, so any NBFC can win it. This changes who books the new asset — the code is flagged and waiting on this answer.</div>
+  </div>
+  <div class="decision">
+    <div class="q"><b>2 · Should admin approve a lot before it goes live?</b></div>
+    <div class="ctx">Today an NBFC publishes straight to live — admin supervises but does not pre-approve. If a pre-publish approval gate is wanted, it is a deliberate addition, not a bug fix. Confirm the current behaviour is intended.</div>
+  </div>
+  <div class="decision">
+    <div class="q"><b>3 · When do we want paid promotion (BRD §19)?</b></div>
+    <div class="ctx">The "promote this lot to a wider audience for a fee" revenue feature was deliberately deferred. The base now works, so it is cheap to add — it just needs a slot on the roadmap.</div>
+  </div>
+</section>
+
+<footer>
+  <span>iTarang · Battery Recovery &amp; Auction · prepared for the flow-review meeting</span>
+  <span>Full detail: <em>Battery Auction BRD v2</em> (companion document)</span>
+</footer>
+
+</div>

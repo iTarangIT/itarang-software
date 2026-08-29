@@ -39,7 +39,7 @@ function IntellicarDashboardContent() {
     return (
         <div className="space-y-6 pb-12">
             <div>
-                <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Intellicar Dashboard</h1>
+                <h1 className="text-2xl font-bold text-gray-900 tracking-tight">IoT Dashboard</h1>
                 <p className="text-sm text-gray-500 mt-1">Battery fleet monitoring and telemetry analytics</p>
             </div>
 

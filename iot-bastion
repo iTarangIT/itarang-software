@@ -1,0 +1,16 @@
+﻿[10:46:51] iot-bastion connecting: ssh -N
+ssh: Could not resolve hostname -: No such host is known. 
+[10:46:58] iot-bastion exited after 7s
+[10:47:01] iot-bastion connecting: ssh -N
+ssh: Could not resolve hostname -: No such host is known. 
+[10:47:04] iot-bastion exited after 3s
+[10:47:07] iot-bastion connecting: ssh -N
+ssh: Could not resolve hostname -: No such host is known. 
+[10:47:10] iot-bastion exited after 3s
+[10:47:13] iot-bastion connecting: ssh -N
+ssh: Could not resolve hostname -: No such host is known. 
+[10:47:20] iot-bastion exited after 7s
+[10:47:23] iot-bastion connecting: ssh -N
+ssh: Could not resolve hostname -: No such host is known. 
+[10:47:26] iot-bastion exited after 3s
+[10:47:26] iot-bastion GIVING UP after 5 consecutive sub-20s failures
