@@ -17,6 +17,10 @@ export const RISK_RULE_KEYS = [
   "geo_shift_km",
   "offline_alert_hours",
   "pci_concern",
+  // E-274 — radius of the circle drawn around a borrower's city centre; the
+  // "outside assigned city" risk card flags a vehicle whose last GPS fix is
+  // beyond it. City-centre based (no polygons), so 25 km ≈ "still in town".
+  "city_geofence_km",
 ] as const;
 
 export type RiskRuleKey = (typeof RISK_RULE_KEYS)[number];
@@ -35,9 +39,10 @@ export const RISK_RULE_CATALOGUE: Catalogue = {
   geo_shift_km:        { label: "Geo-Shift Threshold",           unit: "km",    default_value: 100 },
   offline_alert_hours: { label: "Offline Alert Threshold",       unit: "hours", default_value: 24 },
   pci_concern:         { label: "PCI: Concern threshold",        unit: "score", default_value: 0.4 },
+  city_geofence_km:    { label: "City Geofence Radius",          unit: "km",    default_value: 25 },
 };
 
-/** True if `key` is one of the eight canonical rule keys. */
+/** True if `key` is one of the canonical rule keys. */
 export function isRiskRuleKey(key: string): key is RiskRuleKey {
   return (RISK_RULE_KEYS as readonly string[]).includes(key);
 }

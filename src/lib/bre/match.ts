@@ -86,12 +86,12 @@ function evaluateProduct(
     }
   }
 
+  // E-275 — the requested amount only has to FIT the product: a product is
+  // shown when requested ≤ loan_amount_max. loan_amount_min is deliberately
+  // not applied (business decision 2026-08-29): a customer asking for less
+  // than a product's floor is still a customer that lender can serve.
   if (customer.loan_amount != null) {
-    if (customer.loan_amount < p.loan_amount_min) {
-      reasons.push(
-        `Amount ${customer.loan_amount} below min ${p.loan_amount_min}`,
-      );
-    } else if (customer.loan_amount > p.loan_amount_max) {
+    if (customer.loan_amount > p.loan_amount_max) {
       reasons.push(
         `Amount ${customer.loan_amount} above max ${p.loan_amount_max}`,
       );

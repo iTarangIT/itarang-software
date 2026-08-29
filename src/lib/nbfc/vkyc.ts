@@ -40,6 +40,9 @@ export async function getActiveAssignment(leadId: string, tenantId: string) {
       nbfc_id: nbfcLeadAssignments.nbfc_id,
       tenant_id: nbfcLeadAssignments.tenant_id,
       status: nbfcLeadAssignments.status,
+      loan_product_id: nbfcLeadAssignments.loan_product_id,
+      // E-275 — the NBFC's own rejection reason, echoed back on the offer GET.
+      rejection_note: nbfcLeadAssignments.rejection_note,
       snapshot: nbfcLeadAssignments.service_config_snapshot,
     })
     .from(nbfcLeadAssignments)
