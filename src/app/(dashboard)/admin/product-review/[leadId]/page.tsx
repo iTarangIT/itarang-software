@@ -34,6 +34,8 @@ interface ProductSelection {
   charger_price: string | null;
   paraphernalia_cost: string | null;
   dealer_margin: string | null;
+  dealer_margin_gst_percent: string | null;
+  dealer_margin_gst_amount: string | null;
   final_price: string | null;
   battery_gross: string | null;
   battery_gst_percent: string | null;
@@ -347,6 +349,10 @@ export default function AdminProductReviewPage() {
 
           <div className="grid grid-cols-2 gap-4 text-sm pt-4 border-t">
             <Field label="Dealer Margin" value={`₹${selection.dealer_margin ?? 0}`} />
+            <Field
+              label={`GST on Margin (${selection.dealer_margin_gst_percent ?? 18}%)`}
+              value={`₹${selection.dealer_margin_gst_amount ?? 0}`}
+            />
             <Field
               label="Final Price"
               value={<span className="font-bold">₹{selection.final_price ?? 0}</span>}

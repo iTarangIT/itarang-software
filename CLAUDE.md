@@ -103,6 +103,6 @@ The team uses **hand-written, named, idempotent SQL migration files** in `drizzl
 ## Important Notes
 
 - Both Next.js server AND BullMQ worker must be running for full functionality in dev (`npm run dev` handles this).
-- No formal test suite exists — no Jest/Vitest configuration.
+- Unit tests run on **Vitest** (`npm test` / `npm run test:watch`, config in `vitest.config.ts`). Scope is deliberately narrow: pure, no-I/O helpers under `src/**/__tests__/`. Anything needing a database is covered by a `scripts/verify-*.ts` script instead — those are read-only, import the real query builders rather than restating them, and run via `node --import tsx --env-file=.env.local`. Playwright covers the e2e workflows separately.
 - `legacy-vite/` contains old Vite-based codebase (pre-migration).
 - TypeScript build errors are currently ignored in Next.js config (`ignoreBuildErrors: true`).

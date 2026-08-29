@@ -1,8 +1,15 @@
+import { isForeignLead } from "../geo";
+
 export function filterLeads(leads: any[]) {
   return leads.filter((lead) => {
     if (!lead.name) return false;
 
     if (!lead.phone && !lead.website && !lead.address) return false;
+
+    // The scraper only ever wants Indian dealers, and isValidIndianMobile is
+    // not a geographic check — normalizeIndianPhone stamps "+91" onto any
+    // 10-digit number, so a US mobile passes it. See ../geo.ts.
+    if (isForeignLead(lead)) return false;
 
     const name = lead.name.toLowerCase();
 

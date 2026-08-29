@@ -13,25 +13,26 @@
  * Role: dealer, must own the lead (mirrors /api/lead/[id]/product-photo).
  */
 import { NextRequest, NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, productSelections } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { uploadFileToStorage } from "@/lib/storage";
 import { combineToPdf, isCombinable } from "@/lib/pdf/combine";
+import { notifyDocsShared } from "@/lib/notifications/events";
+import { dealerDisplayName } from "@/lib/notifications/emit";
+import {
+  type BucketItem,
+  PRE_SANCTION_MAX,
+  coerceBucketItems,
+  replacePreSanctionDocs,
+} from "@/lib/leads/pre-sanction-bucket";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB per file (videos allowed)
-
-interface BucketItem {
-  url: string;
-  name: string;
-  type: string;
-  size: number;
-}
 
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "file";
@@ -184,39 +185,36 @@ export async function PATCH(
     }
 
     const raw = Array.isArray(body.items) ? body.items : [];
-    if (raw.length > 10) {
+    if (raw.length > PRE_SANCTION_MAX) {
       return NextResponse.json(
-        { ok: false, error: "Up to 10 items only" },
+        { ok: false, error: `Up to ${PRE_SANCTION_MAX} items only` },
         { status: 400 },
       );
     }
     // Keep only well-formed bucket items.
-    const items: BucketItem[] = raw
-      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
-      .map((it) => ({
-        url: String(it.url ?? ""),
-        name: String(it.name ?? "file"),
-        type: String(it.type ?? "application/octet-stream"),
-        size: Number(it.size ?? 0) || 0,
-      }))
-      .filter((it) => it.url);
+    const items: BucketItem[] = coerceBucketItems(raw);
 
-    // Target the most-recent selection row (the submitted one, once frozen).
-    const [row] = await db
-      .select({ id: productSelections.id })
-      .from(productSelections)
-      .where(eq(productSelections.lead_id, leadId))
-      .orderBy(desc(productSelections.created_at))
-      .limit(1);
-
-    if (!row) {
+    // Targets the most-recent selection row (the submitted one, once frozen);
+    // the WhatsApp extra-documents step writes the same column through the
+    // same helper, so the two channels can never disagree on which row.
+    const persisted = await replacePreSanctionDocs(leadId, items);
+    if (!persisted) {
       return NextResponse.json({ ok: true, persisted: false, items });
     }
 
-    await db
-      .update(productSelections)
-      .set({ pre_sanction_doc_urls: items, updated_at: new Date() })
-      .where(eq(productSelections.id, row.id));
+    // Fired on PATCH, not POST: POST only parks a file in the bucket and the
+    // client calls it once per upload, so notifying there would fire per file
+    // and for items the dealer might still remove. PATCH is the moment the
+    // bucket is committed to the lead — i.e. actually shared.
+    if (items.length > 0) {
+      await notifyDocsShared({
+        leadId,
+        docLabel: "pre-sanction documents",
+        count: items.length,
+        dealerName: await dealerDisplayName(user.dealer_id),
+        stage: "Step 4 · Pre-sanction documents",
+      });
+    }
 
     return NextResponse.json({ ok: true, persisted: true, items });
   } catch (err) {

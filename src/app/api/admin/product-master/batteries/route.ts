@@ -19,6 +19,8 @@ const createSchema = z.object({
   warrantyMonths: z.number().int().min(0).max(240).default(0),
   iotCompatible: z.boolean().default(false),
   compatibleChargerModels: z.array(z.string().trim().min(1)).default([]),
+  hsnCode: z.string().trim().min(1).max(8).nullable().optional(),
+  gstRatePct: z.number().min(0).max(50).nullable().optional(),
   status: statusSchema.default("active"),
 });
 
@@ -70,6 +72,10 @@ export const POST = withErrorHandler(async (req: Request) => {
       warranty_months: body.warrantyMonths,
       iot_compatible: body.iotCompatible,
       compatible_charger_models: body.compatibleChargerModels,
+      // Omit when not provided so the E-256 column defaults (18% / 85076000)
+      // fill in, rather than inserting an explicit NULL over them.
+      hsn_code: body.hsnCode ?? undefined,
+      gst_rate_pct: body.gstRatePct != null ? String(body.gstRatePct) : undefined,
       status: body.status,
       created_by: user.id,
       updated_at: new Date(),

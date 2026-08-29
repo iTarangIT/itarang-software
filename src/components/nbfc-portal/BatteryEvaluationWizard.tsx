@@ -8,8 +8,31 @@
  * decision and checklist; Step 3 captures pricing and submits to
  * POST /api/nbfc/recovery/[id]/evaluation. The base auction price is computed
  * server-side and surfaced back in the result panel.
+ *
+ * [BRD §20] Step 1 now also captures PHOTOGRAPHS. The dealer lot page has
+ * always rendered a gallery headed "captured at inspection" and nothing in the
+ * product ever uploaded one, so that gallery could only ever be empty. Photos
+ * attach to the battery master (`recovery_batteries.image_urls`) rather than to
+ * the evaluation, because that is the row the auction reads.
+ *
+ * A pipeline row whose battery has never been registered has nowhere to put
+ * them; the panel offers to create the record from the serial it already knows,
+ * rather than sending the operator to a different screen and back.
+ *
+ * SCRAP SKIPS THE REFURBISHMENT FIELDS. Step 2's cost estimate and checklist
+ * describe work done to put a battery back in service — terminal cleaning,
+ * recalibration, warranty reset. A scrapped battery gets none of it:
+ * recordEvaluation() sends it to stage 'scrap' with condition_grade = null and
+ * it leaves through Scrap Sales, never refurbishment. Neither field feeds
+ * computeBasePrice() either, so the form was asking the operator to cost work
+ * nobody will do and tick a checklist nobody will follow. Both are hidden on
+ * that decision and submitted as zero/false rather than as whatever was typed
+ * before the decision changed.
  */
 import { useState } from "react";
+import { toast } from "sonner";
+import { AuctionApiError, nbfcFetch } from "@/lib/auction/client";
+import BatteryPhotoCapture from "@/components/nbfc-portal/BatteryPhotoCapture";
 
 interface Step1State {
   soh_percent: string;
@@ -41,14 +64,72 @@ interface EvaluationResult {
 
 interface Props {
   recoveryPipelineId: string;
+  /** The battery master row, when this case already has one. */
+  batteryId?: string | null;
+  /** Used to create that row on the spot when it does not. */
+  batterySerial?: string | null;
   onComplete?: (result: EvaluationResult) => void;
+}
+
+/**
+ * POSTs the evaluation, retrying ONCE when the request never reached the
+ * server.
+ *
+ * The three-step form is filled in over minutes, so by the time Submit is
+ * pressed the browser is reusing a keep-alive socket that has been idle far
+ * longer than the server's idle timeout — and a dev server restart, a
+ * reconnecting laptop or a redeploy all land the same way: the connection dies
+ * before a single byte of the response comes back and `fetch` rejects. The
+ * operator saw the bare "Failed to fetch", could not tell whether the
+ * evaluation had been recorded, and had nothing to press but Submit again.
+ *
+ * `AuctionApiError` with `status === 0` is exactly that case — no response was
+ * ever received — which is the only case that is retried here. A 4xx/5xx is a
+ * real answer from the server and repeating it would only repeat the failure.
+ *
+ * Repeating a POST is safe because `recordEvaluation()` dedupes an identical
+ * resubmission of the same pipeline row inside a short window and returns the
+ * row it already wrote, so a retry after a lost response cannot leave two
+ * evaluations behind.
+ */
+async function postEvaluation(
+  recoveryPipelineId: string,
+  body: unknown,
+): Promise<EvaluationResult> {
+  const attempt = () =>
+    nbfcFetch<EvaluationResult>(
+      `/api/nbfc/recovery/${recoveryPipelineId}/evaluation`,
+      { method: "POST", body: JSON.stringify(body) },
+    ).then((json) => {
+      // A 2xx whose body failed to load parses to `{}`; rendering the result
+      // panel from that throws on `base_auction_price.toLocaleString`. Treat
+      // it as the transport failure it is so the retry below covers it.
+      if (!json || typeof json.evaluation_id !== "string") {
+        throw new AuctionApiError(
+          "The server's reply did not arrive in full — please try again.",
+          0,
+        );
+      }
+      return json;
+    });
+
+  try {
+    return await attempt();
+  } catch (e) {
+    if (e instanceof AuctionApiError && e.status === 0) return attempt();
+    throw e;
+  }
 }
 
 export function BatteryEvaluationWizard({
   recoveryPipelineId,
+  batteryId: initialBatteryId = null,
+  batterySerial = null,
   onComplete,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [batteryId, setBatteryId] = useState<string | null>(initialBatteryId);
+  const [registering, setRegistering] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<EvaluationResult | null>(null);
@@ -73,6 +154,11 @@ export function BatteryEvaluationWizard({
     reject: false,
   });
 
+  // Derived rather than clearing the fields on change: an operator who picks
+  // Scrap, reconsiders and goes back to Cell Replacement gets back the cost
+  // they had already typed.
+  const isScrap = s2.decision === "scrap";
+
   async function submit() {
     setError(null);
     setSubmitting(true);
@@ -88,11 +174,16 @@ export function BatteryEvaluationWizard({
         },
         step2: {
           decision: s2.decision,
-          estimated_cost: Number(s2.estimated_cost),
+          // A scrapped battery is never refurbished, so it carries no
+          // refurbishment cost and no completed checklist. Sending the stale
+          // form state would put a repair estimate on a scrap record.
+          estimated_cost: isScrap ? 0 : Number(s2.estimated_cost),
           checklist: {
-            terminal_cleaning: s2.terminal_cleaning,
-            software_recalibration: s2.software_recalibration,
-            warranty_reset: s2.warranty_reset,
+            terminal_cleaning: isScrap ? false : s2.terminal_cleaning,
+            software_recalibration: isScrap
+              ? false
+              : s2.software_recalibration,
+            warranty_reset: isScrap ? false : s2.warranty_reset,
           },
         },
         step3: {
@@ -101,25 +192,42 @@ export function BatteryEvaluationWizard({
         },
       };
 
-      const res = await fetch(
-        `/api/nbfc/recovery/${recoveryPipelineId}/evaluation`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.error ?? `HTTP ${res.status}`);
-      }
-      setResult(json as EvaluationResult);
+      const json = await postEvaluation(recoveryPipelineId, body);
+      setResult(json);
       setStep(4);
-      onComplete?.(json as EvaluationResult);
+      onComplete?.(json);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  /**
+   * Creates the battery master row for this case so photographs have somewhere
+   * to live. The route is idempotent on serial: re-registering an existing
+   * battery returns it rather than failing.
+   */
+  async function registerBattery() {
+    if (!batterySerial) return;
+    setRegistering(true);
+    try {
+      const r = await nbfcFetch<{ battery: { id: string } }>(
+        "/api/nbfc/recovery/batteries",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            serial: batterySerial,
+            recovery_pipeline_id: recoveryPipelineId,
+          }),
+        },
+      );
+      setBatteryId(r.battery.id);
+      toast.success("Battery record created — you can add photographs now");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRegistering(false);
     }
   }
 
@@ -216,6 +324,31 @@ export function BatteryEvaluationWizard({
               className="mt-1 w-full rounded border px-2 py-1"
             />
           </label>
+          {/* BRD §20 — the photographs the dealer bids on. */}
+          <div className="auction-sheet">
+            {batteryId ? (
+              <BatteryPhotoCapture batteryId={batteryId} />
+            ) : (
+              <div className="auc-field">
+                <span className="auc-label">Photographs</span>
+                <div className="auc-inline-error">
+                  This case has no battery record yet, so there is nowhere to
+                  attach photographs. Create one from the serial
+                  {batterySerial ? ` (${batterySerial})` : ""} and the five
+                  capture slots appear here.
+                </div>
+                <button
+                  type="button"
+                  className="auc-btn"
+                  disabled={!batterySerial || registering}
+                  onClick={registerBattery}
+                >
+                  {registering ? "Creating…" : "Create battery record"}
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end">
             <button
               type="button"
@@ -247,54 +380,70 @@ export function BatteryEvaluationWizard({
               <option value="scrap">Scrap</option>
             </select>
           </label>
-          <label className="block text-sm">
-            <span>Estimated refurb cost</span>
-            <input
-              type="number"
-              min={0}
-              value={s2.estimated_cost}
-              onChange={(e) =>
-                setS2({ ...s2, estimated_cost: e.target.value })
-              }
-              className="mt-1 w-full rounded border px-2 py-1"
-            />
-          </label>
-          <fieldset className="space-y-1 text-sm">
-            <legend className="font-medium">Checklist</legend>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={s2.terminal_cleaning}
-                onChange={(e) =>
-                  setS2({ ...s2, terminal_cleaning: e.target.checked })
-                }
-              />
-              Terminal cleaning
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={s2.software_recalibration}
-                onChange={(e) =>
-                  setS2({
-                    ...s2,
-                    software_recalibration: e.target.checked,
-                  })
-                }
-              />
-              Software recalibration
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={s2.warranty_reset}
-                onChange={(e) =>
-                  setS2({ ...s2, warranty_reset: e.target.checked })
-                }
-              />
-              Warranty reset
-            </label>
-          </fieldset>
+          {isScrap ? (
+            /*
+              Nothing to cost and nothing to tick. Say where the battery goes
+              instead, so the shorter step reads as a decision the form
+              understood rather than as fields that failed to load.
+            */
+            <p className="rounded bg-slate-50 p-2 text-sm text-slate-600">
+              No refurbishment cost or checklist for a scrapped battery — it
+              will not be repaired or auctioned. On submit it moves to the
+              scrap stage and can be bundled into a consignment for iTarang
+              from <span className="font-medium">Scrap Sales</span>.
+            </p>
+          ) : (
+            <>
+              <label className="block text-sm">
+                <span>Estimated refurb cost</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={s2.estimated_cost}
+                  onChange={(e) =>
+                    setS2({ ...s2, estimated_cost: e.target.value })
+                  }
+                  className="mt-1 w-full rounded border px-2 py-1"
+                />
+              </label>
+              <fieldset className="space-y-1 text-sm">
+                <legend className="font-medium">Checklist</legend>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={s2.terminal_cleaning}
+                    onChange={(e) =>
+                      setS2({ ...s2, terminal_cleaning: e.target.checked })
+                    }
+                  />
+                  Terminal cleaning
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={s2.software_recalibration}
+                    onChange={(e) =>
+                      setS2({
+                        ...s2,
+                        software_recalibration: e.target.checked,
+                      })
+                    }
+                  />
+                  Software recalibration
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={s2.warranty_reset}
+                    onChange={(e) =>
+                      setS2({ ...s2, warranty_reset: e.target.checked })
+                    }
+                  />
+                  Warranty reset
+                </label>
+              </fieldset>
+            </>
+          )}
           <div className="flex justify-between">
             <button
               type="button"

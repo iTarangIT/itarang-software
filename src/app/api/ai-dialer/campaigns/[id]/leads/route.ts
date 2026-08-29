@@ -8,11 +8,17 @@
 // (shop_name, dealer_name, phone, score). Soft FK — no DB constraint, so a
 // LEFT JOIN handles the case where a lead row was deleted post-campaign.
 
+import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
 import { db } from "@/lib/db";
 import { dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+import {
+  correlatedDurationSeconds,
+  deriveDurationSeconds,
+} from "@/lib/ai-dialer/call-duration/derive";
+import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/config-store";
 
 const PAGE_SIZE = 50;
 const BANNER_LIMIT = 100; // per bucket on bucket=all
@@ -26,26 +32,11 @@ const VALID_BUCKETS = new Set([
   "skipped",
 ]);
 
-// Authoritative call duration in seconds: the provider-reported value when
-// present, else wall-clock (completed − started) clamped to a sane window.
-// Mirrors transcript/route.ts so the table and the drawer always agree.
-function deriveDuration(
-  callDuration: number | string | null | undefined,
-  startedAt: Date | string | null,
-  completedAt: Date | string | null,
-): number | null {
-  const provided = callDuration != null ? Number(callDuration) : null;
-  if (provided != null && Number.isFinite(provided) && provided > 0) {
-    return provided;
-  }
-  if (startedAt && completedAt) {
-    const diffSec = Math.round(
-      (new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 1000,
-    );
-    if (diffSec > 0 && diffSec < 2 * 60 * 60) return diffSec;
-  }
-  return null;
-}
+// Call duration now lives in @/lib/ai-dialer/call-duration/derive, alongside
+// its SQL twin. It used to be a local copy here and a byte-identical second
+// copy in transcript/route.ts, whose comment promised the two "always agree" —
+// importing the one rule is what makes that true rather than aspirational, and
+// it is the same expression the duration histogram bins by.
 
 function shapeRow(r: any) {
   return {
@@ -65,9 +56,27 @@ function shapeRow(r: any) {
     finalIntentScore: r.finalIntentScore,
     currentStatus: r.currentStatus,
     // Exact call duration (seconds) shown in the table's Duration column.
-    durationSeconds: deriveDuration(r.callDuration, r.startedAt, r.completedAt),
+    // `hasTranscript` gates the wall-clock fallback: the started/completed pair
+    // brackets the DIALER's attempt, so without that gate a trigger_failed row
+    // shows the seconds we spent failing to place the call as its duration.
+    durationSeconds: deriveDurationSeconds(
+      r.callDuration,
+      r.startedAt,
+      r.completedAt,
+      r.hasTranscript,
+    ),
     // True when a reviewer has manually corrected this lead's intent score.
     corrected: Boolean(r.corrected),
+    // Why this call produced no conversation, in words the sales team can act
+    // on — null when it succeeded. Derived server-side so the table, the export
+    // and the retry filter can never disagree about what happened.
+    failureReason: deriveFailureReason({
+      status: r.status,
+      callOutcome: r.callOutcome,
+      hasTranscript: r.hasTranscript,
+      providerStatus: r.logStatus,
+      bandCallStatus: r.logCallStatus,
+    }),
     // Cross-campaign attempt tracking (only populated on the detail query).
     attemptCount: Number(r.attemptCount ?? 0),
     convertedOnAttempt:
@@ -100,11 +109,45 @@ const selectShape = {
     where call_id = ${dialerCampaignLeads.bolna_call_id}
     limit 1
   )`,
+  // The evidence behind the failure reason. Same correlated-subquery pattern as
+  // callDuration above, on the same already-indexed ai_call_logs.call_id.
+  //
+  // hasTranscript is the important one: it OUTRANKS call_outcome, because a
+  // transcript is proof the call happened. That is how a row could read
+  // "Trigger failed" while its own drawer played back a recording.
+  hasTranscript: sql<boolean>`(
+    select transcript is not null from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
+  logStatus: sql<string | null>`(
+    select status from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
+  logCallStatus: sql<string | null>`(
+    select call_status from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
   // Whether a human has corrected this lead's intent score in any attempt
   // (intent_score_feedback, E-159). Lead-level — drives the "Corrected" flag.
+  //
+  // E-250: excludes rows imported from the retired Campaign_Call_Review sheet
+  // whose free text named no band. Those are preserved as commentary, not
+  // verdicts, and lighting a "Corrected" pill for them would claim a decision
+  // nobody made.
+  //
+  // Filters on corrected_status rather than the more obvious review_kind on
+  // purpose: review_kind is an E-250 column, and naming it here would make this
+  // whole query — and with it the campaign leads table — fail with a 42703 on
+  // any database where E-250 has not been applied yet. corrected_status has
+  // existed since E-159, and the importer writes the 'none' sentinel into it
+  // for exactly this reason.
   corrected: sql<boolean>`exists (
     select 1 from intent_score_feedback f
     where f.lead_id = ${dialerCampaignLeads.lead_id}
+      and f.corrected_status <> 'none'
   )`,
 };
 
@@ -144,13 +187,30 @@ export const GET = withErrorHandler(
     const { searchParams } = new URL(req.url);
     const bucket = (searchParams.get("bucket") || "all").toLowerCase();
     const page = Math.max(1, Number(searchParams.get("page") || 1));
+    const durationBucketKey = searchParams.get("durationBucket");
 
     if (!VALID_BUCKETS.has(bucket)) {
       return errorResponse(`Invalid bucket: ${bucket}`, 400);
     }
 
-    // bucket=all returns three buckets in one round-trip for the banner.
-    if (bucket === "all") {
+    // Duration filter, set by clicking a bar on the campaign's call-duration
+    // histogram. Resolved against the SAME configured buckets the chart was
+    // drawn from, so an unrecognised key is a 400 rather than an empty table
+    // that looks like "no calls lasted that long".
+    let durationBounds: { lo: number; hi: number | null } | null = null;
+    if (durationBucketKey) {
+      const { buckets } = await resolveDurationBucketConfig();
+      const hit = buckets.find((b) => b.key === durationBucketKey);
+      if (!hit) {
+        return errorResponse(`Invalid durationBucket: ${durationBucketKey}`, 400);
+      }
+      durationBounds = { lo: hit.loSeconds, hi: hit.hiSeconds };
+    }
+
+    // bucket=all returns three buckets in one round-trip for the banner. A
+    // duration filter always wants the paginated list instead, whatever status
+    // tab happens to be showing.
+    if (bucket === "all" && !durationBounds) {
       const [pending, calling, completed, failed] = await Promise.all([
         db
           .select(selectShape)
@@ -229,13 +289,40 @@ export const GET = withErrorHandler(
         ? asc(dialerCampaignLeads.queue_position)
         : desc(dialerCampaignLeads.completed_at);
 
-    const where =
-      bucket === "all"
-        ? eq(dialerCampaignLeads.campaign_id, campaignId)
-        : and(
-            eq(dialerCampaignLeads.campaign_id, campaignId),
-            inArray(dialerCampaignLeads.status, [bucket]),
-          );
+    const conditions = [eq(dialerCampaignLeads.campaign_id, campaignId)];
+
+    // A duration bucket REPLACES the status filter rather than narrowing it.
+    // The histogram counts every call that reached a dealer, and a call can
+    // carry a real conversation while its row still reads 'failed' (see the
+    // evidence-order note in failureReason.ts). Intersecting the two would
+    // return FEWER rows than the bar the user just clicked promised — the exact
+    // "confident wrong number" this feature exists to prevent. Duration bounds
+    // alone are the precise population: a derived duration exists ONLY for a
+    // call something proves connected, so `>= lo` already excludes every call
+    // that never did. That was not true until the wall-clock fallback was gated
+    // on the transcript — before then a trigger_failed lead carried the seconds
+    // the dialer spent failing as its "duration" and matched these bounds.
+    if (bucket !== "all" && !durationBounds) {
+      conditions.push(inArray(dialerCampaignLeads.status, [bucket]));
+    }
+
+    if (durationBounds) {
+      // Half-open [lo, hi), the same rule the histogram bins by — the shared
+      // expression is what stops a bar reading 47 while the table it filters
+      // returns 44. `hi` is omitted rather than compared to NULL for the open
+      // top bucket, so no untyped null reaches the driver.
+      const duration = correlatedDurationSeconds(
+        dialerCampaignLeads.started_at,
+        dialerCampaignLeads.completed_at,
+        dialerCampaignLeads.bolna_call_id,
+      );
+      conditions.push(sql`${duration} >= ${durationBounds.lo}`);
+      if (durationBounds.hi !== null) {
+        conditions.push(sql`${duration} < ${durationBounds.hi}`);
+      }
+    }
+
+    const where = conditions.length === 1 ? conditions[0] : and(...conditions);
 
     const rows = await db
       .select(detailSelectShape)

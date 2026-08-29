@@ -13,9 +13,15 @@ import {
   CampaignStatusBadge,
 } from "./campaign-status-badge";
 import { displayCampaignName, summarizeRegion } from "@/lib/leads/regionSummary";
+import { formatWindow } from "@/lib/queue/campaignSchedule";
 
 type CampaignRow = {
   id: string;
+  // E-224 — which engine ran this campaign. 'ai_dialer' = Bolna/ElevenLabs
+  // robot calls (dialer_campaigns); 'neodove' = human agents in NeoDove
+  // (neodove_campaigns). The two live in separate tables and are UNIONed by
+  // /api/campaigns/unified; see that route for why they aren't merged.
+  kind?: "ai_dialer" | "neodove";
   name: string;
   status: string;
   provider: string;
@@ -30,6 +36,13 @@ type CampaignRow = {
   triggeredBy: string | null;
   triggeredByName: string | null;
   totalTalkTimeSeconds: number | null;
+  // E-228/E-254 — the calling window. NULL on every NeoDove row (human-agent
+  // campaigns have no dialer window) and on every pre-E-228 campaign.
+  scheduleMode?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  windowDays?: unknown;
+  resumeAfter?: string | null;
 };
 
 // Total talk time across a campaign's calls, as "1h 03m" / "7m 12s" / "45s".
@@ -55,7 +68,42 @@ function categoryLabel(c: string | null): string {
   return map[c] ?? c;
 }
 
+// E-254 — "11:00-15:00 IST · Mon-Sat · Recurring", or null when the campaign is
+// unscheduled. formatWindow is shared with the detail header so the list and
+// the detail page cannot describe the same row differently.
+function windowLabel(c: CampaignRow): string | null {
+  return formatWindow({
+    schedule_mode: c.scheduleMode,
+    window_start: c.windowStart,
+    window_end: c.windowEnd,
+    window_days: c.windowDays,
+  });
+}
+
+// "Thu 11:00" — day plus time, because a parked campaign's next opening is
+// routinely tomorrow or after the weekend, and a bare "11:00" would read as
+// today.
+function fmtResume(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
 function providerChip(p: string) {
+  if (p === "neodove") {
+    return (
+      <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-purple-50 text-purple-700">
+        NeoDove
+      </span>
+    );
+  }
   if (p === "elevenlabs") {
     return (
       <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-violet-50 text-violet-700">
@@ -70,7 +118,18 @@ function providerChip(p: string) {
   );
 }
 
-export function CampaignsTable() {
+export function CampaignsTable({
+  /**
+   * Where an AI-dialer row links to. Defaults to the admin console. The inside
+   * sales and ASM dashboards mount this same table under their OWN prefix so
+   * middleware keeps gating each dashboard to its role — a shared `/leads/*`
+   * link would work, but its Back button lands the rep on the admin console.
+   * NeoDove rows are unaffected: they have no per-dashboard detail view.
+   */
+  basePath = "/leads/campaigns",
+}: {
+  basePath?: string;
+} = {}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
@@ -101,17 +160,28 @@ export function CampaignsTable() {
   };
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["dialer-campaigns", page],
+    // E-224 — unified list: AI-dialer campaigns AND NeoDove campaigns, so the
+    // team has one place to look regardless of which engine ran the calls.
+    queryKey: ["unified-campaigns", page],
     queryFn: async () => {
-      const res = await fetch(`/api/ai-dialer/campaigns?page=${page}`);
+      const res = await fetch(`/api/campaigns/unified?page=${page}`);
       const json = await res.json();
       if (!json.success) throw new Error("Failed to load campaigns");
       return json.data;
     },
     refetchInterval: (query) => {
       const rows = (query.state.data?.data ?? []) as CampaignRow[];
-      const hasActive = rows.some((r) => r.status === "running");
-      return hasActive ? 4000 : false;
+      // 'running' is the AI dialer's in-flight state; 'pushing' is NeoDove's.
+      const hasActive = rows.some(
+        (r) => r.status === "running" || r.status === "pushing",
+      );
+      if (hasActive) return 4000;
+      // E-254 — a scheduled campaign flips itself to running when its window
+      // opens, with no user action to trigger a refetch. Poll slowly so that
+      // transition appears on its own; 4s would be wasteful for something that
+      // may still be hours away.
+      const hasScheduled = rows.some((r) => r.status === "scheduled");
+      return hasScheduled ? 60000 : false;
     },
   });
 
@@ -126,8 +196,9 @@ export function CampaignsTable() {
   if (isError) {
     return (
       <p className="text-sm text-rose-600">
-        Failed to load campaigns. Has the E-109 migration been applied to this
-        DB? Look for &quot;dialer_campaigns&quot; in the server log.
+        Failed to load campaigns. Check the server log for the relation named in
+        the error and apply the migration that creates it — naming one migration
+        here sent people to the wrong file when a different table was missing.
       </p>
     );
   }
@@ -162,7 +233,13 @@ export function CampaignsTable() {
           </thead>
           <tbody>
             {rows.map((c) => {
-              const href = `/leads/campaigns/${c.id}`;
+              const isNeodove = c.kind === "neodove";
+              // NeoDove campaigns have no transcripts, no per-call cost and no
+              // dialer queue, so they get their own detail view rather than a
+              // half-empty version of the AI-dialer one.
+              const href = isNeodove
+                ? `/leads/neodove-campaigns/${c.id}`
+                : `${basePath}/${c.id}`;
               const startedLabel = c.startedAt
                 ? new Date(c.startedAt).toLocaleString("en-IN", {
                     day: "2-digit",
@@ -180,8 +257,11 @@ export function CampaignsTable() {
                   key={c.id}
                   className="border-t border-gray-100 transition-colors hover:bg-gray-50 cursor-pointer group"
                   onClick={() => router.push(href)}
-                  onMouseEnter={() => prefetchCampaign(c.id)}
-                  onFocus={() => prefetchCampaign(c.id)}
+                  // Prefetch only for AI-dialer rows — those query keys point
+                  // at /api/ai-dialer/*, which knows nothing about a NeoDove id
+                  // and would 404 on hover.
+                  onMouseEnter={() => !isNeodove && prefetchCampaign(c.id)}
+                  onFocus={() => !isNeodove && prefetchCampaign(c.id)}
                 >
                   <td className="px-4 py-3">
                     <Link
@@ -189,18 +269,39 @@ export function CampaignsTable() {
                       onClick={(e) => e.stopPropagation()}
                       className="font-medium text-gray-900 hover:text-emerald-700 hover:underline"
                     >
-                      {displayCampaignName({
-                        category: c.category,
-                        regionFilter: c.regionFilter,
-                        startedAt: c.startedAt,
-                      })}
+                      {/* NeoDove campaigns are named by a human at creation;
+                          AI-dialer ones are derived from their region filter. */}
+                      {isNeodove
+                        ? c.name
+                        : displayCampaignName({
+                            category: c.category,
+                            regionFilter: c.regionFilter,
+                            startedAt: c.startedAt,
+                          })}
                     </Link>
                     <p className="text-[11px] text-gray-400 mt-0.5">
-                      {summarizeRegion(c.regionFilter)}
+                      {isNeodove
+                        ? (c.category ?? "NeoDove campaign")
+                        : summarizeRegion(c.regionFilter)}
                     </p>
                   </td>
                   <td className="px-4 py-3">
                     <CampaignStatusBadge status={c.status} />
+                    {/* E-254 — "Scheduled" on its own does not say scheduled
+                        for WHEN, which is the question this row exists to
+                        answer. Show the wake time for a parked campaign and the
+                        window itself for one that is merely constrained. */}
+                    {c.status === "scheduled" && c.resumeAfter ? (
+                      <p className="text-[11px] text-blue-700 mt-0.5">
+                        Resumes {fmtResume(c.resumeAfter)}
+                      </p>
+                    ) : (
+                      windowLabel(c) && (
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          {windowLabel(c)}
+                        </p>
+                      )
+                    )}
                   </td>
                   <td className="px-4 py-3">{providerChip(c.provider)}</td>
                   <td className="px-4 py-3 text-gray-700">
@@ -228,11 +329,14 @@ export function CampaignsTable() {
                       <div className="h-1 bg-gray-100 rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-500 ${
-                            c.status === "running"
+                            c.status === "running" || c.status === "pushing"
                               ? "bg-amber-400"
-                              : c.status === "completed"
+                              : c.status === "completed" || c.status === "active"
                                 ? "bg-emerald-500"
-                                : c.status === "stopped"
+                                : c.status === "stopped" ||
+                                    c.status === "paused" ||
+                                    c.status === "scheduled" ||
+                                    c.status === "draft"
                                   ? "bg-zinc-400"
                                   : "bg-rose-500"
                           }`}

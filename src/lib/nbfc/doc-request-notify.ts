@@ -1,25 +1,38 @@
 /**
  * Notifications + email for the NBFC Acquire request loop (Change 5).
  *
- * Every hop transition fires: (1) an in-app notification (surfaced by the
- * general NotificationBell) and (2) an email. Admin emails carry a tokenised
- * "act from email" link → a confirm page where the admin can forward/push
- * without logging in. All calls are best-effort — wrapped by callers in
- * try/catch so a notification failure never breaks the underlying action.
+ * Every hop transition fires: (1) an in-app notification and (2) an email.
+ * Admin emails carry a tokenised "act from email" link → a confirm page where
+ * the admin can forward/push without logging in. All calls are best-effort —
+ * a notification failure never breaks the underlying action.
+ *
+ * THE IN-APP HALF NOW GOES THROUGH THE NOTIFICATION HUB
+ * (src/lib/notifications/events.ts). That is what gives these rows their
+ * provenance line ("Bajaj Finance → iTarang Admin · NBFC request") and their
+ * in-bell actions (Forward / Decline / Push to NBFC), and what lets the same
+ * hop also reach the DEALER — who does the actual uploading and previously
+ * learned nothing when a request was forwarded to them. The email half is
+ * unchanged: it still carries the act-token link, which the in-app row does not
+ * need because the recipient is already signed in.
  */
 import type { NextRequest } from "next/server";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { nbfcDocRequests, users } from "@/lib/db/schema";
-import { notifyRoles, notifyNbfcTenant } from "@/lib/notifications/notify";
+import {
+  notifyNbfcRequestForwarded,
+  notifyNbfcRequestPushed,
+  notifyNbfcRequestRaised,
+  notifyNbfcRequestUpload,
+} from "@/lib/notifications/events";
+import { notifyDealerForLead } from "@/lib/notifications";
+import { SYSTEM_PARTY, type Party } from "@/lib/notifications/provenance";
 import { sendEmail } from "@/lib/email/mailer";
 import { generateActToken, actTokenExpiry, buildActLink } from "@/lib/nbfc/act-token";
 import { NBFC_DOC_STATUS_LABEL } from "@/lib/nbfc/doc-requests";
 
 export const ADMIN_NOTIFY_ROLES = ["admin", "ceo", "business_head", "sales_head"];
-
-const NOTIF_TYPE = "nbfc_doc_request";
 
 async function adminEmails(): Promise<string[]> {
   const rows = await db
@@ -80,17 +93,15 @@ export async function notifyAdminsOfNbfcRequest(opts: {
     opts.comments ? ` "${opts.comments}"` : ""
   }`;
 
-  try {
-    await notifyRoles(ADMIN_NOTIFY_ROLES, {
-      type: NOTIF_TYPE,
-      title,
-      message,
-      leadId: opts.leadId,
-      data: { requestId: opts.requestId, requestType: opts.requestType },
-    });
-  } catch (e) {
-    console.error("[nbfc-doc-notify] admin in-app failed:", e);
-  }
+  // In-app: lands in the admin bell WITH Review & forward / Decline buttons, so
+  // the common case never needs the page.
+  await notifyNbfcRequestRaised({
+    leadId: opts.leadId,
+    requestId: opts.requestId,
+    requestType: opts.requestType,
+    nbfcName: opts.nbfcName,
+    comments: opts.comments,
+  });
 
   try {
     const to = await adminEmails();
@@ -117,19 +128,17 @@ export async function notifyAdminsOfUpload(opts: {
   docLabel: string;
   req?: NextRequest | Request;
 }): Promise<void> {
-  const title = "NBFC request: document uploaded";
+  // Email copy only — the in-app copy is owned by the hub (events.ts), which
+  // words it from the recipient's point of view and adds the provenance line.
   const message = `A document ("${opts.docLabel}") for an NBFC request on lead ${opts.leadId} was uploaded and is ready for review.`;
-  try {
-    await notifyRoles(ADMIN_NOTIFY_ROLES, {
-      type: NOTIF_TYPE,
-      title,
-      message,
-      leadId: opts.leadId,
-      data: { requestId: opts.requestId },
-    });
-  } catch (e) {
-    console.error("[nbfc-doc-notify] admin upload in-app failed:", e);
-  }
+
+  // In-app: the admin bell gets a "Push to NBFC" button — the whole action at
+  // this hop is one click, so it should not require opening the lead.
+  await notifyNbfcRequestUpload({
+    leadId: opts.leadId,
+    requestId: opts.requestId,
+    docLabel: opts.docLabel,
+  });
   try {
     const to = await adminEmails();
     if (to.length === 0) return;
@@ -151,22 +160,74 @@ export async function notifyNbfcOfUpdate(opts: {
   leadId: string;
   requestId: string;
   isMessage?: boolean;
+  /** E-254 — SYSTEM_PARTY when the SLA sweep pushed. */
+  from?: Party;
 }): Promise<void> {
-  const title = opts.isMessage ? "Update from iTarang admin" : "Documents updated";
-  const message = opts.isMessage
-    ? `The iTarang admin posted an update on lead ${opts.leadId}.`
-    : `Requested documents for lead ${opts.leadId} have been updated and are now available.`;
-  try {
-    await notifyNbfcTenant(opts.tenantId, {
-      type: NOTIF_TYPE,
-      title,
-      message,
-      leadId: opts.leadId,
-      data: { requestId: opts.requestId },
-    });
-  } catch (e) {
-    console.error("[nbfc-doc-notify] nbfc in-app failed:", e);
-  }
+  await notifyNbfcRequestPushed({
+    tenantId: opts.tenantId,
+    leadId: opts.leadId,
+    requestId: opts.requestId,
+    isMessage: opts.isMessage,
+    from: opts.from,
+  });
+}
+
+/**
+ * Admin forwarded an NBFC's ask down to the dealer — the hop that was missing
+ * entirely. The dealer is the one who must upload; before this they only saw a
+ * lead-status change and had to work out what was wanted.
+ */
+export async function notifyDealerOfForward(opts: {
+  leadId: string;
+  requestId: string;
+  docLabels: string[];
+  nbfcName?: string | null;
+  targetStep?: "kyc" | "borrower-consent";
+  /** E-254 — SYSTEM_PARTY when the SLA sweep forwarded. */
+  from?: Party;
+}): Promise<void> {
+  await notifyNbfcRequestForwarded(opts);
+}
+
+/**
+ * Admin forwarded a single NBFC per-document verdict (queried / rejected) to
+ * the dealer as a re-upload request (E-209) — nudge the dealer, deep-linking
+ * the bell to the right step + the Additional Documents section. Shared by the
+ * admin route and the E-254 SLA sweep (`bySystem`), so both say the same thing.
+ */
+export async function notifyDealerOfVerdictForward(opts: {
+  leadId: string;
+  requestId: string;
+  docFor: "primary" | "co_borrower";
+  step: 2 | 3;
+  docLabel: string;
+  /** The instruction the dealer sees as the re-upload reason. */
+  message: string;
+  bySystem?: boolean;
+}): Promise<void> {
+  const where =
+    opts.step === 3 ? "Step 3 (co-borrower documents)" : "Step 2 (customer documents)";
+  const href =
+    opts.step === 3
+      ? `/dealer-portal/leads/${opts.leadId}/borrower-consent#other-documentation`
+      : `/dealer-portal/leads/${opts.leadId}/kyc#other-documentation`;
+  const who = opts.docFor === "co_borrower" ? "co-borrower's" : "customer's";
+  const actor = opts.bySystem
+    ? "iTarang (NBFC request, auto-forwarded on SLA)"
+    : "iTarang admin (NBFC request)";
+  await notifyDealerForLead({
+    leadId: opts.leadId,
+    type: "nbfc_verdict_forwarded",
+    title: `Re-upload requested: ${opts.docLabel}`,
+    message: `${actor} — the ${who} ${opts.docLabel} needs re-upload on ${where}. "${opts.message}"`,
+    ...(opts.bySystem ? { from: SYSTEM_PARTY } : {}),
+    data: {
+      requestId: opts.requestId,
+      step: opts.step,
+      note: opts.message,
+      href,
+    },
+  }).catch(() => {});
 }
 
 /** Status label passthrough for callers that want the human string. */

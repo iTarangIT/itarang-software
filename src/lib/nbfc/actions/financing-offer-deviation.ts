@@ -12,6 +12,7 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { nbfcFinancingOffers, nbfcLeadAssignments } from "@/lib/db/schema";
+import { NEGOTIABLE_FIELDS, appendRound } from "@/lib/nbfc/offer-negotiation";
 
 /** Approve: release the held offer to the dealer + advance the assignment. */
 export async function applyFinancingOfferDeviationApproval(input: {
@@ -46,6 +47,46 @@ export async function applyFinancingOfferDeviationApproval(input: {
         inArray(nbfcLeadAssignments.status, ["pending", "in_progress"]),
       ),
     );
+
+  // E-238 — the submit route deliberately did NOT append a negotiation round
+  // for this offer, because a round is only written once its terms are visible
+  // to the dealer and this one was held here. Approval is that moment, so the
+  // round is written now; without this the dealer's history would silently skip
+  // every offer that ever went out of band.
+  //
+  // Best-effort and idempotent-by-index: the UNIQUE (offer_id, round) refuses a
+  // duplicate if this handler is re-dispatched, and a failure here must not undo
+  // an approval that has already released the offer.
+  const round = offer.negotiation_round + 1;
+  try {
+    await db.transaction(async (tx) => {
+      await appendRound(tx, {
+        offer_id: offer.id,
+        assignment_id: offer.assignment_id,
+        lead_id: offer.lead_id,
+        nbfc_id: offer.nbfc_id,
+        tenant_id: offer.tenant_id,
+        round,
+        party: "nbfc",
+        kind: "offer",
+        terms: Object.fromEntries(NEGOTIABLE_FIELDS.map((f) => [f, offer[f]])),
+        conditions: offer.conditions,
+        created_by: offer.submitted_by,
+        created_at: now,
+      });
+      await tx
+        .update(nbfcFinancingOffers)
+        .set({ negotiation_status: "open", negotiation_round: round, updated_at: now })
+        .where(
+          and(
+            eq(nbfcFinancingOffers.id, offer.id),
+            eq(nbfcFinancingOffers.negotiation_round, offer.negotiation_round),
+          ),
+        );
+    });
+  } catch (err) {
+    console.error("[financing-offer-deviation] round append failed:", err);
+  }
 }
 
 /** Reject: keep the offer held; record the decision. Credit officer must revise. */

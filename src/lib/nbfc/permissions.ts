@@ -1,6 +1,11 @@
 /**
- * NBFC Custom RBAC — the 32-permission catalogue (BRD Addendum V0.3.1 §15.8 +
+ * NBFC Custom RBAC — the permission catalogue (BRD Addendum V0.3.1 §15.8 +
  * Appendix A) and the default permission set for each of the five system roles.
+ *
+ * It was 32 permissions when the addendum was written and this header said so.
+ * E-262 added the `recovery` group, so the count is no longer a fixed number
+ * worth quoting — the catalogue grows as surfaces get gates. What has NOT
+ * changed is which one is deliberately absent (see the note below).
  *
  * Design (non-breaking, additive over the legacy role strings):
  *   • Permissions are the FINE-grained unit. `actor.can(permission)` is the new
@@ -14,7 +19,7 @@
  *
  * `offer.approve_deviation` (Appendix A, CEO column) is intentionally NOT here:
  * it is the platform-level iTarang CEO gate (§13.3.4, shipped in E-161), not an
- * NBFC custom-role permission. That is why the NBFC catalogue is 32, not 33.
+ * NBFC custom-role permission.
  */
 import type { NbfcOriginationRole } from "@/lib/nbfc/origination-roles";
 
@@ -48,6 +53,24 @@ export const NBFC_PERMISSION_GROUPS: PermissionGroup[] = [
       { key: "fi.review", label: "Review FI submission → Pass/Fail/Re-inspect" },
       { key: "fi.reopen", label: "Reopen a closed FI decision" },
       { key: "fi.manage_agents", label: "Manage FI Agent directory" },
+    ],
+  },
+  // [E-262] Recovery. The surfaces here were gated by role STRING or by nothing
+  // at all: `/api/nbfc/recovery/[id]/stage` resolved an actor and then checked
+  // nothing, so any NBFC user of any role could push a battery to
+  // `ready_for_auction` and open a live auction lot, and the Recovery queue
+  // showed the whole flagged book — borrower phone numbers included — to
+  // everyone. These keys are what those routes check.
+  {
+    key: "recovery",
+    label: "Recovery",
+    permissions: [
+      { key: "recovery.view_queue", label: "View the Recovery queue" },
+      { key: "recovery.assign_agent", label: "Assign / reassign a recovery agent" },
+      { key: "recovery.review", label: "Approve / reject a collection" },
+      { key: "recovery.cancel", label: "Cancel a recovery assignment" },
+      { key: "recovery.manage_agents", label: "Manage the Recovery Agent directory" },
+      { key: "recovery.transition_stage", label: "Move a battery on the recovery board" },
     ],
   },
   {
@@ -109,7 +132,7 @@ export const NBFC_PERMISSION_GROUPS: PermissionGroup[] = [
   },
 ];
 
-/** Flat list of every NBFC permission key (the 32-permission catalogue). */
+/** Flat list of every NBFC permission key in the catalogue. */
 export const NBFC_PERMISSIONS: string[] = NBFC_PERMISSION_GROUPS.flatMap((g) =>
   g.permissions.map((p) => p.key),
 );
@@ -169,17 +192,33 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "vkyc.review",
     "enach.register",
     "enach.record_manual",
+    "recovery.view_queue",
   ],
-  viewer: ["lead.view_pipeline", "lead.view_detail", "lead.view_activity", "audit.view_logs"],
+  viewer: [
+    "lead.view_pipeline",
+    "lead.view_detail",
+    "lead.view_activity",
+    "audit.view_logs",
+    "recovery.view_queue",
+  ],
   // Monitor/Recover roles for the battery-immobilisation gate. Both get
   // read-only oversight (leads, activity, audit, reports); the immobilisation
   // initiate/approve actions are gated by role string, not by these keys.
+  //
+  // [E-262] The recovery keys are the exception to that sentence — they ARE
+  // checked, by the routes the recovery agent workflow added. The split between
+  // the two risk roles is deliberate: a manager can send an agent out and call
+  // them back, but approving a collection stamps the asset register and hands
+  // the battery to inspection, which is the head's call.
   nbfc_risk_manager: [
     "lead.view_pipeline",
     "lead.view_detail",
     "lead.view_activity",
     "audit.view_logs",
     "reports.view",
+    "recovery.view_queue",
+    "recovery.assign_agent",
+    "recovery.cancel",
   ],
   nbfc_risk_head: [
     "lead.view_pipeline",
@@ -187,6 +226,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "lead.view_activity",
     "audit.view_logs",
     "reports.view",
+    "recovery.view_queue",
+    "recovery.assign_agent",
+    "recovery.review",
+    "recovery.cancel",
+    "recovery.manage_agents",
+    "recovery.transition_stage",
   ],
 };
 

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
+import { skipsAgreementStep } from "@/components/onboarding/onboardingSchemas";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -375,7 +376,11 @@ export default function StepReview() {
 
   const primaryContact = getPrimaryContact(state);
 
-  const agreementRequired = state.finance?.enableFinance === "yes";
+  // Mirrors skipsAgreementStep: an e-sign agreement is only "required" here for
+  // dealers who actually get one. Scrap / new+scrap sign on paper after review
+  // (E-225), so the signer flow below is not theirs to complete and must not
+  // gate their submit.
+  const agreementRequired = !skipsAgreementStep(state);
   const agreementAlreadyCompleted =
     !agreementRequired || state.agreement?.agreementStatus === "completed";
 

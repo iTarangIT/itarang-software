@@ -16,7 +16,7 @@ import { z } from "zod";
 
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 import { forwardVerdictToDealer } from "@/lib/nbfc/doc-requests";
-import { notifyDealerForLead } from "@/lib/notifications";
+import { notifyDealerOfVerdictForward } from "@/lib/nbfc/doc-request-notify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,29 +70,16 @@ export async function POST(
       message: parsed.data.message,
     });
 
-    // Best-effort: nudge the dealer that a document is required. The explicit
-    // data.href deep-links the bell straight to the right step + the Additional
-    // Documents section on the dealer portal (the bell prioritises data.href).
-    const where =
-      result.step === 3
-        ? "Step 3 (co-borrower documents)"
-        : "Step 2 (customer documents)";
-    const href =
-      result.step === 3
-        ? `/dealer-portal/leads/${result.leadId}/borrower-consent#other-documentation`
-        : `/dealer-portal/leads/${result.leadId}/kyc#other-documentation`;
-    await notifyDealerForLead({
+    // Best-effort: nudge the dealer that a document is required (shared with
+    // the E-254 SLA sweep so both hops read the same).
+    await notifyDealerOfVerdictForward({
       leadId: result.leadId,
-      type: "nbfc_verdict_forwarded",
-      title: `Re-upload requested: ${result.docLabel}`,
-      message: `iTarang admin (NBFC request) — the ${result.docFor === "co_borrower" ? "co-borrower's" : "customer's"} ${result.docLabel} needs re-upload on ${where}. "${parsed.data.message}"`,
-      data: {
-        requestId: result.requestId,
-        step: result.step,
-        note: parsed.data.message,
-        href,
-      },
-    }).catch(() => {});
+      requestId: result.requestId,
+      docFor: result.docFor,
+      step: result.step,
+      docLabel: result.docLabel,
+      message: parsed.data.message,
+    });
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {

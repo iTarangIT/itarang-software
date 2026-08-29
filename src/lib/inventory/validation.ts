@@ -49,7 +49,10 @@ const batteryRowSchema = z
       .trim()
       .optional()
       .nullable()
-      .refine((v) => !v || /^[0-9]{15}$/.test(v), "IMEI ID must be 15 digits"),
+      .refine(
+        (v) => !v || /^[A-Za-z0-9]{16}$/.test(v),
+        "IMEI ID must be 16 alphanumeric characters",
+      ),
     iot_enabled: yesNoBool,
     material_code: z.string().min(1, "Material Code is required"),
     category: z
@@ -63,7 +66,7 @@ const batteryRowSchema = z
     star_rating: z.coerce.number().int().min(1).max(5),
     invoice_number: z.string().min(1, "Invoice Number is required"),
     sold_date: soldDateString,
-    invoice_value: z.coerce.number().positive("Invoice Value must be positive"),
+    base_value: z.coerce.number().positive("Base Value must be positive"),
     supplier_name: z.string().min(1, "Supplier Name is required"),
     oem_warranty_date: dateString,
     oem_warranty_months: z.coerce.number().int().positive("Warranty months must be positive"),
@@ -118,7 +121,7 @@ const chargerRowSchema = z.object({
     ),
   invoice_number: z.string().min(1, "Invoice Number is required"),
   sold_date: soldDateString,
-  invoice_value: z.coerce.number().positive("Invoice Value must be positive"),
+  base_value: z.coerce.number().positive("Base Value must be positive"),
   supplier_name: z.string().min(1, "Supplier Name is required"),
   oem_warranty_date: dateString,
   oem_warranty_months: z.coerce
@@ -167,6 +170,26 @@ const paraphernaliaRowSchema = z.object({
 export type BatteryRow = z.infer<typeof batteryRowSchema>;
 export type ChargerRow = z.infer<typeof chargerRowSchema>;
 export type ParaphernaliaRow = z.infer<typeof paraphernaliaRowSchema>;
+
+/**
+ * Legacy column aliases → canonical keys. The upload template renamed
+ * `invoice_value` to `base_value` (2026-08); files exported from the old
+ * template keep validating. Only fills the new key when it is absent.
+ */
+const LEGACY_KEY_ALIASES: Record<string, string> = {
+  invoice_value: "base_value",
+};
+
+export function normalizeLegacyKeys<T extends Record<string, unknown>>(row: T): T {
+  const out: Record<string, unknown> = { ...row };
+  for (const [legacy, canonical] of Object.entries(LEGACY_KEY_ALIASES)) {
+    if (legacy in out) {
+      if (out[canonical] === undefined || out[canonical] === "") out[canonical] = out[legacy];
+      delete out[legacy];
+    }
+  }
+  return out as T;
+}
 
 export function getRowSchema(type: AssetType) {
   switch (type) {

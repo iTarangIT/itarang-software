@@ -19,6 +19,23 @@ import {
   type RegionSelection,
 } from "./region-selector";
 import { RegionGroupManager } from "./region-group-manager";
+import { DispositionPicker } from "./DispositionPicker";
+import {
+  CampaignWindowPicker,
+  INITIAL_SCHEDULE,
+  isScheduleInvalid,
+  toSchedulePayload,
+  useScheduleDefaults,
+  type CampaignScheduleValue,
+} from "./campaign-window-picker";
+import {
+  AI_CALL_STATES,
+  AI_CALL_STATE_HINT,
+  AI_CALL_STATE_LABEL,
+  EMPTY_LEAD_STATE_FILTERS,
+  type AiCallState,
+  type LeadStateFilters,
+} from "@/lib/leads/leadStateFilters";
 import { toast } from "sonner";
 
 export type DialerProvider = "bolna" | "elevenlabs";
@@ -41,7 +58,23 @@ export interface DialerStartPayload {
   provider: DialerProvider;
   category: DialerCategory;
   region: RegionSelection;
+  /**
+   * Lead-state narrowing — a SIBLING of `region` rather than a key inside it,
+   * so RegionSelection stays purely about geography. The parent folds it into
+   * the persisted region_filter blob when it POSTs.
+   */
+  filters: LeadStateFilters;
   queue: DialerQueueItem[];
+  /**
+   * E-254 — the calling window, or null for an unscheduled campaign.
+   *
+   * A SIBLING of `region`, and it must stay one. The parent folds `filters`
+   * INTO the region blob because that whole object is persisted verbatim as
+   * dialer_campaigns.region_filter; the schedule must not go the same way, or
+   * it would land in that jsonb blob and the real schedule_mode / window_*
+   * columns would stay NULL — a campaign that displays a window and ignores it.
+   */
+  schedule: ReturnType<typeof toSchedulePayload>;
 }
 
 interface DialerStartModalProps {
@@ -53,6 +86,9 @@ interface DialerStartModalProps {
   onStartListCampaign?: (
     campaignId: string,
     provider: DialerProvider,
+    // E-254 — the calling window chosen in the Lists tab's own picker. Null for
+    // an unscheduled campaign, which is the pre-E-228 behaviour.
+    schedule?: unknown,
   ) => Promise<void> | void;
 }
 
@@ -62,6 +98,23 @@ const CATEGORIES: { key: DialerCategory; label: string; hint: string }[] = [
   { key: "cold", label: "Cold", hint: "low intent / new" },
   { key: "all", label: "All", hint: "every lead" },
 ];
+
+// Human labels for excluded.byReason keys. Without this the strip renders the
+// raw key with underscores swapped for spaces ("already ai connected"), which
+// reads like a debug string in the one place a user is trying to understand why
+// their audience shrank.
+const EXCLUDED_REASON_LABEL: Record<string, string> = {
+  already_ai_connected: "already reached by AI",
+  already_queued: "already in a queue",
+  converted: "converted",
+  not_interested: "not interested",
+  dnc: "on do-not-call",
+  blacklisted: "blacklisted",
+};
+
+function excludedReasonLabel(reason: string): string {
+  return EXCLUDED_REASON_LABEL[reason] ?? reason.replace(/_/g, " ");
+}
 
 const CATEGORY_COLOR: Record<DialerCategory, { bar: string; dot: string }> = {
   hot: { bar: "bg-rose-500", dot: "bg-rose-500" },
@@ -129,6 +182,9 @@ export function DialerStartModal({
   const [providerOpen, setProviderOpen] = useState(false);
   const [category, setCategory] = useState<DialerCategory>("hot");
   const [region, setRegion] = useState<RegionSelection>(EMPTY_SELECTION);
+  const [filters, setFilters] = useState<LeadStateFilters>({
+    ...EMPTY_LEAD_STATE_FILTERS,
+  });
   // "region" = Saved Groups / Custom Selection; "list" = the Lists (Excel) tab.
   // Reported up by RegionSelector.onModeChange; gates the segment + footer.
   const [mode, setMode] = useState<"region" | "list">("region");
@@ -143,10 +199,16 @@ export function DialerStartModal({
   }>({ total: 0, byReason: {} });
   const [totalWithPhone, setTotalWithPhone] = useState(0);
   const [queue, setQueue] = useState<DialerQueueItem[]>([]);
+  // E-254 — the calling window. Seeded from assignment_config by
+  // useScheduleDefaults below; mode starts at "now" so the modal behaves
+  // exactly as before until someone chooses to schedule.
+  const [schedule, setSchedule] =
+    useState<CampaignScheduleValue>(INITIAL_SCHEDULE);
   const [showGroupManager, setShowGroupManager] = useState(false);
   const [saveAsName, setSaveAsName] = useState<string>("");
   const [savingGroup, setSavingGroup] = useState(false);
   const saveGroup = useSaveAsRegionGroup();
+  useScheduleDefaults(setSchedule);
 
   const reqIdRef = useRef(0);
 
@@ -156,8 +218,24 @@ export function DialerStartModal({
       setSubmitting(false);
       setSaveAsName("");
       setMode("region");
+      setFilters({ ...EMPTY_LEAD_STATE_FILTERS });
     }
+    // NOTE: `region` is deliberately NOT reset here — that is pre-existing
+    // behaviour (reopening keeps your last selection) and changing it would
+    // surprise users. Only the new lead-state filters reset.
   }, [isOpen]);
+
+  // Destructured so the preview effect depends on the SCALARS rather than the
+  // object. `filters` gets a fresh identity on every setState, and this effect
+  // is the debounced network call — depending on the object would refire it on
+  // renders where nothing actually changed.
+  const {
+    aiCallState: fAiCallState,
+    aiAttemptsMin: fAiAttemptsMin,
+    connectStatus: fConnectStatus,
+    dispositionBucket: fDispositionBucket,
+    disposition: fDisposition,
+  } = filters;
 
   // Debounced preview fetch on every (region, category) change. Server
   // returns segment counts + the category-filtered queueIds. We tag each
@@ -178,6 +256,13 @@ export function DialerStartModal({
             pincodes: region.pincodes,
             groupIds: region.groupIds,
             category,
+            filters: {
+              aiCallState: fAiCallState,
+              aiAttemptsMin: fAiAttemptsMin,
+              connectStatus: fConnectStatus,
+              dispositionBucket: fDispositionBucket,
+              disposition: fDisposition,
+            },
           }),
         });
         const json: PreviewResponse = await res.json();
@@ -212,6 +297,11 @@ export function DialerStartModal({
     region.pincodes,
     region.groupIds,
     category,
+    fAiCallState,
+    fAiAttemptsMin,
+    fConnectStatus,
+    fDispositionBucket,
+    fDisposition,
   ]);
 
   const selectedCount = queue.length;
@@ -225,19 +315,31 @@ export function DialerStartModal({
   if (!isOpen) return null;
 
   const handleConfirm = async () => {
-    if (selectedCount === 0 || submitting) return;
+    // The schedule guard mirrors campaignScheduleSchema on the server, so an
+    // impossible window is caught at the form rather than coming back as a 400.
+    if (selectedCount === 0 || submitting || isScheduleInvalid(schedule)) return;
     setSubmitting(true);
     try {
-      await onConfirm({ provider, category, region, queue });
+      await onConfirm({
+        provider,
+        category,
+        region,
+        filters,
+        queue,
+        schedule: toSchedulePayload(schedule),
+      });
       onClose();
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Launch a draft list campaign with the currently-selected voice agent.
-  const handleStartList = async (campaignId: string) => {
-    await onStartListCampaign?.(campaignId, provider);
+  // Launch a draft list campaign with the currently-selected voice agent and
+  // the window chosen in the Lists tab. The schedule comes from ListsTab rather
+  // than this modal's own section 05: the Lists tab is a separate flow with its
+  // own picker, and section 05 is hidden while it is open.
+  const handleStartList = async (campaignId: string, listSchedule: unknown) => {
+    await onStartListCampaign?.(campaignId, provider, listSchedule);
     onClose();
   };
 
@@ -564,10 +666,26 @@ export function DialerStartModal({
                 </span>{" "}
                 {Object.entries(excluded.byReason)
                   .filter(([, n]) => n > 0)
-                  .map(([reason, n]) => `${n} ${reason.replace(/_/g, " ")}`)
+                  .map(([reason, n]) => `${n} ${excludedReasonLabel(reason)}`)
                   .join(" · ")}
               </div>
             )}
+
+            {/* Without this the segment picker looks broken rather than honest.
+                Every score-bearing column is written only on the transcript
+                path, so a lead with a Hot or Warm score is by definition one the
+                AI has already reached — and those are exactly the ones the hard
+                block removes. An all-Cold audience is the truth, not a bug. */}
+            {!previewing &&
+              counts.hot === 0 &&
+              counts.warm === 0 &&
+              (excluded.byReason.already_ai_connected ?? 0) > 0 && (
+                <div className="mb-4 -mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+                  Hot and Warm leads here have all been reached by AI — they are
+                  with the calling team now. What is left has never been scored,
+                  which is why it reads as Cold.
+                </div>
+              )}
 
             <div className="grid grid-cols-4 gap-2">
               {CATEGORIES.map((c) => {
@@ -609,6 +727,116 @@ export function DialerStartModal({
               })}
             </div>
           </div>
+          )}
+
+          {/* 04 — Lead state (region mode only) */}
+          {mode !== "list" && (
+            <div className="mb-2 relative z-0">
+              <div className="flex items-baseline justify-between mb-3">
+                <p className="dialer-eyebrow">04 · Lead State</p>
+                <p className="text-[11px] text-gray-400">optional</p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {AI_CALL_STATES.map((s) => {
+                  const active = (filters.aiCallState ?? "any") === s;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() =>
+                        setFilters((f) => ({
+                          ...f,
+                          aiCallState: s as AiCallState,
+                          // The attempts floor only means anything for the
+                          // "tried and never got through" pool.
+                          aiAttemptsMin:
+                            s === "attempted_not_connected" ? f.aiAttemptsMin : null,
+                        }))
+                      }
+                      className={`dialer-cat-card ${active ? "is-active" : ""}`}
+                    >
+                      <div
+                        className={`text-[12px] font-semibold ${
+                          active ? "text-emerald-700" : "text-gray-900"
+                        }`}
+                      >
+                        {AI_CALL_STATE_LABEL[s]}
+                      </div>
+                      <div className="mt-1 text-[10px] leading-snug text-gray-500">
+                        {AI_CALL_STATE_HINT[s]}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {filters.aiCallState === "attempted_not_connected" && (
+                <label className="mt-3 flex items-center gap-2 text-[12px] text-gray-600">
+                  Tried at least
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={filters.aiAttemptsMin ?? ""}
+                    placeholder="1"
+                    onChange={(e) =>
+                      setFilters((f) => ({
+                        ...f,
+                        aiAttemptsMin: e.target.value
+                          ? Math.max(1, Number(e.target.value))
+                          : null,
+                      }))
+                    }
+                    className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-sm dialer-tnum focus:border-gray-400 focus:outline-none"
+                  />
+                  times — a number tried six times is usually dead, not busy.
+                </label>
+              )}
+
+              <div className="mt-4 border-t border-gray-100 pt-3">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                  Last call disposition
+                </p>
+                {/* The same L1→L2→L3 control the /leads filter bar uses. These
+                    are the E-236 columns, written by the human calling team —
+                    which is why they still discriminate here even though the AI
+                    band and per-signal filters would not: any lead carrying a
+                    band has been reached by AI, and is therefore blocked. */}
+                <DispositionPicker
+                  mode="filter"
+                  idPrefix="dialer-disposition"
+                  value={{
+                    connectStatus: filters.connectStatus ?? "",
+                    bucket: filters.dispositionBucket ?? "",
+                    disposition: filters.disposition ?? "",
+                  }}
+                  onChange={(next) =>
+                    setFilters((f) => ({
+                      ...f,
+                      connectStatus: next.connectStatus || null,
+                      dispositionBucket: next.bucket || null,
+                      disposition: next.disposition || null,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ── 05 · Calling window (E-254) ─────────────────────────── */}
+          {mode !== "list" && (
+            <div className="mb-2 relative z-0">
+              <div className="flex items-baseline justify-between mb-3">
+                <p className="dialer-eyebrow">05 · Calling window</p>
+                <p className="text-[11px] text-gray-400">optional</p>
+              </div>
+              <CampaignWindowPicker
+                value={schedule}
+                onChange={setSchedule}
+                idPrefix="dialer-start"
+              />
+            </div>
           )}
         </div>
 
@@ -653,7 +881,12 @@ export function DialerStartModal({
             {mode !== "list" && (
               <button
                 onClick={handleConfirm}
-                disabled={selectedCount === 0 || submitting || previewing}
+                disabled={
+                  selectedCount === 0 ||
+                  submitting ||
+                  previewing ||
+                  isScheduleInvalid(schedule)
+                }
                 className="dialer-cta inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] cursor-pointer"
               >
                 {submitting ? (

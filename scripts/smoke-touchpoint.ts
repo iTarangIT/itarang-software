@@ -52,57 +52,37 @@ async function main() {
   console.log("=======================\n");
 
   // ── 1. Lifecycle engine — pure, no DB ──────────────────────────────────
-  console.log("1. canTransition() — BRD §0.7 hard validation");
+  console.log("1. canTransition() — every transition is allowed");
   {
     const r = canTransition("New_Unassigned", "Assigned_Not_Contacted", {});
     assert("New_Unassigned → Assigned_Not_Contacted is allowed", r.ok);
   }
   {
+    // The engaged-touchpoint gate is gone — reps set the status they reached.
     const r = canTransition("Assigned_Not_Contacted", "Under_Discussion", {
       engagedTouchpointCount: 0,
     });
-    assert(
-      "Under_Discussion blocks without engaged touchpoint",
-      !r.ok && r.severity === "hard",
-    );
+    assert("Under_Discussion allowed without engaged touchpoint", r.ok);
   }
   {
-    const r = canTransition("Assigned_Not_Contacted", "Under_Discussion", {
-      engagedTouchpointCount: 1,
-    });
-    assert("Under_Discussion allowed with engaged touchpoint", r.ok);
-  }
-  {
+    // The final_price gate is gone.
     const r = canTransition("Commercials_Explained", "Commercials_Finalised", {
       finalPrice: null,
     });
-    assert(
-      "Commercials_Finalised blocks without final_price",
-      !r.ok && r.severity === "hard",
-    );
+    assert("Commercials_Finalised allowed without final_price", r.ok);
   }
   {
-    const r = canTransition("Commercials_Explained", "Commercials_Finalised", {
-      finalPrice: 50000,
-    });
-    assert("Commercials_Finalised allowed with final_price", r.ok);
+    // Backwards moves are legal: an ASM visit can reopen the conversation.
+    const r = canTransition("Transferred_to_ASM", "Under_Discussion", {});
+    assert("Transferred_to_ASM → Under_Discussion allowed", r.ok);
   }
   {
+    // Reopening a closed lead is no longer admin-only.
     const r = canTransition("Converted", "Lost", {
       actorRole: "inside_sales_rep",
       lostReason: "other",
     });
-    assert(
-      "Converted → Lost blocks non-admin",
-      !r.ok && r.severity === "hard",
-    );
-  }
-  {
-    const r = canTransition("Converted", "Lost", {
-      actorRole: "admin",
-      lostReason: "onboarding_dropout",
-    });
-    assert("Converted → Lost admin loopback allowed", r.ok);
+    assert("Converted → Lost allowed for a rep", r.ok);
   }
   {
     const high = HIGH_IMPACT_LOST_REASONS;

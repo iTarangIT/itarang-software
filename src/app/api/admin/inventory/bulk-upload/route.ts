@@ -17,7 +17,8 @@ import {
   generateId,
 } from "@/lib/api-utils";
 import { ASSET_TYPES, AssetType } from "@/lib/inventory/csv-templates";
-import { formatZodErrors, getRowSchema } from "@/lib/inventory/validation";
+import { formatZodErrors, getRowSchema, normalizeLegacyKeys } from "@/lib/inventory/validation";
+import { inventoryPriceFields } from "@/lib/inventory/pricing";
 import { notifyInventoryAssigned } from "@/lib/notifications";
 import { logInventoryEvent } from "@/lib/inventory/events";
 import {
@@ -86,11 +87,13 @@ export const POST = withErrorHandler(async (req: Request) => {
     return errorResponse("Invalid request body: " + String(err), 400);
   }
 
-  const { dealerId, assetType, rows } = body as {
+  const { dealerId, assetType, rows: rawBodyRows } = body as {
     dealerId: string;
     assetType: AssetType;
     rows: Record<string, unknown>[];
   };
+  // Accept files exported from the pre-rename template (invoice_value → base_value).
+  const rows = rawBodyRows.map((r) => normalizeLegacyKeys(r));
 
   if (!ASSET_TYPES.includes(assetType)) {
     return errorResponse("Invalid assetType", 400);
@@ -196,12 +199,12 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   // ── Invoice consistency + per-asset-type uniqueness ──────────────────────
   // Every row must carry the same invoice_number (battery/charger: also the
-  // same invoice_value); that invoice_number must not already exist for the
+  // same base_value); that invoice_number must not already exist for the
   // SAME asset type. One supplier invoice can span a battery upload AND a
   // charger upload. Defence-in-depth — the Step 4 preview enforces the same.
   const refInvoiceNumber = String(rows[0]?.invoice_number || "").trim();
   const refInvoiceValue =
-    assetType === "paraphernalia" ? null : Number(rows[0]?.invoice_value);
+    assetType === "paraphernalia" ? null : Number(rows[0]?.base_value);
   const inventoryTypeForAsset =
     assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
   const invoiceNumberAlreadyUsed =
@@ -280,13 +283,13 @@ export const POST = withErrorHandler(async (req: Request) => {
       }
     }
     if (refInvoiceValue != null && !Number.isNaN(refInvoiceValue)) {
-      const rowInvoiceValue = Number(r.invoice_value);
+      const rowInvoiceValue = Number(r.base_value);
       if (rowInvoiceValue !== refInvoiceValue) {
         errors.push({
           row: rowNumber,
-          field: "invoice_value",
+          field: "base_value",
           code: "INVOICE_VALUE_MISMATCH",
-          message: `invoice_value must be identical on every row of one upload (expected ${refInvoiceValue}).`,
+          message: `base_value must be identical on every row of one upload (expected ${refInvoiceValue}).`,
         });
         continue;
       }
@@ -504,10 +507,12 @@ export const POST = withErrorHandler(async (req: Request) => {
           const expiry = new Date(warrantyDate);
           expiry.setMonth(expiry.getMonth() + oemWarrantyMonths);
 
-          const value = Number(r.invoice_value || 0);
-          const gstPercent = r.gst_percent != null ? Number(r.gst_percent) : 0;
-          const gstAmount = value * (gstPercent / 100);
-          const finalAmount = value + gstAmount;
+          const value = Number(r.base_value || 0);
+          const { gstPercent, gstAmount, priceInclusiveGst } = inventoryPriceFields(
+            value,
+            r.gst_percent != null ? Number(r.gst_percent) : 0,
+          );
+          const finalAmount = priceInclusiveGst;
 
           const subCategory = bMaster.compatibleSubCategories[0] ?? "";
           const voltageV = bMaster.voltageV ?? "";
@@ -542,6 +547,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             oem_invoice_date: soldDate,
             inventory_amount: value.toString(),
             final_amount: finalAmount.toFixed(2),
+            price_inclusive_gst: priceInclusiveGst.toFixed(2),
             oem_name: String(r.supplier_name || ""),
             oem_warranty_date: warrantyDate.toISOString().slice(0, 10),
             oem_warranty_months: oemWarrantyMonths,
@@ -592,10 +598,12 @@ export const POST = withErrorHandler(async (req: Request) => {
           const oemWarrantyMonths = Number(r.oem_warranty_months || 0);
           const expiry = new Date(warrantyDate);
           expiry.setMonth(expiry.getMonth() + oemWarrantyMonths);
-          const value = Number(r.invoice_value || 0);
-          const gstPercent = r.gst_percent != null ? Number(r.gst_percent) : 0;
-          const gstAmount = value * (gstPercent / 100);
-          const finalAmount = value + gstAmount;
+          const value = Number(r.base_value || 0);
+          const { gstPercent, gstAmount, priceInclusiveGst } = inventoryPriceFields(
+            value,
+            r.gst_percent != null ? Number(r.gst_percent) : 0,
+          );
+          const finalAmount = priceInclusiveGst;
 
           const outputVoltage = cMaster.outputVoltageV ?? "";
           const outputCurrent = cMaster.outputCurrentA ?? "";
@@ -630,6 +638,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             batch_number: r.batch_reference ? String(r.batch_reference) : null,
             inventory_amount: value.toString(),
             final_amount: finalAmount.toFixed(2),
+            price_inclusive_gst: priceInclusiveGst.toFixed(2),
             oem_name: String(r.supplier_name || ""),
             physical_condition: String(r.physical_condition || "").toLowerCase(),
             warehouse_location: r.warehouse_location
@@ -648,9 +657,11 @@ export const POST = withErrorHandler(async (req: Request) => {
           const invoiceDate = safeDate(r.invoice_date) ?? now;
           const value = Number(r.unit_cost || 0);
           const qty = Number(r.quantity || 1);
-          const gstPercent = r.gst_percent != null ? Number(r.gst_percent) : 0;
-          const gstAmount = value * (gstPercent / 100);
-          const finalAmount = value + gstAmount;
+          const { gstPercent, gstAmount, priceInclusiveGst } = inventoryPriceFields(
+            value,
+            r.gst_percent != null ? Number(r.gst_percent) : 0,
+          );
+          const finalAmount = priceInclusiveGst;
           const itemType = pMaster.itemTypeCode;
           const compatible = pMaster.compatibleCategories;
           const label = pMaster.displayLabel;
@@ -671,6 +682,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             oem_invoice_date: invoiceDate,
             inventory_amount: value.toString(),
             final_amount: finalAmount.toFixed(2),
+            price_inclusive_gst: priceInclusiveGst.toFixed(2),
             oem_name: r.supplier ? String(r.supplier) : null,
             warehouse_location: r.warehouse_location
               ? String(r.warehouse_location)

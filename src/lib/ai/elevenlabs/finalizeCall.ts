@@ -4,15 +4,20 @@
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
-import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
+import {
+  appendSalesCallLog,
+  appendCallReview,
+  callReviewSheetEnabled,
+} from "@/lib/google/sheet";
 import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
+import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import {
   rehostRecording,
   rehostElevenLabsRecording,
@@ -116,11 +121,26 @@ export async function finalizeElevenLabsCall(
         intentScore: null,
         intentReason: null,
         nextAction: null,
+        // Usually empty on this path, but a call can fail after turns were
+        // exchanged and those turns are the only record of how far it got.
+        transcriptTurns: conversation ?? null,
       });
 
       // Even failed calls (initiation_failure, busy, no-answer) accrue
       // partial cost on ElevenLabs. Best-effort fetch; backfill retries.
       await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+      // Record it in the CC team's vocabulary. See the Bolna twin for why this
+      // sits after the log exists and before completeCampaignLead.
+      await writeAiCallTouchpoint({
+        leadId: leadForPhone.id,
+        provider: "elevenlabs",
+        callId: conversationId,
+        transcript: null,
+        providerStatus: status || "failed",
+        durationSec: duration ?? null,
+        recordingUrl,
+      });
 
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
@@ -152,6 +172,11 @@ export async function finalizeElevenLabsCall(
             .limit(1);
           campaign = c[0]?.name ?? reviewCampaignId;
         }
+        // E-250 — the Campaign_Call_Review sheet is retired by default. The
+        // guard sits ABOVE the playable-URL resolve because that call pulls
+        // the conversation audio from ElevenLabs and re-hosts it purely so the
+        // sheet has a clickable link; with the sheet off it is wasted work.
+        if (!callReviewSheetEnabled()) return;
         const playableUrl = await resolveElevenLabsPlayableUrl(
           conversationId,
           recordingUrl,
@@ -270,10 +295,13 @@ export async function finalizeElevenLabsCall(
       recordingUrl,
       duration,
       phone: phone ?? lead.phone,
+      transcriptTurns: conversation ?? null,
       intentScore: null,
       intentReason: null,
       nextAction: "auto_retry",
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       band: null,
@@ -282,9 +310,32 @@ export async function finalizeElevenLabsCall(
     });
 
     await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+    // A transcript exists, so this is CONNECTED — Cold / Short Hang up.
+    await writeAiCallTouchpoint({
+      leadId: lead.id,
+      provider: "elevenlabs",
+      callId: conversationId,
+      transcript,
+      providerStatus: status || "completed",
+      bandCallStatus: "dropped_empty",
+      band: null,
+      infoSignalsCount: 0,
+      durationSec: duration ?? null,
+      recordingUrl,
+      summary: analysis.memory?.intent_summary ?? null,
+    });
+
+    // dropped_empty connected and produced a transcript — the line just dropped
+    // before any qualifying info was captured. It is NOT a telephony failure, so
+    // the campaign row is marked completed ("Done"), not failed. The Outcome
+    // column still carries "dropped_empty" to preserve the call-quality nuance.
+    // Mirrors the Bolna path (bolna_ai/finalizeCall.ts) — this branch was missed
+    // when that one was fixed, so every ElevenLabs campaign kept producing red
+    // "Failed" rows for calls that actually connected. See E-169 / E-239.
     const dr = await completeCampaignLead({
       leadId: lead.id,
-      success: false,
+      success: true,
       bolnaCallId: conversationId || null,
       outcome: "dropped_empty",
       intentScore: null,
@@ -320,6 +371,8 @@ export async function finalizeElevenLabsCall(
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       scoringVersion: analysis.scoring_version,
+      extractionVersion: analysis.extraction_version,
+      calibrationSetHash: analysis.calibration_set_hash,
       hardNegative,
     },
   );
@@ -354,10 +407,13 @@ export async function finalizeElevenLabsCall(
     recordingUrl,
     duration,
     phone: phone ?? lead.phone,
+    transcriptTurns: conversation ?? null,
     intentScore: analysis.intent_score,
     intentReason: analysis.memory?.intent_summary ?? null,
     nextAction: action ?? null,
     scoringVersion: analysis.scoring_version,
+    extractionVersion: analysis.extraction_version,
+    calibrationSetHash: analysis.calibration_set_hash,
     signals: analysis.signals,
     scoreBreakdown: analysis.score_breakdown,
     band: analysis.band,
@@ -368,6 +424,27 @@ export async function finalizeElevenLabsCall(
   // Capture per-call cost from ElevenLabs /v1/convai/conversations/{id}.
   // Best-effort: backfill cron is the recovery path on race or 5xx.
   await fetchAndPersistCallCost("elevenlabs", conversationId);
+
+  // The scored path. The band rides on external_tag rather than deciding the L2
+  // bucket — an AI call cannot reach the sheet's Hot bucket. See aiDisposition.ts.
+  await writeAiCallTouchpoint({
+    leadId: lead.id,
+    provider: "elevenlabs",
+    callId: conversationId,
+    transcript,
+    providerStatus: status || "completed",
+    band: analysis.band,
+    bandCallStatus: analysis.call_status,
+    infoSignalsCount: analysis.info_signals_count,
+    disqualifier: analysis.signals?.disqualifier ?? null,
+    callbackAgreed: analysis.signals?.callback_agreed === "yes",
+    relevantDealer: analysis.signals?.relevant_dealer === "yes",
+    pitchHeard: analysis.signals?.pitch_heard === "yes",
+    durationSec: duration ?? null,
+    recordingUrl,
+    summary: analysis.memory?.intent_summary ?? null,
+    nextCallAt: nextCallAt ?? null,
+  });
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
@@ -424,6 +501,8 @@ export async function finalizeElevenLabsCall(
         .limit(1);
       campaign = c[0]?.name ?? reviewCampaignId;
     }
+    // E-250 — see the note on the sibling closure above.
+    if (!callReviewSheetEnabled()) return;
     const playableUrl = await resolveElevenLabsPlayableUrl(
       conversationId,
       recordingUrl,
@@ -447,6 +526,70 @@ export async function finalizeElevenLabsCall(
   }
 }
 
+/**
+ * E-267 — persist the provider's turn array, timings and all.
+ *
+ * A SEPARATE RAW STATEMENT, not a column on the drizzle model, and that is a
+ * blast-radius decision rather than a stylistic one. `aiCallLogs` has 21 call
+ * sites including three bare `db.insert()` on this very path; because drizzle
+ * names every column of a mirrored table in its generated SQL, adding
+ * transcript_turns to the model would make ALL of them fail with `column
+ * "transcript_turns" does not exist` on any database where E-267 has not been
+ * applied. There is no migration auto-runner here and the per-environment ticks
+ * are known to drift, so that trades one dark metric for the entire AI
+ * call-logging pipeline. Written this way, an unapplied E-267 costs exactly the
+ * feature that needs it. Same rule as E-250/E-242/E-224/E-236.
+ *
+ * Stores the array VERBATIM rather than reshaping it. The whole point is to
+ * stop discarding fields the provider sends, and a mapper that picked
+ * {role, message, time} would lose the next field they add exactly the way the
+ * stringifier lost this one. An empty array stores NULL, so "no turns" and "not
+ * captured" stay distinguishable.
+ *
+ * Logs whether timings actually arrived. `time_in_call_secs` is optional in the
+ * provider's schema and had never been read by this codebase when E-267 was
+ * written, so this line is how the first live call answers that — rather than
+ * someone noticing a permanently-empty metric weeks later.
+ *
+ * Best-effort, like every other write on this path: a failure here must not
+ * take down call finalization.
+ */
+async function persistTranscriptTurns(
+  callId: string,
+  turns: unknown[] | null | undefined,
+): Promise<void> {
+  if (!callId || !Array.isArray(turns) || turns.length === 0) return;
+
+  const timed = turns.filter(
+    (t) =>
+      t !== null &&
+      typeof t === "object" &&
+      typeof (t as { time_in_call_secs?: unknown }).time_in_call_secs === "number",
+  ).length;
+
+  try {
+    await db.execute(
+      sql`UPDATE ai_call_logs
+             SET transcript_turns = ${JSON.stringify(turns)}::jsonb
+           WHERE call_id = ${callId}`,
+    );
+    console.log(
+      `[elevenlabs:finalize] stored ${turns.length} turn(s), ${timed} with timings`,
+    );
+  } catch (err) {
+    // undefined_column means E-267 is unapplied on this database. Say so once,
+    // plainly, instead of emitting a stack trace that reads like a real fault.
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "42703") {
+      console.warn(
+        "[elevenlabs:finalize] transcript_turns not stored — apply drizzle/E-267_ai_call_logs_transcript_turns.sql",
+      );
+      return;
+    }
+    console.error("[elevenlabs:finalize] transcript_turns write failed:", err);
+  }
+}
+
 async function upsertAiCallLog(opts: {
   callId: string;
   leadId: string;
@@ -460,11 +603,22 @@ async function upsertAiCallLog(opts: {
   intentReason: string | null;
   nextAction: string | null;
   scoringVersion?: string | null;
+  // E-250 — which PROMPT read the transcript, alongside which band rule scored
+  // it. The hash is required because the calibration set now lives in the DB
+  // and changes without a deploy, so EXTRACTION_VERSION alone stops identifying
+  // the prompt that produced these signals.
+  extractionVersion?: string | null;
+  calibrationSetHash?: string | null;
   signals?: unknown;
   scoreBreakdown?: unknown;
   band?: string | null;
   callStatus?: string | null;
   infoSignalsCount?: number | null;
+  // E-267 — the provider's turn array VERBATIM. `transcript` above is this same
+  // content flattened to "<speaker>: <message>" lines, a step that discards each
+  // turn's time_in_call_secs. The array already travelled this far as the
+  // payload's `conversation`; until E-267 it was dropped here.
+  transcriptTurns?: unknown[] | null;
 }): Promise<void> {
   try {
     const existing = opts.callId
@@ -490,6 +644,8 @@ async function upsertAiCallLog(opts: {
           intent_reason: opts.intentReason,
           next_action: opts.nextAction,
           scoring_version: opts.scoringVersion ?? null,
+          extraction_version: opts.extractionVersion ?? null,
+          calibration_set_hash: opts.calibrationSetHash ?? null,
           signals: opts.signals ?? null,
           score_breakdown: opts.scoreBreakdown ?? null,
           band: opts.band ?? null,
@@ -499,6 +655,7 @@ async function upsertAiCallLog(opts: {
           updated_at: now,
         })
         .where(eq(aiCallLogs.id, existing[0].id));
+      await persistTranscriptTurns(opts.callId, opts.transcriptTurns);
       return;
     }
 
@@ -518,6 +675,8 @@ async function upsertAiCallLog(opts: {
       intent_reason: opts.intentReason,
       next_action: opts.nextAction,
       scoring_version: opts.scoringVersion ?? null,
+      extraction_version: opts.extractionVersion ?? null,
+      calibration_set_hash: opts.calibrationSetHash ?? null,
       signals: opts.signals ?? null,
       score_breakdown: opts.scoreBreakdown ?? null,
       band: opts.band ?? null,
@@ -525,6 +684,7 @@ async function upsertAiCallLog(opts: {
       info_signals_count: opts.infoSignalsCount ?? null,
       ended_at: now,
     });
+    await persistTranscriptTurns(opts.callId || id, opts.transcriptTurns);
   } catch (err) {
     console.error("[elevenlabs:finalize] ai_call_logs upsert failed:", err);
   }
@@ -583,9 +743,25 @@ async function markLeadNeedsReview(opts: {
     intentScore: null,
     intentReason: opts.reason,
     nextAction: null,
+    // The analysis failed, so the turns are the ONLY structured record of this
+    // call. Storing them is what lets it be re-read later without re-dialling.
+    transcriptTurns: opts.conversation ?? null,
   });
 
   await fetchAndPersistCallCost("elevenlabs", opts.callId);
+
+  // Connected with a NULL L3: the dealer WAS reached, but the failure is ours.
+  // See the Bolna twin — that null is the extraction-failure measurement.
+  await writeAiCallTouchpoint({
+    leadId: opts.leadId,
+    provider: "elevenlabs",
+    callId: opts.callId,
+    transcript: opts.transcript,
+    providerStatus: opts.status || "needs_review",
+    analysisFailed: true,
+    durationSec: opts.duration,
+    recordingUrl: opts.recordingUrl,
+  });
 
   const r = await completeCampaignLead({
     leadId: opts.leadId,

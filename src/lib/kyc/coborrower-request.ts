@@ -35,7 +35,8 @@ export async function requestCoBorrowerForLead(
   leadId: string,
   opts: {
     reason: string;
-    adminUserId: string;
+    /** NULL when the E-254 NBFC request SLA sweep acts (system actor). */
+    adminUserId: string | null;
     isReplacement?: boolean;
   },
 ): Promise<RequestCoBorrowerResult | null> {
@@ -178,6 +179,21 @@ export async function requestCoBorrowerForLead(
     performed_by: adminUserId,
     timestamp: now,
   });
+
+  // E-264 — tell the customer on WhatsApp, if they have a chat.
+  //
+  // Hooked HERE rather than in the routes because this function is the single
+  // funnel every request path already goes through: the admin's Step-3 button,
+  // the NBFC's co_borrower wrapper via actionNbfcCoBorrowerRequest, the
+  // replacement flow, and the E-257 SLA sweep. One call covers all four.
+  //
+  // Best-effort and deliberately not awaited: the rows above are committed, and
+  // a WhatsApp failure must never turn a successful request into an error.
+  void import("@/lib/whatsapp/coborrower-flow")
+    .then(({ pushCoBorrowerRequest }) => pushCoBorrowerRequest(leadId, reason))
+    .catch((err) =>
+      console.error("[coborrower-request] WhatsApp push failed:", err),
+    );
 
   return {
     request_id: requestId,

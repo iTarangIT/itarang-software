@@ -11,6 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import ResponsiveTable, {
   type ResponsiveColumn,
@@ -18,6 +19,7 @@ import ResponsiveTable, {
 import ScoreBadge from "@/components/nbfc-portal/ScoreBadge";
 import { SendPaymentReminderButton } from "@/components/nbfc-portal/SendPaymentReminderButton";
 import { FlagForRecoveryDialog } from "@/components/nbfc-portal/FlagForRecoveryDialog";
+import { UnflagRecoveryDialog } from "@/components/nbfc-portal/UnflagRecoveryDialog";
 import LeadAuditTimeline from "@/components/nbfc-portal/audit-log/LeadAuditTimeline";
 
 export type LeadRow = {
@@ -126,12 +128,19 @@ function LeadDetailDrawer({
   row,
   bands,
   onClose,
+  onFlagChange,
 }: {
   row: LeadRow;
   bands: Bands;
   onClose: () => void;
+  /** Lifts the flag state so the list badge updates without a page reload. */
+  onFlagChange: (next: {
+    recovery_flagged: boolean;
+    recovery_flagged_at: string | null;
+  }) => void;
 }) {
   const [flagOpen, setFlagOpen] = useState(false);
+  const [unflagOpen, setUnflagOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -281,7 +290,10 @@ function LeadDetailDrawer({
                 <div className="border-t border-[color:var(--color-border)] pt-3">
                   <p className="mb-1.5 text-xs font-semibold text-[color:var(--color-ink-muted)]">
                     Flag for recovery
-                    <span className="font-normal"> · irreversible, Risk Head</span>
+                    <span className="font-normal">
+                      {" "}
+                      · Risk Head, reversible until recovery starts
+                    </span>
                   </p>
                   {row.recovery_flagged ? (
                     <div
@@ -305,6 +317,20 @@ function LeadDetailDrawer({
                           Track it in the Recovery &amp; Auction queue.
                         </span>
                       )}
+                      {/* Flagged the wrong loan? The escape hatch lives next to
+                          the flag it undoes, not in a separate admin screen. */}
+                      <button
+                        type="button"
+                        onClick={() => setUnflagOpen(true)}
+                        className="mt-2 rounded-md border px-2.5 py-1 text-[11px] font-semibold"
+                        style={{
+                          borderColor: "#c4b5fd",
+                          background: "#fff",
+                          color: "#5b21b6",
+                        }}
+                      >
+                        Withdraw flag
+                      </button>
                     </div>
                   ) : (
                     <button
@@ -332,16 +358,40 @@ function LeadDetailDrawer({
       </aside>
     </div>
       {row.sanction_id ? (
-        <FlagForRecoveryDialog
-          loanSanctionId={row.sanction_id}
-          open={flagOpen}
-          onClose={() => setFlagOpen(false)}
-          batterySerial={row.battery_serial}
-          context={{
-            entity_type: "lead",
-            lead_id: row.lead_id ?? row.loan_application_id,
-          }}
-        />
+        <>
+          <FlagForRecoveryDialog
+            loanSanctionId={row.sanction_id}
+            open={flagOpen}
+            onClose={() => setFlagOpen(false)}
+            batterySerial={row.battery_serial}
+            context={{
+              entity_type: "lead",
+              lead_id: row.lead_id ?? row.loan_application_id,
+            }}
+            onFlagged={(result) =>
+              onFlagChange({
+                recovery_flagged: true,
+                recovery_flagged_at: result.flagged_at,
+              })
+            }
+          />
+          <UnflagRecoveryDialog
+            loanSanctionId={row.sanction_id}
+            open={unflagOpen}
+            onClose={() => setUnflagOpen(false)}
+            batterySerial={row.battery_serial}
+            context={{
+              entity_type: "lead",
+              lead_id: row.lead_id ?? row.loan_application_id,
+            }}
+            onUnflagged={() =>
+              onFlagChange({
+                recovery_flagged: false,
+                recovery_flagged_at: null,
+              })
+            }
+          />
+        </>
       ) : null}
     </>
   );
@@ -395,7 +445,25 @@ export default function LeadsTable({
   bands: Bands;
 }) {
   const [selected, setSelected] = useState<LeadRow | null>(null);
+  const router = useRouter();
   const thresholds = { cdsWarning: bands.low_mid, cdsHigh: bands.mid_high };
+
+  // `rows` is server-rendered, so flagging or withdrawing a flag would leave a
+  // stale badge until the next navigation. These overrides paint the new state
+  // immediately; router.refresh() then re-fetches the authoritative rows.
+  type FlagState = {
+    recovery_flagged: boolean;
+    recovery_flagged_at: string | null;
+  };
+  const [flagOverrides, setFlagOverrides] = useState<Record<string, FlagState>>(
+    {},
+  );
+  const withOverride = (r: LeadRow): LeadRow => {
+    const o = flagOverrides[r.loan_application_id];
+    return o ? { ...r, ...o } : r;
+  };
+  const displayRows = rows.map(withOverride);
+  const selectedRow = selected ? withOverride(selected) : null;
 
   const columns: ResponsiveColumn<LeadRow>[] = [
     {
@@ -487,17 +555,24 @@ export default function LeadsTable({
     <>
       <ResponsiveTable
         columns={columns}
-        rows={rows}
+        rows={displayRows}
         rowKey={(r) => r.loan_application_id}
         onRowClick={(r) => setSelected(r)}
         emptyMessage="No leads match these filters."
         caption="Leads referred via iTarang"
       />
-      {selected ? (
+      {selectedRow ? (
         <LeadDetailDrawer
-          row={selected}
+          row={selectedRow}
           bands={bands}
           onClose={() => setSelected(null)}
+          onFlagChange={(next) => {
+            setFlagOverrides((prev) => ({
+              ...prev,
+              [selectedRow.loan_application_id]: next,
+            }));
+            router.refresh();
+          }}
         />
       ) : null}
     </>

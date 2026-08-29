@@ -14,6 +14,7 @@ import { expenseSubmissions } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { createClient } from "@/lib/supabase/server";
 import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { resolveBucket } from "@/lib/expenses/resolveBucket";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -99,6 +100,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const bucket = resolveBucket({
+      category: parsed.data.category,
+      description: parsed.data.description,
+    });
+
     const [inserted] = await db
       .insert(expenseSubmissions)
       .values({
@@ -109,6 +115,11 @@ export async function POST(req: NextRequest) {
         bill_url: billUrl,
         bill_storage_path: billStoragePath,
         status: "pending",
+        // E-218 — rules only, no model call: the chosen category already maps
+        // cleanly onto a bucket, and a staff expense form is not worth an
+        // OpenAI round-trip.
+        bucket: bucket.bucket,
+        bucket_source: bucket.source,
       })
       .returning({ id: expenseSubmissions.id });
 

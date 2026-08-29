@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { computeFiAutoFlags, getCurrentFiTrack, getFiHistory, getFiPhotos } from "@/lib/nbfc/fi";
 import { getFiAgent, listFiAgents } from "@/lib/nbfc/fi-agents";
@@ -56,10 +57,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       (track.status === "assigned" || track.status === "in_progress") &&
       new Date(track.sla_due_at).getTime() < Date.now();
 
-    // Opt-in + FI config: per-lead snapshot first, live config fallback (§3.4).
-    const snap = assignment.snapshot as { fi_enabled?: boolean };
-    let enabled = snap.fi_enabled ?? false;
-    if (snap.fi_enabled === undefined) enabled = cfg[0]?.fi ?? false;
+    // Opt-in is read LIVE (resolveServiceOptIn) — switching FI off in Settings
+    // takes the track out of in-flight leads too. The FI form parameters below
+    // stay live as well, matching the action route's checks.
+    const enabled = (
+      await resolveServiceOptIn(actor.tenant_id, assignment.snapshot)
+    ).fi_enabled;
     const fiConfig = (cfg[0]?.fiConfig as Record<string, unknown> | undefined) ?? null;
 
     // Decision context for a submitted/decided attempt — photos + agent in

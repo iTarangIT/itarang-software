@@ -1,0 +1,1509 @@
+/* =============================================================================
+   Battery Auction — a scoped design language
+   =============================================================================
+
+   This carries the visual identity of docs/battery-auction-flow.html into the
+   product: an engineering-drawing feel — serif display, mono metadata, hairline
+   rules, tinted role colours, no decoration that is not doing work.
+
+   WHY SCOPED, NOT GLOBAL
+     This repo already has THREE visual languages (the BRD §6.B brand tokens,
+     the peakAmp buyback kit, and a legacy raw-Tailwind layer). A fourth applied
+     globally would be vandalism. Everything here lives under `.auction-sheet`
+     and is imported by the auction route segments only; nothing outside them
+     changes by a pixel.
+
+   WHY THE COLOURS ARE DERIVED, NOT COPIED
+     The flow document has its own palette. Rather than paste those hexes in and
+     have the auction screens read as a foreign document dropped into the CRM,
+     each ROLE colour is anchored to an existing iTarang brand token — the
+     document's navy becomes --color-brand-navy, its teal becomes
+     --color-brand-teal — and every tint is derived from those five with
+     color-mix(). One source, so a brand change propagates.
+
+   LIGHT ONLY, ON PURPOSE
+     globals.css:9 maps the `dark` variant to a class that never exists, so
+     every `dark:` utility in this codebase is a deliberate no-op. There is no
+     dark palette here because there is no dark mode to serve. Do not add
+     `dark:` classes to auction components; they will silently do nothing.
+   ========================================================================== */
+
+.auction-sheet {
+  /* --- role colours (the document's five actors) ------------------------ */
+  --auc-nbfc: var(--color-brand-navy, #02314e);
+  --auc-ops: var(--color-brand-teal, #165e73);
+  --auc-dealer: #8a5200;
+  --auc-sys: #5a4b8a;
+  --auc-warn: #9c3a1e;
+  --auc-live: #0b6b62;
+
+  /* --- surfaces --------------------------------------------------------- */
+  --auc-paper: var(--color-bg, #f4f7fa);
+  --auc-card: var(--color-surface, #ffffff);
+  --auc-ink: var(--color-ink, #1a2733);
+  --auc-ink-2: var(--color-ink-muted, #5a6877);
+  --auc-rule: var(--color-border, #e3e8ef);
+  --auc-rule-strong: color-mix(in srgb, var(--auc-ink) 22%, transparent);
+
+  /* Every tint is mixed from a role colour, so the palette has ONE source. */
+  --auc-tint-nbfc: color-mix(in srgb, var(--auc-nbfc) 7%, white);
+  --auc-tint-ops: color-mix(in srgb, var(--auc-ops) 8%, white);
+  --auc-tint-dealer: color-mix(in srgb, var(--auc-dealer) 9%, white);
+  --auc-tint-warn: color-mix(in srgb, var(--auc-warn) 8%, white);
+  --auc-tint-live: color-mix(in srgb, var(--auc-live) 9%, white);
+
+  /* --- type ------------------------------------------------------------- */
+  /* The document's own stack, and it is entirely SYSTEM fonts — which matters
+     here beyond taste: this app is deployed on a VPS that cannot reach Google
+     Fonts, so a webfont would either 404 or block. Nothing is downloaded. */
+  --auc-display: Constantia, "Iowan Old Style", "Palatino Linotype", Palatino,
+    Georgia, serif;
+  --auc-mono: var(--font-dm-mono), "Cascadia Mono", Consolas, ui-monospace,
+    monospace;
+
+  color: var(--auc-ink);
+}
+
+/* -----------------------------------------------------------------------------
+   The countdown ring.
+
+   A conic-gradient sweep cannot be transitioned or animated by CSS, because a
+   gradient is not an interpolatable value — which is why almost every countdown
+   ring on the web is either an SVG stroke-dasharray or a requestAnimationFrame
+   loop repainting an element every frame.
+
+   @property fixes that by REGISTERING --auc-sweep as a real <angle>, so the
+   browser can interpolate it on the compositor. React writes the angle once per
+   poll (every 2s) and the browser tweens between the two, so the ring moves
+   smoothly at 60fps while JS runs 0.5 times a second.
+   -------------------------------------------------------------------------- */
+@property --auc-sweep {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.auction-sheet .auc-ring {
+  --auc-sweep: 0deg;
+  --auc-ring-color: var(--auc-live);
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 4.5rem;
+  block-size: 4.5rem;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--auc-ring-color) var(--auc-sweep),
+    color-mix(in srgb, var(--auc-ring-color) 12%, transparent) 0
+  );
+  transition: --auc-sweep 2s linear, --auc-ring-color 400ms ease;
+}
+
+/* The hole. An inset ::before rather than a mask, so the ring keeps a solid
+   background the countdown digits sit on legibly at any sweep angle. */
+.auction-sheet .auc-ring::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--auc-card);
+}
+
+.auction-sheet .auc-ring > * {
+  position: relative;
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--auc-ink);
+}
+
+/* Under an hour the ring turns amber, under five minutes red — and the whole
+   card picks that up via :has() below. */
+.auction-sheet .auc-ring[data-urgency="soon"] {
+  --auc-ring-color: var(--auc-dealer);
+}
+.auction-sheet .auc-ring[data-urgency="critical"] {
+  --auc-ring-color: var(--auc-warn);
+  animation: auc-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes auc-pulse {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--auc-warn) 10%, transparent);
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Lot card.
+
+   CONTAINER QUERIES, not media queries. The same card renders in a 3-up dealer
+   grid, a 2-up NBFC panel and a full-width detail header. A media query asks
+   "how wide is the SCREEN", which is the wrong question — the card cares how
+   much room IT has. This way the component carries its own responsiveness and
+   no parent has to prop-drill a size variant.
+   -------------------------------------------------------------------------- */
+.auction-sheet .auc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 1.125rem;
+}
+
+.auction-sheet .auc-card {
+  container-type: inline-size;
+  container-name: auclot;
+  position: relative;
+  display: grid;
+  /* Four named rows so cards of differing title length still line their price
+     and countdown rows up across the grid — see the subgrid rule below. */
+  grid-template-rows: auto auto 1fr auto;
+  background: var(--auc-card);
+  border: 1px solid var(--auc-rule);
+  border-radius: 2px;
+  overflow: hidden;
+  transition:
+    border-color 200ms ease,
+    box-shadow 200ms ease,
+    transform 200ms ease;
+}
+
+/* The 3px rule along the top edge is the document's device for saying which
+   actor owns a thing. Here it says which state the lot is in. */
+.auction-sheet .auc-card::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: 3px;
+  background: var(--auc-live);
+}
+
+.auction-sheet .auc-card:hover {
+  border-color: var(--auc-rule-strong);
+  box-shadow: 0 10px 28px -18px color-mix(in srgb, var(--auc-ink) 55%, transparent);
+  transform: translateY(-2px);
+}
+
+/* :has() — state-driven treatment with NO extra class threaded through React.
+   The card reads its own contents and styles itself; the component just renders
+   the ring with the right data-urgency. */
+.auction-sheet .auc-card:has(.auc-ring[data-urgency="critical"])::before {
+  background: var(--auc-warn);
+}
+.auction-sheet .auc-card:has(.auc-ring[data-urgency="soon"])::before {
+  background: var(--auc-dealer);
+}
+.auction-sheet .auc-card:has([data-leading="true"]) {
+  border-color: color-mix(in srgb, var(--auc-live) 45%, var(--auc-rule));
+  background: linear-gradient(
+    180deg,
+    var(--auc-tint-live) 0,
+    var(--auc-card) 4.5rem
+  );
+}
+.auction-sheet .auc-card:has([data-outbid="true"])::before {
+  background: var(--auc-warn);
+}
+/* An ended lot reads as archive, not as an offer. */
+.auction-sheet .auc-card:has([data-status="ended"]) {
+  opacity: 0.72;
+}
+.auction-sheet .auc-card:has([data-status="ended"])::before {
+  background: var(--auc-ink-2);
+}
+
+.auction-sheet .auc-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9375rem 1rem 0.5rem;
+}
+
+.auction-sheet .auc-title {
+  font-family: var(--auc-display);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  /* Stops a two-line title breaking as one long line plus one orphan word. */
+  text-wrap: balance;
+}
+
+.auction-sheet .auc-lotcode {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+}
+
+/* SUBGRID: the price / meta / action rows inherit the CARD's row track, so the
+   "HIGHEST" line sits at the same y across every card in the row regardless of
+   whether the title wrapped. Without it, a one-line title and a two-line title
+   put their prices 20px apart and the grid looks broken. */
+.auction-sheet .auc-card-body {
+  display: grid;
+  grid-row: 2 / 5;
+  grid-template-rows: subgrid;
+  padding: 0 1rem 1rem;
+  gap: 0.625rem;
+}
+
+.auction-sheet .auc-price-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-block-start: 0.5rem;
+  border-block-start: 1px solid var(--auc-rule);
+}
+
+.auction-sheet .auc-price {
+  font-family: var(--auc-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.auction-sheet .auc-price-label {
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+}
+
+.auction-sheet .auc-meta {
+  font-size: 0.75rem;
+  color: var(--auc-ink-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.auction-sheet .auc-meta b {
+  color: var(--auc-ink);
+  font-weight: 600;
+}
+
+/* At narrow container widths the card stacks; wide, it goes side-by-side. This
+   is the container query doing the work a media query cannot. */
+@container auclot (min-width: 26rem) {
+  .auction-sheet .auc-card-head {
+    padding-block-start: 1.125rem;
+  }
+  .auction-sheet .auc-price {
+    font-size: 1.75rem;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Condition chips, status pills, SOH bar
+   -------------------------------------------------------------------------- */
+.auction-sheet .auc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.125rem 0.4375rem;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  white-space: nowrap;
+}
+
+.auction-sheet .auc-chip[data-condition="new"] {
+  color: var(--auc-ops);
+  background: var(--auc-tint-ops);
+}
+.auction-sheet .auc-chip[data-condition="refurbished"] {
+  color: var(--auc-nbfc);
+  background: var(--auc-tint-nbfc);
+}
+.auction-sheet .auc-chip[data-condition="partial_working"] {
+  color: var(--auc-dealer);
+  background: var(--auc-tint-dealer);
+}
+.auction-sheet .auc-chip[data-tone="live"] {
+  color: var(--auc-live);
+  background: var(--auc-tint-live);
+}
+.auction-sheet .auc-chip[data-tone="warn"] {
+  color: var(--auc-warn);
+  background: var(--auc-tint-warn);
+}
+.auction-sheet .auc-chip[data-tone="muted"] {
+  color: var(--auc-ink-2);
+  background: color-mix(in srgb, var(--auc-ink-2) 7%, white);
+}
+
+/* A hairline SOH meter. Reads as a gauge on an instrument, not a progress bar,
+   which is the whole point of the document's visual language. */
+.auction-sheet .auc-soh {
+  --soh: 0;
+  position: relative;
+  inline-size: 3.25rem;
+  block-size: 0.375rem;
+  background: color-mix(in srgb, var(--auc-ink-2) 15%, transparent);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.auction-sheet .auc-soh::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: calc(var(--soh) * 1%);
+  /* The three bands are the same thresholds the server enforces in stages.ts
+     (>=70 refurbishable, >=55 partial working, below that scrap), so the bar
+     cannot tell a different story from the grade chip beside it. */
+  background: var(--auc-live);
+}
+.auction-sheet .auc-soh[data-band="partial"]::after {
+  background: var(--auc-dealer);
+}
+.auction-sheet .auc-soh[data-band="scrap"]::after {
+  background: var(--auc-warn);
+}
+
+/* -----------------------------------------------------------------------------
+   Bid panel
+   -------------------------------------------------------------------------- */
+.auction-sheet .auc-bidbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.auction-sheet .auc-input {
+  flex: 1;
+  min-inline-size: 0;
+  font-family: var(--auc-mono);
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.5rem 0.6875rem;
+  border: 1px solid var(--auc-rule-strong);
+  border-radius: 2px;
+  background: var(--auc-card);
+  color: var(--auc-ink);
+}
+.auction-sheet .auc-input:focus-visible {
+  outline: 2px solid var(--auc-nbfc);
+  outline-offset: 1px;
+}
+
+.auction-sheet .auc-btn {
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--auc-nbfc);
+  border-radius: 2px;
+  background: var(--auc-nbfc);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 160ms ease, transform 120ms ease;
+}
+.auction-sheet .auc-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--auc-nbfc) 85%, black);
+}
+.auction-sheet .auc-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.auction-sheet .auc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.auction-sheet .auc-btn[data-variant="ghost"] {
+  background: transparent;
+  color: var(--auc-nbfc);
+}
+.auction-sheet .auc-btn[data-variant="ghost"]:hover:not(:disabled) {
+  background: var(--auc-tint-nbfc);
+}
+
+/* The bid ticker. New bids slide in from the top; entries below shift down. */
+.auction-sheet .auc-ticker-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding-block: 0.4375rem;
+  border-block-end: 1px solid var(--auc-rule);
+  font-family: var(--auc-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.auction-sheet .auc-ticker-row[data-yours="true"] {
+  color: var(--auc-live);
+  font-weight: 600;
+}
+.auction-sheet .auc-ticker-row[data-yours="true"]::before {
+  content: "▸ ";
+}
+
+/* -----------------------------------------------------------------------------
+   Section furniture — the document's eyebrow + rule
+   -------------------------------------------------------------------------- */
+.auction-sheet .auc-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+  padding-block-end: 0.5rem;
+  border-block-end: 1px solid var(--auc-rule);
+  margin-block-end: 1rem;
+}
+.auction-sheet .auc-eyebrow::before {
+  content: "";
+  inline-size: 3px;
+  block-size: 0.875rem;
+  background: var(--auc-nbfc);
+  flex: none;
+}
+
+.auction-sheet .auc-h1 {
+  font-family: var(--auc-display);
+  font-size: clamp(1.75rem, 3.2vw, 2.5rem);
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  line-height: 1.06;
+  text-wrap: balance;
+}
+
+.auction-sheet .auc-lede {
+  color: var(--auc-ink-2);
+  font-size: 0.9375rem;
+  max-inline-size: 62ch;
+  margin-block-start: 0.5rem;
+}
+
+/* Wide content must scroll inside its own box; the page body must never scroll
+   sideways. */
+.auction-sheet .auc-scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* Lot detail: photos + items on the left, the bid panel on the right. This one
+   IS a media query rather than a container query — it is a page-level layout
+   decision about the viewport, not a component adapting to its slot. */
+.auction-sheet .auc-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(18rem, 1fr);
+  gap: 1.75rem;
+  align-items: start;
+}
+
+@media (max-width: 60rem) {
+  .auction-sheet .auc-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* A sticky bid panel in a single column would pin itself over the content
+     the bidder scrolled down to read. */
+  .auction-sheet .auc-detail-grid > aside {
+    position: static !important;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Motion: opt-out, honoured properly.
+
+   The countdown ring is INFORMATION, so it is not removed under reduced-motion
+   — it is made static. The angle still updates on each poll, it simply jumps
+   instead of tweening. Removing the ring entirely would take the countdown away
+   from the users who asked for less movement, which is not what they asked for.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .auction-sheet .auc-ring {
+    transition: none;
+  }
+  .auction-sheet .auc-ring[data-urgency="critical"] {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--auc-warn) 22%, transparent);
+  }
+  .auction-sheet .auc-card,
+  .auction-sheet .auc-btn {
+    transition: none;
+  }
+  .auction-sheet .auc-card:hover {
+    transform: none;
+  }
+}
+
+/* Fallback for engines without @property (Firefox < 128): the ring still draws
+   at the right angle, it just does not tween between polls. */
+@supports not (background: conic-gradient(red var(--auc-sweep), transparent 0)) {
+  .auction-sheet .auc-ring {
+    background: color-mix(in srgb, var(--auc-live) 12%, transparent);
+    border: 2px solid var(--auc-live);
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Auction Control Centre — the admin ledger table
+   -----------------------------------------------------------------------------
+   The dealer surface is a set of cards, because a dealer looks at one lot at a
+   time and decides whether to want it. An admin scans forty and looks for the
+   one that is wrong. That is a table, and a table with a hairline rule and
+   tabular numerals reads far faster than forty cards do — same design language,
+   different instrument.
+   -------------------------------------------------------------------------- */
+.auction-sheet .auc-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+.auction-sheet .auc-table th {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+  text-align: start;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--auc-ink);
+  white-space: nowrap;
+}
+.auction-sheet .auc-table td {
+  padding: 0.625rem 0.75rem;
+  border-block-end: 1px solid var(--auc-rule);
+  vertical-align: top;
+}
+.auction-sheet .auc-table tbody tr:hover {
+  background: color-mix(in srgb, var(--auc-nbfc) 4%, transparent);
+}
+/* The row a destructive action is open on. `:has()` again — the row restyles
+   itself from the state of the panel nested inside it, with no class threaded
+   through React. */
+.auction-sheet .auc-table tbody tr:has(.auc-actions[data-open="true"]) {
+  background: color-mix(in srgb, var(--auc-warn) 7%, transparent);
+}
+.auction-sheet .auc-table td.auc-num {
+  text-align: end;
+  font-family: var(--auc-mono);
+}
+
+/* Filter bar: the status tabs above the table. */
+.auction-sheet .auc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-block-end: 1px solid var(--auc-rule);
+  margin-block-end: 1rem;
+}
+.auction-sheet .auc-tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+  cursor: pointer;
+  margin-block-end: -1px;
+}
+.auction-sheet .auc-tab[aria-selected="true"] {
+  color: var(--auc-ink);
+  border-block-end-color: var(--auc-nbfc);
+}
+.auction-sheet .auc-tab:hover:not([aria-selected="true"]) {
+  color: var(--auc-ink);
+}
+
+/* The per-lot action panel that expands under a row. */
+.auction-sheet .auc-actions {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem 0.75rem 1.125rem;
+  background: color-mix(in srgb, var(--auc-nbfc) 3%, transparent);
+  border-inline-start: 3px solid var(--auc-nbfc);
+}
+.auction-sheet .auc-actions[data-open="true"] {
+  border-inline-start-color: var(--auc-warn);
+}
+.auction-sheet .auc-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.auction-sheet .auc-action-label {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+  min-inline-size: 9rem;
+}
+.auction-sheet .auc-note {
+  font-size: 0.75rem;
+  color: var(--auc-ink-2);
+}
+.auction-sheet .auc-note[data-tone="error"] {
+  color: var(--auc-warn);
+  font-weight: 600;
+}
+.auction-sheet .auc-note[data-tone="ok"] {
+  color: var(--auc-live);
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PART 2 — operator surfaces
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Everything above this line was written for the dealer's marketplace and the
+   admin ledger. Everything below is for the people who BUILD a lot: the
+   composer, the draft list, the battery picker, the intake and inspection
+   screens, the refurbishment console.
+
+   Same rules as part 1, restated because they are easy to break:
+
+     · No Tailwind inside `.auction-sheet`. The utilities and this file
+       disagree about spacing scale and about the responsive line, and mixing
+       them is how a screen ends up with two breakpoints.
+     · No `dark:` anything, anywhere. `globals.css` maps the dark variant to a
+       selector that never matches, so every dark utility in this repo is a
+       silent no-op. This sheet is light-only on purpose.
+     · State goes on `data-*` attributes and is read with `:has()` /
+       attribute selectors, not threaded through className strings.
+     · One responsive line, 60rem, matching `.auc-detail-grid` above. The app
+       outside this sheet uses Tailwind's 768px; inside it, this is the line.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* — the responsive switch —
+   Two classes instead of a dozen media queries. A block marked
+   `auc-only-wide` is a table; its `auc-only-narrow` twin is the same data as
+   cards. Both live in the markup; exactly one is ever displayed. */
+.auction-sheet .auc-only-narrow { display: none; }
+.auction-sheet .auc-only-wide { display: block; }
+
+@media (max-width: 60rem) {
+  .auction-sheet .auc-only-narrow { display: block; }
+  .auction-sheet .auc-only-wide { display: none; }
+}
+
+.auction-sheet .auc-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.auction-sheet .auc-subtle {
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  color: var(--auc-ink-2);
+}
+
+.auction-sheet .auc-winner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* — section furniture — */
+.auction-sheet .auc-sheet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block-end: 0.875rem;
+  border-block-end: 2px solid var(--auc-ink);
+  margin-block-end: 1.5rem;
+}
+.auction-sheet .auc-sheet-head > div:first-child { min-inline-size: 0; }
+.auction-sheet .auc-head-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* — empty states —
+   The old surfaces printed the word "loading" and, for an empty grid, a bare
+   sentence. An empty state that explains WHY it is empty is the difference
+   between "there is nothing" and "you have not done the thing yet". */
+.auction-sheet .auc-empty {
+  border: 1px dashed var(--auc-rule-strong);
+  background: var(--auc-card);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+.auction-sheet .auc-empty p {
+  font-family: var(--auc-display);
+  font-size: 1.0625rem;
+  color: var(--auc-ink);
+}
+.auction-sheet .auc-empty .auc-empty-hint {
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--auc-ink-2);
+  max-inline-size: 52ch;
+  margin: 0.625rem auto 0;
+  text-wrap: pretty;
+}
+.auction-sheet .auc-empty .auc-btn { margin-block-start: 1.125rem; }
+
+/* — skeletons —
+   Real placeholders rather than the literal word "loading", so the page does
+   not reflow the moment data lands. */
+@keyframes auc-shimmer {
+  0%   { opacity: 0.55; }
+  50%  { opacity: 0.95; }
+  100% { opacity: 0.55; }
+}
+.auction-sheet .auc-skel {
+  background: color-mix(in oklab, var(--auc-ink) 8%, transparent);
+  border-radius: 2px;
+  animation: auc-shimmer 1.4s ease-in-out infinite;
+}
+.auction-sheet .auc-skel-card {
+  border: 1px solid var(--auc-rule);
+  background: var(--auc-card);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-block-size: 12.5rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .auction-sheet .auc-skel { animation: none; }
+}
+
+/* — mini card: one record, four facts, one action — */
+.auction-sheet .auc-mini-card {
+  border: 1px solid var(--auc-rule);
+  background: var(--auc-card);
+  padding: 0.875rem 1rem;
+}
+.auction-sheet .auc-mini-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-block-end: 0.625rem;
+  border-block-end: 1px solid var(--auc-rule);
+  margin-block-end: 0.625rem;
+}
+.auction-sheet .auc-mini-card .auc-btn { margin-block-start: 0.75rem; width: 100%; }
+
+/* — definition list: label above value, two up, one up when very narrow — */
+.auction-sheet .auc-dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem 1rem;
+}
+.auction-sheet .auc-dl > div { min-inline-size: 0; }
+.auction-sheet .auc-dl dt {
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+}
+.auction-sheet .auc-dl dd {
+  font-size: 0.875rem;
+  color: var(--auc-ink);
+  margin-block-start: 0.125rem;
+  overflow-wrap: anywhere;
+}
+.auction-sheet .auc-dl dd.auc-num {
+  font-family: var(--auc-mono);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 24rem) {
+  .auction-sheet .auc-dl { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* — KPI strip — */
+.auction-sheet .auc-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1px;
+  background: var(--auc-rule);
+  border: 1px solid var(--auc-rule);
+  margin-block-end: 1.5rem;
+}
+.auction-sheet .auc-kpi {
+  background: var(--auc-card);
+  padding: 0.875rem 1rem;
+}
+.auction-sheet .auc-kpi b {
+  display: block;
+  font-family: var(--auc-display);
+  font-size: 1.625rem;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.auction-sheet .auc-kpi span {
+  display: block;
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+  margin-block-start: 0.375rem;
+}
+.auction-sheet .auc-kpi[data-tone="warn"] b { color: var(--auc-warn); }
+.auction-sheet .auc-kpi[data-tone="live"] b { color: var(--auc-live); }
+
+/* ── the composer ────────────────────────────────────────────────────────── */
+
+/* Four panels side by side on a wide screen, one at a time on a narrow one.
+   The wizard is not a different component on mobile — it is the same panels
+   with the others hidden, so state cannot diverge between the two layouts. */
+.auction-sheet .auc-wizard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1.125rem;
+  align-items: start;
+}
+
+.auction-sheet .auc-panel {
+  border: 1px solid var(--auc-rule);
+  background: var(--auc-card);
+  min-inline-size: 0;
+}
+.auction-sheet .auc-panel > header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding: 0.75rem 1rem;
+  background: var(--auc-tint-nbfc);
+  border-block-end: 1px solid var(--auc-rule);
+}
+.auction-sheet .auc-panel > header h3 {
+  font-family: var(--auc-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--auc-ink);
+}
+.auction-sheet .auc-panel > header .auc-panel-n {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--auc-nbfc);
+}
+.auction-sheet .auc-panel-body {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+/* — the step rail, shown only when the panels are stacked — */
+.auction-sheet .auc-steps {
+  display: none;
+  gap: 0;
+  border: 1px solid var(--auc-rule);
+  background: var(--auc-card);
+  margin-block-end: 1rem;
+  overflow: hidden;
+}
+.auction-sheet .auc-steps button {
+  flex: 1 1 0;
+  padding: 0.625rem 0.5rem;
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+  background: transparent;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  cursor: pointer;
+  min-block-size: 2.75rem;
+}
+.auction-sheet .auc-steps button[aria-current="true"] {
+  color: var(--auc-nbfc);
+  border-block-end-color: var(--auc-nbfc);
+  background: var(--auc-tint-nbfc);
+}
+@media (max-width: 60rem) {
+  .auction-sheet .auc-steps { display: flex; }
+  .auction-sheet .auc-wizard { grid-template-columns: minmax(0, 1fr); }
+  .auction-sheet .auc-wizard > .auc-panel[data-active="false"] { display: none; }
+}
+
+/* — fields — */
+.auction-sheet .auc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  min-inline-size: 0;
+}
+.auction-sheet .auc-field > label,
+.auction-sheet .auc-label {
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+}
+.auction-sheet .auc-field .auc-hint {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  line-height: 1.5;
+  color: var(--auc-ink-2);
+  text-wrap: pretty;
+}
+.auction-sheet .auc-field .auc-hint[data-tone="warn"] { color: var(--auc-warn); }
+.auction-sheet .auc-field .auc-hint[data-tone="ok"] { color: var(--auc-live); }
+
+.auction-sheet .auc-text,
+.auction-sheet select.auc-text,
+.auction-sheet textarea.auc-text {
+  inline-size: 100%;
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: var(--auc-ink);
+  background: var(--auc-card);
+  border: 1px solid var(--auc-rule-strong);
+  border-radius: 2px;
+  padding: 0.5rem 0.625rem;
+  min-block-size: 2.5rem;
+}
+.auction-sheet textarea.auc-text { min-block-size: 4.5rem; resize: vertical; }
+.auction-sheet .auc-text:focus-visible {
+  outline: 2px solid var(--auc-nbfc);
+  outline-offset: -1px;
+}
+.auction-sheet .auc-text[data-invalid="true"] { border-color: var(--auc-warn); }
+.auction-sheet .auc-text[data-numeric="true"] {
+  font-family: var(--auc-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* — segmented control: the fixed-choice fields (duration, scope, type) — */
+.auction-sheet .auc-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+.auction-sheet .auc-seg button {
+  flex: 1 1 auto;
+  min-inline-size: 3.5rem;
+  min-block-size: 2.5rem;
+  padding: 0.4375rem 0.625rem;
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--auc-ink-2);
+  background: var(--auc-card);
+  border: 1px solid var(--auc-rule-strong);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.auction-sheet .auc-seg button:hover { border-color: var(--auc-nbfc); }
+.auction-sheet .auc-seg button[aria-pressed="true"] {
+  color: var(--auc-nbfc);
+  border-color: var(--auc-nbfc);
+  background: var(--auc-tint-nbfc);
+}
+.auction-sheet .auc-seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* — the battery picker — */
+.auction-sheet .auc-picker {
+  border: 1px solid var(--auc-rule);
+  max-block-size: 24rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.auction-sheet .auc-pick-row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.625rem;
+  inline-size: 100%;
+  padding: 0.625rem 0.75rem;
+  text-align: start;
+  background: var(--auc-card);
+  border: 0;
+  border-block-end: 1px solid var(--auc-rule);
+  cursor: pointer;
+  min-block-size: 3.25rem;
+}
+.auction-sheet .auc-pick-row:last-child { border-block-end: 0; }
+.auction-sheet .auc-pick-row:hover {
+  background: color-mix(in oklab, var(--auc-nbfc) 4%, var(--auc-card));
+}
+.auction-sheet .auc-pick-row[aria-pressed="true"] {
+  background: var(--auc-tint-live);
+  box-shadow: inset 3px 0 0 var(--auc-live);
+}
+.auction-sheet .auc-pick-row:disabled { opacity: 0.5; cursor: not-allowed; }
+.auction-sheet .auc-pick-box {
+  inline-size: 1.125rem;
+  block-size: 1.125rem;
+  border: 1px solid var(--auc-rule-strong);
+  border-radius: 2px;
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--auc-live);
+}
+.auction-sheet .auc-pick-row[aria-pressed="true"] .auc-pick-box {
+  border-color: var(--auc-live);
+}
+.auction-sheet .auc-pick-main { min-inline-size: 0; }
+.auction-sheet .auc-pick-serial {
+  font-family: var(--auc-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--auc-ink);
+  overflow-wrap: anywhere;
+}
+.auction-sheet .auc-pick-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-block-start: 0.1875rem;
+}
+.auction-sheet .auc-pick-price {
+  font-family: var(--auc-mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--auc-ink);
+  white-space: nowrap;
+}
+
+/* — running totals / price ledger — */
+.auction-sheet .auc-ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-family: var(--auc-mono);
+  font-size: 0.75rem;
+}
+.auction-sheet .auc-ledger-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--auc-ink-2);
+}
+.auction-sheet .auc-ledger-row[data-total="true"] {
+  border-block-start: 1px solid var(--auc-rule-strong);
+  padding-block-start: 0.5rem;
+  margin-block-start: 0.25rem;
+  color: var(--auc-ink);
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.auction-sheet .auc-ledger-row b { font-variant-numeric: tabular-nums; }
+
+/* — audience readout — */
+.auction-sheet .auc-reach {
+  border: 1px solid var(--auc-live);
+  background: var(--auc-tint-live);
+  padding: 0.75rem 0.875rem;
+}
+.auction-sheet .auc-reach[data-tone="warn"] {
+  border-color: var(--auc-warn);
+  background: var(--auc-tint-warn);
+}
+.auction-sheet .auc-reach b {
+  display: block;
+  font-family: var(--auc-display);
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--auc-ink);
+}
+.auction-sheet .auc-reach p {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  line-height: 1.6;
+  color: var(--auc-ink-2);
+  margin-block-start: 0.375rem;
+  text-wrap: pretty;
+}
+
+/* — the sticky commit bar —
+   Always reachable, on any screen height, without hunting for it at the bottom
+   of a long form. */
+.auction-sheet .auc-commit {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-block-start: 1.25rem;
+  padding: 0.875rem 1rem;
+  background: color-mix(in oklab, var(--auc-card) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--auc-rule-strong);
+  border-block-start-width: 2px;
+  border-block-start-color: var(--auc-nbfc);
+}
+.auction-sheet .auc-commit-summary {
+  font-family: var(--auc-mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--auc-ink-2);
+  min-inline-size: 0;
+  flex: 1 1 16rem;
+  text-wrap: pretty;
+}
+.auction-sheet .auc-commit-summary b {
+  color: var(--auc-ink);
+  font-variant-numeric: tabular-nums;
+}
+.auction-sheet .auc-commit .auc-commit-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-inline-start: auto;
+}
+@media (max-width: 40rem) {
+  .auction-sheet .auc-commit .auc-commit-actions {
+    margin-inline-start: 0;
+    inline-size: 100%;
+  }
+  .auction-sheet .auc-commit .auc-commit-actions .auc-btn { flex: 1 1 auto; }
+}
+
+/* — toolbar + filter sheet —
+   The dealer filter row used to be a horizontal scroll strip on a phone, with
+   an auto-margined select inside the overflow container that drifted off the
+   end. On narrow screens the filters now live behind one button in a bottom
+   sheet, which is also where a thumb can reach them. */
+.auction-sheet .auc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  padding-block: 0.875rem;
+  border-block-end: 1px solid var(--auc-rule);
+  margin-block-end: 1.25rem;
+}
+.auction-sheet .auc-toolbar .auc-field { flex: 0 1 10rem; }
+.auction-sheet .auc-toolbar .auc-toolbar-end { margin-inline-start: auto; }
+
+.auction-sheet .auc-filter-trigger { display: none; }
+@media (max-width: 60rem) {
+  .auction-sheet .auc-toolbar[data-collapsible="true"] > .auc-field,
+  .auction-sheet .auc-toolbar[data-collapsible="true"] > .auc-toolbar-end {
+    display: none;
+  }
+  .auction-sheet .auc-filter-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+}
+
+.auction-sheet .auc-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgb(2 4 10 / 0.45);
+}
+.auction-sheet .auc-bottom-sheet {
+  position: fixed;
+  inset-inline: 0;
+  inset-block-end: 0;
+  z-index: 91;
+  max-block-size: 85vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--auc-card);
+  border-block-start: 2px solid var(--auc-nbfc);
+  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+.auction-sheet .auc-bottom-sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* — tag / count pill used next to headings — */
+.auction-sheet .auc-count {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--auc-ink-2);
+}
+
+/* ── photo capture ───────────────────────────────────────────────────────── */
+
+.auction-sheet .auc-shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: 0.625rem;
+}
+.auction-sheet .auc-drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  aspect-ratio: 4 / 3;
+  border: 1px dashed var(--auc-rule-strong);
+  background: var(--auc-card);
+  cursor: pointer;
+  text-align: center;
+  padding: 0.5rem;
+}
+.auction-sheet .auc-drop:hover { border-color: var(--auc-nbfc); }
+.auction-sheet .auc-drop span {
+  font-family: var(--auc-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--auc-ink-2);
+}
+.auction-sheet .auc-drop input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+
+.auction-sheet .auc-thumb {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--auc-rule);
+  background: var(--auc-tint-nbfc);
+  overflow: hidden;
+}
+.auction-sheet .auc-thumb img {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  display: block;
+}
+.auction-sheet .auc-thumb[data-uploading="true"] img { opacity: 0.55; }
+.auction-sheet .auc-thumb .auc-thumb-label {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: 0;
+  padding: 0.1875rem 0.375rem;
+  font-family: var(--auc-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  background: rgb(2 4 10 / 0.6);
+}
+/* Always visible, never hover-only: a hover-revealed remove button cannot be
+   reached on a touch screen at all. */
+.auction-sheet .auc-thumb .auc-thumb-x {
+  position: absolute;
+  inset-block-start: 0.25rem;
+  inset-inline-end: 0.25rem;
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(2 4 10 / 0.72);
+  color: #fff;
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ── lightbox ────────────────────────────────────────────────────────────── */
+
+.auction-sheet .auc-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(2 4 10 / 0.92);
+}
+.auction-sheet .auc-lightbox img {
+  max-inline-size: 100%;
+  max-block-size: 90vh;
+  object-fit: contain;
+}
+.auction-sheet .auc-lightbox .auc-lightbox-x {
+  position: absolute;
+  inset-block-start: 1rem;
+  inset-inline-end: 1rem;
+  min-inline-size: 2.75rem;
+  min-block-size: 2.75rem;
+  border: 1px solid rgb(255 255 255 / 0.4);
+  background: transparent;
+  color: #fff;
+  font-family: var(--auc-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+/* ── misc ────────────────────────────────────────────────────────────────── */
+
+.auction-sheet .auc-inline-error {
+  border: 1px solid var(--auc-warn);
+  border-inline-start-width: 3px;
+  background: var(--auc-tint-warn);
+  padding: 0.625rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--auc-ink);
+}
+
+.auction-sheet .auc-linkrow {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.auction-sheet a.auc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+/* Touch targets. 2.75rem is the smallest thing a thumb reliably hits, and the
+   ghost buttons in the admin ledger were well under it. */
+.auction-sheet .auc-btn {
+  min-block-size: 2.5rem;
+  padding-inline: 0.875rem;
+}
+@media (pointer: coarse) {
+  .auction-sheet .auc-btn { min-block-size: 2.75rem; }
+  .auction-sheet .auc-tab { min-block-size: 2.75rem; }
+}
+
+/* ── register primitives ─────────────────────────────────────────────────── */
+
+/* Visually hidden, still announced. A thumbnail column has no visible header
+   but a screen reader still walks the header row. */
+.auction-sheet .auc-sr {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Count on a filter tab. Nine states with their tallies attached is a stock
+   distribution, which is why this screen uses tabs and not a <select>. */
+.auction-sheet .auc-tab .auc-tab-n {
+  font-style: normal;
+  font-size: 0.5625rem;
+  margin-inline-start: 0.4375rem;
+  padding: 0.0625rem 0.3125rem;
+  border: 1px solid var(--auc-rule-strong);
+  color: var(--auc-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.auction-sheet .auc-tab[aria-selected="true"] .auc-tab-n {
+  border-color: var(--auc-nbfc);
+  background: var(--auc-nbfc);
+  color: #fff;
+}
+
+/* Photo completeness: five pips, one per required shot (front, back, side,
+   serial plate, damage). A bare "3 on file" hides WHICH set is short; five
+   pips read as a progress bar at a glance and the zero case goes red, because
+   a battery without photographs is stock that cannot be auctioned. */
+.auction-sheet .auc-pips {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.auction-sheet .auc-pips i {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--auc-rule-strong);
+}
+.auction-sheet .auc-pips i[data-on="true"] {
+  background: var(--auc-live);
+  border-color: var(--auc-live);
+}
+.auction-sheet .auc-pips b {
+  font-family: var(--auc-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--auc-ink-2);
+  margin-inline-start: 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+.auction-sheet .auc-pips[data-none="true"] b { color: var(--auc-warn); }
+.auction-sheet .auc-pips[data-none="true"] i { border-color: var(--auc-warn); }
+
+/* The lead photograph, in a ledger cell or beside a card's facts. Square and
+   fixed so a column of forty stays a column and not a ragged edge. */
+.auction-sheet .auc-cell-thumb {
+  inline-size: 3rem;
+  block-size: 3rem;
+  object-fit: cover;
+  display: block;
+  border: 1px solid var(--auc-rule);
+  background: color-mix(in srgb, var(--auc-nbfc) 4%, transparent);
+  flex: 0 0 auto;
+}
+.auction-sheet .auc-cell-thumb[data-empty="true"] {
+  border-style: dashed;
+  border-color: var(--auc-rule-strong);
+  color: var(--auc-ink-2);
+  font-family: var(--auc-display);
+  display: grid;
+  place-items: center;
+}
+
+/* Card body: thumbnail rail, facts beside it. */
+.auction-sheet .auc-card-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+
+/* Inside a card, a lone action is full-width (see `.auc-mini-card .auc-btn`),
+   but a ROW of actions is a row — otherwise "Photographs" and "View lot"
+   stack into two full-bleed bars. */
+.auction-sheet .auc-mini-card .auc-linkrow .auc-btn {
+  inline-size: auto;
+  margin-block-start: 0;
+}
+
+/* The ledger's expanded photo panel spans the row; it is a workspace, not a
+   cell, so it drops the table's own padding and keeps the accent rule. */
+.auction-sheet .auc-table .auc-actions {
+  padding-block: 1rem;
+}

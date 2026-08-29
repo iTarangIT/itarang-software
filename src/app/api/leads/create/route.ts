@@ -5,6 +5,9 @@ import { leads, personalDetails, auditLogs, accounts, leadProducts } from '@/lib
 import { successResponse, errorResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
+import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
+import { notifyLeadCreated } from '@/lib/notifications/events';
+import { dealerDisplayName } from '@/lib/notifications/emit';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import {
@@ -35,7 +38,7 @@ async function generateLeadReference() {
 // Returns a structured 403 response with a stable string error code so the
 // dealer-portal UI can localise messages without parsing message text.
 function gateError(
-    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED',
+    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED' | 'DEALER_TYPE_NOT_PERMITTED',
     message: string,
     extra: Record<string, unknown> = {}
 ) {
@@ -76,6 +79,7 @@ async function checkDealerStatusGate(
             id: dealers.id,
             onboarding_status: dealers.onboarding_status,
             finance_enabled: dealers.finance_enabled,
+            dealer_type: dealers.dealer_type,
         })
         .from(dealers)
         .where(eq(dealers.dealer_id, dealerCode))
@@ -96,6 +100,19 @@ async function checkDealerStatusGate(
             'DEALER_NOT_ACTIVE',
             `Your dealer account is not yet active. Current status: ${dealer.onboarding_status}.`,
             { currentStatus: dealer.onboarding_status }
+        );
+    }
+
+    // E-202 — a SCRAP dealer trades only in old batteries. Lead capture is the
+    // front of the new-battery sales funnel, so it is not a module they have;
+    // their portal shows no "Lead Management" at all. Enforced here as well as
+    // in the UI so the menu being hidden is a presentation detail, not the only
+    // thing standing between a scrap login and a lead it should never own.
+    if (!capabilitiesFor(dealer.dealer_type).newBattery) {
+        return gateError(
+            'DEALER_TYPE_NOT_PERMITTED',
+            'Lead creation is not available for scrap dealers. Your account is set up for battery buyback.',
+            { dealerType: dealer.dealer_type }
         );
     }
 
@@ -121,8 +138,9 @@ async function checkDealerStatusGate(
 const step1Schema = z.object({
     full_name: z.string().optional().nullable(),
     phone: z.string().optional().nullable(),
-    // Customer email → leads.owner_email. Required for finance leads (the Digio
-    // loan-agreement e-sign signer id, §11.3); enforced in the commit block.
+    // Customer email → leads.owner_email. Optional at capture; only the format
+    // is checked in the commit block. It is still the Digio loan-agreement
+    // e-sign signer id (§11.3), which is enforced at the e-sign step instead.
     email: z.string().optional().nullable(),
     father_or_husband_name: z.string().optional().nullable(),
     dob: z.string().optional().nullable(),
@@ -516,14 +534,12 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
         }
 
-        // Email + State + City are mandatory for EVERY lead (the UI marks them
-        // required like name/phone). Email also doubles as the Digio e-sign
-        // signer id for finance leads.
+        // State + City are mandatory for EVERY lead. Email is OPTIONAL — only
+        // its format is checked when supplied. It still doubles as the Digio
+        // e-sign signer id, so the agreement route rejects a finance lead that
+        // reaches e-sign with no email on file.
         const email = data.email?.trim();
-        if (!email) {
-            return errorResponse('Customer email required', 400);
-        }
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             return errorResponse('Enter a valid customer email address', 400);
         }
         if (!data.state?.trim()) {
@@ -643,6 +659,18 @@ export const POST = withErrorHandler(async (req: Request) => {
                 sourceChannel: 'web',
                 sourceTable: 'leads',
                 sourceId: data.leadId!,
+            });
+
+            // Tell the admins a real lead now exists. Deliberately here and not
+            // in MODE 1 (draft init): a dealer opening the wizard and walking
+            // away is not news, and MODE 1 rows are literal 'DRAFT' placeholders
+            // with no name or phone. Best-effort — never blocks the commit.
+            await notifyLeadCreated({
+                leadId: data.leadId!,
+                customerName: data.full_name?.trim() || null,
+                paymentMethod: data.payment_method || 'finance',
+                source: 'portal',
+                dealerName: await dealerDisplayName(dealer_id),
             });
 
             return successResponse({ success: true, leadId: data.leadId });

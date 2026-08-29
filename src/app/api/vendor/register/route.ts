@@ -30,9 +30,10 @@ import { z } from "zod";
 import { generateId, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
 import { accounts, businessEntityRoles, scrapVendors, users } from "@/lib/db/schema";
-import { supabaseAdmin } from "@/lib/supabase/admin";
 import { hashPassword } from "@/lib/auth/hashPassword";
+import { createOrAdoptVendorAuthUser } from "@/lib/buyback/vendor-auth";
 import { HttpError, ValidationError } from "@/lib/buyback/errors";
+import { notifyVendorRegistered } from "@/lib/notifications/events";
 import { CHEMISTRIES } from "@/lib/buyback/line-spec";
 
 export const runtime = "nodejs";
@@ -63,73 +64,6 @@ const bodySchema = z.object({
   categories: z.array(z.enum(CHEMISTRIES)).default([]),
   regions: z.array(z.string().trim().min(1).max(120)).default([]),
 });
-
-/**
- * Create the vendor's Supabase auth user — or ADOPT an orphan.
- *
- * By the time we are called, POST has already 409'd if a `users` row exists for
- * this email. So if Supabase still refuses because an auth user exists, that
- * auth user is an ORPHAN: a login with no app-level `users` row, left behind by
- * a half-finished earlier sign-up (an admin-invited dealer that never
- * completed, a registration whose DB write failed). Nobody can use it — login
- * authenticates, the profile lookup finds nothing, and the app reports the
- * account "inactive". Rather than dead-ending the registrant on "email already
- * registered", we set the password they just chose and the vendor role on that
- * auth user, and reuse its id to create the rows that were missing.
- * Registration becomes idempotent: an email whose auth user outlived its data
- * can register again and self-heal.
- *
- * Safe by construction: an email WITH a live `users` row never reaches here (it
- * 409s upstream), so this never resets the password of a working account.
- */
-async function createOrAdoptVendorAuthUser(email: string, password: string): Promise<string> {
-  const { data, error } = await supabaseAdmin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    // MUST be set here. Middleware reads the role off the JWT's app_metadata and
-    // falls back to user_metadata; the RDS role only reaches the JWT after
-    // /api/user/profile has run once. Without this a brand-new vendor resolves to
-    // "user" on their first navigation and gets bounced off /vendor-portal.
-    user_metadata: { role: "scrap_vendor" },
-  });
-  if (data?.user?.id) return data.user.id;
-
-  const alreadyRegistered = /already|exist/i.test(error?.message ?? "");
-  const orphan = alreadyRegistered ? await findAuthUserByEmail(email) : null;
-  if (!orphan) {
-    throw new ValidationError(
-      error?.message ?? "Could not create your login. Try again in a moment.",
-    );
-  }
-
-  // Adopt: set the password they just chose + the vendor role, then hand back
-  // the existing id so the DB rows are created against the same auth user.
-  const { error: adoptError } = await supabaseAdmin.auth.admin.updateUserById(orphan.id, {
-    password,
-    email_confirm: true,
-    user_metadata: { ...(orphan.user_metadata ?? {}), role: "scrap_vendor" },
-    app_metadata: { ...(orphan.app_metadata ?? {}), role: "scrap_vendor" },
-  });
-  if (adoptError) throw new ValidationError(adoptError.message);
-  return orphan.id;
-}
-
-/**
- * GoTrue admin has no by-email getter in supabase-js 2.99, so page listUsers().
- * Only ever called on the rare orphan-adopt path, so the linear scan is fine.
- */
-async function findAuthUserByEmail(email: string) {
-  const target = email.toLowerCase();
-  for (let page = 1; page <= 50; page++) {
-    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || data.users.length === 0) return null;
-    const hit = data.users.find((u) => (u.email ?? "").toLowerCase() === target);
-    if (hit) return hit;
-    if (data.users.length < 200) return null;
-  }
-  return null;
-}
 
 export const POST = withErrorHandler(async (req: Request) => {
   const body = bodySchema.parse(await req.json());
@@ -232,6 +166,11 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     return { vendor_id: row.id, entity_id: entityId };
   });
+
+  // Vendors self-register with no approval step (see the comment on the
+  // businessEntityRoles insert above), so this is the only way an admin finds
+  // out a new vendor exists and is routable.
+  await notifyVendorRegistered({ vendorName: body.name, vendorId: vendor.vendor_id });
 
   return successResponse(
     {

@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { coBorrowers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { requireLeadAccess } from '@/lib/auth/requireLeadAccess';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
+        const access = await requireLeadAccess(leadId);
+        if (!access.ok) return access.response;
         const cob = await db.select().from(coBorrowers).where(eq(coBorrowers.lead_id, leadId)).limit(1);
         return NextResponse.json({ success: true, data: cob[0] || null });
     } catch (error) {
@@ -16,6 +19,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
+        const access = await requireLeadAccess(leadId);
+        if (!access.ok) return access.response;
         const body = await req.json();
         const now = new Date();
 

@@ -15,12 +15,12 @@
  *      On approve we atomically:
  *        a. Flip the request to status='executed' (race-guarded).
  *        b. Set auction_lots.status = 'cancelled'.
- *        c. Return the underlying battery to inventory: inventory rows whose
- *           serial_number == lot.lot_code flip to status='in_stock'. The
- *           lot_code↔battery_serial convention mirrors E-039
- *           (nbfc_recovery_pipeline.battery_serial == auction_lots.lot_code).
- *           `inventory.status` defaults to 'in_stock' (schema ~line 143), so
- *           that is the canonical "in inventory" value in this codebase.
+ *        c. Return the underlying batteries to stock: inventory rows are
+ *           resolved through auction_lot_items → recovery_batteries.serial
+ *           (the legacy lot_code match is kept as an OR for hand-linked rows),
+ *           and the batteries themselves go from `lotted` back to `ready` so
+ *           they can be re-listed. `inventory.status` defaults to 'in_stock',
+ *           so that is the canonical "in inventory" value in this codebase.
  *        d. Append an audit_logs row with action='AUCTION_LOT_CANCELLED'
  *           carrying the reason, both approver IDs, and lot_id.
  *
@@ -38,20 +38,14 @@ import {
   inventory,
   nbfcAuctionCancelRequests,
 } from "@/lib/db/schema";
+import { verifyStepUp } from "@/lib/nbfc/security/step-up";
+import { notifyLotLifecycle } from "@/lib/nbfc/auction/notify";
 
 /**
- * Lightweight MFA token verifier mirroring the audit-export pattern (E-089).
- * Production should swap this for a real Supabase MFA verify; the loop
- * accepts deterministic test tokens so Playwright API tests are reproducible.
+ * The local verifier that used to sit here accepted any 6–8 digit string. It
+ * has been replaced by the shared step-up check, which verifies the requesting
+ * admin's own credential — see `@/lib/nbfc/security/step-up`.
  */
-const MFA_TEST_PASS_PREFIX = "mfa_ok";
-function verifyMfaToken(token: string | undefined | null): boolean {
-  if (!token || typeof token !== "string") return false;
-  if (token.startsWith("INVALID")) return false;
-  if (token.startsWith(MFA_TEST_PASS_PREFIX)) return true;
-  if (/^\d{6,8}$/.test(token)) return true;
-  return false;
-}
 
 export type RequestCancelInput = {
   lot_id: string;
@@ -93,7 +87,11 @@ export type ApproveCancelResult = {
 export async function createCancelRequest(
   input: RequestCancelInput,
 ): Promise<RequestCancelResult> {
-  if (!verifyMfaToken(input.mfa_token)) {
+  const stepUpOk = await verifyStepUp({
+    user_id: input.requester_user_id,
+    token: input.mfa_token,
+  });
+  if (!stepUpOk) {
     throw new Error("UNAUTHORIZED: invalid mfa_token");
   }
   const trimmedReason = input.reason?.trim() ?? "";
@@ -242,18 +240,62 @@ export async function approveCancelRequest(
       throw new Error("NOT_FOUND: lot disappeared during commit");
     }
 
-    // Return the underlying battery to inventory. The lot_code↔serial_number
-    // convention mirrors E-039 (recovery_pipeline.battery_serial). If the
-    // operator never linked an inventory row to the lot, no rows will match
-    // and inventoryReturned stays false — that's not an error: cancellation
-    // is still recorded.
-    const updatedInventory = await tx
-      .update(inventory)
-      .set({ status: "in_stock", updated_at: now })
-      .where(eq(inventory.serial_number, lot.lot_code))
-      .returning({ id: inventory.id });
+    // Return the underlying batteries to stock.
+    //
+    // [FIX] This used to match `inventory.serial_number = lot.lot_code` and
+    // nothing else. Those two values are never equal — a lot code is
+    // "LOT-XXXXXX", a serial never is — so `battery_returned_to_inventory` was
+    // false on every cancellation ever performed, and the stock stayed out of
+    // inventory silently. It is the same defect E-232 already fixed in
+    // settlements.ts, which was not carried across to here.
+    //
+    // The real key is auction_lot_items → recovery_batteries.serial. The legacy
+    // lot_code match is kept alongside it rather than replaced: it costs one OR
+    // and it keeps any hand-linked row, and the E-070 acceptance test, working.
+    //
+    // The `to_regclass` probe has to happen in JS, not in the statement:
+    // Postgres resolves table names at PARSE time, so a guard inside a subquery
+    // does not save a statement that names a table this database may not have —
+    // it still raises 42P01.
+    const probe = await tx.execute(
+      sql`SELECT to_regclass('public.auction_lot_items') AS t`,
+    );
+    const hasLotItems =
+      (probe as unknown as Array<{ t: string | null }>)[0]?.t != null;
+
+    const updatedInventory = hasLotItems
+      ? ((await tx.execute(sql`
+          UPDATE inventory
+             SET status = 'in_stock', updated_at = ${now}
+           WHERE serial_number = ${lot.lot_code}
+              OR serial_number IN (
+                   SELECT rb.serial
+                     FROM auction_lot_items i
+                     JOIN recovery_batteries rb ON rb.id = i.battery_id
+                    WHERE i.lot_id = ${pending.lot_id}
+                 )
+          RETURNING id
+        `)) as unknown as Array<unknown>)
+      : await tx
+          .update(inventory)
+          .set({ status: "in_stock", updated_at: now })
+          .where(eq(inventory.serial_number, lot.lot_code))
+          .returning({ id: inventory.id });
 
     inventoryReturned = updatedInventory.length > 0;
+
+    // And release the batteries themselves. Without this they stay `lotted`
+    // for ever, and `lotted` stock cannot be composed into another lot — so
+    // cancelling a lot used to destroy the resale value of everything on it.
+    if (hasLotItems) {
+      await tx.execute(sql`
+        UPDATE recovery_batteries
+           SET state_code = 'ready', updated_at = ${now}
+         WHERE state_code = 'lotted'
+           AND id IN (SELECT battery_id FROM auction_lot_items
+                       WHERE lot_id = ${pending.lot_id})
+      `);
+    }
 
     await tx.insert(auditLogs).values({
       id: randomUUID(),
@@ -280,6 +322,23 @@ export async function approveCancelRequest(
       timestamp: now,
     });
   });
+
+  // Told after the commit: a cancellation must never fail because an email
+
+  // bounced, and everyone who bid has money committed to a lot that has just
+
+  // been withdrawn.
+
+  await notifyLotLifecycle({
+
+    lot_id: pending.lot_id,
+
+    event: "cancelled",
+
+    reason: pending.reason,
+
+  });
+
 
   return {
     request_id: pending.id,

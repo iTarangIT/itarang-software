@@ -56,3 +56,20 @@ export interface ZohoListPaymentsResponse {
   customerpayments: ZohoPayment[];
   page_context: ZohoPageContext;
 }
+
+// An organization (legal entity) under the Zoho login — /organizations. The
+// login owns one per entity (Haryana "ITG", Delhi "ITD"), and the sync pulls
+// invoices from every one of them.
+export interface ZohoOrganization {
+  organization_id?: string;
+  name?: string;
+  is_org_active?: boolean;
+  is_default_org?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ZohoListOrganizationsResponse {
+  code: number;
+  message: string;
+  organizations?: ZohoOrganization[];
+}

@@ -1,0 +1,871 @@
+<title>Battery Auction BRD v2</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#F4F8F7; --surface:#FFFFFF; --ink:#182B33; --muted:#5B6E74;
+    --line:#D9E4E1; --line-strong:#B9CCC8;
+    --accent:#0E7C74; --accent-soft:#E3F1EF;
+    --done:#2E7D4F; --done-soft:#E6F2EA;
+    --warn:#A96A10; --warn-soft:#F7EEDD;
+    --miss:#B3402E; --miss-soft:#F8E8E4;
+    --navy:#23507C; --navy-soft:#E6EEF6;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0E1719; --surface:#152124; --ink:#E3EDEB; --muted:#93A6A4;
+      --line:#24393C; --line-strong:#3A5458;
+      --accent:#46B8AC; --accent-soft:#173430;
+      --done:#5CB97F; --done-soft:#16301F;
+      --warn:#E0A94E; --warn-soft:#33270F;
+      --miss:#E07A64; --miss-soft:#391A13;
+      --navy:#7FA8D0; --navy-soft:#152436;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E1719; --surface:#152124; --ink:#E3EDEB; --muted:#93A6A4;
+    --line:#24393C; --line-strong:#3A5458;
+    --accent:#46B8AC; --accent-soft:#173430;
+    --done:#5CB97F; --done-soft:#16301F;
+    --warn:#E0A94E; --warn-soft:#33270F;
+    --miss:#E07A64; --miss-soft:#391A13;
+    --navy:#7FA8D0; --navy-soft:#152436;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:15.5px; line-height:1.62;
+  }
+  .wrap{max-width:1100px; margin:0 auto; padding:44px 24px 90px}
+  header.hero{border-bottom:2px solid var(--ink); padding-bottom:18px; margin-bottom:24px}
+  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:500}
+  h1{font-family:Archivo,sans-serif; font-weight:800; font-size:clamp(28px,4.5vw,40px); line-height:1.1; margin:.35em 0 .25em; text-wrap:balance}
+  .lede{font-size:17px; color:var(--muted); max-width:72ch; margin:0}
+  .meta{display:flex; flex-wrap:wrap; gap:18px; margin-top:14px; font-size:12.5px; color:var(--muted); font-family:"IBM Plex Mono",monospace}
+  nav.toc{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 22px; margin:26px 0; columns:2; column-gap:36px}
+  nav.toc a{color:var(--ink); text-decoration:none; display:block; padding:3px 0; font-size:14px; border-bottom:1px dotted transparent}
+  nav.toc a:hover{color:var(--accent)}
+  nav.toc a b{font-family:"IBM Plex Mono",monospace; color:var(--accent); font-weight:500; margin-right:8px}
+  @media (max-width:640px){nav.toc{columns:1}}
+  section{margin-top:56px}
+  .sec-head{display:flex; align-items:baseline; gap:14px; border-bottom:1px solid var(--line-strong); padding-bottom:8px; margin-bottom:18px}
+  .sec-num{font-family:Archivo,sans-serif; font-weight:800; font-size:15px; color:var(--bg); background:var(--accent); border-radius:6px; padding:2px 9px; flex:none; transform:translateY(-2px)}
+  h2{font-family:Archivo,sans-serif; font-weight:700; font-size:23px; margin:0; text-wrap:balance}
+  h3{font-family:Archivo,sans-serif; font-weight:700; font-size:17px; margin:28px 0 10px}
+  h3 .stageno{color:var(--accent); font-family:"IBM Plex Mono",monospace; font-weight:500; font-size:14px; margin-right:6px}
+  p{max-width:76ch}
+  .note{color:var(--muted); font-size:13.5px; max-width:80ch}
+  code{font-family:"IBM Plex Mono",monospace; font-size:.86em; background:var(--accent-soft); padding:1px 5px; border-radius:4px}
+  figure{margin:20px 0; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 12px 8px; overflow-x:auto}
+  figure svg{display:block; min-width:960px; max-width:100%; height:auto; margin:0 auto}
+  figcaption{font-size:13px; color:var(--muted); padding:8px 8px 6px}
+  .tbl{overflow-x:auto; margin:14px 0; border:1px solid var(--line); border-radius:10px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-size:13.5px}
+  th{font-family:Archivo,sans-serif; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; text-align:left; color:var(--muted); background:color-mix(in srgb, var(--surface) 60%, var(--bg)); padding:9px 12px; border-bottom:1px solid var(--line-strong); white-space:nowrap}
+  td{padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td code{white-space:nowrap}
+  .num{font-variant-numeric:tabular-nums}
+  .pill{display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500; padding:1px 9px; border-radius:999px; white-space:nowrap}
+  .pill.done{background:var(--done-soft); color:var(--done)}
+  .pill.partial{background:var(--warn-soft); color:var(--warn)}
+  .pill.missing{background:var(--miss-soft); color:var(--miss)}
+  .pill.deferred{background:var(--line); color:var(--muted)}
+  .pill.p0{background:var(--miss-soft); color:var(--miss)}
+  .pill.p1{background:var(--warn-soft); color:var(--warn)}
+  .pill.p2{background:var(--accent-soft); color:var(--accent)}
+  .pill.p3{background:var(--line); color:var(--muted)}
+  .stage{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px 22px; margin:16px 0}
+  .stage .facts{display:grid; grid-template-columns:110px 1fr; gap:4px 14px; font-size:13.5px; margin-top:10px}
+  .stage .facts dt{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); padding-top:2px}
+  .stage .facts dd{margin:0}
+  .stage h3{margin-top:0}
+  .rules{margin:10px 0 0; padding-left:18px; font-size:14px}
+  .rules li{margin:4px 0}
+  .rules li::marker{color:var(--accent)}
+  .callout{border-radius:10px; padding:12px 16px; font-size:14px; margin:14px 0; border:1px solid}
+  .callout.warn{background:var(--warn-soft); border-color:var(--warn)}
+  .callout.miss{background:var(--miss-soft); border-color:var(--miss)}
+  .callout.info{background:var(--navy-soft); border-color:var(--navy)}
+  .callout b:first-child{display:block; margin-bottom:2px}
+  /* svg */
+  .sv-box{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.2}
+  .sv-box-accent{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.4}
+  .sv-box-miss{fill:var(--miss-soft); stroke:var(--miss); stroke-width:1.2}
+  .sv-box-dash{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.2; stroke-dasharray:5 4}
+  .sv-t{font-family:"IBM Plex Sans",sans-serif; font-size:12.5px; font-weight:600; fill:var(--ink)}
+  .sv-ts{font-family:"IBM Plex Sans",sans-serif; font-size:10.5px; fill:var(--muted)}
+  .sv-mono{font-family:"IBM Plex Mono",monospace; font-size:10px; fill:var(--muted)}
+  .sv-lane{font-family:Archivo,sans-serif; font-size:11px; font-weight:700; letter-spacing:.08em; fill:var(--muted); text-transform:uppercase}
+  .sv-lbl{font-family:"IBM Plex Sans",sans-serif; font-size:10.5px; fill:var(--muted)}
+  .sv-grp{font-family:"IBM Plex Mono",monospace; font-size:10.5px; fill:var(--accent); letter-spacing:.06em}
+  .sv-edge{stroke:var(--ink); stroke-width:1.4; fill:none; opacity:.75}
+  .sv-edge-dash{stroke:var(--ink); stroke-width:1.4; fill:none; opacity:.6; stroke-dasharray:6 5}
+  .sv-sep{stroke:var(--line); stroke-width:1}
+  .sv-tbl-hd{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.2}
+  footer{margin-top:70px; padding-top:16px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px}
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">iTarang CRM · Business Requirements Document</div>
+  <h1>Battery Recovery &amp; Auction — End-to-End BRD v2</h1>
+  <p class="lede">The authoritative specification of the battery recovery, refurbishment and auction flow across all three portals — NBFC, iTarang Admin and Dealer — reconciled against the code actually shipped on branch <code>Rushikesh-claude</code>. Supersedes the July flow-design snapshot (<code>docs/battery-auction-flow.html</code>).</p>
+  <div class="meta">
+    <span>VERSION 2.0 · 20 AUG 2026</span>
+    <span>SOURCE: Battery Auction BRD (Anirudh review) + Telemetry BRD §6.1.7</span>
+    <span>CODE AUDIT: commits 9c2caeeb + 04219f3b</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#s1"><b>1</b>Purpose, actors &amp; permissions</a>
+  <a href="#s2"><b>2</b>The end-to-end flow, stage by stage</a>
+  <a href="#s3"><b>3</b>Status machine</a>
+  <a href="#s4"><b>4</b>Visibility &amp; notifications</a>
+  <a href="#s5"><b>5</b>Role-wise journeys</a>
+  <a href="#s6"><b>6</b>Data model</a>
+  <a href="#s7"><b>7</b>API inventory (45 routes)</a>
+  <a href="#s8"><b>8</b>BRD compliance matrix (25 points)</a>
+  <a href="#s9"><b>9</b>Gap register &amp; development plan</a>
+  <a href="#s10"><b>10</b>Open business decisions</a>
+</nav>
+
+<!-- ================= 1 ================= -->
+<section id="s1">
+  <div class="sec-head"><span class="sec-num">1</span><h2>Purpose, actors &amp; permissions</h2></div>
+  <p><strong>Purpose.</strong> When a battery loan defaults, the financed battery is a stranded asset on the NBFC's book. This module recovers it, grades it, optionally refurbishes it, and resells it to a dealer through a timed online auction — for cash, or for cash plus a fresh loan (refinance) that puts the battery back on the road under a new borrower.</p>
+  <p><strong>Scope.</strong> Everything from the moment a loan is flagged for recovery to the moment the sold battery is delivered (and, where chosen, refinanced). Out of scope: loan collection prior to recovery, disbursement of the refinance loan (parked, see §10), paid promotion (§19 of the source BRD, deferred).</p>
+
+  <h3>Actors</h3>
+  <div class="tbl"><table>
+    <tr><th>Actor</th><th>Portal</th><th>Responsibility</th></tr>
+    <tr><td><strong>NBFC partner</strong> (seller)</td><td>NBFC dashboard</td><td>Owns the asset and the lot. Flags recovery, registers &amp; inspects batteries, raises refurbishment, composes and publishes lots, approves the winner, advances the sale.</td></tr>
+    <tr><td><strong>Collection centre</strong></td><td>NBFC dashboard (Battery Register)</td><td>Physical intake: serial, condition, GPS, photos. Operates under the NBFC's login today.</td></tr>
+    <tr><td><strong>Workshop (iTarang)</strong></td><td>NBFC dashboard (Refurbishment console)</td><td>Executes refurbishment jobs: checklist, repairs, new accessories, return. No separate workshop role yet (see §8, point 23).</td></tr>
+    <tr><td><strong>Platform</strong> (automatic)</td><td>—</td><td>Scheduler (opens/closes lots every 15&nbsp;s), bid validation, anti-snipe, proxy auto-bids, audience resolution, notification fan-out.</td></tr>
+    <tr><td><strong>Dealer</strong> (only bidder)</td><td>Dealer portal</td><td>Browses audience-scoped lots, bids, wins, pays, collects, optionally refinances.</td></tr>
+    <tr><td><strong>iTarang admin / CEO</strong></td><td>Admin dashboard</td><td>Supervises live auctions: pause/resume/extend, reserve floor, approve winner, dual-approval cancellation, analytics.</td></tr>
+  </table></div>
+
+  <h3>Permission matrix</h3>
+  <div class="tbl"><table>
+    <tr><th>Capability</th><th>NBFC</th><th>Admin / CEO</th><th>Dealer</th><th>Enforced by</th></tr>
+    <tr><td>Recovery pipeline, intake, inspection, refurbishment</td><td>✅ own tenant</td><td>view</td><td>—</td><td>tenant scoping on <code>/api/nbfc/recovery/*</code></td></tr>
+    <tr><td>Compose / publish a lot</td><td>✅ own batteries</td><td>—</td><td>—</td><td><code>composeLot.ts</code> ownership checks</td></tr>
+    <tr><td><strong>Place a bid</strong></td><td>❌ hard 403</td><td>❌ view only</td><td>✅ if in the lot's frozen audience</td><td><code>roles.ts</code> · <code>assertDealerMayBid()</code> — NBFC excluded <em>by role, never by geography</em></td></tr>
+    <tr><td>Set / cancel a standing maximum (auto-bid)</td><td>—</td><td>—</td><td>✅ own orders only</td><td><code>autoBid.ts ownerMatch()</code></td></tr>
+    <tr><td>Approve the winning bid</td><td>✅ own lot</td><td>✅ any lot</td><td>—</td><td><code>approve-winner</code> / <code>approve-winning-bid</code> → shared <code>approveWinningBid()</code></td></tr>
+    <tr><td>Pause / resume / extend / reserve floor</td><td>—</td><td>✅ with reason</td><td>—</td><td><code>auctionControlService.ts</code>, audit-logged</td></tr>
+    <tr><td>End early / reduce time</td><td>—</td><td>✅ reason + MFA</td><td>—</td><td>MFA gate (currently a stub — gap G6)</td></tr>
+    <tr><td>Cancel a lot</td><td>—</td><td>✅ two admins</td><td>—</td><td><code>auctionCancelService.ts</code> dual-approval ledger</td></tr>
+    <tr><td>Record payment / advance the sale</td><td>✅ own settlements</td><td>view</td><td>✅ pay own (Razorpay)</td><td>settlement routes, payment gate on <code>in_transit</code></td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 2 ================= -->
+<section id="s2">
+  <div class="sec-head"><span class="sec-num">2</span><h2>The end-to-end flow, stage by stage</h2></div>
+
+  <figure>
+    <svg viewBox="0 0 1160 512" role="img" aria-label="Swimlane diagram: five actors — NBFC, collection centre, workshop, platform, dealer — across seven stages from flag-for-recovery to pay-and-collect, with a dashed refinance loop back to the start.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <line class="sv-sep" x1="0" y1="124" x2="1160" y2="124"/>
+      <line class="sv-sep" x1="0" y1="208" x2="1160" y2="208"/>
+      <line class="sv-sep" x1="0" y1="292" x2="1160" y2="292"/>
+      <line class="sv-sep" x1="0" y1="376" x2="1160" y2="376"/>
+      <text class="sv-lane" x="12" y="78">NBFC</text>
+      <text class="sv-lane" x="12" y="160">Collection</text>
+      <text class="sv-lane" x="12" y="174">centre</text>
+      <text class="sv-lane" x="12" y="244">Workshop</text>
+      <text class="sv-lane" x="12" y="258">(iTarang)</text>
+      <text class="sv-lane" x="12" y="330">Platform</text>
+      <text class="sv-lane" x="12" y="344">(automatic)</text>
+      <text class="sv-lane" x="12" y="414">Dealer</text>
+      <rect class="sv-box" x="110" y="59" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="172" y="78" text-anchor="middle">1 · Flag for</text>
+      <text class="sv-t" x="172" y="94" text-anchor="middle">recovery</text>
+      <rect class="sv-box" x="252" y="143" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="314" y="162" text-anchor="middle">2 · Intake</text>
+      <text class="sv-ts" x="314" y="178" text-anchor="middle">serial · GPS · photos</text>
+      <rect class="sv-box" x="394" y="143" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="456" y="162" text-anchor="middle">3 · Inspect &amp; grade</text>
+      <text class="sv-ts" x="456" y="178" text-anchor="middle">SOH → base price</text>
+      <rect class="sv-box-miss" x="394" y="232" width="124" height="36" rx="8"/>
+      <text class="sv-t" x="456" y="254" text-anchor="middle">Scrap · terminal</text>
+      <rect class="sv-box-dash" x="536" y="227" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="598" y="246" text-anchor="middle">4 · Refurbish</text>
+      <text class="sv-ts" x="598" y="262" text-anchor="middle">optional, never forced</text>
+      <rect class="sv-box" x="678" y="59" width="130" height="46" rx="8"/>
+      <text class="sv-t" x="743" y="78" text-anchor="middle">5 · Build &amp; publish</text>
+      <text class="sv-ts" x="743" y="94" text-anchor="middle">lot · window · audience</text>
+      <rect class="sv-box-accent" x="664" y="308" width="220" height="52" rx="8"/>
+      <text class="sv-t" x="774" y="329" text-anchor="middle">Scheduler &amp; bid engine</text>
+      <text class="sv-ts" x="774" y="345" text-anchor="middle">open · close · anti-snipe · proxy bids</text>
+      <rect class="sv-box" x="806" y="395" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="868" y="414" text-anchor="middle">6 · Browse &amp; bid</text>
+      <text class="sv-ts" x="868" y="430" text-anchor="middle">names never shown</text>
+      <rect class="sv-box" x="950" y="59" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="1012" y="78" text-anchor="middle">7 · Approve winner</text>
+      <text class="sv-ts" x="1012" y="94" text-anchor="middle">reserve must be met</text>
+      <rect class="sv-box" x="950" y="395" width="124" height="46" rx="8"/>
+      <text class="sv-t" x="1012" y="414" text-anchor="middle">Pay &amp; collect</text>
+      <text class="sv-ts" x="1012" y="430" text-anchor="middle">cash or refinance</text>
+      <path class="sv-edge" d="M172 105 V166 H244" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="188" y="161">recovered</text>
+      <path class="sv-edge" d="M376 166 H386" marker-end="url(#ar)"/>
+      <path class="sv-edge" d="M480 189 V250 H528" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="488" y="245">needs repair</text>
+      <path class="sv-edge" d="M430 189 V224" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="366" y="214" text-anchor="end">SOH &lt; 55%</text>
+      <path class="sv-edge-dash" d="M456 143 V30 H743 V51" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="500" y="24">no repair needed — bypass straight to lot</text>
+      <path class="sv-edge" d="M660 250 H700 V113" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="666" y="244">returned</text>
+      <path class="sv-edge" d="M743 105 V300" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="750" y="200">publish → audience frozen</text>
+      <path class="sv-edge" d="M743 360 V418 H798" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="620" y="412" text-anchor="end">notified · WhatsApp / email / in-app</text>
+      <path class="sv-edge" d="M850 395 V368" marker-end="url(#ar)"/>
+      <path class="sv-edge" d="M866 360 V387" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="880" y="381">bid ⇄ validate</text>
+      <path class="sv-edge" d="M884 334 H990 V113" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="998" y="240">auction ends</text>
+      <path class="sv-edge" d="M1030 105 V387" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="1038" y="250">awarded</text>
+      <path class="sv-edge-dash" d="M1012 441 V478 H172 V113" marker-end="url(#ar)"/>
+      <text class="sv-lbl" x="593" y="472" text-anchor="middle">cash + refinance — the battery is financed again and redeployed to a new driver</text>
+    </svg>
+    <figcaption>Figure 1 — Five actors, seven stages. The battery moves left to right; the refinance loop comes back the other way. Dashed = optional path.</figcaption>
+  </figure>
+
+  <div class="stage">
+    <h3><span class="stageno">S1</span>Default &amp; recover — Flag for Recovery</h3>
+    <p>An EMI default surfaces on the NBFC's lead intelligence screens. The risk head flags the loan for recovery; the field team collects the battery.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>NBFC (risk head)</dd>
+      <dt>Screen</dt><dd>NBFC leads table → <code>FlagForRecoveryDialog.tsx</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/actions/flag-for-recovery</code></dd>
+      <dt>DB writes</dt><dd><code>nbfc_recovery_pipeline</code> row (stage <code>needs_inspection</code>), recovery timestamp, audit log</dd>
+    </dl>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S2</span>Intake at the collection centre</h3>
+    <p>The recovered battery becomes a real record: one row per physical battery in the battery master, with photos captured once here and <strong>reused verbatim as the auction images</strong> — never re-uploaded.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>Collection centre (NBFC portal login)</dd>
+      <dt>Screen</dt><dd>Recovery → Recovered Batteries · <code>BatteryRegister.tsx</code> + <code>BatteryPhotoCapture.tsx</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/recovery/batteries</code> · <code>POST …/batteries/[id]/photos</code></dd>
+      <dt>DB writes</dt><dd><code>recovery_batteries</code>: serial (unique), model, capacity, condition, recovery date, warehouse, lat/lng, city/state, source loan, <code>image_urls[]</code> (S3), state <code>intaken</code></dd>
+    </dl>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S3</span>Inspect &amp; grade</h3>
+    <p>A 3-step evaluation wizard captures state-of-health, physical condition, BMS status and a repair plan, then derives the base auction price automatically.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>Collection centre / NBFC</dd>
+      <dt>Screen</dt><dd><code>BatteryEvaluationPanel.tsx</code> → <code>BatteryEvaluationWizard.tsx</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/recovery/[id]/evaluation</code> · stage moves via <code>PATCH …/[id]/stage</code></dd>
+      <dt>DB writes</dt><dd><code>nbfc_battery_evaluations</code>: step 1/2/3 JSON, <code>photo_urls[]</code>, <code>condition_grade</code>, <code>base_auction_price</code></dd>
+    </dl>
+    <ul class="rules">
+      <li><strong>Price bands</strong> (of market reference): SOH &gt; 85 → <span class="num">0.675×</span> · SOH ≥ 70 → <span class="num">0.575×</span> · below → <span class="num">0.40×</span></li>
+      <li><strong>Grades:</strong> SOH ≥ 70 → <code>refurbished</code>-eligible · 55–70 → <code>partial_working</code> · &lt; 55 → <code>scrap</code> (terminal, sold to scrap vendor)</li>
+      <li>The SOH gates are enforced <strong>server-side</strong> on the transition (<code>stages.ts assertSohAllowsStage()</code>) — a direct API call cannot sneak a 30%-SOH battery into refurbishment. A missing SOH reading fails safe to <code>partial_working</code>.</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S4</span>Refurbish — optional, never mandatory</h3>
+    <p>The NBFC raises a job; the iTarang workshop repairs the battery and returns it. A battery that needs no repair takes the <strong>bypass arc</strong> from inspection straight to ready-for-auction.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>Workshop (iTarang), raised by NBFC</dd>
+      <dt>Screen</dt><dd>Recovery → Refurbishment · <code>RefurbishmentConsole.tsx</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/recovery/refurbishment</code> · <code>PATCH …/refurbishment/[id]</code></dd>
+      <dt>DB writes</dt><dd><code>refurbishment_jobs</code>: checklist JSON, estimated vs actual cost, accessories, status, <code>returned_at</code></dd>
+    </dl>
+    <ul class="rules">
+      <li>Job lifecycle: <code>requested → in_progress → returned</code> (or <code>cancelled</code>, which drops the battery back to <em>inspected</em>, not <em>ready</em>).</li>
+      <li>Only one open job per battery (enforced in <code>refurbishment.ts</code>).</li>
+      <li><strong>Accessories are always new</strong> — charger, harness, SOC meter (~₹7–8k) — costed per unit and rolled into the base price so the dealer sees one number.</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S5</span>Build &amp; publish the lot</h3>
+    <p>The four-panel Lot Composer: basics → items → pricing → window &amp; visibility. Lots are <strong>draft-first</strong> — nothing goes live until the NBFC explicitly publishes (the old auto-publish-on-ready is gone).</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>NBFC</dd>
+      <dt>Screen</dt><dd><code>LotComposer.tsx</code> (compose / drafts / new) · <code>SellerLotsConsole.tsx</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/auction/lots</code> (draft) · <code>…/lots/[id]/items</code> · <code>PATCH …/lots/[id]</code> · <code>POST …/lots/[id]/publish</code> · <code>POST …/audience/preview</code></dd>
+      <dt>DB writes</dt><dd><code>auction_lots</code> (+ <code>seller_tenant_id</code>, <code>auction_type</code>, <code>starts_at</code>, <code>reserve_price</code>, <code>anti_snipe_seconds</code>), <code>auction_lot_items</code>, <code>auction_lot_visibility</code>, <code>auction_lot_audience</code> (frozen)</dd>
+    </dl>
+    <ul class="rules">
+      <li>Windows fixed to <strong>2 / 12 / 24 / 48&nbsp;h</strong>, validated server-side, 48&nbsp;h hard maximum. Start now, or schedule.</li>
+      <li>A lot may mix conditions — <code>new | refurbished | partial_working</code> lives <strong>per item</strong>, not per lot (EVs later, same column).</li>
+      <li>Auction type: <code>cash</code> or <code>cash_refinance</code>. Bid increment auto-derived (2% of base, rounded to ₹100). Reserve price optional.</li>
+      <li>Audience is resolved and <strong>frozen before the status flips</strong>; a live reach preview runs while composing, and publish is blocked when it reaches 0 dealers.</li>
+      <li>Batteries in a published lot are reserved (<code>ready → lotted</code>); discarding a draft releases them.</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S6</span>Live bidding</h3>
+    <p>Dealers see photos, health score, quantity, location and the highest bid — <strong>never a rival's name</strong>. The platform enforces every rule inside a row-locked transaction.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>Dealer + Platform</dd>
+      <dt>Screen</dt><dd><code>AuctionBrowser.tsx</code> → <code>LotDetail.tsx</code> (15&nbsp;s detail poll + 2&nbsp;s state poll)</dd>
+      <dt>API</dt><dd><code>POST /api/dealer/auctions/[id]/bid</code> · <code>…/auto-bid</code> · <code>GET …/state</code></dd>
+      <dt>DB writes</dt><dd><code>auction_bids</code> (append-only, <code>bidder_dealer_id</code>), <code>auction_auto_bids</code>, audit log</dd>
+    </dl>
+    <ul class="rules">
+      <li>Three gates in order: dealer role → membership of the lot's frozen audience → bid ≥ current + increment, with an explicit binding-bid confirmation.</li>
+      <li><strong>Anti-snipe:</strong> a bid inside the final <code>anti_snipe_seconds</code> (default 120) extends the deadline by the same window — audited, and surfaced to bidders in the UI.</li>
+      <li><strong>Proxy auto-bid:</strong> a dealer sets a standing maximum; the engine (running inside the bid transaction) advances the price eBay-style — the winner pays what it took to win, not their maximum. Exhausted orders are flagged; an outbid-by-proxy result is reported honestly, never as "bid placed".</li>
+      <li>The old NBFC bid route answers <strong>403</strong> (<code>auction_nbfc_bidding_withdrawn</code>) — dealers only, structurally.</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S7</span>Close &amp; award</h3>
+    <p>The scheduler — a 15-second in-process ticker — opens scheduled lots and closes elapsed ones. No human is needed for a lot to end on time.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>Platform, then NBFC (or admin)</dd>
+      <dt>Screen</dt><dd><code>SellerLotDetail.tsx</code> ("Award to highest bidder") · admin <code>AuctionControlCentre.tsx</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/auction/lots/[id]/approve-winner</code> · <code>POST /api/admin/nbfc/auction/lot/approve-winning-bid</code> · <code>GET/POST /api/cron/auction/tick</code></dd>
+      <dt>DB writes</dt><dd><code>auction_lots.status = ended</code>, <code>auction_settlements</code> (<code>payment_pending</code>, unique per lot), batteries → <code>sold</code></dd>
+    </dl>
+    <ul class="rules">
+      <li>Close claims the lot with <code>FOR UPDATE SKIP LOCKED</code> in one transaction; the top bid is <code>ORDER BY amount DESC, placed_at ASC</code> — ties go to the earliest bid.</li>
+      <li>A settlement is created only when a top bid exists <em>and the reserve is met</em>; otherwise the batteries return to <em>ready for auction</em> for re-listing.</li>
+      <li>The top bid is <em>suggested</em>; the seller (or admin, on their behalf) has the final say. Both paths converge on the same <code>approveWinningBid()</code>.</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S8</span>Settle &amp; pay</h3>
+    <p>The winning dealer pays in full — online through Razorpay, or offline by bank transfer — then the seller dispatches and confirms delivery.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>Dealer (pay) + NBFC (dispatch)</dd>
+      <dt>Screen</dt><dd>Dealer → Purchases (<code>Purchases.tsx</code>) · NBFC → <code>AuctionSettlementsTable.tsx</code></dd>
+      <dt>API</dt><dd><code>POST/PATCH /api/dealer/auctions/settlements/[id]/pay</code> (Razorpay) · <code>POST/DELETE /api/nbfc/auction/settlements/[id]/payment</code> (offline / abandon) · <code>PATCH /api/nbfc/auction/settlements/[id]</code> (status)</dd>
+      <dt>DB writes</dt><dd><code>auction_settlements</code>: <code>payment_ref</code>, <code>payment_provider</code>, <code>paid_at</code>, status advance</dd>
+    </dl>
+    <ul class="rules">
+      <li><strong>Payment before dispatch:</strong> <code>payment_pending → in_transit</code> is refused until a payment is recorded (<code>paid_at</code> set).</li>
+      <li>Lifecycle: <code>payment_pending → in_transit → delivered</code>; delivery marks the batteries <em>resold</em>.</li>
+    </ul>
+    <div class="callout warn"><b>Gap (G2):</b> the offline-payment route exists but has <strong>no screen</strong> — the dealer is told "the seller will record your bank transfer", and the seller has nowhere to do it. See §9, Phase B.</div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="stageno">S9</span>Refinance loop — the battery becomes a loan again</h3>
+    <p>On a <code>cash_refinance</code> lot, the winner can take part cash / part loan: a sanction is raised against the winning dealer at the used-asset amount (≈₹40k vs ₹60k new), seeded from the auction — the dealer saw the same EMI split <em>before</em> bidding.</p>
+    <dl class="facts">
+      <dt>Actor</dt><dd>NBFC (raises the sanction)</dd>
+      <dt>Service</dt><dd><code>refinance.ts createRefinanceSanction()</code> — idempotent; shared split math in <code>lib/auction/refinance-split.ts</code></dd>
+      <dt>API</dt><dd><code>POST /api/nbfc/auction/settlements/[id]/refinance</code></dd>
+      <dt>DB writes</dt><dd><code>loan_sanctions</code> row (<code>status = sanctioned</code>), <code>auction_settlements.refinance_loan_id</code>, audit log</dd>
+    </dl>
+    <div class="callout warn"><b>Gap (G3 + G5):</b> the route and service are complete, but <strong>nothing in any portal calls them</strong> — refinance wins currently settle as cash. And the raised sanction stops at <em>sanctioned</em>: the handoff into disbursement is not wired. See §9 and the ownership decision in §10.</div>
+  </div>
+</section>
+
+<!-- ================= 3 ================= -->
+<section id="s3">
+  <div class="sec-head"><span class="sec-num">3</span><h2>Status machine</h2></div>
+  <p>Three chained state machines — the battery, the lot, the sale — each enforced at the service layer. The bypass arc and every branch below are deliberate.</p>
+
+  <figure>
+    <svg viewBox="0 0 1160 330" role="img" aria-label="Status chain: battery statuses intaken to ready-for-auction with scrap branch and bypass; lot statuses draft to ended with cancel branch; settlement statuses payment-pending to delivered with an optional refinanced outcome.">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <text class="sv-grp" x="110" y="16">BATTERY · recovery pipeline</text>
+      <rect class="sv-box" x="110" y="44" width="130" height="36" rx="18"/>
+      <text class="sv-t" x="175" y="66" text-anchor="middle">Intaken</text>
+      <rect class="sv-box" x="270" y="44" width="140" height="36" rx="18"/>
+      <text class="sv-t" x="340" y="66" text-anchor="middle">Under inspection</text>
+      <rect class="sv-box-dash" x="440" y="44" width="140" height="36" rx="18"/>
+      <text class="sv-t" x="510" y="66" text-anchor="middle">Refurb pending</text>
+      <rect class="sv-box-accent" x="610" y="44" width="150" height="36" rx="18"/>
+      <text class="sv-t" x="685" y="66" text-anchor="middle">Ready for auction</text>
+      <path class="sv-edge" d="M240 62 H262" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M410 62 H432" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M580 62 H602" marker-end="url(#ar2)"/>
+      <path class="sv-edge-dash" d="M340 44 V30 H685 V36" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="512" y="26" text-anchor="middle">no repair needed — bypass</text>
+      <rect class="sv-box-miss" x="270" y="104" width="140" height="34" rx="17"/>
+      <text class="sv-t" x="340" y="125" text-anchor="middle">Scrap</text>
+      <path class="sv-edge" d="M340 80 V96" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="420" y="126">SOH &lt; 55% · terminal — sold to scrap vendor</text>
+      <path class="sv-edge" d="M685 80 V168 H175 V188" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="430" y="162" text-anchor="middle">batteries added to a lot</text>
+      <text class="sv-grp" x="110" y="188">LOT · auction_lots</text>
+      <text class="sv-grp" x="710" y="188">SALE · auction_settlements</text>
+      <rect class="sv-box" x="110" y="196" width="130" height="36" rx="18"/>
+      <text class="sv-t" x="175" y="218" text-anchor="middle">Draft lot</text>
+      <rect class="sv-box-dash" x="270" y="196" width="130" height="36" rx="18"/>
+      <text class="sv-t" x="335" y="218" text-anchor="middle">Scheduled</text>
+      <rect class="sv-box-accent" x="430" y="196" width="110" height="36" rx="18"/>
+      <text class="sv-t" x="485" y="218" text-anchor="middle">Live</text>
+      <rect class="sv-box" x="570" y="196" width="110" height="36" rx="18"/>
+      <text class="sv-t" x="625" y="218" text-anchor="middle">Ended</text>
+      <rect class="sv-box" x="710" y="196" width="150" height="36" rx="18"/>
+      <text class="sv-t" x="785" y="218" text-anchor="middle">Payment pending</text>
+      <rect class="sv-box" x="890" y="196" width="120" height="36" rx="18"/>
+      <text class="sv-t" x="950" y="218" text-anchor="middle">In transit</text>
+      <rect class="sv-box-accent" x="1040" y="196" width="110" height="36" rx="18"/>
+      <text class="sv-t" x="1095" y="218" text-anchor="middle">Delivered</text>
+      <path class="sv-edge" d="M240 214 H262" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M400 214 H422" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M540 214 H562" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M680 214 H702" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M860 214 H882" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M1010 214 H1032" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="691" y="244" text-anchor="middle">winner approved</text>
+      <text class="sv-lbl" x="871" y="244" text-anchor="middle">payment recorded</text>
+      <rect class="sv-box-miss" x="430" y="268" width="140" height="34" rx="17"/>
+      <text class="sv-t" x="500" y="289" text-anchor="middle">Cancelled</text>
+      <path class="sv-edge" d="M470 232 V260" marker-end="url(#ar2)"/>
+      <path class="sv-edge" d="M610 232 V250 H530 V260" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="580" y="292">needs two admins + MFA</text>
+      <rect class="sv-box-dash" x="1040" y="268" width="110" height="34" rx="17"/>
+      <text class="sv-t" x="1095" y="289" text-anchor="middle">Refinanced ↺</text>
+      <path class="sv-edge-dash" d="M1095 232 V260" marker-end="url(#ar2)"/>
+      <text class="sv-lbl" x="1030" y="292" text-anchor="end">optional — a new loan is raised</text>
+    </svg>
+    <figcaption>Figure 2 — the status journey. A no-bid or below-reserve close returns the batteries to "Ready for auction". "Paused" (not drawn) sits beside Live: admin can pause and resume a live lot.</figcaption>
+  </figure>
+
+  <h3>Transition table</h3>
+  <div class="tbl"><table>
+    <tr><th>Machine</th><th>From</th><th>To</th><th>Guard</th></tr>
+    <tr><td rowspan="4"><strong>Battery</strong><br><code>nbfc_recovery_pipeline.stage</code></td>
+        <td><code>needs_inspection</code></td><td><code>refurbishable</code></td><td>SOH ≥ 70 (server-enforced)</td></tr>
+    <tr><td><code>needs_inspection</code></td><td><code>ready_for_auction</code></td><td>bypass arc — no repair needed</td></tr>
+    <tr><td><code>needs_inspection</code> / <code>refurbishable</code></td><td><code>scrap</code></td><td>SOH &lt; 55 or beyond repair · terminal</td></tr>
+    <tr><td><code>refurbishable</code></td><td><code>ready_for_auction</code></td><td>refurbishment job <code>returned</code></td></tr>
+    <tr><td rowspan="5"><strong>Lot</strong><br><code>auction_lots.status</code></td>
+        <td><code>draft</code></td><td><code>scheduled</code> / <code>live</code></td><td>publish: window valid, ≥1 item, audience &gt; 0</td></tr>
+    <tr><td><code>scheduled</code></td><td><code>live</code></td><td>scheduler at <code>starts_at</code></td></tr>
+    <tr><td><code>live</code></td><td><code>ended</code></td><td>scheduler at <code>ends_at</code> (incl. anti-snipe extensions) or admin end-now (MFA)</td></tr>
+    <tr><td><code>live</code></td><td><code>paused</code> ⇄ <code>live</code></td><td>admin pause / resume, with reason</td></tr>
+    <tr><td><code>live</code> / <code>ended</code></td><td><code>cancelled</code></td><td>dual approval — a second admin must approve</td></tr>
+    <tr><td rowspan="3"><strong>Sale</strong><br><code>auction_settlements.status</code></td>
+        <td>—</td><td><code>payment_pending</code></td><td>created at close/award when top bid ≥ reserve</td></tr>
+    <tr><td><code>payment_pending</code></td><td><code>in_transit</code></td><td><strong>payment recorded</strong> (<code>paid_at</code> set)</td></tr>
+    <tr><td><code>in_transit</code></td><td><code>delivered</code></td><td>seller confirms handover → batteries <em>resold</em></td></tr>
+  </table></div>
+  <div class="callout warn"><b>Gap (G4):</b> the sale machine has no <code>failed</code> / <code>cancelled</code> terminal state — an abandoned settlement is <em>deleted</em>, leaving no record, even though the <code>failure_reason</code> column (E-252) exists for exactly this. See §9, Phase C.</div>
+</section>
+
+<!-- ================= 4 ================= -->
+<section id="s4">
+  <div class="sec-head"><span class="sec-num">4</span><h2>Visibility &amp; notifications</h2></div>
+  <p>Who may see and bid on a lot is decided <strong>once, at publish</strong>, and frozen. Late-approved dealers do not join a running auction; re-publishing never re-notifies.</p>
+
+  <h3>Visibility scopes — pick exactly one</h3>
+  <div class="tbl"><table>
+    <tr><th>Scope</th><th>Parameters</th><th>Meaning</th></tr>
+    <tr><td><code>india</code></td><td>—</td><td>every eligible dealer, no geographic filter</td></tr>
+    <tr><td><code>state</code></td><td><code>states[]</code></td><td>one or many states (case-normalised match)</td></tr>
+    <tr><td><code>city</code></td><td><code>cities[]</code></td><td>one or many cities (normalised match)</td></tr>
+    <tr><td><code>radius</code></td><td>centre lat/lng + km</td><td>haversine distance from the lot's centre; dealers with an unknown city are excluded</td></tr>
+  </table></div>
+  <p class="note">Eligibility on top of geography: account active + onboarding approved + role <code>dealer</code>. <strong>NBFC users are excluded by role, never by geography</strong> — the exclusion holds even when an NBFC user sits inside the radius. Resolver: <code>src/lib/nbfc/auction/audience.ts resolveAuctionAudience()</code>.</p>
+
+  <figure>
+    <svg viewBox="0 0 1160 240" role="img" aria-label="Pipeline: lot published, visibility scope chosen, eligibility filter applied, audience frozen, then fan-out to WhatsApp, email, in-app, and SMS channels.">
+      <defs>
+        <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <rect class="sv-box" x="40" y="40" width="140" height="56" rx="8"/>
+      <text class="sv-t" x="110" y="63" text-anchor="middle">Lot published</text>
+      <text class="sv-ts" x="110" y="80" text-anchor="middle">by the NBFC</text>
+      <rect class="sv-box" x="220" y="40" width="220" height="56" rx="8"/>
+      <text class="sv-t" x="330" y="63" text-anchor="middle">Visibility — pick one</text>
+      <text class="sv-ts" x="330" y="80" text-anchor="middle">All India · states · cities · radius (km)</text>
+      <text class="sv-lbl" x="330" y="122" text-anchor="middle">reach preview shown while composing —</text>
+      <text class="sv-lbl" x="330" y="137" text-anchor="middle">publish is blocked if it reaches 0 dealers</text>
+      <rect class="sv-box" x="480" y="40" width="220" height="56" rx="8"/>
+      <text class="sv-t" x="590" y="63" text-anchor="middle">Eligibility filter</text>
+      <text class="sv-ts" x="590" y="80" text-anchor="middle">active, approved dealers only</text>
+      <text class="sv-lbl" x="590" y="122" text-anchor="middle">NBFC users are excluded by role —</text>
+      <text class="sv-lbl" x="590" y="137" text-anchor="middle">never by geography</text>
+      <rect class="sv-box-accent" x="740" y="40" width="220" height="56" rx="8"/>
+      <text class="sv-t" x="850" y="63" text-anchor="middle">Frozen audience snapshot</text>
+      <text class="sv-ts" x="850" y="80" text-anchor="middle">who may see &amp; bid on this lot</text>
+      <text class="sv-lbl" x="850" y="122" text-anchor="middle">frozen once at publish —</text>
+      <text class="sv-lbl" x="850" y="137" text-anchor="middle">re-publish never re-notifies</text>
+      <path class="sv-edge" d="M180 68 H212" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M440 68 H472" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M700 68 H732" marker-end="url(#ar3)"/>
+      <rect class="sv-box" x="1020" y="16" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="35" text-anchor="middle">WhatsApp ✓</text>
+      <rect class="sv-box" x="1020" y="72" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="91" text-anchor="middle">Email ✓</text>
+      <rect class="sv-box" x="1020" y="128" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="147" text-anchor="middle">In-app ✓</text>
+      <rect class="sv-box-dash" x="1020" y="184" width="122" height="30" rx="15"/>
+      <text class="sv-t" x="1081" y="203" text-anchor="middle">SMS · pending</text>
+      <path class="sv-edge" d="M960 52 H992 V31 H1012" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M960 66 H1000 V87 H1012" marker-end="url(#ar3)"/>
+      <path class="sv-edge" d="M960 80 H992 V143 H1012" marker-end="url(#ar3)"/>
+      <path class="sv-edge-dash" d="M960 94 H1000 V199 H1012" marker-end="url(#ar3)"/>
+    </svg>
+    <figcaption>Figure 3 — one publish event, four channels, all from one frozen snapshot. Delivery state per (dealer, channel) is tracked on <code>auction_lot_audience</code>. WhatsApp reuses the Meta Cloud API wiring; email the NBFC-activation SMTP path; SMS returns <code>skipped</code> until a DLT template is registered.</figcaption>
+  </figure>
+
+  <h3>Notification events</h3>
+  <div class="tbl"><table>
+    <tr><th>Event key</th><th>Fires when</th><th>Audience</th></tr>
+    <tr><td><code>auction.lot_published</code></td><td>a lot goes live</td><td>every dealer in the frozen audience</td></tr>
+    <tr><td><code>auction.outbid</code></td><td>a dealer's leading bid is beaten (incl. by proxy)</td><td>the displaced bidder</td></tr>
+    <tr><td><code>auction.ending_soon</code></td><td>the final hour — idempotent, fires once per lot</td><td>audience + participants</td></tr>
+    <tr><td><code>auction.won</code> / <code>auction.lost</code></td><td>close + award</td><td>winner / losing bidders</td></tr>
+    <tr><td><code>auction.paused</code> / <code>resumed</code> / <code>cancelled</code></td><td>admin lifecycle actions</td><td>audience + participants</td></tr>
+  </table></div>
+  <p class="note">All fan-out is best-effort and try-caught — a bounced email can never fail a close. The dealer home also carries the <strong>live-auctions carousel</strong> (<code>LiveAuctionsStrip.tsx</code>, 5&nbsp;s poll, max 8 lots).</p>
+</section>
+
+<!-- ================= 5 ================= -->
+<section id="s5">
+  <div class="sec-head"><span class="sec-num">5</span><h2>Role-wise journeys</h2></div>
+
+  <h3>NBFC — seller journey</h3>
+  <div class="tbl"><table>
+    <tr><th>#</th><th>Screen (nav)</th><th>Key actions</th><th>Routes</th></tr>
+    <tr><td class="num">1</td><td>Leads → Flag for Recovery</td><td>flag a defaulted loan into the pipeline</td><td><code>/api/nbfc/actions/flag-for-recovery</code></td></tr>
+    <tr><td class="num">2</td><td>Recovery board (kanban + KPIs)</td><td>drag batteries between stages; SOH gates enforced</td><td><code>/api/nbfc/recovery</code> · <code>…/[id]/stage</code></td></tr>
+    <tr><td class="num">3</td><td>Recovered Batteries (register)</td><td>intake: serial, model, GPS, photos</td><td><code>…/recovery/batteries</code> (+ photos)</td></tr>
+    <tr><td class="num">4</td><td>Battery evaluation (3-step wizard)</td><td>SOH, condition, repair plan → base price</td><td><code>…/recovery/[id]/evaluation</code></td></tr>
+    <tr><td class="num">5</td><td>Refurbishment console</td><td>raise / progress / return / cancel jobs; checklist; costs</td><td><code>…/recovery/refurbishment</code></td></tr>
+    <tr><td class="num">6</td><td>Auction Lots · Draft Lots · Lot Composer</td><td>compose (4 panels), preview reach, publish, discard</td><td><code>/api/nbfc/auction/lots*</code> · <code>…/audience/preview</code></td></tr>
+    <tr><td class="num">7</td><td>Seller lot detail</td><td>watch bids, reserve-met indicator, award winner</td><td><code>…/lots/[id]</code> · <code>…/approve-winner</code></td></tr>
+    <tr><td class="num">8</td><td>Settlements table</td><td>advance <code>in_transit → delivered</code> after payment</td><td><code>…/settlements/[id]</code></td></tr>
+  </table></div>
+
+  <h3>iTarang Admin — supervision journey</h3>
+  <div class="tbl"><table>
+    <tr><th>#</th><th>Screen (nav)</th><th>Key actions</th><th>Routes</th></tr>
+    <tr><td class="num">1</td><td>Auction Control (control centre)</td><td>lot table + drawer: extend +15/30/60&nbsp;m, pause/resume, reserve floor (pre-first-bid), all with a required reason</td><td><code>/api/admin/nbfc/auction/lots</code> · <code>…/lot/{extend-time, pause, resume, reserve-price}</code></td></tr>
+    <tr><td class="num">2</td><td>— destructive half (checkbox + MFA)</td><td>reduce −15&nbsp;m, end now, request cancellation</td><td><code>…/lot/{reduce-time, cancel/request}</code></td></tr>
+    <tr><td class="num">3</td><td>Cancel approval queue</td><td>second admin approves/rejects a cancellation</td><td><code>…/lot/cancel/{approvals, approve}</code></td></tr>
+    <tr><td class="num">4</td><td>— award</td><td>approve the winning bid on the seller's behalf</td><td><code>…/lot/approve-winning-bid</code></td></tr>
+    <tr><td class="num">5</td><td>Auction Performance (analytics)</td><td>sell-through, realisation ratio, no-bid rate, bids/lot, time-to-first-bid, below-reserve, refinanced; scheduler-health card</td><td><code>…/auction/analytics</code> · <code>…/auction/health</code></td></tr>
+  </table></div>
+
+  <h3>Dealer — buyer journey</h3>
+  <div class="tbl"><table>
+    <tr><th>#</th><th>Screen (nav)</th><th>Key actions</th><th>Routes</th></tr>
+    <tr><td class="num">1</td><td>Dashboard home</td><td>live-auctions carousel (5&nbsp;s poll)</td><td><code>/api/dealer/auctions?status=live</code></td></tr>
+    <tr><td class="num">2</td><td>Live Auctions (browser)</td><td>9 filters + 5 sorts, facet-driven, bookmarkable URLs</td><td><code>/api/dealer/auctions</code> · <code>…/facets</code></td></tr>
+    <tr><td class="num">3</td><td>Lot detail</td><td>countdown (anti-snipe aware), photos, SOH, bid history (anonymous), place bid, standing maximum, EMI preview on refinance lots</td><td><code>…/[id]</code> · <code>…/state</code> · <code>…/bid</code> · <code>…/auto-bid</code></td></tr>
+    <tr><td class="num">4</td><td>My Bids</td><td>track leading / outbid positions</td><td><code>…/my-bids</code></td></tr>
+    <tr><td class="num">5</td><td>Purchases</td><td>amount due, pay by Razorpay, delivery tracking, refinance status</td><td><code>…/settlements</code> · <code>…/settlements/[id]/pay</code></td></tr>
+    <tr><td class="num">6</td><td>Public showcase (no login)</td><td>read-only live-lot list — no bidder data, no current bids</td><td><code>/auctions</code> → <code>/api/public/auctions</code></td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 6 ================= -->
+<section id="s6">
+  <div class="sec-head"><span class="sec-num">6</span><h2>Data model</h2></div>
+
+  <figure>
+    <svg viewBox="0 0 1160 470" role="img" aria-label="Entity diagram: recovery_batteries joins auction lots through auction_lot_items; lots carry visibility and audience tables; bids and settlements reference dealers; settlements link to loan_sanctions for refinance.">
+      <defs>
+        <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink)" opacity=".75"/>
+        </marker>
+      </defs>
+      <!-- recovery_batteries -->
+      <rect class="sv-box" x="40" y="40" width="205" height="118" rx="8"/>
+      <rect class="sv-tbl-hd" x="40" y="40" width="205" height="26" rx="8"/>
+      <text class="sv-t" x="142" y="58" text-anchor="middle">recovery_batteries</text>
+      <text class="sv-mono" x="52" y="84">serial UNIQUE · model · capacity</text>
+      <text class="sv-mono" x="52" y="100">condition_grade · lat/lng · city/state</text>
+      <text class="sv-mono" x="52" y="116">image_urls[] (S3) · state_code</text>
+      <text class="sv-mono" x="52" y="132">loan_sanction_id → source loan</text>
+      <text class="sv-mono" x="52" y="148">E-232</text>
+      <!-- pipeline -->
+      <rect class="sv-box" x="40" y="200" width="205" height="86" rx="8"/>
+      <rect class="sv-tbl-hd" x="40" y="200" width="205" height="26" rx="8"/>
+      <text class="sv-t" x="142" y="218" text-anchor="middle">nbfc_recovery_pipeline</text>
+      <text class="sv-mono" x="52" y="244">stage (5-state machine)</text>
+      <text class="sv-mono" x="52" y="260">battery_id → battery master</text>
+      <text class="sv-mono" x="52" y="276">E-026/036 + E-232</text>
+      <!-- refurb -->
+      <rect class="sv-box" x="40" y="330" width="205" height="102" rx="8"/>
+      <rect class="sv-tbl-hd" x="40" y="330" width="205" height="26" rx="8"/>
+      <text class="sv-t" x="142" y="348" text-anchor="middle">refurbishment_jobs</text>
+      <text class="sv-mono" x="52" y="374">checklist jsonb · workshop</text>
+      <text class="sv-mono" x="52" y="390">est vs actual cost · accessories</text>
+      <text class="sv-mono" x="52" y="406">status · returned_at</text>
+      <text class="sv-mono" x="52" y="422">E-233</text>
+      <!-- lot_items -->
+      <rect class="sv-box" x="330" y="76" width="180" height="84" rx="8"/>
+      <rect class="sv-tbl-hd" x="330" y="76" width="180" height="26" rx="8"/>
+      <text class="sv-t" x="420" y="94" text-anchor="middle">auction_lot_items</text>
+      <text class="sv-mono" x="342" y="120">lot_id · battery_id (m:n)</text>
+      <text class="sv-mono" x="342" y="136">condition: new | refurb | partial</text>
+      <text class="sv-mono" x="342" y="152">E-234</text>
+      <!-- visibility -->
+      <rect class="sv-box" x="330" y="212" width="180" height="86" rx="8"/>
+      <rect class="sv-tbl-hd" x="330" y="212" width="180" height="26" rx="8"/>
+      <text class="sv-t" x="420" y="230" text-anchor="middle">auction_lot_visibility</text>
+      <text class="sv-mono" x="342" y="256">scope · states[] · cities[]</text>
+      <text class="sv-mono" x="342" y="272">centre lat/lng · radius_km</text>
+      <text class="sv-mono" x="342" y="288">E-234</text>
+      <!-- audience -->
+      <rect class="sv-box" x="330" y="336" width="180" height="86" rx="8"/>
+      <rect class="sv-tbl-hd" x="330" y="336" width="180" height="26" rx="8"/>
+      <text class="sv-t" x="420" y="354" text-anchor="middle">auction_lot_audience</text>
+      <text class="sv-mono" x="342" y="380">dealer_id · channel</text>
+      <text class="sv-mono" x="342" y="396">delivery status · sent_at</text>
+      <text class="sv-mono" x="342" y="412">E-234 · frozen at publish</text>
+      <!-- lots -->
+      <rect class="sv-box-accent" x="590" y="40" width="215" height="150" rx="8"/>
+      <rect class="sv-tbl-hd" x="590" y="40" width="215" height="26" rx="8"/>
+      <text class="sv-t" x="697" y="58" text-anchor="middle">auction_lots</text>
+      <text class="sv-mono" x="602" y="84">lot_code · status · title</text>
+      <text class="sv-mono" x="602" y="100">seller_tenant_id · auction_type</text>
+      <text class="sv-mono" x="602" y="116">starts_at · ends_at · published_at</text>
+      <text class="sv-mono" x="602" y="132">base_price · bid_increment</text>
+      <text class="sv-mono" x="602" y="148">reserve_price · anti_snipe_seconds</text>
+      <text class="sv-mono" x="602" y="164">E-038 + E-232</text>
+      <text class="sv-mono" x="602" y="180">⚠ SQL default still 'live'</text>
+      <!-- bids -->
+      <rect class="sv-box" x="590" y="240" width="215" height="100" rx="8"/>
+      <rect class="sv-tbl-hd" x="590" y="240" width="215" height="26" rx="8"/>
+      <text class="sv-t" x="697" y="258" text-anchor="middle">auction_bids (+ auto_bids)</text>
+      <text class="sv-mono" x="602" y="284">bidder_dealer_id · bidder_kind</text>
+      <text class="sv-mono" x="602" y="300">amount · placed_at · append-only</text>
+      <text class="sv-mono" x="602" y="316">⚠ tenant_id = SELLER's tenant</text>
+      <text class="sv-mono" x="602" y="332">E-038/093 + E-232/234</text>
+      <!-- accounts -->
+      <rect class="sv-box" x="890" y="40" width="220" height="64" rx="8"/>
+      <rect class="sv-tbl-hd" x="890" y="40" width="220" height="26" rx="8"/>
+      <text class="sv-t" x="1000" y="58" text-anchor="middle">accounts (dealers)</text>
+      <text class="sv-mono" x="902" y="84">role='dealer' · active · approved</text>
+      <!-- settlements -->
+      <rect class="sv-box" x="890" y="150" width="220" height="134" rx="8"/>
+      <rect class="sv-tbl-hd" x="890" y="150" width="220" height="26" rx="8"/>
+      <text class="sv-t" x="1000" y="168" text-anchor="middle">auction_settlements</text>
+      <text class="sv-mono" x="902" y="194">lot_id UNIQUE · final_price</text>
+      <text class="sv-mono" x="902" y="210">winner_dealer_id · status</text>
+      <text class="sv-mono" x="902" y="226">payment_ref · provider · paid_at</text>
+      <text class="sv-mono" x="902" y="242">failure_reason (unused — G4)</text>
+      <text class="sv-mono" x="902" y="258">refinance_loan_id</text>
+      <text class="sv-mono" x="902" y="274">E-039 + E-252 ⚠ not on prod</text>
+      <!-- loan_sanctions -->
+      <rect class="sv-box" x="890" y="330" width="220" height="78" rx="8"/>
+      <rect class="sv-tbl-hd" x="890" y="330" width="220" height="26" rx="8"/>
+      <text class="sv-t" x="1000" y="348" text-anchor="middle">loan_sanctions</text>
+      <text class="sv-mono" x="902" y="374">refinance sanction, used-asset amt</text>
+      <text class="sv-mono" x="902" y="390">status='sanctioned' (stops here — G5)</text>
+      <!-- edges -->
+      <path class="sv-edge" d="M245 118 H330" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="256" y="112">battery_id</text>
+      <path class="sv-edge" d="M142 200 V166" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="150" y="186">battery_id</text>
+      <path class="sv-edge" d="M142 330 V294" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="150" y="316">battery_id</text>
+      <path class="sv-edge" d="M510 118 H590" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="522" y="112">lot_id</text>
+      <path class="sv-edge" d="M510 255 H550 V150 H582" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="516" y="248">lot_id</text>
+      <path class="sv-edge" d="M510 379 H566 V170 H582" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="516" y="372">lot_id</text>
+      <path class="sv-edge" d="M697 240 V198" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="705" y="222">lot_id</text>
+      <path class="sv-edge" d="M805 266 H850 V72 H882" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="812" y="260">bidder_dealer_id</text>
+      <path class="sv-edge" d="M805 120 H860 V190 H882" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="812" y="114">lot_id (1:1)</text>
+      <path class="sv-edge" d="M1000 150 V112" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="1008" y="134">winner_dealer_id</text>
+      <path class="sv-edge-dash" d="M1000 284 V322" marker-end="url(#ar4)"/>
+      <text class="sv-lbl" x="1008" y="308">refinance_loan_id</text>
+    </svg>
+    <figcaption>Figure 4 — the auction data model. Accent = the two hubs. ⚠ marks the two live landmines: the lot-status SQL default and the seller-tenant semantics on bids (both documented in <code>schema.ts</code>).</figcaption>
+  </figure>
+
+  <h3>Migration ledger</h3>
+  <div class="tbl"><table>
+    <tr><th>Migration</th><th>Adds</th><th>Sandbox (db-1)</th><th>Production (db-2)</th></tr>
+    <tr><td><code>E-232</code></td><td>catch-up DDL for the 6 legacy auction/recovery tables · <code>recovery_batteries</code> · bidder re-point (<code>bidder_dealer_id</code>, <code>bidder_kind</code>) · lot columns (<code>seller_tenant_id</code>, <code>auction_type</code>, <code>starts_at</code>, <code>anti_snipe_seconds</code>, <code>reserve_price</code>) + due-date partial indexes</td><td><span class="pill done">APPLIED</span></td><td><span class="pill done">APPLIED</span></td></tr>
+    <tr><td><code>E-233</code></td><td><code>refurbishment_jobs</code> · evaluation <code>photo_urls[]</code>, <code>condition_grade</code></td><td><span class="pill done">APPLIED</span></td><td><span class="pill done">APPLIED</span></td></tr>
+    <tr><td><code>E-234</code></td><td><code>auction_lot_items</code> · <code>auction_lot_visibility</code> · <code>auction_lot_audience</code> · auto-bid re-key</td><td><span class="pill done">APPLIED</span></td><td><span class="pill done">APPLIED</span></td></tr>
+    <tr><td><code>E-252</code></td><td>settlement <code>payment_ref</code> · <code>payment_provider</code> · <code>paid_at</code> · <code>refinance_loan_id</code> · <code>failure_reason</code></td><td><span class="pill done">APPLIED</span></td><td><span class="pill missing">NOT APPLIED</span></td></tr>
+    <tr><td><code>E-253</code></td><td>removes the five DEMO-LOT rows (E-129 seed)</td><td><span class="pill done">APPLIED</span></td><td><span class="pill missing">NOT APPLIED</span></td></tr>
+  </table></div>
+  <div class="callout miss"><b>Deploy blocker:</b> E-252 must be applied to production <em>before</em> this branch deploys — <code>listSettlements()</code> reads the new columns with a bare <code>db.select()</code>, so the NBFC recovery page and the dealer purchases screen 500 on first load without it. Applier: <code>scripts/apply-e252-e253.mjs</code>.</div>
+</section>
+
+<!-- ================= 7 ================= -->
+<section id="s7">
+  <div class="sec-head"><span class="sec-num">7</span><h2>API inventory — 45 routes</h2></div>
+  <h3>Dealer (9)</h3>
+  <div class="tbl"><table>
+    <tr><th>Route</th><th>Purpose</th></tr>
+    <tr><td><code>GET /api/dealer/auctions</code></td><td>browse lots visible to this dealer (audience-filtered)</td></tr>
+    <tr><td><code>GET …/auctions/[id]</code> · <code>…/state</code></td><td>lot detail (15&nbsp;s) · live poll: current bid, countdown, own position (2&nbsp;s)</td></tr>
+    <tr><td><code>POST …/auctions/[id]/bid</code></td><td><strong>place a binding bid</strong> — the live bidding path</td></tr>
+    <tr><td><code>POST/DELETE …/auctions/[id]/auto-bid</code></td><td>set / cancel a standing maximum</td></tr>
+    <tr><td><code>GET …/auctions/my-bids</code> · <code>…/facets</code></td><td>bid history · filter facets for the browser</td></tr>
+    <tr><td><code>GET …/auctions/settlements</code> · <code>POST/PATCH …/settlements/[id]/pay</code></td><td>won-lot settlements · Razorpay intent + verify</td></tr>
+  </table></div>
+  <h3>NBFC seller (13) + recovery (8)</h3>
+  <div class="tbl"><table>
+    <tr><th>Route</th><th>Purpose</th></tr>
+    <tr><td><code>/api/nbfc/auction/drafts</code> · <code>…/lots</code> · <code>…/lots/[id]</code> · <code>…/lots/[id]/items</code></td><td>draft CRUD · seller lot list/detail · add/remove batteries</td></tr>
+    <tr><td><code>POST …/lots/[id]/publish</code></td><td><strong>publish</strong>: validate window, resolve + freeze audience, flip status</td></tr>
+    <tr><td><code>POST …/lots/[id]/approve-winner</code></td><td>seller awards the winning bid</td></tr>
+    <tr><td><code>…/lots/[id]/bid</code></td><td><strong>403 — withdrawn</strong> (dealers only, source BRD §9)</td></tr>
+    <tr><td><code>…/batteries/lottable</code> · <code>…/audience/preview</code></td><td>eligible batteries · dry-run a visibility rule</td></tr>
+    <tr><td><code>…/settlements</code> · <code>…/settlements/[id]</code></td><td>settlement ledger · status advance (payment-gated)</td></tr>
+    <tr><td><code>POST/DELETE …/settlements/[id]/payment</code></td><td>record offline payment / abandon <em>(no UI yet — G2)</em></td></tr>
+    <tr><td><code>POST …/settlements/[id]/refinance</code></td><td>raise the refinance sanction <em>(no UI yet — G3)</em></td></tr>
+    <tr><td><code>/api/nbfc/recovery</code> · <code>…/[id]/stage</code> · <code>…/[id]/evaluation</code></td><td>pipeline list · stage transition (SOH-guarded) · 3-step evaluation</td></tr>
+    <tr><td><code>…/recovery/batteries</code> (+ <code>[id]/photos</code>) · <code>…/refurbishment</code> (+ <code>[id]</code>)</td><td>battery master + photos · refurbishment jobs</td></tr>
+    <tr><td><code>/api/nbfc/actions/flag-for-recovery</code></td><td>push a delinquent loan into the pipeline</td></tr>
+  </table></div>
+  <h3>Admin (12) · Public &amp; cron (2)</h3>
+  <div class="tbl"><table>
+    <tr><th>Route</th><th>Purpose</th></tr>
+    <tr><td><code>/api/admin/nbfc/auction/lots</code> · <code>…/analytics</code> · <code>…/health</code></td><td>all-lot table · KPI analytics · scheduler health</td></tr>
+    <tr><td><code>…/lot/{pause, resume, extend-time, reduce-time, reserve-price, approve-winning-bid}</code></td><td>supervision actions (reason required; destructive ones MFA-gated)</td></tr>
+    <tr><td><code>…/lot/cancel/{request, approvals, approve}</code></td><td>dual-approval cancellation ledger</td></tr>
+    <tr><td><code>GET /api/public/auctions</code></td><td>unauthenticated shop window — no bidder data, no reserve, no current bid</td></tr>
+    <tr><td><code>GET/POST /api/cron/auction/tick</code></td><td>HTTP trigger for the scheduler (backs up the 15&nbsp;s in-process ticker)</td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 8 ================= -->
+<section id="s8">
+  <div class="sec-head"><span class="sec-num">8</span><h2>BRD compliance matrix — all 25 points</h2></div>
+  <p>Every point of the source Battery Auction BRD, verified against the code on 20 Aug 2026. <strong>19 done, 5 partial, 1 deferred — nothing is unbuilt.</strong></p>
+  <div class="tbl"><table>
+    <tr><th>§</th><th>Requirement</th><th>Status</th><th>Evidence / remaining work</th></tr>
+    <tr><td class="num">2</td><td>End-to-end business flow</td><td><span class="pill done">DONE</span></td><td>all seven stages wired, Figure 1</td></tr>
+    <tr><td class="num">3</td><td>Recovery capture: serial, images, condition, location, date</td><td><span class="pill done">DONE</span></td><td><code>recovery_batteries</code> + <code>BatteryRegister.tsx</code></td></tr>
+    <tr><td class="num">4</td><td>Inspection module + statuses</td><td><span class="pill done">DONE</span></td><td>3-step wizard, photos, <code>partial_working</code> grade, server-side SOH gates</td></tr>
+    <tr><td class="num">5</td><td>Refurbishment request → repair → return</td><td><span class="pill done">DONE</span></td><td><code>RefurbishmentConsole.tsx</code> + <code>refurbishment_jobs</code>; bypass arc respected</td></tr>
+    <tr><td class="num">6</td><td>Battery types per item (new / refurbished / partial; EV later)</td><td><span class="pill done">DONE</span></td><td><code>auction_lot_items.condition</code></td></tr>
+    <tr><td class="num">7</td><td>Auction creation screen, fixed windows</td><td><span class="pill done">DONE</span></td><td><code>LotComposer.tsx</code>; draft-first; 2/12/24/48&nbsp;h validated server-side</td></tr>
+    <tr><td class="num">8</td><td>Visibility: India / states / cities / radius</td><td><span class="pill done">DONE</span></td><td><code>audience.ts</code> + frozen snapshot + reach preview</td></tr>
+    <tr><td class="num">9</td><td><strong>Dealers only — never other NBFCs</strong></td><td><span class="pill done">DONE</span></td><td><code>bidder_dealer_id</code> end-to-end; NBFC route 403; exclusion by role</td></tr>
+    <tr><td class="num">10</td><td>Dealer auction dashboard</td><td><span class="pill done">DONE</span></td><td>browser + detail + my-bids + purchases</td></tr>
+    <tr><td class="num">11</td><td>Bidding rules; highest bid visible, names hidden</td><td><span class="pill done">DONE</span></td><td>increment + binding confirm + anti-snipe + live proxy engine; anonymous projection</td></tr>
+    <tr><td class="num">12</td><td>Winner selection — suggested, seller approves</td><td><span class="pill done">DONE</span></td><td>seller <code>approve-winner</code> + admin route + Control Centre UI</td></tr>
+    <tr><td class="num">13</td><td>Auction types: cash / cash + refinance</td><td><span class="pill partial">PARTIAL</span></td><td>type + EMI preview done; <strong>refinance trigger has no UI</strong> (G3)</td></tr>
+    <tr><td class="num">14</td><td>Refinance a refurbished battery</td><td><span class="pill partial">PARTIAL</span></td><td><code>createRefinanceSanction()</code> complete; no caller; stops at <em>sanctioned</em> (G5)</td></tr>
+    <tr><td class="num">15</td><td>Accessories must be new (charger, harness, SOC meter)</td><td><span class="pill done">DONE</span></td><td>required accessories block, per-unit cost, rolled into base price</td></tr>
+    <tr><td class="num">16</td><td>Public website auction page</td><td><span class="pill partial">PARTIAL</span></td><td>built at <code>/auctions</code>; <strong>zero inbound links</strong> (G7)</td></tr>
+    <tr><td class="num">17</td><td>Notify: WhatsApp / SMS / email / dashboard</td><td><span class="pill partial">PARTIAL</span></td><td>3 of 4 live; SMS returns <code>skipped</code> pending DLT (G8)</td></tr>
+    <tr><td class="num">18</td><td>Dashboard carousel of live auctions</td><td><span class="pill done">DONE</span></td><td><code>LiveAuctionsStrip.tsx</code> on the dealer home</td></tr>
+    <tr><td class="num">19</td><td>Paid promotion (revenue model)</td><td><span class="pill deferred">DEFERRED</span></td><td>deliberate; cheap to add once scheduled (§10)</td></tr>
+    <tr><td class="num">20</td><td>Images: front, back, side, serial, damage</td><td><span class="pill done">DONE</span></td><td>captured at intake/inspection, S3, reused verbatim in the auction</td></tr>
+    <tr><td class="num">21</td><td>Filters: type, price, location, distance, ending soon, newest</td><td><span class="pill done">DONE</span></td><td>9 facet-driven filters + 5 sorts</td></tr>
+    <tr><td class="num">22</td><td>Eleven auction statuses</td><td><span class="pill partial">PARTIAL</span></td><td>all built except a <em>failed/cancelled</em> terminal on the sale (G4)</td></tr>
+    <tr><td class="num">23</td><td>Roles: NBFC, dealer, iTarang admin (+ workshop)</td><td><span class="pill partial">PARTIAL</span></td><td>three roles done; no separate workshop role — refurb runs under the NBFC login</td></tr>
+    <tr><td class="num">24</td><td>Phased roadmap</td><td><span class="pill done">DONE</span></td><td>phases 0–5 shipped; phase 6 is §9's remaining work</td></tr>
+    <tr><td class="num">25</td><td>Scheduler, bid engine, queue, audit, payments, storage</td><td><span class="pill partial">PARTIAL</span></td><td>scheduler/audit/S3/Razorpay live; <strong>MFA stub</strong> (G6); no engine tests (G10)</td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 9 ================= -->
+<section id="s9">
+  <div class="sec-head"><span class="sec-num">9</span><h2>Gap register &amp; development plan</h2></div>
+
+  <h3>Gap register</h3>
+  <div class="tbl"><table>
+    <tr><th>ID</th><th>Priority</th><th>Gap</th><th>Consequence today</th></tr>
+    <tr><td>G1</td><td><span class="pill p0">P0</span></td><td>E-252/E-253 not applied on production (db-2)</td><td>deploy → NBFC recovery page &amp; dealer purchases 500 (<code>column "payment_ref" does not exist</code>)</td></tr>
+    <tr><td>G2</td><td><span class="pill p1">P1</span></td><td>Offline-payment recording has no UI (route exists)</td><td>bank-transfer sales dead-end at <code>payment_pending</code>; abandon path unreachable</td></tr>
+    <tr><td>G3</td><td><span class="pill p1">P1</span></td><td>Refinance trigger has no UI (route + service exist)</td><td><code>cash_refinance</code> wins settle as plain cash</td></tr>
+    <tr><td>G4</td><td><span class="pill p2">P2</span></td><td>No <code>failed</code>/<code>cancelled</code> settlement state; abandon deletes the row</td><td>failed sales leave no record; <code>failure_reason</code> column unused</td></tr>
+    <tr><td>G5</td><td><span class="pill p2">P2</span></td><td>Refinance stops at <em>sanctioned</em> — no disbursement handoff</td><td>the new loan never reaches the loan book (blocked partly on decision D1)</td></tr>
+    <tr><td>G6</td><td><span class="pill p2">P2</span></td><td>Admin MFA verifier is a stub (any 6–8 digits pass)</td><td>destructive controls are a speed bump, not authentication</td></tr>
+    <tr><td>G7</td><td><span class="pill p3">P3</span></td><td>Public <code>/auctions</code> page has zero inbound links</td><td>discoverable only by typing the URL</td></tr>
+    <tr><td>G8</td><td><span class="pill p3">P3</span></td><td>SMS channel inert pending DLT template + sender ID</td><td>fan-out returns <code>skipped</code> for SMS</td></tr>
+    <tr><td>G9</td><td><span class="pill p3">P3</span></td><td>No <code>vercel.json</code> cron for <code>/api/cron/auction/tick</code></td><td>closer depends wholly on the pm2 in-process ticker — fine on the VPS; document it</td></tr>
+    <tr><td>G10</td><td><span class="pill p3">P3</span></td><td>Zero unit tests on the engine</td><td>anti-snipe × proxy × close-claim interaction is the highest-value untested logic</td></tr>
+    <tr><td>G11</td><td><span class="pill p3">P3</span></td><td>Code landmines: lot-status SQL default <code>'live'</code>; dead <code>AUCTION_WINDOW_DAYS=7</code> + <code>quantity:1</code> in <code>createLot.ts</code>; audience resolver full-scans <code>accounts</code>; hard-coded city-centroid table</td><td>latent bugs waiting for the next maintainer</td></tr>
+  </table></div>
+
+  <h3>Development plan — four phases</h3>
+  <div class="tbl"><table>
+    <tr><th>Phase</th><th>Scope</th><th>Effort</th><th>Done when (acceptance)</th></tr>
+    <tr>
+      <td><strong>A — Unblock prod</strong><br><span class="pill p0">G1</span></td>
+      <td>Run <code>scripts/apply-e252-e253.mjs</code> against production db-2 (explicit <code>DATABASE_URL</code>); verify via <code>information_schema</code>; tick both boxes in <code>MIGRATION_CHECKLIST.md</code>.</td>
+      <td>½ day</td>
+      <td>NBFC recovery page and dealer purchases load against production; re-running the script is a no-op.</td>
+    </tr>
+    <tr>
+      <td><strong>B — Close the money loop</strong><br><span class="pill p1">G2 · G3</span></td>
+      <td>(1) Offline-payment card on the seller settlement surface (<code>AuctionSettlementsTable</code> / <code>SellerLotDetail</code>): record reference + provider <code>offline</code>, and an abandon action — both against the existing <code>…/settlements/[id]/payment</code> route. (2) "Raise refinance loan" CTA on the seller settlement (visible when <code>auction_type = cash_refinance</code> and payment recorded), calling <code>…/settlements/[id]/refinance</code>; surface <code>refinance_loan_id</code> to both sides afterwards.</td>
+      <td>2–3 days</td>
+      <td>A bank-transfer sale reaches <em>delivered</em> without touching the DB by hand; a refinance win produces a visible <code>loan_sanctions</code> row.</td>
+    </tr>
+    <tr>
+      <td><strong>C — Harden the model</strong><br><span class="pill p2">G4 · G5 · G6</span></td>
+      <td>(1) Small additive migration extending the settlement status vocabulary with <code>failed</code>/<code>cancelled</code>; abandon becomes a transition writing <code>failure_reason</code>, not a DELETE. (2) Wire the MFA input to the real verifier used elsewhere in the app. (3) After decision D1: hand the refinance sanction into the disbursement flow.</td>
+      <td>3–4 days</td>
+      <td>An unpaid settlement can be closed out with a reason and stays queryable; a wrong MFA code is rejected; a sanctioned refinance shows up in the origination pipeline.</td>
+    </tr>
+    <tr>
+      <td><strong>D — Polish &amp; safety net</strong><br><span class="pill p3">G7–G11</span></td>
+      <td>Link <code>/auctions</code> (dealer login page + footer); register the DLT template and flip SMS on; unit tests for anti-snipe, proxy engine and close-claim (the three-way interaction first); clean the landmines (draft SQL default via additive migration, dead constants, quantity reconcile, SQL-side audience filter, extend the centroid table).</td>
+      <td>~1 week, parallelisable</td>
+      <td>All four channels deliver; <code>npm run type-check</code> + the new tests pass in CI; the landmine list in <code>schema.ts</code> comments is empty.</td>
+    </tr>
+  </table></div>
+  <p class="note">Sequencing: A must precede any production deploy of this branch. B and C are independent of each other; D can run alongside. Total: roughly <strong>two working weeks</strong> for one developer, less in parallel.</p>
+</section>
+
+<!-- ================= 10 ================= -->
+<section id="s10">
+  <div class="sec-head"><span class="sec-num">10</span><h2>Open business decisions</h2></div>
+  <div class="tbl"><table>
+    <tr><th>ID</th><th>Question</th><th>Context</th><th>Recommendation</th></tr>
+    <tr>
+      <td>D1</td>
+      <td><strong>Who owns the refinance loan?</strong></td>
+      <td>The code assumes the <em>selling</em> NBFC finances the battery again (flagged in <code>refinance.ts</code>). The alternative routes it competitively like a fresh origination.</td>
+      <td>Start with the selling NBFC (already built, simplest settlement story); revisit competitive routing once volumes justify it.</td>
+    </tr>
+    <tr>
+      <td>D2</td>
+      <td><strong>Should admin pre-approve a lot before it goes live?</strong></td>
+      <td>Today an NBFC publishes straight to live; admin supervises after the fact (pause / cancel / reserve).</td>
+      <td>Keep publish-direct — the supervision toolkit already covers abuse; a pre-approval gate would add hours of latency to 2-hour auctions.</td>
+    </tr>
+    <tr>
+      <td>D3</td>
+      <td><strong>When to build paid promotion (§19)?</strong></td>
+      <td>Deferred by design. It is a campaign row pointing at an existing lot plus a widened audience — no new pipeline.</td>
+      <td>Schedule after Phase B, once real dealers are bidding — promotion is worthless before there is an audience to promote to.</td>
+    </tr>
+  </table></div>
+</section>
+
+<footer>
+  <span>iTarang CRM · Battery Recovery &amp; Auction BRD v2 · 20 Aug 2026</span>
+  <span>Companion: <em>Battery Auction Walkthrough</em> (meeting explainer)</span>
+</footer>
+
+</div>

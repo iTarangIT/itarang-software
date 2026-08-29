@@ -55,6 +55,12 @@ function toDateString(d: Date): string {
  *                        disbursement txn so the projection is atomic).
  * @param loanSanctionId  `loan_sanctions.id` of the just-disbursed loan.
  */
+/** numeric(12,2) as a string, or null when the sanction carries no usable EMI. */
+function toMoney(v: unknown): string | null {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n.toFixed(2) : null;
+}
+
 export async function projectDisbursedLoan(
   tx: TxLike,
   loanSanctionId: string,
@@ -131,8 +137,18 @@ export async function projectDisbursedLoan(
       .where(eq(emiSchedules.loan_sanction_id, loan.id));
 
     if (existing === 0) {
+      // `amount` must be set: the EMI Tracker's "next due" predicate is
+      // `COALESCE(amount,0) - COALESCE(amount_paid,0) > 0`, so a row with a
+      // NULL amount is never "due" and the loan renders with no next
+      // instalment. Principal/interest split is left NULL on purpose — there
+      // is no amortisation model in this codebase to derive it from, and a
+      // guessed split is worse than none. Coerced defensively: this runs
+      // inside the dispatch transaction and must never throw.
+      const emiAmount = toMoney(loan.emi);
       const rows = Array.from({ length: tenure }, (_, i) => ({
         loan_sanction_id: loan.id,
+        emi_seq: i + 1,
+        amount: emiAmount,
         due_date: toDateString(addMonthsClamped(disbursedAt, i + 1)),
         status: "scheduled",
       }));

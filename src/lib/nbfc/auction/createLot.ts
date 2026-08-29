@@ -17,12 +17,14 @@
  * UNIQUE constraint — a duplicate insert would surface as a 23505 the caller
  * can choose to swallow).
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   auctionLots,
+  auctionLotItems,
   nbfcBatteryEvaluations,
   nbfcRecoveryPipeline,
+  recoveryBatteries,
 } from "@/lib/db/schema";
 
 type DbLike = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -95,6 +97,8 @@ export async function publishLotFromRecovery(
       id: nbfcRecoveryPipeline.id,
       battery_serial: nbfcRecoveryPipeline.battery_serial,
       estimated_recovery_value: nbfcRecoveryPipeline.estimated_recovery_value,
+      // [E-234] Needed to record the seeded draft's lot item.
+      battery_id: nbfcRecoveryPipeline.battery_id,
     })
     .from(nbfcRecoveryPipeline)
     .where(
@@ -174,7 +178,21 @@ export async function publishLotFromRecovery(
       base_price: basePrice.toFixed(2),
       bid_increment: bidIncrement.toFixed(2),
       ends_at: endsAt,
-      status: "live",
+      // [E-234] DRAFT, not live.
+      //
+      // This line used to publish a lot to the marketplace the instant an
+      // operator dragged a card to `ready_for_auction` — with a hard-coded
+      // 7-day window and quantity 1, neither of which the Battery Auction BRD
+      // allows (§7: 2/12/24/48 h, 48 h hard maximum; §6: a lot holds many
+      // batteries). Nobody chose to sell anything; a kanban column moved.
+      //
+      // The seeding behaviour is kept because it is genuinely useful — one
+      // draft per battery, ready to be renamed, merged with others, priced and
+      // published from the lot composer. What is gone is the publishing.
+      // See publishLot() in composeLot.ts for the deliberate step.
+      status: "draft",
+      // [E-232] The seller is knowable here and was being thrown away.
+      seller_tenant_id: input.tenant_id,
     })
     .onConflictDoNothing({ target: auctionLots.lot_code })
     .returning({
@@ -206,6 +224,47 @@ export async function publishLotFromRecovery(
       base_price: basePrice,
       ends_at: existing.ends_at.toISOString(),
     };
+  }
+
+  // [E-234] Record the battery as a lot ITEM.
+  //
+  // Without this the seeded draft is a lot with quantity 1 and nothing in it,
+  // so the composer's "is this battery already in an open lot?" check cannot
+  // see it and the same battery ends up in two lots. Guarded and best-effort:
+  // this runs inside transitionStage()'s transaction, and a battery that has no
+  // recovery_batteries row yet (pre-E-232 pipeline rows) must not fail the
+  // stage transition it is riding on.
+  if (pipeline.battery_id) {
+    await x
+      .insert(auctionLotItems)
+      .values({
+        lot_id: inserted.id,
+        battery_id: pipeline.battery_id,
+        condition: "refurbished",
+        item_price: basePrice.toFixed(2),
+      })
+      .onConflictDoNothing();
+
+    // And mark the battery itself as spoken for. Every OTHER way a battery
+    // reaches a lot — composeLot(), addLotItems() — flips this, and the whole
+    // product reads `lotted` as "already on a lot": the recovery board shows
+    // it, and the composer's picker used to hide on it alone. Seeding a draft
+    // here without the flip left a battery sitting on a live auction while
+    // still advertising itself as free stock, which is how the same battery
+    // ended up offered twice.
+    //
+    // Only from a sellable state, so a re-run cannot walk `sold` or `scrapped`
+    // backwards; the item insert above is idempotent for the same reason.
+    await x
+      .update(recoveryBatteries)
+      .set({ state_code: "lotted", updated_at: new Date() })
+      .where(
+        and(
+          eq(recoveryBatteries.id, pipeline.battery_id),
+          eq(recoveryBatteries.tenant_id, input.tenant_id),
+          inArray(recoveryBatteries.state_code, ["ready", "inspected"]),
+        ),
+      );
   }
 
   return {

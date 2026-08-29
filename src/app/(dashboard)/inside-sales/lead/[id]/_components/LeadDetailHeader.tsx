@@ -7,6 +7,8 @@ import { IntentBadge } from "../../../_components/IntentBadge";
 import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
 import { LeadStatusEditor, type StatusModalAction } from "../../../_components/LeadStatusEditor";
 import { OwnerIndicator } from "../../../_components/OwnerIndicator";
+import { NeodoveTag } from "@/components/leads/neodove-tag";
+import { SentByStamp } from "@/components/leads/sent-by-stamp";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin"];
@@ -96,6 +98,9 @@ export function LeadDetailHeader({
                             onUpdated={onUpdated}
                         />
                         <IntentBadge score={lead.final_intent_score} />
+                        {/* Same chip as the queue row, so a lead does not gain or
+                            lose its NeoDove provenance by being opened. */}
+                        <NeodoveTag syncStatus={lead.neodove_sync_status} />
                     </div>
                     {lead.shop_name && lead.dealer_name && (
                         <div className="text-xs text-gray-500 mt-0.5">{lead.shop_name}</div>
@@ -118,6 +123,10 @@ export function LeadDetailHeader({
                             currentOwnerName={lead.current_owner_name}
                             viewerId={viewerId}
                             asmName={lead.asm_name}
+                        />
+                        <SentByStamp
+                            assignedBy={lead.assigned_by}
+                            currentOwnerId={lead.current_owner_id}
                         />
                     </div>
                 </div>

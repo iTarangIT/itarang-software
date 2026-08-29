@@ -4,6 +4,7 @@
 // export pattern (src/app/api/scraper/runs/[id]/export.xlsx/route.ts) so
 // the user gets a consistent file format across the two history views.
 
+import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
 import { db } from "@/lib/db";
 import {
   dialerCampaigns,
@@ -13,6 +14,11 @@ import {
 } from "@/lib/db/schema";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
+import {
+  bucketFor,
+  resolveDurationBucketConfig,
+} from "@/lib/ai-dialer/call-duration/config-store";
 import { asc, eq } from "drizzle-orm";
 import ExcelJS from "exceljs";
 
@@ -47,6 +53,41 @@ function transcriptCell(t: string | null | undefined): string {
     : trimmed;
 }
 
+// One place the export derives the reason, so the sheet and the screen agree.
+function failureReasonOf(r: {
+  status: string | null;
+  call_outcome: string | null;
+  transcript: string | null;
+  log_status: string | null;
+  log_call_status: string | null;
+}) {
+  return deriveFailureReason({
+    status: r.status,
+    callOutcome: r.call_outcome,
+    hasTranscript: r.transcript != null,
+    providerStatus: r.log_status,
+    bandCallStatus: r.log_call_status,
+  });
+}
+
+/** The same duration the lead table, the drawer and the histogram all show. */
+function durationOf(r: {
+  call_duration: number | null;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  transcript: string | null;
+}) {
+  // `transcript` is what licenses the wall-clock fallback. Without it a
+  // trigger_failed lead exports the seconds the dialer spent failing as though
+  // a dealer had talked for them.
+  return deriveDurationSeconds(
+    r.call_duration,
+    r.started_at,
+    r.completed_at,
+    r.transcript != null,
+  );
+}
+
 export const GET = withErrorHandler(
   async (
     _req: Request,
@@ -59,11 +100,17 @@ export const GET = withErrorHandler(
       "sales_manager",
       "sales_executive",
       "admin",
+      // Same reason as the advance route: the Export Excel button ships with
+      // the campaign detail view, which these two dashboards now mount.
+      "inside_sales_rep",
+      "asm",
     ]);
 
     const { id } = await params;
 
-    const [campaignRow, leadRows] = await Promise.all([
+    // Resolved alongside the rows so the sheet's bucket labels are the same
+    // ones the on-screen histogram was drawn with.
+    const [campaignRow, leadRows, { buckets: durationBuckets }] = await Promise.all([
       db
         .select()
         .from(dialerCampaigns)
@@ -91,6 +138,12 @@ export const GET = withErrorHandler(
           // backfills transcripts for current AND previous campaigns from
           // whatever is already persisted in ai_call_logs.
           transcript: aiCallLogs.transcript,
+          // Same already-joined row — the evidence behind the failure reason.
+          log_status: aiCallLogs.status,
+          log_call_status: aiCallLogs.call_status,
+          // Same already-joined row again. Duration is derived rather than read
+          // straight off this column — see deriveDurationSeconds.
+          call_duration: aiCallLogs.call_duration,
         })
         .from(dialerCampaignLeads)
         .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
@@ -100,6 +153,7 @@ export const GET = withErrorHandler(
         )
         .where(eq(dialerCampaignLeads.campaign_id, id))
         .orderBy(asc(dialerCampaignLeads.queue_position)),
+      resolveDurationBucketConfig(),
     ]);
 
     const workbook = new ExcelJS.Workbook();
@@ -145,11 +199,21 @@ export const GET = withErrorHandler(
       { header: "State", key: "state", width: 16 },
       { header: "Status", key: "status", width: 14 },
       { header: "Call Outcome", key: "outcome", width: 22 },
+      // Why the call produced no conversation, in the same words the campaign
+      // table shows. The raw outcome column stays beside it: the derived reason
+      // is for reading, the raw string is for debugging.
+      { header: "Failure Reason", key: "failure_reason", width: 24 },
+      { header: "Retryable", key: "retryable", width: 11 },
       { header: "Intent Score", key: "intent_score", width: 14 },
       { header: "Lead Score", key: "final_intent_score", width: 14 },
       { header: "Current Status", key: "current_status", width: 16 },
       { header: "Started", key: "started_at", width: 22 },
       { header: "Ended", key: "completed_at", width: 22 },
+      // Duration sits with the timestamps it is derived from, and before the
+      // debug columns. Written as a NUMBER, not "0m 12s", so the column sorts
+      // and averages in Excel — the point of exporting it at all.
+      { header: "Duration (s)", key: "duration_seconds", width: 14 },
+      { header: "Duration Bucket", key: "duration_bucket", width: 16 },
       { header: "Call Id", key: "call_id", width: 28 },
       { header: "Transcription", key: "transcription", width: 80 },
     ];
@@ -164,11 +228,21 @@ export const GET = withErrorHandler(
         state: r.state ?? "—",
         status: r.status,
         outcome: r.call_outcome ?? "—",
+        failure_reason: failureReasonOf(r)?.label ?? "—",
+        // Blank rather than "No" for a successful call — "No" would read as
+        // "do not retry this", which is a different statement from "this one
+        // worked".
+        retryable: (() => {
+          const fr = failureReasonOf(r);
+          return fr ? (fr.retryable ? "Yes" : "No") : "—";
+        })(),
         intent_score: r.intent_score ?? "—",
         final_intent_score: r.final_intent_score ?? "—",
         current_status: r.current_status ?? "—",
         started_at: fmt(r.started_at),
         completed_at: fmt(r.completed_at),
+        duration_seconds: durationOf(r) ?? "—",
+        duration_bucket: bucketFor(durationOf(r), durationBuckets)?.label ?? "—",
         call_id: r.bolna_call_id ?? "—",
         transcription: transcriptCell(r.transcript),
       });

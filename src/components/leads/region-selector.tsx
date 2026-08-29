@@ -90,7 +90,13 @@ export function RegionSelector({
   // Voice agent the modal currently has selected — used when a list draft is
   // started from the Lists tab.
   provider?: "bolna" | "elevenlabs";
-  onStartList?: (campaignId: string) => Promise<void> | void;
+  // E-254 — `schedule` is the calling window chosen in the Lists tab's own
+  // picker; this component only forwards it. Passed through rather than handled
+  // here because RegionSelector knows nothing about campaigns.
+  onStartList?: (
+    campaignId: string,
+    schedule?: unknown,
+  ) => Promise<void> | void;
 }) {
   const [tab, setTab] = useState<"saved" | "custom" | "list">("saved");
 

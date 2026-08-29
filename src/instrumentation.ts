@@ -23,6 +23,14 @@ export async function register() {
       startBuybackDispatchTicker,
       startBuybackDedupTicker,
       startBuybackGatewayTicker,
+      startDriveExpenseTicker,
+      startOemPriceSweepTicker,
+      startAuctionTicker,
+      startScraperQueueTicker,
+      startKycAutoApprovalTicker,
+      startNbfcRequestSlaTicker,
+      startRecordingTranscriptionTicker,
+      startDriveMirrorTicker,
       startOpsMonitorTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
@@ -30,6 +38,14 @@ export async function register() {
     await startBuybackDispatchTicker();
     await startBuybackDedupTicker();
     await startBuybackGatewayTicker();
+    await startDriveExpenseTicker();
+    await startOemPriceSweepTicker();
+    await startAuctionTicker();
+    await startScraperQueueTicker();
+    await startKycAutoApprovalTicker();
+    await startNbfcRequestSlaTicker();
+    await startRecordingTranscriptionTicker();
+    await startDriveMirrorTicker();
     // Ops Console collector runner (E-210). Last, and its own kickoff is
     // staggered 75s out, so a cold boot finishes wiring the app before the
     // monitoring starts querying the database it monitors.

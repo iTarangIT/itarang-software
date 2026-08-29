@@ -15,7 +15,7 @@
 // Decentro / Meta network calls — that would tie up a connection from the small
 // (max 5) pool for seconds. Rapid interleaved uploads are a Phase-2 concern.
 
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
@@ -59,6 +59,10 @@ import {
 // runDealerTurn when switching back to the dealer-orchestrator increment.
 // import { runDealerTurn } from "./dealer-orchestrator";
 import { resolveKnownContact, resolveWhatsAppDealer } from "./dealer-identity";
+import {
+  type WhatsAppOperator,
+  resolveOperator,
+} from "./operator-identity";
 import { classifyDocument } from "./extraction";
 import { answerGeneralQuestion } from "./general-info";
 import { classifyIntent } from "./intent";
@@ -82,7 +86,9 @@ import {
   getDealerProductOptions,
   setLeadProduct,
   getDealerDraft,
+  getDealerLeadSummary,
   listDealerDrafts,
+  classifyCustomerLead,
   loadApplication,
   normalizeMobile,
   requiresConsent,
@@ -90,11 +96,52 @@ import {
   resolveHouseDealer,
 } from "./customer-lead";
 import { maskAccount, maskGstin, maskIfsc, maskPan } from "./masking";
+import {
+  notifyOnboardingChatStarted,
+  notifyOnboardingDocsUploaded,
+} from "@/lib/notifications/events";
 import { removeMedia, saveMedia } from "./storage";
+// Session access + outbound messaging live in session-store.ts (E-214) so the
+// operator state machine can reuse them without importing this module.
+import {
+  type Ctx,
+  type SessionRow,
+  attachInboundToSession,
+  loadSession,
+  mergeContext,
+  patchApplication,
+  reply,
+  replyList,
+  setSession,
+} from "./session-store";
+// E-264 — journey phases register their states here instead of adding cases to
+// the two console switches. Type-only + a lookup; no phase module is imported
+// at eval time, so the one-way dependency rule this file relies on is intact.
+import { leadStateHandler, leadStateResumer, rerendersOnGreeting } from "./lead-states";
+// Step-4 extra documents. Imported directly (not only via lead-phases) because
+// the ladder below offers the step and the module hands the turn back through
+// registerExtraDocsContinuation — it cannot import this file itself.
+import {
+  askExtraDocs,
+  openExtraDocs,
+  registerExtraDocsContinuation,
+} from "./extra-docs-flow";
+// Static side-effect import: registers every shipped journey phase. Must stay
+// a static import — a dynamic one can fail silently and leave the registry empty.
+import { loadLeadPhases } from "./lead-phases";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
+import {
+  DC_ACTIVE_BATT,
+  onActiveBatteryPick,
+  showActiveBatteries,
+} from "./active-batteries";
+// Defined in ./labels so admin API routes and client components can read it
+// without importing this module (and its whole dependency tree) at eval time.
+// Re-exported here because three call sites already import it from here.
+import { PLACEHOLDER_COMPANY } from "./labels";
+export { PLACEHOLDER_COMPANY };
 
 const MIN_CONFIDENCE = Number(process.env.WHATSAPP_MIN_CONFIDENCE ?? 0.55);
-const PLACEHOLDER_COMPANY = "WhatsApp onboarding (pending)";
 
 const CONFIRM_WORDS = /^(confirm|confirmed|ok|okay|yes|yep|y|haan|ha|sahi)$/i;
 const CHANGE_WORDS = /^(change|edit|wrong|correct|no|nahi|galat)$/i;
@@ -109,9 +156,30 @@ const WANTS_TYPE_CHANGE = /\b(company\s*type|wrong|galat|change|update)\b/i;
 const GREETING_TRIGGERS =
   /^(hi+|hey+|hello+|helo|hii+|onboard(ing)?|start|begin|restart|namaste|menu)$/i;
 
+/**
+ * The subset of the greeting/menu triggers that unambiguously means "leave this
+ * step", as opposed to a bare hello.
+ *
+ * A greeting arriving inside a tap-driven journey step re-renders that step
+ * (see runConsoleTurn / runCustomerTurn) instead of clearing ctx.lead. These
+ * words are the deliberate way out, so they must keep escaping — otherwise a
+ * customer who actually wants the menu is trapped in a step that answers every
+ * message by re-sending itself.
+ */
+// Hindi / Hinglish synonyms sit beside the English ones so a bot switched to
+// Hindi at /admin/settings/whatsapp/language still understands the escape words.
+const EXPLICIT_ESCAPE =
+  /^(menu|home|back|exit|cancel|restart|start over|मेनू|मेन्यू|वापस|पीछे|रद्द|wapas|peeche|radd|band karo|बंद करो)$/i;
+
+/** The lead a journey session is pointing at, if any. */
+function leadIdOf(session: SessionRow): string | undefined {
+  const ctx = (session.context ?? {}) as { lead?: { leadId?: string } };
+  return ctx.lead?.leadId;
+}
+
 // Global "get me out of here" words. A dealer/customer who types any of these
 // ends the current flow and is returned to the start (see runTurn → handleStop).
-const STOP_TRIGGERS = /^(stop|end|exit)$/i;
+const STOP_TRIGGERS = /^(stop|end|exit|रुको|रोको|बंद|band|ruko|roko|khatam|खत्म)$/i;
 
 // States that a stop word must NOT wipe: submitted / mid-correction / rejected
 // applications are admin-owned, so an "exit" there keeps the state's own reply.
@@ -130,7 +198,7 @@ const UPLOAD_MODE_BUTTONS: ReplyButton[] = [
 // the item for manual admin follow-up and continue instead of looping. Only
 // checked in COLLECTING_DOC, so a "No" to the financing question is unaffected.
 const SKIP_WORDS =
-  /(^|\b)(no|nope|nah|nahi+|naa+|n\/?a|skip|next|proceed|continue|move\s*(on|ahead|forward|further)|don'?t\s*have|do\s*not\s*have|have\s*not|haven'?t|not?\s*avai\w*|un\s*avai\w*|no\s*(doc|document|more)|only\s*this|this\s*(is\s*)?(all|only)|have\s*this\s*only|that'?s\s*all|nothing\s*else|can'?t\s*(get|provide|share|do)|cannot\s*(get|provide|share|do)|nahi\s*hai|aage\s*(badho|chalo))(\b|$)/i;
+  /(^|\b)(no|nope|nah|nahi+|naa+|nahin|नहीं|नही|n\/?a|skip|chhodo|chodo|छोड़ो|छोड़ दो|aage|आगे|next|proceed|continue|move\s*(on|ahead|forward|further)|don'?t\s*have|do\s*not\s*have|have\s*not|haven'?t|not?\s*avai\w*|un\s*avai\w*|no\s*(doc|document|more)|only\s*this|this\s*(is\s*)?(all|only)|have\s*this\s*only|that'?s\s*all|nothing\s*else|can'?t\s*(get|provide|share|do)|cannot\s*(get|provide|share|do)|nahi\s*hai|aage\s*(badho|chalo))(\b|$)/i;
 
 // Company-type choices shown as tappable reply buttons (WhatsApp allows ≤3).
 // The button id IS the canonical CompanyType, so a tap maps straight through
@@ -210,8 +278,8 @@ function financeAnswer(event: InboundEvent): boolean | null {
     if (t === "finance_yes") return true;
     if (t === "finance_no") return false;
   }
-  if (/^(yes|y|haan|ha|sure|yep)$/i.test(t)) return true;
-  if (/^(no|n|nahi|nope)$/i.test(t)) return false;
+  if (/^(yes|y|haan|ha|sure|yep|ji|jee|हाँ|हां|जी|ok|okay|theek hai|ठीक है)$/i.test(t)) return true;
+  if (/^(no|n|nahi|nahin|nope|नहीं|नही|na)$/i.test(t)) return false;
   return null;
 }
 
@@ -219,78 +287,6 @@ function financeAnswer(event: InboundEvent): boolean | null {
 function asCompanyType(id: string | null | undefined): CompanyType | null {
   return id && KNOWN_COMPANY_TYPES.includes(id) ? (id as CompanyType) : null;
 }
-
-type SessionRow = typeof whatsappOnboardingSessions.$inferSelect;
-type Ctx = {
-  answers?: Record<string, unknown>;
-  docs?: Record<string, { fields: Record<string, unknown>; confidence: number }>;
-  fieldIndex?: number;
-  /** Index into SIGNER_FIELDS while the dealer is re-entering the signer
-   *  (owner) name/phone/email via the "Change" button on the signer confirm. */
-  signerIndex?: number;
-  /** True when the dealer is editing a SINGLE signer field (picked Name/Email/
-   *  Phone from the "Change" menu). After collecting that one field we loop back
-   *  to the signer confirmation instead of walking through the remaining fields. */
-  signerSingleEdit?: boolean;
-  /** Document types the dealer couldn't provide / we gave up on — handled by the
-   *  admin instead, so the flow doesn't get stuck. */
-  skipped?: string[];
-  /** Per-document failed-attempt counter, to auto-skip after a few bad tries. */
-  attempts?: Record<string, number>;
-  /** Active in-chat correction round (set when the admin requests corrections on
-   *  a WhatsApp-onboarded dealer). The dealer fixes only the queued items. */
-  correction?: {
-    roundId: string;
-    roundNumber: number;
-    /** Ordered items to fix — fields first, then documents. `key` is the
-     *  correction-catalog key (camelCase field / web doc key). */
-    queue: Array<{ kind: "field" | "document"; key: string }>;
-    /** Index into `queue` of the item we're currently collecting. */
-    index: number;
-  };
-  /** When set, this session is a CUSTOMER self-onboarding a lead (entry-chooser
-   *  option 2) rather than dealer onboarding. Routes to runCustomerTurn and
-   *  attributes the created lead to the house dealer (dealer@itarang.com). */
-  flow?: "customer";
-  /** Active "General Information" Q&A (entry-chooser option 3). `turns` caps
-   *  the LLM spend per session; `history` (last few Q/A pairs, answers
-   *  truncated) gives follow-up questions their context. */
-  info?: { turns: number; history: Array<{ q: string; a: string }> };
-  /** The onboarding state we interrupted with the Resume/Start-Over prompt
-   *  (ASK_RESUME); restored verbatim when the applicant taps Resume. */
-  resumeState?: string;
-  /** Recognized-contact stamp from the greeting-time phone lookup (staff /
-   *  existing lead), kept for reuse so we don't re-query every greeting. */
-  known?: { kind: "staff" | "lead"; name: string; role?: string };
-  /** Active customer-lead being created in the post-approval dealer console
-   *  (states prefixed DC_*). Independent of the onboarding fields above. */
-  lead?: {
-    leadId?: string;
-    mobile?: string;
-    /** Customer name established from the first ID document (Aadhaar/PAN); used
-     *  to reject a later ID that belongs to a different person. */
-    customerName?: string;
-    interest?: "hot" | "warm" | "cold";
-    paymentMethod?: "finance" | "cash" | "other_finance";
-    /** Customer KYC document types collected so far (DC_LEAD_DOCS). */
-    docs?: Record<string, true>;
-    /** The product list offered at DC_LEAD_PRODUCT, so a tapped row resolves
-     *  back to its catalogue ids. */
-    productOptions?: Array<{
-      productId: string;
-      categoryId: string;
-      name: string;
-      assetType: string | null;
-    }>;
-    /** Index into ADDITIONAL_FINANCE_QUESTIONS while collecting the post-consent
-     *  resident-status / health- / life-insurance answers (DC_LEAD_FINANCE_Q). */
-    financeQIndex?: number;
-    /** Wrong-OTP attempts on the current consent OTP session (DC_LEAD_CONSENT_OTP_WAIT). */
-    consentOtpAttempts?: number;
-    /** Channel the consent OTP was sent over, so Resend uses the same one. */
-    consentOtpChannel?: "call" | "sms" | "whatsapp";
-  };
-};
 
 // After this many failed attempts at one document (illegible / wrong type /
 // unreadable key field), stop nagging and move on — the admin follows up.
@@ -331,6 +327,31 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     return;
   }
 
+  // E-264 — the journey phases registered their states at module load; this
+  // call exists so the side-effect import cannot be tree-shaken away.
+  loadLeadPhases();
+
+  // E-243 — a dealer tapping Approve / Decline on a quotation.
+  //
+  // FIRST, ahead of every other gate including the operator check and the
+  // session itself. The sender may be an approved dealer (who would land in the
+  // lead console), a lead who was never onboarded (who would land in the
+  // onboarding state machine), or neither — and in all three cases the answer
+  // to a quotation is what the message means. Feeding `quote_approve:<uuid>`
+  // into "what is your company name?" would both lose the decision and corrupt
+  // a draft.
+  //
+  // It only ever claims a message carrying one of the two button IDs we mint,
+  // so free text is untouched and every existing flow behaves exactly as
+  // before. Wrapped because a failure here must not swallow the dealer's
+  // message — on error we fall through to the normal flow.
+  try {
+    const { handleQuotationReply } = await import("./quotationReply");
+    if (await handleQuotationReply(event)) return;
+  } catch (err) {
+    console.error("[WhatsApp/orchestrator] quotation-reply gate failed:", err);
+  }
+
   // E-170 — dealer self-service fork. DISABLED: this WIP simpler flow
   // (dealer-orchestrator.ts: name→mobile→email→address→"finish in portal")
   // was intercepting approved dealers before they reached the complete
@@ -348,8 +369,77 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   //   // Fall through to onboarding rather than dropping the message.
   // }
 
-  const session = await getOrCreateSession(event);
+  // E-214 — internal onboarding operator. Resolved BEFORE the session so an
+  // allowlisted number gets a bare `operator_hub` row instead of a dealer draft.
+  const operator = await resolveOperator(event.waPhone);
+
+  const session = await getOrCreateSession(event, operator);
   await setSession(session.id, { last_inbound_at: new Date() });
+  // recordInbound() ran in the webhook before we knew the session, so the row is
+  // sitting there with session_id = NULL. Attribute it now (an operator turn
+  // re-attributes it to the dealer file it actually belongs to).
+  await attachInboundToSession(event.providerMessageId, session.id);
+
+  // E-214 — internal onboarding operator: one number, many dealer files. This
+  // gate is placed HERE, ahead of every other gate, on purpose:
+  //
+  //  • Ahead of the approved-dealer console below. That gate reads
+  //    session.application_id → resolveActiveDealer(); if an operator's hub
+  //    still pointed at a dealer file that later got approved, the OPERATOR
+  //    would be dropped into that dealer's lead console and create leads
+  //    attributed to a dealer they don't own. Returning here makes that
+  //    structurally unreachable. (closeFile() also nulls the hub's
+  //    application_id, so the trap is disarmed twice.)
+  //  • Ahead of the stop word. handleStop() wipes ctx.docs/answers on the row it
+  //    is given — catastrophic mid-file. In operator mode "stop" means "park
+  //    this dealer file and go back to the menu", which runOperatorTurn owns.
+  //  • Ahead of the website Apply button. An allowlisted internal number is
+  //    never a retail customer.
+  //
+  // Imported lazily so operator-orchestrator.ts can import this module for the
+  // shared onboarding state machine without a module-eval cycle.
+  if (operator) {
+    const { runOperatorTurn } = await import("./operator-orchestrator");
+    return await runOperatorTurn(session, event, operator);
+  }
+
+  // E-264 — a journey button press (cb_start:<lead>, of_pick:<lead>:<nbfc>, …).
+  //
+  // Placed HERE, and the position is load-bearing in both directions:
+  //  • AFTER the operator gate, which returns early — an allowlisted internal
+  //    number is never a lead actor, and that gate must keep winning.
+  //  • BEFORE the console gate below. A `cb_start:` tap arriving while the
+  //    session sits at DC_MENU would otherwise fall into onMenuChoice's
+  //    `default:` and be silently swallowed as an unrecognised menu row.
+  //
+  // Button ids cannot collide with the stop word or a greeting, so nothing
+  // downstream is starved by running this first. Same try/catch-and-fall-through
+  // shape as the E-243 quotation gate: a failure here must not eat the message.
+  try {
+    const { handleLeadAction } = await import("./leadActionReply");
+    if (await handleLeadAction(session, event)) return;
+  } catch (err) {
+    console.error("[WhatsApp] lead-action gate failed:", err);
+  }
+
+  // E-264 — the customer came back, so Meta's 24-hour window is open again.
+  // Deliver anything we had to park while it was shut, and reset the nudge
+  // budget. Runs after the lead-action gate so an explicit button tap is
+  // answered on its own terms rather than being pre-empted by a stale prompt.
+  try {
+    const { replayParkedPrompt, onInboundResetNudges } = await import(
+      "./outbound"
+    );
+    await onInboundResetNudges(session.id);
+    if (session.pending_prompt) {
+      const replayed = await replayParkedPrompt(await loadSession(session.id));
+      // A replayed prompt IS this turn's reply: the customer's "hi" was an
+      // answer to the doorbell, not to whatever state the session is parked in.
+      if (replayed) return;
+    }
+  } catch (err) {
+    console.error("[WhatsApp] parked-prompt replay failed:", err);
+  }
 
   // Global stop word (stop / end / exit): bail out of whatever flow is active
   // and return to the start. Runs BEFORE every other gate so it works from the
@@ -379,24 +469,33 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   // machine to the lead-creation console. This must run BEFORE the greeting
   // so an approved dealer's "hi" opens the menu instead of restarting onboarding.
   const application = await loadApplication(session.application_id);
-  const dealer = resolveActiveDealer(application);
+  const dealer = await resolveActiveDealer(application);
   if (dealer) {
     return await runConsoleTurn(session, event, dealer);
   }
 
-  // Web-onboarded approved dealer: their number matches dealers.owner_phone but
-  // their session's application row is just a stray WhatsApp draft, so the gate
-  // above misses them. Route to the SAME post-approval console. Only the "web"
-  // match is honoured here — the approved-application ("whatsapp") match is
-  // owned by resolveActiveDealer above, which also checks the account status.
+  // Approved dealer whose SESSION doesn't point at their approved application,
+  // so the gate above misses them. Two ways that happens:
+  //   • web-onboarded — matched on dealers.owner_phone; their session's
+  //     application row is just a stray WhatsApp draft;
+  //   • E-214 operator-uploaded — an internal operator collected every document
+  //     from their own number, so the dealer's number has no session at all and
+  //     their first "hi" mints a fresh draft.
+  // Both route to the SAME post-approval console. Previously only the "web"
+  // match was honoured here, which left operator-onboarded dealers stuck in
+  // onboarding forever; resolveWhatsAppDealer's "whatsapp" branch now checks
+  // dealer_account_status='active' too, so it is as strict as resolveActiveDealer.
   // This must never call the disabled E-170 runDealerTurn fork.
   try {
     const webDealer = await resolveWhatsAppDealer(event.waPhone);
-    if (webDealer?.matchedVia === "web" && webDealer.dealerUserId) {
+    if (webDealer?.dealerUserId) {
       return await runConsoleTurn(session, event, {
         dealerCode: webDealer.dealerCode,
         uploaderId: webDealer.dealerUserId,
         dealerName: webDealer.dealerName || session.wa_contact_name || "there",
+        // resolveWhatsAppDealer's "web" branch reads dealers.finance_enabled —
+        // the same canonical column the E-105 lead gate uses.
+        financeEnabled: webDealer.financeEnabled,
       });
     }
   } catch (err) {
@@ -413,72 +512,91 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   }
 
   try {
-    // A greeting word (hi/hello/menu/start…) at the entry of the flow re-greets
-    // (with known-contact recognition); mid-application it offers Resume /
-    // Start Over instead of restarting. Post-submission states keep their own
-    // replies (see GREETING_EXCLUDED_STATES).
-    if (
-      isGreetingWord(event) &&
-      !GREETING_EXCLUDED_STATES.has(session.current_state)
-    ) {
-      if (!hasOnboardingProgress(session)) {
-        return await greetEntry(session, event);
-      }
-      if (RESUMABLE_STATES.has(session.current_state)) {
-        return await askResume(session);
-      }
-      // Progress in a non-resumable state — fall through; the state handler
-      // simply re-prompts (e.g. an impatient "hi" during a document read).
-    }
-
-    switch (session.current_state) {
-      case "GREETING":
-        return await greetEntry(session, event);
-      case "CHOOSE_FLOW":
-        return await onChooseFlow(session, event);
-      case "GENERAL_INFO":
-        return await onGeneralInfo(session, event);
-      case "ASK_RESUME":
-        return await onAskResume(session, event);
-      case "ASK_COMPANY_TYPE":
-        return await onCompanyType(session, event);
-      case "ASK_UPLOAD_MODE":
-        return await onUploadMode(session, event);
-      case "COLLECTING_DOC":
-        return await onDocument(session, event);
-      case "ASK_FINANCE":
-        return await onFinance(session, event);
-      case "ASK_FIELD":
-        return await onField(session, event);
-      case "CONFIRM_SIGNER":
-        return await onSignerConfirm(session, event);
-      case "ASK_SIGNER_CHOICE":
-        return await onSignerChoice(session, event);
-      case "ASK_SIGNER_FIELD":
-        return await onSignerField(session, event);
-      case "AWAIT_CONFIRM":
-        return await onConfirm(session, event);
-      case "CORRECTION":
-        return await onCorrection(session, event);
-      case "REJECTED":
-        return void (await reply(
-          session,
-          "This application was not approved. Please contact our team if you'd like to discuss it.",
-        ));
-      case "SUBMITTED":
-        return void (await reply(
-          session,
-          "Your application is already submitted and under review. Our team will contact you shortly.",
-        ));
-      default:
-        return await greetEntry(session, event);
-    }
+    return await runOnboardingStates(session, event);
   } catch (err) {
     console.error("[WhatsApp/orchestrator] turn failed:", err);
     await reply(
       session,
       "Sorry, something went wrong on our side. Please try again in a moment.",
     );
+  }
+}
+
+/**
+ * The dealer-onboarding state machine for ONE session row.
+ *
+ * Split out of runTurn (E-214) so the operator flow can drive it against a
+ * per-dealer `operator_file` session while the replies still go to the
+ * operator's own number (see session-store.ts). Every handler below reads and
+ * writes only the row it is handed, which is what makes many dealer files per
+ * WhatsApp number work without touching the document pipeline.
+ *
+ * Errors propagate — the caller owns the "something went wrong" reply so the
+ * message lands on the right conversation.
+ */
+export async function runOnboardingStates(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  // A greeting word (hi/hello/menu/start…) at the entry of the flow re-greets
+  // (with known-contact recognition); mid-application it offers Resume /
+  // Start Over instead of restarting. Post-submission states keep their own
+  // replies (see GREETING_EXCLUDED_STATES).
+  if (
+    isGreetingWord(event) &&
+    !GREETING_EXCLUDED_STATES.has(session.current_state)
+  ) {
+    if (!hasOnboardingProgress(session)) {
+      return await greetEntry(session, event);
+    }
+    if (RESUMABLE_STATES.has(session.current_state)) {
+      return await askResume(session);
+    }
+    // Progress in a non-resumable state — fall through; the state handler
+    // simply re-prompts (e.g. an impatient "hi" during a document read).
+  }
+
+  switch (session.current_state) {
+    case "GREETING":
+      return await greetEntry(session, event);
+    case "CHOOSE_FLOW":
+      return await onChooseFlow(session, event);
+    case "GENERAL_INFO":
+      return await onGeneralInfo(session, event);
+    case "ASK_RESUME":
+      return await onAskResume(session, event);
+    case "ASK_COMPANY_TYPE":
+      return await onCompanyType(session, event);
+    case "ASK_UPLOAD_MODE":
+      return await onUploadMode(session, event);
+    case "COLLECTING_DOC":
+      return await onDocument(session, event);
+    case "ASK_FINANCE":
+      return await onFinance(session, event);
+    case "ASK_FIELD":
+      return await onField(session, event);
+    case "CONFIRM_SIGNER":
+      return await onSignerConfirm(session, event);
+    case "ASK_SIGNER_CHOICE":
+      return await onSignerChoice(session, event);
+    case "ASK_SIGNER_FIELD":
+      return await onSignerField(session, event);
+    case "AWAIT_CONFIRM":
+      return await onConfirm(session, event);
+    case "CORRECTION":
+      return await onCorrection(session, event);
+    case "REJECTED":
+      return void (await reply(
+        session,
+        "This application was not approved. Please contact our team if you'd like to discuss it.",
+      ));
+    case "SUBMITTED":
+      return void (await reply(
+        session,
+        "Your application is already submitted and under review. Our team will contact you shortly.",
+      ));
+    default:
+      return await greetEntry(session, event);
   }
 }
 
@@ -600,7 +718,8 @@ async function onChooseFlow(
 // Words that leave the Q&A and return to the entry menu. "menu"/"hi" etc. also
 // exit earlier via the greeting-word check (an info session has no onboarding
 // progress); this covers back/exit/stop, which aren't greeting triggers.
-const INFO_EXIT_WORDS = /^(menu|back|exit|stop|home|main\s*menu)$/i;
+const INFO_EXIT_WORDS =
+  /^(menu|back|exit|stop|home|main\s*menu|मेनू|मेन्यू|वापस|पीछे|रुको|बंद|wapas|peeche|ruko|band)$/i;
 // LLM-spend guardrails per info session.
 const INFO_MAX_TURNS = 15;
 const INFO_HISTORY_PAIRS = 4;
@@ -709,8 +828,21 @@ async function runCustomerTurn(
 
   try {
     const text = (event.text ?? "").trim();
-    // A typed greeting abandons the in-progress lead and returns to the chooser.
+    // A typed greeting abandons the in-progress lead and returns to the chooser
+    // — except in a tap-driven journey step, where it re-renders instead. Same
+    // reasoning as the dealer console above: for a self-serve customer the lead
+    // pointer is the ONLY route back into their own application, so treating
+    // "hi" as "throw it away" loses an approved loan to a reflex.
     if (event.type === "text" && GREETING_TRIGGERS.test(text)) {
+      const journey = leadStateHandler(session.current_state);
+      if (
+        journey &&
+        rerendersOnGreeting(session.current_state) &&
+        !EXPLICIT_ESCAPE.test(text) &&
+        leadIdOf(session)
+      ) {
+        return await journey(session, event, houseDealer);
+      }
       await mergeContext(session, (ctx) => {
         ctx.flow = undefined;
         ctx.lead = undefined;
@@ -723,15 +855,11 @@ async function runCustomerTurn(
       case "DC_LEAD_MOBILE":
         return await onLeadMobile(session, event);
       case "DC_LEAD_INTEREST":
-        return await onLeadInterest(session, event);
+        return await onLeadInterest(session, event, houseDealer);
       case "DC_LEAD_PAYMENT":
         return await onLeadPayment(session, event, houseDealer);
       case "DC_LEAD_PRODUCT":
         return await onLeadProduct(session, event, houseDealer);
-      case "DC_LEAD_CASH_RC":
-        return await onLeadCashRc(session, event, houseDealer);
-      case "DC_LEAD_CASH_DOCS":
-        return await onLeadCashDocs(session, event, houseDealer);
       case "DC_LEAD_DOCS_MODE":
         return await onLeadDocsMode(session, event, houseDealer);
       case "DC_LEAD_DOCS":
@@ -746,9 +874,16 @@ async function runCustomerTurn(
         return await onLeadFinanceQuestion(session, event);
       case "DC_LEAD_CONSENT_REVIEW":
         return await onConsentReview(session, event);
-      default:
+      default: {
+        // E-264 — same journey-state table the dealer console consults. This is
+        // the half that makes "identical flow for both actors" structural rather
+        // than a promise: there is one registry, so a state cannot exist for the
+        // dealer and be missing for the customer.
+        const handler = leadStateHandler(session.current_state);
+        if (handler) return await handler(session, event, houseDealer);
         // Completed or stale state → thank-you + reset to the chooser.
         return await finishCustomerFlow(session);
+      }
     }
   } catch (err) {
     console.error("[WhatsApp/customer] turn failed:", err);
@@ -799,7 +934,7 @@ function isStopWord(event: InboundEvent): boolean {
 // sender); an approved dealer's next message re-enters the console via the gate
 // in runTurn. We confirm the stop rather than dumping the welcome, so the user
 // isn't nagged — they can send "hi" when they're ready.
-async function handleStop(session: SessionRow): Promise<void> {
+export async function handleStop(session: SessionRow): Promise<void> {
   await mergeContext(session, (ctx) => {
     ctx.flow = undefined;
     ctx.lead = undefined;
@@ -827,7 +962,7 @@ async function handleStop(session: SessionRow): Promise<void> {
 // re-greeting: SUBMITTED ("under review"), CORRECTION / REJECTED (a stray "hi"
 // must NOT wipe a mid-correction or declined application), GREETING (the
 // switch already greets) and the resume prompt itself.
-const GREETING_EXCLUDED_STATES = new Set([
+export const GREETING_EXCLUDED_STATES = new Set([
   "GREETING",
   "SUBMITTED",
   "CORRECTION",
@@ -840,7 +975,7 @@ const GREETING_EXCLUDED_STATES = new Set([
 // progress. Anything else with progress falls through to its state handler —
 // dealers often type "hi" out of impatience during a slow document read, and
 // the handler simply re-prompts the step.
-const RESUMABLE_STATES = new Set([
+export const RESUMABLE_STATES = new Set([
   "ASK_COMPANY_TYPE",
   "ASK_UPLOAD_MODE",
   "COLLECTING_DOC",
@@ -1014,7 +1149,7 @@ async function promptForState(
 // Clear any collected progress and re-greet, so "hi" mid-flow is a genuine
 // fresh start. The application row + session are kept (same dealer); only the
 // in-conversation context is reset.
-async function restartOnboarding(session: SessionRow): Promise<void> {
+export async function restartOnboarding(session: SessionRow): Promise<void> {
   await mergeContext(session, (ctx) => {
     ctx.docs = {};
     ctx.answers = {};
@@ -1036,7 +1171,7 @@ async function restartOnboarding(session: SessionRow): Promise<void> {
 // fallback still works (onCompanyType also accepts free text), so dealers on
 // clients that don't render buttons can reply with a word. Moves the session to
 // ASK_COMPANY_TYPE and clears any leftover expected document.
-async function askCompanyType(
+export async function askCompanyType(
   session: SessionRow,
   prefix?: string,
 ): Promise<void> {
@@ -1303,6 +1438,16 @@ async function ingestClassifiedFile(
       ? " (some values were hard to read — our team will double-check)"
       : "";
   await reply(session, `Got your *${spec?.label ?? c.documentType}* ✅${note}`);
+
+  // Tell the admins a document landed. Deliberately only for a STORED required
+  // document — the unreadable and wrong-document branches above return early,
+  // and notifying on those would fill the bell with a dealer's failed retries.
+  await notifyOnboardingDocsUploaded({
+    phone: session.wa_phone,
+    docLabel: spec?.label ?? c.documentType,
+    businessName: session.wa_contact_name ?? null,
+  });
+
   await advanceDocument(await loadSession(session.id));
 }
 
@@ -2121,6 +2266,10 @@ export async function startCorrectionOverWhatsApp(params: {
     id: string;
     wa_session_id: string | null;
     wa_phone: string | null;
+    // E-214 — which channel currently owns the file, and the operator's own
+    // per-dealer session. Optional so existing callers keep compiling.
+    onboarding_channel?: string | null;
+    wa_operator_session_id?: string | null;
   };
   roundId: string;
   roundNumber: number;
@@ -2130,16 +2279,31 @@ export async function startCorrectionOverWhatsApp(params: {
 }): Promise<{ ok: boolean; error?: string }> {
   const { application, roundId, roundNumber, remarks } = params;
 
-  // Locate the dealer's session: prefer the linked one, else latest by phone.
+  // Locate the session that OWNS the file, so the correction lands in the chat
+  // the documents actually came from. E-214: when the operator is uploading on
+  // the dealer's behalf ('operator'), the dealer's own number may never have
+  // messaged us — sending there would be a dead end.
+  const preferredSessionId =
+    application.onboarding_channel === "operator"
+      ? (application.wa_operator_session_id ?? application.wa_session_id)
+      : (application.wa_session_id ?? application.wa_operator_session_id ?? null);
+
   let session: SessionRow | undefined;
-  if (application.wa_session_id) {
-    session = await loadSession(application.wa_session_id);
+  if (preferredSessionId) {
+    session = await loadSession(preferredSessionId);
   }
   if (!session && application.wa_phone) {
+    // Phone fallback. Skip operator_file rows — they carry the OPERATOR's phone,
+    // never the dealer's, so a match here would be the wrong conversation.
     const [row] = await db
       .select()
       .from(whatsappOnboardingSessions)
-      .where(eq(whatsappOnboardingSessions.wa_phone, application.wa_phone))
+      .where(
+        and(
+          eq(whatsappOnboardingSessions.wa_phone, application.wa_phone),
+          ne(whatsappOnboardingSessions.session_kind, "operator_file"),
+        ),
+      )
       .orderBy(desc(whatsappOnboardingSessions.created_at))
       .limit(1);
     session = row;
@@ -2374,14 +2538,94 @@ async function ingestCorrectionDoc(
 
 // ── DB helpers ──────────────────────────────────────────────────────────────
 
-async function getOrCreateSession(event: InboundEvent): Promise<SessionRow> {
+/**
+ * The conversation row for an inbound number.
+ *
+ * E-214: `operator_file` rows are EXCLUDED from the lookup. They carry the
+ * operator's own wa_phone (so replies reach them) but belong to a specific
+ * dealer file; without this filter the newest-by-created_at pick would hand the
+ * operator's next message to whichever dealer file they opened last instead of
+ * their menu hub. Every pre-E-214 row defaults to session_kind='dealer', so no
+ * existing number changes behaviour.
+ *
+ * `operator` is passed when the sender is on the internal allowlist: they get a
+ * bare `operator_hub` row with NO placeholder application — an operator saying
+ * "hi" is not a dealer walking in the door.
+ */
+async function getOrCreateSession(
+  event: InboundEvent,
+  operator?: WhatsAppOperator | null,
+): Promise<SessionRow> {
   const existing = await db
     .select()
     .from(whatsappOnboardingSessions)
-    .where(eq(whatsappOnboardingSessions.wa_phone, event.waPhone))
+    .where(
+      and(
+        eq(whatsappOnboardingSessions.wa_phone, event.waPhone),
+        ne(whatsappOnboardingSessions.session_kind, "operator_file"),
+      ),
+    )
     .orderBy(desc(whatsappOnboardingSessions.created_at))
     .limit(1);
-  if (existing.length > 0) return existing[0];
+
+  if (existing.length > 0) {
+    const row = existing[0];
+    // A number that used to onboard as a DEALER has just been allowlisted as an
+    // operator. Promote its existing row to the hub rather than leaving a
+    // `dealer` row driving the OP_* states: the partial unique index and every
+    // `session_kind` filter (admin pipeline, handoff lookup, listOpenFiles) key
+    // off this column, so an unpromoted row would be invisible to them. The old
+    // application stays on disk; showOperatorMenu clears the pointer to it.
+    if (operator && row.session_kind !== "operator_hub") {
+      await db
+        .update(whatsappOnboardingSessions)
+        .set({
+          session_kind: "operator_hub",
+          operator_id: operator.id,
+          updated_at: new Date(),
+        })
+        .where(eq(whatsappOnboardingSessions.id, row.id));
+      return { ...row, session_kind: "operator_hub", operator_id: operator.id };
+    }
+    return row;
+  }
+
+  if (operator) {
+    try {
+      const [hub] = await db
+        .insert(whatsappOnboardingSessions)
+        .values({
+          wa_phone: event.waPhone,
+          wa_contact_name: event.contactName ?? operator.displayName,
+          provider: getAdapter().provider,
+          provider_conversation_id: event.conversationId ?? null,
+          application_id: null,
+          session_kind: "operator_hub",
+          operator_id: operator.id,
+          current_state: "OP_MENU",
+          session_status: "active",
+          last_inbound_at: new Date(),
+        })
+        .returning();
+      return hub;
+    } catch (err) {
+      // whatsapp_onboarding_sessions_operator_hub_key (partial UNIQUE) — two
+      // near-simultaneous first messages raced. getOrCreateSession is a
+      // deliberately unlocked read-then-insert, so re-select the winner.
+      const [hub] = await db
+        .select()
+        .from(whatsappOnboardingSessions)
+        .where(
+          and(
+            eq(whatsappOnboardingSessions.wa_phone, event.waPhone),
+            eq(whatsappOnboardingSessions.session_kind, "operator_hub"),
+          ),
+        )
+        .limit(1);
+      if (hub) return hub;
+      throw err;
+    }
+  }
 
   // New conversation → create a draft application + session. company_name is
   // NOT NULL, so seed a placeholder; it's overwritten once the GST is read.
@@ -2418,51 +2662,15 @@ async function getOrCreateSession(event: InboundEvent): Promise<SessionRow> {
     .set({ wa_session_id: session.id })
     .where(eq(dealerOnboardingApplications.id, application.id));
 
+  // A brand-new WhatsApp onboarding conversation. Fires once per session, on
+  // creation — the only signal iTarang gets that a dealer has walked in the
+  // WhatsApp door, since there is no form submission until the very end.
+  await notifyOnboardingChatStarted({
+    phone: event.waPhone,
+    sessionId: session.id,
+  });
+
   return session;
-}
-
-async function loadSession(id: string): Promise<SessionRow> {
-  const [row] = await db
-    .select()
-    .from(whatsappOnboardingSessions)
-    .where(eq(whatsappOnboardingSessions.id, id))
-    .limit(1);
-  return row;
-}
-
-async function setSession(
-  id: string,
-  patch: Partial<SessionRow>,
-): Promise<void> {
-  await db
-    .update(whatsappOnboardingSessions)
-    .set({ ...patch, updated_at: new Date() } as any)
-    .where(eq(whatsappOnboardingSessions.id, id));
-}
-
-/** Read-modify-write the session context jsonb. */
-async function mergeContext(
-  session: SessionRow,
-  mutate: (ctx: Ctx) => void,
-): Promise<void> {
-  const fresh = await loadSession(session.id);
-  const ctx = ((fresh.context ?? {}) as Ctx) || {};
-  mutate(ctx);
-  await db
-    .update(whatsappOnboardingSessions)
-    .set({ context: ctx as any, updated_at: new Date() })
-    .where(eq(whatsappOnboardingSessions.id, session.id));
-}
-
-async function patchApplication(
-  applicationId: string | null,
-  patch: Record<string, unknown>,
-): Promise<void> {
-  if (!applicationId || Object.keys(patch).length === 0) return;
-  await db
-    .update(dealerOnboardingApplications)
-    .set({ ...patch, updated_at: new Date() } as any)
-    .where(eq(dealerOnboardingApplications.id, applicationId));
 }
 
 // Merge extracted values into provider_raw_response.submissionSnapshot.ownership
@@ -2842,48 +3050,8 @@ function buildExtractionSummary(ctx: Ctx): Record<string, unknown> {
 }
 
 // ── Misc helpers ────────────────────────────────────────────────────────────
-
-async function reply(
-  session: SessionRow,
-  body: string,
-  buttons?: ReplyButton[],
-): Promise<void> {
-  const adapter = getAdapter();
-  const res = buttons
-    ? await adapter.sendInteractive(session.wa_phone, body, buttons)
-    : await adapter.sendText(session.wa_phone, body);
-
-  await db.insert(whatsappMessages).values({
-    session_id: session.id,
-    provider_message_id: res.providerMessageId,
-    direction: "outbound",
-    message_type: buttons ? "interactive" : "text",
-    text_body: body,
-    delivery_status: res.ok ? "sent" : "failed",
-    raw_payload: (res.raw ?? null) as any,
-  });
-  await setSession(session.id, { last_outbound_at: new Date() });
-}
-
-/** Send an interactive List (for >3 choices, e.g. the dealer console menu). */
-async function replyList(
-  session: SessionRow,
-  body: string,
-  button: string,
-  rows: ListRow[],
-): Promise<void> {
-  const res = await getAdapter().sendList(session.wa_phone, body, button, rows);
-  await db.insert(whatsappMessages).values({
-    session_id: session.id,
-    provider_message_id: res.providerMessageId,
-    direction: "outbound",
-    message_type: "interactive",
-    text_body: body,
-    delivery_status: res.ok ? "sent" : "failed",
-    raw_payload: (res.raw ?? null) as any,
-  });
-  await setSession(session.id, { last_outbound_at: new Date() });
-}
+// (reply / replyList / loadSession / setSession / mergeContext / patchApplication
+//  now live in ./session-store — see the import block at the top of this file.)
 
 function parseFieldValue(
   kind: "text" | "phone" | "email" | "yesno",
@@ -2900,8 +3068,8 @@ function parseFieldValue(
     case "email":
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v.toLowerCase() : null;
     case "yesno":
-      if (/^(yes|y|haan|ha)$/i.test(v)) return true;
-      if (/^(no|n|nahi)$/i.test(v)) return false;
+      if (/^(yes|y|haan|ha|ji|jee|हाँ|हां|जी)$/i.test(v)) return true;
+      if (/^(no|n|nahi|nahin|नहीं|नही|na)$/i.test(v)) return false;
       return null;
     default:
       return null;
@@ -2955,6 +3123,7 @@ const DEALER_MENU_ROWS: ListRow[] = [
   { id: "menu_new_lead", title: "🆕 New Lead", description: "Create a new customer lead" },
   { id: "menu_drafts", title: "📝 Save Drafts", description: "Resume a saved lead" },
   { id: "menu_inventory", title: "📦 Inventory", description: "View available stock" },
+  { id: "menu_active", title: "🔋 Active batteries", description: "Dispatched & sold — owner, warranty" },
   { id: "menu_help", title: "❓ Help", description: "Support & how it works" },
 ];
 
@@ -2970,16 +3139,62 @@ const PAYMENT_BUTTONS: ReplyButton[] = [
   { id: "pay_other", title: "Other Finance" },
 ];
 
+// Cash-only dealers (dealers.finance_enabled = false) must never be offered a
+// finance path. The web lead route enforces this server-side via the E-105 gate
+// (FINANCE_NOT_ENABLED in /api/leads/create), but the WhatsApp console writes
+// leads directly through customer-lead.ts and so bypasses that route — without
+// this the buttons offered financing to every approved dealer regardless.
+const CASH_ONLY_PAYMENT_BUTTONS: ReplyButton[] = [
+  { id: "pay_cash", title: "Cash" },
+];
+
+function paymentButtons(dealer: ActiveDealer): ReplyButton[] {
+  return dealer.financeEnabled ? PAYMENT_BUTTONS : CASH_ONLY_PAYMENT_BUTTONS;
+}
+
+function paymentPrompt(dealer: ActiveDealer): string {
+  return dealer.financeEnabled
+    ? "*Payment method*\n\nHow will the customer pay? Tap an option 👇"
+    : "*Payment method*\n\nHow will the customer pay? Tap an option 👇\n\n" +
+        "_Financing isn't enabled on your account yet, so leads are cash only. " +
+        "Contact iTarang if you'd like to offer financing._";
+}
+
+function paymentRetryPrompt(dealer: ActiveDealer): string {
+  return dealer.financeEnabled
+    ? "Please tap *iTarang Finance*, *Cash* or *Other Finance*."
+    : "Financing isn't enabled on your account, so this lead can only be *Cash*. " +
+        "Please tap *Cash*, or contact iTarang to enable financing.";
+}
+
 /** One turn for an admin-approved dealer (the post-onboarding console). */
-async function runConsoleTurn(
+export async function runConsoleTurn(
   session: SessionRow,
   event: InboundEvent,
   dealer: ActiveDealer,
 ): Promise<void> {
   try {
     const text = (event.text ?? "").trim();
-    // A typed greeting / "menu" is always an escape back to the main menu.
+    // A typed greeting / "menu" is an escape back to the main menu — EXCEPT
+    // mid-journey, where it used to be quietly destructive. showDealerMenu
+    // clears ctx.lead, and the menu offers no way back into a submitted lead
+    // (Save Drafts lists kyc_status='draft' only), so one "hi" while choosing a
+    // lender or a battery stranded the application for good. A bare greeting in
+    // a tap-driven step now re-renders that step instead.
+    //
+    // "menu"/"home"/"back" still escape. They are unambiguous requests to
+    // leave, and a customer who genuinely wants out must not be trapped in a
+    // step that keeps re-sending itself.
     if (event.type === "text" && CONSOLE_MENU_TRIGGERS.test(text)) {
+      const journey = leadStateHandler(session.current_state);
+      if (
+        journey &&
+        rerendersOnGreeting(session.current_state) &&
+        !EXPLICIT_ESCAPE.test(text) &&
+        leadIdOf(session)
+      ) {
+        return await journey(session, event, dealer);
+      }
       return await showDealerMenu(session, dealer);
     }
 
@@ -2988,18 +3203,16 @@ async function runConsoleTurn(
         return await onMenuChoice(session, event, dealer);
       case "DC_DRAFTS":
         return await onDraftSelection(session, event, dealer);
+      case DC_ACTIVE_BATT:
+        return await onActiveBatteryPick(session, event, dealer);
       case "DC_LEAD_MOBILE":
         return await onLeadMobile(session, event);
       case "DC_LEAD_INTEREST":
-        return await onLeadInterest(session, event);
+        return await onLeadInterest(session, event, dealer);
       case "DC_LEAD_PAYMENT":
         return await onLeadPayment(session, event, dealer);
       case "DC_LEAD_PRODUCT":
         return await onLeadProduct(session, event, dealer);
-      case "DC_LEAD_CASH_RC":
-        return await onLeadCashRc(session, event, dealer);
-      case "DC_LEAD_CASH_DOCS":
-        return await onLeadCashDocs(session, event, dealer);
       case "DC_LEAD_DOCS_MODE":
         return await onLeadDocsMode(session, event, dealer);
       case "DC_LEAD_DOCS":
@@ -3014,10 +3227,17 @@ async function runConsoleTurn(
         return await onLeadFinanceQuestion(session, event);
       case "DC_LEAD_CONSENT_REVIEW":
         return await onConsentReview(session, event);
-      default:
+      default: {
+        // E-264 — journey phases (co-borrower, Step 4, offers, dispatch) register
+        // their states in ./lead-states rather than adding cases here, so the
+        // dealer and customer entry points cannot drift apart. One clause, and
+        // every phase is reachable from both.
+        const handler = leadStateHandler(session.current_state);
+        if (handler) return await handler(session, event, dealer);
         // Any other state (an onboarding-terminal state, or a stale DC_* not yet
         // handled) drops the dealer back to the menu.
         return await showDealerMenu(session, dealer);
+      }
     }
   } catch (err) {
     console.error("[WhatsApp/console] turn failed:", err);
@@ -3032,16 +3252,90 @@ async function showDealerMenu(
   session: SessionRow,
   dealer: ActiveDealer,
 ): Promise<void> {
+  const parked = await parkCurrentLead(session, dealer);
   await mergeContext(session, (ctx) => {
     ctx.lead = undefined;
   });
   await setSession(session.id, { current_state: "DC_MENU" });
   await replyList(
     session,
-    `👋 Hi *${dealer.dealerName}*!\n\nWhat would you like to do?`,
+    (parked ? `${parkedNotice(parked)}\n\n` : "") +
+      `👋 Hi *${dealer.dealerName}*!\n\nWhat would you like to do?`,
     "Open Menu",
     DEALER_MENU_ROWS,
   );
+}
+
+/** Console states that are NOT a customer onboarding in progress. */
+const NOT_A_LEAD_STATE = new Set(["DC_MENU", "DC_DRAFTS", DC_ACTIVE_BATT]);
+
+/**
+ * Save whatever customer onboarding this chat is in the middle of, so that
+ * starting another one (or going to the menu) never loses it.
+ *
+ * Two cases:
+ *   - the lead row already exists (anything from the payment step onwards):
+ *     it is already what Save Drafts lists — nothing to write, just say so.
+ *   - only a mobile (and maybe an interest) has been typed: no row exists yet,
+ *     so one is created now as an unclassified draft. `resumeDraft` picks it up
+ *     at the first unanswered question and `classifyCustomerLead` fills the
+ *     rest in when the dealer gets there.
+ *
+ * Returns the parked draft's display label, or null when nothing was in
+ * progress. Never throws — losing the menu to a failed save would be worse
+ * than losing the save.
+ */
+async function parkCurrentLead(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<string | null> {
+  try {
+    const fresh = await loadSession(session.id);
+    if (NOT_A_LEAD_STATE.has(fresh.current_state)) return null;
+    const lead = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+
+    if (lead.leadId) {
+      const draft = await getDealerDraft(dealer.dealerCode, lead.leadId);
+      if (draft) return draftLabel(draft);
+      // Past the pre-submit draft states (co-borrower, lender pick, offers,
+      // dispatch). The DB cannot rebuild where the chat was, so snapshot the
+      // exact step + sub-context into ctx.parked; Save Drafts lists it from
+      // there and resumeParkedJourney restores it verbatim.
+      if (!leadStateHandler(fresh.current_state)) return null;
+      const summary = await getDealerLeadSummary(dealer.dealerCode, lead.leadId);
+      if (!summary) return null;
+      const state = fresh.current_state;
+      await mergeContext(session, (ctx) => {
+        ctx.parked = {
+          ...(ctx.parked ?? {}),
+          [lead.leadId as string]: { state, lead, at: new Date().toISOString() },
+        };
+      });
+      console.log(`[WhatsApp/console] parked journey ${lead.leadId} at ${state}`);
+      return draftLabel(summary);
+    }
+    if (!lead.mobile) return null;
+
+    const leadId = await createCustomerLead({
+      dealer,
+      mobile: lead.mobile,
+      interest: lead.interest,
+      notify: false,
+    });
+    console.log(`[WhatsApp/console] parked unclassified lead ${leadId} for ${lead.mobile}`);
+    return lead.mobile;
+  } catch (err) {
+    console.error("[WhatsApp/console] park lead failed:", err);
+    return null;
+  }
+}
+
+function draftLabel(d: DealerDraft): string {
+  return d.hasName ? `${d.customerName} (${d.mobile})` : d.mobile;
+}
+
+function parkedNotice(label: string): string {
+  return `📝 *${label}* is saved in *Save Drafts* — you can pick it up where you left off any time.`;
 }
 
 async function onMenuChoice(
@@ -3052,11 +3346,13 @@ async function onMenuChoice(
   const id = (event.text ?? "").trim();
   switch (id) {
     case "menu_new_lead":
-      return await startNewLead(session);
+      return await startNewLead(session, dealer);
     case "menu_drafts":
       return await showDrafts(session, dealer);
     case "menu_inventory":
       return await showInventory(session, dealer);
+    case "menu_active":
+      return await showActiveBatteries(session, dealer);
     case "menu_help":
       await reply(session, consoleHelpText());
       return;
@@ -3072,8 +3368,9 @@ function consoleHelpText(): string {
     "",
     "• Send *menu* any time to see your options.",
     "• *New Lead* — create a customer lead step by step.",
-    "• *Save Drafts* — resume a lead you started earlier.",
+    "• *Save Drafts* — resume a lead you started earlier, right where you left it. Starting a new lead or sending *menu* mid-way saves the current one here automatically.",
     "• *Inventory* — see your available stock.",
+    "• *Active batteries* — batteries you've dispatched, with owner and warranty.",
     "• Need a person? Email support@itarang.com.",
   ].join("\n");
 }
@@ -3100,11 +3397,54 @@ function draftRowDescription(d: DealerDraft): string {
 
 // Show the dealer's unsubmitted WhatsApp leads as a tappable list. Tapping one
 // resumes it at the next incomplete step (onDraftSelection → resumeDraft).
+/** Human label for the journey phase a parked lead is sitting in. */
+function phaseLabel(state: string): string {
+  if (state.startsWith("DC_CB_")) return "Co-borrower";
+  if (state.startsWith("DC_S4_")) return "Lender selection";
+  if (state.startsWith("DC_OF_")) return "Offers";
+  if (state.startsWith("DC_DP_")) return "Dispatch";
+  if (state.startsWith("DC_DOCREQ_")) return "Documents requested";
+  if (state.startsWith("DC_XD_")) return "Extra documents";
+  return "In progress";
+}
+
+type DraftListItem = DealerDraft & { parkedState?: string };
+
+/**
+ * Pre-submit drafts from the DB plus journeys parked mid-way in this chat
+ * (ctx.parked). A parked lead that has since been finished elsewhere (sold,
+ * closed) is dropped — getDealerLeadSummary still finds it, but its phase
+ * handler decides what to say. Newest activity first, ≤10 rows (WhatsApp cap).
+ */
+async function listAllDrafts(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<DraftListItem[]> {
+  const drafts: DraftListItem[] = await listDealerDrafts(dealer.dealerCode);
+  const seen = new Set(drafts.map((d) => d.leadId));
+  const fresh = await loadSession(session.id);
+  const parked = ((fresh.context as Ctx)?.parked ?? {}) as NonNullable<Ctx["parked"]>;
+  for (const [leadId, snap] of Object.entries(parked)) {
+    if (seen.has(leadId)) continue;
+    const summary = await getDealerLeadSummary(dealer.dealerCode, leadId);
+    if (!summary) continue;
+    drafts.push({
+      ...summary,
+      updatedAt: new Date(snap.at),
+      parkedState: snap.state,
+    });
+  }
+  drafts.sort(
+    (a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0),
+  );
+  return drafts.slice(0, 10);
+}
+
 async function showDrafts(
   session: SessionRow,
   dealer: ActiveDealer,
 ): Promise<void> {
-  const drafts = await listDealerDrafts(dealer.dealerCode);
+  const drafts = await listAllDrafts(session, dealer);
   if (drafts.length === 0) {
     await setSession(session.id, { current_state: "DC_MENU" });
     await reply(
@@ -3116,7 +3456,9 @@ async function showDrafts(
   const rows: ListRow[] = drafts.map((d) => ({
     id: `draft_${d.leadId}`,
     title: clip(d.customerName, 24),
-    description: draftRowDescription(d),
+    description: d.parkedState
+      ? clip(`${draftRowDescription(d)} · ${phaseLabel(d.parkedState)}`, 72)
+      : draftRowDescription(d),
   }));
   await setSession(session.id, { current_state: "DC_DRAFTS" });
   await replyList(
@@ -3139,14 +3481,60 @@ async function onDraftSelection(
   }
   const leadId = id.slice("draft_".length);
   const draft = await getDealerDraft(dealer.dealerCode, leadId);
-  if (!draft) {
-    await reply(
-      session,
-      "I couldn't find that draft — it may have been submitted already. Send *menu* to go back.",
+  if (draft) return await resumeDraft(session, dealer, draft);
+
+  const fresh = await loadSession(session.id);
+  const snap = ((fresh.context as Ctx)?.parked ?? {})[leadId];
+  if (snap) return await resumeParkedJourney(session, dealer, leadId, snap);
+
+  await reply(
+    session,
+    "I couldn't find that draft — it may have been submitted already. Send *menu* to go back.",
+  );
+  return await showDealerMenu(session, dealer);
+}
+
+/**
+ * Pick a parked post-submit journey back up: restore the lead sub-context and
+ * the exact state, then re-render that step. Phases that registered a `resume`
+ * renderer use it; tap-driven steps re-render on a synthetic greeting (the same
+ * path a typed "hi" takes); anything else just gets a nudge.
+ */
+async function resumeParkedJourney(
+  session: SessionRow,
+  dealer: ActiveDealer,
+  leadId: string,
+  snap: NonNullable<Ctx["parked"]>[string],
+): Promise<void> {
+  const summary = await getDealerLeadSummary(dealer.dealerCode, leadId);
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...snap.lead, leadId };
+    if (ctx.parked) delete ctx.parked[leadId];
+  });
+  await setSession(session.id, { current_state: snap.state });
+  await reply(
+    session,
+    `▶️ Resuming *${summary ? draftLabel(summary) : leadId}* — ${phaseLabel(snap.state)}.`,
+  );
+
+  const live = await loadSession(session.id);
+  const resumer = leadStateResumer(snap.state);
+  if (resumer) return await resumer(live, dealer);
+
+  const handler = leadStateHandler(snap.state);
+  if (handler && rerendersOnGreeting(snap.state)) {
+    return await handler(
+      live,
+      {
+        providerMessageId: `resume:${leadId}:${Date.now()}`,
+        waPhone: session.wa_phone,
+        type: "text",
+        text: "hi",
+      },
+      dealer,
     );
-    return await showDealerMenu(session, dealer);
   }
-  await resumeDraft(session, dealer, draft);
+  await reply(session, "Please reply to the last question above to continue.");
 }
 
 // Reverse of toKycDocType: map a stored kyc_documents.doc_type back to the
@@ -3205,6 +3593,7 @@ async function resumeDraft(
 ): Promise<void> {
   const docs = await loadCustomerDocsAsCtx(draft.leadId);
   await mergeContext(session, (ctx) => {
+    if (ctx.parked) delete ctx.parked[draft.leadId];
     ctx.lead = {
       leadId: draft.leadId,
       mobile: draft.mobile,
@@ -3217,21 +3606,49 @@ async function resumeDraft(
 
   const { interest, paymentMethod } = draft;
 
-  // Non-finance (or unclassified) leads have no further WhatsApp steps.
-  if (!interest || !paymentMethod || !requiresConsent(interest, paymentMethod)) {
+  await reply(session, `▶️ Resuming *${draftLabel(draft)}*.`);
+
+  // 0) Parked before it was classified → the first unanswered question.
+  if (!interest) {
+    await setSession(session.id, { current_state: "DC_LEAD_INTEREST" });
+    await reply(
+      session,
+      "*Lead Classification*\n_Lead interest level_\n\nTap the customer's interest level 👇",
+      INTEREST_BUTTONS,
+    );
+    return;
+  }
+  if (!paymentMethod) {
+    await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
+    await reply(session, paymentPrompt(dealer), paymentButtons(dealer));
+    return;
+  }
+
+  // Cash: name → vehicle reg → battery picker, whichever is next.
+  if (paymentMethod === "cash") {
+    const cash = await import("./cash-flow");
+    if (!draft.hasName) return await cash.startCashSale(session);
+    if (!draft.vehicleRc) return await cash.askVehicleRc(session);
+    const { askBattery } = await import("./dispatch-flow");
+    return await askBattery(await loadSession(session.id), draft.leadId, dealer, 0);
+  }
+
+  // Warm/cold finance has no further WhatsApp steps.
+  if (!requiresConsent(interest, paymentMethod)) {
     await setSession(session.id, { current_state: "DC_MENU" });
     await reply(
       session,
-      `📄 *${draft.customerName}* — ${humanPayment(paymentMethod ?? "cash")} lead is saved.\n\n` +
+      `📄 *${draft.customerName}* — ${humanPayment(paymentMethod)} lead is saved.\n\n` +
         "There's nothing more to capture here; finish the remaining steps on the dealer portal. Send *menu* to go back.",
     );
     return;
   }
 
-  await reply(
-    session,
-    `▶️ Resuming *${draft.customerName}* (${draft.mobile}).`,
-  );
+  // Hot finance: product → documents → consent → finance questions → submit.
+  if (!draft.productTagged) {
+    await startProductStep(await loadSession(session.id), dealer);
+    return;
+  }
 
   // 1) Documents incomplete → back to the documents step.
   if (!REQUIRED_CUSTOMER_DOCS.every((d) => docs[d])) {
@@ -3298,14 +3715,19 @@ async function showInventory(
   await reply(session, lines.join("\n"));
 }
 
-async function startNewLead(session: SessionRow): Promise<void> {
+async function startNewLead(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const parked = await parkCurrentLead(session, dealer);
   await mergeContext(session, (ctx) => {
     ctx.lead = {};
   });
   await setSession(session.id, { current_state: "DC_LEAD_MOBILE" });
   await reply(
     session,
-    "🆕 *New Lead*\n\nPlease enter the *customer's mobile number* (10 digits).",
+    (parked ? `${parkedNotice(parked)}\n\n` : "") +
+      "🆕 *New Lead*\n\nPlease enter the *customer's mobile number* (10 digits).",
   );
 }
 
@@ -3377,6 +3799,7 @@ function parseInterest(event: InboundEvent): InterestLevel | null {
 async function onLeadInterest(
   session: SessionRow,
   event: InboundEvent,
+  dealer: ActiveDealer,
 ): Promise<void> {
   const interest = parseInterest(event);
   if (!interest) {
@@ -3390,25 +3813,40 @@ async function onLeadInterest(
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), interest };
   });
+  // A resumed parked draft already has a row — keep it in step with the chat.
+  const parkedId = ((session.context as Ctx)?.lead ?? {}).leadId;
+  if (parkedId) await classifyCustomerLead(parkedId, dealer, { interest });
   await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
-  await reply(
-    session,
-    "*Payment method*\n\nHow will the customer pay? Tap an option 👇",
-    PAYMENT_BUTTONS,
-  );
+  await reply(session, paymentPrompt(dealer), paymentButtons(dealer));
 }
 
-function parsePayment(event: InboundEvent): PaymentMethod | null {
+/**
+ * Parse the dealer's payment choice. A cash-only dealer (finance not enabled)
+ * is never shown the finance buttons, but the free-text branch below would
+ * still match a typed "finance" — so finance choices resolve to null for them
+ * and the caller re-prompts. This is the WhatsApp-side equivalent of the
+ * FINANCE_NOT_ENABLED gate in /api/leads/create.
+ */
+function parsePayment(
+  event: InboundEvent,
+  financeEnabled: boolean,
+): PaymentMethod | null {
   const t = (event.text ?? "").trim().toLowerCase();
+  let picked: PaymentMethod | null = null;
+
   if (event.type === "interactive") {
-    if (t === "pay_finance") return "finance";
-    if (t === "pay_cash") return "cash";
-    if (t === "pay_other") return "other_finance";
+    if (t === "pay_finance") picked = "finance";
+    else if (t === "pay_cash") picked = "cash";
+    else if (t === "pay_other") picked = "other_finance";
   }
-  if (/other/.test(t)) return "other_finance";
-  if (/itarang|finance/.test(t)) return "finance";
-  if (/cash/.test(t)) return "cash";
-  return null;
+  if (!picked) {
+    if (/other/.test(t)) picked = "other_finance";
+    else if (/itarang|finance/.test(t)) picked = "finance";
+    else if (/cash/.test(t)) picked = "cash";
+  }
+
+  if (!financeEnabled && picked !== "cash") return null;
+  return picked;
 }
 
 async function onLeadPayment(
@@ -3416,13 +3854,9 @@ async function onLeadPayment(
   event: InboundEvent,
   dealer: ActiveDealer,
 ): Promise<void> {
-  const paymentMethod = parsePayment(event);
+  const paymentMethod = parsePayment(event, dealer.financeEnabled);
   if (!paymentMethod) {
-    await reply(
-      session,
-      "Please tap *iTarang Finance*, *Cash* or *Other Finance*.",
-      PAYMENT_BUTTONS,
-    );
+    await reply(session, paymentRetryPrompt(dealer), paymentButtons(dealer));
     return;
   }
 
@@ -3431,7 +3865,7 @@ async function onLeadPayment(
   if (!draft.mobile || !draft.interest) {
     // Context lost (e.g. server restart mid-flow) — restart cleanly.
     await reply(session, "Let's start over.");
-    return await startNewLead(session);
+    return await startNewLead(session, dealer);
   }
 
   // NOTE: no mobile-number duplicate check. The SAME mobile may be reused (cash
@@ -3441,19 +3875,40 @@ async function onLeadPayment(
   // Create the lead now so consent + documents can key off a real lead id. The
   // customer name is stored as a placeholder and filled from the PAN / Aadhaar
   // once the documents are read (fillCustomerLeadFromDoc).
-  const leadId = await createCustomerLead({
-    dealer,
-    mobile: draft.mobile,
-    interest: draft.interest,
-    paymentMethod,
-  });
+  //
+  // A draft parked before this step already HAS a row (see parkCurrentLead);
+  // classify that one instead of inserting a second lead for the same customer.
+  let leadId = draft.leadId;
+  if (leadId) {
+    await classifyCustomerLead(leadId, dealer, {
+      interest: draft.interest,
+      paymentMethod,
+    });
+  } else {
+    leadId = await createCustomerLead({
+      dealer,
+      mobile: draft.mobile,
+      interest: draft.interest,
+      paymentMethod,
+    });
+  }
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), paymentMethod, leadId };
   });
 
-  // Every lead now captures *product details* next (DC_LEAD_PRODUCT). The
+  // CASH SKIPS EVERYTHING ELSE. A cash sale is a counter transaction: no
+  // lender, no KYC to verify, no admin approval. It goes straight to
+  // name → vehicle reg → pick a battery from live stock → SOLD (./cash-flow).
+  // In particular it skips the product-CATEGORY tag below, because the cash
+  // flow picks a real serial a moment later and tagging a category first would
+  // ask the same question twice.
+  if (paymentMethod === "cash") {
+    const { startCashSale } = await import("./cash-flow");
+    return await startCashSale(session);
+  }
+
+  // Finance leads capture *product details* next (DC_LEAD_PRODUCT). The
   // payment-specific steps run afterwards in afterProductStep():
-  //   • cash → Vehicle Reg. Number → Aadhaar front+back (extract + fill) → save
   //   • hot finance → KYC documents → consent
   //   • warm/cold finance → save (finish on the portal)
   await startProductStep(session, dealer);
@@ -3488,7 +3943,7 @@ async function startProductStep(
         "_No available stock to attach right now — you can set the product on the dealer portal._",
       );
     }
-    return await afterProductStep(session, dealer);
+    return await afterProductStep(session);
   }
 
   const top = options.slice(0, 10); // WhatsApp lists allow ≤10 rows.
@@ -3538,27 +3993,27 @@ async function onLeadProduct(
   await mergeContext(session, (ctx) => {
     if (ctx.lead) ctx.lead.productOptions = undefined;
   });
-  await afterProductStep(session, dealer);
+  await afterProductStep(session);
 }
 
-/** Route by payment method once the product is chosen. */
-async function afterProductStep(
-  session: SessionRow,
-  dealer: ActiveDealer,
-): Promise<void> {
+/**
+ * Route by payment method once the product is chosen.
+ *
+ * Finance-only now: the cash branch moved up into onLeadPayment, which is why
+ * this no longer takes a dealer.
+ */
+async function afterProductStep(session: SessionRow): Promise<void> {
   const fresh = await loadSession(session.id);
   const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
   const interest = (draft.interest ?? "cold") as InterestLevel;
   const paymentMethod = (draft.paymentMethod ?? "cash") as PaymentMethod;
 
-  // Cash → Vehicle Reg. Number, then Aadhaar front + back.
+  // Cash forks earlier now, in onLeadPayment — it never reaches the product
+  // step. This branch remains only for a lead whose draft says cash but which
+  // somehow got here (a resumed session from before the change).
   if (paymentMethod === "cash") {
-    await setSession(session.id, { current_state: "DC_LEAD_CASH_RC" });
-    await reply(
-      session,
-      "🚗 What's the *vehicle registration number*? (e.g. HR 35 A 7898)",
-    );
-    return;
+    const { startCashSale } = await import("./cash-flow");
+    return await startCashSale(session);
   }
 
   // Hot finance → KYC documents → consent.
@@ -3595,203 +4050,6 @@ async function afterProductStep(
       `You can complete the rest on the dealer portal. Send *menu* for more.`,
   );
 }
-
-/** DC_LEAD_CASH_RC — capture the typed vehicle registration number (cash flow). */
-async function onLeadCashRc(
-  session: SessionRow,
-  event: InboundEvent,
-  _dealer: ActiveDealer,
-): Promise<void> {
-  const rc = (event.text ?? "").trim().toUpperCase().replace(/\s+/g, "");
-  if (rc.length < 6 || !/^[A-Z0-9]+$/.test(rc)) {
-    await reply(
-      session,
-      "Please send a valid *vehicle registration number* (e.g. HR 35 A 7898).",
-    );
-    return;
-  }
-  const fresh = await loadSession(session.id);
-  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
-  if (!draft.leadId) {
-    await reply(session, "Let's start over.");
-    return await startNewLead(session);
-  }
-  await db
-    .update(leads)
-    .set({ vehicle_rc: rc, updated_at: new Date() })
-    .where(eq(leads.id, draft.leadId));
-
-  await setSession(session.id, { current_state: "DC_LEAD_CASH_DOCS" });
-  await reply(
-    session,
-    "📎 Now send the customer's *Aadhaar (front & back)* and *PAN card* " +
-      "(photos or PDF, one at a time). All three are required; I'll read the " +
-      "name, date of birth and address from them.",
-  );
-}
-
-// Cash leads require the customer's Aadhaar (front + back) and PAN card.
-const CASH_REQUIRED_DOCS = ["aadhaar_front", "aadhaar_back", "pan_card"] as const;
-
-/** DC_LEAD_CASH_DOCS — collect Aadhaar front + back + PAN card (all required),
- *  extract and fill the lead, then save once all are in. */
-async function onLeadCashDocs(
-  session: SessionRow,
-  event: InboundEvent,
-  _dealer: ActiveDealer,
-): Promise<void> {
-  if (event.type !== "document" && event.type !== "image") {
-    await reply(
-      session,
-      "Please send the customer's *Aadhaar (front & back)* and *PAN card* as photos or a PDF.",
-    );
-    return;
-  }
-  if (!event.mediaProviderId) {
-    await reply(session, "I couldn't read that file. Please resend it.");
-    return;
-  }
-
-  const lead = await getLeadCtx(session);
-  if (!lead.leadId) {
-    await reply(session, "Send *menu* to start again.");
-    return;
-  }
-
-  let media;
-  try {
-    media = await getAdapter().downloadMedia(event.mediaProviderId);
-  } catch {
-    await reply(session, "I couldn't download that file. Please resend it.");
-    return;
-  }
-  if (
-    /zip/i.test(media.mimeType) ||
-    /\.zip$/i.test(media.fileName ?? event.fileName ?? "")
-  ) {
-    await reply(
-      session,
-      "Please send the Aadhaar *front* and *back* as separate photos (not a ZIP).",
-    );
-    return;
-  }
-
-  const cls = await classifyDocument(media.buffer, media.mimeType);
-  const docType = cls.ok ? normalizeCustomerDocType(cls.documentType) : null;
-  if (!docType || !CASH_REQUIRED_DOCS.includes(docType as (typeof CASH_REQUIRED_DOCS)[number])) {
-    await reply(
-      session,
-      "I couldn't tell which document that is. Please send the customer's " +
-        "*Aadhaar front*, *Aadhaar back* or *PAN card*.",
-    );
-    return;
-  }
-
-  // No duplicate-identity check here: CASH leads may be created repeatedly for
-  // the same customer / documents (the duplicate guard applies to finance only,
-  // in the DC_LEAD_DOCS flow).
-  await persistCustomerDoc(
-    lead.leadId,
-    docType,
-    media.buffer,
-    media.mimeType,
-    media.fileName ?? event.fileName,
-    cls.fields,
-  );
-  await mergeContext(session, (ctx) => {
-    if (!ctx.lead) ctx.lead = {};
-    ctx.lead.docs = { ...(ctx.lead.docs ?? {}), [docType]: true };
-  });
-  await reply(session, `Got *${customerDocLabel(docType)}* ✅`);
-
-  // All required docs in → save the lead; else say which are still needed.
-  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
-  if (CASH_REQUIRED_DOCS.every((d) => have.includes(d))) {
-    return await finalizeCashLead(session);
-  }
-  const still = CASH_REQUIRED_DOCS.filter((d) => !have.includes(d));
-  await reply(
-    session,
-    "Still needed:\n" + still.map((d) => `• ${customerDocLabel(d)}`).join("\n"),
-  );
-}
-
-/** Confirm + save a cash lead once Aadhaar front + back are in. */
-async function finalizeCashLead(session: SessionRow): Promise<void> {
-  const fresh = await loadSession(session.id);
-  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
-  await setSession(session.id, { current_state: "DC_MENU" });
-
-  // Name / vehicle / product were written onto the lead (Aadhaar extraction +
-  // the earlier steps) — read them back for the confirmation.
-  let line = { name: "—", rc: "—", model: "—" };
-  if (draft.leadId) {
-    const [row] = await db
-      .select({
-        full_name: leads.full_name,
-        owner_name: leads.owner_name,
-        rc: leads.vehicle_rc,
-        model: leads.asset_model,
-      })
-      .from(leads)
-      .where(eq(leads.id, draft.leadId))
-      .limit(1);
-    line = {
-      name: str(row?.full_name) || str(row?.owner_name) || "—",
-      rc: str(row?.rc) || "—",
-      model: str(row?.model) || "—",
-    };
-  }
-
-  if (((fresh.context as Ctx)?.flow) === "customer") {
-    return await finishCustomerFlow(
-      session,
-      `✅ *Thanks — your details have been saved!*\n\n` +
-        `Name: ${line.name}\n` +
-        `Mobile: ${draft.mobile ?? "—"}\n` +
-        `Vehicle: ${line.rc}\n` +
-        `Product: ${line.model}\n` +
-        `Payment: Cash\n\n` +
-        `Our team will contact you shortly.`,
-    );
-  }
-
-  await reply(
-    session,
-    `✅ *Lead saved!*\n\n` +
-      `Name: ${line.name}\n` +
-      `Mobile: ${draft.mobile ?? "—"}\n` +
-      `Vehicle: ${line.rc}\n` +
-      `Product: ${line.model}\n` +
-      `Payment: Cash\n\n` +
-      `You can complete the rest on the dealer portal. Send *menu* for more.`,
-  );
-}
-
-// ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
-
-const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
-  { id: "consent_call", title: "📞 Call" },
-  { id: "consent_manual", title: "✍ Manual" },
-];
-
-const CONSENT_SEND_BUTTON: ReplyButton = {
-  id: "consent_send",
-  title: "📤 Submit to iTarang",
-};
-
-// At the digital-consent wait step the dealer can pull the latest signing status
-// (so they aren't stranded if the async Digio webhook is delayed). Manual path only.
-const CONSENT_CHECK_BUTTON: ReplyButton = {
-  id: "consent_check",
-  title: "✅ Check if signed",
-};
-
-// At the OTP-wait step the dealer can send the customer a fresh OTP.
-const CONSENT_RESEND_OTP_BUTTON: ReplyButton = {
-  id: "consent_resend_otp",
-  title: "🔁 Resend OTP",
-};
 
 /** Read the active lead context off the (freshly loaded) session. */
 async function getLeadCtx(
@@ -3853,6 +4111,36 @@ async function logDocumentSend(
   });
   await setSession(session.id, { last_outbound_at: new Date() });
 }
+
+// ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
+
+const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
+  { id: "consent_call", title: "📞 Call" },
+  { id: "consent_manual", title: "✍ Manual" },
+];
+
+const CONSENT_SEND_BUTTON: ReplyButton = {
+  id: "consent_send",
+  title: "📤 Submit to iTarang",
+};
+/** Open the Step-4 extra-documents bucket from the submit prompt. */
+const EXTRA_DOCS_BUTTON: ReplyButton = {
+  id: "xd_open",
+  title: "📎 Extra docs",
+};
+
+// At the digital-consent wait step the dealer can pull the latest signing status
+// (so they aren't stranded if the async Digio webhook is delayed). Manual path only.
+const CONSENT_CHECK_BUTTON: ReplyButton = {
+  id: "consent_check",
+  title: "✅ Check if signed",
+};
+
+// At the OTP-wait step the dealer can send the customer a fresh OTP.
+const CONSENT_RESEND_OTP_BUTTON: ReplyButton = {
+  id: "consent_resend_otp",
+  title: "🔁 Resend OTP",
+};
 
 /** Render the unsigned consent PDF preview and ask the dealer for a delivery
  *  channel. Called right after a Hot + finance lead is saved. */
@@ -4162,8 +4450,9 @@ async function promptSubmitToITarang(session: SessionRow): Promise<void> {
   await setSession(session.id, { current_state: "DC_LEAD_CONSENT_REVIEW" });
   await reply(
     session,
-    "Review the signed consent above. When ready, tap *Submit to iTarang* — the documents, extracted details and signed consent all go to the iTarang team for KYC review.",
-    [CONSENT_SEND_BUTTON],
+    "Review the signed consent above. When ready, tap *Submit to iTarang* — the documents, extracted details and signed consent all go to the iTarang team for KYC review.\n\n" +
+      "Need to attach extra files for the lenders (up to 10)? Tap *Extra docs*.",
+    [CONSENT_SEND_BUTTON, EXTRA_DOCS_BUTTON],
   );
 }
 
@@ -4225,8 +4514,8 @@ function parseYesNo(event: InboundEvent, prefix: string): boolean | null {
     if (t === `${prefix}_yes`) return true;
     if (t === `${prefix}_no`) return false;
   }
-  if (/^(yes|y|haan|ha|yep|sure|hai)$/i.test(t)) return true;
-  if (/^(no|n|nahi|nope|nahin)$/i.test(t)) return false;
+  if (/^(yes|y|haan|ha|yep|sure|hai|ji|jee|हाँ|हां|जी|ok|okay|theek hai|ठीक है)$/i.test(t)) return true;
+  if (/^(no|n|nahi|nope|nahin|नहीं|नही|na)$/i.test(t)) return false;
   return null;
 }
 
@@ -4296,10 +4585,16 @@ async function onConsentReview(
   if (id === "consent_send" || /\b(send|submit)\b/.test(id)) {
     return await finalizeLead(session);
   }
+  if (id === "xd_open" || /\bextra\b/.test(id)) {
+    const lead = await getLeadCtx(session);
+    if (lead.leadId) {
+      return await openExtraDocs(session, lead.leadId, { next: "submit" });
+    }
+  }
   await reply(
     session,
-    "Tap *Submit to iTarang* to send the documents and signed consent for KYC review, or send *menu* to exit.",
-    [CONSENT_SEND_BUTTON],
+    "Tap *Submit to iTarang* to send the documents and signed consent for KYC review, *Extra docs* to attach more files, or send *menu* to exit.",
+    [CONSENT_SEND_BUTTON, EXTRA_DOCS_BUTTON],
   );
 }
 
@@ -4550,7 +4845,7 @@ async function onLeadDocs(
 ): Promise<void> {
   if (event.type === "text") {
     const t = (event.text ?? "").trim();
-    if (/^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya)$/i.test(t)) {
+    if (/^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya|hogaya|बस|हो गया|पूरा|poora|pura)$/i.test(t)) {
       return await proceedToConsent(session, dealer);
     }
     await reply(
@@ -5162,10 +5457,26 @@ async function proceedToConsent(
   if (missing.length) {
     ack += `\n\n⚠️ Still missing: ${missing.join(", ")}. You can add these later on the dealer portal.`;
   }
-  ack += "\n\nNow let's get the customer's *KYC consent*. Generating the consent form…";
   await reply(session, ack);
-  await startConsent(session, dealer, lead.leadId);
+  // The optional Step-4 extra-documents bucket sits between the KYC documents
+  // and the consent — the same position the web wizard's card occupies
+  // relative to the rest of the ladder. Skip is one tap; the continuation
+  // registered below carries the turn on to startConsent.
+  await askExtraDocs(session, dealer, lead.leadId, "consent");
 }
+
+/** Hand-back from the extra-documents step into this ladder. */
+registerExtraDocsContinuation(async (session, dealer, next, leadId) => {
+  if (next === "consent") {
+    await reply(
+      session,
+      "Now let's get the customer's *KYC consent*. Generating the consent form…",
+    );
+    await startConsent(session, dealer, leadId);
+    return;
+  }
+  await promptSubmitToITarang(session);
+});
 
 async function finalizeLead(session: SessionRow): Promise<void> {
   // Terminal step for a Hot + finance lead: documents collected, consent signed.

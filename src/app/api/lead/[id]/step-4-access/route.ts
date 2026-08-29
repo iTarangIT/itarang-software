@@ -159,6 +159,8 @@ export async function GET(
         charger_price: productSelections.charger_price,
         paraphernalia_cost: productSelections.paraphernalia_cost,
         dealer_margin: productSelections.dealer_margin,
+        dealer_margin_gst_percent: productSelections.dealer_margin_gst_percent,
+        dealer_margin_gst_amount: productSelections.dealer_margin_gst_amount,
         final_price: productSelections.final_price,
         battery_gross: productSelections.battery_gross,
         battery_gst_percent: productSelections.battery_gst_percent,

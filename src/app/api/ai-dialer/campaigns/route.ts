@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { dialerCampaigns, users } from "@/lib/db/schema";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
 
 export const GET = withErrorHandler(async (req: Request) => {
   const { searchParams } = new URL(req.url);
@@ -46,24 +47,39 @@ export const GET = withErrorHandler(async (req: Request) => {
       completedAt: dialerCampaigns.completed_at,
       triggeredBy: dialerCampaigns.triggered_by,
       triggeredByName: users.name,
-      // Total talk time across the campaign's calls (seconds): sum of each
-      // call's provider-reported duration (ai_call_logs.call_duration), falling
-      // back to per-lead wall-clock (capped at 2h) — mirrors the per-call
-      // Duration in the detail table, so this total ≈ the sum of those cells.
+      // E-228/E-254 — the calling window, so the card can say when this
+      // campaign runs and when a parked one will wake.
+      scheduleMode: dialerCampaigns.schedule_mode,
+      windowStart: dialerCampaigns.window_start,
+      windowEnd: dialerCampaigns.window_end,
+      windowDays: dialerCampaigns.window_days,
+      resumeAfter: dialerCampaigns.resume_after,
+      pausedAt: dialerCampaigns.paused_at,
+      // Total talk time across the campaign's calls (seconds). Binds the ONE
+      // duration rule from call-duration/derive rather than restating it, which
+      // is what makes the claim below true: this total IS the sum of the
+      // per-call Duration cells in the detail table, not an approximation of
+      // them. The local copy this replaces accepted per-lead wall clock on its
+      // own, so it was adding the seconds the dialer spent failing to place
+      // trigger_failed calls to a figure labelled "talk time".
+      //
+      // LATERAL ... LIMIT 1, not a plain LEFT JOIN: ai_call_logs_call_id_idx is
+      // NOT unique, and a lead whose call_id has two log rows was having its
+      // duration counted twice by the join this replaces.
+      //
+      // coalesce(..., 0) restores the summing behaviour the predicate itself
+      // deliberately drops — it yields NULL for "we were never told", which a
+      // histogram needs to distinguish and a SUM does not.
       totalTalkTimeSeconds: sql<number>`(
-        select coalesce(sum(
-          case
-            when acl.call_duration is not null and acl.call_duration > 0
-              then acl.call_duration
-            when dcl.started_at is not null and dcl.completed_at is not null
-                 and extract(epoch from (dcl.completed_at - dcl.started_at)) > 0
-                 and extract(epoch from (dcl.completed_at - dcl.started_at)) < 7200
-              then extract(epoch from (dcl.completed_at - dcl.started_at))::int
-            else 0
-          end
-        ), 0)::int
+        select coalesce(sum(coalesce(${DURATION_SECONDS_SQL}, 0)), 0)::int
         from dialer_campaign_leads dcl
-        left join ai_call_logs acl on acl.call_id = dcl.bolna_call_id
+        left join lateral (
+          select a.call_duration, a.transcript
+            from ai_call_logs a
+           where a.call_id = dcl.bolna_call_id
+           order by a.updated_at desc nulls last
+           limit 1
+        ) acl on true
         where dcl.campaign_id = ${dialerCampaigns.id}
       )`,
     })

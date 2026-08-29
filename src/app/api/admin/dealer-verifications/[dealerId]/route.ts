@@ -5,8 +5,10 @@ import {
   dealerCorrectionRounds,
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
+  dealers,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 import { z } from "zod";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
@@ -15,7 +17,12 @@ import {
 } from "@/lib/onboarding/correction-catalog";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
+import { viewableFileUrl } from "@/lib/storage/legacyUrl";
 import { extractAddress, gstPrincipalAddress } from "@/lib/onboarding/dealer-address";
+import {
+  agreementModeFor,
+  usesManualAgreement,
+} from "@/lib/dealer/dealer-capabilities";
 
 const AddressRoleEnum = z.enum(["billing", "dispatch", "other"]);
 const GstAddressSchema = z.object({
@@ -52,7 +59,20 @@ const PatchBodySchema = z.object({
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
   beneficiaryName: z.string().optional(),
-  ifscCode: z.string().optional(),
+  // IFSC is varchar(11) on accounts.ifsc_code — an over-long or malformed code
+  // (WhatsApp onboarding extracts it from a cheque/passbook photo, so OCR can
+  // add or drop a digit) sails through onboarding and only explodes at
+  // approval time as a raw "value too long for type character varying(11)"
+  // 500. Validate the canonical RBI shape here so it is caught at the point
+  // the admin can actually fix it.
+  ifscCode: z
+    .string()
+    .optional()
+    .transform((v) => (typeof v === "string" ? v.trim().toUpperCase() : v))
+    .refine((v) => !v || /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v), {
+      message:
+        "IFSC code must be 11 characters: 4 letters, then 0, then 6 letters/digits (e.g. HDFC0000516).",
+    }),
   agreementLanguage: z.string().optional(),
 
   // Owner residential address (sole proprietorship) — persisted in
@@ -179,6 +199,22 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       );
     }
 
+    // Whether financing is actually LIVE for this dealer, as opposed to merely
+    // requested on the application. These diverge during post-approval finance
+    // enablement: `financeEnabled` flips to true when the admin clicks Enable
+    // Finance, but `financeLive` only follows once the agreement is signed and
+    // Activate Finance runs. `dealers.finance_enabled` is the column the E-105
+    // lead-creation gate and the WhatsApp console both read.
+    let financeLive = false;
+    if (row.dealer_code) {
+      const [dealerRow] = await db
+        .select({ financeEnabled: dealers.finance_enabled })
+        .from(dealers)
+        .where(eq(dealers.dealer_id, row.dealer_code))
+        .limit(1);
+      financeLive = Boolean(dealerRow?.financeEnabled);
+    }
+
     // Keep only the most recent upload per document_type so the admin sees a
     // single fresh row per item — no stale duplicates after re-upload.
 
@@ -198,7 +234,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       id: doc.id,
       name: doc.file_name || doc.document_type,
       documentType: doc.document_type,
-      url: doc.file_url || "",
+      // Legacy rows hold an absolute URL on the now-deleted Supabase project;
+      // rewrite to the /api/files proxy so the link resolves (E-251 backfill
+      // does the same in the DB — this covers envs it has not reached yet).
+      url: viewableFileUrl(doc.file_url) || "",
       docStatus: doc.doc_status,
       verificationStatus: doc.verification_status,
       uploadedAt: doc.uploaded_at,
@@ -376,9 +415,14 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         agreementLanguage: row.agreement_language,
 
         financeEnabled: row.finance_enabled,
+        financeLive,
         onboardingStatus: row.onboarding_status,
         reviewStatus: row.review_status,
         submittedAt: row.submitted_at,
+        approvedByTag:
+          row.onboarding_status === "approved" && row.approved_by
+            ? (await approvalTagsFor([row.approved_by])).get(row.approved_by) ?? null
+            : null,
 
         // E-167: collection channel + bot-surfaced warnings. For WhatsApp-
         // collected applications the values were auto-extracted (Gemini) and
@@ -400,12 +444,20 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         // "missing documents" alert in Section 2 of the review page.
         missingDocuments,
 
-        agreement: row.finance_enabled
+        // E-225 — manual-mode dealers (scrap / new+scrap) need this block even
+        // with finance off: their agreement is not a finance agreement, and
+        // gating on finance_enabled would leave the review page with nothing to
+        // show for the paper copy they actually signed.
+        agreement: row.finance_enabled || usesManualAgreement(row.dealer_type)
           ? {
               agreementId: row.provider_document_id || null,
               status: row.agreement_status || "not_generated",
+              // How it was executed, and the paper's own provenance.
+              mode: row.agreement_mode || agreementModeFor(row.dealer_type),
+              agreementRef: row.agreement_ref || null,
+              agreementSignedOn: row.agreement_signed_on || null,
               copyUrl: row.provider_signing_url || null,
-              signedAgreementUrl: row.signed_agreement_url || null,
+              signedAgreementUrl: viewableFileUrl(row.signed_agreement_url) || null,
               requestId: row.request_id || null,
               stampStatus: row.stamp_status || "pending",
               completionStatus: row.completion_status || "pending",
@@ -466,10 +518,16 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
     const parsed = PatchBodySchema.safeParse(rawBody);
     if (!parsed.success) {
+      // Surface the actual field message — a bare "Invalid request body" gives
+      // the admin nothing to act on when e.g. the IFSC fails its format check.
+      const firstIssue = parsed.error.issues[0];
+      const fieldPath = firstIssue?.path?.join(".") || "";
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid request body",
+          message: firstIssue
+            ? `${fieldPath ? `${fieldPath}: ` : ""}${firstIssue.message}`
+            : "Invalid request body",
           errors: parsed.error.issues,
         },
         { status: 400 }

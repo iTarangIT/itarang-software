@@ -33,7 +33,7 @@ import ServiceOptInSection, {
 } from "./_components/ServiceOptInSection";
 import StepOwnersSection from "./_components/StepOwnersSection";
 import WalletSection from "./_components/WalletSection";
-import ConsentTemplateSection from "./_components/ConsentTemplateSection";
+import RecoveryAgentDirectory from "./_components/RecoveryAgentDirectory";
 
 export const dynamic = "force-dynamic";
 
@@ -186,18 +186,11 @@ export default async function SettingsPage() {
         callbackBase={callbackBase}
       />
 
-      {/* Consent document — the NBFC's own DPDP consent template (E-205) */}
-      <ConsentTemplateSection
-        canEdit={canEdit}
-        initialTemplate={
-          serviceCfgRow?.consent_template_url
-            ? {
-                url: serviceCfgRow.consent_template_url,
-                size: serviceCfgRow.consent_template_size ?? null,
-              }
-            : null
-        }
-      />
+      {/* Recovery agents (E-262) — the people dispatched to collect a flagged
+          battery. Its own section rather than a link inside Service Opt-In (the
+          way the FI directory sits): the Recovery queue cannot dispatch anyone
+          until this list has a name in it, so it is not a sub-setting. */}
+      <RecoveryAgentDirectory canEdit={canEdit} />
 
       {/* Notification Channels — per-NBFC Email/SMS/WhatsApp gateways (§15.5) */}
       <NotificationChannelsSection />

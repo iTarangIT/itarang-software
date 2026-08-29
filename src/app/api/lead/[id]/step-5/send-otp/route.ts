@@ -7,7 +7,11 @@ import { leads, loanSanctions, otpConfirmations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { sendMsg91Otp } from "@/lib/msg91";
-import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
+import {
+  sendTwoFactorSmsOtp,
+  sendTwoFactorVoiceOtp,
+  twoFactorConfigured,
+} from "@/lib/twofactor";
 
 // BRD V2 §3.2 — Step 5 OTP send.
 // Generates a 6-digit OTP, stores a SHA-256 hash with 10-minute expiry, and
@@ -178,31 +182,52 @@ export async function POST(
     const isDev = process.env.NODE_ENV !== "production";
     let deliveryStatus: "voice_call" | "sms" | "dev_hardcoded" = "dev_hardcoded";
 
-    if (twofactorConfigured) {
-      // Primary: 2Factor places an automated phone call reading the OTP aloud.
-      const call = await sendTwoFactorVoiceOtp({ mobile_number: phone, otp });
-      if (!call.success) {
-        const reason = `Voice OTP call failed: ${call.error || "unknown error"}`;
+    if (twofactorConfigured || msg91Configured) {
+      // Ladder: 2Factor voice call → 2Factor SMS → MSG91 SMS. Each wallet is a
+      // separate balance; an empty voice wallet must not block dispatch while
+      // an SMS wallet still has credit (2026-08-26 "Insufficient Account
+      // Balance" incident).
+      const failures: string[] = [];
+      let delivered = false;
+
+      if (twofactorConfigured) {
+        const call = await sendTwoFactorVoiceOtp({ mobile_number: phone, otp });
+        if (call.success) {
+          deliveryStatus = "voice_call";
+          delivered = true;
+        } else {
+          failures.push(`call: ${call.error || "unknown error"}`);
+          const sms = await sendTwoFactorSmsOtp({ mobile_number: phone, otp });
+          if (sms.success) {
+            deliveryStatus = "sms";
+            delivered = true;
+          } else {
+            failures.push(`SMS: ${sms.error || "unknown error"}`);
+          }
+        }
+      }
+
+      if (!delivered && msg91Configured) {
+        const smsResult = await sendMsg91Otp({
+          mobile_number: phone,
+          otp,
+          otp_expiry_minutes: Math.floor(OTP_LIFETIME_MS / 60000),
+        });
+        if (smsResult.success) {
+          deliveryStatus = "sms";
+          delivered = true;
+        } else {
+          failures.push(`MSG91: ${smsResult.error || "unknown error"}`);
+        }
+      }
+
+      if (!delivered) {
+        const reason = `OTP delivery failed — ${failures.join("; ")}. Check the OTP provider balance.`;
         return NextResponse.json(
           { success: false, error: { message: reason, smsStatus: "failed" } },
           { status: 502 },
         );
       }
-      deliveryStatus = "voice_call";
-    } else if (msg91Configured) {
-      const smsResult = await sendMsg91Otp({
-        mobile_number: phone,
-        otp,
-        otp_expiry_minutes: Math.floor(OTP_LIFETIME_MS / 60000),
-      });
-      if (!smsResult.success) {
-        const reason = `SMS delivery failed: ${smsResult.error || "unknown error"}`;
-        return NextResponse.json(
-          { success: false, error: { message: reason, smsStatus: "failed" } },
-          { status: 502 },
-        );
-      }
-      deliveryStatus = "sms";
     } else {
       console.log(
         `[Step 5 Send OTP] No OTP provider configured — using hardcoded OTP ${otp} for ${leadId}. Set TWOFACTOR_API_KEY (voice call) or MSG91_AUTH_KEY + MSG91_TEMPLATE_ID (SMS) to switch to live delivery.`,

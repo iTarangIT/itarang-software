@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iTarang CRM — Risk Alert Agent</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#14181f; --muted:#5b6572;
+    --line:#e2e6ec; --accent:#0f6fd6; --accent-soft:#e8f1fc;
+    --high:#d32f2f; --high-bg:#fdecec;
+    --warn:#b26a00; --warn-bg:#fdf3e3;
+    --ok:#1d7a4f;   --ok-bg:#e7f5ee;
+    --grey:#5b6572; --grey-bg:#eef0f3;
+    --code:#f2f4f7;
+    --radius:10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0e1116; --panel:#161b22; --ink:#e6eaf0; --muted:#9aa5b4;
+      --line:#262d38; --accent:#5aa9f7; --accent-soft:#132436;
+      --high:#ff7a72; --high-bg:#2c1618;
+      --warn:#e8b04b; --warn-bg:#2b2213;
+      --ok:#5fd39a;   --ok-bg:#12271d;
+      --grey:#9aa5b4; --grey-bg:#1c222b;
+      --code:#1b212a;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#14181f; --muted:#5b6572;
+    --line:#e2e6ec; --accent:#0f6fd6; --accent-soft:#e8f1fc;
+    --high:#d32f2f; --high-bg:#fdecec; --warn:#b26a00; --warn-bg:#fdf3e3;
+    --ok:#1d7a4f; --ok-bg:#e7f5ee; --grey:#5b6572; --grey-bg:#eef0f3; --code:#f2f4f7;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e1116; --panel:#161b22; --ink:#e6eaf0; --muted:#9aa5b4;
+    --line:#262d38; --accent:#5aa9f7; --accent-soft:#132436;
+    --high:#ff7a72; --high-bg:#2c1618; --warn:#e8b04b; --warn-bg:#2b2213;
+    --ok:#5fd39a; --ok-bg:#12271d; --grey:#9aa5b4; --grey-bg:#1c222b; --code:#1b212a;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:40px 20px 90px}
+  header.top{border-bottom:2px solid var(--line); padding-bottom:22px; margin-bottom:34px}
+  h1{font-size:30px; line-height:1.25; margin:0 0 8px; letter-spacing:-.02em}
+  .sub{color:var(--muted); font-size:15px; margin:0}
+  .tagrow{margin-top:14px; display:flex; flex-wrap:wrap; gap:8px}
+  .tag{font-size:12px; font-weight:600; padding:4px 10px; border-radius:999px;
+       background:var(--accent-soft); color:var(--accent); border:1px solid var(--line)}
+
+  h2{font-size:21px; margin:52px 0 6px; letter-spacing:-.01em}
+  h2 .num{display:inline-block; min-width:30px; color:var(--accent); font-variant-numeric:tabular-nums}
+  h3{font-size:16px; margin:26px 0 8px}
+  p{margin:10px 0}
+  .lead{color:var(--muted); margin:0 0 18px; font-size:15px}
+
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:20px; margin:18px 0}
+
+  /* ── callouts ── */
+  .rule{border-left:4px solid var(--accent); background:var(--accent-soft);
+        padding:14px 18px; border-radius:0 var(--radius) var(--radius) 0; margin:18px 0}
+  .rule b{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); margin-bottom:4px}
+  .warnbox{border-left:4px solid var(--warn); background:var(--warn-bg); padding:14px 18px;
+           border-radius:0 var(--radius) var(--radius) 0; margin:18px 0}
+  .warnbox b{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--warn); margin-bottom:4px}
+
+  /* ── stack diagram ── */
+  .stack{display:flex; flex-direction:column; align-items:stretch; gap:0; margin:8px 0}
+  .layer{border:1px solid var(--line); background:var(--panel); border-radius:var(--radius);
+         padding:14px 18px; display:flex; gap:16px; align-items:flex-start}
+  .layer .n{flex:0 0 34px; height:34px; border-radius:50%; background:var(--accent-soft); color:var(--accent);
+            font-weight:700; display:flex; align-items:center; justify-content:center; font-size:14px}
+  .layer .t{font-weight:650}
+  .layer .d{color:var(--muted); font-size:14px}
+  .layer.llm{border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft)}
+  .layer .io{margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);
+             font-size:12.5px; color:var(--muted)}
+  .layer .io .in,.layer .io .outp{font-size:10.5px; font-weight:750; letter-spacing:.05em;
+             padding:1px 6px; border-radius:4px; margin-right:5px}
+  .layer .io .in{background:var(--grey-bg); color:var(--grey)}
+  .layer .io .outp{background:var(--ok-bg); color:var(--ok)}
+  .layer .io .sep{margin:0 8px; opacity:.5}
+  .layer .io code{font-size:.92em}
+  h4{font-weight:700}
+  .arrow{align-self:center; color:var(--muted); font-size:18px; line-height:1; padding:6px 0}
+
+  /* ── flow chips ── */
+  .flow{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:14px 0}
+  .node{border:1px solid var(--line); background:var(--panel); border-radius:8px;
+        padding:8px 12px; font-size:13.5px; font-weight:600; white-space:nowrap}
+  .node.term{background:var(--grey-bg); color:var(--muted); font-weight:600}
+  .node.hot{border-color:var(--accent); background:var(--accent-soft); color:var(--accent)}
+  .arr{color:var(--muted)}
+
+  /* ── generic table ── */
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:14px 0}
+  table{border-collapse:collapse; width:100%; min-width:560px; font-size:14.5px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:650}
+  tbody tr:last-child td{border-bottom:none}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em;
+       background:var(--code); padding:1.5px 5px; border-radius:4px}
+  pre{background:var(--code); border:1px solid var(--line); border-radius:var(--radius);
+      padding:14px 16px; overflow-x:auto; font-size:13px; line-height:1.55; margin:14px 0}
+  pre code{background:none; padding:0}
+
+  /* ── pills ── */
+  .pill{display:inline-block; font-size:11.5px; font-weight:700; padding:2px 8px; border-radius:999px;
+        letter-spacing:.03em; white-space:nowrap}
+  .p-high{background:var(--high-bg); color:var(--high)}
+  .p-warn{background:var(--warn-bg); color:var(--warn)}
+  .p-ok{background:var(--ok-bg); color:var(--ok)}
+  .p-grey{background:var(--grey-bg); color:var(--grey)}
+  .p-acc{background:var(--accent-soft); color:var(--accent)}
+
+  /* ── two column ── */
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:16px 0}
+  @media (max-width:720px){ .cols{grid-template-columns:1fr} }
+  .card{border:1px solid var(--line); background:var(--panel); border-radius:var(--radius); padding:16px}
+  .card h4{margin:0 0 8px; font-size:14px; letter-spacing:.03em; text-transform:uppercase; color:var(--muted)}
+  .card ul{margin:0; padding-left:18px}
+  .card li{margin:5px 0; font-size:14.5px}
+
+  /* ── lifecycle ── */
+  .life{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:14px 0}
+  .state{border:2px solid var(--line); border-radius:999px; padding:6px 14px; font-size:13.5px; font-weight:650; background:var(--panel)}
+  .state.open{border-color:var(--high); color:var(--high)}
+  .state.ack{border-color:var(--warn); color:var(--warn)}
+  .state.res{border-color:var(--ok); color:var(--ok)}
+
+  ul.plain{padding-left:20px; margin:10px 0}
+  ul.plain li{margin:6px 0}
+  .muted{color:var(--muted)}
+  .yes{color:var(--ok); font-weight:700}
+  .no{color:var(--high); font-weight:700}
+  .add{color:var(--accent); font-weight:700}
+  footer{margin-top:60px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:13.5px}
+  a{color:var(--accent)}
+
+  /* ── horizontal pipeline diagram ── */
+  .pipe{display:flex; align-items:stretch; gap:0; min-width:900px; padding:4px 0}
+  .pcol{flex:1 1 0; display:flex; flex-direction:column; gap:10px; min-width:150px}
+  .phead{font-size:11px; font-weight:750; letter-spacing:.08em; text-transform:uppercase;
+         color:var(--muted); text-align:center; padding-bottom:6px; border-bottom:2px solid var(--line)}
+  .pbox{border:1px solid var(--line); background:var(--panel); border-radius:8px; padding:10px 12px; flex:1}
+  .pbox .bt{font-size:13px; font-weight:700; margin-bottom:4px}
+  .pbox .bs{font-size:11.5px; color:var(--muted); line-height:1.5;
+            font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .pbox.db{border-color:var(--accent); background:var(--accent-soft)}
+  .pbox.db .bt{color:var(--accent)}
+  .pbox.out{border-color:var(--ok); background:var(--ok-bg)}
+  .pbox.out .bt{color:var(--ok)}
+  .pbox.ai{border-color:var(--warn); background:var(--warn-bg)}
+  .pbox.ai .bt{color:var(--warn)}
+  .parrow{flex:0 0 34px; display:flex; align-items:center; justify-content:center;
+          color:var(--accent); font-size:20px; font-weight:700}
+
+  /* ── trace table ── */
+  table.trace{min-width:900px; font-size:13px}
+  table.trace td{padding:8px 10px}
+  table.trace code{font-size:11.5px; background:none; padding:0; color:var(--ink)}
+  table.trace .src code{color:var(--accent)}
+  table.trace .out{color:var(--ok); font-weight:600}
+  table.trace .fn{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>CRM Risk Alert Agent</h1>
+  <p class="sub">One agent that watches the whole iTarang CRM, catches risk anywhere in it, and tells the right person — in-app, by email, on WhatsApp.</p>
+  <div class="tagrow">
+    <span class="tag">LangGraph</span>
+    <span class="tag">LangChain</span>
+    <span class="tag">LangSmith</span>
+    <span class="tag">Postgres</span>
+    <span class="tag">Next.js cron route</span>
+    <span class="tag">Architecture v1 · 28 Jul 2026</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══════════════ -->
+<h2><span class="num">1.</span> The problem in one picture</h2>
+<p class="lead">The CRM has ~253 tables and ~194 API routes. Today only a small corner of it is watched.</p>
+
+<div class="cols">
+  <div class="card">
+    <h4 style="color:var(--ok)">✔ Watched today</h4>
+    <ul>
+      <li>NBFC loan portfolio (risk cards)</li>
+      <li>Battery / IoT telemetry alerts</li>
+      <li>Rows explicitly put into the <code>slas</code> table</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4 style="color:var(--high)">✘ Not watched at all</h4>
+    <ul>
+      <li>KYC review backlog piling up</li>
+      <li>KYC retries exhausted → dead lead</li>
+      <li>Orders past their delivery date</li>
+      <li>Stock stuck in “dispatched” forever</li>
+      <li>Dealer onboarding drafts abandoned</li>
+      <li>WhatsApp conversations gone silent</li>
+      <li>E-sign links expiring unsigned</li>
+      <li>Payments, consent gaps, data drift</li>
+    </ul>
+  </div>
+</div>
+
+<div class="warnbox">
+  <b>And even where we do detect</b>
+  A High-severity risk card today is visible on <em>one page</em> and emails <em>nobody</em>. There is no delivery step. That is the gap this agent closes.
+</div>
+
+<!-- ══════════════ 2 ══════════════ -->
+<h2><span class="num">2.</span> The one rule that makes it trustworthy</h2>
+
+<div class="rule">
+  <b>Golden rule</b>
+  <strong>The AI never decides severity or counts. Plain code does the maths. The AI only explains, groups, and drafts the message.</strong>
+</div>
+
+<p>Why this matters: if you ask a model “how many leads are at risk?”, it will produce a number that <em>looks</em> exactly like a measured one and isn’t. So the numbers come from SQL, and the model gets the numbers handed to it.</p>
+
+<p>This is the same discipline the existing NBFC risk engine already uses, so we keep the same four-word vocabulary:</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Verdict</th><th>What it actually means</th></tr></thead>
+  <tbody>
+    <tr><td><span class="pill p-high">HIGH</span></td><td>We tested it. It’s bad. Act now.</td></tr>
+    <tr><td><span class="pill p-warn">WARN</span></td><td>We tested it. It’s drifting. Keep an eye on it.</td></tr>
+    <tr><td><span class="pill p-ok">OK</span></td><td>We tested it and <strong>found nothing</strong>.</td></tr>
+    <tr><td><span class="pill p-grey">INCONCLUSIVE</span></td><td>We <strong>could not test it</strong> — data missing. This is <em>not</em> the same as OK.</td></tr>
+    <tr><td><span class="pill p-grey">ERROR</span></td><td>The check itself crashed. A bug in us, not a clean bill of health.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="muted">Collapsing those last three into “OK” is exactly how a broken engine renders as a healthy business. We don’t do it.</p>
+
+<!-- ══════════════ 3 ══════════════ -->
+<h2><span class="num">3.</span> Architecture — six layers</h2>
+<p class="lead">Data comes in the top, an alert goes out the bottom. Only <strong>one</strong> layer uses AI.</p>
+
+<div class="stack">
+  <div class="layer">
+    <div class="n">1</div>
+    <div><div class="t">Collectors — read the data</div>
+    <div class="d">Plain SQL, one file per domain (leads, KYC, e-sign, EMI, inventory, payments, onboarding, telemetry, security). They return rows. They never judge anything.</div>
+    <div class="io"><span class="in">IN</span> 2 databases, read-only <span class="sep">•</span> <span class="outp">OUT</span> raw rows</div></div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="layer">
+    <div class="n">2</div>
+    <div><div class="t">Detectors — decide the verdict</div>
+    <div class="d">Deterministic TypeScript. Each detector is one small function: <code>slug → fn(rows, thresholds) → findings</code>. This is where HIGH/WARN/OK is decided, and nowhere else.</div>
+    <div class="io"><span class="in">IN</span> rows + thresholds <span class="sep">•</span> <span class="outp">OUT</span> <code>RiskFinding[]</code> — severity, counts, evidence</div></div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="layer">
+    <div class="n">3</div>
+    <div><div class="t">Dedupe — is this actually new?</div>
+    <div class="d">Every finding gets a fingerprint. Already open? Just bump the counter. Gone away? Close it automatically. This layer is what stops the inbox from becoming noise.</div>
+    <div class="io"><span class="in">IN</span> findings + open alerts <span class="sep">•</span> <span class="outp">OUT</span> new · reopened · still-open · auto-resolved</div></div>
+  </div>
+  <div class="arrow">▼ <span class="muted" style="font-size:13px">(new findings only)</span></div>
+
+  <div class="layer llm">
+    <div class="n">4</div>
+    <div><div class="t">Triage — the only AI step 🤖</div>
+    <div class="d">Takes a pile of raw findings and turns it into something a human can act on: groups related ones, ranks them, writes the explanation, picks the owner. <strong>See the breakdown below.</strong></div>
+    <div class="io"><span class="in">IN</span> new findings (numbers already fixed) <span class="sep">•</span> <span class="outp">OUT</span> title, summary, recommended action, owner</div></div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="layer">
+    <div class="n">5</div>
+    <div><div class="t">Notify — reach the human</div>
+    <div class="d">In-app bell + email digest + WhatsApp for the urgent ones. Respects quiet hours and a suppression window. Escalates if nobody acknowledges.</div>
+    <div class="io"><span class="in">IN</span> triaged alerts + owner role <span class="sep">•</span> <span class="outp">OUT</span> bell · email · WhatsApp</div></div>
+  </div>
+  <div class="arrow">▼</div>
+
+  <div class="layer">
+    <div class="n">6</div>
+    <div><div class="t">Dashboard + tracing</div>
+    <div class="d">An alert board at <code>/admin/risk-alerts</code> to acknowledge / snooze / resolve, plus LangSmith traces so you can see what the agent did and what it cost.</div>
+    <div class="io"><span class="in">IN</span> the alert tables <span class="sep">•</span> <span class="outp">OUT</span> a screen a human works from</div></div>
+  </div>
+</div>
+
+<!-- ── TRIAGE EXPLAINER ── -->
+<h3 id="triage">Layer 4 in detail — what does “triage” actually mean?</h3>
+
+<div class="rule">
+  <b>Triage, in one line</b>
+  Exactly like a hospital emergency room: <strong>many people arrive at once, someone decides who is seen first, and why.</strong> Our detectors are the people arriving. Triage is the nurse at the door.
+</div>
+
+<p>Without triage, a sweep hands you <strong>47 separate findings</strong> in no particular order, each phrased as a raw database condition. That is a spreadsheet, not an alert. Triage turns it into a short, ranked, readable list.</p>
+
+<h4 style="margin:22px 0 6px; font-size:15px">The five jobs triage does</h4>
+<div class="scroll">
+<table>
+  <thead><tr><th style="width:20%">Job</th><th>What it means</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>1 · Group</strong></td>
+      <td>Merge findings that share one root cause into a single incident, so you get one alert instead of forty.</td>
+      <td>38 separate “auto-debit failed” findings ➜ <em>one</em> alert: “Payment gateway looks down”</td>
+    </tr>
+    <tr>
+      <td><strong>2 · Rank</strong></td>
+      <td>Order the incidents by what actually deserves attention first — money and compliance above process delays.</td>
+      <td>A missing consent on a sanctioned loan ranks above 12 stalled leads</td>
+    </tr>
+    <tr>
+      <td><strong>3 · Explain</strong></td>
+      <td>Rewrite the raw condition as three plain sentences: <em>what happened · why it matters · what to do next.</em></td>
+      <td>“<code>retry_count ≥ 3</code>” ➜ “4 customers can’t finish KYC. They’ll drop off. Call them or reset the verification.”</td>
+    </tr>
+    <tr>
+      <td><strong>4 · Assign</strong></td>
+      <td>Pick the role that can actually fix it, so the alert lands on the right desk rather than everyone’s.</td>
+      <td>Wallet low ➜ Finance Controller. Stalled lead ➜ Sales Manager.</td>
+    </tr>
+    <tr>
+      <td><strong>5 · Suppress</strong></td>
+      <td>Mark findings that are real but not worth a ping right now — they stay on the dashboard, they just don’t interrupt anyone.</td>
+      <td>2 leads stalled over a public holiday ➜ visible, not notified</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h4 style="margin:26px 0 6px; font-size:15px">Before and after, on real data</h4>
+<div class="cols">
+  <div class="card">
+    <h4 style="color:var(--high)">Without triage — what the detectors emit</h4>
+    <pre style="margin:0; font-size:11.5px"><code>emi-autodebit-failed  LOAN-4471  WARN
+emi-autodebit-failed  LOAN-4472  WARN
+emi-autodebit-failed  LOAN-4478  WARN
+… 35 more identical rows …
+kyc-retry-exhausted   LEAD-10422 WARN
+kyc-retry-exhausted   LEAD-10455 WARN
+consent-missing       LOAN-4390  HIGH
+lead-stalled-in-step  LEAD-9981  WARN</code></pre>
+    <p style="font-size:13px; margin:10px 0 0" class="muted">47 rows. All equally loud. Nobody reads this twice.</p>
+  </div>
+  <div class="card">
+    <h4 style="color:var(--ok)">With triage — what reaches you</h4>
+    <div style="border-left:3px solid var(--high); padding-left:10px; margin-bottom:12px">
+      <div style="font-weight:700; font-size:13.5px">🔴 Loan sanctioned without signed consent</div>
+      <div style="font-size:12.5px" class="muted">1 loan · compliance breach · <strong>Compliance</strong> · fix today</div>
+    </div>
+    <div style="border-left:3px solid var(--warn); padding-left:10px; margin-bottom:12px">
+      <div style="font-weight:700; font-size:13.5px">🟠 Auto-debit failing across 38 loans</div>
+      <div style="font-size:12.5px" class="muted">Single spike, one day — likely gateway, not 38 defaulters · <strong>Finance</strong></div>
+    </div>
+    <div style="border-left:3px solid var(--warn); padding-left:10px">
+      <div style="font-weight:700; font-size:13.5px">🟠 4 customers stuck on KYC</div>
+      <div style="font-size:12.5px" class="muted">Retries exhausted — they will drop off · <strong>Sales Manager</strong></div>
+    </div>
+    <p style="font-size:13px; margin:12px 0 0" class="muted">3 incidents, ranked, owned. Readable in 15 seconds.</p>
+  </div>
+</div>
+
+<h4 style="margin:26px 0 6px; font-size:15px">What triage is <em>not</em> allowed to do</h4>
+<div class="scroll">
+<table>
+  <thead><tr><th style="width:46%">Allowed</th><th>Forbidden</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="yes">✔ Lower a severity (HIGH ➜ WARN) with a stated reason</td>
+      <td class="no">✘ Raise a severity — ever</td>
+    </tr>
+    <tr>
+      <td class="yes">✔ Group findings and name the incident</td>
+      <td class="no">✘ Invent a count, an amount, or a customer</td>
+    </tr>
+    <tr>
+      <td class="yes">✔ Write the summary and recommended action</td>
+      <td class="no">✘ Change any number the detector computed</td>
+    </tr>
+    <tr>
+      <td class="yes">✔ Choose the owning role and the channel</td>
+      <td class="no">✘ Create an alert no detector produced</td>
+    </tr>
+    <tr>
+      <td class="yes">✔ Mark something as not-worth-notifying</td>
+      <td class="no">✘ Delete or resolve an alert</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>Enforced in code, not by prompt wording: the triage output is parsed through a strict <strong>zod schema</strong>, and any severity higher than the detector's own verdict is clamped back down before the alert is written. If the model returns nonsense, the alert still ships with the detector's raw wording — <strong>degraded, never wrong</strong>.</p>
+
+<div class="rule">
+  <b>The practical test</b>
+  Turn triage off and the system still works — you just get the ugly 47-row list instead of the 3-line one. That is deliberate. Triage improves readability; it is never load-bearing for correctness.
+</div>
+
+<!-- ══════════════ 4 ══════════════ -->
+<h2><span class="num">4.</span> Data flow — database ➜ functions ➜ output</h2>
+<p class="lead">Follow the arrows left to right. Where the data is read from, which function does what to it, and what finally reaches a human.</p>
+
+<div class="scroll">
+<div class="pipe">
+
+  <!-- 1 · SOURCE -->
+  <div class="pcol">
+    <div class="phead">① Read from</div>
+    <div class="pbox db">
+      <div class="bt">AWS RDS Postgres</div>
+      <div class="bs">DATABASE_URL<br>
+      db · src/lib/db/index.ts<br><br>
+      leads · kyc_verifications<br>
+      consent_records · slas<br>
+      emi_schedules · orders<br>
+      inventory · nbfc_wallets<br>
+      users · accounts<br>
+      audit_logs</div>
+    </div>
+    <div class="pbox db">
+      <div class="bt">VPS Telemetry PG</div>
+      <div class="bs">IOT_DATABASE_URL<br>
+      getIotSql() · db/iot.ts<br>
+      <em>read-only role</em><br><br>
+      vehicle_state<br>
+      distance_rollup<br>
+      telemetry_battery</div>
+    </div>
+  </div>
+
+  <div class="parrow">➜</div>
+
+  <!-- 2 · COLLECT -->
+  <div class="pcol">
+    <div class="phead">② Collect</div>
+    <div class="pbox">
+      <div class="bt">Collector functions</div>
+      <div class="bs">risk-alerts/collectors/<br><br>
+      collectLeadPipeline()<br>
+      collectKyc()<br>
+      collectEsign()<br>
+      collectEmi()<br>
+      collectInventory()<br>
+      collectPayments()<br>
+      collectOnboarding()<br>
+      collectIntegrity()<br>
+      collectSecurity()<br>
+      collectTelemetry()</div>
+    </div>
+    <div class="pbox" style="flex:0">
+      <div class="bs" style="color:var(--muted)">Plain SELECTs.<br><strong>Return rows only.</strong><br>No verdicts here.</div>
+    </div>
+  </div>
+
+  <div class="parrow">➜</div>
+
+  <!-- 3 · DETECT -->
+  <div class="pcol">
+    <div class="phead">③ Decide</div>
+    <div class="pbox">
+      <div class="bt">Detector functions</div>
+      <div class="bs">risk-alerts/detectors/<br><br>
+      detectLeadStalled()<br>
+      detectKycRetryExhausted()<br>
+      detectConsentExpiring()<br>
+      detectDpdBandCrossed()<br>
+      detectWalletLow()<br>
+      detectOrphanDealer()<br>
+      detectTelemetryStale()<br>
+      …~30 total</div>
+    </div>
+    <div class="pbox" style="flex:0">
+      <div class="bs" style="color:var(--muted)"><strong>Verdict decided HERE</strong><br>and nowhere else.<br>⇒ RiskFinding[]</div>
+    </div>
+  </div>
+
+  <div class="parrow">➜</div>
+
+  <!-- 4 · DEDUPE + AI -->
+  <div class="pcol">
+    <div class="phead">④ Dedupe &amp; write</div>
+    <div class="pbox">
+      <div class="bt">Dedupe</div>
+      <div class="bs">fingerprintOf()<br>diffFindings()<br><br>
+      new · reopened<br>still-open · resolved</div>
+    </div>
+    <div class="pbox ai">
+      <div class="bt">🤖 Triage (new only)</div>
+      <div class="bs">triageFindings()<br>gpt-4o-mini + zod<br>writes the wording,<br>never the numbers</div>
+    </div>
+    <div class="pbox">
+      <div class="bt">Writes to</div>
+      <div class="bs">risk_alerts<br>risk_alert_events<br>risk_alert_runs</div>
+    </div>
+  </div>
+
+  <div class="parrow">➜</div>
+
+  <!-- 5 · OUTPUT -->
+  <div class="pcol">
+    <div class="phead">⑤ You get</div>
+    <div class="pbox out">
+      <div class="bt">🔔 In-app bell</div>
+      <div class="bs">notifications table<br>emit() · every alert</div>
+    </div>
+    <div class="pbox out">
+      <div class="bt">✉ Email digest</div>
+      <div class="bs">sendRiskAlertEmail()<br>1 mail per sweep,<br>per owner role</div>
+    </div>
+    <div class="pbox out">
+      <div class="bt">💬 WhatsApp</div>
+      <div class="bs">meta.ts<br>HIGH severity only</div>
+    </div>
+    <div class="pbox out">
+      <div class="bt">📊 Dashboard</div>
+      <div class="bs">/admin/risk-alerts<br>ack · snooze · resolve</div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<p class="muted" style="font-size:13.5px">Two separate databases, both <strong>read-only</strong> for this agent. It never writes to a business table — the only rows it creates are its own alerts. Nothing it does can corrupt a lead, a loan or a payment.</p>
+
+<h3>Trace one alert end to end</h3>
+<p class="lead">Eight real examples. Read each row left to right: table ➜ collector ➜ detector ➜ what you'd actually see.</p>
+
+<div class="scroll">
+<table class="trace">
+  <thead>
+    <tr>
+      <th>Read from ①</th><th></th>
+      <th>Collector ②</th><th></th>
+      <th>Detector ③</th><th></th>
+      <th>Rule</th><th></th>
+      <th>You see ⑤</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="src"><code>leads</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectLeadPipeline()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectLeadStalled()</code></td><td class="arr">➜</td>
+      <td>step unchanged &gt; 5 working days</td><td class="arr">➜</td>
+      <td class="out">“12 leads stuck at Step 3”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>admin_verification_queue</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectKyc()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectVerificationBacklog()</code></td><td class="arr">➜</td>
+      <td><code>reviewed_at</code> null &amp; &gt; 48h old</td><td class="arr">➜</td>
+      <td class="out">“9 KYC reviews waiting 2+ days”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>kyc_verifications</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectKyc()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectKycRetryExhausted()</code></td><td class="arr">➜</td>
+      <td><code>retry_count ≥ 3</code>, still unverified</td><td class="arr">➜</td>
+      <td class="out">“4 leads dead-ended on KYC”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>consent_records</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectEsign()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectConsentExpiring()</code></td><td class="arr">➜</td>
+      <td>expires &lt; 24h, unsigned</td><td class="arr">➜</td>
+      <td class="out">“3 consent links expire today”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>emi_schedules</code><br><code>loan_sanctions</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectEmi()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectDpdBandCrossed()</code></td><td class="arr">➜</td>
+      <td><code>days_overdue</code> crosses 30/60/90</td><td class="arr">➜</td>
+      <td class="out">“6 borrowers crossed DPD 30”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>nbfc_wallets</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectPayments()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectWalletLow()</code></td><td class="arr">➜</td>
+      <td>balance &lt; auto-recharge threshold</td><td class="arr">➜</td>
+      <td class="out">“NBFC wallet below threshold”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>users</code> + <code>accounts</code></td><td class="arr">➜</td>
+      <td class="fn"><code>collectIntegrity()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectOrphanDealer()</code></td><td class="arr">➜</td>
+      <td>LEFT JOIN finds no account</td><td class="arr">➜</td>
+      <td class="out">“2 dealer logins point nowhere”</td>
+    </tr>
+    <tr>
+      <td class="src"><code>telemetry_ingestion_log</code><br><span class="muted" style="font-size:11px">+ <code>vehicle_state</code> (IoT DB)</span></td><td class="arr">➜</td>
+      <td class="fn"><code>collectTelemetry()</code></td><td class="arr">➜</td>
+      <td class="fn"><code>detectTelemetryStale()</code></td><td class="arr">➜</td>
+      <td>nothing ingested &gt; 24h</td><td class="arr">➜</td>
+      <td class="out">“No battery data for 31 hours”</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="rule">
+  <b>Read the last two columns together</b>
+  The <em>Rule</em> column is plain SQL/TypeScript — that is what produces the number. The <em>You see</em> column is the sentence the AI writes <strong>around</strong> that number. The model is a translator, never a calculator.
+</div>
+
+<!-- ══════════════ 5 ══════════════ -->
+<h2><span class="num">5.</span> The LangGraph flow</h2>
+<p class="lead">A straight line, not a loop. Predictable, cheap, easy to debug.</p>
+
+<div class="flow">
+  <span class="node term">START</span><span class="arr">→</span>
+  <span class="node">collect_signals</span><span class="arr">→</span>
+  <span class="node">run_detectors</span><span class="arr">→</span>
+  <span class="node">dedupe_and_diff</span><span class="arr">→</span>
+  <span class="node hot">triage 🤖</span><span class="arr">→</span>
+  <span class="node">route_and_notify</span><span class="arr">→</span>
+  <span class="node">persist_run</span><span class="arr">→</span>
+  <span class="node term">END</span>
+</div>
+
+<div class="panel">
+  <p style="margin-top:0"><strong>Two things to notice:</strong></p>
+  <ul class="plain">
+    <li><strong>Triage is skipped</strong> when there are no new findings. Most sweeps cost ₹0 in tokens.</li>
+    <li><strong>The graph is useful with the AI node switched off.</strong> The first release ships exactly like that. If the LLM never works, you still get a working alerting system.</li>
+  </ul>
+</div>
+
+<h3>State &amp; durability</h3>
+<p>Standard <code>StateGraph</code> + <code>Annotation.Root</code>, compiled per call, <strong>no checkpointer</strong> — same as the two graphs already in this repo. Durability comes from writing rows to Postgres inside the nodes, not from LangGraph memory.</p>
+
+<!-- ══════════════ 6 ══════════════ -->
+<h2><span class="num">6.</span> How dedupe works (the important bit)</h2>
+<p class="lead">Without this, every sweep re-raises every alert and everyone mutes the channel by Thursday.</p>
+
+<pre><code>fingerprint = sha1( detector_slug + entity_type + entity_id )
+
+  e.g.  "kyc-retry-exhausted" + "lead" + "LEAD-10422"  →  a1f9c3…</code></pre>
+
+<p>One database index does the whole job:</p>
+
+<pre><code>CREATE UNIQUE INDEX risk_alerts_open_fingerprint_idx
+  ON risk_alerts (fingerprint)
+  WHERE resolved_at IS NULL;      -- only ONE open alert per fingerprint, ever</code></pre>
+
+<p>So on every sweep, each finding lands in exactly one of four buckets:</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Situation</th><th>What happens</th><th>Notify?</th></tr></thead>
+  <tbody>
+    <tr><td>New fingerprint</td><td>Create alert, status <code>open</code></td><td class="yes">Yes</td></tr>
+    <tr><td>Already open</td><td>Bump <code>occurrence_count</code> + <code>last_seen_at</code></td><td class="no">No</td></tr>
+    <tr><td>Was resolved, came back</td><td>Reopen, log a <code>reopened</code> event</td><td>Only after the suppression window</td></tr>
+    <tr><td>Open, but not found this sweep</td><td>Auto-resolve, reason <code>condition_cleared</code></td><td class="no">No</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Alert lifecycle</h3>
+<div class="life">
+  <span class="state open">open</span><span class="arr">→</span>
+  <span class="state ack">acknowledged</span><span class="arr">→</span>
+  <span class="state res">resolved</span>
+  <span class="muted" style="margin-left:14px">↘ also: <span class="state">snoozed</span> · <span class="state">escalated&nbsp;to&nbsp;CEO</span></span>
+</div>
+<p class="muted">Every transition is written to an append-only <code>risk_alert_events</code> table, so “who knew what, when” is always answerable.</p>
+
+<!-- ══════════════ 7 ══════════════ -->
+<h2><span class="num">7.</span> What it actually watches — the detector catalogue</h2>
+<p class="lead">Roughly 30 detectors across four risk families. The first release ships the first 10.</p>
+
+<h3>A · Process &amp; SLA risk <span class="pill p-acc">work is stuck</span></h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>Detector</th><th>Fires when…</th></tr></thead>
+  <tbody>
+    <tr><td><code>lead-stalled-in-step</code></td><td>A lead hasn’t moved wizard step for N <em>working</em> days</td></tr>
+    <tr><td><code>admin-verification-backlog</code></td><td>KYC review queue item unreviewed &gt; 48h</td></tr>
+    <tr><td><code>kyc-retry-exhausted</code></td><td>Verification retried 3× and still not verified</td></tr>
+    <tr><td><code>digilocker-link-dead</code></td><td>Link sent, never opened, now expired</td></tr>
+    <tr><td><code>consent-esign-expiring</code></td><td>Consent link expires in &lt; 24h, still unsigned</td></tr>
+    <tr><td><code>dealer-onboarding-abandoned</code></td><td>Draft sitting mid-step, untouched 7 days</td></tr>
+    <tr><td><code>whatsapp-session-dormant</code></td><td>No reply from the dealer for 3 days</td></tr>
+    <tr><td><code>nbfc-doc-request-unanswered</code></td><td>NBFC asked for a document &gt; 72h ago</td></tr>
+    <tr><td><code>order-delivery-overdue</code></td><td>Past expected delivery date, nothing delivered</td></tr>
+    <tr><td><code>inventory-stuck-dispatched</code></td><td>Stock “dispatched” &gt; 14 days, never marked sold</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>B · Financial risk <span class="pill p-acc">money at stake</span></h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>Detector</th><th>Fires when…</th></tr></thead>
+  <tbody>
+    <tr><td><code>emi-dpd-band-crossed</code></td><td>A borrower crosses 30 / 60 / 90 days overdue</td></tr>
+    <tr><td><code>emi-autodebit-failure-cluster</code></td><td>Many auto-debits fail on the same day — usually a provider outage, not N bad borrowers</td></tr>
+    <tr><td><code>nbfc-wallet-low</code></td><td>NBFC wallet below its auto-recharge threshold</td></tr>
+    <tr><td><code>facilitation-qr-expired-unpaid</code></td><td>Payment QR expired and the fee is still unpaid</td></tr>
+    <tr><td><code>sanction-not-disbursed</code></td><td>Approved 7+ days ago, money never went out</td></tr>
+    <tr><td><code>settlement-unreconciled</code></td><td>Bank rows unmatched &gt; 3 days</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>C · Data-integrity risk <span class="pill p-acc">the system lying to itself</span></h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>Detector</th><th>Fires when…</th></tr></thead>
+  <tbody>
+    <tr><td><code>orphan-dealer-account</code></td><td>A dealer login points at a non-existent account — a known repeat production bug</td></tr>
+    <tr><td><code>telemetry-stale</code></td><td>No battery data ingested for &gt; 24h</td></tr>
+    <tr><td><code>risk-score-stale</code></td><td>Nightly CDS/PCI scoring silently stopped running</td></tr>
+    <tr><td><code>duplicate-finance-documents</code></td><td>Same Aadhaar/PAN on two finance leads</td></tr>
+    <tr><td><code>schema-drift-probe</code></td><td>An expected DB column is missing — catches “column does not exist” <em>before</em> a user does</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>D · Security &amp; compliance risk <span class="pill p-acc">rules broken</span></h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>Detector</th><th>Fires when…</th></tr></thead>
+  <tbody>
+    <tr><td><code>consent-missing-before-sanction</code></td><td>A loan was sanctioned with no signed consent on file</td></tr>
+    <tr><td><code>aadhaar-signer-mismatch</code></td><td>The person who signed ≠ the Aadhaar we captured</td></tr>
+    <tr><td><code>pii-access-spike</code></td><td>A user reads far more customer PII than their own normal</td></tr>
+    <tr><td><code>role-change-detected</code></td><td>Someone’s role was changed</td></tr>
+    <tr><td><code>password-reset-abuse</code></td><td>Many reset requests from one IP in an hour</td></tr>
+    <tr><td><code>dpdp-retention-overdue</code></td><td>Documents past their retention window, not purged</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="warnbox">
+  <b>Honest limitation</b>
+  There is <strong>no failed-login table anywhere in the schema</strong> and no login-attempt counter. So brute-force / credential-stuffing detection is <em>not buildable today</em> — it needs a new <code>auth_login_attempts</code> table first. Deferred to a later release rather than pretending the security category is complete.
+</div>
+
+<!-- ══════════════ 8 ══════════════ -->
+<h2><span class="num">8.</span> Keeping it quiet enough to be useful</h2>
+<p class="lead">An alerting system dies from noise, not from missing things. Eight controls, borrowed from Prometheus Alertmanager and PagerDuty.</p>
+
+<div class="cols">
+  <div class="card">
+    <h4>Fewer false alarms</h4>
+    <ul>
+      <li><strong>Fire-delay</strong> — must be true on two consecutive sweeps before it raises</li>
+      <li><strong>Dedupe</strong> — one open alert per fingerprint, enforced by the DB</li>
+      <li><strong>Auto-resolve</strong> — alerts close themselves when the condition clears</li>
+      <li><strong>Severity ceiling</strong> — a new, unvetted detector cannot declare HIGH until a human promotes it</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Lower cost &amp; fewer pings</h4>
+    <ul>
+      <li><strong>AI sees new findings only</strong>, batched one call per domain</li>
+      <li><strong>Per-detector cap</strong> — and if we truncate, we log how many we dropped</li>
+      <li><strong>Suppression window</strong> — same alert won’t re-ping for X hours</li>
+      <li><strong>Quiet hours</strong> for email/WhatsApp; the in-app bell is always written</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ══════════════ 9 ══════════════ -->
+<h2><span class="num">9.</span> Getting it to a human</h2>
+<p class="lead">Nothing new to integrate — all three channels already exist in the codebase.</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Channel</th><th>Used for</th><th>Built on</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td><strong>In-app bell</strong></td><td>Everything</td><td><code>notifications/emit.ts</code></td><td class="yes">Exists</td></tr>
+    <tr><td><strong>Email digest</strong></td><td>One mail per sweep, per owner — never one per alert</td><td><code>email/mailer.ts</code></td><td class="yes">Exists</td></tr>
+    <tr><td><strong>WhatsApp</strong></td><td><span class="pill p-high">HIGH</span> only</td><td><code>whatsapp/meta.ts</code></td><td class="add">Needs Meta template approval</td></tr>
+    <tr><td><strong>n8n webhook</strong></td><td>Optional fan-out</td><td><code>triggerN8nWebhook</code></td><td class="yes">Exists</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Routing:</strong> each detector declares an <code>owner_role</code> → we resolve the users in that role → we notify them. A HIGH alert nobody acknowledges within 24h escalates to the CEO.</p>
+
+<!-- ══════════════ 10 ══════════════ -->
+<h2><span class="num">10.</span> How it runs in production</h2>
+
+<p>Two schedules, hit by a normal VPS crontab — <strong>not</strong> a queue worker. (There is no live BullMQ worker in production; the repo’s real pattern is <em>cron route → plain async function</em>.)</p>
+
+<pre><code>*/15 * * * *   curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
+               "http://127.0.0.1:3002/api/cron/risk-alerts?scope=fast"
+
+0    * * * *   curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
+               "http://127.0.0.1:3002/api/cron/risk-alerts?scope=full"</code></pre>
+
+<ul class="plain">
+  <li><code>scope=fast</code> — money + security detectors. Cheap, urgent, every 15 minutes.</li>
+  <li><code>scope=full</code> — all four families, hourly.</li>
+</ul>
+
+<p>A database-level lock (a partial unique index on “one running row per scope”) guarantees two sweeps can never overlap. A run stuck for 15 minutes is presumed dead and reaped, so a crash can’t wedge the system forever.</p>
+
+<!-- ══════════════ 11 ══════════════ -->
+<h2><span class="num">11.</span> What we need for this</h2>
+
+<h3>Already here — nothing to install</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>Thing</th><th>Version</th><th></th></tr></thead>
+  <tbody>
+    <tr><td><code>@langchain/langgraph</code></td><td>1.2.0</td><td class="yes">✔ installed</td></tr>
+    <tr><td><code>@langchain/openai</code></td><td>1.2.8</td><td class="yes">✔ installed</td></tr>
+    <tr><td><code>langchain</code></td><td>1.2.25</td><td class="yes">✔ installed</td></tr>
+    <tr><td><code>langsmith</code></td><td>0.5.4</td><td class="yes">✔ already present (transitively)</td></tr>
+    <tr><td><code>zod</code></td><td>4.3.5</td><td class="yes">✔ installed</td></tr>
+    <tr><td><code>OPENAI_API_KEY</code>, <code>CRON_SECRET</code></td><td>—</td><td class="yes">✔ configured</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>New — small list</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>Item</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>E-215_risk_alerts.sql</code></td><td>4 new tables: <code>risk_detectors</code>, <code>risk_alerts</code>, <code>risk_alert_runs</code>, <code>risk_alert_events</code>. Apply to <strong>both</strong> databases — they drift.</td></tr>
+    <tr><td><code>LANGSMITH_TRACING=true</code> + API key</td><td>Tracing is currently off. This is the entire observability story, and it costs one env var.</td></tr>
+    <tr><td><code>RISK_ALERT_MODEL</code></td><td>Defaults to <code>gpt-4o-mini</code>, matching the existing risk engine.</td></tr>
+    <tr><td>Quiet-hours / channel / escalation env</td><td>Tuning knobs for delivery.</td></tr>
+    <tr><td>Meta WhatsApp template</td><td>Needs approval before the WhatsApp channel can be switched on.</td></tr>
+    <tr><td>2 crontab lines</td><td>The schedule.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Explicitly not needed:</strong> the Python risk sandbox on <code>:8091</code>. Every detector here is TypeScript. The sandbox only matters later, if we ever let the agent write its own detectors.</p>
+
+<footer>
+  <p><strong>iTarang CRM — Risk Alert Agent</strong> · architecture v1 · 28 July 2026<br>
+  Companion documents: <code>docs/nbfc/RISK_ENGINE_SYSTEM_DESIGN.md</code> · <code>docs/risk-alert-e2e-flow.html</code> · <code>docs/nbfc/Risk_Alerts_Overview.html</code></p>
+</footer>
+
+</div>
+</body>
+</html>

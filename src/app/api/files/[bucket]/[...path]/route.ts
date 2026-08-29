@@ -76,7 +76,7 @@ export async function GET(
 
   // Primary backend, then fall back to the other (migration safety).
   const buf = await readBucketObject(bucket, key);
-  if (!buf) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!buf) return notFound(req, key);
 
   return new NextResponse(new Uint8Array(buf), {
     status: 200,
@@ -94,4 +94,32 @@ export async function GET(
       "Cache-Control": "private, max-age=3600, immutable",
     },
   });
+}
+
+/**
+ * 404 for a missing object. A handful of pre-S3-migration rows point at objects
+ * that never made it into S3 (the source Supabase project has since been
+ * deleted), and these links are opened in a browser tab from the admin review
+ * pages — raw `{"error":"Not found"}` reads like a system fault. Explain it
+ * instead, and keep JSON for programmatic callers.
+ */
+function notFound(req: NextRequest, key: string) {
+  if (!(req.headers.get("accept") || "").includes("text/html")) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  const name = escapeHtml(key.split("/").pop() || key);
+  return new NextResponse(
+    `<!doctype html><meta charset="utf-8"><title>File unavailable</title>` +
+      `<div style="font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a">` +
+      `<h1 style="font-size:1.25rem;margin:0 0 .75rem">This file is no longer stored</h1>` +
+      `<p style="margin:0 0 .75rem;color:#475569">The record still references <code style="background:#f1f5f9;padding:.1rem .3rem;border-radius:.25rem">${name}</code>, but the file itself was not carried over from the old storage provider.</p>` +
+      `<p style="margin:0;color:#475569">Ask the dealer to re-upload it — the new copy will save and open normally.</p></div>`,
+    { status: 404, headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
 }

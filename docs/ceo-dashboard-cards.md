@@ -165,33 +165,50 @@ revenue_mtd (from Card 1) ──▶ passed in as salesMtd ──▶ "₹12.50L"
 
 ## 5. Other Expenses ✅ *(Business Snapshot tile)*
 
-**What it shows:** Day-to-day business expenses **that the CEO has approved** this month (travel, office, etc.).
+**What it shows:** Day-to-day business expenses **approved** for this month (travel, office, vendor invoices, etc.).
 
 **Where the code is:**
-- Tile on screen: `src/components/dashboard/ceo/BusinessSnapshotPanel.tsx:83-90`
-- Calculation: `src/app/api/dashboard/[role]/route.ts:69-79`
+- Snapshot tile: `src/components/dashboard/ceo/BusinessSnapshotPanel.tsx`
+- Standalone card with its own month/year picker (E-172): `src/components/dashboard/ceo/ExpensesMtdCard.tsx` → `src/app/api/dashboard/ceo/expenses-summary/route.ts`
+- Seed value for the snapshot tile: `src/app/api/dashboard/[role]/route.ts` (CEO branch, `other_expenses_mtd`)
+- Shared window predicate: `approvedExpenseInWindow()` in `src/lib/dashboard/salesWindow.ts`
 
 **How it's calculated (in simple terms):**
-Add up the amounts of expense submissions that are **approved** and were approved on or after the 1st of this month. Pending or rejected expenses do not count.
+Add up the amounts of expense submissions that are **approved** and whose invoice date falls in the window. Pending or rejected expenses do not count.
 
 ```ts
-// route.ts:69-79
-const [expensesAgg] = await db
-  .select({ other_expenses_mtd: sql`COALESCE(SUM(${expenseSubmissions.amount}), 0)` })
-  .from(expenseSubmissions)
-  .where(and(
-    eq(expenseSubmissions.status, "approved"),                 // only approved
-    gte(expenseSubmissions.approved_at, startOfMonthDate),     // approved this month
-  ));
+// src/lib/dashboard/salesWindow.ts — one predicate, shared by all four readers
+export function approvedExpenseInWindow(startStr: string, endStr: string | null) {
+    const conds = [
+        eq(expenseSubmissions.status, "approved"),
+        sql`${expenseEffectiveDate()} >= ${startStr}::date`,   // COALESCE(expense_date, approved_at::date)
+    ];
+    if (endStr) conds.push(sql`${expenseEffectiveDate()} < ${endStr}::date`);
+    return and(...conds);
+}
 ```
+
+> **E-216 changed the date basis.** This used to window on `approved_at` — for
+> an AI-extracted row, the moment somebody imported it. Once invoices are
+> scanned in bulk from a Google Drive folder that stops working: a year of
+> historic bills would all land in the month the scan ran. Expenses now count
+> under the date **on the bill**, falling back to the approval date for older
+> rows that never captured one. See `docs/drive-expense-ingestion.md`.
+
+**Where the rows come from:** three sources, all in `expense_submissions`:
+- Staff submissions via `/expenses/submit` (`source='manual'`, needs approval)
+- Invoices uploaded at `/admin/expense-tracker` (`source='ai'`, auto-approved)
+- Invoices scanned from Google Drive (`source='ai'` with `drive_file_id` set, auto-approved — E-216)
 
 **Flow diagram:** `diagrams/other-expenses.excalidraw` · [Open interactive »](https://excalidraw.com/#json=EQ7YkTmIs7s3txzgduRpL,hTvxG_IQADPETm6X3DMFLQ)
 
 ```
-Expense submissions ──status = approved AND approved this month──▶ SUM(amount) ──▶ other_expenses_mtd ──▶ "₹1.20L"
+Expense submissions ──status = approved AND invoice date in month──▶ SUM(amount) ──▶ other_expenses_mtd ──▶ "₹1.20L"
 ```
 
-**Sample case:** This month the CEO approved expenses of ₹70,000 and ₹50,000 = ₹1,20,000. A ₹30,000 expense is still *pending*, so it is skipped. 1,20,000 ÷ 1,00,000 = 1.20 → the tile shows **₹1.20L**.
+**Sample case:** Two approved invoices dated this month, ₹70,000 and ₹50,000 = ₹1,20,000. A ₹30,000 expense is still *pending*, so it is skipped. A ₹90,000 invoice **dated last month** but scanned today counts under *last* month, not this one. 1,20,000 ÷ 1,00,000 = 1.20 → the tile shows **₹1.20L**.
+
+**Related:** the department/project breakdown (`ExpenseBreakdownPanel`), the full AI ledger (`ExpenseLedgerPanel`) and the click-through drill-down all read the same table and the same window predicate.
 
 ---
 

@@ -24,6 +24,7 @@ import {
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+import { deriveDurationSeconds } from "@/lib/ai-dialer/call-duration/derive";
 
 // Intent score at/above which the dialer considers a lead "qualified" — the
 // single central threshold (INTENT_THRESHOLDS), shared with routing/status. The
@@ -364,22 +365,21 @@ export const GET = withErrorHandler(
     // (older calls that ran before ai_call_logs upsert existed).
     const transcript = latest?.transcript || lastHistory.transcript || null;
 
-    // Duration falls back to completedAt - startedAt when ai_call_logs
-    // didn't capture call_duration (older webhook paths, ElevenLabs payloads
-    // missing the field). Caps at 2 hours to guard against bad timestamps.
-    let callDuration = latest?.callDuration ?? null;
-    if (
-      (callDuration == null || callDuration <= 0) &&
-      cl.startedAt &&
-      cl.completedAt
-    ) {
-      const diffSec = Math.round(
-        (new Date(cl.completedAt).getTime() -
-          new Date(cl.startedAt).getTime()) /
-          1000,
-      );
-      if (diffSec > 0 && diffSec < 2 * 60 * 60) callDuration = diffSec;
-    }
+    // Duration falls back to completedAt - startedAt when ai_call_logs didn't
+    // capture call_duration (older webhook paths, ElevenLabs payloads missing
+    // the field), capped to guard against bad timestamps. Shared with the leads
+    // table and the duration histogram so the drawer header, the table cell and
+    // the chart can never quote three different numbers for one call.
+    //
+    // That fallback is licensed by the transcript resolved just above: the
+    // started/completed pair brackets the dialer's ATTEMPT, so on a call that
+    // never connected it measures our own latency, not talk time.
+    const callDuration = deriveDurationSeconds(
+      latest?.callDuration ?? null,
+      cl.startedAt,
+      cl.completedAt,
+      transcript != null,
+    );
 
     const summary = buildSummary({
       callSummary: latest?.summary ?? null,

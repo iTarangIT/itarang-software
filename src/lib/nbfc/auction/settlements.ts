@@ -19,8 +19,8 @@ import {
   auctionSettlements,
   auctionLots,
   nbfcTenants,
-  nbfcRecoveryPipeline,
   nbfcAuditLog,
+  accounts,
 } from "@/lib/db/schema";
 
 export type SettlementStatus =
@@ -37,9 +37,24 @@ const ALLOWED_TRANSITIONS: Record<SettlementStatus, SettlementStatus[]> = {
 export interface SettlementListItem {
   id: string;
   lot_id: string;
+  /** Human-facing code — the id is a uuid nobody can read off a screen. */
+  lot_code: string;
   final_price: number;
   winner_tenant_id: string;
+  /** Set when a DEALER won (the normal case since the E-232 bidder re-point). */
+  winner_dealer_id: string | null;
   winner_name: string;
+  /**
+   * Which kind of party the name belongs to.
+   *
+   * [FIX] This list used to inner-join `nbfc_tenants` on `winner_tenant_id` and
+   * call the result the winner. On a dealer win that column carries the
+   * SELLER's tenant — see the schema note on `auction_settlements` — so every
+   * dealer win rendered the seller's own name back at them as the buyer. The
+   * dealer's identity was in `winner_dealer_id` all along and no read path
+   * selected it.
+   */
+  winner_kind: "dealer" | "nbfc";
   status: SettlementStatus;
   updated_at: string;
 }
@@ -83,16 +98,26 @@ export async function listSettlements(
     .select({
       id: auctionSettlements.id,
       lot_id: auctionSettlements.lot_id,
+      lot_code: auctionLots.lot_code,
       final_price: auctionSettlements.final_price,
       winner_tenant_id: auctionSettlements.winner_tenant_id,
+      winner_dealer_id: auctionSettlements.winner_dealer_id,
       status: auctionSettlements.status,
       updated_at: auctionSettlements.updated_at,
-      winner_name: nbfcTenants.display_name,
+      tenant_name: nbfcTenants.display_name,
+      dealer_name: accounts.business_entity_name,
     })
     .from(auctionSettlements)
+    .leftJoin(auctionLots, eq(auctionLots.id, auctionSettlements.lot_id))
     .leftJoin(
       nbfcTenants,
       eq(nbfcTenants.id, auctionSettlements.winner_tenant_id),
+    )
+    // Dealer ids are application strings ("ACC-ITARANG-…"), not uuids, which is
+    // why `winner_dealer_id` is varchar and why this is a separate join.
+    .leftJoin(
+      accounts,
+      eq(accounts.id, auctionSettlements.winner_dealer_id),
     )
     .where(where)
     .orderBy(auctionSettlements.updated_at)
@@ -105,15 +130,25 @@ export async function listSettlements(
     .where(where);
   const total = Number(totalRows[0]?.c ?? 0);
 
-  const items: SettlementListItem[] = rows.map((r) => ({
-    id: r.id,
-    lot_id: r.lot_id,
-    final_price: toNumber(r.final_price),
-    winner_tenant_id: r.winner_tenant_id,
-    winner_name: r.winner_name ?? "",
-    status: r.status as SettlementStatus,
-    updated_at: (r.updated_at as Date).toISOString(),
-  }));
+  const items: SettlementListItem[] = rows.map((r) => {
+    const isDealerWin = r.winner_dealer_id != null;
+    return {
+      id: r.id,
+      lot_id: r.lot_id,
+      lot_code: r.lot_code ?? r.lot_id.slice(0, 8),
+      final_price: toNumber(r.final_price),
+      winner_tenant_id: r.winner_tenant_id,
+      winner_dealer_id: r.winner_dealer_id ?? null,
+      // Fall back to the raw id rather than an empty cell: an unresolvable
+      // winner is a data problem someone needs to see, not a blank.
+      winner_name: isDealerWin
+        ? (r.dealer_name ?? r.winner_dealer_id ?? "")
+        : (r.tenant_name ?? ""),
+      winner_kind: isDealerWin ? "dealer" : "nbfc",
+      status: r.status as SettlementStatus,
+      updated_at: (r.updated_at as Date).toISOString(),
+    };
+  });
 
   return { items, page: input.page, total };
 }
@@ -161,6 +196,23 @@ export async function patchSettlementStatus(
     );
   }
 
+  // 3b. [E-252] Money before goods.
+  //
+  //     `payment_pending -> in_transit` was a bare status flip: the seller
+  //     pressed a button and the settlement claimed the battery was on its way,
+  //     with nothing anywhere recording that a rupee had moved. The status was
+  //     the ONLY evidence of payment, and it was self-certified.
+  //
+  //     `paid_at` is now that evidence, and it is written by exactly two paths:
+  //     a signature-verified gateway capture, or an explicit, attributed,
+  //     reason-carrying offline record. Either is fine; neither is a click.
+  if (toStatus === "in_transit" && !current.paid_at) {
+    throw new Error(
+      "CONFLICT: this settlement has not been paid — capture the payment, or " +
+        "record an offline one against a reference, before dispatching",
+    );
+  }
+
   // 4. Apply update.
   const now = new Date();
   const [updated] = await db
@@ -169,42 +221,61 @@ export async function patchSettlementStatus(
     .where(eq(auctionSettlements.id, current.id))
     .returning();
 
-  // 5. On delivered: best-effort mark the linked recovery_pipeline row
-  //    'resold'. The link is via the lot's lot_code → battery_serial; in this
-  //    unit's data shape an internal job populates the settlement so we
-  //    simply look up the lot and find a recovery_pipeline row owned by the
-  //    seller tenant whose battery_serial encodes the lot. To keep this unit
-  //    self-contained, we match by tenant_id only when no battery hint is
-  //    available — but only update one row to avoid clobbering siblings.
+  // 5. On delivered: mark every recovery_pipeline row behind this lot 'resold'.
+  //
+  //    [E-232] This used to match `nbfc_recovery_pipeline.battery_serial` against
+  //    `auction_lots.lot_code`. Those two values are never equal — createLot.ts
+  //    derives lot_code as "LOT-" + the first 8 hex of the PIPELINE uuid, and
+  //    never writes it into battery_serial — so the lookup returned zero rows
+  //    every single time and no battery has ever actually been marked resold.
+  //    It failed silently because the whole block was best-effort.
+  //
+  //    The join now runs on a real key. auction_lot_items (E-234) is the
+  //    eventual source of truth for lot -> battery and it handles the
+  //    multi-battery lots this BRD introduces; until it exists the single-battery
+  //    path resolves through nbfc_recovery_pipeline.battery_id.
   if (toStatus === "delivered") {
-    const lotRows = await db
-      .select({ lot_code: auctionLots.lot_code })
-      .from(auctionLots)
-      .where(eq(auctionLots.id, current.lot_id))
-      .limit(1);
-    const lotCode = lotRows[0]?.lot_code ?? null;
+    // The presence check has to happen in JS, not in the statement. Postgres
+    // resolves table names at PARSE time, so a `to_regclass(...) IS NOT NULL`
+    // guard inside a subquery does not save a statement that names a table the
+    // database does not have — it still raises 42P01. Probe first, then choose
+    // which statement to send.
+    const probe = await db.execute(
+      sql`SELECT to_regclass('public.auction_lot_items') AS t`,
+    );
+    const hasLotItems =
+      (probe as unknown as Array<{ t: string | null }>)[0]?.t != null;
 
-    if (lotCode) {
-      // Update the most recent recovery row for this seller tenant whose
-      // battery_serial matches the lot_code (single-battery lots) — falling
-      // back to the most recent row in the pipeline for this tenant.
-      const candidates = await db
-        .select({ id: nbfcRecoveryPipeline.id })
-        .from(nbfcRecoveryPipeline)
-        .where(
-          and(
-            eq(nbfcRecoveryPipeline.tenant_id, input.caller_tenant_id),
-            eq(nbfcRecoveryPipeline.battery_serial, lotCode),
-          ),
-        )
-        .limit(1);
+    let resoldCount = 0;
+    if (hasLotItems) {
+      const resoldRows = await db.execute(sql`
+        UPDATE nbfc_recovery_pipeline p
+           SET stage = 'resold', updated_at = ${now}
+         WHERE p.tenant_id = ${input.caller_tenant_id}
+           AND p.stage <> 'resold'
+           AND p.battery_id IS NOT NULL
+           AND p.battery_id IN (
+                 SELECT i.battery_id
+                   FROM auction_lot_items i
+                  WHERE i.lot_id = ${current.lot_id}
+               )
+        RETURNING p.id
+      `);
+      resoldCount = (resoldRows as unknown as Array<unknown>).length;
+    }
 
-      if (candidates.length > 0) {
-        await db
-          .update(nbfcRecoveryPipeline)
-          .set({ stage: "resold", updated_at: now })
-          .where(eq(nbfcRecoveryPipeline.id, candidates[0].id));
-      }
+    if (resoldCount === 0) {
+      // Single-battery lots, where the battery hangs off the pipeline row
+      // rather than off a lot item.
+      await db.execute(sql`
+        UPDATE nbfc_recovery_pipeline p
+           SET stage = 'resold', updated_at = ${now}
+          FROM recovery_batteries rb
+         WHERE rb.id = p.battery_id
+           AND p.tenant_id = ${input.caller_tenant_id}
+           AND p.stage <> 'resold'
+           AND rb.state_code = 'lotted'
+      `);
     }
   }
 

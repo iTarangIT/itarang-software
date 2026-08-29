@@ -7,6 +7,7 @@ import {
   dealers,
   leads,
   nbfc,
+  nbfcFinancingOffers,
   nbfcLeadAssignments,
   nbfcLoanProducts,
   productSelections,
@@ -15,6 +16,8 @@ import { getCurrentTenant } from "@/lib/nbfc/tenant";
 import { getFiTrack } from "@/lib/nbfc/fi";
 import { getVkycTrack } from "@/lib/nbfc/vkyc";
 import { evaluateEnachGate } from "@/lib/nbfc/enach";
+import { evaluateAgreementGate } from "@/lib/nbfc/agreement";
+import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getCustomerDossier } from "@/lib/nbfc/dossier";
 import CustomerDossierPanel from "../_components/CustomerDossierPanel";
 import EnachTrackPanel from "../_components/EnachTrackPanel";
@@ -25,7 +28,6 @@ import OfferPanel from "../_components/OfferPanel";
 import GoToStepButton from "../_components/GoToStepButton";
 import SanctionPanel from "../_components/SanctionPanel";
 import NbfcVerificationPanel from "../_components/NbfcVerificationPanel";
-import NbfcConsentPanel from "../_components/NbfcConsentPanel";
 import LeadStageStepper, {
   type NextAction,
   type StepperStage,
@@ -46,7 +48,10 @@ const STATUS_LABEL: Record<string, string> = {
   selected: "Selected",
   not_selected: "Not selected",
   declined: "Declined",
-  withdrawn: "Withdrawn",
+  // E-245 — 'withdrawn' has exactly one writer: the dealer's Close deal action.
+  // "Withdrawn" reads like an internal state change of unknown origin; this is a
+  // customer decision and the panel should say whose it was.
+  withdrawn: "Deal closed by customer",
 };
 
 function fmtInr(v: string | number | null | undefined): string {
@@ -158,14 +163,17 @@ export default async function AcquireLeadDetailPage({
   // ── Lifecycle derivation (Addendum V0.2 §6/§9/§10) ───────────────────────
   // Stage-1 tracks run across EVERY picked NBFC, so read THIS NBFC's own rows
   // (assignment.nbfc_id). E-NACH is winner-only, so its gate is winner-centric.
-  const snap = (assignment.service_config_snapshot ?? {}) as {
-    fi_enabled?: boolean;
-    vkyc_enabled?: boolean;
-    enach_enabled?: boolean;
-  };
+  // Which steps run is read LIVE from Settings → Service Opt-In, so switching a
+  // service off takes it out of this lead straight away (and switching it back
+  // on restores it). The snapshot still governs the mechanics — vkyc_mode,
+  // handoff method, storage, Track Rules. See resolveServiceOptIn.
+  const optIn = await resolveServiceOptIn(
+    tenant.id,
+    assignment.service_config_snapshot,
+  );
   const status = assignment.status;
 
-  const fiRequired = snap.fi_enabled ?? false;
+  const fiRequired = optIn.fi_enabled;
   const fiRow = fiRequired ? await getFiTrack(leadId, assignment.nbfc_id) : null;
   // FI terminal-pass is status "passed" (E-148; legacy E-136 rows used
   // "completed", backfilled but accepted here to match track-gate.ts).
@@ -174,7 +182,7 @@ export default async function AcquireLeadDetailPage({
   const fiFailed =
     fiRequired && (fiRow?.status === "failed" || fiRow?.outcome === "fail");
 
-  const vkycRequired = snap.vkyc_enabled ?? false;
+  const vkycRequired = optIn.vkyc_enabled;
   const vkycRow = vkycRequired
     ? await getVkycTrack(leadId, assignment.nbfc_id)
     : null;
@@ -183,13 +191,55 @@ export default async function AcquireLeadDetailPage({
 
   const enachGate = await evaluateEnachGate(leadId);
 
+  // ── Opted-out steps (Addendum V0.3.1 §13.2.3) ───────────────────────────
+  // A rail switched off in Settings → Service Opt-In does not run through
+  // iTarang. Its stepper node reads "Skipped", its panel carries no actions,
+  // and the matching APIs reject. Switching the service back on re-opens the
+  // step for this lead too — the toggles are read live (see resolveServiceOptIn).
+  //
+  // E-NACH's flag comes from `optIn` rather than `enachGate.required` — the
+  // gate resolves against the WINNING assignment, so it reports "not required"
+  // for every lead that has no winner yet.
+  const agreementRequired = optIn.doc_agreement_method != null;
+  const enachRequired = optIn.enach_enabled;
+  const fivkycSkipped = !fiRequired && !vkycRequired;
+  const enachStepSkipped = !enachRequired && !agreementRequired;
+
+  // Advisory agreement state (§11.5 — never a disbursal gate). Needed here so
+  // that when E-NACH is opted out and the agreement is the step's only live
+  // rail, the node doesn't read "Completed" with an unsigned agreement in it.
+  const agreementGate = agreementRequired
+    ? await evaluateAgreementGate(
+        leadId,
+        assignment.nbfc_id,
+        optIn.doc_agreement_method,
+      )
+    : null;
+
   // Full customer dossier (Steps 1–3 + product selection) for the Verification
   // step. `lead` already exists (guarded above), so this is non-null.
   const dossier = await getCustomerDossier(leadId);
 
-  const offerSubmitted = ["offer_submitted", "selected", "not_selected"].includes(
-    status,
-  );
+  const offerSubmitted = [
+    "offer_submitted",
+    "selected",
+    "not_selected",
+    // E-245 — closing takes the assignment straight from 'offer_submitted' to
+    // 'withdrawn'. Without this the Offer step reads "pending · Locked" while
+    // the submitted offer sits rendered directly underneath it, and Verification
+    // (which keys off the same flag) reverts to "review dossier".
+    "withdrawn",
+  ].includes(status);
+  // E-238 — negotiation state of this NBFC's offer, for the Next banner. The
+  // Offer node's own state is unchanged: it stays `active` throughout a
+  // negotiation, which is already what offerSubmitted gives it.
+  const [offerNegotiation] = await db
+    .select({ negotiation_status: nbfcFinancingOffers.negotiation_status })
+    .from(nbfcFinancingOffers)
+    .where(eq(nbfcFinancingOffers.assignment_id, assignment.id))
+    .limit(1);
+  const dealerCountered = offerNegotiation?.negotiation_status === "dealer_countered";
+  const offerFixed = offerNegotiation?.negotiation_status === "fixed";
   const won = status === "selected";
   const lost = status === "not_selected";
   const closed = status === "declined" || status === "withdrawn";
@@ -203,17 +253,32 @@ export default async function AcquireLeadDetailPage({
   // active). The disbursement money-transfer itself is PARKED (§19.1), so `sold`
   // is the furthest state iTarang models. `loan_sanctioned` = sanctioned, dealer
   // OTP/dispatch still pending.
-  const sanctioned = lead.kyc_status === "loan_sanctioned" || lead.kyc_status === "sold";
-  const sold = lead.kyc_status === "sold";
+  //
+  // `confirmDispatch` (the Step-5 OTP, web or WhatsApp) writes `dispatched`
+  // and flips the sanction to disbursed in the same transaction; `sold` only
+  // arrives later from Mark Delivered / the nightly cron. Both are past the
+  // OTP gate, so both are "disbursed" for this rail — treating `dispatched` as
+  // unknown made the node regress to "ready" the moment the OTP succeeded.
+  const dispatched = lead.kyc_status === "dispatched";
+  const delivered = lead.kyc_status === "sold";
+  const sold = dispatched || delivered;
+  const sanctioned = lead.kyc_status === "loan_sanctioned" || sold;
 
   function nodeOffer(): StepperStage["state"] {
     // FI / Video KYC now live inside the Offer step and only unlock once won, so
     // the Offer step itself is reachable straight after the dossier review.
-    if (offerSubmitted) return "done";
+    // Closed outranks submitted. E-245 made offerSubmitted true for 'withdrawn'
+    // — the offer really was submitted, and Verification upstream must stay
+    // done — but a green Completed check over a deal the customer walked away
+    // from reads as a win. Locked + the red badge is the honest pair.
     if (closed) return "locked";
+    if (offerSubmitted) return "done";
     return "active";
   }
   function nodeFivkyc(): StepperStage["state"] {
+    // Both rails opted out in Settings — the step never runs here at all, so it
+    // outranks the winner gate (it stays skipped whether we win or lose).
+    if (fivkycSkipped) return "skipped";
     // FI / Video KYC only run for the winning lead.
     if (!won) return "locked";
     if (verificationFailed) return "failed";
@@ -221,8 +286,12 @@ export default async function AcquireLeadDetailPage({
     return verificationComplete ? "done" : "active";
   }
   function nodeEnach(): StepperStage["state"] {
+    if (enachStepSkipped) return "skipped";
     if (!won) return "locked";
-    if (enachGate.satisfied) return "done";
+    // Both live rails must be settled before the step reads as complete. An
+    // opted-out rail reports satisfied, so it drops out of the check.
+    const agreementOk = !agreementGate?.applicable || agreementGate.satisfied;
+    if (enachGate.satisfied && agreementOk) return "done";
     // Gate E-NACH behind FI & V-KYC completion.
     if (!verificationComplete) return "locked";
     return "active";
@@ -326,19 +395,60 @@ export default async function AcquireLeadDetailPage({
           }
         />
       ) : null}
-      {/* Change 7 — DPDP consent view/track + NBFC-initiated re-capture.
-          Consent leads the verification loop, so it renders above the KYC card. */}
-      <NbfcConsentPanel leadId={leadId} />
       {/* Change 1 & 2 — the NBFC's own per-document verification + the
           correction / additional-document request loop (routes to the admin). */}
       <NbfcVerificationPanel leadId={leadId} />
     </div>
   );
 
+  // Every rail of the step is switched off in Settings → Service Opt-In. The
+  // step stays on the rail (§13.2.3 "dimmed but visible") but carries no action
+  // surface at all — the track panels are not rendered, so there is nothing to
+  // click, and the underlying APIs reject on the same snapshot flags.
+  const optedOutContent = (services: string) => (
+    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
+      <svg
+        className="mx-auto mb-2 h-5 w-5 text-slate-400"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="11" width="18" height="11" rx="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </svg>
+      <p className="text-sm font-semibold text-slate-600">
+        Skipped — handled off-platform
+      </p>
+      <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-500">
+        {services} are switched off in{" "}
+        <b className="text-slate-600">Settings → Service Opt-In</b>, so this step
+        does not run through iTarang and no action can be taken here. Switch it
+        back on in Settings and the step re-opens for this lead.
+      </p>
+    </div>
+  );
+
+  // "Next: …" buttons must hop OVER a skipped step — landing the reviewer on a
+  // step they cannot act on would be a dead end.
+  const STEP_LABEL: Record<string, string> = {
+    fivkyc: "FI & V-KYC",
+    enach: "E-NACH & Agreement",
+    disburse: "Disbursal",
+  };
+  const nextLiveStep = (after: "offer" | "fivkyc") => {
+    if (after === "offer" && !fivkycSkipped) return "fivkyc";
+    return enachStepSkipped ? "disburse" : "enach";
+  };
+
   // FI + Passive Video KYC — their own step ("FI & V-KYC", step 3). They only
   // become interactive once this NBFC wins the offer; until then they are
   // locked behind a notice.
-  const fivkycContent = (
+  const fivkycContent = fivkycSkipped ? (
+    optedOutContent("Field Investigation and Video KYC")
+  ) : (
     <div className="space-y-3">
       <div className="flex items-center gap-2.5">
         <span
@@ -351,7 +461,13 @@ export default async function AcquireLeadDetailPage({
           </svg>
         </span>
         <div>
-          <p className="text-sm font-semibold tracking-tight text-slate-900">Field Investigation &amp; Passive Video KYC</p>
+          <p className="text-sm font-semibold tracking-tight text-slate-900">
+            {fiRequired && vkycRequired
+              ? "Field Investigation & Passive Video KYC"
+              : fiRequired
+                ? "Field Investigation"
+                : "Passive Video KYC"}
+          </p>
           <p className="text-[11px] text-slate-400">
             {won
               ? "Stage-1 verification tracks — run these for the winning lead"
@@ -359,12 +475,23 @@ export default async function AcquireLeadDetailPage({
           </p>
         </div>
       </div>
+      {/* Only the opted-in rails render — an opted-out one has no panel at all,
+          so there is no surface to act on. */}
+      {!fiRequired || !vkycRequired ? (
+        <p className="text-[11px] text-slate-500">
+          {fiRequired ? "Video KYC is" : "Field Investigation is"} switched off in
+          Settings → Service Opt-In — handled off-platform.
+        </p>
+      ) : null}
       {won ? (
         <>
-          <FiTrackPanel leadId={leadId} />
-          <VkycTrackPanel leadId={leadId} />
+          {fiRequired ? <FiTrackPanel leadId={leadId} /> : null}
+          {vkycRequired ? <VkycTrackPanel leadId={leadId} /> : null}
           {verificationComplete ? (
-            <GoToStepButton stepKey="enach" label="Next: E-NACH & Agreement" />
+            <GoToStepButton
+              stepKey={nextLiveStep("fivkyc")}
+              label={`Next: ${STEP_LABEL[nextLiveStep("fivkyc")]}`}
+            />
           ) : null}
         </>
       ) : (
@@ -401,18 +528,24 @@ export default async function AcquireLeadDetailPage({
       className={`rounded-lg border px-3 py-2.5 text-xs font-medium leading-relaxed ${
         won
           ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-          : lost
-            ? "border-slate-200 bg-slate-50 text-slate-600"
-            : "border-sky-200 bg-sky-50 text-sky-800"
+          : status === "withdrawn"
+            ? "border-red-200 bg-red-50 text-red-800"
+            : lost
+              ? "border-slate-200 bg-slate-50 text-slate-600"
+              : "border-sky-200 bg-sky-50 text-sky-800"
       }`}
     >
       {won
-        ? "Selected as the winning lender by the customer — proceed to Field Investigation & Passive Video KYC."
-        : lost
-          ? "Not selected — a competing offer won. No further action."
-          : status === "offer_submitted"
-            ? "Offer submitted — awaiting the customer's decision between competing offers."
-            : "Submit your financing offer first; the customer then picks the winner across competing NBFCs."}
+        ? `Selected as the winning lender by the customer — proceed to ${STEP_LABEL[nextLiveStep("offer")]}.`
+        : // E-245 — the customer ended this conversation. Distinct from `lost`:
+          // nobody outbid you, the deal itself was closed.
+          status === "withdrawn"
+          ? "Deal closed by the customer — this offer is withdrawn and can no longer be revised or fixed. Their reason is on the offer above."
+          : lost
+            ? "Not selected — a competing offer won. No further action."
+            : status === "offer_submitted"
+              ? "Offer submitted — awaiting the customer's decision between competing offers."
+              : "Submit your financing offer first; the customer then picks the winner across competing NBFCs."}
     </div>
   );
 
@@ -421,12 +554,17 @@ export default async function AcquireLeadDetailPage({
       <OfferPanel leadId={leadId} />
       {offerSubmitted ? winnerBanner : null}
       {won ? (
-        <GoToStepButton stepKey="fivkyc" label="Next: FI & V-KYC" />
+        <GoToStepButton
+          stepKey={nextLiveStep("offer")}
+          label={`Next: ${STEP_LABEL[nextLiveStep("offer")]}`}
+        />
       ) : null}
     </div>
   );
 
-  const enachContent = !won ? (
+  const enachContent = enachStepSkipped ? (
+    optedOutContent("E-NACH and the loan agreement")
+  ) : !won ? (
     <p className="text-sm text-slate-500">
       {lost
         ? "This NBFC was not selected — Stage 2 does not apply."
@@ -456,8 +594,15 @@ export default async function AcquireLeadDetailPage({
     </div>
   ) : (
     <div className="space-y-3">
-      <EnachTrackPanel leadId={leadId} />
-      <AgreementTrackPanel leadId={leadId} />
+      {/* Only the opted-in rails render — an opted-out one has no panel. */}
+      {!enachRequired || !agreementRequired ? (
+        <p className="text-[11px] text-slate-500">
+          {enachRequired ? "The loan agreement is" : "E-NACH is"} switched off in
+          Settings → Service Opt-In — handled off-platform.
+        </p>
+      ) : null}
+      {enachRequired ? <EnachTrackPanel leadId={leadId} /> : null}
+      {agreementRequired ? <AgreementTrackPanel leadId={leadId} /> : null}
       <p className="text-[11px] leading-relaxed text-slate-500 border-t border-slate-100 pt-3">
         <b className="text-slate-600">Agreement &amp; documents (§11).</b>{" "}
         iTarang facilitates and files the sanction letter / loan agreement but is
@@ -496,48 +641,68 @@ export default async function AcquireLeadDetailPage({
         ? "selected"
         : lost
           ? "not selected"
-          : offerSubmitted
-            ? "submitted · awaiting decision"
-            : "pending",
+          : status === "withdrawn"
+            ? "deal closed by customer"
+            : offerSubmitted
+              ? "submitted · awaiting decision"
+              : "pending",
       state: nodeOffer(),
+      // E-245 — "Completed" would read as a won deal; this one ended.
+      badge:
+        status === "withdrawn"
+          ? {
+              label: "Deal closed by customer",
+              cls: "bg-red-50 text-red-700 border-red-200",
+            }
+          : undefined,
       content: offerContent,
     },
     {
       key: "fivkyc",
       label: "FI & V-KYC",
-      sub: !won
-        ? "winner only"
-        : verificationFailed
-          ? "action needed"
-          : !verificationRequired
-            ? "not required"
-            : verificationComplete
-              ? "complete"
-              : "in progress",
+      sub: fivkycSkipped
+        ? "opted out"
+        : !won
+          ? "winner only"
+          : verificationFailed
+            ? "action needed"
+            : !verificationRequired
+              ? "not required"
+              : verificationComplete
+                ? "complete"
+                : "in progress",
       state: nodeFivkyc(),
       content: fivkycContent,
     },
     {
       key: "enach",
       label: "E-NACH & Agreement",
-      sub: !won
-        ? "winner only"
-        : enachGate.satisfied
-          ? enachGate.status === "skipped"
-            ? "waived"
-            : "registered"
-          : !verificationComplete
-            ? "awaiting FI & V-KYC"
-            : "pending",
+      sub: enachStepSkipped
+        ? "opted out"
+        : !won
+          ? "winner only"
+          : !enachRequired
+            ? agreementGate?.satisfied
+              ? "agreement signed"
+              : "agreement pending"
+            : enachGate.satisfied
+              ? enachGate.status === "skipped"
+                ? "waived"
+                : "registered"
+              : !verificationComplete
+                ? "awaiting FI & V-KYC"
+                : "pending",
       state: nodeEnach(),
       content: enachContent,
     },
     {
       key: "disburse",
       label: "Disbursal",
-      sub: sold
-        ? "disbursed & dispatched"
-        : sanctioned
+      sub: delivered
+        ? "disbursed · delivered"
+        : dispatched
+          ? "disbursed · dispatched"
+          : sanctioned
           ? "sanctioned · awaiting dealer OTP"
           : disbursalReady
             ? "ready"
@@ -554,6 +719,11 @@ export default async function AcquireLeadDetailPage({
       return {
         tone: "muted",
         text: "This NBFC was not selected by the customer — a competing offer won. No further action.",
+      };
+    if (status === "withdrawn")
+      return {
+        tone: "muted",
+        text: "Deal closed by the customer — they ended this conversation and the offer is withdrawn. See the reason on the offer above. No further action.",
       };
     if (closed)
       return {
@@ -580,12 +750,25 @@ export default async function AcquireLeadDetailPage({
       if (!verificationComplete)
         return {
           tone: "info",
-          text: "FI Coordinator & Operations: this NBFC won — complete Field Investigation and Passive Video KYC (now unlocked in the FI & V-KYC step).",
+          text: `FI Coordinator & Operations: this NBFC won — complete ${
+            fiRequired && vkycRequired
+              ? "Field Investigation and Passive Video KYC"
+              : fiRequired
+                ? "Field Investigation"
+                : "Passive Video KYC"
+          } (now unlocked in the FI & V-KYC step).`,
         };
       if (enachGate.required && !enachGate.satisfied)
         return {
           tone: "info",
           text: "Operations: register the E-NACH mandate for the winning lead (Stage 2, winner-only).",
+        };
+      // E-NACH opted out but the agreement rail is still live — that's the
+      // outstanding Stage-2 item, so name it rather than the mandate.
+      if (agreementGate?.applicable && !agreementGate.satisfied)
+        return {
+          tone: "info",
+          text: "Operations: complete the loan agreement for the winning lead (E-NACH is handled off-platform for this NBFC).",
         };
       if (disbursalReady)
         return {
@@ -603,10 +786,19 @@ export default async function AcquireLeadDetailPage({
         tone: "info",
         text: "Credit / Underwriting: submit the firm financing offer for this lead.",
       };
+    // E-238 — the customer has come back with an ask; the lead is stalled on us,
+    // not on them, so say so before the generic "awaiting decision" line.
+    if (dealerCountered)
+      return {
+        tone: "warning",
+        text: "Credit / Underwriting: the customer requested revised terms — revise the offer, or fix the current terms to close the negotiation.",
+      };
     if (status === "offer_submitted")
       return {
         tone: "info",
-        text: "Offer submitted — awaiting the customer's decision between competing offers.",
+        text: offerFixed
+          ? "Terms fixed — awaiting the customer's decision between competing offers."
+          : "Offer submitted — awaiting the customer's decision between competing offers.",
       };
     return { tone: "muted", text: "Awaiting the next step." };
   }
@@ -656,6 +848,12 @@ export default async function AcquireLeadDetailPage({
             <p className="text-xl font-bold text-slate-800">
               {fmtInr(ps?.final_price)}
             </p>
+            {ps?.dealer_margin_gst_amount != null && Number(ps.dealer_margin_gst_amount) > 0 ? (
+              <p className="text-[11px] text-slate-500">
+                Items {fmtInr(ps.net_subtotal)} · margin {fmtInr(ps.dealer_margin)} + GST{" "}
+                {fmtInr(ps.dealer_margin_gst_amount)}
+              </p>
+            ) : null}
             <p className="text-xs text-slate-500 mt-2">
               Assigned {fmtDate(assignment.assigned_at)}
             </p>

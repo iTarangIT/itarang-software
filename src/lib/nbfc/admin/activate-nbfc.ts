@@ -11,8 +11,9 @@
  * credential without re-provisioning Supabase users or re-emailing.
  */
 import { eq, sql } from "drizzle-orm";
-import { randomUUID, randomInt } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db";
+import { generatePortalPassword } from "@/lib/auth/generatePortalPassword";
 import {
   auditLogs,
   nbfc,
@@ -31,30 +32,9 @@ export interface ActivateNbfcResult {
   error?: string;
 }
 
-const PWD_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-const PWD_LOWER = "abcdefghjkmnpqrstuvwxyz";
-const PWD_DIGIT = "23456789";
-const PWD_SYMBOL = "!@#$%^&*-_=+";
-const PWD_ALL = PWD_UPPER + PWD_LOWER + PWD_DIGIT + PWD_SYMBOL;
-
-function pickFrom(set: string): string {
-  return set[randomInt(0, set.length)];
-}
-
-export function generatePortalPassword(): string {
-  const chars: string[] = [
-    pickFrom(PWD_UPPER),
-    pickFrom(PWD_LOWER),
-    pickFrom(PWD_DIGIT),
-    pickFrom(PWD_SYMBOL),
-  ];
-  for (let i = chars.length; i < 20; i++) chars.push(pickFrom(PWD_ALL));
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomInt(0, i + 1);
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-  }
-  return chars.join("");
-}
+// Re-exported, not redefined: src/app/api/nbfc/users/route.ts imports it from
+// here. The generator itself now lives in src/lib/auth/generatePortalPassword.
+export { generatePortalPassword };
 
 export function maskEmail(email: string): string {
   const at = email.indexOf("@");
@@ -65,7 +45,7 @@ export function maskEmail(email: string): string {
   return `${head}${"*".repeat(Math.max(2, local.length - 2))}${domain}`;
 }
 
-async function ensureSupabaseUser(
+export async function ensureSupabaseUser(
   email: string,
   password: string,
 ): Promise<string> {
