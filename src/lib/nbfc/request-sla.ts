@@ -45,6 +45,7 @@ import {
   auditLogs,
   nbfcDocRequests,
   nbfcDocumentVerifications,
+  nbfcLeadAssignments,
   otherDocumentRequests,
 } from "@/lib/db/schema";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
@@ -67,6 +68,7 @@ import {
   formatSlaWindow,
   getNbfcRequestSlaSettings,
 } from "@/lib/nbfc/request-sla-settings";
+import { forwardRejectionToDealer } from "@/lib/nbfc/rejection-forward";
 import { tenantDisplayName } from "@/lib/notifications/emit";
 import { notifyNbfcRequestAutoRouted } from "@/lib/notifications/events";
 import { SYSTEM_PARTY } from "@/lib/notifications/provenance";
@@ -84,11 +86,14 @@ export type NbfcRequestSlaTickResult = {
   forwarded: number;
   verdictsForwarded: number;
   pushed: number;
+  /** E-275 — NBFC file rejections auto-forwarded to the dealer. */
+  rejectionsForwarded: number;
   failed: number;
 };
 
 type WrapperRow = typeof nbfcDocRequests.$inferSelect;
 type VerdictRow = typeof nbfcDocumentVerifications.$inferSelect;
+type AssignmentRow = typeof nbfcLeadAssignments.$inferSelect;
 
 /**
  * Claim and process every request whose SLA has expired.
@@ -101,6 +106,7 @@ export async function runNbfcRequestSlaTick(
     forwarded: 0,
     verdictsForwarded: 0,
     pushed: 0,
+    rejectionsForwarded: 0,
     failed: 0,
   };
 
@@ -117,10 +123,20 @@ export async function runNbfcRequestSlaTick(
   if (settings.autoPushToNbfc) {
     await sweepPushes(nowSql, settings, result);
   }
+  if (settings.autoForwardRejection) {
+    await sweepRejectionForwards(nowSql, settings, result);
+  }
 
-  if (result.forwarded + result.verdictsForwarded + result.pushed + result.failed > 0) {
+  if (
+    result.forwarded +
+      result.verdictsForwarded +
+      result.pushed +
+      result.rejectionsForwarded +
+      result.failed >
+    0
+  ) {
     console.log(
-      `[nbfc-request-sla] forwarded=${result.forwarded} verdicts=${result.verdictsForwarded} pushed=${result.pushed} failed=${result.failed}`,
+      `[nbfc-request-sla] forwarded=${result.forwarded} verdicts=${result.verdictsForwarded} pushed=${result.pushed} rejections=${result.rejectionsForwarded} failed=${result.failed}`,
     );
   }
   return result;
@@ -461,6 +477,85 @@ async function sweepPushes(
       }).catch(() => {});
     } catch (err) {
       await failWrapper(row, "pushed", err, window, nbfcName, out);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Loop D — E-275, NBFC file rejections: declined, not forwarded → dealer
+ * ------------------------------------------------------------------ */
+
+async function sweepRejectionForwards(
+  nowSql: ReturnType<typeof clockOf>,
+  settings: NbfcRequestSlaSettings,
+  out: NbfcRequestSlaTickResult,
+): Promise<void> {
+  const window = formatSlaWindow(settings.rejectionSlaMinutes);
+  for (let i = 0; i < MAX_PER_LOOP; i++) {
+    const claimed = await db.execute<AssignmentRow>(sql`
+      UPDATE nbfc_lead_assignments
+         SET rejection_admin_due_at = NULL, updated_at = ${nowSql}
+       WHERE id = (
+             SELECT id FROM nbfc_lead_assignments
+              WHERE rejection_admin_due_at IS NOT NULL
+                AND rejection_admin_due_at <= ${nowSql}
+                AND status = 'declined'
+                AND rejection_forwarded_at IS NULL
+              ORDER BY rejection_admin_due_at ASC
+              LIMIT 1
+              FOR UPDATE SKIP LOCKED
+       )
+   RETURNING *
+    `);
+    const row = claimed[0];
+    if (!row) break;
+
+    const nbfcName = await tenantDisplayName(row.tenant_id);
+    try {
+      const fwd = await forwardRejectionToDealer({
+        assignmentId: row.id,
+        source: "system",
+        adminUserId: null,
+      });
+      out.rejectionsForwarded++;
+      await recordAudit("auto_forwarded", `rejection:${row.id}`, {
+        lead_id: row.lead_id,
+        kind: "rejection",
+        nbfc_name: fwd.nbfcName,
+        sla_minutes: settings.rejectionSlaMinutes,
+        note: fwd.note,
+      });
+      notifyNbfcRequestAutoRouted({
+        leadId: row.lead_id,
+        requestId: `rejection:${row.id}`,
+        kind: "forwarded",
+        ok: true,
+        slaWindow: window,
+        nbfcName: fwd.nbfcName,
+        docLabels: ["File rejection"],
+      }).catch(() => {});
+    } catch (err) {
+      out.failed++;
+      const message = (err instanceof Error ? err.message : String(err)).replace(
+        /^(BAD_REQUEST|NOT_FOUND):\s*/,
+        "",
+      );
+      console.error(`[nbfc-request-sla] rejection ${row.id} auto-forward failed:`, message);
+      await recordAudit("failed", `rejection:${row.id}`, {
+        lead_id: row.lead_id,
+        kind: "rejection",
+        error: message,
+      });
+      notifyNbfcRequestAutoRouted({
+        leadId: row.lead_id,
+        requestId: `rejection:${row.id}`,
+        kind: "forwarded",
+        ok: false,
+        slaWindow: window,
+        nbfcName,
+        docLabels: ["File rejection"],
+        error: message,
+      }).catch(() => {});
     }
   }
 }

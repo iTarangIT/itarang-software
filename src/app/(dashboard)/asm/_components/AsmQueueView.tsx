@@ -21,6 +21,13 @@ import {
     type QueueFilters,
     type QueueRegion,
 } from "@/lib/leads/queueFilters";
+import {
+    EMPTY_QUEUE_SORT,
+    hasQueueSort,
+    readQueueSort,
+    writeQueueSort,
+    type QueueSort,
+} from "@/lib/leads/queueSort";
 import { AsmQueueTabs } from "./AsmQueueTabs";
 import { AsmQueueTable } from "./AsmQueueTable";
 import {
@@ -64,6 +71,11 @@ export function AsmQueueView({ viewerId }: Props) {
     const [filters, setFilters] = useState<QueueFilters>(() =>
         readQueueFilters(new URLSearchParams(params.toString())),
     );
+    // Order, seeded from the URL like the filters so a sorted view survives a
+    // reload and can be pasted to a colleague.
+    const [sort, setSort] = useState<QueueSort>(() =>
+        readQueueSort(new URLSearchParams(params.toString())),
+    );
     const [visitStatus, setVisitStatus] = useState(() => {
         const v = params.get("visit_status") ?? "";
         return (VISIT_STATUS as readonly string[]).includes(v) ? v : "";
@@ -79,6 +91,7 @@ export function AsmQueueView({ viewerId }: Props) {
     const [filtersOpen, setFiltersOpen] = useState(
         () =>
             hasAnyQueueFilter(readQueueFilters(new URLSearchParams(params.toString()))) ||
+            hasQueueSort(readQueueSort(new URLSearchParams(params.toString()))) ||
             params.get("visit_status") !== null ||
             params.get("visit_outcome") !== null,
     );
@@ -97,8 +110,11 @@ export function AsmQueueView({ viewerId }: Props) {
         if (searchDebounced) p.set("q", searchDebounced);
         if (visitStatus) p.set("visit_status", visitStatus);
         if (visitOutcome) p.set("visit_outcome", visitOutcome);
+        // The sort rides along: the rows and the CSV honour it, the counts and
+        // facets simply never read it.
+        writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, visitStatus, visitOutcome, filters]);
+    }, [searchDebounced, visitStatus, visitOutcome, filters, sort]);
 
     const filterKey = filterParams.toString();
 
@@ -123,8 +139,14 @@ export function AsmQueueView({ viewerId }: Props) {
         setPage(1);
     }, []);
 
+    const patchSort = useCallback((next: QueueSort) => {
+        setSort(next);
+        setPage(1);
+    }, []);
+
     const resetFilters = useCallback(() => {
         setFilters(EMPTY_QUEUE_FILTERS);
+        setSort(EMPTY_QUEUE_SORT);
         setVisitStatus("");
         setVisitOutcome("");
         setPage(1);
@@ -215,6 +237,8 @@ export function AsmQueueView({ viewerId }: Props) {
                     // in the window, and the queue filters on the visit date.
                     dateLabel="Visit"
                     extraActiveCount={extraActive}
+                    sort={sort}
+                    onSortChange={patchSort}
                 >
                     <QueueFilterField label="Visit status">
                         <select

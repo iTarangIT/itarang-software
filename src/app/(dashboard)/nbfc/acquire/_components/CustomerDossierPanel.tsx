@@ -183,11 +183,14 @@ export default function CustomerDossierPanel({
   dossier,
   leadId,
   afterHero,
+  actionsExtra,
 }: {
   dossier: CustomerDossier;
   leadId: string;
   /** Optional cards rendered right after the hero, before Customer details. */
   afterHero?: React.ReactNode;
+  /** E-275 — extra control(s) in the action bar, e.g. "Reject file". */
+  actionsExtra?: React.ReactNode;
 }) {
   const { lead, productSelection: ps } = dossier;
   const batteryPhotos = (ps?.battery_photo_urls as string[] | null) ?? [];
@@ -211,7 +214,7 @@ export default function CustomerDossierPanel({
           </div>
         </div>
         <div className="bg-white px-5 py-3">
-          <DossierActions leadId={leadId} />
+          <DossierActions leadId={leadId} extra={actionsExtra} />
         </div>
       </div>
 

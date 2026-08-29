@@ -31,6 +31,8 @@ export const LEAD_ACTIONS = {
   /** Step 4: choose lenders in chat / open the Section-G page. */
   s4_start: "s4_start:",
   s4_web: "s4_web:",
+  /** E-275: an NBFC rejected the file — choose another lender. */
+  s4_again: "s4_again:",
   /** Offers: open the comparison page / pick a lender (`of_pick:<lead>:<nbfc>`). */
   of_view: "of_view:",
   of_pick: "of_pick:",

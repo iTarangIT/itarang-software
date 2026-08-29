@@ -20,9 +20,12 @@ type Settings = {
     pushSlaMinutes: number;
     autoForwardToDealer: boolean;
     autoPushToNbfc: boolean;
+    /** E-275 — whole minutes an NBFC file rejection waits with the admin. */
+    rejectionSlaMinutes: number;
+    autoForwardRejection: boolean;
 };
 
-type WindowKey = "forwardSlaMinutes" | "pushSlaMinutes";
+type WindowKey = "forwardSlaMinutes" | "pushSlaMinutes" | "rejectionSlaMinutes";
 
 const MIN_MINUTES = 1;
 const MAX_MINUTES = 7 * 24 * 60;
@@ -60,7 +63,7 @@ function splitMinutes(minutes: number): { value: number; unit: UnitKey } {
 
 const WINDOWS: {
     key: WindowKey;
-    toggle: "autoForwardToDealer" | "autoPushToNbfc";
+    toggle: "autoForwardToDealer" | "autoPushToNbfc" | "autoForwardRejection";
     title: string;
     hint: string;
     toggleLabel: string;
@@ -82,6 +85,14 @@ const WINDOWS: {
         toggleLabel: "Auto-verify uploads and push to the NBFC when leg 2 expires",
         toggleHint: "Turn this off to keep the leg-2 clock visible but require a human to verify each upload before it reaches the lender.",
     },
+    {
+        key: "rejectionSlaMinutes",
+        toggle: "autoForwardRejection",
+        title: "NBFC file rejection → dealer",
+        hint: "From the moment an NBFC rejects a customer's file in its Acquire workspace. The rejection and its reason wait on the NBFC Actions card; if nobody forwards it to the dealer in this time, the system does — the dealer is told the reason and asked to pick another NBFC.",
+        toggleLabel: "Auto-forward the rejection to the dealer when this window expires",
+        toggleHint: "Turn this off to keep the clock visible on the card but leave the forward click to a human.",
+    },
 ];
 
 export function NbfcRequestSlaForm() {
@@ -96,6 +107,7 @@ export function NbfcRequestSlaForm() {
     >({
         forwardSlaMinutes: { open: false, value: "30", unit: "minutes" },
         pushSlaMinutes: { open: false, value: "30", unit: "minutes" },
+        rejectionSlaMinutes: { open: false, value: "30", unit: "minutes" },
     });
 
     const { data, isLoading } = useQuery({
@@ -115,7 +127,7 @@ export function NbfcRequestSlaForm() {
         if (!data) return;
         const next = { ...custom };
         for (const w of WINDOWS) {
-            const { value, unit } = splitMinutes(data[w.key]);
+            const { value, unit } = splitMinutes(data[w.key] ?? 240);
             next[w.key] = { open: !PRESETS.includes(data[w.key]), value: String(value), unit };
         }
         setCustom(next);
@@ -217,7 +229,7 @@ export function NbfcRequestSlaForm() {
                 )}
             </div>
 
-            {/* The two windows */}
+            {/* The three windows */}
             {WINDOWS.map((w) => {
                 const c = custom[w.key];
                 const value = settings[w.key];
@@ -312,7 +324,7 @@ export function NbfcRequestSlaForm() {
             })}
 
             <p className="text-xs text-ink-muted">
-                Both windows are plain wall-clock time — nights, weekends and holidays all
+                All windows are plain wall-clock time — nights, weekends and holidays all
                 count — from <strong>1 minute to 7 days</strong>. The sweep runs every 60
                 seconds, so a 2-minute window fires within about three. Changing a window
                 only affects requests raised, and uploads received, from now on; a request

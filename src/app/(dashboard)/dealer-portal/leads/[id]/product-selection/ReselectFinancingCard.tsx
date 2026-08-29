@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-245 — pick another lender after closing a deal.
+ * E-245 / E-275 — pick another NBFC after a forwarded rejection (or a closed deal).
  *
  * Reads the SAME BRE-matched list Section G renders at Step 4
  * (GET /api/lead/[id]/section-g-options), so the dealer sees the loan products
@@ -54,7 +54,7 @@ export default function ReselectFinancingCard({
   leadId: string;
   /** Every NBFC already on this lead, in any state — all are excluded. */
   assignedNbfcIds: number[];
-  /** Section G caps a lead at 2 lenders; 0 means nothing can be added yet. */
+  /** E-275: one NBFC per lead; 0 means nothing can be added yet. */
   slotsFree: number;
   onRouted: () => void | Promise<void>;
 }) {
@@ -81,7 +81,7 @@ export default function ReselectFinancingCard({
   async function choose(group: NbfcGroup, product: LoanProduct) {
     const ok = await confirmDialog({
       title: `Route this lead to ${group.shortName || group.legalName}?`,
-      message: `${product.productName} will receive this application and can submit a firm offer. Your closed deal stays on the record.`,
+      message: `${product.productName} will receive this application and can submit a firm offer. The previous lender's decision stays on the record.`,
       confirmText: "Send to this lender",
     });
     if (!ok) return;
@@ -117,10 +117,10 @@ export default function ReselectFinancingCard({
   return (
     <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
       <h4 className="text-xs font-black uppercase tracking-wider text-slate-600">
-        Choose another lender
+        Choose another NBFC
       </h4>
       <p className="mt-1 text-xs text-slate-500">
-        You deleted a loan product, which frees a lender slot on this lead. These are the other
+        The previous lender is out, which frees this lead&apos;s NBFC slot. These are the other
         loan products this customer qualifies for.
       </p>
 
@@ -128,7 +128,7 @@ export default function ReselectFinancingCard({
 
       {slotsFree <= 0 ? (
         <p className="mt-3 text-xs text-slate-500">
-          This lead is already with two lenders. Delete one of those loan products to free a slot.
+          This lead is already with an NBFC. Its slot frees once that lender declines.
         </p>
       ) : available.length === 0 ? (
         <p className="mt-3 text-xs text-slate-500">

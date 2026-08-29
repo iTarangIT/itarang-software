@@ -11,7 +11,7 @@
  * names the lender. That guarantee was being broken two lines later: the
  * product block printed `p.productName` — the lender's OWN product name —
  * verbatim. In the test data that renders "iTarang Finance Scheme 2"; for a real
- * lender it would read "Bajaj Finserv EV Loan", which names the lender exactly
+ * lender it would read "<Lender> EV Loan", which names the lender exactly
  * as well as the lender's name would. So products get positional labels too, and
  * `productName` is never rendered in chat. (It is still what the dealer and the
  * NBFC see in the portal — only this surface masks it.)

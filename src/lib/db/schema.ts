@@ -509,6 +509,15 @@ export const leads = pgTable("leads", {
   // decline reason is retained even after §12.3 finance-data purge.
   financing_decline_category: varchar("financing_decline_category", { length: 40 }), // 'all_declined' | 'no_match' | 'handoff_unanswered'
   financing_unavailable_at: timestamp("financing_unavailable_at", { withTimezone: true }),
+  // E-275 — "Up to how much loan do you want?" asked before the lender list.
+  // Products whose loan_amount_max is below this are hidden at Step 4.
+  requested_loan_amount: integer("requested_loan_amount"),
+  // E-275 — admin Recall / Resubmit. Recalled while
+  // recalled_at IS NOT NULL AND (resubmitted_at IS NULL OR resubmitted_at < recalled_at).
+  recalled_at: timestamp("recalled_at", { withTimezone: true }),
+  recalled_by: uuid("recalled_by"),
+  recall_note: text("recall_note"),
+  resubmitted_at: timestamp("resubmitted_at", { withTimezone: true }),
 });
 
 // E-116 — extra products attached to a lead via the new-lead form's
@@ -4235,6 +4244,9 @@ export const productSelections = pgTable("product_selections", {
   // image/video/zip/pdf; a combined PDF counts as one). Array of
   // { url, name, type, size }. Viewable by the NBFC (Acquire dossier) + admin.
   pre_sanction_doc_urls: jsonb("pre_sanction_doc_urls").default(sql`'[]'::jsonb`),
+  // E-275 — off-platform lender ("Bajaj Finance") chosen when no partner
+  // serves the customer. selected_nbfcs is [] and no assignment is created.
+  external_lender: varchar("external_lender", { length: 64 }),
 
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -4275,6 +4287,8 @@ export const loanSanctions = pgTable("loan_sanctions", {
   // records a non-reversible recovery decision by the Risk Head.
   recovery_flagged_at: timestamp("recovery_flagged_at", { withTimezone: true }),
   recovery_reason: text("recovery_reason"),
+  // E-275 — loan written off-platform (e.g. 'Bajaj Finance'); nbfc_id NULL.
+  external_lender: varchar("external_lender", { length: 64 }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -4497,6 +4511,13 @@ export const nbfcLeadAssignments = pgTable(
     // NEW leads only; in-flight leads read this snapshot. Nullable for rows
     // created before E-133.
     service_config_snapshot: jsonb("service_config_snapshot"),
+    // E-275 — NBFC rejected the file (status='declined',
+    // decision_reason='nbfc_rejected'). The rejection waits with the admin
+    // until forwarded to the dealer by a human or by the SLA sweep.
+    rejection_note: text("rejection_note"),
+    rejection_admin_due_at: timestamp("rejection_admin_due_at", { withTimezone: true }),
+    rejection_forwarded_at: timestamp("rejection_forwarded_at", { withTimezone: true }),
+    rejection_forward_source: varchar("rejection_forward_source", { length: 16 }), // 'admin' | 'system'
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
