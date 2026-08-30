@@ -97,9 +97,11 @@ jobs:
         run: |
           export CI=1
           export NEXT_TELEMETRY_DISABLED=1
-          # Runner has ~7 GB; keep the 4 GB cap for parity with the prod
-          # build, in case any peak allocation pattern is config-sensitive.
-          export NODE_OPTIONS="--max-old-space-size=4096"
+          # 8 GB heap. The webpack build outgrew the old 4 GB cap on 2026-08-30
+          # ("Ineffective mark-compacts near heap limit" at ~3.97 GB, SIGABRT).
+          # ubuntu-latest runners now have 16 GB (~13.8 GB free at build time),
+          # so 8 GB leaves headroom for the build worker + the OS page cache.
+          export NODE_OPTIONS="--max-old-space-size=8192"
           export GITHUB_SHA=$(git rev-parse HEAD)
           echo "Node: $(node -v)  npm: $(npm -v)"
           echo "Free mem before build:"; free -m || true
