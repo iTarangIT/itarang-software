@@ -53,6 +53,10 @@ import {
   recordNoPreferredPartner,
   type ExternalLenderId,
 } from "@/lib/leads/bajaj-fallback";
+import {
+  isUnresolvedLocation,
+  reresolveLeadLocationFromDocs,
+} from "@/lib/leads/resolve-location";
 import { loadSectionGOptions, type SectionGNbfc } from "@/lib/leads/section-g";
 import { getPreSanctionBucket } from "@/lib/leads/pre-sanction-bucket";
 import {
@@ -203,7 +207,7 @@ const ACK_BUTTONS: ReplyButton[] = [
 ];
 
 const BAJAJ_BUTTONS: ReplyButton[] = [
-  { id: "s4b_go", title: "✅ Continue with Bajaj" },
+  { id: "s4b_go", title: "✅ Continue" },
   { id: "s4_redo", title: "↩ Back" },
 ];
 
@@ -355,6 +359,18 @@ async function optionsFor(
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return null;
+  // The BRE matches lenders on state + city, and a lead still carrying the
+  // 'Unknown' placeholder fails every product's location rule and falls to
+  // Bajaj. Give the address document on file one more chance to resolve it
+  // (city → district → taluka → address → PIN) before deciding no one serves
+  // this customer.
+  if (isUnresolvedLocation(lead.state) || isUnresolvedLocation(lead.city)) {
+    const loc = await reresolveLeadLocationFromDocs(leadId);
+    if (loc.changed) {
+      lead.state = loc.state;
+      lead.city = loc.city;
+    }
+  }
   const all = await loadSectionGOptions(lead, lead.requested_loan_amount ?? null);
   return {
     lead,
