@@ -47,6 +47,12 @@ import {
 } from "@/lib/kyc/consent-service";
 
 import type { ActiveDealer } from "./customer-lead";
+import {
+  docMissingButtons,
+  docSendPrompt,
+  isDocSend,
+  isDocSkip,
+} from "./doc-buttons";
 import { classifyDocument } from "./extraction";
 import { getAdapter } from "./index";
 import { leadActionId } from "./leadActionButton";
@@ -414,10 +420,27 @@ async function onCoBorrowerDocs(
   if (!leadId || !cb?.coBorrowerId) return await lostTrack(session);
 
   if (event.type !== "image" && event.type !== "document") {
+    const t = (event.text ?? "").trim();
+    const left = pending(cb.docs);
+    // Skip: carry on to consent without the remaining documents (they can be
+    // added later on the portal). Send: restate what is missing and wait.
+    if (isDocSkip(t)) {
+      return await startConsent(session, leadId, left.map((d) => DOC_LABEL[d]));
+    }
+    if (isDocSend(t)) {
+      if (left.length === 0) return await startConsent(session, leadId);
+      await reply(
+        session,
+        docSendPrompt(left.map((d) => DOC_LABEL[d])),
+        docMissingButtons(),
+      );
+      return;
+    }
     await reply(
       session,
-      "Please send the document as a *photo* or a *PDF*.\n\nStill needed: " +
-        pending(cb.docs).map((d) => DOC_LABEL[d]).join(", "),
+      "Please send the document as a *photo* or a *PDF*.\n\nStill needed:\n" +
+        left.map((d) => `• ${DOC_LABEL[d]}`).join("\n"),
+      left.length ? docMissingButtons() : undefined,
     );
     return;
   }
@@ -535,7 +558,9 @@ async function onCoBorrowerDocs(
   if (left.length > 0) {
     await reply(
       session,
-      `Got *${DOC_LABEL[docType]}* ✅ (${done}/${REQUIRED_DOCS.length})\n\nNext: *${DOC_LABEL[left[0]]}*`,
+      `Got *${DOC_LABEL[docType]}* ✅ (${done}/${REQUIRED_DOCS.length})\n\nStill needed:\n` +
+        left.map((d) => `• ${DOC_LABEL[d]}`).join("\n"),
+      docMissingButtons(),
     );
     return;
   }
@@ -554,7 +579,13 @@ async function onCoBorrowerDocs(
  * captured in question 2 — which is why that question refuses the applicant's
  * own number. The person in the chat cannot consent on their behalf.
  */
-async function startConsent(session: SessionRow, leadId: string): Promise<void> {
+async function startConsent(
+  session: SessionRow,
+  leadId: string,
+  /** Required documents the dealer chose to Skip — named so nobody reads
+   *  "All documents received" on a set that is not complete. */
+  skipped: string[] = [],
+): Promise<void> {
   const [cb] = await db
     .select({ full_name: coBorrowers.full_name, phone: coBorrowers.phone })
     .from(coBorrowers)
@@ -564,7 +595,9 @@ async function startConsent(session: SessionRow, leadId: string): Promise<void> 
   await setSession(session.id, { current_state: DC_CB_CONSENT });
   await reply(
     session,
-    `✅ *All documents received.*\n\n` +
+    (skipped.length
+      ? `⏭ *Skipped for now:* ${skipped.join(", ")} — add later on the dealer portal.\n\n`
+      : `✅ *All documents received.*\n\n`) +
       `Last step: *${cb?.full_name ?? "the co-borrower"}* needs to give consent ` +
       `on their own number (${maskPhone(cb?.phone ?? null)}).\n\n` +
       `How should we send the code?`,
@@ -845,6 +878,7 @@ async function resumeDocs(session: SessionRow): Promise<void> {
     "📎 *Co-borrower documents* — continuing where you left off.\n\nStill needed:\n" +
       left.map((d) => `• ${DOC_LABEL[d]}`).join("\n") +
       "\n\nSend them one at a time, a clear photo of each is fine.",
+    docMissingButtons(),
   );
 }
 
@@ -996,7 +1030,7 @@ async function ingestCoBorrowerZip(
   if (rejected.length) lines.push(`⚠️ Skipped:\n${rejected.map((r) => `• ${r}`).join("\n")}`);
   if (left.length) {
     lines.push(`Still needed:\n${left.map((d) => `• ${DOC_LABEL[d]}`).join("\n")}`);
-    await reply(session, lines.join("\n\n"));
+    await reply(session, lines.join("\n\n"), docMissingButtons());
     return;
   }
 
