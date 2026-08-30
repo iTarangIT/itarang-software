@@ -45,6 +45,44 @@ export function isDocNext(text: string | null | undefined): boolean {
   return t === DOC_NEXT_ID || t === "next" || t === "next file";
 }
 
+// --- "Still needed" follow-up ---------------------------------------------
+// After a batch lands with required documents still missing, the summary ends
+// with two choices instead of the generic Next/Done pair: SKIP the rest and
+// move on (they can be added later on the portal), or SEND — which restates
+// exactly which documents are still needed and waits for them.
+
+export const DOC_SKIP_ID = "docs_skip";
+export const DOC_SEND_ID = "docs_send";
+
+/** The two buttons shown under a "Still needed" list. */
+export function docMissingButtons(): ReplyButton[] {
+  return [
+    { id: DOC_SKIP_ID, title: "⏭ Skip" },
+    { id: DOC_SEND_ID, title: "📎 Send document" },
+  ];
+}
+
+/** The Skip button, or "skip" typed. */
+export function isDocSkip(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim().toLowerCase();
+  return t === DOC_SKIP_ID || t === "skip";
+}
+
+/** The Send button, or "send" typed. */
+export function isDocSend(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim().toLowerCase();
+  return t === DOC_SEND_ID || t === "send";
+}
+
+/** "Please send the *RC copy* now …" — what Send replies with. */
+export function docSendPrompt(missingLabels: string[]): string {
+  const list = missingLabels.map((l) => `• *${l}*`).join("\n");
+  return (
+    `Please send the following document${missingLabels.length > 1 ? "s" : ""} now (photo or PDF):\n${list}` +
+    `\n\nSend them one by one or as a ZIP — I'll continue automatically once they are in.`
+  );
+}
+
 /** What the chat says when Next-file is tapped. */
 export const DOC_NEXT_PROMPT = "Send the next file now (photo or PDF).";
 
