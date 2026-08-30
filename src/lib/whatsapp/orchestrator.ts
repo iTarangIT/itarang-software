@@ -32,7 +32,7 @@ import {
 } from "@/lib/db/schema";
 
 import JSZip from "jszip";
-import { City, State } from "country-state-city";
+import { resolveLeadLocation } from "@/lib/leads/resolve-location";
 
 import {
   documentLabel as correctionDocumentLabel,
@@ -134,8 +134,12 @@ import {
   DOC_NEXT_PROMPT,
   docBatchButtons,
   docGotIt,
+  docMissingButtons,
+  docSendPrompt,
   isDocDone,
   isDocNext,
+  isDocSend,
+  isDocSkip,
 } from "./doc-buttons";
 import {
   DC_ACTIVE_BATT,
@@ -4854,8 +4858,19 @@ async function onLeadDocs(
 ): Promise<void> {
   if (event.type === "text" || event.type === "interactive") {
     const t = (event.text ?? "").trim();
-    if (isDocDone(t)) {
+    // "Skip" under a Still-needed list: move on without the remaining
+    // documents (proceedToConsent surfaces them as a heads-up; they can be
+    // added later on the portal).
+    if (isDocDone(t) || isDocSkip(t)) {
       return await proceedToConsent(session, dealer);
+    }
+    // "Send" under a Still-needed list: restate exactly what is missing and
+    // stay here waiting for it.
+    if (isDocSend(t)) {
+      const missing = await missingCustomerDocLabels(session);
+      if (missing.length === 0) return await proceedToConsent(session, dealer);
+      await reply(session, docSendPrompt(missing), docMissingButtons());
+      return;
     }
     if (isDocNext(t)) {
       await reply(session, DOC_NEXT_PROMPT, docBatchButtons());
@@ -4909,6 +4924,12 @@ async function onLeadDocs(
     "Please send the documents as photos or PDFs, or tap *Done*.",
     docBatchButtons(),
   );
+}
+
+/** Labels of the REQUIRED customer documents not yet on the lead. */
+async function missingCustomerDocLabels(session: SessionRow): Promise<string[]> {
+  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
+  return REQUIRED_CUSTOMER_DOCS.filter((d) => !have.includes(d)).map(customerDocLabel);
 }
 
 /** Save a customer document, link it to the lead, and fill its extracted
@@ -5148,7 +5169,12 @@ async function ingestCustomerZip(
       `🎉 *All documents are correct* — every document belongs to *${canonical || "the customer"}*.`,
     );
   }
-  await reply(session, parts.join("\n\n"));
+  // Under a "Still needed" list the dealer chooses: Skip the rest, or Send
+  // (which restates the missing documents and waits). A mismatch has its own
+  // resend instruction; a complete set auto-advances from the caller.
+  const buttons =
+    !mismatched.length && missing.length > 0 ? docMissingButtons() : undefined;
+  await reply(session, parts.join("\n\n"), buttons);
 }
 
 async function ingestCustomerDoc(
@@ -5216,11 +5242,16 @@ async function ingestCustomerDoc(
   // push the tally past the denominator (e.g. "6/5").
   const haveDocs = Object.keys((await getLeadCtx(session)).docs ?? {});
   const haveCount = REQUIRED_CUSTOMER_DOCS.filter((d) => haveDocs.includes(d)).length;
-  await reply(
-    session,
-    `${docGotIt(haveCount)} *${customerDocLabel(docType)}* — ${haveCount}/${REQUIRED_CUSTOMER_DOCS.length} required.`,
-    docBatchButtons(),
+  const missing = REQUIRED_CUSTOMER_DOCS.filter((d) => !haveDocs.includes(d)).map(
+    customerDocLabel,
   );
+  let msg = `${docGotIt(haveCount)} *${customerDocLabel(docType)}* — ${haveCount}/${REQUIRED_CUSTOMER_DOCS.length} required.`;
+  if (missing.length) {
+    msg += `\n\nStill needed:\n${missing.map((l) => `• ${l}`).join("\n")}`;
+  }
+  // Same Skip / Send choice as the batch summary while documents are still
+  // missing; a complete set auto-advances from the caller.
+  await reply(session, msg, missing.length ? docMissingButtons() : docBatchButtons());
 }
 
 // ID documents that print the customer's name — used for the cross-document
@@ -5307,61 +5338,6 @@ function namesMatch(nameA: string, nameB: string): boolean {
 
 function digitsOnly(v: unknown): string {
   return str(v).replace(/\D/g, "");
-}
-
-/**
- * Resolve free-text state/city (from OCR) to the canonical `country-state-city`
- * names the dealer Step-1 dropdowns use (the wizard's State/City <select>s are
- * built from this same package — value must match a name exactly to pre-select).
- * Returns only confident matches; an unmatched value is left undefined so the
- * dealer picks it manually rather than us storing a value the dropdown can't show.
- */
-function resolveStateCity(
-  rawState: string,
-  rawCity: string,
-  rawDistrict = "",
-  rawFullAddress = "",
-): { state?: string; city?: string } {
-  const out: { state?: string; city?: string } = {};
-  const s = rawState.trim().toLowerCase();
-  if (!s) return out;
-  const stateMatch = State.getStatesOfCountry("IN").find(
-    (st) => st.name.toLowerCase() === s,
-  );
-  if (!stateMatch) return out;
-  out.state = stateMatch.name;
-
-  const cities = City.getCitiesOfState("IN", stateMatch.isoCode);
-  const findCity = (raw: string): string | undefined => {
-    const c = raw.trim().toLowerCase();
-    if (!c) return undefined;
-    // Exact (case-insensitive) first; else tolerate the "Allahabad" ⇄
-    // "Allahabad City" prefix difference between OCR text and the package name.
-    const hit =
-      cities.find((ct) => ct.name.toLowerCase() === c) ||
-      cities.find((ct) => {
-        const n = ct.name.toLowerCase();
-        return c.startsWith(n) || n.startsWith(c);
-      });
-    return hit?.name;
-  };
-
-  // Rural Aadhaar cards print the VILLAGE in the city slot ("Ugaon") and the
-  // real city in the district slot ("Nashik"). The BRE matches NBFC products on
-  // exact state+city, so a village left the lead at city='Unknown' and every
-  // customer fell through to the Bajaj card. Try city → district → each comma
-  // segment of the printed address, so the district/taluka names still resolve.
-  const segments = rawFullAddress
-    .split(/[,\n]/)
-    .map((t) => t.replace(/^\s*(tal|taluka|dist|district|po|post|at)\b[-:. ]*/i, "").trim())
-    .filter((t) => t && !/^\d{6}$/.test(t))
-    .reverse(); // address goes small → large; largest units first
-  const city =
-    findCity(rawCity) ??
-    findCity(rawDistrict) ??
-    segments.map(findCity).find(Boolean);
-  if (city) out.city = city;
-  return out;
 }
 
 function parseDobValue(v: unknown): Date | null {
@@ -5463,12 +5439,14 @@ async function fillCustomerLeadFromDoc(
   // names so the wizard's State/City selects pre-populate (overwriting the
   // "Unknown" placeholder set at lead creation).
   if (docType === "aadhaar_back" || docType === "address_proof") {
-    const loc = resolveStateCity(
-      str(fields.state),
-      str(fields.city),
-      str(fields.district),
-      str(fields.full_address),
-    );
+    const loc = await resolveLeadLocation({
+      state: str(fields.state),
+      city: str(fields.city),
+      district: str(fields.district),
+      taluka: str(fields.taluka),
+      full_address: str(fields.full_address),
+      pincode: str(fields.pincode),
+    });
     if (loc.state) leadPatch.state = loc.state;
     if (loc.city) leadPatch.city = loc.city;
   }
