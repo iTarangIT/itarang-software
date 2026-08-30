@@ -148,7 +148,8 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       aadhaar_number: "the 12-digit Aadhaar number, if shown (digits only)",
       address_line1: "house/street part of the address",
       city: "city/town/village, if shown",
-      district: "district, if shown",
+      taluka: "taluka / tehsil / block, if shown (often printed after 'Tal-', 'Tehsil' or 'Block')",
+      district: "district, if shown (often printed after 'Dist-' or 'District')",
       state: "state, if shown",
       pincode: "the 6-digit PIN code, if shown",
       full_address: "the full address as printed",
@@ -176,6 +177,7 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       name: "the person's name, if shown",
       address_line1: "house/street part of the residential address",
       city: "city/town, if shown",
+      taluka: "taluka / tehsil / block, if shown",
       district: "district, if shown",
       state: "state, if shown",
       pincode: "the 6-digit PIN code, if shown",
@@ -278,6 +280,12 @@ export function buildExtractionPrompt(docType: string): string {
     "- If a field is not present or not readable, return null for it.",
     "- If the document is not the expected type, set is_expected_type=false and still extract any fields you can.",
     "- Remove spaces from GSTIN / PAN / IFSC / account numbers.",
+    ...(docType === "aadhaar_back" || docType === "address_proof"
+      ? [
+          "- Aadhaar and most Indian ID cards print the address twice: once in a regional script (Hindi/Marathi/etc.) and once in English. For city, taluka, district, state, pincode and full_address ALWAYS use the ENGLISH (Latin-script) version. If only a regional-script version is printed, transliterate the place names into English (e.g. 'महाराष्ट्र' -> 'Maharashtra', 'नाशिक' -> 'Nashik').",
+          "- 'state' must be the official English name of the Indian state/UT. 'district' is the district (e.g. 'Nashik'), even when the address also lists a village/taluka.",
+        ]
+      : []),
   ].join("\n");
 }
 
