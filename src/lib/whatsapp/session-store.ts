@@ -196,9 +196,19 @@ export type Ctx = {
       marginMode?: "percent" | "rupees";
       marginValue?: number;
       marginAmount?: number;
+      /** 18% GST on marginAmount (E-273). */
+      marginGst?: number;
       /** The order card has been sent to the customer (DC_DP_OTP onwards). Set
        *  so a re-tap of Send does not message them twice. */
       orderSentAt?: string;
+      /** The picker is running as the front half of STEP 4 (pre-lender):
+       *  confirming derives requested_loan_amount instead of saving. */
+      phase?: "step4" | null;
+      /** Loan sanctioned against the stored selection — Send-only, no edits. */
+      locked?: boolean | null;
+      /** Stock-forced exception to the lock: the approved serial vanished, a
+       *  replacement battery may be picked; the margin stays as approved. */
+      repickAllowed?: boolean | null;
     };
   };
   /** E-214 — internal onboarding operator state. Lives ONLY on the
