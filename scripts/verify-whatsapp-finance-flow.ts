@@ -12,12 +12,13 @@
  * THIS SCRIPT MUTATES. It sets `leads.requested_loan_amount`, submits Step 4
  * and (on the Bajaj path) sanctions the lead. Never point it at production.
  *
- * Covers (cart-first Step 4: battery → charger → confirm → lenders):
- *   1. s4_start opens the battery picker; pick + confirm derives
- *      leads.requested_loan_amount from the cart's final price; then single
- *      pick → disclosure → NBFC_RECEIVED_MSG and the submitted
- *      product_selections row carries the serial + final_price
- *      (when the lead's area has ≥1 preferred partner), OR
+ * Covers (cart-first Step 4: battery → charger → loan amount → confirm →
+ * lenders):
+ *   1. s4_start opens the battery picker; after the cart the "How much loan do
+ *      you want?" question stores the TYPED amount on
+ *      leads.requested_loan_amount at Confirm; then single pick → disclosure →
+ *      NBFC_RECEIVED_MSG and the submitted product_selections row carries the
+ *      serial + final_price (when the lead's area has ≥1 preferred partner), OR
  *   2. zero options → Bajaj card → Continue → sanctioned → the chat lands on
  *      the LOCKED order (no re-pick after sanction);
  *   3. the Next file / Done buttons on the Step-4 extra-docs bucket.
@@ -199,6 +200,18 @@ async function main() {
           st = await state();
         }
       }
+
+      // Customer actor: no margin step — the loan-amount question comes next.
+      if (st === "DC_DP_LOAN_AMT" && /how much loan/i.test(bodies(sends))) {
+        pass("loan amount asked after the cart", "state=DC_DP_LOAN_AMT");
+        sends = await send("banana", "text");
+        if ((await state()) === "DC_DP_LOAN_AMT") pass("garbage amount re-asks");
+        else fail("garbage amount re-asks", `state=${await state()}`);
+        sends = await send("1.5 lakh", "text");
+        st = await state();
+      } else {
+        fail("loan amount asked after the cart", `state=${st}: ${bodies(sends).slice(0, 160)}`);
+      }
     } else if (st === "DC_DP_SEND") {
       pass("s4_start prefilled the order preview", "state=DC_DP_SEND");
     } else if (st === "DC_DP_WAIT") {
@@ -219,8 +232,9 @@ async function main() {
     }
 
     const stored = (await leadRow()).requested_loan_amount;
-    if (stored != null && stored > 0) pass("amount derived from cart", `requested_loan_amount=${stored}`);
-    else fail("amount derived from cart", `requested_loan_amount=${stored}`);
+    if (stored === 150000) pass("typed amount stored on Confirm", "1.5 lakh → 150000");
+    else if (stored != null && stored > 0) pass("amount stored on Confirm", `requested_loan_amount=${stored} (prefill path)`);
+    else fail("amount stored on Confirm", `requested_loan_amount=${stored}`);
 
     st = await state();
     const rows = lastRows(sends);
@@ -270,12 +284,10 @@ async function main() {
         .limit(1);
       if (ps?.battery_serial) pass("submitted row carries the serial", ps.battery_serial);
       else fail("submitted row carries the serial", String(ps?.battery_serial));
-      const finalPrice = Math.round(Number(ps?.final_price));
-      const requested = (await leadRow()).requested_loan_amount;
-      if (finalPrice > 0 && requested === finalPrice) {
-        pass("requested amount = final price", `${requested}`);
+      if (Math.round(Number(ps?.final_price)) > 0) {
+        pass("submitted row carries final_price", String(ps?.final_price));
       } else {
-        fail("requested amount = final price", `final_price=${ps?.final_price} requested=${requested}`);
+        fail("submitted row carries final_price", String(ps?.final_price));
       }
     } else if (st === "DC_S4_BAJAJ") {
       pass("no partner → Bajaj card", `buttons=${ids.join(",")}`);

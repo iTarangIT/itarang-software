@@ -82,11 +82,12 @@
  * ── THE STEP-4 PHASE AND THE SANCTION LOCK ─────────────────────────────────
  *
  * The picker above is ALSO the front half of WhatsApp Step 4. `beginStep4Cart`
- * runs battery → charger → margin with `dp.phase === "step4"`, the preview's
- * Send button becomes "Confirm order", and confirming derives
- * `leads.requested_loan_amount` from the cart's final price and hands back to
- * step4-flow's lender list — so the order is fixed BEFORE the file reaches a
- * lender, and the loan is sized to the actual order.
+ * runs battery → charger → margin → "How much loan do you want?" with
+ * `dp.phase === "step4"`, the preview's Send button becomes "Confirm order",
+ * and confirming writes the TYPED amount (falling back to the cart total) to
+ * `leads.requested_loan_amount` and hands back to step4-flow's lender list —
+ * so the order is fixed BEFORE the file reaches a lender, and the ask is made
+ * against a known order.
  *
  * Once the loan is sanctioned (the NBFC sanction route stamps `disbursed_at`
  * in the same breath), the cart is LOCKED: `startDispatch` lands on
@@ -102,7 +103,10 @@ import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import { leads, loanSanctions, productSelections } from "@/lib/db/schema";
-import { setRequestedLoanAmount } from "@/lib/leads/requested-loan-amount";
+import {
+  parseRupees,
+  setRequestedLoanAmount,
+} from "@/lib/leads/requested-loan-amount";
 import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
 import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
 import { DispatchError, confirmDispatch } from "@/lib/leads/confirm-dispatch";
@@ -155,6 +159,8 @@ export const DC_DP_CHARGER = "DC_DP_CHARGER";
 /** Dealer leg — see the header. */
 export const DC_DP_MARGIN = "DC_DP_MARGIN";
 export const DC_DP_MARGIN_VAL = "DC_DP_MARGIN_VAL";
+/** Step-4 phase only — "How much loan do you want?", asked after the margin. */
+export const DC_DP_LOAN_AMT = "DC_DP_LOAN_AMT";
 export const DC_DP_SEND = "DC_DP_SEND";
 export const DC_DP_OTP = "DC_DP_OTP";
 export const DC_DP_WAIT = "DC_DP_WAIT";
@@ -391,6 +397,18 @@ export async function beginStep4Cart(
         marginAmount: Number(prior.dealer_margin) || 0,
         marginGst: Number(prior.dealer_margin_gst_amount) || 0,
       });
+    }
+  }
+  // A re-entry that jumps straight to the preview should show the loan amount
+  // that was asked for last time, not silently fall back to the total.
+  if (dpCtx(session).loanAmount == null) {
+    const [leadRow] = await db
+      .select({ requested_loan_amount: leads.requested_loan_amount })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    if (leadRow?.requested_loan_amount != null) {
+      await patchDp(session, { loanAmount: leadRow.requested_loan_amount });
     }
   }
   await patchDp(session, {
@@ -773,9 +791,9 @@ async function beginPricing(
     // The customer is choosing for themselves. There is no margin to ask about
     // and nobody in this chat entitled to set one.
     if (dpCtx(session).phase === "step4") {
-      // Pre-sanction: the choice still needs the disclosure + submit, so it
-      // goes through the preview's Confirm, not straight to a Step-5 save.
-      return await showOrderPreview(session, leadId, battery, charger, 0);
+      // Pre-sanction: no margin to ask, but the loan amount still is — then
+      // the preview's Confirm, not a Step-5 save.
+      return await askLoanAmount(session, battery, charger);
     }
     return await completeOrder(session, leadId, dealer, battery, charger, 0, false);
   }
@@ -830,12 +848,16 @@ async function onMarginMode(
   const raw = (event.text ?? "").trim();
 
   if (raw === "dpm_none") {
-    await patchLeadSub(session.id, "dp", {
+    await patchDp(session, {
       marginMode: null,
       marginValue: 0,
       marginAmount: 0,
       marginGst: 0,
     });
+    if (dpCtx(session).phase === "step4") {
+      // Step 4: the loan amount is asked after the margin, before the preview.
+      return await askLoanAmount(session, picked.battery, picked.charger);
+    }
     return await showOrderPreview(session, leadId, picked.battery, picked.charger, 0);
   }
 
@@ -895,11 +917,16 @@ async function onMarginValue(
 
   const base = stockValue(picked.battery, picked.charger);
   const amount = marginAmount(mode, parsed.value, base);
-  await patchLeadSub(session.id, "dp", {
+  await patchDp(session, {
     marginValue: parsed.value,
     marginAmount: amount,
     marginGst: marginGst(amount),
   });
+
+  if (dpCtx(session).phase === "step4") {
+    // Step 4: the loan amount is asked after the margin, before the preview.
+    return await askLoanAmount(session, picked.battery, picked.charger);
+  }
 
   await showOrderPreview(
     session,
@@ -908,6 +935,68 @@ async function onMarginValue(
     picked.charger,
     amount,
     marginLabel(mode, parsed.value),
+  );
+}
+
+/**
+ * DC_DP_LOAN_AMT — Step-4 phase only: how much loan is being asked for.
+ *
+ * Asked AFTER the margin so the order total can be quoted alongside. The typed
+ * figure becomes `leads.requested_loan_amount` at Confirm — a down payment may
+ * cover the gap to the total, so the ask is not forced to equal the price.
+ */
+async function askLoanAmount(
+  session: SessionRow,
+  battery: DealerStockItem,
+  charger: DealerStockItem | null,
+): Promise<void> {
+  const dp = dpCtx(session);
+  const margin = Number(dp.marginAmount) || 0;
+  const total = finalPriceOf(stockValue(battery, charger), margin, marginGst(margin));
+  await setSession(session.id, { current_state: DC_DP_LOAN_AMT });
+  await reply(
+    session,
+    `💰 *How much loan do you want?*\n\n` +
+      `Your order totals *${inr(total)}* _(incl. GST)_.\n\n` +
+      `Reply with an amount — e.g. *60000* or *1.5 lakh*.`,
+  );
+}
+
+/** DC_DP_LOAN_AMT — the typed figure. */
+async function onLoanAmount(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const leadId = leadIdOf(session);
+  if (!leadId) return await lost(session);
+
+  const picked = await resolvePicked(session, leadId, dealer);
+  if (!picked) return;
+
+  const amount = parseRupees((event.text ?? "").trim());
+  if (amount == null) {
+    // Stay on this state; they type again.
+    await reply(
+      session,
+      "I couldn't read that as an amount. Reply with a number — e.g. *60000* or *1.5 lakh*.",
+    );
+    return;
+  }
+
+  await patchDp(session, { loanAmount: amount });
+  const dp = dpCtx(session);
+  const mode: MarginMode | null =
+    dp.marginMode === "percent" || dp.marginMode === "rupees" ? dp.marginMode : null;
+  await showOrderPreview(
+    session,
+    leadId,
+    picked.battery,
+    picked.charger,
+    Number(dp.marginAmount) || 0,
+    mode && dp.marginValue !== undefined && dp.marginValue !== null
+      ? marginLabel(mode, Number(dp.marginValue))
+      : undefined,
   );
 }
 
@@ -936,6 +1025,7 @@ async function showOrderPreview(
   // lender list — nothing is sent to the customer yet.
   if (dp.phase === "step4") {
     const dealerActor = await actingAsDealer(session, leadId);
+    const loanAsk = Number(dp.loanAmount) || total;
     await setSession(session.id, { current_state: DC_DP_SEND });
     await reply(
       session,
@@ -946,7 +1036,7 @@ async function showOrderPreview(
             `➕ GST on margin (${MARGIN_GST_PCT}%) — ${inr(gst)}\n`
           : "") +
         `\n*Total ${inr(total)}* _(incl. GST)_\n\n` +
-        `📤 A loan of *${inr(total)}* will be requested from the lender.\n` +
+        `📤 A loan of *${inr(loanAsk)}* will be requested from the lender.\n` +
         `_Once the loan is approved, the battery and margin can't be changed._`,
       dealerActor
         ? [
@@ -1053,25 +1143,27 @@ async function onSendPreview(
     return;
   }
 
-  // Step-4 phase: Confirm order — derive the requested loan amount from the
-  // cart's total and hand back to step4-flow's lender list. Nothing is saved
-  // to product_selections here; the submit carries the cart.
+  // Step-4 phase: Confirm order — the requested loan amount is what was TYPED
+  // at DC_DP_LOAN_AMT (falling back to the cart total), and the chat hands
+  // back to step4-flow's lender list. Nothing is saved to product_selections
+  // here; the submit carries the cart.
   if (dp.phase === "step4") {
     const gst = marginGst(margin);
     const total = Math.round(
       finalPriceOf(stockValue(picked.battery, picked.charger), margin, gst),
     );
-    if (!(total >= 1)) {
+    const loanAsk = Math.round(Number(dp.loanAmount) || 0) || total;
+    if (!(loanAsk >= 1)) {
       await setSession(session.id, { current_state: DC_DP_SEND });
       await reply(
         session,
-        "⚠️ This battery has no price on stock, so I can't size the loan from it. " +
-          "Please pick a different battery.",
+        "⚠️ I don't have a usable loan amount for this order. " +
+          "Please pick a different battery or start over with *hi*.",
       );
       return;
     }
     try {
-      const ok = await setRequestedLoanAmount(leadId, total);
+      const ok = await setRequestedLoanAmount(leadId, loanAsk);
       if (!ok) throw new Error(`lead ${leadId} not found`);
       const { continueStep4AfterCart } = await import("./step4-flow");
       await continueStep4AfterCart(session, leadId);
@@ -1954,6 +2046,9 @@ interface DpCtx {
    *  preview derives requested_loan_amount and hands back to step4-flow instead
    *  of saving/dispatching. */
   phase?: "step4" | null;
+  /** Step-4 phase: the loan amount the dealer/customer TYPED after the margin
+   *  step (DC_DP_LOAN_AMT). Falls back to the cart total when absent. */
+  loanAmount?: number | null;
   /** The loan is sanctioned against the stored selection; only Send is offered
    *  and every battery/margin mutation refuses. Set by showLockedSummary. */
   locked?: boolean | null;
@@ -2103,6 +2198,9 @@ registerLeadState(DC_DP_MARGIN, onMarginMode, { rerenderOnGreeting: true });
 // alternative is worse — a "hi" mid-dispatch clears ctx.lead, and the dealer has
 // no button left to reopen a lead that is already sanctioned and saved.
 registerLeadState(DC_DP_MARGIN_VAL, onMarginValue, { rerenderOnGreeting: true });
+// Free text like DC_DP_MARGIN_VAL, and safe for the same reason: the payload
+// is a rupee amount, "hi" is not one, and parseRupees rejects it and re-prompts.
+registerLeadState(DC_DP_LOAN_AMT, onLoanAmount, { rerenderOnGreeting: true });
 registerLeadState(DC_DP_SEND, onSendPreview, { rerenderOnGreeting: true });
 registerLeadState(DC_DP_OTP, onDispatchOtp, { rerenderOnGreeting: true });
 registerLeadState(DC_DP_WAIT, onDispatchWait, { rerenderOnGreeting: true });
