@@ -29,6 +29,11 @@ const SECRET_SENTINEL = "__UNCHANGED__"; // PUT sends this to keep an existing s
 
 const Body = z.object({
   email_mode: z.enum(["itarang_default", "own_smtp"]),
+  // E-276 — recipient for NBFC event emails (not a secret, no sentinel).
+  notification_email: z
+    .union([z.string().trim().email(), z.literal("")])
+    .optional()
+    .nullable(),
   email_from: z.string().optional().nullable(),
   email_from_name: z.string().optional().nullable(),
   smtp_host: z.string().optional().nullable(),
@@ -62,6 +67,7 @@ export async function GET(req: NextRequest) {
       canEdit: actor.can("settings.notification_channels"),
       config: {
         email_mode: row?.email_mode ?? "itarang_default",
+        notification_email: row?.notification_email ?? null,
         email_from: row?.email_from ?? null,
         email_from_name: row?.email_from_name ?? null,
         smtp_host: row?.smtp_host ?? null,
@@ -120,6 +126,7 @@ export async function PUT(req: NextRequest) {
     const values = {
       tenant_id: actor.tenant_id,
       email_mode: d.email_mode,
+      notification_email: d.notification_email || null,
       email_from: d.email_from ?? null,
       email_from_name: d.email_from_name ?? null,
       smtp_host: d.smtp_host ?? null,

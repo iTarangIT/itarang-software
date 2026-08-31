@@ -18,7 +18,8 @@ import { isAssignmentDecided } from "@/lib/nbfc/offer-negotiation";
 import { RECALLED_ERROR, isLeadRecalled } from "@/lib/nbfc/recall";
 import { getNbfcRequestSlaSettings, rejectionDueAtFrom } from "@/lib/nbfc/request-sla-settings";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
-import { tenantDisplayName } from "@/lib/notifications/emit";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
+import { dealerDisplayName, tenantDisplayName } from "@/lib/notifications/emit";
 import { notifyNbfcRejectedApplication } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
@@ -69,7 +70,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       );
     }
     const [lead] = await db
-      .select({ recalled_at: leads.recalled_at, resubmitted_at: leads.resubmitted_at })
+      .select({
+        recalled_at: leads.recalled_at,
+        resubmitted_at: leads.resubmitted_at,
+        full_name: leads.full_name,
+        owner_name: leads.owner_name,
+        dealer_id: leads.dealer_id,
+      })
       .from(leads)
       .where(eq(leads.id, leadId))
       .limit(1);
@@ -116,12 +123,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       });
     });
 
+    const nbfcName = await tenantDisplayName(actor.tenant_id);
     await notifyNbfcRejectedApplication({
       leadId,
       assignmentId: assignment.id,
-      nbfcName: await tenantDisplayName(actor.tenant_id),
+      nbfcName,
       note,
     });
+
+    // E-276 — confirmation copy to the rejecting NBFC (+ global monitoring CC).
+    sendNbfcEventEmail({
+      tenantId: actor.tenant_id,
+      leadId,
+      subject: `iTarang — Application rejected by ${nbfcName} (Lead ${leadId})`,
+      eventLabel: `${nbfcName} has rejected the loan application for Lead ${leadId}.`,
+      customerName: lead?.full_name ?? lead?.owner_name ?? null,
+      dealerName: await dealerDisplayName(lead?.dealer_id),
+      extraRows: [
+        ["Rejected by", nbfcName],
+        ["Rejection reason", note],
+      ],
+      bodyHtml: `<p>Update: the rejection is recorded and now sits with the iTarang admin, who will forward the decision to the dealer (the dealer may then re-route the file to another lender).</p>`,
+    }).catch(() => {});
 
     return NextResponse.json({
       ok: true,
