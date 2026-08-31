@@ -172,10 +172,11 @@ async function main() {
   if (["step_3_cleared", "kyc_approved"].includes(await kycStatus())) {
     let sends = await send(leadActionId("s4_start", leadId));
 
-    // Cart-first Step 4: walk battery → charger → (margin) → Confirm order
-    // before the lender list appears. A lead with a prior selection prefils
-    // straight onto the preview; a dealer-actor run also gets the margin step.
-    for (let hop = 0; hop < 5; hop += 1) {
+    // Cart-first Step 4: walk battery → charger → (margin) → loan amount →
+    // Confirm order before the lender list appears. A lead with a prior
+    // selection prefils straight onto the preview; a dealer-actor run also
+    // gets the margin step.
+    for (let hop = 0; hop < 6; hop += 1) {
       const cartState = await state();
       if (cartState === "DC_DP_PRODUCT") {
         const batt = lastRows(sends).find((r) => r.id.startsWith("dpb:"));
@@ -185,6 +186,8 @@ async function main() {
         sends = await send("dpc_skip");
       } else if (cartState === "DC_DP_MARGIN") {
         sends = await send("dpm_none");
+      } else if (cartState === "DC_DP_LOAN_AMT") {
+        sends = await send("1.5 lakh");
       } else if (cartState === "DC_DP_SEND") {
         sends = await send("dps_send");
         break;
