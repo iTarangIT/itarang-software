@@ -13,6 +13,7 @@ const KEEP = "__UNCHANGED__";
 
 type Config = {
   email_mode: "itarang_default" | "own_smtp";
+  notification_email: string | null; // E-276 — recipient for NBFC event emails
   email_from: string | null;
   email_from_name: string | null;
   smtp_host: string | null;
@@ -71,6 +72,7 @@ export default function NotificationChannelsSection() {
     try {
       const body = {
         email_mode: cfg.email_mode,
+        notification_email: cfg.notification_email,
         email_from: cfg.email_from,
         email_from_name: cfg.email_from_name,
         smtp_host: cfg.smtp_host,
@@ -157,6 +159,21 @@ export default function NotificationChannelsSection() {
       {/* Email */}
       <div className="rounded-lg border border-slate-200 p-4 space-y-3">
         <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Email</h3>
+        <label className="block text-[11px] text-slate-500 font-semibold">
+          Notification email
+          <input
+            type="email"
+            value={cfg.notification_email ?? ""}
+            disabled={dis}
+            onChange={(e) => set("notification_email", e.target.value)}
+            className={input}
+            placeholder="alerts@yournbfc.com"
+          />
+          <span className="block mt-1 font-normal text-slate-400">
+            Where iTarang sends alerts for your NBFC — new files and documents, rejection and
+            correction-request confirmations, offer accepted, loan disbursed.
+          </span>
+        </label>
         <div className="flex gap-4 text-sm">
           {(["itarang_default", "own_smtp"] as const).map((m) => (
             <label key={m} className="flex items-center gap-2">

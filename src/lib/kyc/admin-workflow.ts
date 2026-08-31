@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -267,11 +267,52 @@ export async function getOpenQueueEntryForLead(leadId: string) {
 // signed-PDF upload, digital esign sync) — without it the case stays invisible
 // to admins until the dealer hits Submit-for-Verification, which itself
 // requires admin-verified consent. Returns the entry id (existing or new).
-export async function ensureAdminKycQueueEntry(leadId: string): Promise<string> {
-  const existing = await getOpenQueueEntryForLead(leadId);
-  if (existing) return existing.id;
-
+//
+// `armSla` (E-246/E-248) starts the auto-approval clock on the row. It is
+// OPT-IN because most callers run at consent time, before the documents exist —
+// a clock started there could expire before there is anything to review. Pass
+// it only from a path that IS the submission moment (the WhatsApp finalize
+// step, which has no web Submit button to retro-stamp the row the way
+// /api/kyc/[leadId]/submit-verification does). Stamped only while the feature
+// is enabled and only where no clock is already running, so a repeat call can
+// never push a deadline out.
+export async function ensureAdminKycQueueEntry(
+  leadId: string,
+  opts: { armSla?: boolean } = {},
+): Promise<string> {
   const now = new Date();
+
+  // Resolved once; null when the caller did not ask, the feature is off, or the
+  // settings read failed — every one of which means "do not touch the clock".
+  const slaStamp = await (async () => {
+    if (!opts.armSla) return null;
+    const { getKycAutoApprovalSettings, slaStampFor } = await import(
+      "@/lib/kyc/auto-approval-settings"
+    );
+    const settings = await getKycAutoApprovalSettings();
+    const stamp = slaStampFor(now, settings);
+    return stamp.sla_due_at ? stamp : null;
+  })();
+
+  const existing = await getOpenQueueEntryForLead(leadId);
+  if (existing) {
+    // Arm the existing row only when its clock has never started AND the sweep
+    // has never finalised it — mirroring the guarded retro-stamp in
+    // submit-verification.
+    if (slaStamp && !existing.sla_due_at && !existing.auto_approved_at) {
+      await db
+        .update(adminVerificationQueue)
+        .set({ ...slaStamp, updated_at: now })
+        .where(
+          and(
+            eq(adminVerificationQueue.id, existing.id),
+            isNull(adminVerificationQueue.sla_due_at),
+          ),
+        );
+    }
+    return existing.id;
+  }
+
   const id = createWorkflowId("ADMQ", now);
   await db.insert(adminVerificationQueue).values({
     id,
@@ -282,6 +323,7 @@ export async function ensureAdminKycQueueEntry(leadId: string): Promise<string> 
     submitted_by: null,
     status: "pending_itarang_verification",
     submitted_at: now,
+    ...(slaStamp ?? {}),
     created_at: now,
     updated_at: now,
   });

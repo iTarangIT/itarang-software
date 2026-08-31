@@ -4,6 +4,7 @@
  *   anupam@itarang.com    / password  / role: asm
  *   sonu@itarang.com      / password  / role: asm
  *   abhishek@itarang.com  / password  / role: asm
+ *   jiten@itarang.com     / password  / role: asm
  *
  * Writes to BOTH:
  *   - Supabase Auth (signInWithPassword reads from here)
@@ -14,7 +15,8 @@
  * config needed. Idempotent: re-running resets each password, refreshes
  * app_metadata, and updates the AWS RDS users row.
  *
- * Usage: node scripts/seed-asm-users.js
+ * Usage: node scripts/seed-asm-users.js [email]
+ *   With an email argument, seeds only that user (others untouched).
  * Requires (.env.local):
  *   NEXT_PUBLIC_SUPABASE_URL
  *   SUPABASE_SERVICE_ROLE_KEY
@@ -41,6 +43,7 @@ const USERS = [
     { email: 'anupam@itarang.com',   password: 'password', name: 'Anupam',   role: 'asm' },
     { email: 'sonu@itarang.com',     password: 'password', name: 'Sonu',     role: 'asm' },
     { email: 'abhishek@itarang.com', password: 'password', name: 'Abhishek', role: 'asm' },
+    { email: 'jiten@itarang.com',    password: 'password', name: 'Jiten',    role: 'asm' },
 ];
 
 async function seedUser(user, authUsers) {
@@ -122,14 +125,23 @@ async function run() {
         process.exit(1);
     }
 
+    const onlyEmail = process.argv[2]?.toLowerCase();
+    const targets = onlyEmail
+        ? USERS.filter(u => u.email.toLowerCase() === onlyEmail)
+        : USERS;
+    if (targets.length === 0) {
+        console.error(`No user with email ${onlyEmail} in the USERS list — add it first.`);
+        process.exit(1);
+    }
+
     let ok = true;
-    for (const user of USERS) {
+    for (const user of targets) {
         const result = await seedUser(user, authUsers);
         ok = ok && result;
     }
 
     console.log('\n──────────────────────────────────────────');
-    for (const u of USERS) {
+    for (const u of targets) {
         console.log(`  ${u.email}  /  ${u.password}  →  /asm`);
     }
     console.log('──────────────────────────────────────────\n');
