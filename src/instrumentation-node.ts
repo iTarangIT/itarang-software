@@ -857,12 +857,14 @@ export async function startScraperQueueTicker() {
 // code here, the crons in vercel.json do not fire on the pm2 boxes, and an
 // in-process ticker demonstrably runs in both environments.
 //
-// 60s because the unit being waited for is hours. The claim behind one tick is
-// a single indexed UPDATE against a partial index
-// (admin_verification_queue_sla_due_idx WHERE auto_approved_at IS NULL AND
-// status='pending_itarang_verification'), so an idle tick is nearly free, and a
-// case auto-approving up to a minute after its deadline is indistinguishable
-// from one that did not.
+// 10s (was 60s) — the settings screen allows per-card windows down to a single
+// minute, and the team runs them that short in practice, so a card sitting
+// visibly "pending" for up to a further minute past its own deadline reads as
+// the feature being broken. The claim behind one tick is a single indexed
+// UPDATE against a partial index (admin_verification_queue_sla_due_idx WHERE
+// auto_approved_at IS NULL AND status='pending_itarang_verification'), so an
+// idle tick is nearly free and six of them a minute still cost less than one
+// dialer poll.
 //
 // runKycAutoApprovalTick() returns immediately when the feature is disabled,
 // which is the shipped default — so this ticker is inert until an admin turns
@@ -871,7 +873,7 @@ export async function startKycAutoApprovalTicker() {
   // Skip on Vercel — /api/cron/kyc-auto-approval owns it there.
   if (process.env.VERCEL === "1") return;
 
-  const TICK_INTERVAL_MS = 60_000;
+  const TICK_INTERVAL_MS = 10_000;
 
   let inFlight = false;
 
@@ -905,7 +907,7 @@ export async function startKycAutoApprovalTicker() {
   const interval = setInterval(tick, TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
-  console.log("[instrumentation] KYC auto-approval SLA sweep (60s) started in-process");
+  console.log("[instrumentation] KYC auto-approval SLA sweep (10s) started in-process");
 }
 
 // ---------------------------------------------------------------------------

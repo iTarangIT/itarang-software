@@ -21,7 +21,11 @@ import {
   kycVerifications,
   leads,
 } from "@/lib/db/schema";
-import { createWorkflowId } from "@/lib/kyc/admin-workflow";
+import { createWorkflowId, getOpenQueueEntryForLead } from "@/lib/kyc/admin-workflow";
+import {
+  getKycAutoApprovalSettings,
+  slaStampFor,
+} from "@/lib/kyc/auto-approval-settings";
 
 /**
  * Admin only acts on aadhaar / pan / bank for a co-borrower. Address and mobile
@@ -121,16 +125,50 @@ export async function submitCoBorrowerVerification(
     })
     .where(eq(coBorrowers.lead_id, leadId));
 
-  await db.insert(adminVerificationQueue).values({
-    id: createWorkflowId("ADMQ", now),
-    queue_type: "kyc_verification",
-    lead_id: leadId,
-    status: "pending_itarang_verification",
-    priority: "high",
-    submitted_at: now,
-    created_at: now,
-    updated_at: now,
-  });
+  // E-246/E-248 — a co-borrower submission (re)starts the auto-approval SLA
+  // clock. This insert used to carry no SLA stamp at all, and the sweep's claim
+  // predicate skips rows with no deadline — so a case that came back through
+  // this path (auto co-borrower rule, admin "Dealer Action Required") was
+  // structurally invisible to auto-approval and sat pending forever.
+  //
+  // Reuse the open queue row when one exists rather than inserting a second
+  // open row for the same lead: the sweep would otherwise fire the final
+  // decision once per row. Re-arming clears `auto_approved_at` on purpose — a
+  // case the sweep already finalised as `blocked` ("no co-borrower
+  // verifications have been run") has just had those verifications created
+  // above, and this new submission earns it a fresh attempt with a fresh
+  // window. The stamp is null while the feature is off, and then nothing about
+  // the previous clock is touched.
+  const autoApproval = await getKycAutoApprovalSettings();
+  const stamp = slaStampFor(now, autoApproval);
+  const openEntry = await getOpenQueueEntryForLead(leadId);
+
+  if (openEntry) {
+    await db
+      .update(adminVerificationQueue)
+      .set({
+        status: "pending_itarang_verification",
+        priority: "high",
+        submitted_at: now,
+        updated_at: now,
+        ...(stamp.sla_due_at
+          ? { ...stamp, auto_approved_at: null, auto_approval_result: null }
+          : {}),
+      })
+      .where(eq(adminVerificationQueue.id, openEntry.id));
+  } else {
+    await db.insert(adminVerificationQueue).values({
+      id: createWorkflowId("ADMQ", now),
+      queue_type: "kyc_verification",
+      lead_id: leadId,
+      status: "pending_itarang_verification",
+      priority: "high",
+      submitted_at: now,
+      ...stamp,
+      created_at: now,
+      updated_at: now,
+    });
+  }
 
   return {
     verificationsInitiated: VERIFICATION_TYPES.length,

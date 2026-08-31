@@ -34,6 +34,7 @@ import {
 } from "@/lib/nbfc/doc-requests";
 import { notifyDealerRepliedToNbfc } from "@/lib/notifications/events";
 import { dealerDisplayName } from "@/lib/notifications/emit";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -165,13 +166,36 @@ export async function POST(
       }
     }
 
+    const replyDealerName = await dealerDisplayName(user.dealer_id);
     await notifyDealerRepliedToNbfc({
       leadId,
       requestId,
       tenantId: wrapper.tenant_id,
-      dealerName: await dealerDisplayName(user.dealer_id),
+      dealerName: replyDealerName,
       count: items.length,
     }).catch(() => {});
+
+    // E-276 — contact-email copy to the asking NBFC (+ global monitoring CC).
+    (async () => {
+      const [leadRow] = await db
+        .select({ full_name: leads.full_name, owner_name: leads.owner_name })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      await sendNbfcEventEmail({
+        tenantId: wrapper.tenant_id,
+        leadId,
+        subject: `iTarang — Dealer replied to your document request (Lead ${leadId})`,
+        eventLabel: `Dealer ${replyDealerName} has replied to your document request for Lead ${leadId}${
+          items.length ? ` and uploaded ${items.length} file${items.length === 1 ? "" : "s"}` : ""
+        }.`,
+        customerName: leadRow?.full_name ?? leadRow?.owner_name ?? null,
+        dealerName: replyDealerName,
+        files: items.map((it) => it.name),
+        extraRows: [["Message", message || null]],
+        bodyHtml: `<p>Update: the reply is with the iTarang admin for verification; the verified documents will be pushed to your dashboard next. You can already see the thread on the lead's request panel.</p>`,
+      });
+    })().catch(() => {});
 
     return NextResponse.json({ ok: true, mirrored, bucket });
   } catch (err) {
