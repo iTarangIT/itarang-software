@@ -25,14 +25,15 @@
  *     commercial relationships to the customer over a channel they can
  *     forward, so the same masking applies here.
  *
- *  3. **The ORDER is chosen first, and the loan amount derives from it.**
- *     Step 4 opens on the cart (battery → charger → margin, via
- *     `beginStep4Cart` in dispatch-flow) and `leads.requested_loan_amount` is
- *     set to the confirmed order's final price. That amount feeds the BRE so a
- *     customer is never shown a product whose ceiling is below their order —
- *     and once a lender sanctions, the battery and margin are locked (see
- *     dispatch-flow's sanction lock). The old typed-amount state (DC_S4_AMT)
- *     stays registered only for sessions parked there mid-flight.
+ *  3. **The ORDER is chosen first, then the loan amount is asked.** Step 4
+ *     opens on the cart (battery → charger → margin → "How much loan do you
+ *     want?", via `beginStep4Cart` in dispatch-flow) and the TYPED amount
+ *     (falling back to the cart total) becomes `leads.requested_loan_amount`.
+ *     That amount feeds the BRE so a customer is never shown a product whose
+ *     ceiling is below their ask — and once a lender sanctions, the battery
+ *     and margin are locked (see dispatch-flow's sanction lock). The old
+ *     standalone amount state (DC_S4_AMT) stays registered only for sessions
+ *     parked there mid-flight.
  *
  *  4. **No partner in the area is not a dead end.** Bajaj Finance operates
  *     nationally; taking that card sanctions the lead on the spot (no NBFC, no
