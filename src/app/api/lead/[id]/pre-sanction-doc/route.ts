@@ -16,8 +16,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads } from "@/lib/db/schema";
+import { leads, nbfcLeadAssignments } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
 import { uploadFileToStorage } from "@/lib/storage";
 import { combineToPdf, isCombinable } from "@/lib/pdf/combine";
 import { notifyDocsShared } from "@/lib/notifications/events";
@@ -207,13 +208,33 @@ export async function PATCH(
     // and for items the dealer might still remove. PATCH is the moment the
     // bucket is committed to the lead — i.e. actually shared.
     if (items.length > 0) {
+      const bucketDealerName = await dealerDisplayName(user.dealer_id);
       await notifyDocsShared({
         leadId,
         docLabel: "pre-sanction documents",
         count: items.length,
-        dealerName: await dealerDisplayName(user.dealer_id),
+        dealerName: bucketDealerName,
         stage: "Step 4 · Pre-sanction documents",
       });
+
+      // E-276 — contact-email copy to every routed NBFC (+ global monitoring CC).
+      const assignments = await db
+        .select({ tenant_id: nbfcLeadAssignments.tenant_id })
+        .from(nbfcLeadAssignments)
+        .where(eq(nbfcLeadAssignments.lead_id, leadId));
+      const tenantIds = [...new Set(assignments.map((a) => a.tenant_id).filter((t): t is string => Boolean(t)))];
+      for (const tenantId of tenantIds) {
+        sendNbfcEventEmail({
+          tenantId,
+          leadId,
+          subject: `iTarang — Dealer uploaded ${items.length} pre-sanction document${items.length === 1 ? "" : "s"} (Lead ${leadId})`,
+          eventLabel: `Dealer ${bucketDealerName} has uploaded pre-sanction documents on Lead ${leadId}.`,
+          customerName: lead.full_name ?? lead.owner_name ?? null,
+          dealerName: bucketDealerName,
+          files: items.map((it) => it.name),
+          bodyHtml: `<p>Update: the files are now visible in your NBFC dashboard under the lead's <b>Documents</b> tab (Step 4 · Pre-sanction documents).</p>`,
+        }).catch(() => {});
+      }
     }
 
     return NextResponse.json({ ok: true, persisted: true, items });

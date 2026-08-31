@@ -5507,7 +5507,10 @@ async function finalizeLead(session: SessionRow): Promise<void> {
   const lead = await getLeadCtx(session);
   if (lead.leadId) {
     try {
-      await ensureAdminKycQueueEntry(lead.leadId);
+      // armSla — this IS the submission moment for a WhatsApp-originated case:
+      // there is no web Submit button after this to retro-stamp the deadline,
+      // so without it the auto-approval sweep never sees these leads.
+      await ensureAdminKycQueueEntry(lead.leadId, { armSla: true });
     } catch (e) {
       console.error("[WhatsApp/console] admin KYC queue entry failed:", e);
     }
