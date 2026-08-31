@@ -78,12 +78,31 @@
  * number, the customer reads it out, the dealer types it. That is the Step-5
  * screen's flow, in the chat the dealer is already in. The customer-driven path
  * still mints no code and still hands over — see `completeOrder`.
+ *
+ * ── THE STEP-4 PHASE AND THE SANCTION LOCK ─────────────────────────────────
+ *
+ * The picker above is ALSO the front half of WhatsApp Step 4. `beginStep4Cart`
+ * runs battery → charger → margin with `dp.phase === "step4"`, the preview's
+ * Send button becomes "Confirm order", and confirming derives
+ * `leads.requested_loan_amount` from the cart's final price and hands back to
+ * step4-flow's lender list — so the order is fixed BEFORE the file reaches a
+ * lender, and the loan is sized to the actual order.
+ *
+ * Once the loan is sanctioned (the NBFC sanction route stamps `disbursed_at`
+ * in the same breath), the cart is LOCKED: `startDispatch` lands on
+ * `showLockedSummary` — a single "Send to customer" button, no Change battery,
+ * no Edit margin — and every mutating handler refuses via `sanctionLock`. The
+ * one exception is `beginRepick`: the stored serial vanished from stock, so
+ * the dealer may pick a REPLACEMENT battery while the margin stays as
+ * approved. Cash leads and legacy sanctioned leads with no stored serial keep
+ * the original picker.
  */
 
 import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import { leads, loanSanctions, productSelections } from "@/lib/db/schema";
+import { setRequestedLoanAmount } from "@/lib/leads/requested-loan-amount";
 import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
 import { CashSaleError, confirmCashSale } from "@/lib/leads/confirm-cash-sale";
 import { DispatchError, confirmDispatch } from "@/lib/leads/confirm-dispatch";
@@ -229,6 +248,190 @@ export async function startDispatch(
     return;
   }
 
+  // Sanctioned finance order with a committed cart: the battery and margin are
+  // locked — the only remaining step is sending the order and running the OTP.
+  if (lead?.kyc_status === "loan_sanctioned" && !isCashLead(lead.payment_method)) {
+    const sel = await storedSelection(leadId);
+    if (sel) {
+      if (await serialInStock(leadId, dealer, sel.battery_serial)) {
+        return await showLockedSummary(session, leadId, dealer, sel);
+      }
+      return await beginRepick(session, leadId, dealer, sel);
+    }
+  }
+
+  await askBattery(session, leadId, dealer, 0);
+}
+
+/**
+ * The stock-forced exception to the sanction lock: the approved battery is no
+ * longer available, so a REPLACEMENT may be picked. The margin (and its GST)
+ * are carried over from the approved order and never re-asked.
+ */
+async function beginRepick(
+  session: SessionRow,
+  leadId: string,
+  dealer: ActiveDealer,
+  sel: StoredSelection,
+): Promise<void> {
+  await patchDp(session, {
+    repickAllowed: true,
+    locked: null,
+    phase: null,
+    batterySerial: null,
+    chargerSerial: null,
+    page: 0,
+    marginMode: null,
+    marginValue: null,
+    marginAmount: Number(sel.dealer_margin) || 0,
+    marginGst: Number(sel.dealer_margin_gst_amount) || 0,
+    orderSentAt: null,
+  });
+  await reply(
+    session,
+    `⚠️ The battery on this approved order (serial *${sel.battery_serial}*) is ` +
+      `no longer available.\n\nPick a replacement — your margin stays as approved.`,
+  );
+  await askBattery(session, leadId, dealer, 0);
+}
+
+/** The order card rendered from the STORED row, for the customer-actor side. */
+function storedOrderCard(sel: StoredSelection): string {
+  return (
+    `🧾 *Your order*\n\n` +
+    `🔋 ${sel.model_number ?? "Battery"}\n` +
+    `   Serial ${sel.battery_serial}` +
+    (sel.charger_serial ? `\n⚡ Charger\n   Serial ${sel.charger_serial}` : "")
+  );
+}
+
+/**
+ * The post-sanction view of a locked order. Rendered from the STORED row's
+ * numbers, not live stock — the lender sanctioned against that figure. One
+ * button: Send. A customer actor gets the card and the handoff instead; the
+ * OTP leg is the dealer's to run.
+ */
+async function showLockedSummary(
+  session: SessionRow,
+  leadId: string,
+  dealer: ActiveDealer,
+  sel: StoredSelection,
+): Promise<void> {
+  if (!(await actingAsDealer(session, leadId))) {
+    await setSession(session.id, { current_state: DC_DP_WAIT });
+    await reply(session, `${storedOrderCard(sel)}\n\n${HANDOFF}`);
+    return;
+  }
+
+  const margin = Number(sel.dealer_margin) || 0;
+  const gst = Number(sel.dealer_margin_gst_amount) || 0;
+  await patchDp(session, {
+    batterySerial: sel.battery_serial,
+    chargerSerial: sel.charger_serial ?? null,
+    page: 0,
+    marginMode: null,
+    marginValue: null,
+    marginAmount: margin,
+    marginGst: gst,
+    locked: true,
+    repickAllowed: null,
+    phase: null,
+    selectionId: sel.id,
+  });
+  await setSession(session.id, { current_state: DC_DP_SEND });
+  await reply(
+    session,
+    `🔒 *Order approved by the lender*\n\n` +
+      `🔋 ${sel.model_number ?? "Battery"} — SN ${sel.battery_serial}` +
+      (sel.battery_price ? ` · ${inr(sel.battery_price)}` : "") +
+      (sel.charger_serial
+        ? `\n⚡ Charger — SN ${sel.charger_serial}` +
+          (sel.charger_price ? ` · ${inr(sel.charger_price)}` : "")
+        : "") +
+      (margin > 0
+        ? `\n➕ Your margin — ${inr(margin)}\n➕ GST on margin (${MARGIN_GST_PCT}%) — ${inr(gst)}`
+        : "") +
+      `\n\n*Total ${inr(sel.final_price)}* _(incl. GST)_\n\n` +
+      `The loan was sanctioned against this order, so the battery and margin ` +
+      `can no longer be changed.\n\nTap below to send the order to the customer ` +
+      `and confirm delivery.`,
+    [{ id: "dps_send", title: "✅ Send to customer" }],
+  );
+}
+
+/**
+ * Step-4 entry: run the picker BEFORE the lender routing (`dp.phase="step4"`).
+ *
+ * Re-entry prefills: a cart from an earlier run (same session) or from the
+ * submitted `product_selections` row (session context lost — a re-route after
+ * an NBFC rejection) jumps straight to the preview so the dealer redoes only
+ * what they want to change. Called from step4-flow's `s4_start` / `s4_again`.
+ */
+export async function beginStep4Cart(
+  session: SessionRow,
+  leadId: string,
+  dealer: ActiveDealer,
+): Promise<void> {
+  // A stale s4_start / s4_again tap on a lead that has since been sanctioned
+  // must not reopen the Step-4 cart.
+  const lock = await sanctionLock(leadId);
+  if (lock) {
+    return await showLockedSummary(session, leadId, dealer, lock);
+  }
+
+  let dp = dpCtx(session);
+  if (!dp.batterySerial) {
+    const prior = await storedSelection(leadId);
+    if (prior) {
+      await patchDp(session, {
+        batterySerial: prior.battery_serial,
+        chargerSerial: prior.charger_serial ?? null,
+        marginMode: null,
+        marginValue: null,
+        marginAmount: Number(prior.dealer_margin) || 0,
+        marginGst: Number(prior.dealer_margin_gst_amount) || 0,
+      });
+    }
+  }
+  await patchDp(session, {
+    phase: "step4",
+    locked: null,
+    repickAllowed: null,
+    orderSentAt: null,
+    page: 0,
+  });
+  dp = dpCtx(session);
+
+  if (dp.batterySerial) {
+    const category = await leadCategory(leadId);
+    const batteries = await listDealerBatteries({
+      dealerId: dealer.dealerCode,
+      category,
+    });
+    const battery = batteries.find((b) => b.serial_number === dp.batterySerial);
+    if (battery) {
+      let charger: DealerStockItem | null = null;
+      if (dp.chargerSerial) {
+        const chargers = await listDealerChargers({
+          dealerId: dealer.dealerCode,
+          category,
+        });
+        charger =
+          chargers.find((c) => c.serial_number === dp.chargerSerial) ?? null;
+        if (!charger) await patchDp(session, { chargerSerial: null });
+      }
+      return await showOrderPreview(
+        session,
+        leadId,
+        battery,
+        charger,
+        Number(dp.marginAmount) || 0,
+      );
+    }
+    // The prefilled battery is gone — start clean.
+    await patchDp(session, { batterySerial: null, chargerSerial: null });
+  }
+
   await askBattery(session, leadId, dealer, 0);
 }
 
@@ -244,6 +447,19 @@ export async function askBattery(
   dealer: ActiveDealer,
   page: number,
 ): Promise<void> {
+  // Sanction lock: a stale "Change battery" tap (or an old picker message) on
+  // a sanctioned order must not reopen the picker — unless the repick
+  // exception is active, or the stored serial itself is gone.
+  if (!dpCtx(session).repickAllowed) {
+    const sel = await sanctionLock(leadId);
+    if (sel) {
+      if (await serialInStock(leadId, dealer, sel.battery_serial)) {
+        return await showLockedSummary(session, leadId, dealer, sel);
+      }
+      return await beginRepick(session, leadId, dealer, sel);
+    }
+  }
+
   const category = await leadCategory(leadId);
   const batteries = await listDealerBatteries({
     dealerId: dealer.dealerCode,
@@ -520,23 +736,47 @@ async function beginPricing(
   battery: DealerStockItem,
   charger: DealerStockItem | null,
 ): Promise<void> {
-  await patchLeadSub(session.id, "dp", {
+  const prev = dpCtx(session);
+  const repick = !!prev.repickAllowed;
+
+  await patchDp(session, {
     batterySerial: battery.serial_number,
     chargerSerial: charger?.serial_number ?? null,
     page: 0,
     // Nulls, not undefined: patchLeadSub merges JSON.stringify(patch), which
     // DROPS undefined keys — so a re-run of the picker would silently inherit
-    // the margin from the abandoned one.
-    marginMode: null,
-    marginValue: null,
-    marginAmount: null,
-    marginGst: null,
+    // the margin from the abandoned one. In a repick the inherited margin is
+    // exactly the point: it was approved with the sanction and stays.
+    ...(repick
+      ? {}
+      : {
+          marginMode: null,
+          marginValue: null,
+          marginAmount: null,
+          marginGst: null,
+        }),
     orderSentAt: null,
   });
+
+  if (repick) {
+    // Margin is locked with the sanction — straight to the preview.
+    return await showOrderPreview(
+      session,
+      leadId,
+      battery,
+      charger,
+      Number(prev.marginAmount) || 0,
+    );
+  }
 
   if (!(await actingAsDealer(session, leadId))) {
     // The customer is choosing for themselves. There is no margin to ask about
     // and nobody in this chat entitled to set one.
+    if (dpCtx(session).phase === "step4") {
+      // Pre-sanction: the choice still needs the disclosure + submit, so it
+      // goes through the preview's Confirm, not straight to a Step-5 save.
+      return await showOrderPreview(session, leadId, battery, charger, 0);
+    }
     return await completeOrder(session, leadId, dealer, battery, charger, 0, false);
   }
 
@@ -573,6 +813,16 @@ async function onMarginMode(
 ): Promise<void> {
   const leadId = leadIdOf(session);
   if (!leadId) return await lost(session);
+
+  // The margin is fixed with the sanction — even during a repick.
+  const sel = await sanctionLock(leadId);
+  if (sel) {
+    await reply(
+      session,
+      "🔒 The loan was sanctioned against this order — the margin can no longer be changed.",
+    );
+    return await showLockedSummary(session, leadId, dealer, sel);
+  }
 
   const picked = await resolvePicked(session, leadId, dealer);
   if (!picked) return;
@@ -614,6 +864,16 @@ async function onMarginValue(
 ): Promise<void> {
   const leadId = leadIdOf(session);
   if (!leadId) return await lost(session);
+
+  // The margin is fixed with the sanction — even during a repick.
+  const sel = await sanctionLock(leadId);
+  if (sel) {
+    await reply(
+      session,
+      "🔒 The loan was sanctioned against this order — the margin can no longer be changed.",
+    );
+    return await showLockedSummary(session, leadId, dealer, sel);
+  }
 
   const picked = await resolvePicked(session, leadId, dealer);
   if (!picked) return;
@@ -669,6 +929,39 @@ async function showOrderPreview(
   const base = stockValue(battery, charger);
   const gst = marginGst(margin);
   const total = finalPriceOf(base, margin, gst);
+  const dp = dpCtx(session);
+
+  // Step-4 phase: this is the pre-lender order confirmation. Confirming
+  // derives the requested loan amount from the total and hands back to the
+  // lender list — nothing is sent to the customer yet.
+  if (dp.phase === "step4") {
+    const dealerActor = await actingAsDealer(session, leadId);
+    await setSession(session.id, { current_state: DC_DP_SEND });
+    await reply(
+      session,
+      `🧾 *Confirm the order*\n\n` +
+        pricedLines(battery, charger) +
+        (dealerActor && margin > 0
+          ? `➕ Your margin ${marginText ?? inr(margin)}\n` +
+            `➕ GST on margin (${MARGIN_GST_PCT}%) — ${inr(gst)}\n`
+          : "") +
+        `\n*Total ${inr(total)}* _(incl. GST)_\n\n` +
+        `📤 A loan of *${inr(total)}* will be requested from the lender.\n` +
+        `_Once the loan is approved, the battery and margin can't be changed._`,
+      dealerActor
+        ? [
+            { id: "dps_send", title: "✅ Confirm order" },
+            { id: "dps_margin", title: "✏️ Edit margin" },
+            { id: "dps_battery", title: "🔙 Change battery" },
+          ]
+        : [
+            { id: "dps_send", title: "✅ Confirm order" },
+            { id: "dps_battery", title: "🔙 Change battery" },
+          ],
+    );
+    return;
+  }
+
   const facts = await leadFacts(leadId);
   const cash = isCashLead(facts?.payment_method);
 
@@ -681,12 +974,21 @@ async function showOrderPreview(
       (margin > 0
         ? `_Stock ${inr(base)} + your margin ${marginText ?? inr(margin)} + ${MARGIN_GST_PCT}% GST on margin ${inr(gst)} = ${inr(total)}._\n` +
           `_That line is yours only — the margin and its GST are not itemised in the message above._`
-        : `_No margin added._`),
-    [
-      { id: "dps_send", title: cash ? "✅ Send & confirm" : "✅ Send to customer" },
-      { id: "dps_margin", title: "✏️ Edit margin" },
-      { id: "dps_battery", title: "🔙 Change battery" },
-    ],
+        : `_No margin added._`) +
+      (dp.repickAllowed
+        ? `\n\n_This replaces the battery on a sanctioned order — the margin stays as approved._`
+        : ""),
+    dp.repickAllowed
+      ? [
+          // Repick: the margin is locked with the sanction, so no Edit margin.
+          { id: "dps_send", title: "✅ Send to customer" },
+          { id: "dps_battery", title: "🔙 Change battery" },
+        ]
+      : [
+          { id: "dps_send", title: cash ? "✅ Send & confirm" : "✅ Send to customer" },
+          { id: "dps_margin", title: "✏️ Edit margin" },
+          { id: "dps_battery", title: "🔙 Change battery" },
+        ],
   );
 }
 
@@ -699,6 +1001,11 @@ async function onSendPreview(
   const leadId = leadIdOf(session);
   if (!leadId) return await lost(session);
 
+  // Locked order: Send is the only live button; anything else refuses.
+  if (dpCtx(session).locked) {
+    return await onLockedSendPreview(session, event, dealer, leadId);
+  }
+
   const picked = await resolvePicked(session, leadId, dealer);
   if (!picked) return;
 
@@ -707,6 +1014,18 @@ async function onSendPreview(
   const margin = Number(dp.marginAmount) || 0;
 
   if (raw === "dps_margin") {
+    if (dp.repickAllowed) {
+      // Margin is fixed with the sanction; only the battery may be replaced.
+      await reply(
+        session,
+        "🔒 The loan was sanctioned against this order — the margin can no longer be changed.",
+      );
+      return await showOrderPreview(session, leadId, picked.battery, picked.charger, margin);
+    }
+    if (dp.phase === "step4" && !(await actingAsDealer(session, leadId))) {
+      // A customer never sets their dealer's margin.
+      return await showOrderPreview(session, leadId, picked.battery, picked.charger, margin);
+    }
     return await askMarginMode(session, picked.battery, picked.charger);
   }
   if (raw === "dps_battery") {
@@ -733,6 +1052,40 @@ async function onSendPreview(
   if (!(await setSessionIf(session.id, DC_DP_SEND, { current_state: DC_DP_WAIT }))) {
     return;
   }
+
+  // Step-4 phase: Confirm order — derive the requested loan amount from the
+  // cart's total and hand back to step4-flow's lender list. Nothing is saved
+  // to product_selections here; the submit carries the cart.
+  if (dp.phase === "step4") {
+    const gst = marginGst(margin);
+    const total = Math.round(
+      finalPriceOf(stockValue(picked.battery, picked.charger), margin, gst),
+    );
+    if (!(total >= 1)) {
+      await setSession(session.id, { current_state: DC_DP_SEND });
+      await reply(
+        session,
+        "⚠️ This battery has no price on stock, so I can't size the loan from it. " +
+          "Please pick a different battery.",
+      );
+      return;
+    }
+    try {
+      const ok = await setRequestedLoanAmount(leadId, total);
+      if (!ok) throw new Error(`lead ${leadId} not found`);
+      const { continueStep4AfterCart } = await import("./step4-flow");
+      await continueStep4AfterCart(session, leadId);
+    } catch (err) {
+      console.error("[dispatch-flow] step-4 order confirm failed:", err);
+      await setSession(session.id, { current_state: DC_DP_SEND });
+      await reply(
+        session,
+        "⚠️ I couldn't record that order just now. Please tap *Confirm order* once more.",
+      );
+    }
+    return;
+  }
+
   await completeOrder(
     session,
     leadId,
@@ -745,30 +1098,113 @@ async function onSendPreview(
 }
 
 /**
- * The end of the picker, for BOTH payment paths.
- *
- * The fork is on the lead's own payment method, not on who is chatting:
- *   - **cash** → the sale closes here. `confirmCashSale()` writes the selection,
- *     moves the battery available → SOLD, creates the warranty and the
- *     after-sales record, and sets the lead to 'sold'. That mirrors the web
- *     exactly: cash completes at Step 4, skips 'dispatched', and has no OTP.
- *   - **finance** → the selection is saved. A customer-driven order hands over
- *     here exactly as it always has; a dealer-driven one goes on to the OTP.
- *
- * Either way the chat writes only what was actually chosen: paraphernalia stays
- * empty (see the file header) and the margin is whatever the dealer set — zero
- * when the customer is the one picking. The GST figures come straight off the
- * inventory rows, so the total shown is the real one.
+ * DC_DP_SEND with `dp.locked` — the post-sanction summary. Send skips the save
+ * entirely (the row the lender sanctioned against stays byte-identical) and
+ * jumps to the order card + OTP. Everything else refuses and re-renders.
  */
-async function completeOrder(
+async function onLockedSendPreview(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+  leadId: string,
+): Promise<void> {
+  const sel = await sanctionLock(leadId);
+  if (!sel) {
+    // The lock is stale — the lead moved on (dispatched elsewhere?) or the
+    // selection vanished. Re-route through the entry gate.
+    await patchDp(session, { locked: null });
+    return await startDispatch(session, event, dealer, leadId);
+  }
+
+  const raw = (event.text ?? "").trim();
+  if (raw !== "dps_send") {
+    await reply(
+      session,
+      "🔒 The loan was sanctioned against this order — the battery and margin " +
+        "can no longer be changed.",
+    );
+    return await showLockedSummary(session, leadId, dealer, sel);
+  }
+
+  if (!(await setSessionIf(session.id, DC_DP_SEND, { current_state: DC_DP_WAIT }))) {
+    return;
+  }
+  await sendLockedOrder(session, leadId, dealer, sel);
+}
+
+/**
+ * Send a LOCKED order to the customer and open the OTP leg. No save — unless
+ * the charger vanished, which is a stock-forced correction (battery and margin
+ * unchanged) written through the ordinary Step-5 save so the dispatch reads a
+ * row that matches reality.
+ */
+async function sendLockedOrder(
   session: SessionRow,
   leadId: string,
   dealer: ActiveDealer,
+  sel: StoredSelection,
+): Promise<void> {
+  const category = await leadCategory(leadId);
+  const batteries = await listDealerBatteries({
+    dealerId: dealer.dealerCode,
+    category,
+  });
+  const battery = batteries.find((b) => b.serial_number === sel.battery_serial);
+  if (!battery) {
+    // Taken between the summary and the tap — the repick exception.
+    return await beginRepick(session, leadId, dealer, sel);
+  }
+
+  const margin = Number(sel.dealer_margin) || 0;
+  let charger: DealerStockItem | null = null;
+  let total = Number(sel.final_price) || 0;
+  if (sel.charger_serial) {
+    const chargers = await listDealerChargers({
+      dealerId: dealer.dealerCode,
+      category,
+    });
+    charger = chargers.find((c) => c.serial_number === sel.charger_serial) ?? null;
+    if (!charger) {
+      const fields = buildLineFields(battery, null, margin);
+      try {
+        await saveStep5ProductSelection({
+          leadId,
+          submittedBy: dealer.uploaderId,
+          lead: { product_category_id: null, product_type_id: null },
+          body: fields,
+        });
+      } catch (err) {
+        console.error("[dispatch-flow] charger-drop save failed:", err);
+      }
+      await patchDp(session, { chargerSerial: null });
+      total = fields.finalPrice;
+      await reply(
+        session,
+        "⚠️ The charger on this order is no longer available, so it has been " +
+          "removed. The battery and margin are unchanged.",
+      );
+    }
+  }
+  if (!(total > 0)) {
+    total = finalPriceOf(stockValue(battery, charger), margin, marginGst(margin));
+  }
+
+  await promptDispatchAfterSend(session, leadId, battery, charger, total);
+}
+
+/**
+ * The line snapshot every write path uses. Built in exactly one place so a
+ * cash sale, a finance selection and a Step-4 submit can never disagree about
+ * the price the customer was shown. `netSubtotal` is the ITEMS only and
+ * `finalPrice` carries the margin plus 18% GST on it — the same split
+ * `computeTotals` uses in the web cart, so the Step-5 screen reads back a row
+ * it would itself have written.
+ */
+export function buildLineFields(
   battery: DealerStockItem,
   charger: DealerStockItem | null,
   margin: number,
-  dealerDriven: boolean,
-): Promise<void> {
+) {
   const batteryNet = lineTotal(battery);
   const chargerNet = charger ? lineTotal(charger) : 0;
   const netSubtotal = batteryNet + chargerNet;
@@ -780,15 +1216,7 @@ async function completeOrder(
     return Number.isFinite(n) ? n : undefined;
   };
 
-  const lead = await leadFacts(leadId);
-
-  // The line snapshot both paths write. Built once so a cash sale and a finance
-  // selection can never disagree about the price the customer was shown.
-  // `netSubtotal` is the ITEMS only and `finalPrice` carries the margin plus 18% GST on it — the
-  // `netSubtotal` is the ITEMS only and `finalPrice` carries the margin — the
-  // same split `computeTotals` uses in the web cart, so the Step-5 screen reads
-  // back a row it would itself have written.
-  const lineFields = {
+  return {
     batterySerial: battery.serial_number,
     chargerSerial: charger?.serial_number ?? null,
     // Not offered in chat — see the file header.
@@ -819,6 +1247,81 @@ async function completeOrder(
     batteryPhotoUrls: [],
     chargerPhotoUrls: [],
   };
+}
+
+/**
+ * Re-resolve the session's cart against LIVE stock for the Step-4 submit,
+ * without messaging — the caller (step4-flow) owns the conversation. Null
+ * means the cart is unusable (nothing picked, or the battery is gone) and the
+ * picker should be re-entered via `beginStep4Cart`.
+ */
+export async function resolveCartForSubmit(
+  session: SessionRow,
+  leadId: string,
+  dealer: ActiveDealer,
+): Promise<{
+  battery: DealerStockItem;
+  charger: DealerStockItem | null;
+  margin: number;
+  lineFields: ReturnType<typeof buildLineFields>;
+} | null> {
+  const dp = dpCtx(session);
+  if (!dp.batterySerial) return null;
+
+  const category = await leadCategory(leadId);
+  const batteries = await listDealerBatteries({
+    dealerId: dealer.dealerCode,
+    category,
+  });
+  const battery = batteries.find((b) => b.serial_number === dp.batterySerial);
+  if (!battery) return null;
+
+  let charger: DealerStockItem | null = null;
+  if (dp.chargerSerial) {
+    const chargers = await listDealerChargers({
+      dealerId: dealer.dealerCode,
+      category,
+    });
+    charger = chargers.find((c) => c.serial_number === dp.chargerSerial) ?? null;
+  }
+
+  const margin = Number(dp.marginAmount) || 0;
+  return { battery, charger, margin, lineFields: buildLineFields(battery, charger, margin) };
+}
+
+/**
+ * The end of the picker, for BOTH payment paths.
+ *
+ * The fork is on the lead's own payment method, not on who is chatting:
+ *   - **cash** → the sale closes here. `confirmCashSale()` writes the selection,
+ *     moves the battery available → SOLD, creates the warranty and the
+ *     after-sales record, and sets the lead to 'sold'. That mirrors the web
+ *     exactly: cash completes at Step 4, skips 'dispatched', and has no OTP.
+ *   - **finance** → the selection is saved. A customer-driven order hands over
+ *     here exactly as it always has; a dealer-driven one goes on to the OTP.
+ *
+ * Either way the chat writes only what was actually chosen: paraphernalia stays
+ * empty (see the file header) and the margin is whatever the dealer set — zero
+ * when the customer is the one picking. The GST figures come straight off the
+ * inventory rows, so the total shown is the real one.
+ */
+async function completeOrder(
+  session: SessionRow,
+  leadId: string,
+  dealer: ActiveDealer,
+  battery: DealerStockItem,
+  charger: DealerStockItem | null,
+  margin: number,
+  dealerDriven: boolean,
+): Promise<void> {
+  const batteryNet = lineTotal(battery);
+  const chargerNet = charger ? lineTotal(charger) : 0;
+  const gst = marginGst(margin);
+  const total = finalPriceOf(batteryNet + chargerNet, margin, gst);
+
+  const lead = await leadFacts(leadId);
+
+  const lineFields = buildLineFields(battery, charger, margin);
 
   const orderLines =
     `🔋 ${battery.model_name ?? battery.serial_number} — ${inr(batteryNet)}\n` +
@@ -870,6 +1373,26 @@ async function completeOrder(
   }
 
   // --- Finance: save the selection. ---------------------------------------
+
+  // Sanction lock: once the lender has sanctioned against a stored cart, the
+  // battery may change only through the stock-forced repick exception, and the
+  // margin never. Belt to the entry-point guards' braces — a stale button from
+  // an old message must not rewrite the order the loan was sized against.
+  const sel = await sanctionLock(leadId);
+  if (sel) {
+    const dp = dpCtx(session);
+    const batteryChanged = sel.battery_serial !== battery.serial_number;
+    const marginChanged = Math.abs((Number(sel.dealer_margin) || 0) - margin) > 0.5;
+    if ((batteryChanged && !dp.repickAllowed) || marginChanged) {
+      await reply(
+        session,
+        "🔒 The loan was sanctioned against this order — the battery and margin " +
+          "can no longer be changed.",
+      );
+      return await showLockedSummary(session, leadId, dealer, sel);
+    }
+  }
+
   try {
     const saved = await saveStep5ProductSelection({
       leadId,
@@ -880,7 +1403,11 @@ async function completeOrder(
       },
       body: lineFields,
     });
-    await patchLeadSub(session.id, "dp", { selectionId: saved.productSelectionId });
+    await patchDp(session, {
+      selectionId: saved.productSelectionId,
+      // A repick is spent by the save that used it.
+      repickAllowed: null,
+    });
   } catch (err) {
     console.error("[dispatch-flow] product save failed:", err);
     // Put the dealer back on Send so the tap is not lost. The customer-driven
@@ -906,8 +1433,22 @@ async function completeOrder(
   }
 
   // --- Dealer sent it: the customer gets the card, the dealer gets the OTP. -
+  await promptDispatchAfterSend(session, leadId, battery, charger, total);
+}
+
+/**
+ * The dealer-driven send tail, shared by `completeOrder` and the locked path:
+ * push the order card into the customer's chat, then open the OTP leg.
+ */
+async function promptDispatchAfterSend(
+  session: SessionRow,
+  leadId: string,
+  battery: DealerStockItem,
+  charger: DealerStockItem | null,
+  total: number,
+): Promise<void> {
   const delivered = await sendOrderCard(leadId, battery, charger, total, false);
-  await patchLeadSub(session.id, "dp", {
+  await patchDp(session, {
     orderSentAt: new Date().toISOString(),
     otpAttempts: 0,
   });
@@ -1008,6 +1549,17 @@ async function onDispatchOtp(
         warrantyLine(result),
     );
   } catch (err) {
+    // Stock taken between Send and the OTP on a sanctioned order: don't leave
+    // the dealer on a dead resend button — offer the replacement pick.
+    if ((err as { status?: unknown }).status === 409) {
+      const sel = await sanctionLock(leadId);
+      if (sel && !(await serialInStock(leadId, dealer, sel.battery_serial))) {
+        const message = refusalMessage(err);
+        if (message) await reply(session, `⚠️ ${message}`);
+        return await beginRepick(session, leadId, dealer, sel);
+      }
+    }
+
     await setSession(session.id, { current_state: DC_DP_OTP });
     const message = refusalMessage(err);
     if (!message) console.error("[dispatch-flow] confirm dispatch failed:", err);
@@ -1311,6 +1863,16 @@ async function onDispatchWait(
   }
 
   if (!dpCtx(session).batterySerial) {
+    // A locked order that lost its session context must re-land on the locked
+    // summary (or the repick exception), never the open picker.
+    const sel = await sanctionLock(leadId);
+    if (sel) {
+      if (await serialInStock(leadId, dealer, sel.battery_serial)) {
+        return await showLockedSummary(session, leadId, dealer, sel);
+      }
+      return await beginRepick(session, leadId, dealer, sel);
+    }
+
     const category = await leadCategory(leadId);
     const batteries = await listDealerBatteries({
       dealerId: dealer.dealerCode,
@@ -1388,11 +1950,41 @@ interface DpCtx {
   /** 18% GST on marginAmount (E-273). */
   marginGst?: number | null;
   orderSentAt?: string | null;
+  /** "step4": the picker is running BEFORE the lender routing — confirming the
+   *  preview derives requested_loan_amount and hands back to step4-flow instead
+   *  of saving/dispatching. */
+  phase?: "step4" | null;
+  /** The loan is sanctioned against the stored selection; only Send is offered
+   *  and every battery/margin mutation refuses. Set by showLockedSummary. */
+  locked?: boolean | null;
+  /** The one exception to the lock: the stored serial vanished from stock, so
+   *  a replacement battery may be picked. The margin stays as approved. */
+  repickAllowed?: boolean | null;
+  selectionId?: string;
+  otpAttempts?: number;
+  otpChannel?: "call" | "sms" | "whatsapp";
 }
 
 function dpCtx(session: SessionRow): DpCtx {
   const ctx = (session.context ?? {}) as { lead?: { dp?: DpCtx } };
   return ctx.lead?.dp ?? {};
+}
+
+/**
+ * Write a dp patch AND mirror it onto the in-memory row. `patchLeadSub` only
+ * touches the DB, so a same-turn `dpCtx(session)` after it would read stale
+ * context — the phase/lock flags below are checked in the same turn they are
+ * set, which the existing fields never were.
+ */
+async function patchDp(
+  session: SessionRow,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const ctx = (session.context ?? {}) as { lead?: { dp?: DpCtx } };
+  ctx.lead = ctx.lead ?? {};
+  ctx.lead.dp = { ...(ctx.lead.dp ?? {}), ...patch } as DpCtx;
+  session.context = ctx as SessionRow["context"];
+  await patchLeadSub(session.id, "dp", patch);
 }
 
 async function lost(session: SessionRow): Promise<void> {
@@ -1422,6 +2014,81 @@ async function leadCategory(leadId: string): Promise<string | null> {
     .where(eq(leads.id, leadId))
     .limit(1);
   return lead?.product_category_id ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Sanction lock (see the module header)
+// ---------------------------------------------------------------------------
+
+interface StoredSelection {
+  id: string;
+  battery_serial: string;
+  charger_serial: string | null;
+  dealer_margin: string | null;
+  dealer_margin_gst_amount: string | null;
+  battery_price: string | null;
+  charger_price: string | null;
+  final_price: string | null;
+  model_number: string | null;
+  category: string | null;
+}
+
+/**
+ * The lead's newest `product_selections` row, but only when it actually
+ * carries a serial — a Step-4 row from the old amount-only flow does not, and
+ * such a lead must keep the original post-sanction picker.
+ */
+async function storedSelection(leadId: string): Promise<StoredSelection | null> {
+  const [row] = await db
+    .select({
+      id: productSelections.id,
+      battery_serial: productSelections.battery_serial,
+      charger_serial: productSelections.charger_serial,
+      dealer_margin: productSelections.dealer_margin,
+      dealer_margin_gst_amount: productSelections.dealer_margin_gst_amount,
+      battery_price: productSelections.battery_price,
+      charger_price: productSelections.charger_price,
+      final_price: productSelections.final_price,
+      model_number: productSelections.model_number,
+      category: productSelections.category,
+    })
+    .from(productSelections)
+    .where(eq(productSelections.lead_id, leadId))
+    .orderBy(desc(productSelections.created_at))
+    .limit(1);
+  if (!row?.battery_serial) return null;
+  return { ...row, battery_serial: row.battery_serial };
+}
+
+/**
+ * The stored selection IF this lead's cart is frozen: a FINANCE lead that is
+ * `loan_sanctioned` (the sanction route stamps `disbursed_at` at the same
+ * moment) with a committed serial. Null means the picker is free — cash leads,
+ * pre-sanction leads, and legacy sanctioned leads that never stored a serial.
+ */
+async function sanctionLock(leadId: string): Promise<StoredSelection | null> {
+  const [lead] = await db
+    .select({ kyc_status: leads.kyc_status, payment_method: leads.payment_method })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead || lead.kyc_status !== "loan_sanctioned") return null;
+  if (isCashLead(lead.payment_method)) return null;
+  return await storedSelection(leadId);
+}
+
+/** Is this serial still in the dealer's available battery stock? */
+async function serialInStock(
+  leadId: string,
+  dealer: ActiveDealer,
+  serial: string,
+): Promise<boolean> {
+  const category = await leadCategory(leadId);
+  const batteries = await listDealerBatteries({
+    dealerId: dealer.dealerCode,
+    category,
+  });
+  return batteries.some((b) => b.serial_number === serial);
 }
 
 registerLeadAction("dp_start", startDispatch);
