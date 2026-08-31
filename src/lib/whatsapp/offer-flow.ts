@@ -461,8 +461,8 @@ export async function pushSanctionedToWhatsApp(
           (amount ? ` for ${inr(amount)}` : "") +
           (emi ? ` — EMI ${inr(emi)}` : "") +
           (dealerSide
-            ? `.\n\nNext: choose the battery and arrange delivery.`
-            : `.\n\nNext: choose your battery and arrange delivery.`),
+            ? `.\n\nNext: send the approved order to the customer and confirm delivery.`
+            : `.\n\nNext: confirm your order and delivery.`),
         buttons: [{ id: leadActionId("sn_ack", leadId), title: "📦 Continue" }],
       },
       nudge: {

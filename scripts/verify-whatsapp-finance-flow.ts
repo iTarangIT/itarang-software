@@ -12,15 +12,20 @@
  * THIS SCRIPT MUTATES. It sets `leads.requested_loan_amount`, submits Step 4
  * and (on the Bajaj path) sanctions the lead. Never point it at production.
  *
- * Covers:
- *   1. loan-amount question → single pick → disclosure → NBFC_RECEIVED_MSG
+ * Covers (cart-first Step 4: battery → charger → confirm → lenders):
+ *   1. s4_start opens the battery picker; pick + confirm derives
+ *      leads.requested_loan_amount from the cart's final price; then single
+ *      pick → disclosure → NBFC_RECEIVED_MSG and the submitted
+ *      product_selections row carries the serial + final_price
  *      (when the lead's area has ≥1 preferred partner), OR
- *   2. zero options → Bajaj card → Continue → sanctioned → startDispatch
- *      opened the battery picker in the same chat;
+ *   2. zero options → Bajaj card → Continue → sanctioned → the chat lands on
+ *      the LOCKED order (no re-pick after sanction);
  *   3. the Next file / Done buttons on the Step-4 extra-docs bucket.
  *
  * Which of 1/2 runs depends on the lead's city — the script reports which.
  * Precondition for 1/2: finance lead at step_3_cleared / kyc_approved.
+ * NOTE: the chat is driven from the LEAD's own number, so the actor is the
+ * CUSTOMER — no margin steps appear and margin lands as 0.
  */
 
 process.env.WA_DRY_RUN = "1";
@@ -162,7 +167,7 @@ async function main() {
   }
 
   // ---- Step 4 ---------------------------------------------------------------
-  console.log("\nStep 4 — loan amount → one lender / Bajaj");
+  console.log("\nStep 4 — cart → derived amount → one lender / Bajaj");
   const before = await leadRow();
   if (
     String(lead.payment_method).toLowerCase() !== "finance" ||
@@ -170,29 +175,54 @@ async function main() {
   ) {
     skip("Step 4", `lead is ${lead.payment_method}/${before.kyc_status}`);
   } else {
-    // Force the amount question by clearing any stored amount.
+    // Clear any stored amount so we can prove the cart derives it.
     await db
       .update(schema.leads)
       .set({ requested_loan_amount: null })
       .where(eq(schema.leads.id, leadId));
 
     let sends = await send(leadActionId("s4_start", leadId));
-    if ((await state()) === "DC_S4_AMT" && /how much loan/i.test(bodies(sends))) {
-      pass("amount question asked", "state=DC_S4_AMT");
+    let st = await state();
+
+    // The cart opens first. A lead with a prior selection prefils straight to
+    // the preview; one with no dealer stock parks — nothing more to verify.
+    if (st === "DC_DP_PRODUCT") {
+      pass("s4_start opens the battery picker", "state=DC_DP_PRODUCT");
+      const battRows = lastRows(sends).filter((r) => r.id.startsWith("dpb:"));
+      if (battRows.length === 0) {
+        fail("battery rows offered", "no dpb: rows");
+      } else {
+        sends = await send(battRows[0].id);
+        st = await state();
+        if (st === "DC_DP_CHARGER") {
+          sends = await send("dpc_skip");
+          st = await state();
+        }
+      }
+    } else if (st === "DC_DP_SEND") {
+      pass("s4_start prefilled the order preview", "state=DC_DP_SEND");
+    } else if (st === "DC_DP_WAIT") {
+      skip("Step 4 cart", "dealer has no battery stock — chat parked");
     } else {
-      fail("amount question asked", `state=${await state()}: ${bodies(sends).slice(0, 160)}`);
+      fail("s4_start opens the cart", `state=${st}: ${bodies(sends).slice(0, 160)}`);
     }
 
-    sends = await send("banana", "text");
-    if ((await state()) === "DC_S4_AMT") pass("garbage amount re-asks");
-    else fail("garbage amount re-asks", `state=${await state()}`);
+    if ((await state()) === "DC_DP_SEND") {
+      const previewIds = buttonIds(sends);
+      if (previewIds.includes("dps_send")) pass("order preview shows Confirm", previewIds.join(","));
+      else fail("order preview shows Confirm", `buttons=${previewIds.join(",") || "(none)"}`);
+      // Customer actor: the margin button must not be offered.
+      if (previewIds.includes("dps_margin")) fail("no margin button for customer actor", previewIds.join(","));
+      else pass("no margin button for customer actor");
 
-    sends = await send("1.5 lakh", "text");
+      sends = await send("dps_send");
+    }
+
     const stored = (await leadRow()).requested_loan_amount;
-    if (stored === 150000) pass("amount parsed and stored", "1.5 lakh → 150000");
-    else fail("amount parsed and stored", `requested_loan_amount=${stored}`);
+    if (stored != null && stored > 0) pass("amount derived from cart", `requested_loan_amount=${stored}`);
+    else fail("amount derived from cart", `requested_loan_amount=${stored}`);
 
-    const st = await state();
+    st = await state();
     const rows = lastRows(sends);
     const ids = buttonIds(sends);
 
@@ -226,6 +256,27 @@ async function main() {
         .where(eq(schema.nbfcLeadAssignments.lead_id, leadId));
       if (assigns.length === 1) pass("exactly one assignment", `nbfc ${assigns[0].nbfc_id}`);
       else fail("exactly one assignment", `${assigns.length} rows`);
+
+      // The submitted row must carry the cart, and the requested amount must
+      // be the cart's final price.
+      const [ps] = await db
+        .select({
+          battery_serial: schema.productSelections.battery_serial,
+          final_price: schema.productSelections.final_price,
+        })
+        .from(schema.productSelections)
+        .where(eq(schema.productSelections.lead_id, leadId))
+        .orderBy(desc(schema.productSelections.created_at))
+        .limit(1);
+      if (ps?.battery_serial) pass("submitted row carries the serial", ps.battery_serial);
+      else fail("submitted row carries the serial", String(ps?.battery_serial));
+      const finalPrice = Math.round(Number(ps?.final_price));
+      const requested = (await leadRow()).requested_loan_amount;
+      if (finalPrice > 0 && requested === finalPrice) {
+        pass("requested amount = final price", `${requested}`);
+      } else {
+        fail("requested amount = final price", `final_price=${ps?.final_price} requested=${requested}`);
+      }
     } else if (st === "DC_S4_BAJAJ") {
       pass("no partner → Bajaj card", `buttons=${ids.join(",")}`);
       if (!ids.includes("s4b_go") || !ids.includes("s4_redo")) {
@@ -265,12 +316,17 @@ async function main() {
       if (/Application sent with Bajaj Finance/.test(bodies(sends))) pass("Bajaj sent message");
       else fail("Bajaj sent message", bodies(sends).slice(0, 200));
 
+      // The cart was already chosen at the top of Step 4, so the sanction must
+      // NOT reopen the picker: the customer actor gets the locked order card +
+      // handoff (a dealer actor would get the Send-to-customer summary).
       const dpState = await state();
       const battRows = lastRows(sends).filter((r) => r.id.startsWith("dpb:"));
-      if (dpState === "DC_DP_PRODUCT" || battRows.length > 0) {
-        pass("startDispatch opened the picker in the same chat", `state=${dpState}, ${battRows.length} battery row(s)`);
+      if (battRows.length > 0) {
+        fail("sanction does not reopen the picker", `${battRows.length} battery row(s) offered post-sanction`);
+      } else if (dpState === "DC_DP_WAIT" && /Your order/i.test(bodies(sends))) {
+        pass("locked order card after sanction", `state=${dpState}`);
       } else {
-        fail("startDispatch opened the picker in the same chat", `state=${dpState}: ${bodies(sends).slice(-200)}`);
+        fail("locked order card after sanction", `state=${dpState}: ${bodies(sends).slice(-200)}`);
       }
     } else {
       fail("after amount", `unexpected state ${st}: ${bodies(sends).slice(0, 200)}`);
