@@ -21,6 +21,8 @@ import { and, eq, ne, notInArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, nbfc, nbfcLeadAssignments } from "@/lib/db/schema";
 import { sendNotSelectedEmail } from "@/lib/email/sendManualHandoffEmail";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
+import { dealerDisplayName } from "@/lib/notifications/emit";
 import { notifyWinnerSelected } from "@/lib/notifications/events";
 import { OfferActionError } from "@/lib/leads/negotiate-offer";
 
@@ -159,6 +161,30 @@ export async function selectOfferWinner(opts: {
         winnerTenantId: winnerNbfc.tenant_id,
         winnerName: winnerNbfc.legal_name || winnerNbfc.short_name || "the lender",
       });
+
+      // E-276 — contact-email copy to the winning NBFC (+ global monitoring CC).
+      const [leadName] = await db
+        .select({
+          full_name: leads.full_name,
+          owner_name: leads.owner_name,
+          dealer_id: leads.dealer_id,
+        })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      const winnerCustomer = leadName?.full_name ?? leadName?.owner_name ?? "the customer";
+      sendNbfcEventEmail({
+        tenantId: winnerNbfc.tenant_id,
+        leadId,
+        subject: `iTarang — Your offer was accepted (Lead ${leadId})`,
+        eventLabel: `Customer ${winnerCustomer} has accepted the financing offer from ${
+          winnerNbfc.legal_name || winnerNbfc.short_name || "your NBFC"
+        } on Lead ${leadId}.`,
+        customerName: winnerCustomer,
+        dealerName: await dealerDisplayName(leadName?.dealer_id),
+        extraRows: [["Selected lender", winnerNbfc.legal_name || winnerNbfc.short_name]],
+        bodyHtml: `<p>Update: the lead has moved to <b>awaiting E-NACH</b>. Please proceed with the next steps (E-NACH mandate, agreement, sanction) in your NBFC dashboard.</p>`,
+      }).catch(() => {});
     }
   } catch (err) {
     console.error("[select-winner] winner notification failed:", err);
