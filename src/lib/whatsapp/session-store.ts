@@ -204,6 +204,9 @@ export type Ctx = {
       /** The picker is running as the front half of STEP 4 (pre-lender):
        *  confirming derives requested_loan_amount instead of saving. */
       phase?: "step4" | null;
+      /** Step-4 phase: the loan amount typed at DC_DP_LOAN_AMT (after the
+       *  margin step); Confirm falls back to the cart total when absent. */
+      loanAmount?: number | null;
       /** Loan sanctioned against the stored selection — Send-only, no edits. */
       locked?: boolean | null;
       /** Stock-forced exception to the lock: the approved serial vanished, a
