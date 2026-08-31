@@ -51,6 +51,7 @@ import {
   type SubmitProductSelectionBody,
 } from "@/lib/leads/productSelectionSchema";
 import { buildServiceSnapshot } from "@/lib/nbfc/service-snapshot";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
 
 /** The `kyc_status` values from which Step 4 may be submitted. */
 export const STEP4_UNLOCKED_STATUSES = new Set([
@@ -327,6 +328,7 @@ export async function submitStep4ProductSelection(opts: {
       short: nbfc.short_name,
       code: nbfc.nbfc_id,
       product: nbfcLoanProducts.product_name,
+      tenant_id: nbfcLeadAssignments.tenant_id,
     })
     .from(nbfcLeadAssignments)
     .innerJoin(nbfc, eq(nbfc.id, nbfcLeadAssignments.nbfc_id))
@@ -336,6 +338,7 @@ export async function submitStep4ProductSelection(opts: {
     )
     .where(eq(nbfcLeadAssignments.lead_id, leadId));
 
+  const submitDealerName = await dealerDisplayName(dealerCode ?? "");
   await notifyProductSubmitted({
     leadId,
     productSelectionId,
@@ -344,8 +347,42 @@ export async function submitStep4ProductSelection(opts: {
     nbfcNames: picked.map((p) => p.name || p.short || "").filter(Boolean),
     loanProduct:
       picked.map((p) => p.product).filter(Boolean).join(", ") || null,
-    dealerName: await dealerDisplayName(dealerCode ?? ""),
+    dealerName: submitDealerName,
   });
+
+  // E-276 — contact-email copy to each routed NBFC (+ global monitoring CC).
+  {
+    const [leadRow2] = await db
+      .select({
+        full_name: leads.full_name,
+        owner_name: leads.owner_name,
+        requested_loan_amount: leads.requested_loan_amount,
+      })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const customerName = leadRow2?.full_name ?? leadRow2?.owner_name ?? "the customer";
+    for (const p of picked) {
+      if (!p.tenant_id) continue;
+      sendNbfcEventEmail({
+        tenantId: p.tenant_id,
+        leadId,
+        subject: `iTarang — New loan file routed to you (Lead ${leadId})`,
+        eventLabel: `Dealer ${submitDealerName} has sent a new customer loan file to your NBFC account.`,
+        customerName,
+        dealerName: submitDealerName,
+        extraRows: [
+          ["Loan product", p.product],
+          [
+            "Requested loan amount",
+            leadRow2?.requested_loan_amount ? `₹${leadRow2.requested_loan_amount}` : null,
+          ],
+          ["Final price", body.finalPrice != null ? `₹${body.finalPrice}` : null],
+        ],
+        bodyHtml: `<p>Update: the file is now in your <b>Acquire queue</b> awaiting your review — verify the customer's KYC documents and submit your financing offer from the NBFC dashboard.</p>`,
+      }).catch(() => {});
+    }
+  }
 
   return {
     productSelectionId,

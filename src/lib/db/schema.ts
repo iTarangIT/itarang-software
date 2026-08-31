@@ -4484,6 +4484,7 @@ export const nbfcNotificationChannels = pgTable(
     whatsapp_api_key: text("whatsapp_api_key"),
     whatsapp_from: text("whatsapp_from"),
     whatsapp_templates: jsonb("whatsapp_templates"),
+    notification_email: text("notification_email"), // E-276 — recipient for NBFC event emails
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

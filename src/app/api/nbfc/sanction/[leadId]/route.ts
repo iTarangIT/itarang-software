@@ -25,9 +25,11 @@ import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreemen
 import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { syncLoanAgreementStatusFromDigio } from "@/lib/nbfc/sync-loan-agreement-status";
 import { postCharge } from "@/lib/nbfc/charging";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanSanctioned } from "@/lib/notifications";
 import { notifyLoanDisbursed, notifyLoanSanctionedEvent } from "@/lib/notifications/events";
+import { dealerDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -238,6 +240,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       tenantId: actor.tenant_id,
       loanAmount: offer?.loan_amount ?? null,
     });
+
+    // E-276 — contact-email copy to the sanctioning NBFC (+ global monitoring CC).
+    (async () => {
+      const [leadRow] = await db
+        .select({
+          full_name: leads.full_name,
+          owner_name: leads.owner_name,
+          dealer_id: leads.dealer_id,
+        })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      await sendNbfcEventEmail({
+        tenantId: actor.tenant_id,
+        leadId,
+        subject: `iTarang — Loan sanctioned & disbursed by ${lenderName} (Lead ${leadId})`,
+        eventLabel: `${lenderName} has sanctioned the loan for Lead ${leadId}; it is recorded as disbursed.`,
+        customerName: leadRow?.full_name ?? leadRow?.owner_name ?? null,
+        dealerName: await dealerDisplayName(leadRow?.dealer_id),
+        extraRows: [
+          ["Lender", lenderName],
+          ["Loan amount", offer?.loan_amount ? `₹${offer.loan_amount}` : null],
+          ["EMI", offer?.emi_amount ? `₹${offer.emi_amount}` : null],
+          ["Tenure", offer?.tenure_months ? `${offer.tenure_months} months` : null],
+          ["Sanction ID", loanSanctionId],
+        ],
+        bodyHtml: `<p>Update: the customer now proceeds to Step 5 (battery selection, OTP and dispatch); the loan will appear in your portfolio once dispatch is confirmed.</p>`,
+      });
+    })().catch(() => {});
 
     // E-264 — Step 5 begins for the customer. Best-effort and not awaited: the
     // sanction is committed and must not be undone by a messaging failure.
