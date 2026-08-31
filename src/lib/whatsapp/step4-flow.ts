@@ -25,9 +25,14 @@
  *     commercial relationships to the customer over a channel they can
  *     forward, so the same masking applies here.
  *
- *  3. **The loan amount is asked first** (E-275). `leads.requested_loan_amount`
- *     feeds the BRE so a customer is never shown a product whose ceiling is
- *     below what they asked for.
+ *  3. **The ORDER is chosen first, and the loan amount derives from it.**
+ *     Step 4 opens on the cart (battery → charger → margin, via
+ *     `beginStep4Cart` in dispatch-flow) and `leads.requested_loan_amount` is
+ *     set to the confirmed order's final price. That amount feeds the BRE so a
+ *     customer is never shown a product whose ceiling is below their order —
+ *     and once a lender sanctions, the battery and margin are locked (see
+ *     dispatch-flow's sanction lock). The old typed-amount state (DC_S4_AMT)
+ *     stays registered only for sessions parked there mid-flight.
  *
  *  4. **No partner in the area is not a dead end.** Bajaj Finance operates
  *     nationally; taking that card sanctions the lead on the spot (no NBFC, no
@@ -70,8 +75,14 @@ import {
   submitStep4ProductSelection,
 } from "@/lib/leads/submit-step4";
 
+import { saveStep5ProductSelection } from "@/lib/leads/step5-product";
+
 import type { ActiveDealer } from "./customer-lead";
-import { startDispatch } from "./dispatch-flow";
+import {
+  beginStep4Cart,
+  resolveCartForSubmit,
+  startDispatch,
+} from "./dispatch-flow";
 import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
 import { pushToLead } from "./lead-push";
@@ -414,18 +425,22 @@ async function nbfcDisplayName(nbfcId: number): Promise<string> {
   return row?.name || "The lender";
 }
 
-/** `s4_start:<leadId>` */
+/**
+ * `s4_start:<leadId>` — Step 4 now opens on the CART, not the amount question:
+ * battery → charger → margin → Confirm order. The requested loan amount is
+ * derived from the confirmed order's final price, and only then does the
+ * lender list appear (`continueStep4AfterCart`).
+ */
 async function onStep4Start(
   session: SessionRow,
   _event: InboundEvent,
-  _dealer: ActiveDealer,
+  dealer: ActiveDealer,
   leadId: string,
 ): Promise<void> {
   const [lead] = await db
     .select({
       payment_method: leads.payment_method,
       kyc_status: leads.kyc_status,
-      requested_loan_amount: leads.requested_loan_amount,
     })
     .from(leads)
     .where(eq(leads.id, leadId))
@@ -457,10 +472,7 @@ async function onStep4Start(
     externalLender: null,
   });
 
-  if (lead.requested_loan_amount == null) {
-    return await askAmount(session);
-  }
-  await showLenders(session, leadId, "submit");
+  await beginStep4Cart(session, leadId, dealer);
 }
 
 /**
@@ -471,14 +483,11 @@ async function onStep4Start(
 async function onStep4Again(
   session: SessionRow,
   _event: InboundEvent,
-  _dealer: ActiveDealer,
+  dealer: ActiveDealer,
   leadId: string,
 ): Promise<void> {
   const [lead] = await db
-    .select({
-      payment_method: leads.payment_method,
-      requested_loan_amount: leads.requested_loan_amount,
-    })
+    .select({ payment_method: leads.payment_method })
     .from(leads)
     .where(eq(leads.id, leadId))
     .limit(1);
@@ -497,15 +506,27 @@ async function onStep4Again(
     externalLender: null,
   });
 
-  if (lead.requested_loan_amount == null) {
-    return await askAmount(session);
-  }
-  await showLenders(session, leadId, "reselect");
+  // The cart prefills from the submitted row, so the dealer redoes only what
+  // they want to change before the file goes to the next lender.
+  await beginStep4Cart(session, leadId, dealer);
 }
 
-async function askAmount(session: SessionRow): Promise<void> {
-  await setSession(session.id, { current_state: DC_S4_AMT });
-  await reply(session, AMOUNT_PROMPT);
+// The old "ask the amount" entry is gone — the amount now derives from the
+// confirmed cart. DC_S4_AMT stays registered below only so sessions parked
+// there mid-flight (before this change deployed) can still finish.
+
+/**
+ * The cart is confirmed and `leads.requested_loan_amount` is set from its
+ * final price (dispatch-flow's Step-4 preview did both) — continue to the
+ * lender list. Called via dynamic import from dispatch-flow, so the static
+ * dependency between the two modules keeps running one way only.
+ */
+export async function continueStep4AfterCart(
+  session: SessionRow,
+  leadId: string,
+): Promise<void> {
+  const { s4 } = s4Ctx(session);
+  await showLenders(session, leadId, s4.mode ?? "submit");
 }
 
 /** DC_S4_AMT — the requested loan amount. */
@@ -650,15 +671,17 @@ async function onStep4Pick(
 async function onStep4Bajaj(
   session: SessionRow,
   event: InboundEvent,
+  dealer: ActiveDealer,
 ): Promise<void> {
   const { leadId } = s4Ctx(session);
   if (!leadId) return await lostTrack(session);
 
   const t = text(event).toLowerCase();
   if (t === "s4_redo" || t === "back") {
-    // "Back" to the one thing they can change: the amount. A different ceiling
-    // can bring a partner into range.
-    return await askAmount(session);
+    // "Back" to the one thing they can change: the order. A cheaper battery or
+    // a lower margin shrinks the requested amount, which can bring a partner
+    // into range.
+    return await beginStep4Cart(session, leadId, dealer);
   }
   if (t !== "s4b_go" && t !== "continue" && t !== "yes") {
     await reply(
@@ -747,6 +770,19 @@ async function onStep4Ack(
     .limit(1);
   if (!lead) return await lostTrack(session);
 
+  // The cart chosen at the top of Step 4 rides the submit. Re-resolved against
+  // live stock — the battery may have been taken while the disclosure sat
+  // unanswered, and a submit without a resolvable cart would route a file the
+  // requested amount no longer describes.
+  const cart = await resolveCartForSubmit(session, leadId, dealer);
+  if (!cart) {
+    await reply(
+      session,
+      "⚠️ That battery is no longer available — let's pick the order again.",
+    );
+    return await beginStep4Cart(session, leadId, dealer);
+  }
+
   // --- Re-route after a rejection (E-275) ---------------------------------
   if (mode === "reselect" && !external) {
     const pick = picks[0];
@@ -771,6 +807,22 @@ async function onStep4Ack(
         ACK_BUTTONS,
       );
       return;
+    }
+    // Persist the (possibly changed) cart onto the submitted row. Allowed —
+    // the lead is not sanctioned on a re-route. Best-effort: the routing
+    // itself already succeeded and must not be reported as failed.
+    try {
+      await saveStep5ProductSelection({
+        leadId,
+        submittedBy: lead.uploader_id ?? "",
+        lead: {
+          product_category_id: lead.product_category_id,
+          product_type_id: lead.product_type_id,
+        },
+        body: cart.lineFields,
+      });
+    } catch (err) {
+      console.error("[WhatsApp/step4] reselect cart save failed:", err);
     }
     await reply(session, sentMessage([pick.label]));
     return;
@@ -800,11 +852,13 @@ async function onStep4Ack(
       lead,
       body: external
         ? {
+            ...cart.lineFields,
             externalLender: external,
             preSanctionDocs,
             customerDisclosureAck: true,
           }
         : {
+            ...cart.lineFields,
             selectedNbfcs: picks.map((p) => ({
               nbfc_id: String(p.nbfcId),
               loan_product_id: p.productId,
@@ -832,12 +886,13 @@ async function onStep4Ack(
   }
 
   if (external) {
-    // Sanctioned on the spot — no NBFC, no admin gate. Roll straight into
-    // Step 5 in the same chat: cart → margin → customer card → OTP.
+    // Sanctioned on the spot — no NBFC, no admin gate. The cart was already
+    // chosen at the top of Step 4, so startDispatch lands on the locked
+    // summary: send the order → OTP, in the same chat.
     await reply(
       session,
       `🎉 *Application sent with ${BAJAJ_FALLBACK.name}.*\n\n` +
-        `Let's pick the battery and confirm delivery.`,
+        `Let's confirm the order and delivery.`,
     );
     await startDispatch(session, event, dealer, leadId);
     return;
