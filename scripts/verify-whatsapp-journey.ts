@@ -171,9 +171,31 @@ async function main() {
   console.log("Phase 2 — Step 4 (lenders)");
   if (["step_3_cleared", "kyc_approved"].includes(await kycStatus())) {
     let sends = await send(leadActionId("s4_start", leadId));
-    let rows = lastRows(sends);
+
+    // Cart-first Step 4: walk battery → charger → (margin) → Confirm order
+    // before the lender list appears. A lead with a prior selection prefils
+    // straight onto the preview; a dealer-actor run also gets the margin step.
+    for (let hop = 0; hop < 5; hop += 1) {
+      const cartState = await state();
+      if (cartState === "DC_DP_PRODUCT") {
+        const batt = lastRows(sends).find((r) => r.id.startsWith("dpb:"));
+        if (!batt) break;
+        sends = await send(batt.id);
+      } else if (cartState === "DC_DP_CHARGER") {
+        sends = await send("dpc_skip");
+      } else if (cartState === "DC_DP_MARGIN") {
+        sends = await send("dpm_none");
+      } else if (cartState === "DC_DP_SEND") {
+        sends = await send("dps_send");
+        break;
+      } else {
+        break;
+      }
+    }
+
+    let rows = lastRows(sends).filter((r) => r.id.startsWith("s4p:"));
     if (rows.length === 0) {
-      fail("s4_start", `no lender list — ${sends.map((s) => s.body).join(" / ").slice(0, 160)}`);
+      fail("s4_start", `no lender list — state ${await state()}: ${sends.map((s) => s.body).join(" / ").slice(0, 160)}`);
     } else {
       pass("s4_start", `${rows.length} scheme row(s), state ${await state()}`);
       const leaked = sends.some((s) => /NBFC|Finance Ltd|Bajaj/i.test(s.body ?? ""));
@@ -299,7 +321,25 @@ async function main() {
     let sends = await send(leadActionId("dp_start", leadId));
     let rows = lastRows(sends);
     const batteryRow = rows.find((r) => r.id.startsWith("dpb:"));
-    if (!batteryRow) {
+
+    // A lead whose cart was fixed at Step 4 is LOCKED after sanction: dp_start
+    // must not reopen the picker — a customer actor gets the order card +
+    // handoff, a dealer actor gets the Send-to-customer summary.
+    const [preSel] = await db
+      .select({ battery_serial: schema.productSelections.battery_serial })
+      .from(schema.productSelections)
+      .where(eq(schema.productSelections.lead_id, leadId))
+      .orderBy(desc(schema.productSelections.created_at))
+      .limit(1);
+    if (preSel?.battery_serial) {
+      if (batteryRow) {
+        fail("sanction lock", "picker reopened despite a committed cart");
+      } else if (/Your order|approved by the lender/i.test(sends.map((s) => s.body).join(" "))) {
+        pass("sanction lock", `locked order shown, state ${await state()}`);
+      } else {
+        fail("sanction lock", `no locked order card — ${sends.map((s) => s.body).join(" / ").slice(0, 200)}`);
+      }
+    } else if (!batteryRow) {
       fail("dp_start", `no battery list — ${sends.map((s) => s.body).join(" / ").slice(0, 200)}`);
     } else {
       pass("dp_start", `${rows.length} stock row(s), state ${await state()}`);
