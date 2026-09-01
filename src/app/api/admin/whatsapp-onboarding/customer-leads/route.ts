@@ -19,6 +19,7 @@ import { db } from "@/lib/db/index";
 import {
   adminVerificationQueue,
   dealers,
+  dealerSalespersons,
   kycDocuments,
   leads,
 } from "@/lib/db/schema";
@@ -82,6 +83,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         createdAt: leads.created_at,
         updatedAt: leads.updated_at,
         dealerName: dealers.company_name,
+        // E-277 — the dealer's salesperson who created this lead, when any.
+        salespersonName: dealerSalespersons.display_name,
       })
       .from(leads)
       .leftJoin(
@@ -89,6 +92,10 @@ export const GET = withErrorHandler(async (req: Request) => {
         eq(adminVerificationQueue.lead_id, leads.id),
       )
       .leftJoin(dealers, eq(dealers.dealer_id, leads.dealer_id))
+      .leftJoin(
+        dealerSalespersons,
+        eq(dealerSalespersons.id, leads.salesperson_id),
+      )
       .where(where)
       .orderBy(desc(leads.updated_at))
       .limit(limit)
@@ -141,6 +148,7 @@ export const GET = withErrorHandler(async (req: Request) => {
       mobile: r.mobile || r.ownerContact || null,
       dealerCode: r.dealerId,
       dealerName: r.dealerName,
+      salespersonName: r.salespersonName,
       interest: r.interest,
       paymentMethod: r.paymentMethod,
       consentStatus: r.consentStatus,

@@ -65,6 +65,14 @@ export type Ctx = {
   /** Recognized-contact stamp from the greeting-time phone lookup (staff /
    *  existing lead), kept for reuse so we don't re-query every greeting. */
   known?: { kind: "staff" | "lead"; name: string; role?: string };
+  /** E-277 — the dealer's in-progress "My Team" action (team-flow.ts): the
+   *  add-member phone/name being collected, or the member picked for removal. */
+  team?: {
+    addPhone?: string;
+    addName?: string;
+    removeId?: string;
+    removeName?: string;
+  };
   /** Customer journeys the dealer walked away from mid-way (sent *menu* or
    *  started another lead) that are NOT pre-submit drafts — co-borrower, Step 4,
    *  offers, dispatch. The DB cannot reconstruct those steps, so the exact

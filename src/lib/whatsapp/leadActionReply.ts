@@ -33,6 +33,10 @@ import {
   type ActiveDealer,
 } from "./customer-lead";
 import { resolveWhatsAppDealer } from "./dealer-identity";
+import {
+  resolveDealerForSalesperson,
+  resolveSalesperson,
+} from "./salesperson-identity";
 import { parseLeadAction, type LeadActionKey } from "./leadActionButton";
 import { mergeContext, reply, type SessionRow } from "./session-store";
 import type { InboundEvent } from "./types";
@@ -59,6 +63,7 @@ export async function authorizeLeadAction(
       id: leads.id,
       dealer_id: leads.dealer_id,
       uploader_id: leads.uploader_id,
+      salesperson_id: leads.salesperson_id,
       mobile: leads.mobile,
       phone: leads.phone,
       owner_contact: leads.owner_contact,
@@ -82,6 +87,20 @@ export async function authorizeLeadAction(
         financeEnabled: waDealer.financeEnabled,
       },
     };
+  }
+
+  // --- Salesperson arm (E-277) ------------------------------------------
+  // A dealer's salesperson may act, but only on a lead THEY created (own-leads
+  // scope) — the same dealer_code alone is not enough. They act with the
+  // dealer's identity plus the actor tag, exactly as in the console.
+  const sp = await resolveSalesperson(waPhone);
+  if (
+    sp &&
+    sp.dealerCode === lead.dealer_id &&
+    lead.salesperson_id === sp.id
+  ) {
+    const spDealer = await resolveDealerForSalesperson(sp);
+    if (spDealer) return { ok: true, actor: "dealer", dealer: spDealer };
   }
 
   // No second dealer lookup: resolveWhatsAppDealer already covers both routes
