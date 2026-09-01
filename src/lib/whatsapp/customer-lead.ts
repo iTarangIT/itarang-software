@@ -18,10 +18,13 @@ import { and, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } fr
 import { generateId } from "@/lib/api-utils";
 import { db } from "@/lib/db/index";
 import { nextReference } from "@/lib/leads/draftService";
+// E-278 — best-effort history stream; both imports swallow their own errors.
+import { actorOf, recordLeadFlowEvent } from "./lead-events";
 import { notifyLeadCreated } from "@/lib/notifications/events";
 import {
   adminVerificationQueue,
   dealerOnboardingApplications,
+  dealerSalespersons,
   dealers,
   inventory,
   leads,
@@ -257,6 +260,16 @@ export async function createCustomerLead(
       id: crypto.randomUUID(),
       lead_id: leadId,
     });
+  });
+
+  // E-278 — the "created by X" line of the lead's history. Explicit rather than
+  // left to the console choke point, which cannot see parkCurrentLead's
+  // unclassified-draft mint (that turn ends at DC_MENU with ctx.lead cleared).
+  await recordLeadFlowEvent({
+    leadId,
+    dealerCode: dealer.dealerCode,
+    action: "created",
+    ...actorOf(dealer),
   });
 
   // A WhatsApp lead is real the moment it is inserted — unlike the web wizard
@@ -540,6 +553,65 @@ async function loadDealerLeadRow(
     )
     .limit(1);
   return row ?? null;
+}
+
+// ── Dealer console: team leads (E-278) ───────────────────────────────────────
+
+/** A dealership WhatsApp lead with its E-277 creator attribution, for the
+ *  dealer-only "Team Leads" / "History" pickers. */
+export interface TeamLeadListItem extends DealerDraft {
+  /** dealer_salespersons.id — null when the dealer created it themselves. */
+  salespersonId: string | null;
+  /** Creator's display name (survives via the join; null = the dealer). */
+  salespersonName: string | null;
+  kycStatus: string | null;
+}
+
+/**
+ * The dealership's WhatsApp leads with creator attribution, newest activity
+ * first. Default scope is TEAM leads only (salesperson_id set) — the Team
+ * Leads picker; `includeOwn` widens to the dealer's own leads too — the
+ * History picker. Deliberately no kyc_status filter: the dealer may take over
+ * (or inspect) a lead at any stage, pre- or post-submit.
+ */
+export async function listTeamLeads(
+  dealerCode: string,
+  opts: { includeOwn?: boolean; limit?: number } = {},
+): Promise<TeamLeadListItem[]> {
+  const conds = [
+    eq(leads.dealer_id, dealerCode),
+    eq(leads.source_channel, "whatsapp"),
+  ];
+  if (!opts.includeOwn) conds.push(isNotNull(leads.salesperson_id));
+
+  const rows = await db
+    .select({
+      id: leads.id,
+      ownerName: leads.owner_name,
+      fullName: leads.full_name,
+      ownerContact: leads.owner_contact,
+      mobile: leads.mobile,
+      interest: leads.interest_level,
+      paymentMethod: leads.payment_method,
+      updatedAt: leads.updated_at,
+      vehicleRc: leads.vehicle_rc,
+      productTypeId: leads.product_type_id,
+      kycStatus: leads.kyc_status,
+      salespersonId: leads.salesperson_id,
+      salespersonName: dealerSalespersons.display_name,
+    })
+    .from(leads)
+    .leftJoin(dealerSalespersons, eq(dealerSalespersons.id, leads.salesperson_id))
+    .where(and(...conds))
+    .orderBy(desc(leads.updated_at))
+    .limit(opts.limit ?? 30);
+
+  return rows.map((r) => ({
+    ...toDealerDraft(r),
+    salespersonId: r.salespersonId ?? null,
+    salespersonName: r.salespersonName ?? null,
+    kycStatus: r.kycStatus ?? null,
+  }));
 }
 
 // ── Dealer console: inventory ────────────────────────────────────────────────
