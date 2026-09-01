@@ -3507,6 +3507,50 @@ export const dealerSalespersons = pgTable(
   }),
 );
 
+// ── E-278 per-lead action/step audit trail (WhatsApp console) ───────────────
+// Append-only event stream: who (dealer / salesperson / customer) took a lead
+// to which DC_* step, written from the runConsoleTurn choke point plus the
+// created/submitted/button-tap write points (src/lib/whatsapp/lead-events.ts).
+// Serves the dealer's "History" timeline, and the newest journey to_state is
+// the lead's last-known position for the "Team Leads" takeover — which is what
+// makes a salesperson's session-local parked position visible to the dealer.
+// All code paths swallow errors, so an unapplied environment records nothing
+// but breaks nothing.
+export const leadFlowEvents = pgTable(
+  "lead_flow_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // = leads.id (loose varchar ref, as leads.dealer_id references dealers).
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    // = leads.dealer_id, denormalised so listings need no join.
+    dealer_code: varchar("dealer_code", { length: 255 }).notNull(),
+    // 'dealer' | 'salesperson' | 'customer' | 'system' (code-owned).
+    actor_kind: varchar("actor_kind", { length: 16 }).notNull(),
+    // dealer_salespersons.id when actor_kind='salesperson'.
+    salesperson_id: uuid("salesperson_id"),
+    // Display-name snapshot; survives the salesperson's later removal.
+    actor_label: text("actor_label"),
+    from_state: varchar("from_state", { length: 32 }),
+    to_state: varchar("to_state", { length: 32 }),
+    // 'created' | 'submitted' | 'state' | 'takeover' | 'action:<key>'.
+    action: varchar("action", { length: 32 }).default("state").notNull(),
+    note: text("note"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    leadIdx: index("lead_flow_events_lead_idx").on(
+      table.lead_id,
+      table.created_at,
+    ),
+    dealerIdx: index("lead_flow_events_dealer_idx").on(
+      table.dealer_code,
+      table.created_at,
+    ),
+  }),
+);
+
 // ── E-167 WhatsApp dealer-onboarding chatbot ────────────────────────────────
 // One row per dealer conversation. Persists the conversation state machine so a
 // dropped chat resumes exactly where it left off (design §4). State values are
