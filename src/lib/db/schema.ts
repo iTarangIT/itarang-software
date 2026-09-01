@@ -398,6 +398,10 @@ export const leads = pgTable("leads", {
   // WhatsApp dealer console; NULL for web/other). Distinguishes WhatsApp leads,
   // which share lead_source='dealer_referral' with web-dealer leads.
   source_channel: varchar("source_channel", { length: 20 }),
+  // E-277 — dealer_salespersons.id of the salesperson who created this lead
+  // over WhatsApp. NULL = the dealer themselves (or a non-WhatsApp channel).
+  // uploader_id stays the dealer's users.id — salespersons have no login.
+  salesperson_id: uuid("salesperson_id"),
   remarks: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3463,6 +3467,46 @@ export const whatsappOperators = pgTable(
   }),
 );
 
+// ── E-277 dealer sales team on WhatsApp ─────────────────────────────────────
+// Dealer-managed allowlist of salespersons who onboard customers from their own
+// WhatsApp numbers on the dealer's behalf. Mirror image of whatsapp_operators
+// (E-214: one iTarang number → many dealers; here: many numbers → one dealer).
+// Identity is the phone alone; salespersons have NO users row / login. One
+// ACTIVE row per phone globally (partial unique in E-277); deactivation flips
+// is_active so leads.salesperson_id history and re-adding both survive.
+export const dealerSalespersons = pgTable(
+  "dealer_salespersons",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // = dealers.dealer_id / leads.dealer_id (loose varchar ref, as elsewhere).
+    dealer_code: varchar("dealer_code", { length: 255 }).notNull(),
+    // E.164 WITHOUT '+', exactly as Meta delivers it ('919876543210').
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    display_name: text("display_name").notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    added_by: uuid("added_by"),
+    // 'whatsapp' | 'portal' | 'admin'
+    added_via: varchar("added_via", { length: 16 })
+      .default("whatsapp")
+      .notNull(),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    deactivated_by: uuid("deactivated_by"),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    dealerIdx: index("dealer_salespersons_dealer_idx").on(
+      table.dealer_code,
+      table.created_at,
+    ),
+  }),
+);
+
 // ── E-167 WhatsApp dealer-onboarding chatbot ────────────────────────────────
 // One row per dealer conversation. Persists the conversation state machine so a
 // dropped chat resumes exactly where it left off (design §4). State values are
@@ -3502,6 +3546,10 @@ export const whatsappOnboardingSessions = pgTable(
       .notNull(),
     operator_id: uuid("operator_id"),
     parent_session_id: uuid("parent_session_id"),
+    // E-277 — dealer_salespersons.id when session_kind='salesperson'. Mirrors
+    // operator_id for E-214 hubs: a dealer's salesperson runs the lead console
+    // from their own number, scoped to leads they created.
+    salesperson_id: uuid("salesperson_id"),
     // E-264 — the interactive prompt we could not send because Meta's 24-hour
     // service window was shut. A template cannot carry a list or more than three
     // buttons, so out-of-window we send a generic template nudge and stash the
