@@ -37,6 +37,7 @@ import {
   resolveDealerForSalesperson,
   resolveSalesperson,
 } from "./salesperson-identity";
+import { actorOf, recordLeadFlowEvent } from "./lead-events";
 import { parseLeadAction, type LeadActionKey } from "./leadActionButton";
 import { mergeContext, reply, type SessionRow } from "./session-store";
 import type { InboundEvent } from "./types";
@@ -165,6 +166,19 @@ export async function handleLeadAction(
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), leadId: press.leadId };
     if (auth.actor === "customer") ctx.flow = "customer";
+  });
+
+  // E-278 — the tap itself onto the lead's history stream. This path runs in
+  // runTurn BEFORE the console gate, so the console choke point never sees it;
+  // the turns that follow inside the entered phase do go through the choke
+  // point. Best-effort by contract (the recorder swallows all errors).
+  await recordLeadFlowEvent({
+    leadId: press.leadId,
+    dealerCode: auth.dealer.dealerCode,
+    action: `action:${press.action}`,
+    ...(auth.actor === "customer"
+      ? { actorKind: "customer" as const, salespersonId: null, actorLabel: null }
+      : actorOf(auth.dealer)),
   });
   const fresh = { ...session };
 

@@ -243,6 +243,11 @@ export type Ctx = {
   };
   /** "Active batteries" browser (DC_ACTIVE_BATT) — paging cursor only. */
   ab?: { page?: number };
+  /** E-278 — dealer's "Team Leads" browser (DC_TL_*): paging cursor + the
+   *  lead whose card is open (DC_TL_VIEW's take-over / history buttons). */
+  tl?: { page?: number; leadId?: string };
+  /** E-278 — dealer's "History" picker (DC_HIST_LIST) — paging cursor only. */
+  hist?: { page?: number };
 };
 
 /**
