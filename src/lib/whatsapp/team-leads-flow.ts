@@ -10,26 +10,35 @@
  *   DC_TL_LIST  paged picker (rows `tl:<leadId>`, `tl_more` pages)
  *   DC_TL_VIEW  one lead's card + ▶️ Take over / 🕘 History / ⬅ Back buttons
  *
- * HOW TAKEOVER WORKS — deliberately WITHOUT reading the salesperson's session.
- * Their exact mid-phase position lives in their own session's context jsonb
- * (ctx.parked), which the dealer's turn cannot see. Instead:
- *   - a pre-submit draft goes through the orchestrator's resumeDraft ladder,
- *     which rebuilds everything from the DB and re-opens at the first
- *     unanswered step;
- *   - a post-submit journey is re-entered at its PHASE via the existing
- *     LEAD_ACTIONS buttons (cb_start / s4_start / of_view / dp_start /
- *     xd_start) — cold-hydrating by design and already dealer-authorized in
- *     authorizeLeadAction. The phase to offer comes from the lead's newest
- *     lead_flow_events journey state (latestFlowState).
- * Mid-phase sub-context (a half-typed co-borrower name) is unrecoverable
- * cross-session; phases are re-enterable by design, so re-entry at the phase
- * head is the correct cost.
+ * HOW TAKEOVER WORKS — the contract is "the last system message comes again":
+ * the dealer's chat re-renders the step the salesperson last saw, and the
+ * dealer answers it from there. In order of fidelity:
+ *   0. The salesperson's EXACT position, copied from their session row
+ *      (ctx.lead mid-journey, or their ctx.parked snapshot) and replayed via
+ *      resumeParkedJourney — full sub-context (picked battery, margin,
+ *      question cursor). Only for states registered in ./lead-states.
+ *   1. Lead not yet submitted (no admin_verification_queue row) → the
+ *      orchestrator's resumeDraft ladder rebuilds from the DB and re-sends
+ *      the first unanswered step's prompt.
+ *   2. Submitted → the lead's newest lead_flow_events journey state maps to a
+ *      LEAD_ACTIONS phase entry (cb_start / s4_start / of_view / dp_start /
+ *      xd_start), driven DIRECTLY through handleLeadAction (cold-hydrating,
+ *      dealer-authorized) so the prompt arrives without another tap; live-
+ *      status fallbacks: sanction → dp_start, kyc_approved → s4_start.
+ * Every successful path also releases the salesperson's hold: their pointers
+ * to this lead are cleared and they get a "your dealer took over" notice, so
+ * two chats never drive the same lead.
  */
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
-import { loanSanctions } from "@/lib/db/schema";
+import {
+  adminVerificationQueue,
+  leads,
+  loanSanctions,
+  whatsappOnboardingSessions,
+} from "@/lib/db/schema";
 
 import {
   getDealerDraft,
@@ -43,9 +52,10 @@ import {
   actorOf,
   flowPhaseLabel,
   latestFlowState,
+  listFlowEvents,
   recordLeadFlowEvent,
 } from "./lead-events";
-import { registerLeadState } from "./lead-states";
+import { leadStateHandler, registerLeadState } from "./lead-states";
 import { leadActionId, type LeadActionKey } from "./leadActionButton";
 import {
   mergeContext,
@@ -98,13 +108,24 @@ async function backToMenu(
   );
 }
 
+const DRAFTISH_KYC = ["pending", "draft"];
+
+function isDraftishKyc(kycStatus: string | null): boolean {
+  return !kycStatus || DRAFTISH_KYC.includes(kycStatus);
+}
+
 /** Where the lead stands, for a list-row description / the card's Stage line.
- *  The events stream is the best signal; the draft columns are the fallback. */
+ *  A pre-submit last-known state is only trusted while the lead is still a
+ *  draft — a SUBMITTED lead whose newest event says "Consent" (the salesperson
+ *  finished the ladder and submitted) must show its live status instead, or
+ *  the card promises a step the takeover can't offer. */
 async function stageOf(d: TeamLeadListItem): Promise<string> {
   const st = await latestFlowState(d.leadId);
-  if (st) return flowPhaseLabel(st);
-  if (!d.kycStatus || ["pending", "draft"].includes(d.kycStatus)) return "Draft";
-  return "In progress";
+  const preSubmit = !st || st.startsWith("DC_LEAD_") || st.startsWith("DC_CASH_");
+  if (!preSubmit) return flowPhaseLabel(st);
+  if (isDraftishKyc(d.kycStatus)) return st ? flowPhaseLabel(st) : "Draft";
+  if (d.kycStatus === "kyc_approved") return "Lender selection";
+  return "In review";
 }
 
 const VIEW_BUTTONS: ReplyButton[] = [
@@ -276,6 +297,146 @@ async function hasSanction(leadId: string): Promise<boolean> {
   }
 }
 
+/** Has this lead been submitted to iTarang for KYC review? Same marker the
+ *  drafts list keys on (ensureAdminKycQueueEntry writes it). */
+async function isSubmitted(leadId: string): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ id: adminVerificationQueue.id })
+      .from(adminVerificationQueue)
+      .where(eq(adminVerificationQueue.lead_id, leadId))
+      .limit(1);
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+type LeadSnap = { state: string; lead: NonNullable<Ctx["lead"]>; at: string };
+
+/**
+ * The salesperson's hold on this lead, read from THEIR session row (same DB —
+ * "unreadable" was never literal, just uncopied). `snap` is their exact
+ * position — the live journey step they're sitting in, or their ctx.parked
+ * snapshot — in the same shape as a ctx.parked entry, so resumeParkedJourney
+ * replays the very step prompt they last saw, sub-context and all. `snap` is
+ * only set for states registered in ./lead-states: the hard-coded DC_LEAD_*
+ * ladder re-renders through resumeDraft instead. Null-safe throughout.
+ */
+async function salespersonHold(
+  leadId: string,
+  salespersonId: string | null,
+): Promise<{ snap: LeadSnap | null; spSession: SessionRow | null }> {
+  try {
+    let spId = salespersonId;
+    if (!spId) {
+      const [row] = await db
+        .select({ spId: leads.salesperson_id })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      spId = row?.spId ?? null;
+    }
+    if (!spId) {
+      // Attribution drift: the lead column can be null while the event stream
+      // still knows who drove it — use the newest salesperson event.
+      const evts = await listFlowEvents(leadId, 30);
+      for (let i = evts.length - 1; i >= 0; i -= 1) {
+        if (evts[i].actorKind === "salesperson" && evts[i].salespersonId) {
+          spId = evts[i].salespersonId;
+          break;
+        }
+      }
+    }
+    if (!spId) return { snap: null, spSession: null };
+    const [sess] = await db
+      .select()
+      .from(whatsappOnboardingSessions)
+      .where(
+        and(
+          eq(whatsappOnboardingSessions.salesperson_id, spId),
+          eq(whatsappOnboardingSessions.session_kind, "salesperson"),
+        ),
+      )
+      .orderBy(desc(whatsappOnboardingSessions.updated_at))
+      .limit(1);
+    if (!sess) return { snap: null, spSession: null };
+    const ctx = (sess.context ?? {}) as Ctx;
+
+    if (
+      ctx.lead?.leadId === leadId &&
+      leadStateHandler(sess.current_state)
+    ) {
+      return {
+        snap: {
+          state: sess.current_state,
+          lead: ctx.lead as NonNullable<Ctx["lead"]>,
+          at: new Date().toISOString(),
+        },
+        spSession: sess,
+      };
+    }
+    const parked = ctx.parked?.[leadId];
+    if (parked && leadStateHandler(parked.state)) {
+      return { snap: parked, spSession: sess };
+    }
+    return { snap: null, spSession: sess };
+  } catch (err) {
+    console.error("[WhatsApp/team-leads] salesperson hold lookup failed:", err);
+    return { snap: null, spSession: null };
+  }
+}
+
+/**
+ * After a takeover: drop the salesperson's pointers to this lead (their parked
+ * snapshot, and their live journey if they're mid-THIS-lead) so the two chats
+ * don't drive the same lead, and tell them what happened. Best-effort — a
+ * failure here must not fail the dealer's takeover.
+ */
+async function releaseSalespersonHold(
+  spSession: SessionRow | null,
+  leadId: string,
+  dealer: ActiveDealer,
+  customerName: string,
+): Promise<void> {
+  if (!spSession) return;
+  try {
+    const ctx = (spSession.context ?? {}) as Ctx;
+    const midThisLead = ctx.lead?.leadId === leadId;
+    await mergeContext(spSession, (c) => {
+      if (c.parked) delete c.parked[leadId];
+      if (c.lead?.leadId === leadId) c.lead = undefined;
+    });
+    if (midThisLead) {
+      await setSession(spSession.id, { current_state: "DC_MENU" });
+    }
+    await reply(
+      spSession,
+      `ℹ️ *${dealer.dealerName}* has taken over the lead *${customerName}* — it continues from their WhatsApp now.\n\nSend *menu* to see your other leads.`,
+    );
+  } catch (err) {
+    console.error("[WhatsApp/team-leads] release salesperson hold failed:", err);
+  }
+}
+
+/** Human label for the phase a takeover button re-enters. */
+function actionPhaseLabel(action: LeadActionKey): string {
+  switch (action) {
+    case "cb_start":
+      return "Co-borrower";
+    case "s4_start":
+      return "Lender selection";
+    case "of_view":
+      return "Offers";
+    case "dp_start":
+      return "Dispatch";
+    case "xd_start":
+      return "Extra documents";
+    default:
+      return "In progress";
+  }
+}
+
 async function takeOverLead(
   session: SessionRow,
   dealer: ActiveDealer,
@@ -286,10 +447,10 @@ async function takeOverLead(
     await reply(session, "I couldn't find that lead any more. Here's the current list:");
     return await showTeamLeads(session, dealer, 0);
   }
-  const spName =
-    (await listTeamLeads(dealer.dealerCode, { limit: 30 })).find(
-      (d) => d.leadId === leadId,
-    )?.salespersonName ?? null;
+  const teamItem = (
+    await listTeamLeads(dealer.dealerCode, { limit: 30 })
+  ).find((d) => d.leadId === leadId);
+  const spName = teamItem?.salespersonName ?? null;
 
   const takeoverEvent = () =>
     recordLeadFlowEvent({
@@ -300,34 +461,71 @@ async function takeOverLead(
       ...actorOf(dealer),
     });
 
-  // 1) Still a pre-submit draft → the DB-driven resume ladder re-opens it at
-  //    the first unanswered step, exactly like Save Drafts would.
-  const draft = await getDealerDraft(dealer.dealerCode, leadId);
-  if (draft) {
+  const hold = await salespersonHold(leadId, teamItem?.salespersonId ?? null);
+  const release = () =>
+    releaseSalespersonHold(hold.spSession, leadId, dealer, summary.customerName);
+
+  // 0) The salesperson's EXACT position, copied from their session row: the
+  //    dealer's chat re-renders the very step prompt the salesperson last saw
+  //    (sub-context included — picked battery, margin, question cursor), and
+  //    the dealer answers it from here on. This is the "last system message
+  //    comes again" contract.
+  if (hold.snap) {
     await takeoverEvent();
+    await release();
+    const { resumeParkedJourney } = await import("./orchestrator");
+    return await resumeParkedJourney(session, dealer, leadId, hold.snap);
+  }
+
+  // 1) Not yet submitted to iTarang → the DB-driven resume ladder re-opens the
+  //    lead at the next unanswered step and re-sends that step's prompt.
+  //    Deliberately NOT keyed on getDealerDraft alone: kyc_status can leave the
+  //    draft window mid-ladder, and the old check dead-ended those takeovers.
+  const submitted = await isSubmitted(leadId);
+  if (!submitted) {
+    const draft =
+      (await getDealerDraft(dealer.dealerCode, leadId)) ?? summary;
+    await takeoverEvent();
+    await release();
     const { resumeDraft } = await import("./orchestrator");
     return await resumeDraft(session, dealer, draft);
   }
 
-  // 2) Submitted — offer the phase-entry button for its last-known position.
+  // 2) Submitted, no live session position — re-enter the phase for its
+  //    last-known recorded position. A pre-submit DC_LEAD_* last event on a
+  //    submitted lead means the salesperson finished the ladder (takeoverAction
+  //    maps it to null), so fall through to the live-status ladder below.
   const state = await latestFlowState(leadId);
   let action = takeoverAction(state);
+  let phase = action ? flowPhaseLabel(state) : "";
 
-  // 3) No usable events (pre-E-278 lead, or table unapplied): a sanctioned
-  //    lead can still be taken to dispatch; anything else is with iTarang.
+  // 3) Live-status fallback: sanctioned → dispatch; KYC approved → lender
+  //    selection (the next actionable step after admin approval — the same
+  //    push the salesperson would receive).
   if (!action && (await hasSanction(leadId))) action = "dp_start";
+  if (!action && teamItem?.kycStatus === "kyc_approved") action = "s4_start";
 
   if (action) {
+    if (!phase) phase = actionPhaseLabel(action);
     await takeoverEvent();
+    await release();
     await reply(
       session,
-      `▶️ *${summary.customerName}* is at *${flowPhaseLabel(state)}*` +
-        (spName ? ` (with ${spName})` : "") +
-        `.\n\nTap below to continue this lead yourself 👇`,
-      [{ id: leadActionId(action, leadId), title: "▶️ Continue" }],
+      `▶️ Taking over *${summary.customerName}*` +
+        (spName ? ` from ${spName}` : "") +
+        ` — *${phase}*.`,
     );
-    // Stay on DC_TL_VIEW; the tap routes through the lead-action gate, which
-    // re-hydrates from the DB and records the action on the history stream.
+    // Drive the phase entry directly — the same cold-hydrating, authorized
+    // path a tapped button takes — so the step's prompt arrives immediately
+    // instead of asking the dealer for one more tap.
+    const { handleLeadAction } = await import("./leadActionReply");
+    await handleLeadAction(session, {
+      providerMessageId: `takeover:${leadId}:${Date.now()}`,
+      waPhone: session.wa_phone,
+      type: "interactive",
+      text: leadActionId(action, leadId),
+      raw: { synthetic: true },
+    } as InboundEvent);
     return;
   }
 
