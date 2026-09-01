@@ -3748,8 +3748,14 @@ async function onDraftSelection(
  * the exact state, then re-render that step. Phases that registered a `resume`
  * renderer use it; tap-driven steps re-render on a synthetic greeting (the same
  * path a typed "hi" takes); anything else just gets a nudge.
+ *
+ * Exported for the E-278 Team Leads takeover (team-leads-flow.ts): the dealer
+ * resumes a SALESPERSON's exact position by feeding a snapshot copied from the
+ * salesperson's session row through this same path — the snapshot shape is
+ * identical to a ctx.parked entry. Only meaningful for states registered in
+ * ./lead-states (the DC_LEAD_* ladder re-renders via resumeDraft instead).
  */
-async function resumeParkedJourney(
+export async function resumeParkedJourney(
   session: SessionRow,
   dealer: ActiveDealer,
   leadId: string,
@@ -3783,6 +3789,7 @@ async function resumeParkedJourney(
         waPhone: session.wa_phone,
         type: "text",
         text: "hi",
+        raw: { synthetic: true },
       },
       dealer,
     );
