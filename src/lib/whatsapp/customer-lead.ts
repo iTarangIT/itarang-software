@@ -33,6 +33,21 @@ import {
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
+/**
+ * E-277 — WHO is actually driving the console this turn. Absent (the default
+ * everywhere ActiveDealer is built today) means the dealer themselves.
+ * A salesperson runs the SAME console with the dealer's identity (dealerCode /
+ * uploaderId — they have no users row), but their leads are stamped with
+ * salespersonId and their list/read scope is narrowed to those leads.
+ */
+export interface ActorContext {
+  role: "dealer" | "salesperson";
+  /** dealer_salespersons.id — set only when role === 'salesperson'. */
+  salespersonId?: string;
+  /** Salesperson display name, for greetings ("Hi Ramesh (Acme Motors)"). */
+  displayName?: string;
+}
+
 /** The minimum identity needed to create a lead as an approved dealer. */
 export interface ActiveDealer {
   /** dealer_code — the leads.dealer_id FK target (accounts.id for non-branch). */
@@ -50,6 +65,8 @@ export interface ActiveDealer {
    * agreement is actually signed and activate-finance runs.
    */
   financeEnabled: boolean;
+  /** E-277 — who is driving the console. Absent = the dealer themselves. */
+  actor?: ActorContext;
 }
 
 /**
@@ -228,6 +245,10 @@ export async function createCustomerLead(
       // admin KYC review uses to unlock documents without a coupon.
       source_channel: "whatsapp",
       uploader_id: dealer.uploaderId,
+      // E-277 — the salesperson who created this lead, when a team member (not
+      // the dealer) is driving the console. uploader_id above stays the
+      // dealer's users.id: salespersons have no login row.
+      salesperson_id: dealer.actor?.salespersonId ?? null,
       state: "Unknown",
       city: "Unknown",
     });
@@ -247,7 +268,9 @@ export async function createCustomerLead(
       customerName: name === PENDING_CUSTOMER_NAME ? null : name,
       paymentMethod,
       source: "whatsapp",
-      dealerName: dealer.dealerName || dealer.dealerCode,
+      dealerName: dealer.actor?.displayName
+        ? `${dealer.dealerName || dealer.dealerCode} · ${dealer.actor.displayName}`
+        : dealer.dealerName || dealer.dealerCode,
     });
   }
 
@@ -285,7 +308,9 @@ export async function classifyCustomerLead(
       customerName: name && name !== PENDING_CUSTOMER_NAME ? name : null,
       paymentMethod: patch.paymentMethod,
       source: "whatsapp",
-      dealerName: dealer.dealerName || dealer.dealerCode,
+      dealerName: dealer.actor?.displayName
+        ? `${dealer.dealerName || dealer.dealerCode} · ${dealer.actor.displayName}`
+        : dealer.dealerName || dealer.dealerCode,
     });
   }
 }
@@ -375,6 +400,9 @@ const DRAFT_KYC_STATUSES = ["pending", "draft"];
 export async function listDealerDrafts(
   dealerCode: string,
   limit = 10,
+  // E-277 — when a SALESPERSON is driving the console, narrow to leads they
+  // created. The dealer passes undefined and sees the whole dealership.
+  salespersonId?: string,
 ): Promise<DealerDraft[]> {
   // Lead ids already submitted for KYC review — excluded from the draft list.
   const submitted = await db
@@ -390,6 +418,9 @@ export async function listDealerDrafts(
     eq(leads.source_channel, "whatsapp"),
     or(isNull(leads.kyc_status), inArray(leads.kyc_status, DRAFT_KYC_STATUSES)),
   ];
+  if (salespersonId) {
+    conds.push(eq(leads.salesperson_id, salespersonId));
+  }
   if (submittedIds.length) {
     // notInArray → `leads.id not in ($1, …)`. (A hand-rolled `sql\`... <> all()\``
     // splats the JS array into a tuple `all(($1,$2,…))`, which Postgres rejects
@@ -454,8 +485,9 @@ function toDealerDraft(r: DraftRow): DealerDraft {
 export async function getDealerDraft(
   dealerCode: string,
   leadId: string,
+  salespersonId?: string,
 ): Promise<DealerDraft | null> {
-  const row = await loadDealerLeadRow(dealerCode, leadId);
+  const row = await loadDealerLeadRow(dealerCode, leadId, salespersonId);
   if (!row) return null;
   if (row.kycStatus && !DRAFT_KYC_STATUSES.includes(row.kycStatus)) return null;
   return toDealerDraft(row);
@@ -471,14 +503,18 @@ export async function getDealerDraft(
 export async function getDealerLeadSummary(
   dealerCode: string,
   leadId: string,
+  salespersonId?: string,
 ): Promise<DealerDraft | null> {
-  const row = await loadDealerLeadRow(dealerCode, leadId);
+  const row = await loadDealerLeadRow(dealerCode, leadId, salespersonId);
   return row ? toDealerDraft(row) : null;
 }
 
 async function loadDealerLeadRow(
   dealerCode: string,
   leadId: string,
+  // E-277 — salesperson scope: only leads they created. Undefined = dealer,
+  // whole dealership.
+  salespersonId?: string,
 ): Promise<(DraftRow & { kycStatus: string | null }) | null> {
   const [row] = await db
     .select({
@@ -495,7 +531,13 @@ async function loadDealerLeadRow(
       kycStatus: leads.kyc_status,
     })
     .from(leads)
-    .where(and(eq(leads.id, leadId), eq(leads.dealer_id, dealerCode)))
+    .where(
+      and(
+        eq(leads.id, leadId),
+        eq(leads.dealer_id, dealerCode),
+        ...(salespersonId ? [eq(leads.salesperson_id, salespersonId)] : []),
+      ),
+    )
     .limit(1);
   return row ?? null;
 }

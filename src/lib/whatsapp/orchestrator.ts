@@ -63,6 +63,11 @@ import {
   type WhatsAppOperator,
   resolveOperator,
 } from "./operator-identity";
+import {
+  type DealerSalesperson,
+  resolveDealerForSalesperson,
+  resolveSalesperson,
+} from "./salesperson-identity";
 import { classifyDocument } from "./extraction";
 import { answerGeneralQuestion } from "./general-info";
 import { classifyIntent } from "./intent";
@@ -384,7 +389,13 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   // allowlisted number gets a bare `operator_hub` row instead of a dealer draft.
   const operator = await resolveOperator(event.waPhone);
 
-  const session = await getOrCreateSession(event, operator);
+  // E-277 — a dealer's salesperson. Resolved BEFORE the session, like the
+  // operator, so an allowlisted number gets a bare `salesperson` row instead of
+  // a junk draft application. Operator wins a double-listing (prevented at add
+  // time, but the order must still be deterministic).
+  const salesperson = operator ? null : await resolveSalesperson(event.waPhone);
+
+  const session = await getOrCreateSession(event, operator, salesperson);
   await setSession(session.id, { last_inbound_at: new Date() });
   // recordInbound() ran in the webhook before we knew the session, so the row is
   // sitting there with session_id = NULL. Attribute it now (an operator turn
@@ -473,6 +484,48 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   // global stop word takes precedence.
   if (isWebsiteApplyButton(event)) {
     return await enterCustomerFlow(session);
+  }
+
+  // E-277 — a dealer's salesperson drives the SAME console as the dealer, with
+  // the dealer's identity plus an actor tag (leads stamped salesperson_id,
+  // lists scoped to their own leads). Placed HERE and not beside the operator
+  // gate, on purpose: unlike operators, salespersons ARE lead actors — the
+  // lead-action button gate, parked-prompt replay and the stop word above must
+  // all keep working for them. It must still beat the two dealer gates below:
+  // a salesperson session has application_id = null, so those would drop them
+  // into dealer onboarding.
+  if (salesperson) {
+    const spDealer = await resolveDealerForSalesperson(salesperson);
+    if (spDealer) {
+      return await runConsoleTurn(session, event, spDealer);
+    }
+    // The dealership behind them is deactivated or missing — fail closed.
+    await reply(
+      session,
+      "Your dealer's account is not active right now, so lead creation is " +
+        "paused. Please contact your dealer.",
+    );
+    return;
+  }
+
+  // E-277 — the sender WAS a salesperson but has been removed from the team
+  // (resolveSalesperson now returns null while the session still says
+  // 'salesperson'). Tell them once, then downgrade the row so their next
+  // message is treated as a fresh prospect — this also prevents repeat notices.
+  if (session.session_kind === "salesperson") {
+    await reply(
+      session,
+      "Your access to the dealer's team on this number has been removed. " +
+        "Please contact the dealer if this is unexpected.",
+    );
+    await setSession(session.id, {
+      session_kind: "dealer",
+      salesperson_id: null,
+      application_id: null,
+      current_state: "GREETING",
+      context: {},
+    });
+    return;
   }
 
   // Post-approval dealer console: once the dealer's onboarding application is
@@ -2566,6 +2619,11 @@ async function ingestCorrectionDoc(
 async function getOrCreateSession(
   event: InboundEvent,
   operator?: WhatsAppOperator | null,
+  // E-277 — passed when the sender is on a dealer's sales team. They get a
+  // bare `salesperson` row with NO placeholder application, exactly like the
+  // operator hub: a salesperson saying "hi" is not a dealer walking in the
+  // door. Never non-null together with `operator` (operator wins in runTurn).
+  salesperson?: DealerSalesperson | null,
 ): Promise<SessionRow> {
   const existing = await db
     .select()
@@ -2597,6 +2655,42 @@ async function getOrCreateSession(
         })
         .where(eq(whatsappOnboardingSessions.id, row.id));
       return { ...row, session_kind: "operator_hub", operator_id: operator.id };
+    }
+    // E-277 — same promotion for a number just added to a dealer's team: an
+    // unpromoted row would keep its old onboarding state (and possibly a stray
+    // draft application pointer) driving the console. The stray application
+    // stays on disk; the salesperson gate never reads application_id.
+    if (salesperson && row.session_kind !== "salesperson") {
+      await db
+        .update(whatsappOnboardingSessions)
+        .set({
+          session_kind: "salesperson",
+          salesperson_id: salesperson.id,
+          application_id: null,
+          current_state: "DC_MENU",
+          updated_at: new Date(),
+        })
+        .where(eq(whatsappOnboardingSessions.id, row.id));
+      return {
+        ...row,
+        session_kind: "salesperson",
+        salesperson_id: salesperson.id,
+        application_id: null,
+        current_state: "DC_MENU",
+      };
+    }
+    // E-277 — the member was moved to a different dealer (deactivate + re-add):
+    // keep the row but repoint the id so scoping follows the new team.
+    if (
+      salesperson &&
+      row.session_kind === "salesperson" &&
+      row.salesperson_id !== salesperson.id
+    ) {
+      await db
+        .update(whatsappOnboardingSessions)
+        .set({ salesperson_id: salesperson.id, updated_at: new Date() })
+        .where(eq(whatsappOnboardingSessions.id, row.id));
+      return { ...row, salesperson_id: salesperson.id };
     }
     return row;
   }
@@ -2634,6 +2728,45 @@ async function getOrCreateSession(
         )
         .limit(1);
       if (hub) return hub;
+      throw err;
+    }
+  }
+
+  // E-277 — first message from a dealer's salesperson: a bare console session,
+  // no placeholder application (which would pollute the admin onboarding
+  // pipeline with junk drafts).
+  if (salesperson) {
+    try {
+      const [row] = await db
+        .insert(whatsappOnboardingSessions)
+        .values({
+          wa_phone: event.waPhone,
+          wa_contact_name: event.contactName ?? salesperson.displayName,
+          provider: getAdapter().provider,
+          provider_conversation_id: event.conversationId ?? null,
+          application_id: null,
+          session_kind: "salesperson",
+          salesperson_id: salesperson.id,
+          current_state: "DC_MENU",
+          session_status: "active",
+          last_inbound_at: new Date(),
+        })
+        .returning();
+      return row;
+    } catch (err) {
+      // whatsapp_sessions_salesperson_key (partial UNIQUE) — two near-
+      // simultaneous first messages raced; re-select the winner.
+      const [row] = await db
+        .select()
+        .from(whatsappOnboardingSessions)
+        .where(
+          and(
+            eq(whatsappOnboardingSessions.wa_phone, event.waPhone),
+            eq(whatsappOnboardingSessions.session_kind, "salesperson"),
+          ),
+        )
+        .limit(1);
+      if (row) return row;
       throw err;
     }
   }
@@ -3135,8 +3268,32 @@ const DEALER_MENU_ROWS: ListRow[] = [
   { id: "menu_drafts", title: "📝 Save Drafts", description: "Resume a saved lead" },
   { id: "menu_inventory", title: "📦 Inventory", description: "View available stock" },
   { id: "menu_active", title: "🔋 Active batteries", description: "Dispatched & sold — owner, warranty" },
+  { id: "menu_team", title: "👥 My Team", description: "Salespersons who can create leads" },
   { id: "menu_help", title: "❓ Help", description: "Support & how it works" },
 ];
+
+// E-277 — a salesperson works leads only: no Team (dealer-only management), no
+// Inventory / Active batteries (dealership-level views; dispatch stays with the
+// dealer for v1).
+const SALESPERSON_MENU_ROWS: ListRow[] = [
+  { id: "menu_new_lead", title: "🆕 New Lead", description: "Create a new customer lead" },
+  { id: "menu_drafts", title: "📝 My Leads", description: "Resume a lead you created" },
+  { id: "menu_help", title: "❓ Help", description: "Support & how it works" },
+];
+
+function isSalesperson(dealer: ActiveDealer): boolean {
+  return dealer.actor?.role === "salesperson";
+}
+
+/** E-277 — the salesperson's scope filter for the draft readers; undefined for
+ *  the dealer themselves (sees the whole dealership). */
+function actorScope(dealer: ActiveDealer): string | undefined {
+  return isSalesperson(dealer) ? dealer.actor?.salespersonId : undefined;
+}
+
+function dealerMenuRows(dealer: ActiveDealer): ListRow[] {
+  return isSalesperson(dealer) ? SALESPERSON_MENU_ROWS : DEALER_MENU_ROWS;
+}
 
 const INTEREST_BUTTONS: ReplyButton[] = [
   { id: "interest_hot", title: "🔥 Hot" },
@@ -3268,12 +3425,15 @@ async function showDealerMenu(
     ctx.lead = undefined;
   });
   await setSession(session.id, { current_state: "DC_MENU" });
+  const greetName = dealer.actor?.displayName
+    ? `${dealer.actor.displayName}* (${dealer.dealerName})`
+    : `${dealer.dealerName}*`;
   await replyList(
     session,
     (parked ? `${parkedNotice(parked)}\n\n` : "") +
-      `👋 Hi *${dealer.dealerName}*!\n\nWhat would you like to do?`,
+      `👋 Hi *${greetName}!\n\nWhat would you like to do?`,
     "Open Menu",
-    DEALER_MENU_ROWS,
+    dealerMenuRows(dealer),
   );
 }
 
@@ -3306,14 +3466,22 @@ async function parkCurrentLead(
     const lead = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
 
     if (lead.leadId) {
-      const draft = await getDealerDraft(dealer.dealerCode, lead.leadId);
+      const draft = await getDealerDraft(
+        dealer.dealerCode,
+        lead.leadId,
+        actorScope(dealer),
+      );
       if (draft) return draftLabel(draft);
       // Past the pre-submit draft states (co-borrower, lender pick, offers,
       // dispatch). The DB cannot rebuild where the chat was, so snapshot the
       // exact step + sub-context into ctx.parked; Save Drafts lists it from
       // there and resumeParkedJourney restores it verbatim.
       if (!leadStateHandler(fresh.current_state)) return null;
-      const summary = await getDealerLeadSummary(dealer.dealerCode, lead.leadId);
+      const summary = await getDealerLeadSummary(
+        dealer.dealerCode,
+        lead.leadId,
+        actorScope(dealer),
+      );
       if (!summary) return null;
       const state = fresh.current_state;
       await mergeContext(session, (ctx) => {
@@ -3361,11 +3529,21 @@ async function onMenuChoice(
     case "menu_drafts":
       return await showDrafts(session, dealer);
     case "menu_inventory":
+      // E-277 — dealership-level view; a salesperson tapping a stale menu row
+      // goes back to their own menu instead.
+      if (isSalesperson(dealer)) return await showDealerMenu(session, dealer);
       return await showInventory(session, dealer);
     case "menu_active":
+      if (isSalesperson(dealer)) return await showDealerMenu(session, dealer);
       return await showActiveBatteries(session, dealer);
+    case "menu_team": {
+      // E-277 — team management is dealer-only.
+      if (isSalesperson(dealer)) return await showDealerMenu(session, dealer);
+      const { showTeamMenu } = await import("./team-flow");
+      return await showTeamMenu(session, dealer);
+    }
     case "menu_help":
-      await reply(session, consoleHelpText());
+      await reply(session, consoleHelpText(dealer));
       return;
     default:
       // Unrecognized free text while at the menu → re-show the menu.
@@ -3373,7 +3551,17 @@ async function onMenuChoice(
   }
 }
 
-function consoleHelpText(): string {
+function consoleHelpText(dealer: ActiveDealer): string {
+  if (isSalesperson(dealer)) {
+    return [
+      "❓ *iTarang Sales Team Help*",
+      "",
+      "• Send *menu* any time to see your options.",
+      "• *New Lead* — create a customer lead step by step, on behalf of your dealer.",
+      "• *My Leads* — resume a lead you created, right where you left it. Starting a new lead or sending *menu* mid-way saves the current one here automatically.",
+      "• Need a person? Ask your dealer, or email support@itarang.com.",
+    ].join("\n");
+  }
   return [
     "❓ *iTarang Dealer Help*",
     "",
@@ -3382,6 +3570,7 @@ function consoleHelpText(): string {
     "• *Save Drafts* — resume a lead you started earlier, right where you left it. Starting a new lead or sending *menu* mid-way saves the current one here automatically.",
     "• *Inventory* — see your available stock.",
     "• *Active batteries* — batteries you've dispatched, with owner and warranty.",
+    "• *My Team* — add or remove salespersons who can create leads from their own WhatsApp.",
     "• Need a person? Email support@itarang.com.",
   ].join("\n");
 }
@@ -3431,13 +3620,21 @@ async function listAllDrafts(
   session: SessionRow,
   dealer: ActiveDealer,
 ): Promise<DraftListItem[]> {
-  const drafts: DraftListItem[] = await listDealerDrafts(dealer.dealerCode);
+  const drafts: DraftListItem[] = await listDealerDrafts(
+    dealer.dealerCode,
+    10,
+    actorScope(dealer),
+  );
   const seen = new Set(drafts.map((d) => d.leadId));
   const fresh = await loadSession(session.id);
   const parked = ((fresh.context as Ctx)?.parked ?? {}) as NonNullable<Ctx["parked"]>;
   for (const [leadId, snap] of Object.entries(parked)) {
     if (seen.has(leadId)) continue;
-    const summary = await getDealerLeadSummary(dealer.dealerCode, leadId);
+    const summary = await getDealerLeadSummary(
+      dealer.dealerCode,
+      leadId,
+      actorScope(dealer),
+    );
     if (!summary) continue;
     drafts.push({
       ...summary,
@@ -3491,7 +3688,11 @@ async function onDraftSelection(
     return await showDrafts(session, dealer);
   }
   const leadId = id.slice("draft_".length);
-  const draft = await getDealerDraft(dealer.dealerCode, leadId);
+  const draft = await getDealerDraft(
+    dealer.dealerCode,
+    leadId,
+    actorScope(dealer),
+  );
   if (draft) return await resumeDraft(session, dealer, draft);
 
   const fresh = await loadSession(session.id);
@@ -3517,7 +3718,11 @@ async function resumeParkedJourney(
   leadId: string,
   snap: NonNullable<Ctx["parked"]>[string],
 ): Promise<void> {
-  const summary = await getDealerLeadSummary(dealer.dealerCode, leadId);
+  const summary = await getDealerLeadSummary(
+    dealer.dealerCode,
+    leadId,
+    actorScope(dealer),
+  );
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...snap.lead, leadId };
     if (ctx.parked) delete ctx.parked[leadId];

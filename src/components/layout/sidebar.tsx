@@ -1415,6 +1415,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/dealer-portal/leads",
         },
         {
+          // E-277 — WhatsApp salespersons who create leads on the dealer's behalf.
+          id: "team",
+          label: "My Team",
+          icon: Users,
+          href: "/dealer-portal/team",
+        },
+        {
           id: "drafts",
           label: "My Drafts",
           icon: FileText,
