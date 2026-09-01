@@ -177,6 +177,11 @@ export function CustomerLeadsView() {
                                                 {r.dealerCode}
                                             </div>
                                         )}
+                                        {r.salespersonName && (
+                                            <div className="mt-0.5 text-xs text-ink-muted">
+                                                via {r.salespersonName}
+                                            </div>
+                                        )}
                                     </td>
                                     <td className="px-4 py-3 align-top">
                                         {r.interest ? (
