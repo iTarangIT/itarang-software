@@ -199,6 +199,8 @@ export type PartialCustomerLead = {
     mobile: string | null;
     dealerCode: string | null;
     dealerName: string | null;
+    /** E-277 — the dealer's salesperson who created this lead, when any. */
+    salespersonName?: string | null;
     interest: string | null;
     paymentMethod: string | null;
     consentStatus: string | null;
