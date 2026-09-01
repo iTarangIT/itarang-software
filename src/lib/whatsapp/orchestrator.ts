@@ -100,6 +100,9 @@ import {
   resolveActiveDealer,
   resolveHouseDealer,
 } from "./customer-lead";
+// E-278 — the per-lead history stream (Team Leads / History). Both recorders
+// swallow their own errors; a missing lead_flow_events table costs nothing.
+import { recordConsoleTransition, recordLeadSubmitted } from "./lead-events";
 import { maskAccount, maskGstin, maskIfsc, maskPan } from "./masking";
 import {
   notifyOnboardingChatStarted,
@@ -3269,6 +3272,10 @@ const DEALER_MENU_ROWS: ListRow[] = [
   { id: "menu_inventory", title: "📦 Inventory", description: "View available stock" },
   { id: "menu_active", title: "🔋 Active batteries", description: "Dispatched & sold — owner, warranty" },
   { id: "menu_team", title: "👥 My Team", description: "Salespersons who can create leads" },
+  // E-278 — dealer-only oversight of the E-277 team: see the leads salespersons
+  // are working (and take one over), and a who-did-what timeline per lead.
+  { id: "menu_team_leads", title: "🗂 Team Leads", description: "Leads your salespersons are working" },
+  { id: "menu_history", title: "🕘 History", description: "Who did what on a lead" },
   { id: "menu_help", title: "❓ Help", description: "Support & how it works" },
 ];
 
@@ -3337,6 +3344,23 @@ function paymentRetryPrompt(dealer: ActiveDealer): string {
 
 /** One turn for an admin-approved dealer (the post-onboarding console). */
 export async function runConsoleTurn(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  // E-278 — the history choke point. Snapshot (state, lead) before dispatch and
+  // let recordConsoleTransition write one event when the pair changed. Every
+  // DC_* transition — the hard-coded cases AND every registerLeadState phase —
+  // flows through this function for dealer and salesperson alike, so this one
+  // site is what makes "which salesperson took the lead to which step"
+  // answerable. Best-effort by contract: the recorder swallows all errors.
+  const beforeState = session.current_state;
+  const beforeLeadId = ((session.context ?? {}) as Ctx).lead?.leadId;
+  await dispatchConsoleTurn(session, event, dealer);
+  await recordConsoleTransition(session.id, beforeState, beforeLeadId, dealer);
+}
+
+async function dispatchConsoleTurn(
   session: SessionRow,
   event: InboundEvent,
   dealer: ActiveDealer,
@@ -3542,6 +3566,17 @@ async function onMenuChoice(
       const { showTeamMenu } = await import("./team-flow");
       return await showTeamMenu(session, dealer);
     }
+    case "menu_team_leads": {
+      // E-278 — team oversight is dealer-only (a salesperson has no team).
+      if (isSalesperson(dealer)) return await showDealerMenu(session, dealer);
+      const { showTeamLeads } = await import("./team-leads-flow");
+      return await showTeamLeads(session, dealer);
+    }
+    case "menu_history": {
+      if (isSalesperson(dealer)) return await showDealerMenu(session, dealer);
+      const { showHistoryList } = await import("./history-flow");
+      return await showHistoryList(session, dealer);
+    }
     case "menu_help":
       await reply(session, consoleHelpText(dealer));
       return;
@@ -3571,6 +3606,8 @@ function consoleHelpText(dealer: ActiveDealer): string {
     "• *Inventory* — see your available stock.",
     "• *Active batteries* — batteries you've dispatched, with owner and warranty.",
     "• *My Team* — add or remove salespersons who can create leads from their own WhatsApp.",
+    "• *Team Leads* — see the leads your salespersons are working, open one and finish it yourself.",
+    "• *History* — a lead's timeline: which salesperson took it to which step, and what you did after.",
     "• Need a person? Email support@itarang.com.",
   ].join("\n");
 }
@@ -3802,7 +3839,10 @@ async function financeQuestionsAnswered(leadId: string): Promise<boolean> {
 // Resume a draft: rehydrate ctx.lead and jump to the earliest incomplete step.
 //   Hot + finance: documents → consent → finance questions → submit.
 //   Anything else: nothing left to capture on WhatsApp (finished on the portal).
-async function resumeDraft(
+// Exported for the E-278 Team Leads takeover (team-leads-flow.ts): the dealer
+// picks up a salesperson's pre-submit draft through exactly this ladder — it
+// rebuilds everything from the DB, so no foreign session context is needed.
+export async function resumeDraft(
   session: SessionRow,
   dealer: ActiveDealer,
   draft: DealerDraft,
@@ -5719,6 +5759,9 @@ async function finalizeLead(session: SessionRow): Promise<void> {
     } catch (e) {
       console.error("[WhatsApp/console] admin KYC queue entry failed:", e);
     }
+    // E-278 — explicit 'submitted' marker: the choke point only sees the walk
+    // back to DC_MENU here, which is indistinguishable from parking.
+    await recordLeadSubmitted(lead.leadId, session);
   }
 
   const fresh = await loadSession(session.id);
