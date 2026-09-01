@@ -3507,6 +3507,44 @@ export const dealerSalespersons = pgTable(
   }),
 );
 
+// ── E-279 extra MAIN-dealer WhatsApp numbers ────────────────────────────────
+// Admin-managed allowlist of ADDITIONAL numbers that resolve to a dealership's
+// full main-dealer console (ActiveDealer without an actor tag) — the full-scope
+// sibling of dealer_salespersons. Resolution rides resolveWhatsAppDealer()'s
+// third lookup step (gate 12 fallback); leads created from these numbers are
+// ordinary main-dealer leads (salesperson_id NULL). One ACTIVE row per phone
+// globally (partial unique in E-279, SQL-only like E-277's); deactivation flips
+// is_active, never deletes.
+export const dealerExtraNumbers = pgTable(
+  "dealer_extra_numbers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // = dealers.dealer_id / leads.dealer_id (loose varchar ref, as elsewhere).
+    dealer_code: varchar("dealer_code", { length: 255 }).notNull(),
+    // E.164 WITHOUT '+', exactly as Meta delivers it ('919876543210').
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    display_name: text("display_name").notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    added_by: uuid("added_by"),
+    added_via: varchar("added_via", { length: 16 }).default("admin").notNull(),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    deactivated_by: uuid("deactivated_by"),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    dealerIdx: index("dealer_extra_numbers_dealer_idx").on(
+      table.dealer_code,
+      table.created_at,
+    ),
+  }),
+);
+
 // ── E-278 per-lead action/step audit trail (WhatsApp console) ───────────────
 // Append-only event stream: who (dealer / salesperson / customer) took a lead
 // to which DC_* step, written from the runConsoleTurn choke point plus the

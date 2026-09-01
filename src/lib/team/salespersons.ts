@@ -7,6 +7,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
+  dealerExtraNumbers,
   dealerOnboardingApplications,
   dealers,
   dealerSalespersons,
@@ -147,6 +148,29 @@ async function findConflict(
     )
     .limit(1);
   if (dealerRow) return "is_dealer";
+
+  // E-279: an admin-registered EXTRA main number resolves as the full dealer
+  // console (gate 12), which would shadow the salesperson gate's semantics —
+  // same class of conflict as a primary dealer number. Guarded: an environment
+  // without the E-279 table behaves pre-E-279.
+  try {
+    const [extra] = await db
+      .select({ id: dealerExtraNumbers.id })
+      .from(dealerExtraNumbers)
+      .where(
+        and(
+          inArray(dealerExtraNumbers.wa_phone, variants),
+          eq(dealerExtraNumbers.is_active, true),
+        ),
+      )
+      .limit(1);
+    if (extra) return "is_dealer";
+  } catch (err) {
+    console.error(
+      "[team/salespersons] extra-number check failed (is E-279 applied?):",
+      err,
+    );
+  }
 
   return null;
 }

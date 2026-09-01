@@ -4,13 +4,15 @@
 // dealer, they get the dealer self-service flow (lead creation, KYC, inventory,
 // financing). Otherwise the message falls through to the existing onboarding
 // flow (orchestrator.ts). Eligibility = ANY approved/active dealer, whether they
-// onboarded via WhatsApp (matched on dealer_onboarding_applications.wa_phone) or
-// the web (matched on dealers.owner_phone).
+// onboarded via WhatsApp (matched on dealer_onboarding_applications.wa_phone),
+// the web (matched on dealers.owner_phone), or — E-279 — an admin-registered
+// EXTRA main number for the dealership (matched on dealer_extra_numbers).
 
 import { and, desc, eq, inArray, ne, or } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
+  dealerExtraNumbers,
   dealerOnboardingApplications,
   dealers,
   leads,
@@ -27,8 +29,10 @@ export interface WhatsAppDealer {
   financeEnabled: boolean;
   /** Display name for greetings (owner/company name), when available. */
   dealerName: string | null;
-  /** "whatsapp" if matched via the onboarding application's wa_phone, else "web". */
-  matchedVia: "whatsapp" | "web";
+  /** "whatsapp" — matched via the onboarding application's wa_phone;
+   *  "web" — matched via dealers.owner_phone;
+   *  "extra" — E-279 admin-registered extra main number (dealer_extra_numbers). */
+  matchedVia: "whatsapp" | "web" | "extra";
 }
 
 /**
@@ -114,22 +118,78 @@ export async function resolveWhatsAppDealer(
     )
     .limit(1);
 
-  if (!dealer?.dealerCode) return null;
+  if (dealer?.dealerCode) {
+    return {
+      dealerCode: dealer.dealerCode,
+      dealerUserId: await resolveDealerLoginUserId(dealer.dealerCode),
+      financeEnabled: Boolean(dealer.financeEnabled),
+      dealerName: dealer.companyName || null,
+      matchedVia: "web",
+    };
+  }
 
-  // Resolve the canonical dealer login user (leads.uploader_id).
+  // 3) E-279 — an admin-registered EXTRA main number for a dealership
+  //    (admin "Multiple dealer" tab). Resolves to the SAME full-scope console
+  //    identity as an owner_phone match: leads it creates are ordinary
+  //    main-dealer leads. Guarded so an environment without the E-279 table
+  //    simply behaves pre-E-279.
+  try {
+    const [extra] = await db
+      .select({ dealerCode: dealerExtraNumbers.dealer_code })
+      .from(dealerExtraNumbers)
+      .where(
+        and(
+          inArray(dealerExtraNumbers.wa_phone, variants),
+          eq(dealerExtraNumbers.is_active, true),
+        ),
+      )
+      .limit(1);
+    if (extra?.dealerCode) {
+      // The dealership itself must still be active — an extra number must
+      // never outlive its dealer's deactivation.
+      const [d] = await db
+        .select({
+          financeEnabled: dealers.finance_enabled,
+          companyName: dealers.company_name,
+        })
+        .from(dealers)
+        .where(
+          and(
+            eq(dealers.dealer_id, extra.dealerCode),
+            eq(dealers.onboarding_status, "active"),
+          ),
+        )
+        .limit(1);
+      if (d) {
+        return {
+          dealerCode: extra.dealerCode,
+          dealerUserId: await resolveDealerLoginUserId(extra.dealerCode),
+          financeEnabled: Boolean(d.financeEnabled),
+          dealerName: d.companyName || null,
+          matchedVia: "extra",
+        };
+      }
+    }
+  } catch (err) {
+    console.error(
+      "[WhatsApp/dealer-identity] extra-number lookup failed (is E-279 applied?):",
+      err,
+    );
+  }
+
+  return null;
+}
+
+/** The canonical dealer login user (leads.uploader_id source). */
+async function resolveDealerLoginUserId(
+  dealerCode: string,
+): Promise<string | null> {
   const [u] = await db
     .select({ id: users.id })
     .from(users)
-    .where(and(eq(users.dealer_id, dealer.dealerCode), eq(users.role, "dealer")))
+    .where(and(eq(users.dealer_id, dealerCode), eq(users.role, "dealer")))
     .limit(1);
-
-  return {
-    dealerCode: dealer.dealerCode,
-    dealerUserId: u?.id ?? null,
-    financeEnabled: Boolean(dealer.financeEnabled),
-    dealerName: dealer.companyName || null,
-    matchedVia: "web",
-  };
+  return u?.id ?? null;
 }
 
 // ── Known-contact recognition (greeting-time, non-dealer) ───────────────────
