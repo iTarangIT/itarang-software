@@ -2,7 +2,18 @@
 
 import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Receipt, Download, Search, RefreshCw } from "lucide-react";
+import {
+  Loader2,
+  Receipt,
+  Download,
+  Search,
+  RefreshCw,
+  CloudDownload,
+  CloudOff,
+  AlertTriangle,
+  FileText,
+  IndianRupee,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -15,18 +26,23 @@ const STATUS_OPTIONS = [
   "void",
 ] as const;
 
+// E-280 — one row of the UNION of zoho_invoices and the sales invoices read out
+// of Google Drive. `source` says which side it came from; everything else is
+// normalised by src/lib/dashboard/revenueSource.ts.
 interface InvoiceRow {
+  source: "zoho" | "drive";
   id: string;
-  zoho_invoice_id: string;
   invoice_number: string | null;
   customer_name: string | null;
   invoice_date: string | null;
-  due_date: string | null;
-  currency_code: string | null;
   total: string | null;
   balance: string | null;
   status: string | null;
   payment_reference: string | null;
+  /** Zoho PDF passthrough, or the stored copy of the Drive original. */
+  document_url: string | null;
+  needs_attention: boolean;
+  attention_reason: string | null;
 }
 
 interface ApiResponse {
@@ -34,6 +50,7 @@ interface ApiResponse {
   data: InvoiceRow[];
   summary: { count: number; total: number; balance: number };
   filters: { from: string; to: string };
+  sources: { zoho: boolean; drive: boolean };
 }
 
 function startOfMonthISO(): string {
@@ -67,6 +84,27 @@ function StatusBadge({ status }: { status: string | null }) {
   );
 }
 
+function SourceBadge({ source }: { source: "zoho" | "drive" }) {
+  const drive = source === "drive";
+  return (
+    <span
+      data-testid={`source-${source}`}
+      title={
+        drive
+          ? "Read from the Google Drive invoice folder"
+          : "Synced from the Zoho Invoice API before the move to Vyapar"
+      }
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
+        drive
+          ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+          : "bg-slate-50 text-slate-600 border-slate-200"
+      }`}
+    >
+      {drive ? "Drive" : "Zoho"}
+    </span>
+  );
+}
+
 export default function CEOInvoicesPage() {
   const [from, setFrom] = useState(startOfMonthISO());
   const [to, setTo] = useState(todayISO());
@@ -89,7 +127,7 @@ export default function CEOInvoicesPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["ceo-invoices", queryString],
     queryFn: async () => {
-      const r = await fetch(`/api/admin/zoho/invoices?${queryString}`, {
+      const r = await fetch(`/api/dashboard/ceo/invoices?${queryString}`, {
         cache: "no-store",
       });
       if (!r.ok) throw new Error("Failed to load invoices");
@@ -112,8 +150,77 @@ export default function CEOInvoicesPage() {
     },
   });
 
+  // E-280 — pull anything newly filed in Drive. Deliberately separate from the
+  // Zoho refresh above: they read different systems and either can be stale on
+  // its own.
+  const scanDrive = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/admin/sales-invoices/drive/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const json = await r.json();
+      if (!r.ok || !json.success) {
+        throw new Error(json?.error?.message ?? "Drive scan failed");
+      }
+      return json.data as {
+        status: string;
+        files_seen: number;
+        files_new: number;
+        imported: number;
+        skipped_duplicate: number;
+        needs_attention: number;
+        failed: number;
+        skipped_reason?: string;
+      };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
+    },
+  });
+
+  // Collection is CRM-owned for Drive invoices: the PDF only carries a balance
+  // printed at issue time. A Zoho row is refused by the API, so the control is
+  // not offered for one.
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payRef, setPayRef] = useState("");
+
+  const recordPayment = useMutation({
+    mutationFn: async (args: { id: string; amount: number; reference: string }) => {
+      const r = await fetch(`/api/dashboard/ceo/invoices/${args.id}/payment`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount_paid: args.amount,
+          payment_reference: args.reference.trim() || null,
+        }),
+      });
+      const json = await r.json();
+      if (!r.ok || !json.success) {
+        throw new Error(json?.error?.message ?? "Could not record the payment");
+      }
+      return json.data;
+    },
+    onSuccess: () => {
+      setPayingId(null);
+      setPayAmount("");
+      setPayRef("");
+      queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
+    },
+  });
+
   const rows = data?.data || [];
   const summary = data?.summary;
+  const scanResult = scanDrive.data;
+  // False when sales_invoices is absent (E-280 not applied on this database).
+  // Worth saying out loud: the page otherwise looks like a working Zoho-only
+  // view, and "no Drive invoices" reads as "none imported yet" rather than
+  // "this environment cannot see them at all".
+  const driveUnavailable = data ? data.sources?.drive === false : false;
 
   const toggleStatus = (s: string) => {
     setSelectedStatuses((prev) =>
@@ -130,7 +237,7 @@ export default function CEOInvoicesPage() {
     if (customer.trim()) p.set("customer", customer.trim());
     p.set("format", "csv");
     const a = document.createElement("a");
-    a.href = `/api/admin/zoho/invoices?${p.toString()}`;
+    a.href = `/api/dashboard/ceo/invoices?${p.toString()}`;
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
@@ -145,7 +252,8 @@ export default function CEOInvoicesPage() {
           Sales Invoices
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Synced from Zoho Invoice. One row per invoice — no line-item duplication.
+          Zoho invoices up to the move to Vyapar, and everything filed in Google
+          Drive since. One row per invoice — no line-item duplication.
         </p>
       </div>
 
@@ -249,6 +357,14 @@ export default function CEOInvoicesPage() {
                 {(refresh.error as Error).message}
               </span>
             )}
+            {scanDrive.isError && (
+              <span
+                data-testid="scan-error"
+                className="text-[11px] font-semibold text-rose-600"
+              >
+                {(scanDrive.error as Error).message}
+              </span>
+            )}
             <Button
               data-testid="refresh-zoho"
               variant="outline"
@@ -262,6 +378,18 @@ export default function CEOInvoicesPage() {
               {refresh.isPending ? "Refreshing…" : "Refresh from Zoho"}
             </Button>
             <Button
+              data-testid="scan-drive"
+              variant="outline"
+              onClick={() => scanDrive.mutate()}
+              disabled={scanDrive.isPending}
+              className="flex items-center gap-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+            >
+              <CloudDownload
+                className={cn("w-4 h-4", scanDrive.isPending && "animate-pulse")}
+              />
+              {scanDrive.isPending ? "Scanning Drive…" : "Scan Drive"}
+            </Button>
+            <Button
               data-testid="export-csv"
               variant="outline"
               onClick={exportCsv}
@@ -273,6 +401,45 @@ export default function CEOInvoicesPage() {
           </div>
         </div>
       </div>
+
+      {driveUnavailable && (
+        <div
+          data-testid="drive-unavailable"
+          className="flex items-start gap-2 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-sm text-amber-900"
+        >
+          <CloudOff className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            Showing Zoho invoices only — the Drive invoice table does not exist on this
+            database yet. Apply{" "}
+            <code className="font-mono text-xs">
+              drizzle/E-280_drive_sales_invoices.sql
+            </code>{" "}
+            to include invoices filed since the move to Vyapar.
+          </span>
+        </div>
+      )}
+
+      {/* E-280 — the scan's own counters, not a bare "done". A scan that saw 135
+          files and imported 0 is either "nothing new" or "everything is broken",
+          and only the breakdown says which. */}
+      {scanResult && (
+        <div
+          data-testid="scan-summary"
+          className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 text-sm text-indigo-900"
+        >
+          {scanResult.status === "skipped" ? (
+            <span>Drive scan skipped — {scanResult.skipped_reason}</span>
+          ) : (
+            <span>
+              Drive scan: saw <b>{scanResult.files_seen}</b> file(s), processed{" "}
+              <b>{scanResult.files_new}</b> new, imported <b>{scanResult.imported}</b>,{" "}
+              <b>{scanResult.skipped_duplicate}</b> already recorded,{" "}
+              <b>{scanResult.needs_attention}</b> need attention,{" "}
+              <b>{scanResult.failed}</b> failed.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Summary tiles */}
       <div className="grid grid-cols-3 gap-4">
@@ -321,39 +488,158 @@ export default function CEOInvoicesPage() {
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
                     <th className="py-2 font-semibold">Invoice #</th>
+                    <th className="py-2 font-semibold">Source</th>
                     <th className="py-2 font-semibold">Date</th>
                     <th className="py-2 font-semibold">Customer</th>
                     <th className="py-2 font-semibold">Status</th>
                     <th className="py-2 font-semibold">Transaction ID</th>
                     <th className="py-2 font-semibold text-right">Total</th>
                     <th className="py-2 font-semibold text-right">Balance</th>
+                    <th className="py-2 font-semibold text-right"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.id} data-testid="invoice-row" data-status={r.status ?? ""} className="border-b border-gray-50">
-                      <td className="py-3 text-xs font-semibold text-gray-900">
-                        {r.invoice_number || "—"}
-                      </td>
-                      <td className="py-3 text-xs text-gray-600">
-                        {r.invoice_date || "—"}
-                      </td>
-                      <td className="py-3 text-xs text-gray-900 max-w-xs truncate">
-                        {r.customer_name || "—"}
-                      </td>
-                      <td className="py-3">
-                        <StatusBadge status={r.status} />
-                      </td>
-                      <td className="py-3 text-xs text-gray-600 font-mono">
-                        {r.payment_reference || "—"}
-                      </td>
-                      <td className="py-3 text-xs font-bold text-gray-900 text-right">
-                        {formatINR(Number(r.total || 0))}
-                      </td>
-                      <td className="py-3 text-xs font-bold text-amber-700 text-right">
-                        {formatINR(Number(r.balance || 0))}
-                      </td>
-                    </tr>
+                    <React.Fragment key={`${r.source}:${r.id}`}>
+                      <tr
+                        data-testid="invoice-row"
+                        data-status={r.status ?? ""}
+                        data-source={r.source}
+                        className="border-b border-gray-50"
+                      >
+                        <td className="py-3 text-xs font-semibold text-gray-900">
+                          <span className="inline-flex items-center gap-1.5">
+                            {r.document_url ? (
+                              <a
+                                href={r.document_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-brand-700 hover:underline inline-flex items-center gap-1"
+                              >
+                                <FileText className="w-3 h-3" />
+                                {r.invoice_number || "—"}
+                              </a>
+                            ) : (
+                              r.invoice_number || "—"
+                            )}
+                            {r.needs_attention && (
+                              <span
+                                data-testid="invoice-attention"
+                                title={r.attention_reason ?? "Needs checking"}
+                                className="inline-flex"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          <SourceBadge source={r.source} />
+                        </td>
+                        <td className="py-3 text-xs text-gray-600">
+                          {r.invoice_date || "—"}
+                        </td>
+                        <td className="py-3 text-xs text-gray-900 max-w-xs truncate">
+                          {r.customer_name || "—"}
+                        </td>
+                        <td className="py-3">
+                          <StatusBadge status={r.status} />
+                        </td>
+                        <td className="py-3 text-xs text-gray-600 font-mono">
+                          {r.payment_reference || "—"}
+                        </td>
+                        <td className="py-3 text-xs font-bold text-gray-900 text-right">
+                          {formatINR(Number(r.total || 0))}
+                        </td>
+                        <td className="py-3 text-xs font-bold text-amber-700 text-right">
+                          {formatINR(Number(r.balance || 0))}
+                        </td>
+                        <td className="py-3 text-right">
+                          {/* Drive rows only: a Zoho invoice's payment state is
+                              rewritten by the hourly sync, so anything recorded
+                              here would silently vanish within the hour. */}
+                          {r.source === "drive" && r.status !== "void" && (
+                            <button
+                              data-testid="record-payment"
+                              onClick={() => {
+                                const opening = payingId !== r.id;
+                                setPayingId(opening ? r.id : null);
+                                setPayAmount(opening ? String(Number(r.total || 0)) : "");
+                                setPayRef(opening ? (r.payment_reference ?? "") : "");
+                                recordPayment.reset();
+                              }}
+                              className="text-[10px] font-bold uppercase tracking-wider text-brand-700 hover:underline whitespace-nowrap"
+                            >
+                              {payingId === r.id ? "Cancel" : "Payment"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {payingId === r.id && (
+                        <tr data-testid="payment-editor" className="bg-brand-50/40">
+                          <td colSpan={9} className="py-3 px-2">
+                            <div className="flex flex-wrap items-end gap-3">
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                                  Collected so far
+                                </label>
+                                <div className="relative">
+                                  <IndianRupee className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                                  <input
+                                    data-testid="payment-amount"
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={payAmount}
+                                    onChange={(e) => setPayAmount(e.target.value)}
+                                    className="w-40 pl-7 pr-2 py-1.5 rounded-lg border border-gray-200 text-sm"
+                                  />
+                                </div>
+                                <p className="text-[10px] text-gray-500 mt-1">
+                                  Running total against {formatINR(Number(r.total || 0))}, not an
+                                  added payment.
+                                </p>
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                                  Reference / UTR
+                                </label>
+                                <input
+                                  data-testid="payment-reference"
+                                  type="text"
+                                  value={payRef}
+                                  onChange={(e) => setPayRef(e.target.value)}
+                                  placeholder="Optional"
+                                  className="w-56 px-2 py-1.5 rounded-lg border border-gray-200 text-sm"
+                                />
+                              </div>
+                              <Button
+                                data-testid="payment-save"
+                                size="sm"
+                                disabled={recordPayment.isPending || payAmount === ""}
+                                onClick={() =>
+                                  recordPayment.mutate({
+                                    id: r.id,
+                                    amount: Number(payAmount),
+                                    reference: payRef,
+                                  })
+                                }
+                              >
+                                {recordPayment.isPending ? "Saving…" : "Save"}
+                              </Button>
+                              {recordPayment.isError && (
+                                <span
+                                  data-testid="payment-error"
+                                  className="text-[11px] font-semibold text-rose-600"
+                                >
+                                  {(recordPayment.error as Error).message}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

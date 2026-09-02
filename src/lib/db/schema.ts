@@ -8580,6 +8580,198 @@ export const driveExpenseFiles = pgTable(
   }),
 );
 
+// ---------------------------------------------------------------------------
+// E-280 — Google Drive → CEO Revenue (sales invoices).
+//
+// The purchase-side mirror of these tables is drive_expense_folders /
+// drive_scan_runs / drive_expense_files above. They are deliberately NOT shared:
+// Drizzle names every column of a mirrored table in its generated SQL, so adding
+// a `kind` column to those would make E-280 REQUIRED, and an unapplied migration
+// would then break every EXPENSE scan in order to add a feature beside it.
+// Separate tables mean an unapplied E-280 costs only the sales feature.
+// See the migration header for the full reasoning.
+// ---------------------------------------------------------------------------
+
+export const salesInvoices = pgTable(
+  "sales_invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // 'drive' today; present so a future source is distinguishable.
+    source: varchar("source", { length: 16 }).default("drive").notNull(),
+    // As printed on the document.
+    invoice_number: text("invoice_number"),
+    // normalizeInvoiceNumber(invoice_number) — separators folded, leading zeros
+    // stripped from numeric segments. The ONLY guard against double-counting an
+    // invoice that exists in both zoho_invoices and Drive.
+    invoice_number_key: text("invoice_number_key"),
+    invoice_date: date("invoice_date"),
+    due_date: date("due_date"),
+    customer_name: text("customer_name"),
+    customer_gstin: varchar("customer_gstin", { length: 20 }),
+    place_of_supply: text("place_of_supply"),
+    // Same ids as zoho_invoices.organization_id (E-171): 60064046518 = Delhi
+    // (ITD), 60060919257 = Haryana (ITG). Reused so a GROUP BY spans both
+    // sources rather than splitting one legal entity in two.
+    organization_id: varchar("organization_id", { length: 64 }),
+    // The SELLER's GSTIN as printed — 07… Delhi, 06… Haryana. The only org
+    // signal for the Nov/Dec 2025 invoices, which sit in a flat "Sales
+    // Invoices" folder with no state sub-folder and free-form filenames.
+    seller_gstin: varchar("seller_gstin", { length: 20 }),
+    sub_total: numeric("sub_total", { precision: 14, scale: 2 }),
+    tax_total: numeric("tax_total", { precision: 14, scale: 2 }),
+    total: numeric("total", { precision: 14, scale: 2 }),
+    // CRM-owned: a PDF carries no live payment status, only a "Balance Due"
+    // printed at issue time which goes stale the moment anything is paid.
+    // There is no `balance` column — it is COALESCE(total,0) - amount_paid,
+    // derived in revenueSource.ts so it cannot disagree with its own inputs.
+    amount_paid: numeric("amount_paid", { precision: 14, scale: 2 })
+      .default("0")
+      .notNull(),
+    // Same vocabulary as zoho_invoices.status so the /ceo/invoices filter chips
+    // and the not-void / outstanding rules work over both sources unchanged:
+    // draft | sent | overdue | paid | partially_paid | void.
+    status: varchar("status", { length: 32 }).default("sent").notNull(),
+    payment_reference: text("payment_reference"),
+    last_payment_date: date("last_payment_date"),
+    payment_marked_by: uuid("payment_marked_by"),
+    drive_file_id: varchar("drive_file_id", { length: 128 }),
+    file_name: varchar("file_name", { length: 255 }),
+    // "2026 / August 2026 / Sale / Haryana" — the path carries the month and
+    // the entity, so it is the audit trail's best column.
+    folder_path: text("folder_path"),
+    document_url: text("document_url"),
+    storage_key: text("storage_key"),
+    ai_raw: jsonb("ai_raw"),
+    // Set by validateSalesInvoice: arithmetic mismatch, invoice month
+    // disagreeing with its folder, missing GSTIN, contradictory org signals.
+    needs_attention: boolean("needs_attention").default(false).notNull(),
+    attention_reason: text("attention_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Dedup layer 2. Partial (WHERE invoice_number_key IS NOT NULL) in the
+    // migration only — an invoice whose number could not be read is still kept
+    // as a needs_attention row, and several such rows must coexist.
+    salesInvoicesNumberKeyUnique: uniqueIndex("sales_invoices_number_key_unique").on(
+      table.invoice_number_key,
+    ),
+    salesInvoicesInvoiceDateIdx: index("sales_invoices_invoice_date_idx").on(
+      table.invoice_date,
+    ),
+    salesInvoicesStatusIdx: index("sales_invoices_status_idx").on(table.status),
+    salesInvoicesOrganizationIdIdx: index("sales_invoices_organization_id_idx").on(
+      table.organization_id,
+    ),
+    // Partial (WHERE needs_attention) in the migration only.
+    salesInvoicesAttentionIdx: index("sales_invoices_attention_idx").on(
+      table.created_at,
+    ),
+  }),
+);
+
+export const salesInvoiceFolders = pgTable(
+  "sales_invoice_folders",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    drive_folder_id: varchar("drive_folder_id", { length: 128 }).notNull(),
+    label: varchar("label", { length: 160 }),
+    is_active: boolean("is_active").default(true).notNull(),
+    recursive: boolean("recursive").default(true).notNull(),
+    // INVERTED relative to drive_expense_folders: that module books expenses
+    // and allows only 'purchase'; this one books revenue and allows only
+    // 'sale'. Matched as a leading word by folderMatchesToken(), which is what
+    // makes one token cover all four spellings the live folder uses — "Sale",
+    // "Sales", "Sale Invoices" and "Sales Invoices".
+    include_names: text("include_names").default("sale").notNull(),
+    exclude_names: text("exclude_names").default("purchase").notNull(),
+    last_scanned_at: timestamp("last_scanned_at", { withTimezone: true }),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    salesInvoiceFoldersFolderIdUnique: uniqueIndex(
+      "sales_invoice_folders_folder_id_unique",
+    ).on(table.drive_folder_id),
+    // Partial (WHERE is_active) in the migration only.
+    salesInvoiceFoldersActiveIdx: index("sales_invoice_folders_active_idx").on(
+      table.is_active,
+    ),
+  }),
+);
+
+export const salesScanRuns = pgTable(
+  "sales_scan_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // NULL = scanned every active folder.
+    folder_id: uuid("folder_id"),
+    // NULL = triggered by the in-process ticker rather than a person.
+    triggered_by: uuid("triggered_by"),
+    // text + CHECK, not pgEnum. 'running' | 'success' | 'failed'.
+    status: text().default("running").notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    duration_ms: integer("duration_ms"),
+    files_seen: integer("files_seen").default(0).notNull(),
+    // Files that got past the md5 check and actually cost a download + a model
+    // call. files_seen minus files_new is what the dedup saved.
+    files_new: integer("files_new").default(0).notNull(),
+    imported: integer("imported").default(0).notNull(),
+    skipped_duplicate: integer("skipped_duplicate").default(0).notNull(),
+    needs_attention: integer("needs_attention").default(0).notNull(),
+    unsupported: integer("unsupported").default(0).notNull(),
+    failed: integer("failed").default(0).notNull(),
+    // Set only when the RUN died. A single failing file increments `failed`
+    // and the run still completes.
+    error_message: text("error_message"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Partial (WHERE status = 'running') in the migration only — the
+    // concurrency guard's index.
+    salesScanRunsRunningIdx: index("sales_scan_runs_running_idx").on(table.started_at),
+    salesScanRunsStartedIdx: index("sales_scan_runs_started_at_idx").on(
+      table.started_at,
+    ),
+  }),
+);
+
+export const salesScanFiles = pgTable(
+  "sales_scan_files",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    run_id: uuid("run_id"),
+    folder_id: uuid("folder_id"),
+    drive_file_id: varchar("drive_file_id", { length: 128 }).notNull(),
+    drive_file_name: varchar("drive_file_name", { length: 512 }),
+    folder_path: text("folder_path"),
+    mime_type: varchar("mime_type", { length: 160 }),
+    // Google's md5 where it exists, the RFC3339 modifiedTime where it does not,
+    // so this is never null and the unique index below actually bites.
+    md5_checksum: varchar("md5_checksum", { length: 128 }),
+    drive_modified_time: timestamp("drive_modified_time", { withTimezone: true }),
+    // 'imported' | 'duplicate' | 'needs_attention' | 'unsupported' | 'failed'
+    status: text().notNull(),
+    // Shown verbatim in the needs-attention panel — write it for the person who
+    // has to fix the row.
+    reason: text(),
+    invoice_ids: jsonb("invoice_ids").default([]).notNull(),
+    storage_key: text("storage_key"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Dedup layer 1 — an unchanged file is never re-downloaded or re-sent to
+    // the model. This is what makes re-scanning a folder free.
+    salesScanFilesFileVersionUnique: uniqueIndex(
+      "sales_scan_files_file_version_unique",
+    ).on(table.drive_file_id, table.md5_checksum),
+    salesScanFilesRunIdx: index("sales_scan_files_run_id_idx").on(table.run_id),
+    salesScanFilesStatusIdx: index("sales_scan_files_status_idx").on(table.status),
+  }),
+);
+
 export const zohoSyncState = pgTable("zoho_sync_state", {
   id: integer().default(1).primaryKey().notNull(),
   last_invoice_modified_at: timestamp("last_invoice_modified_at", {
