@@ -10,29 +10,43 @@
  * selling a battery.
  */
 import { db } from "@/lib/db";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   refurbishmentJobs,
   recoveryBatteries,
   nbfcRecoveryPipeline,
+  nbfcBatteryEvaluations,
   nbfcAuditLog,
 } from "@/lib/db/schema";
+import { assertSohAllowsStage } from "@/lib/nbfc/recovery/stages";
 
+/**
+ * [E-270] `declined` and `ready` joined the vocabulary when jobs became lot
+ * items: admin can refuse one battery out of a batch, and a repaired battery
+ * waits at the workshop (`ready`) for the return truck before the NBFC's
+ * receipt marks it `returned`.
+ */
 export const REFURB_STATUSES = [
   "requested",
+  "declined",
   "in_progress",
+  "ready",
   "returned",
   "cancelled",
 ] as const;
 export type RefurbStatus = (typeof REFURB_STATUSES)[number];
 
-/** Open = occupying the one-job-per-battery slot enforced by E-233's index. */
-const OPEN_STATUSES: RefurbStatus[] = ["requested", "in_progress"];
+/** Open = occupying the one-job-per-battery slot enforced by E-233/E-270's index. */
+export const OPEN_STATUSES: RefurbStatus[] = ["requested", "in_progress", "ready"];
 
-const ALLOWED_TRANSITIONS: Record<RefurbStatus, RefurbStatus[]> = {
-  requested: ["in_progress", "cancelled"],
-  in_progress: ["returned", "cancelled"],
+export const ALLOWED_TRANSITIONS: Record<RefurbStatus, RefurbStatus[]> = {
+  requested: ["in_progress", "declined", "cancelled"],
+  // `returned` straight from in_progress is the legacy single-job path (E-233);
+  // a lot item goes in_progress -> ready -> returned.
+  in_progress: ["ready", "returned", "cancelled"],
+  ready: ["returned", "cancelled"],
   returned: [], // terminal
+  declined: [], // terminal
   cancelled: [], // terminal
 };
 
@@ -83,17 +97,57 @@ export interface RefurbishmentJobRow {
   requested_at: string;
   started_at: string | null;
   returned_at: string | null;
+  /** [E-270] lot membership + per-battery decision / receipt facts. */
+  lot_id: string | null;
+  decline_reason: string | null;
+  decided_at: string | null;
+  out_received_condition: string | null;
+  out_received_note: string | null;
+  out_received_photo_urls: string[];
+  ready_at: string | null;
+  ret_received_condition: string | null;
+  ret_received_note: string | null;
+  ret_received_photo_urls: string[];
+  ret_received_at: string | null;
 }
 
-function num(v: unknown): number | null {
+export function num(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
-function iso(v: unknown): string | null {
+export function iso(v: unknown): string | null {
   if (!v) return null;
   return v instanceof Date ? v.toISOString() : String(v);
+}
+
+/**
+ * [E-270] The measured state of health of a battery — `step1.soh_percent` of
+ * its latest evaluation. The same lookup transitionStage() does; exported so
+ * the lot path and the legacy single-job path enforce the SAME 70% floor.
+ */
+export async function latestSohForBattery(
+  tenant_id: string,
+  recovery_pipeline_id: string | null,
+): Promise<number | null> {
+  if (!recovery_pipeline_id) return null;
+  const [latestEval] = await db
+    .select({ step1: nbfcBatteryEvaluations.step1 })
+    .from(nbfcBatteryEvaluations)
+    .where(
+      and(
+        eq(nbfcBatteryEvaluations.recovery_pipeline_id, recovery_pipeline_id),
+        eq(nbfcBatteryEvaluations.tenant_id, tenant_id),
+      ),
+    )
+    .orderBy(desc(nbfcBatteryEvaluations.created_at))
+    .limit(1);
+  const soh =
+    latestEval && typeof latestEval.step1 === "object" && latestEval.step1 !== null
+      ? Number((latestEval.step1 as Record<string, unknown>).soh_percent)
+      : NaN;
+  return Number.isFinite(soh) ? soh : null;
 }
 
 export function accessoriesTotal(accessories: AccessoryLine[]): number {
@@ -102,7 +156,7 @@ export function accessoriesTotal(accessories: AccessoryLine[]): number {
     .reduce((sum, a) => sum + (Number(a.unit_cost) || 0), 0);
 }
 
-function shape(
+export function shapeJob(
   row: typeof refurbishmentJobs.$inferSelect,
   battery_serial: string | null,
 ): RefurbishmentJobRow {
@@ -125,6 +179,17 @@ function shape(
     requested_at: iso(row.requested_at) ?? "",
     started_at: iso(row.started_at),
     returned_at: iso(row.returned_at),
+    lot_id: row.lot_id ?? null,
+    decline_reason: row.decline_reason ?? null,
+    decided_at: iso(row.decided_at),
+    out_received_condition: row.out_received_condition ?? null,
+    out_received_note: row.out_received_note ?? null,
+    out_received_photo_urls: row.out_received_photo_urls ?? [],
+    ready_at: iso(row.ready_at),
+    ret_received_condition: row.ret_received_condition ?? null,
+    ret_received_note: row.ret_received_note ?? null,
+    ret_received_photo_urls: row.ret_received_photo_urls ?? [],
+    ret_received_at: iso(row.ret_received_at),
   };
 }
 
@@ -166,6 +231,13 @@ export async function createRefurbishmentJob(
       `CONFLICT: battery is ${battery.state_code} and cannot go to the workshop`,
     );
   }
+  // [E-270] The 70% refurbishment floor used to be enforced only on the
+  // Kanban stage transition and in UI hint text; a direct call could send a
+  // 30% battery to the workshop. Same guard, same message, on the server.
+  assertSohAllowsStage(
+    await latestSohForBattery(input.tenant_id, battery.recovery_pipeline_id ?? null),
+    "refurbishable",
+  );
 
   // Check the open-job slot explicitly rather than letting the partial unique
   // index raise 23505. The index is the guarantee; this is the message.
@@ -237,7 +309,7 @@ export async function createRefurbishmentJob(
       },
     });
 
-    return shape(created, battery.serial);
+    return shapeJob(created, battery.serial);
   });
 }
 
@@ -319,6 +391,7 @@ export async function updateRefurbishmentJob(
           ? { started_at: now }
           : {}),
         ...(nextStatus === "returned" ? { returned_at: now } : {}),
+        ...(nextStatus === "ready" ? { ready_at: now } : {}),
         updated_at: now,
       })
       .where(eq(refurbishmentJobs.id, input.job_id))
@@ -368,7 +441,7 @@ export async function updateRefurbishmentJob(
       created_at: now,
     });
 
-    return shape(updated, battery?.serial ?? null);
+    return shapeJob(updated, battery?.serial ?? null);
   });
 }
 
@@ -407,7 +480,7 @@ export async function listRefurbishmentJobs(input: {
     )
     .orderBy(desc(refurbishmentJobs.requested_at));
 
-  return rows.map((r) => shape(r.job, r.serial ?? null));
+  return rows.map((r) => shapeJob(r.job, r.serial ?? null));
 }
 
 /**

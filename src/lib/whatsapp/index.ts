@@ -4,6 +4,9 @@
 
 import { DryRunWhatsAppAdapter } from "./dry-run";
 import { MetaWhatsAppAdapter } from "./meta";
+import { getWhatsAppLanguage } from "./language-settings";
+import { translateBatch } from "./translate";
+import { TranslatingWhatsAppAdapter } from "./translating-adapter";
 import type { WhatsAppAdapter } from "./types";
 
 let cached: WhatsAppAdapter | null = null;
@@ -20,7 +23,15 @@ export function getAdapter(): WhatsAppAdapter {
   const provider = (process.env.WHATSAPP_PROVIDER || "meta").toLowerCase();
   switch (provider) {
     case "meta":
-      cached = new MetaWhatsAppAdapter();
+      // Wrapped so every free-form send is localised to the language chosen
+      // at /admin/settings/whatsapp/language. English = pure pass-through.
+      // The dry-run adapter is deliberately NOT wrapped: verification scripts
+      // and tests assert on the English copy the flows produce.
+      cached = new TranslatingWhatsAppAdapter(
+        new MetaWhatsAppAdapter(),
+        getWhatsAppLanguage,
+        translateBatch,
+      );
       break;
     case "dry-run":
       cached = new DryRunWhatsAppAdapter();

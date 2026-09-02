@@ -531,3 +531,50 @@ export async function cancelBuybackPaymentLink(id: string): Promise<BuybackPayme
 }
 
 export default getRazorpay;
+
+// ---------------------------------------------------------------------------
+// E-271 — plain Checkout order (collect INTO iTarang)
+// ---------------------------------------------------------------------------
+export interface PlainOrderParams {
+  /** Whole rupees; converted to paise here so callers never mix units. */
+  amountRupees: number;
+  /** ≤ 40 chars — Razorpay's limit. */
+  receipt: string;
+  /** Free-form correlation keys; the webhook routes on `itarang_purpose`. */
+  notes?: Record<string, string>;
+}
+
+export interface PlainOrderResponse {
+  order_id: string;
+  amount: number; // paise
+  currency: string;
+  key_id: string;
+}
+
+/** True when RAZORPAY_KEY_ID/SECRET are both set — the Checkout gateway is usable. */
+export function checkoutConfigured(): boolean {
+  return Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
+}
+
+/**
+ * A plain one-off Checkout order. NOT createEmandateOrder — that one builds an
+ * e-mandate registration order whose amount is the ₹0 auth amount, and the
+ * auction settlement misusing it is a known defect. This is the helper for
+ * "the NBFC/dealer pays iTarang a sum now".
+ */
+export async function createPlainOrder(params: PlainOrderParams): Promise<PlainOrderResponse> {
+  const rzp = getRazorpay();
+  const order = await rzp.orders.create({
+    amount: Math.round(params.amountRupees * 100),
+    currency: "INR",
+    receipt: params.receipt.slice(0, 40),
+    payment_capture: true,
+    notes: params.notes ?? {},
+  } as Parameters<typeof rzp.orders.create>[0]);
+  return {
+    order_id: order.id,
+    amount: Number(order.amount) || 0,
+    currency: order.currency || "INR",
+    key_id: process.env.RAZORPAY_KEY_ID || "",
+  };
+}

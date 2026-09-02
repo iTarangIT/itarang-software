@@ -29,12 +29,19 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   leads,
+  loanSanctions,
   nbfc,
   nbfcLeadAssignments,
   nbfcLoanProducts,
   nbfcServiceConfig,
   productSelections,
 } from "@/lib/db/schema";
+import {
+  BAJAJ_FALLBACK,
+  externalLenderName,
+  recordNoPreferredPartner,
+} from "@/lib/leads/bajaj-fallback";
+import { notifyLoanSanctioned } from "@/lib/notifications";
 import { generateId } from "@/lib/api-utils";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
 import { notifyProductSubmitted } from "@/lib/notifications/events";
@@ -44,6 +51,7 @@ import {
   type SubmitProductSelectionBody,
 } from "@/lib/leads/productSelectionSchema";
 import { buildServiceSnapshot } from "@/lib/nbfc/service-snapshot";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
 
 /** The `kyc_status` values from which Step 4 may be submitted. */
 export const STEP4_UNLOCKED_STATUSES = new Set([
@@ -55,6 +63,11 @@ export interface Step4SubmitResult {
   productSelectionId: string;
   /** NBFC display codes + product names actually bound, post-commit. */
   routedTo: Array<{ code: string; product: string | null }>;
+  /**
+   * E-275 — set when the dealer took the off-platform lender card. The lead
+   * is already `loan_sanctioned`; the caller should send the dealer to Step 5.
+   */
+  externalLender?: { id: string; name: string; loanSanctionId: string };
 }
 
 /**
@@ -75,8 +88,105 @@ export async function submitStep4ProductSelection(opts: {
 }): Promise<Step4SubmitResult> {
   const { leadId, lead, body, submittedBy, dealerCode } = opts;
 
+  if (body.selectedNbfcs && body.selectedNbfcs.length > 1) {
+    throw new Error("Only one lending partner may be selected.");
+  }
+
   const productSelectionId = await generateId("PS");
   const now = new Date();
+
+  // E-275 — off-platform lender ("Bajaj Finance"). No NBFC ever sees this
+  // file: no assignment row, no NBFC notification. The lead is sanctioned on
+  // the spot so Step 5 (cart → OTP → dispatch) opens immediately.
+  if (body.externalLender) {
+    const lenderName = externalLenderName(body.externalLender) ?? BAJAJ_FALLBACK.name;
+    const loanSanctionId = await generateId("LS");
+    const [leadRow] = await db
+      .select({ requested_loan_amount: leads.requested_loan_amount })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const loanAmount = leadRow?.requested_loan_amount ?? null;
+
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(productSelections)
+        .where(
+          and(
+            eq(productSelections.lead_id, leadId),
+            eq(productSelections.admin_decision, "draft"),
+          ),
+        );
+      await tx.insert(productSelections).values({
+        id: productSelectionId,
+        lead_id: leadId,
+        ...productSelectionColumns(body),
+        category: body.category || lead.product_category_id,
+        model_number: body.modelNumber || lead.product_type_id,
+        payment_mode: "finance",
+        admin_decision: "accepted",
+        pre_sanction_doc_urls: body.preSanctionDocs ?? [],
+        selected_nbfcs: [],
+        external_lender: body.externalLender,
+        customer_disclosure_ack: body.customerDisclosureAck ?? false,
+        submitted_by: submittedBy,
+        submitted_at: now,
+        created_at: now,
+        updated_at: now,
+      });
+      await tx.insert(loanSanctions).values({
+        id: loanSanctionId,
+        lead_id: leadId,
+        product_selection_id: productSelectionId,
+        loan_amount: loanAmount == null ? null : String(loanAmount),
+        loan_approved_by: lenderName,
+        status: "sanctioned",
+        external_lender: body.externalLender,
+        // E-130 CHECK allows only 'admin' | 'nbfc_user' | NULL here; the
+        // off-platform lender is discriminated by `external_lender` instead.
+        sanctioned_by: null,
+        sanctioned_by_type: null,
+        sanctioned_at: now,
+        created_at: now,
+        updated_at: now,
+      });
+      await tx
+        .update(leads)
+        .set({ kyc_status: "loan_sanctioned", updated_at: now })
+        .where(eq(leads.id, leadId));
+    });
+
+    await recordNoPreferredPartner({ leadId, actorUserId: submittedBy });
+    notifyProductSelectionSubmitted({
+      leadId,
+      productSelectionId,
+      paymentMode: "finance",
+      finalPrice: body.finalPrice ?? null,
+    }).catch(() => {});
+    notifyLoanSanctioned({
+      leadId,
+      loanSanctionId,
+      lenderName,
+      loanAmount: loanAmount ?? 0,
+      emi: 0,
+      tenureMonths: 0,
+    }).catch(() => {});
+    notifyProductSubmitted({
+      leadId,
+      productSelectionId,
+      paymentMode: "finance",
+      finalPrice: body.finalPrice ?? null,
+      nbfcNames: [`${lenderName} (outside partner)`],
+      loanProduct: null,
+      dealerName: await dealerDisplayName(dealerCode ?? ""),
+    }).catch(() => {});
+
+    return {
+      productSelectionId,
+      routedTo: [{ code: lenderName, product: null }],
+      externalLender: { id: body.externalLender, name: lenderName, loanSanctionId },
+    };
+  }
 
   await db.transaction(async (tx) => {
     // Clear any existing draft row for this lead so it disappears from
@@ -218,6 +328,7 @@ export async function submitStep4ProductSelection(opts: {
       short: nbfc.short_name,
       code: nbfc.nbfc_id,
       product: nbfcLoanProducts.product_name,
+      tenant_id: nbfcLeadAssignments.tenant_id,
     })
     .from(nbfcLeadAssignments)
     .innerJoin(nbfc, eq(nbfc.id, nbfcLeadAssignments.nbfc_id))
@@ -227,6 +338,7 @@ export async function submitStep4ProductSelection(opts: {
     )
     .where(eq(nbfcLeadAssignments.lead_id, leadId));
 
+  const submitDealerName = await dealerDisplayName(dealerCode ?? "");
   await notifyProductSubmitted({
     leadId,
     productSelectionId,
@@ -235,8 +347,42 @@ export async function submitStep4ProductSelection(opts: {
     nbfcNames: picked.map((p) => p.name || p.short || "").filter(Boolean),
     loanProduct:
       picked.map((p) => p.product).filter(Boolean).join(", ") || null,
-    dealerName: await dealerDisplayName(dealerCode ?? ""),
+    dealerName: submitDealerName,
   });
+
+  // E-276 — contact-email copy to each routed NBFC (+ global monitoring CC).
+  {
+    const [leadRow2] = await db
+      .select({
+        full_name: leads.full_name,
+        owner_name: leads.owner_name,
+        requested_loan_amount: leads.requested_loan_amount,
+      })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const customerName = leadRow2?.full_name ?? leadRow2?.owner_name ?? "the customer";
+    for (const p of picked) {
+      if (!p.tenant_id) continue;
+      sendNbfcEventEmail({
+        tenantId: p.tenant_id,
+        leadId,
+        subject: `iTarang — New loan file routed to you (Lead ${leadId})`,
+        eventLabel: `Dealer ${submitDealerName} has sent a new customer loan file to your NBFC account.`,
+        customerName,
+        dealerName: submitDealerName,
+        extraRows: [
+          ["Loan product", p.product],
+          [
+            "Requested loan amount",
+            leadRow2?.requested_loan_amount ? `₹${leadRow2.requested_loan_amount}` : null,
+          ],
+          ["Final price", body.finalPrice != null ? `₹${body.finalPrice}` : null],
+        ],
+        bodyHtml: `<p>Update: the file is now in your <b>Acquire queue</b> awaiting your review — verify the customer's KYC documents and submit your financing offer from the NBFC dashboard.</p>`,
+      }).catch(() => {});
+    }
+  }
 
   return {
     productSelectionId,

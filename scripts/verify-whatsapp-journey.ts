@@ -20,17 +20,13 @@
  * media and a real Gemini call, so a stub would prove nothing. Those stay on the
  * live checklist. Everything from "send to lenders" onwards is covered here.
  *
- * HOW IT READS THE DISPATCH OTP. It brute-forces the sha256 in
- * `otp_confirmations.otp_hash` over the million six-digit codes — about a second.
- * That is deliberate: the alternative is a test-only backdoor in the OTP path,
- * and an OTP service with a way to ask it for the code is not an OTP service.
- * The dry-run adapter never records the code either (`dispatch-otp-send.ts`
- * writes the literal "[dispatch OTP sent]" to the message log, by design).
+ * WHAT PHASE 4 NOW ASSERTS. The chat collects the product choice and hands over
+ * to the team — it does NOT send a delivery code and does NOT dispatch. So the
+ * checks are inverted from what you might expect: a minted `otp_confirmations`
+ * row or a lead that moved past `loan_sanctioned` is a FAILURE here.
  */
 
 process.env.WA_DRY_RUN = "1";
-
-import crypto from "crypto";
 
 type Step = { name: string; ok: boolean; detail: string };
 const steps: Step[] = [];
@@ -128,13 +124,81 @@ async function main() {
     return l?.kyc_status ?? "";
   }
 
+  // ---- Step-4 extra documents (≤10 bucket) --------------------------------
+  // Opens the bucket from the push button, ingests one fixture file when
+  // WA_DRY_RUN_MEDIA_FIXTURE=1, then parks it with "later" and checks it is
+  // listed in Save Drafts under "Extra documents".
+  console.log("Extra documents — Step-4 bucket");
+  {
+    const { getPreSanctionBucket } = await import("@/lib/leads/pre-sanction-bucket");
+    const before = (await getPreSanctionBucket(leadId)).items.length;
+    let sends = await send(leadActionId("xd_start", leadId));
+    const st = await state();
+    if (st === "DC_XD_WAIT") pass("xd_start opens the bucket", `state=${st}`);
+    else if (st === "DC_MENU" && before >= 10) pass("xd_start on a full bucket returns to menu");
+    else fail("xd_start opens the bucket", `state=${st}, sends=${sends.length}`);
+
+    if (st === "DC_XD_WAIT" && process.env.WA_DRY_RUN_MEDIA_FIXTURE === "1") {
+      dryRunClear();
+      seq += 1;
+      await runTurn({
+        providerMessageId: `verify-${Date.now()}-${seq}`,
+        waPhone,
+        type: "image",
+        mediaProviderId: "fixture",
+        mimeType: "image/png",
+        raw: { synthetic: true },
+      });
+      const after = (await getPreSanctionBucket(leadId)).items.length;
+      if (after === before + 1) pass("a file lands in pre_sanction_doc_urls", `${before} → ${after}`);
+      else fail("a file lands in pre_sanction_doc_urls", `${before} → ${after}; ${dryRunSends().map((s) => s.body).join(" | ")}`);
+    } else if (st === "DC_XD_WAIT") {
+      skip("file ingest", "set WA_DRY_RUN_MEDIA_FIXTURE=1 to exercise it");
+    }
+
+    if ((await state()) === "DC_XD_WAIT") {
+      sends = await send("later");
+      const parked = (await state()) === "DC_MENU";
+      sends = await send("menu_drafts");
+      const row = lastRows(sends).find((r) => r.id === `draft_${leadId}`);
+      if (parked && row) pass("parked lead is listed in Save Drafts", row.title);
+      else fail("parked lead is listed in Save Drafts", `parked=${parked}, row=${row ? "yes" : "no"}`);
+      await send("menu");
+    }
+  }
+
   // ---- Phase 2: Step 4, routing to lenders -------------------------------
   console.log("Phase 2 — Step 4 (lenders)");
   if (["step_3_cleared", "kyc_approved"].includes(await kycStatus())) {
     let sends = await send(leadActionId("s4_start", leadId));
-    let rows = lastRows(sends);
+
+    // Cart-first Step 4: walk battery → charger → (margin) → loan amount →
+    // Confirm order before the lender list appears. A lead with a prior
+    // selection prefils straight onto the preview; a dealer-actor run also
+    // gets the margin step.
+    for (let hop = 0; hop < 6; hop += 1) {
+      const cartState = await state();
+      if (cartState === "DC_DP_PRODUCT") {
+        const batt = lastRows(sends).find((r) => r.id.startsWith("dpb:"));
+        if (!batt) break;
+        sends = await send(batt.id);
+      } else if (cartState === "DC_DP_CHARGER") {
+        sends = await send("dpc_skip");
+      } else if (cartState === "DC_DP_MARGIN") {
+        sends = await send("dpm_none");
+      } else if (cartState === "DC_DP_LOAN_AMT") {
+        sends = await send("1.5 lakh");
+      } else if (cartState === "DC_DP_SEND") {
+        sends = await send("dps_send");
+        break;
+      } else {
+        break;
+      }
+    }
+
+    let rows = lastRows(sends).filter((r) => r.id.startsWith("s4p:"));
     if (rows.length === 0) {
-      fail("s4_start", `no lender list — ${sends.map((s) => s.body).join(" / ").slice(0, 160)}`);
+      fail("s4_start", `no lender list — state ${await state()}: ${sends.map((s) => s.body).join(" / ").slice(0, 160)}`);
     } else {
       pass("s4_start", `${rows.length} scheme row(s), state ${await state()}`);
       const leaked = sends.some((s) => /NBFC|Finance Ltd|Bajaj/i.test(s.body ?? ""));
@@ -235,17 +299,50 @@ async function main() {
   }
 
   // ---- Phase 4: Step 5, cart + dispatch -----------------------------------
-  console.log("\nPhase 4 — Step 5 (cart, OTP, dispatch)");
+  console.log("\nPhase 4 — Step 5 (cart, then hand off)");
   if ((await kycStatus()) !== "loan_sanctioned") {
     skip(
       "dispatch",
       `lead is ${await kycStatus()} — have the NBFC sanction it (POST /api/nbfc/sanction/${leadId}), then re-run`,
     );
   } else {
+    // Counted BEFORE the phase, not compared against zero: a lead that was
+    // driven through the old code-based flow already carries rows, and this
+    // check is about what THIS run mints.
+    const otpsBefore = (
+      await db
+        .select({ id: schema.otpConfirmations.id })
+        .from(schema.otpConfirmations)
+        .where(
+          and(
+            eq(schema.otpConfirmations.lead_id, leadId),
+            eq(schema.otpConfirmations.otp_type, "dispatch_confirmation"),
+          ),
+        )
+    ).length;
+
     let sends = await send(leadActionId("dp_start", leadId));
     let rows = lastRows(sends);
     const batteryRow = rows.find((r) => r.id.startsWith("dpb:"));
-    if (!batteryRow) {
+
+    // A lead whose cart was fixed at Step 4 is LOCKED after sanction: dp_start
+    // must not reopen the picker — a customer actor gets the order card +
+    // handoff, a dealer actor gets the Send-to-customer summary.
+    const [preSel] = await db
+      .select({ battery_serial: schema.productSelections.battery_serial })
+      .from(schema.productSelections)
+      .where(eq(schema.productSelections.lead_id, leadId))
+      .orderBy(desc(schema.productSelections.created_at))
+      .limit(1);
+    if (preSel?.battery_serial) {
+      if (batteryRow) {
+        fail("sanction lock", "picker reopened despite a committed cart");
+      } else if (/Your order|approved by the lender/i.test(sends.map((s) => s.body).join(" "))) {
+        pass("sanction lock", `locked order shown, state ${await state()}`);
+      } else {
+        fail("sanction lock", `no locked order card — ${sends.map((s) => s.body).join(" / ").slice(0, 200)}`);
+      }
+    } else if (!batteryRow) {
       fail("dp_start", `no battery list — ${sends.map((s) => s.body).join(" / ").slice(0, 200)}`);
     } else {
       pass("dp_start", `${rows.length} stock row(s), state ${await state()}`);
@@ -273,40 +370,52 @@ async function main() {
         fail("cart saved", "product_selections.battery_serial is still null");
       }
 
-      if ((await state()) !== "DC_DP_OTP") {
-        fail("OTP sent", `state is ${await state()}, expected DC_DP_OTP`);
-      } else {
-        pass("OTP sent", "state DC_DP_OTP");
-        const [row] = await db
-          .select({ otp_hash: schema.otpConfirmations.otp_hash })
-          .from(schema.otpConfirmations)
-          .where(
-            and(
-              eq(schema.otpConfirmations.lead_id, leadId),
-              eq(schema.otpConfirmations.is_used, false),
-            ),
-          )
-          .orderBy(desc(schema.otpConfirmations.created_at))
-          .limit(1);
-        const code = row ? crack(row.otp_hash) : null;
-        if (!code) {
-          fail("OTP recovery", "could not recover the code from its hash");
-        } else {
-          await send(code);
-          const status = await kycStatus();
-          if (status === "dispatched") pass("dispatch", `kyc_status → ${status}`);
-          else fail("dispatch", `expected dispatched, got ${status} (state ${await state()})`);
+      // The chat hands over here — it must NOT send a delivery code and must
+      // NOT dispatch. The dealer runs the OTP and Confirm Dispatch on Step 5.
+      const handoff = sends.some((s) =>
+        (s.body ?? "").includes("iTarang Team will connect you"),
+      );
+      if (handoff) pass("handoff message", "sent with the order summary");
+      else
+        fail(
+          "handoff message",
+          `not sent — last body: ${(sends[sends.length - 1]?.body ?? "").slice(0, 120)}`,
+        );
 
-          if (sel?.battery_serial) {
-            const [inv] = await db
-              .select({ status: schema.inventory.status })
-              .from(schema.inventory)
-              .where(eq(schema.inventory.serial_number, sel.battery_serial))
-              .limit(1);
-            if (inv?.status === "dispatched") pass("inventory", "available → reserved → dispatched");
-            else fail("inventory", `serial is '${inv?.status}', expected 'dispatched'`);
-          }
-        }
+      const parked = await state();
+      if (parked === "DC_DP_WAIT") pass("parked", "state DC_DP_WAIT");
+      else fail("parked", `state is ${parked}, expected DC_DP_WAIT`);
+
+      // The specific regression this change is about: no code was minted.
+      const otps = await db
+        .select({ id: schema.otpConfirmations.id })
+        .from(schema.otpConfirmations)
+        .where(
+          and(
+            eq(schema.otpConfirmations.lead_id, leadId),
+            eq(schema.otpConfirmations.otp_type, "dispatch_confirmation"),
+          ),
+        );
+      const minted = otps.length - otpsBefore;
+      if (minted === 0) {
+        pass(
+          "no delivery code",
+          otpsBefore > 0
+            ? `no new otp_confirmations row (${otpsBefore} pre-existing, from before this change)`
+            : "no otp_confirmations row created",
+        );
+      } else {
+        fail("no delivery code", `${minted} otp_confirmations row(s) minted by this run`);
+      }
+
+      const stillSanctioned = await kycStatus();
+      if (stillSanctioned === "loan_sanctioned") {
+        pass("dispatch left to dealer", "kyc_status still loan_sanctioned");
+      } else {
+        fail(
+          "dispatch left to dealer",
+          `kyc_status moved to ${stillSanctioned} — the chat should not dispatch`,
+        );
       }
     }
   }
@@ -316,20 +425,6 @@ async function main() {
       `${steps.length} checked.`,
   );
   process.exit(failed > 0 ? 1 : 0);
-}
-
-/**
- * Recover a six-digit code from its sha256. ~1M hashes, about a second — the
- * price of not putting a "tell me the code" hook in the OTP service.
- */
-function crack(hash: string): string | null {
-  for (let n = 0; n < 1_000_000; n += 1) {
-    const candidate = String(n).padStart(6, "0");
-    if (crypto.createHash("sha256").update(candidate).digest("hex") === hash) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 main().catch((err) => {

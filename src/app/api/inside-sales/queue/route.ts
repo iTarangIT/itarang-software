@@ -9,6 +9,7 @@ import { fetchQueueRows, countQueueRows } from "@/lib/inside-sales/queryBuilder"
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
 import { QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
+import { readQueueSort } from "@/lib/leads/queueSort";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,9 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // vocabularies inside readQueueFilters, so an unknown value is dropped
     // rather than reaching the SQL builder.
     const filters = readQueueFilters(url.searchParams);
+    // Order only — validated the same way, so an unknown key falls back to the
+    // tab's own order rather than reaching the SQL builder.
+    const sort = readQueueSort(url.searchParams);
 
     const [rows, total] = await Promise.all([
         fetchQueueRows({
@@ -62,6 +66,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             neodoveOnly,
             callbackOnly,
             filters,
+            sort,
         }),
         countQueueRows({
             tab: parsed.tab,

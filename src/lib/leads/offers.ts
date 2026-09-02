@@ -58,6 +58,16 @@ export interface LeadOfferItem {
    * on iTarang; 'rejected' waits on the lender to re-price within band.
    */
   withheld_reason: string | null;
+  /**
+   * E-275 — the lender's rejection, as forwarded to the dealer. `rejection_note`
+   * is only exposed once `rejection_forwarded_at` is set (admin forwarded it, or
+   * the SLA did): before that a declined assignment must read like any other
+   * in-review card, so the dealer never learns of a rejection admin is still
+   * holding.
+   */
+  rejection_note: string | null;
+  rejection_forwarded_at: Date | null;
+  decided_at: Date | null;
 }
 
 export interface LeadOffersView {
@@ -65,6 +75,20 @@ export interface LeadOffersView {
   kycStatus: string | null;
   winnerNbfcId: number | null;
   items: LeadOfferItem[];
+  /** E-275 — recall banner inputs; see `isRecallActive`. */
+  recalled_at: Date | null;
+  recall_note: string | null;
+  resubmitted_at: Date | null;
+}
+
+/** E-275 — a recall is live until the file is resubmitted after it. */
+export function isRecallActive(v: {
+  recalled_at: Date | string | null;
+  resubmitted_at: Date | string | null;
+}): boolean {
+  if (!v.recalled_at) return false;
+  if (!v.resubmitted_at) return true;
+  return new Date(v.resubmitted_at).getTime() < new Date(v.recalled_at).getTime();
 }
 
 /**
@@ -76,7 +100,13 @@ export interface LeadOffersView {
  */
 export async function listLeadOffers(leadId: string): Promise<LeadOffersView> {
   const [lead] = await db
-    .select({ id: leads.id, kyc_status: leads.kyc_status })
+    .select({
+      id: leads.id,
+      kyc_status: leads.kyc_status,
+      recalled_at: leads.recalled_at,
+      recall_note: leads.recall_note,
+      resubmitted_at: leads.resubmitted_at,
+    })
     .from(leads)
     .where(eq(leads.id, leadId))
     .limit(1);
@@ -87,6 +117,9 @@ export async function listLeadOffers(leadId: string): Promise<LeadOffersView> {
       id: nbfcLeadAssignments.id,
       nbfc_id: nbfcLeadAssignments.nbfc_id,
       status: nbfcLeadAssignments.status,
+      decided_at: nbfcLeadAssignments.decided_at,
+      rejection_note: nbfcLeadAssignments.rejection_note,
+      rejection_forwarded_at: nbfcLeadAssignments.rejection_forwarded_at,
     })
     .from(nbfcLeadAssignments)
     .where(eq(nbfcLeadAssignments.lead_id, leadId));
@@ -160,6 +193,10 @@ export async function listLeadOffers(leadId: string): Promise<LeadOffersView> {
       negotiation: anyOffer ? (roundsByOffer.get(anyOffer.id) ?? []) : [],
       withheld_reason:
         anyOffer != null && offer == null ? (anyOffer.ceo_approval_status ?? null) : null,
+      // The note travels only with the forwarding timestamp — see the field doc.
+      rejection_note: a.rejection_forwarded_at ? (a.rejection_note ?? null) : null,
+      rejection_forwarded_at: a.rejection_forwarded_at ?? null,
+      decided_at: a.decided_at ?? null,
     };
   });
 
@@ -170,6 +207,9 @@ export async function listLeadOffers(leadId: string): Promise<LeadOffersView> {
     kycStatus: lead.kyc_status,
     winnerNbfcId: winner?.nbfc_id ?? null,
     items,
+    recalled_at: lead.recalled_at ?? null,
+    recall_note: lead.recall_note ?? null,
+    resubmitted_at: lead.resubmitted_at ?? null,
   };
 }
 

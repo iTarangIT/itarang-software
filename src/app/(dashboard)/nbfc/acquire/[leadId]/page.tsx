@@ -7,7 +7,6 @@ import {
   dealers,
   leads,
   nbfc,
-  nbfcFinancingOffers,
   nbfcLeadAssignments,
   nbfcLoanProducts,
   productSelections,
@@ -19,6 +18,7 @@ import { evaluateEnachGate } from "@/lib/nbfc/enach";
 import { evaluateAgreementGate } from "@/lib/nbfc/agreement";
 import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getCustomerDossier } from "@/lib/nbfc/dossier";
+import { isLeadRecalled } from "@/lib/nbfc/recall";
 import CustomerDossierPanel from "../_components/CustomerDossierPanel";
 import EnachTrackPanel from "../_components/EnachTrackPanel";
 import AgreementTrackPanel from "../_components/AgreementTrackPanel";
@@ -26,6 +26,7 @@ import VkycTrackPanel from "../_components/VkycTrackPanel";
 import FiTrackPanel from "../_components/FiTrackPanel";
 import OfferPanel from "../_components/OfferPanel";
 import GoToStepButton from "../_components/GoToStepButton";
+import RejectFileButton from "../_components/RejectFileButton";
 import SanctionPanel from "../_components/SanctionPanel";
 import NbfcVerificationPanel from "../_components/NbfcVerificationPanel";
 import LeadStageStepper, {
@@ -230,19 +231,14 @@ export default async function AcquireLeadDetailPage({
     // (which keys off the same flag) reverts to "review dossier".
     "withdrawn",
   ].includes(status);
-  // E-238 — negotiation state of this NBFC's offer, for the Next banner. The
-  // Offer node's own state is unchanged: it stays `active` throughout a
-  // negotiation, which is already what offerSubmitted gives it.
-  const [offerNegotiation] = await db
-    .select({ negotiation_status: nbfcFinancingOffers.negotiation_status })
-    .from(nbfcFinancingOffers)
-    .where(eq(nbfcFinancingOffers.assignment_id, assignment.id))
-    .limit(1);
-  const dealerCountered = offerNegotiation?.negotiation_status === "dealer_countered";
-  const offerFixed = offerNegotiation?.negotiation_status === "fixed";
   const won = status === "selected";
   const lost = status === "not_selected";
-  const closed = status === "declined" || status === "withdrawn";
+  // E-275 — 'declined' now has exactly one writer: this NBFC's own Reject.
+  const rejected = status === "declined";
+  const closed = rejected || status === "withdrawn";
+  // E-275 — iTarang recalled the file for revision; every action is paused
+  // (the APIs 409) until it is resubmitted.
+  const recalled = isLeadRecalled(lead);
 
   const verificationRequired = fiRequired || vkycRequired;
   const verificationComplete = fiComplete && vkycComplete;
@@ -253,8 +249,16 @@ export default async function AcquireLeadDetailPage({
   // active). The disbursement money-transfer itself is PARKED (§19.1), so `sold`
   // is the furthest state iTarang models. `loan_sanctioned` = sanctioned, dealer
   // OTP/dispatch still pending.
-  const sanctioned = lead.kyc_status === "loan_sanctioned" || lead.kyc_status === "sold";
-  const sold = lead.kyc_status === "sold";
+  //
+  // `confirmDispatch` (the Step-5 OTP, web or WhatsApp) writes `dispatched`
+  // and flips the sanction to disbursed in the same transaction; `sold` only
+  // arrives later from Mark Delivered / the nightly cron. Both are past the
+  // OTP gate, so both are "disbursed" for this rail — treating `dispatched` as
+  // unknown made the node regress to "ready" the moment the OTP succeeded.
+  const dispatched = lead.kyc_status === "dispatched";
+  const delivered = lead.kyc_status === "sold";
+  const sold = dispatched || delivered;
+  const sanctioned = lead.kyc_status === "loan_sanctioned" || sold;
 
   function nodeOffer(): StepperStage["state"] {
     // FI / Video KYC now live inside the Offer step and only unlock once won, so
@@ -263,6 +267,8 @@ export default async function AcquireLeadDetailPage({
     // — the offer really was submitted, and Verification upstream must stay
     // done — but a green Completed check over a deal the customer walked away
     // from reads as a win. Locked + the red badge is the honest pair.
+    // E-275 — a rejection is this NBFC's own decision; red, not a padlock.
+    if (rejected) return "failed";
     if (closed) return "locked";
     if (offerSubmitted) return "done";
     return "active";
@@ -384,6 +390,9 @@ export default async function AcquireLeadDetailPage({
               {sectionGCard}
               {loanProductCard}
             </>
+          }
+          actionsExtra={
+            !closed && !won && !lost && !recalled ? <RejectFileButton leadId={leadId} /> : null
           }
         />
       ) : null}
@@ -543,8 +552,8 @@ export default async function AcquireLeadDetailPage({
 
   const offerContent = (
     <div className="space-y-4">
-      <OfferPanel leadId={leadId} />
-      {offerSubmitted ? winnerBanner : null}
+      <OfferPanel leadId={leadId} disabled={recalled} />
+      {offerSubmitted && !rejected ? winnerBanner : null}
       {won ? (
         <GoToStepButton
           stepKey={nextLiveStep("offer")}
@@ -633,11 +642,15 @@ export default async function AcquireLeadDetailPage({
         ? "selected"
         : lost
           ? "not selected"
-          : status === "withdrawn"
-            ? "deal closed by customer"
-            : offerSubmitted
-              ? "submitted · awaiting decision"
-              : "pending",
+          : rejected
+            ? "rejected"
+            : status === "withdrawn"
+              ? "deal closed by customer"
+              : recalled
+                ? "recalled by iTarang"
+                : offerSubmitted
+                  ? "submitted · awaiting decision"
+                  : "pending",
       state: nodeOffer(),
       // E-245 — "Completed" would read as a won deal; this one ended.
       badge:
@@ -646,7 +659,9 @@ export default async function AcquireLeadDetailPage({
               label: "Deal closed by customer",
               cls: "bg-red-50 text-red-700 border-red-200",
             }
-          : undefined,
+          : rejected
+            ? { label: "Rejected", cls: "bg-red-50 text-red-700 border-red-200" }
+            : undefined,
       content: offerContent,
     },
     {
@@ -690,9 +705,11 @@ export default async function AcquireLeadDetailPage({
     {
       key: "disburse",
       label: "Disbursal",
-      sub: sold
-        ? "disbursed & dispatched"
-        : sanctioned
+      sub: delivered
+        ? "disbursed · delivered"
+        : dispatched
+          ? "disbursed · dispatched"
+          : sanctioned
           ? "sanctioned · awaiting dealer OTP"
           : disbursalReady
             ? "ready"
@@ -715,10 +732,21 @@ export default async function AcquireLeadDetailPage({
         tone: "muted",
         text: "Deal closed by the customer — they ended this conversation and the offer is withdrawn. See the reason on the offer above. No further action.",
       };
+    if (rejected)
+      return {
+        tone: "danger",
+        text: "File rejected by this NBFC — iTarang relays the reason to the dealer, who may route the customer to another lender. No further action.",
+      };
     if (closed)
       return {
         tone: "muted",
         text: `This lead is ${STATUS_LABEL[status] ?? status}. No further action.`,
+      };
+    // E-275 — paused by iTarang; outranks every pre-sanction prompt below.
+    if (recalled && !sanctioned)
+      return {
+        tone: "warning",
+        text: "Recalled by iTarang — changes are being made to this file. Actions are paused until it is resubmitted.",
       };
     if (sold)
       return {
@@ -776,19 +804,10 @@ export default async function AcquireLeadDetailPage({
         tone: "info",
         text: "Credit / Underwriting: submit the firm financing offer for this lead.",
       };
-    // E-238 — the customer has come back with an ask; the lead is stalled on us,
-    // not on them, so say so before the generic "awaiting decision" line.
-    if (dealerCountered)
-      return {
-        tone: "warning",
-        text: "Credit / Underwriting: the customer requested revised terms — revise the offer, or fix the current terms to close the negotiation.",
-      };
     if (status === "offer_submitted")
       return {
         tone: "info",
-        text: offerFixed
-          ? "Terms fixed — awaiting the customer's decision between competing offers."
-          : "Offer submitted — awaiting the customer's decision between competing offers.",
+        text: "Offer submitted — awaiting the customer's decision between competing offers.",
       };
     return { tone: "muted", text: "Awaiting the next step." };
   }
@@ -806,6 +825,17 @@ export default async function AcquireLeadDetailPage({
           Back to pipeline
         </Link>
       </div>
+
+      {recalled ? (
+        <div className="border border-amber-300 bg-amber-100 text-amber-900 rounded-lg px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <p className="text-xs leading-relaxed">
+            <b>Recalled by iTarang</b> — changes are being made to this file.
+            Actions are paused until the file is resubmitted.
+            {lead.recall_note ? <> Note: {lead.recall_note}</> : null}
+          </p>
+        </div>
+      ) : null}
 
       <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded-lg px-4 py-3 flex items-start gap-3">
         <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -838,6 +868,12 @@ export default async function AcquireLeadDetailPage({
             <p className="text-xl font-bold text-slate-800">
               {fmtInr(ps?.final_price)}
             </p>
+            {ps?.dealer_margin_gst_amount != null && Number(ps.dealer_margin_gst_amount) > 0 ? (
+              <p className="text-[11px] text-slate-500">
+                Items {fmtInr(ps.net_subtotal)} · margin {fmtInr(ps.dealer_margin)} + GST{" "}
+                {fmtInr(ps.dealer_margin_gst_amount)}
+              </p>
+            ) : null}
             <p className="text-xs text-slate-500 mt-2">
               Assigned {fmtDate(assignment.assigned_at)}
             </p>

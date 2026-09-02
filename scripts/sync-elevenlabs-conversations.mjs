@@ -37,8 +37,23 @@ const AGENT_ID = args.agent || process.env.AGENT_ID || "";
 const FROM_DATE = args.from || "2026-04-19";
 const TO_DATE = args.to || "2026-05-19";
 const DRY_RUN = process.argv.includes("--dry-run");
-const FROM_UNIX = Math.floor(new Date(`${FROM_DATE}T00:00:00Z`).getTime() / 1000);
-const TO_UNIX = Math.floor(new Date(`${TO_DATE}T23:59:59Z`).getTime() / 1000);
+// IST bounds, half-open: [FROM 00:00 IST, TO+1day 00:00 IST).
+//
+// These were UTC (`…T00:00:00Z` / `…T23:59:59Z`) while every dashboard query
+// buckets on `AT TIME ZONE 'Asia/Kolkata'`. The 5h30m offset at each edge meant
+// a --from/--to that looked like a calendar month pulled a window shifted off
+// that month — dropping the first 5.5 hours and picking up the tail of the
+// previous one. Matching the dashboard's own boundary is what makes "backfill
+// August" and "display August" mean the same thing.
+const IST_OFFSET = "+05:30";
+const FROM_UNIX = Math.floor(
+  new Date(`${FROM_DATE}T00:00:00${IST_OFFSET}`).getTime() / 1000,
+);
+// Exclusive upper bound. The old `23:59:59` also silently dropped the final
+// second of the last day.
+const TO_UNIX =
+  Math.floor(new Date(`${TO_DATE}T00:00:00${IST_OFFSET}`).getTime() / 1000) +
+  86_400;
 const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY;
 const RATE = Number(process.env.ELEVENLABS_INR_PER_CREDIT || 0.0159742);
 
@@ -100,10 +115,19 @@ function parseDetail(d) {
     startedAt: meta.start_time_unix_secs
       ? new Date(meta.start_time_unix_secs * 1000)
       : null,
-    endedAt:
-      meta.start_time_unix_secs && durationSecs
-        ? new Date((meta.start_time_unix_secs + durationSecs) * 1000)
-        : null,
+    // `durationSecs || 0`, NOT `&& durationSecs`.
+    //
+    // The old guard was falsy for a zero-duration call, so every failed dial
+    // got ended_at = NULL. Every query on /operations/elevenlabs compares
+    // against ended_at (see cost-analytics-query.ts istDayBounds), and NULL
+    // fails a comparison — so those rows existed in the table and were counted
+    // by nothing: not the tiles, not first_call_at, not the month dropdown.
+    // That is 390 of August's 738 calls. A call that failed instantly ended
+    // when it started; collapsing to the start instant is both true and
+    // visible.
+    endedAt: meta.start_time_unix_secs
+      ? new Date((meta.start_time_unix_secs + (durationSecs || 0)) * 1000)
+      : null,
     status: d.status === "done" ? "completed" : d.status || "completed",
     agentId: d.agent_id || null,
   };
@@ -131,11 +155,24 @@ async function upsertOne(conversationId, detail) {
         after: { cost: detail.totalCents, duration: setDuration ? detail.durationSecs : row.call_duration },
       };
     }
+    // Cost columns are COALESCE(new, old) — not a bare assignment.
+    //
+    // The header calls this script idempotent, and for cost it was not: a
+    // DETAIL response missing metadata.cost makes creditsToPaise return null,
+    // and the old unconditional SET wrote that null straight over a good
+    // stored value. Re-running the sync could therefore erase cost it had
+    // itself recorded earlier. New data still wins; absent data no longer
+    // destroys.
+    //
+    // The provider guard matters too: the probe above matches on call_id
+    // alone, and without `provider = 'elevenlabs'` a Bolna row sharing an id
+    // would have its costs rewritten to INR/provider_api while still claiming
+    // provider='bolna'.
     await sql`
       UPDATE ai_call_logs SET
-        total_cost_cents     = ${detail.totalCents},
-        llm_cost_cents       = ${detail.llmCents},
-        telephony_cost_cents = ${detail.telephonyCents},
+        total_cost_cents     = COALESCE(${detail.totalCents}, total_cost_cents),
+        llm_cost_cents       = COALESCE(${detail.llmCents}, llm_cost_cents),
+        telephony_cost_cents = COALESCE(${detail.telephonyCents}, telephony_cost_cents),
         cost_currency        = 'INR',
         cost_source          = 'provider_api',
         cost_fetched_at      = now(),
@@ -145,6 +182,7 @@ async function upsertOne(conversationId, detail) {
         started_at           = COALESCE(started_at, ${detail.startedAt}),
         updated_at           = now()
       WHERE id = ${row.id}
+        AND provider = 'elevenlabs'
     `;
     return { action: "update", id: row.id, setDuration };
   }

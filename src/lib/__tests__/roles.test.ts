@@ -2,7 +2,7 @@
  * Path → role inference, and the registry drift it exists to catch.
  *
  * `users.role` is a bare varchar(50) with no enum and no CHECK, so a role is
- * whatever six independent hardcoded lists agree it is:
+ * whatever nine independent hardcoded lists agree it is:
  *
  *   1. middleware.ts       roleDashboards   (role → dashboard; also the protected-route registry)
  *   2. sidebar.tsx         roleNavigation   (the nav itself)
@@ -10,6 +10,12 @@
  *   4. login/page.tsx      the redirect if/else
  *   5. login/actions.ts    a second redirect if/else
  *   6. lib/roles.ts        ROLE_PATH_PREFIXES (this file)
+ *   7. sidebar.tsx         NO_COMMON_ITEMS  (opt out of the shared "Submit Expense" item)
+ *   8. sidebar.tsx         showMobileDrawer (whether the role gets the mobile drawer)
+ *   9. header.tsx          showMobileNav    (an independent copy of 8 — keep in step)
+ *
+ * (This header said "six" until the `operations` role was added and 7-9 were
+ * found to matter too. 1-6 are the ones that break login; 7-9 break chrome.)
  *
  * Missing one fails SILENTLY — an unknown role falls back to the `user` nav or
  * a `/` redirect, with no error anywhere. That is not hypothetical: asm,
@@ -17,7 +23,7 @@
  * middleware for months with no entry here, and nothing ever complained.
  *
  * This file can only police list 6. It is here so the next person adding a role
- * finds the other five written down.
+ * finds the other eight written down.
  */
 
 import { describe, expect, it } from "vitest";
@@ -38,6 +44,8 @@ describe("inferRoleFromPath", () => {
     ["/sales-insight", "sales_insight"],
     ["/sales-head", "sales_head"],
     ["/sales-order-manager", "sales_order_manager"],
+    ["/operations", "operations"],
+    ["/operations/infrastructure", "operations"],
   ])("%s → %s", (path, role) => {
     expect(inferRoleFromPath(path)).toBe(role);
   });

@@ -10,10 +10,12 @@ import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
 import {
     foldRegionFacets,
     queueFilterClauses,
+    queueSortOrder,
     regionFacetQuery,
     type QueueFilterInput,
 } from "@/lib/leads/queueFilterSql";
 import type { QueueRegion } from "@/lib/leads/queueFilters";
+import type { QueueSort } from "@/lib/leads/queueSort";
 
 const OPEN_LIST = sql.raw(
     OPEN_STATUSES.map((s) => `'${s}'`).join(", "),
@@ -51,6 +53,8 @@ type BuildArgs = {
     callbackOnly?: boolean;
     /** Stage / interest / region / date range — see @/lib/leads/queueFilters. */
     filters?: QueueFilterInput;
+    /** User-chosen column + direction; the tab order stays as the tiebreak. */
+    sort?: QueueSort;
 };
 
 /**
@@ -126,10 +130,11 @@ function extraFilters({
     return parts.length ? sql.join(parts, sql``) : sql``;
 }
 
+/** The tab's own order COLUMNS — queueSortOrder() prepends the user's sort. */
 function tabOrder(tab: QueueTab) {
     switch (tab) {
         case "follow_ups":
-            return sql`ORDER BY dl.next_follow_up_at ASC NULLS LAST`;
+            return sql`dl.next_follow_up_at ASC NULLS LAST`;
         case "unassigned":
             // Band model: Qualified leads all share lead_score 90, so within a
             // band the queue is ordered by facts disclosed (info_signals_count
@@ -137,7 +142,7 @@ function tabOrder(tab: QueueTab) {
             // A callback request is time-sensitive in a way a score is not, so
             // it sorts first: the dealer asked us to ring back, and the AI
             // cannot, so the queue should surface them before anything else.
-            return sql`ORDER BY
+            return sql`
                 EXISTS (SELECT 1 FROM ai_call_logs a
                          WHERE a.lead_id = dl.id
                            AND a.signals ->> 'callback_agreed' = 'yes') DESC,
@@ -145,11 +150,11 @@ function tabOrder(tab: QueueTab) {
                 dl.info_signals_count DESC NULLS LAST,
                 dl.created_at DESC`;
         case "my_closed":
-            return sql`ORDER BY dl.closed_at DESC NULLS LAST`;
+            return sql`dl.closed_at DESC NULLS LAST`;
         case "team":
         case "my_open":
         default:
-            return sql`ORDER BY COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at) DESC NULLS LAST`;
+            return sql`COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at) DESC NULLS LAST`;
     }
 }
 
@@ -162,10 +167,11 @@ export async function fetchQueueRows({
     neodoveOnly,
     callbackOnly,
     filters,
+    sort,
 }: BuildArgs): Promise<QueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, userId);
-    const order = tabOrder(tab);
+    const order = queueSortOrder(sort, tabOrder(tab));
     const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
 
     const rows = await db.execute<QueueRow>(sql`

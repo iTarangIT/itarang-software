@@ -30,7 +30,45 @@ export type LeadStateHandler = (
   dealer: ActiveDealer,
 ) => Promise<void>;
 
+export interface LeadStateOptions {
+  /**
+   * Opt in to re-rendering this step when a bare greeting ("hi", "hello")
+   * arrives, instead of letting the greeting abandon the journey.
+   *
+   * WHY IT IS OPT-IN AND NOT THE DEFAULT.
+   *
+   * Both turn functions treat a typed greeting as "start over", which clears
+   * `ctx.lead`. Mid-journey that is destructive: the lead pointer is the only
+   * route back into a step, and the dealer menu offers no way to reopen a
+   * submitted lead — so one "hi" strands the application permanently.
+   *
+   * The obvious fix, routing every greeting to the current handler, is wrong.
+   * In the states where FREE TEXT IS THE PAYLOAD it would submit the greeting
+   * as data: "hi" typed at DC_S4_AMT would be parsed as a loan amount, and
+   * at DC_CB_FIELD it is stored as a co-borrower's name. Those states genuinely want the escape hatch.
+   *
+   * So a state opts in only when its input is a tap — a list row, a button, a
+   * document — and arbitrary text is already handled by re-rendering the
+   * prompt. For those, a greeting is a request to see the message again.
+   */
+  rerenderOnGreeting?: boolean;
+  /**
+   * Re-render this step from scratch after the journey was parked in Save
+   * Drafts and picked up again (ctx.lead and current_state are already
+   * restored when this runs). States whose input is free text cannot use the
+   * greeting re-render above, so they supply an explicit prompt here.
+   */
+  resume?: LeadStateResumer;
+}
+
+export type LeadStateResumer = (
+  session: SessionRow,
+  dealer: ActiveDealer,
+) => Promise<void>;
+
 const LEAD_STATE_HANDLERS: Record<string, LeadStateHandler> = {};
+const RERENDER_ON_GREETING = new Set<string>();
+const LEAD_STATE_RESUMERS: Record<string, LeadStateResumer> = {};
 
 /**
  * Register one state. Called by a phase module at import time.
@@ -42,6 +80,7 @@ const LEAD_STATE_HANDLERS: Record<string, LeadStateHandler> = {};
 export function registerLeadState(
   state: string,
   handler: LeadStateHandler,
+  options: LeadStateOptions = {},
 ): void {
   if (state.length > 32) {
     throw new Error(
@@ -58,6 +97,8 @@ export function registerLeadState(
     throw new Error(`WhatsApp state "${state}" is already registered`);
   }
   LEAD_STATE_HANDLERS[state] = handler;
+  if (options.rerenderOnGreeting) RERENDER_ON_GREETING.add(state);
+  if (options.resume) LEAD_STATE_RESUMERS[state] = options.resume;
 }
 
 export function registerLeadStates(
@@ -70,6 +111,19 @@ export function registerLeadStates(
 
 export function leadStateHandler(state: string): LeadStateHandler | undefined {
   return LEAD_STATE_HANDLERS[state];
+}
+
+/**
+ * Should a bare greeting in this state re-render the step rather than abandon
+ * the journey? See LeadStateOptions.rerenderOnGreeting.
+ */
+export function rerendersOnGreeting(state: string): boolean {
+  return RERENDER_ON_GREETING.has(state);
+}
+
+/** Explicit resume prompt for a state, if the phase registered one. */
+export function leadStateResumer(state: string): LeadStateResumer | undefined {
+  return LEAD_STATE_RESUMERS[state];
 }
 
 /** For diagnostics and tests. */

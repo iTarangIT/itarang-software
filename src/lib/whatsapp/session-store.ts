@@ -65,6 +65,23 @@ export type Ctx = {
   /** Recognized-contact stamp from the greeting-time phone lookup (staff /
    *  existing lead), kept for reuse so we don't re-query every greeting. */
   known?: { kind: "staff" | "lead"; name: string; role?: string };
+  /** E-277 — the dealer's in-progress "My Team" action (team-flow.ts): the
+   *  add-member phone/name being collected, or the member picked for removal. */
+  team?: {
+    addPhone?: string;
+    addName?: string;
+    removeId?: string;
+    removeName?: string;
+  };
+  /** Customer journeys the dealer walked away from mid-way (sent *menu* or
+   *  started another lead) that are NOT pre-submit drafts — co-borrower, Step 4,
+   *  offers, dispatch. The DB cannot reconstruct those steps, so the exact
+   *  `lead` sub-context and state are snapshotted here, keyed by lead id, and
+   *  restored verbatim when the dealer picks the lead from Save Drafts. */
+  parked?: Record<
+    string,
+    { state: string; lead: NonNullable<Ctx["lead"]>; at: string }
+  >;
   /** Active customer-lead being created in the post-approval dealer console
    *  (states prefixed DC_*). Independent of the onboarding fields above. */
   lead?: {
@@ -136,6 +153,22 @@ export type Ctx = {
       }>;
     };
 
+    /** Step-4 extra documents (DC_XD_*) — the ≤10 pre-sanction bucket. The
+     *  files themselves live on product_selections.pre_sanction_doc_urls; this
+     *  only carries what the chat needs between two inbound messages. */
+    xd?: {
+      /** Items in the bucket after the last save, for the "n/10" counter. */
+      count?: number;
+      /** Set when an NBFC request opened this step: its nbfc_doc_requests.id,
+       *  so each file also answers the request's next open child. */
+      requestId?: string;
+      /** Where to go when the batch ends — the new-lead ladder continues to
+       *  consent / submit; a request-driven batch returns to the menu. */
+      next?: "consent" | "submit" | "menu";
+      /** Files saved in THIS batch, for the single end-of-batch notification. */
+      batch?: number;
+    };
+
     /** Offers and sanction (DC_OF_*, DC_SN_*). */
     of?: {
       offers?: Array<{
@@ -158,6 +191,35 @@ export type Ctx = {
       /** Read back from product_selections for display only — never typed in
        *  chat. A mistyped serial fails mid-transaction after stock has moved. */
       batterySerial?: string;
+      /** Paging cursor for the stock lists. */
+      page?: number;
+      /** The charger chosen alongside `batterySerial`, or null for "no charger".
+       *  Held here rather than passed down the call chain because the dealer's
+       *  margin steps sit between the pick and the save, and every one of them
+       *  is a separate inbound message. */
+      chargerSerial?: string | null;
+      /** Dealer margin (DC_DP_MARGIN / DC_DP_MARGIN_VAL). `mode` + `value` are
+       *  what the dealer typed; `amount` is the resolved rupee figure, kept so
+       *  the preview the dealer approved and the row we write cannot drift. */
+      marginMode?: "percent" | "rupees";
+      marginValue?: number;
+      marginAmount?: number;
+      /** 18% GST on marginAmount (E-273). */
+      marginGst?: number;
+      /** The order card has been sent to the customer (DC_DP_OTP onwards). Set
+       *  so a re-tap of Send does not message them twice. */
+      orderSentAt?: string;
+      /** The picker is running as the front half of STEP 4 (pre-lender):
+       *  confirming derives requested_loan_amount instead of saving. */
+      phase?: "step4" | null;
+      /** Step-4 phase: the loan amount typed at DC_DP_LOAN_AMT (after the
+       *  margin step); Confirm falls back to the cart total when absent. */
+      loanAmount?: number | null;
+      /** Loan sanctioned against the stored selection — Send-only, no edits. */
+      locked?: boolean | null;
+      /** Stock-forced exception to the lock: the approved serial vanished, a
+       *  replacement battery may be picked; the margin stays as approved. */
+      repickAllowed?: boolean | null;
     };
   };
   /** E-214 — internal onboarding operator state. Lives ONLY on the
@@ -179,6 +241,13 @@ export type Ctx = {
      *  turn knows to hand the message to runConsoleTurn. */
     inDealerConsole?: boolean;
   };
+  /** "Active batteries" browser (DC_ACTIVE_BATT) — paging cursor only. */
+  ab?: { page?: number };
+  /** E-278 — dealer's "Team Leads" browser (DC_TL_*): paging cursor + the
+   *  lead whose card is open (DC_TL_VIEW's take-over / history buttons). */
+  tl?: { page?: number; leadId?: string };
+  /** E-278 — dealer's "History" picker (DC_HIST_LIST) — paging cursor only. */
+  hist?: { page?: number };
 };
 
 /**

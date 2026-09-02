@@ -33,6 +33,13 @@ export type LoanProductRow = {
   // E-115 — null means legacy row (unknown), false means bureau check waived,
   // true means min/max gate is enforced when score is known.
   cibil_required: boolean | null;
+  // Carried for DISPLAY only — the matcher does not read these. A borrower
+  // comparing two schemes pays the file charge out of pocket exactly like the
+  // processing fee, so it has to reach the card; leaving it off made two
+  // schemes look identically priced when they were not.
+  file_charge_fixed?: string | null;
+  file_charge_pct?: string | null;
+  subvention_available?: boolean | null;
 };
 
 function resolveFeeByOwnership(
@@ -79,12 +86,12 @@ function evaluateProduct(
     }
   }
 
+  // E-275 — the requested amount only has to FIT the product: a product is
+  // shown when requested ≤ loan_amount_max. loan_amount_min is deliberately
+  // not applied (business decision 2026-08-29): a customer asking for less
+  // than a product's floor is still a customer that lender can serve.
   if (customer.loan_amount != null) {
-    if (customer.loan_amount < p.loan_amount_min) {
-      reasons.push(
-        `Amount ${customer.loan_amount} below min ${p.loan_amount_min}`,
-      );
-    } else if (customer.loan_amount > p.loan_amount_max) {
+    if (customer.loan_amount > p.loan_amount_max) {
       reasons.push(
         `Amount ${customer.loan_amount} above max ${p.loan_amount_max}`,
       );

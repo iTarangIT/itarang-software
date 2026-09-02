@@ -45,6 +45,9 @@ export const productSelectionFields = {
   paraphernalia: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   paraphernaliaLines: z.array(paraLineSchema).optional(),
   dealerMargin: z.number().min(0).optional(),
+  // E-273: GST on the margin (rate + rupees), captured with the rest of the snapshot.
+  dealerMarginGstPercent: z.number().min(0).optional(),
+  dealerMarginGstAmount: z.number().min(0).optional(),
   finalPrice: z.number().min(0).optional(),
   batteryPrice: z.number().min(0).optional(),
   chargerPrice: z.number().min(0).optional(),
@@ -96,10 +99,17 @@ export const submitProductSelectionSchema = z.object({
         loan_product_id: z.union([z.string(), z.number()]).optional(),
       }),
     )
-    .max(2)
+    // E-275 — one lending partner per submission (was 2).
+    .max(1)
     .optional(),
+  // E-275 — the off-platform "Bajaj Finance" card. Mutually exclusive with
+  // selectedNbfcs; the lead goes straight to Step 5 with an external sanction.
+  externalLender: z.literal("bajaj_finance").optional(),
   customerDisclosureAck: z.boolean().optional(),
-});
+}).refine(
+  (b) => !(b.externalLender && b.selectedNbfcs && b.selectedNbfcs.length > 0),
+  { message: "Pick either an NBFC or the external lender, not both." },
+);
 
 /**
  * Step 5 save. This is where the dealer commits to actual stock, so the serial
@@ -135,6 +145,8 @@ export function productSelectionColumns(
     charger_price: body.chargerPrice?.toString(),
     paraphernalia_cost: body.paraphernaliaCost?.toString(),
     dealer_margin: body.dealerMargin?.toString(),
+    dealer_margin_gst_percent: body.dealerMarginGstPercent?.toString(),
+    dealer_margin_gst_amount: body.dealerMarginGstAmount?.toString(),
     final_price: body.finalPrice?.toString(),
     battery_gross: body.batteryGross?.toString(),
     battery_gst_percent: body.batteryGstPercent?.toString(),

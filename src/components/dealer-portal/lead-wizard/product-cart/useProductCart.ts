@@ -596,6 +596,8 @@ export function useProductCart(ctx: ProductCartContext): ProductCart {
       chargerPrice: live.chargerPrice,
       paraphernaliaCost: live.paraCost,
       dealerMargin: Number(live.dealerMargin || 0),
+      dealerMarginGstPercent: live.dealerMarginGstPct,
+      dealerMarginGstAmount: live.dealerMarginGst,
       finalPrice: live.finalPrice,
       batteryGross: live.batteryTriple.gross,
       batteryGstPercent: live.batteryTriple.gstPct,

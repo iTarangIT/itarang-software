@@ -857,12 +857,14 @@ export async function startScraperQueueTicker() {
 // code here, the crons in vercel.json do not fire on the pm2 boxes, and an
 // in-process ticker demonstrably runs in both environments.
 //
-// 60s because the unit being waited for is hours. The claim behind one tick is
-// a single indexed UPDATE against a partial index
-// (admin_verification_queue_sla_due_idx WHERE auto_approved_at IS NULL AND
-// status='pending_itarang_verification'), so an idle tick is nearly free, and a
-// case auto-approving up to a minute after its deadline is indistinguishable
-// from one that did not.
+// 10s (was 60s) — the settings screen allows per-card windows down to a single
+// minute, and the team runs them that short in practice, so a card sitting
+// visibly "pending" for up to a further minute past its own deadline reads as
+// the feature being broken. The claim behind one tick is a single indexed
+// UPDATE against a partial index (admin_verification_queue_sla_due_idx WHERE
+// auto_approved_at IS NULL AND status='pending_itarang_verification'), so an
+// idle tick is nearly free and six of them a minute still cost less than one
+// dialer poll.
 //
 // runKycAutoApprovalTick() returns immediately when the feature is disabled,
 // which is the shipped default — so this ticker is inert until an admin turns
@@ -871,7 +873,7 @@ export async function startKycAutoApprovalTicker() {
   // Skip on Vercel — /api/cron/kyc-auto-approval owns it there.
   if (process.env.VERCEL === "1") return;
 
-  const TICK_INTERVAL_MS = 60_000;
+  const TICK_INTERVAL_MS = 10_000;
 
   let inFlight = false;
 
@@ -905,7 +907,7 @@ export async function startKycAutoApprovalTicker() {
   const interval = setInterval(tick, TICK_INTERVAL_MS);
   if (typeof interval.unref === "function") interval.unref();
 
-  console.log("[instrumentation] KYC auto-approval SLA sweep (60s) started in-process");
+  console.log("[instrumentation] KYC auto-approval SLA sweep (10s) started in-process");
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,6 +1128,120 @@ export async function startDriveMirrorTicker() {
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] Google Drive mirror sweep (60s) started in-process");
+}
+// ---------------------------------------------------------------------------
+// Ops Console — the metric collector runner (E-210).
+//
+// One timer, per-collector cadence. This ticks every 60s and calls
+// runDueCollectors(), which executes only the collectors whose last run is
+// older than their own declared intervalMs. Adding a collector therefore does
+// NOT mean adding a ticker — see src/lib/operations/collectors/index.ts.
+//
+// Deliberately no `VERCEL === "1"` guard, unlike the dialer and Zoho tickers
+// above. Those short-circuit because vercel.json declares equivalent crons; the
+// Ops Console has none, and in any case production runs on pm2 where Vercel
+// crons never fire. This ticker is the only thing that runs the collectors.
+//
+// Each tick does three things: run due collectors, evaluate thresholds, and —
+// once per IST day past 00:15 — freeze yesterday into ops_daily_snapshots and
+// prune. One timer for all of it; there is no second scheduler to keep alive.
+// ---------------------------------------------------------------------------
+export async function startOpsMonitorTicker() {
+  // Explicit opt-out, e.g. for a second process that also boots
+  // instrumentation and would otherwise contend for every collector's lock.
+  // (Contention is safe — the partial unique index makes the loser skip — but
+  // it is pointless work and noisy in ops_collector_runs.)
+  if (process.env.ENABLE_OPS_MONITOR === "0") {
+    console.log("[instrumentation:ops-monitor] disabled via ENABLE_OPS_MONITOR=0");
+    return;
+  }
+
+  const TICK_INTERVAL_MS = 60_000;
+
+  // Which IST day the daily rollup last ran for. In memory on purpose — see the
+  // rollup block in tick() for why that is safe.
+  let lastDailyDate: string | null = null;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDueCollectors } = await import("@/lib/operations/runner");
+      const outcomes = await runDueCollectors("ticker");
+
+      if (outcomes.length > 0) {
+        const ok = outcomes.filter((o) => o.status === "completed").length;
+        const failed = outcomes.filter((o) => o.status === "failed");
+        const samples = outcomes.reduce((sum, o) => sum + o.samples, 0);
+        console.log(
+          `[instrumentation:ops-monitor] ran=${outcomes.length} ok=${ok} failed=${failed.length} samples=${samples}`,
+        );
+        for (const f of failed) {
+          console.error(
+            `[instrumentation:ops-monitor] ${f.collector_id} failed: ${f.error}`,
+          );
+        }
+      }
+
+      // Threshold evaluation runs EVERY tick, not only when a collector fired.
+      // It is cheap (one indexed read per metric) and it must not hang off
+      // `outcomes.length` — the alerts it resolves are driven by samples that
+      // may have landed on an earlier tick.
+      const { evaluateAlerts } = await import("@/lib/operations/alerts");
+      const alerts = await evaluateAlerts();
+      if (alerts.opened > 0 || alerts.resolved > 0) {
+        console.log(
+          `[instrumentation:ops-monitor] alerts opened=${alerts.opened} ` +
+            `resolved=${alerts.resolved} notified=${alerts.notified}`,
+        );
+      }
+
+      // Daily rollup, once per IST day past 00:15. The last-run date is held in
+      // memory: a restart just means the next tick past 00:15 redoes it, and
+      // the UNIQUE(snapshot_date, metric_key, source) from E-210 makes that a
+      // no-op rather than a duplicate.
+      const { istDate, istHourMinute, previousIstDate, runDailySnapshot } =
+        await import("@/lib/operations/daily");
+
+      const today = istDate();
+      const { hour, minute } = istHourMinute();
+      // `>=` rather than `===`: a process that was down at 00:15 still catches
+      // up on its first tick after boot instead of skipping the day entirely.
+      if (lastDailyDate !== today && (hour > 0 || minute >= 15)) {
+        const result = await runDailySnapshot(previousIstDate());
+        // Stamped only on success — a failed rollup retries on the next tick.
+        lastDailyDate = today;
+        console.log(
+          `[instrumentation:ops-monitor] daily rollup for ${result.snapshot_date}: ` +
+            `${result.snapshots_written} snapshots, pruned ${result.samples_pruned} samples / ` +
+            `${result.logs_pruned} logs / ${result.sessions_pruned} sessions / ` +
+            `${result.login_events_pruned} login events / ` +
+            `${result.module_visit_keys_pruned} module keys`,
+        );
+      }
+    } catch (err) {
+      // Never let a tick failure kill the ticker — the whole point of this
+      // dashboard is that it keeps reporting when other things break.
+      console.error(
+        "[instrumentation:ops-monitor] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered behind every other ticker (5s, 20s, 35s, 45s, 60s) so a cold
+  // boot does not open five collectors' worth of queries while the dialer and
+  // Zoho are already competing for the same max: 5 connection pool.
+  const kickoff = setTimeout(tick, 75_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] ops-monitor (60s) started in-process");
 }
 
 // ---------------------------------------------------------------------------

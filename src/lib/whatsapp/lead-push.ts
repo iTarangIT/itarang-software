@@ -7,6 +7,23 @@
  * caller and blocks every other one: a co-borrower request, an offer, a sanction
  * and a dispatch-ready notice each park the conversation somewhere different.
  *
+ * WHO THE MESSAGE IS FOR.
+ *
+ * A lead that a DEALER created in their WhatsApp console is the dealer's file to
+ * run. The customer in that flow never typed a word to us — the dealer sat with
+ * them, photographed their documents and sent them in. Pushing "we need a
+ * co-borrower" to that customer's own number reaches somebody who has no chat
+ * with iTarang, no context and no way to act, while the dealer who is holding
+ * the file hears nothing. So resolveLeadTarget() looks for the owning dealer's
+ * chat FIRST, and falls back to the customer only when there isn't one — a
+ * customer who self-onboarded through the house dealer, or a web-onboarded
+ * dealer who has never used WhatsApp.
+ *
+ * Callers pass a FUNCTION of the resolved target wherever the wording differs:
+ * a dealer must be told "your customer needs a co-borrower", not "you need a
+ * co-borrower". Nothing downstream changes — authorizeLeadAction() already
+ * admits the owning dealer's number on every journey button.
+ *
  * WHAT THIS DELIBERATELY DOES NOT DO.
  *
  * It does not assume the session is "on" the lead being pushed. A dealer runs
@@ -20,12 +37,18 @@
 
 import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 
+import { phoneLookupVariants } from "@/lib/ai/phone";
 import { db } from "@/lib/db/index";
 import {
+  dealerExtraNumbers,
+  dealerOnboardingApplications,
+  dealers,
+  dealerSalespersons,
   leads,
   whatsappOnboardingSessions,
 } from "@/lib/db/schema";
 
+import { resolveHouseDealer } from "./customer-lead";
 import { getAdapter } from "./index";
 import { logOutbound } from "./notifications";
 import { sendOrPark, type NudgeSpec, type ParkedPrompt } from "./outbound";
@@ -51,6 +74,11 @@ export const LEAD_WAIT_STATES = [
   "DC_OF_WAIT",
   "DC_SN_WAIT",
   "DC_DP_PRODUCT",
+  "DC_DP_CHARGER",
+  "DC_DP_MARGIN",
+  "DC_DP_MARGIN_VAL",
+  "DC_DP_SEND",
+  "DC_DP_OTP",
   "DC_DP_WAIT",
 ] as const;
 
@@ -134,14 +162,23 @@ export async function findSessionByLeadPhone(
   const candidates = [lead.mobile, lead.phone, lead.owner_contact]
     .map((v) => toWaPhone(v))
     .filter((v): v is string => Boolean(v));
-  if (candidates.length === 0) return null;
+
+  return await newestSessionForPhones(candidates);
+}
+
+/** Newest usable chat on any of these Meta addresses, dealer rows ranked first. */
+async function newestSessionForPhones(
+  waPhones: string[],
+): Promise<SessionRow | null> {
+  const unique = [...new Set(waPhones)].filter(Boolean);
+  if (unique.length === 0) return null;
 
   const [row] = await db
     .select()
     .from(whatsappOnboardingSessions)
     .where(
       and(
-        inArray(whatsappOnboardingSessions.wa_phone, [...new Set(candidates)]),
+        inArray(whatsappOnboardingSessions.wa_phone, unique),
         ne(whatsappOnboardingSessions.session_kind, "operator_file"),
       ),
     )
@@ -154,15 +191,298 @@ export async function findSessionByLeadPhone(
   return row ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Who the message is addressed to
+// ---------------------------------------------------------------------------
+
+export type LeadAudience = "dealer" | "customer";
+
+export interface LeadPushTarget {
+  leadId: string;
+  /** "dealer" when the owning dealer is running this file over WhatsApp. */
+  audience: LeadAudience;
+  /** The name the prompt should greet — the dealer's, or the customer's. */
+  greetName: string;
+  /** The customer this lead is about, whoever is being written to. */
+  customerName: string;
+  referenceId: string;
+  /** The chat to send into, or null when nobody has one yet (cold push). */
+  session: SessionRow | null;
+  /** Meta address for the cold template. */
+  waPhone: string | null;
+  /** E-277 — set when the "dealer" audience is actually the SALESPERSON who
+   *  owns this lead, chatting from their own number. pushToLeadBoth uses it to
+   *  copy milestone messages to the dealer's own chat as well. */
+  viaSalesperson?: boolean;
+}
+
+/**
+ * The house dealer owns every SELF-onboarded customer lead, so its leads must
+ * keep going to the customer. Resolved once — it is a fixed account — and only
+ * a successful lookup is cached, so a transient failure cannot pin `null` for
+ * the life of the process and silently reroute self-onboarded customers.
+ */
+let houseDealerCodeCache: string | null = null;
+async function houseDealerCode(): Promise<string | null> {
+  if (houseDealerCodeCache) return houseDealerCodeCache;
+  try {
+    const house = await resolveHouseDealer();
+    if (house?.dealerCode) houseDealerCodeCache = house.dealerCode;
+    return houseDealerCodeCache;
+  } catch {
+    return null;
+  }
+}
+
+interface DealerChannel {
+  waPhones: string[];
+  name: string | null;
+}
+
+/**
+ * Every Meta address the dealer who owns this lead might be chatting from.
+ *
+ * All routes in are covered, exactly as resolveWhatsAppDealer() covers them for
+ * the inbound direction: `dealer_onboarding_applications.wa_phone` for a dealer
+ * who onboarded over WhatsApp, `dealers.owner_phone` for one who onboarded on
+ * the web, and — E-279 — every active `dealer_extra_numbers` row (admin-added
+ * extra main numbers). Returns null for the house dealer — its leads are
+ * customers acting for themselves, and there is no dealer sitting behind them.
+ */
+async function dealerChannelForLead(
+  dealerCode: string | null | undefined,
+): Promise<DealerChannel | null> {
+  if (!dealerCode) return null;
+  if (dealerCode === (await houseDealerCode())) return null;
+
+  // ALL of them, not the first. One dealer_code can carry several approved
+  // applications — a re-application, or an operator who filed for a dealer who
+  // had also filed themselves — and in live data the newest of those is the one
+  // whose wa_phone is null. Taking one row silently loses the dealer's number.
+  const apps = await db
+    .select({
+      waPhone: dealerOnboardingApplications.wa_phone,
+      ownerName: dealerOnboardingApplications.owner_name,
+      companyName: dealerOnboardingApplications.company_name,
+    })
+    .from(dealerOnboardingApplications)
+    .where(
+      and(
+        eq(dealerOnboardingApplications.dealer_code, dealerCode),
+        eq(dealerOnboardingApplications.onboarding_status, "approved"),
+        eq(dealerOnboardingApplications.dealer_account_status, "active"),
+      ),
+    )
+    .orderBy(desc(dealerOnboardingApplications.created_at));
+  const app = apps.find((a) => a.waPhone) ?? apps[0];
+
+  const [row] = await db
+    .select({
+      ownerPhone: dealers.owner_phone,
+      ownerName: dealers.owner_name,
+      companyName: dealers.company_name,
+    })
+    .from(dealers)
+    .where(
+      and(
+        eq(dealers.dealer_id, dealerCode),
+        eq(dealers.onboarding_status, "active"),
+      ),
+    )
+    .limit(1);
+
+  // E-279 — extra main numbers registered by admin. Guarded: an environment
+  // without the table degrades to the two primary channels.
+  let extraPhones: (string | null)[] = [];
+  try {
+    const extras = await db
+      .select({ waPhone: dealerExtraNumbers.wa_phone })
+      .from(dealerExtraNumbers)
+      .where(
+        and(
+          eq(dealerExtraNumbers.dealer_code, dealerCode),
+          eq(dealerExtraNumbers.is_active, true),
+        ),
+      );
+    extraPhones = extras.map((e) => e.waPhone);
+  } catch (err) {
+    console.error(
+      "[WhatsApp/lead-push] extra-number lookup failed (is E-279 applied?):",
+      err,
+    );
+  }
+
+  const waPhones = [...apps.map((a) => a.waPhone), row?.ownerPhone, ...extraPhones]
+    .flatMap((p) => (p ? [p, ...phoneLookupVariants(p)] : []))
+    .map((p) => toWaPhone(p))
+    .filter((p): p is string => Boolean(p));
+  if (waPhones.length === 0) return null;
+
+  // `dealers.owner_name` first: it is stamped at approval and names the DEALER.
+  // An application's owner_name can be whoever filed it — an operator onboarding
+  // a dealer on their behalf files under their own name (E-214), and greeting
+  // the dealer by that name is greeting them as somebody else.
+  return {
+    waPhones: [...new Set(waPhones)],
+    name:
+      row?.ownerName ||
+      app?.ownerName ||
+      row?.companyName ||
+      app?.companyName ||
+      null,
+  };
+}
+
+/**
+ * E-277 — the Meta addresses of the ACTIVE salesperson who created this lead.
+ * Null when the lead has none, or the member has since been deactivated —
+ * routing then falls back to the dealer channel, so no push is ever lost.
+ * Guarded like resolveSalesperson: an unapplied E-277 degrades to "no
+ * salesperson" instead of breaking every push.
+ */
+async function salespersonChannelForLead(
+  salespersonId: string | null | undefined,
+): Promise<DealerChannel | null> {
+  if (!salespersonId) return null;
+  try {
+    const [row] = await db
+      .select({
+        waPhone: dealerSalespersons.wa_phone,
+        displayName: dealerSalespersons.display_name,
+      })
+      .from(dealerSalespersons)
+      .where(
+        and(
+          eq(dealerSalespersons.id, salespersonId),
+          eq(dealerSalespersons.is_active, true),
+        ),
+      )
+      .limit(1);
+    if (!row?.waPhone) return null;
+    const waPhones = [row.waPhone, ...phoneLookupVariants(row.waPhone)]
+      .map((p) => toWaPhone(p))
+      .filter((p): p is string => Boolean(p));
+    if (waPhones.length === 0) return null;
+    return { waPhones: [...new Set(waPhones)], name: row.displayName };
+  } catch (err) {
+    console.error(
+      "[WhatsApp/lead-push] salesperson channel lookup failed (is E-277 applied?):",
+      err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Decide who hears about this lead, and in which chat.
+ *
+ * The dealer wins only when they actually have a WhatsApp chat with us. A
+ * web-onboarded dealer who has never messaged the bot has a phone number but no
+ * conversation, and cold-templating them would be a doorbell rung at somebody
+ * who does not use this channel — so those leads keep the customer-first
+ * resolution they have always had.
+ *
+ * E-277 — a lead created by a SALESPERSON goes to that salesperson's chat
+ * first: they are the person driving the file day to day. Deactivated (or
+ * chat-less) salespersons fall back to the dealer channel.
+ */
+export async function resolveLeadTarget(
+  leadId: string,
+): Promise<LeadPushTarget | null> {
+  const [lead] = await db
+    .select({
+      reference_id: leads.reference_id,
+      full_name: leads.full_name,
+      owner_name: leads.owner_name,
+      dealer_id: leads.dealer_id,
+      salesperson_id: leads.salesperson_id,
+      mobile: leads.mobile,
+      phone: leads.phone,
+      owner_contact: leads.owner_contact,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return null;
+
+  const customerName = lead.full_name || lead.owner_name || "there";
+  const referenceId = lead.reference_id || leadId;
+
+  const spChannel = await salespersonChannelForLead(lead.salesperson_id);
+  if (spChannel) {
+    const spSession = await newestSessionForPhones(spChannel.waPhones);
+    if (spSession) {
+      return {
+        leadId,
+        audience: "dealer",
+        greetName: spChannel.name || "there",
+        customerName,
+        referenceId,
+        session: spSession,
+        waPhone: spSession.wa_phone || spChannel.waPhones[0] || null,
+        viaSalesperson: true,
+      };
+    }
+  }
+
+  const channel = await dealerChannelForLead(lead.dealer_id);
+  if (channel) {
+    const dealerSession = await newestSessionForPhones(channel.waPhones);
+    if (dealerSession) {
+      return {
+        leadId,
+        audience: "dealer",
+        greetName: channel.name || "there",
+        customerName,
+        referenceId,
+        session: dealerSession,
+        waPhone: dealerSession.wa_phone || channel.waPhones[0] || null,
+      };
+    }
+  }
+
+  // No dealer chat — the original resolution. It can still land in a dealer's
+  // chat (via the jsonb pointer, mid-capture), so classify by whose number the
+  // session belongs to rather than by how we found it.
+  const session = await bestLeadSession(leadId);
+  const isDealerChat = Boolean(
+    session?.wa_phone && channel?.waPhones.includes(session.wa_phone),
+  );
+  return {
+    leadId,
+    audience: isDealerChat ? "dealer" : "customer",
+    greetName: isDealerChat ? channel?.name || "there" : customerName,
+    customerName,
+    referenceId,
+    session,
+    waPhone:
+      session?.wa_phone ||
+      toWaPhone(lead.phone || lead.mobile || lead.owner_contact),
+  };
+}
+
 export type PushResult = "session" | "cold" | "none";
+
+export interface LeadMessage {
+  prompt: ParkedPrompt;
+  nudge: NudgeSpec;
+}
+
+/**
+ * A message, or a way to word one once we know who is receiving it. Pass the
+ * function form wherever dealer-facing and customer-facing copy differ.
+ */
+export type LeadMessageSpec =
+  | LeadMessage
+  | ((target: LeadPushTarget) => LeadMessage);
 
 /**
  * Deliver a journey prompt to whoever is driving this lead.
  *
  *   "session" — a chat exists; the prompt was sent, or parked behind a nudge
- *   "cold"    — no chat exists, so only the template went out. The customer's
- *               reply creates the session, and the button in the template (or
- *               their "hi") picks the journey up from there.
+ *   "cold"    — no chat exists, so only the template went out. The reply creates
+ *               the session, and the button in the template (or their "hi")
+ *               picks the journey up from there.
  *   "none"    — unreachable: no session, no usable phone, or no approved
  *               template. Caller should fall back to email/SMS/the dealer.
  *
@@ -172,19 +492,195 @@ export type PushResult = "session" | "cold" | "none";
  */
 export async function pushToLead(
   leadId: string,
-  msg: { prompt: ParkedPrompt; nudge: NudgeSpec },
+  msg: LeadMessageSpec,
 ): Promise<PushResult> {
   try {
-    const session = await bestLeadSession(leadId);
-    if (session) {
-      await sendOrPark(session, msg.prompt, msg.nudge);
-      return "session";
-    }
-    return await pushCold(leadId, msg.nudge);
+    const target = await resolveLeadTarget(leadId);
+    if (!target) return "none";
+    return await deliverTo(target, msg);
   } catch (err) {
     console.error(`[WhatsApp/lead-push] push for ${leadId} failed:`, err);
     return "none";
   }
+}
+
+/** Word the message for this target and send it. Shared by all three arms. */
+async function deliverTo(
+  target: LeadPushTarget,
+  msg: LeadMessageSpec,
+): Promise<PushResult> {
+  const built = typeof msg === "function" ? msg(target) : msg;
+  if (target.session) {
+    await sendOrPark(target.session, built.prompt, built.nudge);
+    return "session";
+  }
+  return await pushCold(target, built.nudge);
+}
+
+/**
+ * The CUSTOMER's own chat, ignoring the dealer-first rule.
+ *
+ * `resolveLeadTarget` deliberately prefers the dealer, because a dealer-run lead
+ * is the dealer's file and most journey prompts are asking THEM to do something.
+ * This is the other case: a message that is addressed to the customer by
+ * definition — the order the dealer just quoted them, the dispatch that has just
+ * happened. Sending those to the dealer's chat instead would leave the customer
+ * with no record of what they agreed to.
+ *
+ * There is no dealer fallback on purpose. If the customer has no chat and no
+ * usable number this returns "none", and the caller decides — silently routing a
+ * customer-addressed message to the dealer would tell the dealer something and
+ * the customer nothing, which is exactly the failure this exists to avoid.
+ */
+export async function resolveCustomerTarget(
+  leadId: string,
+): Promise<LeadPushTarget | null> {
+  const [lead] = await db
+    .select({
+      reference_id: leads.reference_id,
+      full_name: leads.full_name,
+      owner_name: leads.owner_name,
+      mobile: leads.mobile,
+      phone: leads.phone,
+      owner_contact: leads.owner_contact,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return null;
+
+  const customerName = lead.full_name || lead.owner_name || "there";
+  const session = await findSessionByLeadPhone(leadId);
+  return {
+    leadId,
+    audience: "customer",
+    greetName: customerName,
+    customerName,
+    referenceId: lead.reference_id || leadId,
+    session,
+    waPhone:
+      session?.wa_phone ||
+      toWaPhone(lead.phone || lead.mobile || lead.owner_contact),
+  };
+}
+
+/** Deliver to the customer's own chat. Same contract as `pushToLead`. */
+export async function pushToLeadCustomer(
+  leadId: string,
+  msg: LeadMessageSpec,
+): Promise<PushResult> {
+  try {
+    const target = await resolveCustomerTarget(leadId);
+    if (!target) return "none";
+    return await deliverTo(target, msg);
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] customer push for ${leadId} failed:`, err);
+    return "none";
+  }
+}
+
+export interface LeadFanOut {
+  dealer: PushResult;
+  customer: PushResult;
+  /** E-277 — result of the extra copy to the DEALER's own chat when the primary
+   *  "dealer" arm actually went to the owning salesperson. Absent otherwise. */
+  dealerCopy?: PushResult;
+}
+
+/**
+ * E-277 — the dealer's OWN chat for a lead, ignoring the salesperson-first
+ * preference. Used by pushToLeadBoth to keep the dealer in the loop on
+ * milestones for team-created leads.
+ */
+async function resolveDealerCopyTarget(
+  leadId: string,
+): Promise<LeadPushTarget | null> {
+  const [lead] = await db
+    .select({
+      reference_id: leads.reference_id,
+      full_name: leads.full_name,
+      owner_name: leads.owner_name,
+      dealer_id: leads.dealer_id,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return null;
+  const channel = await dealerChannelForLead(lead.dealer_id);
+  if (!channel) return null;
+  const session = await newestSessionForPhones(channel.waPhones);
+  if (!session) return null;
+  return {
+    leadId,
+    audience: "dealer",
+    greetName: channel.name || "there",
+    customerName: lead.full_name || lead.owner_name || "there",
+    referenceId: lead.reference_id || leadId,
+    session,
+    waPhone: session.wa_phone || channel.waPhones[0] || null,
+  };
+}
+
+/**
+ * Tell BOTH sides — for the handful of events that are news to each of them
+ * (the dispatch that just completed, most obviously).
+ *
+ * The two arms are deduplicated, because they collapse onto one chat more often
+ * than you would expect: a self-onboarded customer has no dealer chat at all,
+ * and in a demo the dealer's number and the customer's number are frequently the
+ * same one. Sending twice into the same conversation reads as a bug.
+ *
+ * `msg` is called once per arm, so the dealer sees "your customer's battery" and
+ * the customer sees "your battery" from the one call site.
+ */
+export async function pushToLeadBoth(
+  leadId: string,
+  msg: LeadMessageSpec,
+): Promise<LeadFanOut> {
+  try {
+    const primary = await resolveLeadTarget(leadId);
+    if (!primary) return { dealer: "none", customer: "none" };
+
+    const first = await deliverTo(primary, msg);
+    // Already the customer's chat — there is no dealer chat to tell as well.
+    if (primary.audience === "customer") {
+      return { dealer: "none", customer: first };
+    }
+
+    // E-277 — the primary "dealer" arm went to the owning SALESPERSON's chat;
+    // the dealer still hears about every milestone in their own chat. Deduped:
+    // a salesperson demo'd on the dealer's own number collapses to one send.
+    let dealerCopy: PushResult | undefined;
+    if (primary.viaSalesperson) {
+      const copyTarget = await resolveDealerCopyTarget(leadId);
+      dealerCopy =
+        copyTarget && !sameChannel(primary, copyTarget)
+          ? await deliverTo(copyTarget, msg)
+          : "none";
+    }
+
+    const customer = await resolveCustomerTarget(leadId);
+    if (!customer || sameChannel(primary, customer)) {
+      return { dealer: first, customer: "none", dealerCopy };
+    }
+    return {
+      dealer: first,
+      customer: await deliverTo(customer, msg),
+      dealerCopy,
+    };
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] fan-out for ${leadId} failed:`, err);
+    return { dealer: "none", customer: "none" };
+  }
+}
+
+/** Same conversation, or the same Meta address with no conversation yet. */
+function sameChannel(a: LeadPushTarget, b: LeadPushTarget): boolean {
+  if (a.session && b.session) return a.session.id === b.session.id;
+  if (!a.session && !b.session) return Boolean(a.waPhone) && a.waPhone === b.waPhone;
+  // One has a chat and the other does not; if they are the same number the cold
+  // template would land in that same chat.
+  return Boolean(a.waPhone) && a.waPhone === b.waPhone;
 }
 
 /**
@@ -195,22 +691,10 @@ export async function pushToLead(
  * on its own to be worth answering.
  */
 async function pushCold(
-  leadId: string,
+  target: LeadPushTarget,
   nudge: NudgeSpec,
 ): Promise<PushResult> {
-  const [lead] = await db
-    .select({
-      phone: leads.phone,
-      mobile: leads.mobile,
-      owner_contact: leads.owner_contact,
-    })
-    .from(leads)
-    .where(eq(leads.id, leadId))
-    .limit(1);
-
-  const raw = lead?.phone || lead?.mobile || lead?.owner_contact || "";
-  const waPhone = toWaPhone(raw);
-  if (!waPhone) return "none";
+  if (!target.waPhone) return "none";
 
   const tpl = resolveTemplate(nudge.template);
   if (!tpl) return "none";
@@ -218,7 +702,7 @@ async function pushCold(
   assertParamCount(nudge.template, nudge.params);
   const params = nudge.params.map((p) => oneLine(p));
   const res = await getAdapter().sendTemplate(
-    waPhone,
+    target.waPhone,
     tpl.name,
     tpl.lang,
     params,

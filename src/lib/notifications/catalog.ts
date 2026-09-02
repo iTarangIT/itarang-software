@@ -51,6 +51,10 @@ export type NotificationCategory =
   | "Inventory"
   | "Auctions"
   | "Scrap Sales"
+  // [E-270] The NBFC ⇄ iTarang workshop loop: a batch sent, a timeline
+  // proposed, trucks both ways, receipts. Its own category — it is neither an
+  // auction nor a sale, and muting one must never silence the other.
+  | "Refurbishment"
   // [E-262/E-263] The physical collection leg — dispatching an agent, what they
   // found at the door, and standing them down. Its own category rather than a
   // corner of "Auctions": an auction is where a recovered battery ends up, not
@@ -73,6 +77,7 @@ export const CATEGORIES: NotificationCategory[] = [
   "Inventory",
   "Auctions",
   "Scrap Sales",
+  "Refurbishment",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
   ...BUYBACK_CATEGORIES.filter((c) => c !== "System"),
@@ -210,6 +215,11 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // lead to another.
   "loan.offer_closed": "Loan & Sanction",
   "loan.lead_rerouted": "Loan & Sanction",
+  // E-275 — NBFC rejected the whole file; admin recall / resubmit.
+  "nbfc.application_rejected": "Loan & Sanction",
+  "loan.rejected_by_nbfc": "Loan & Sanction",
+  "lead.recalled": "Loan & Sanction",
+  "lead.resubmitted": "Loan & Sanction",
   "loan.winner_selected": "Loan & Sanction",
   "loan.not_selected": "Loan & Sanction",
   "loan.sanctioned": "Loan & Sanction",
@@ -273,6 +283,27 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "scrap.consignment_closed": "Scrap Sales",
   "scrap.payment_settled": "Scrap Sales",
 
+  // --- Refurbishment lots (E-270) ---
+  "refurb.lot_requested": "Refurbishment",
+  "refurb.lot_proposed": "Refurbishment",
+  "refurb.lot_countered": "Refurbishment",
+  "refurb.lot_agreed": "Refurbishment",
+  "refurb.lot_cancelled": "Refurbishment",
+  "refurb.lot_dispatched": "Refurbishment",
+  "refurb.lot_received": "Refurbishment",
+  "refurb.work_started": "Refurbishment",
+  "refurb.lot_completed": "Refurbishment",
+  "refurb.lot_message": "Refurbishment",
+  // [E-271] money, pickup, arrival, quote revision
+  "refurb.advance_due": "Refurbishment",
+  "refurb.advance_confirmed": "Refurbishment",
+  "refurb.payment_recorded": "Refurbishment",
+  "refurb.balance_due": "Refurbishment",
+  "refurb.settled": "Refurbishment",
+  "refurb.lot_arrived": "Refurbishment",
+  "refurb.quote_revised": "Refurbishment",
+  "refurb.revision_answered": "Refurbishment",
+
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
   "nbfc.dual_approval": "System",
@@ -303,6 +334,10 @@ const CRITICAL = new Set([
   "kyc_rejected_final",
   "loan.rejected",
   "loan_rejected",
+  // E-275 — a lender walked away from the file; both the admin (forward it)
+  // and the dealer (pick another NBFC) must act today.
+  "nbfc.application_rejected",
+  "loan.rejected_by_nbfc",
   "onboarding.rejected",
   "nbfc.doc_rejected",
   "vkyc.rejected",
@@ -342,6 +377,10 @@ const WARNING = new Set([
   // not been made yet. `loan.offer_closed` is NOT amber: nothing the lender can
   // do about it, same reasoning as `auction.lost`.
   "loan.lead_rerouted",
+  // E-275 — a recalled file is paused on the NBFC side until iTarang resubmits;
+  // a resubmitted one is waiting on the NBFC's second look.
+  "lead.recalled",
+  "lead.resubmitted",
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",
@@ -369,6 +408,21 @@ const WARNING = new Set([
   // `payment_settled` are deliberately NOT amber: they close an action.
   "scrap.consignment_submitted",
   "scrap.offer_countered",
+  // E-270 — each is "the other side is waiting on you": a batch to review, a
+  // proposal to answer, a truck to sign for. `agreed`, `work_started` and
+  // `completed` close an action and are deliberately not amber.
+  "refurb.lot_requested",
+  "refurb.lot_proposed",
+  "refurb.lot_countered",
+  "refurb.lot_dispatched",
+  "refurb.lot_received",
+  // E-271 — money the NBFC owes, a bank transfer iTarang must confirm, a truck
+  // at the gate that needs a receipt, a revised quote that blocks the return.
+  "refurb.advance_due",
+  "refurb.balance_due",
+  "refurb.payment_recorded",
+  "refurb.lot_arrived",
+  "refurb.quote_revised",
 ]);
 
 /**
@@ -509,6 +563,14 @@ export function linkFor(
     if (role === "dealer") return null; // dealers are not party to a scrap sale
     if (role === "nbfc") return "/nbfc/recovery/scrap";
     return "/admin/nbfc/scrap";
+  }
+
+  if (category === "Refurbishment") {
+    // emit() always sets a per-recipient href; this only catches rows written
+    // without one. Land on the list.
+    if (role === "dealer") return null; // dealers are not party to a refurbishment
+    if (role === "nbfc") return "/nbfc/recovery/refurbishment";
+    return "/admin/nbfc/refurbishment";
   }
 
   if (category === "Escalations") {

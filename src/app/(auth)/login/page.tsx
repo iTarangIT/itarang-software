@@ -128,6 +128,11 @@ export default function LoginPage() {
                 return;
             }
 
+            // NOTE: the sign-in is recorded server-side, by the /api/user/profile
+            // call above — see src/lib/usage/track.ts. It deliberately does NOT
+            // happen here: a fire-and-forget fetch issued moments before
+            // navigateTo() does window.location.assign is one a browser may drop,
+            // and when it does it fails silently.
             toast.success(`Welcome back, ${appUser.name || appUser.email}!`);
 
             if (appUser.must_change_password) {
@@ -167,6 +172,8 @@ export default function LoginPage() {
                 navigateTo('/asm');
             } else if (appUser.role === 'it') {
                 navigateTo('/it');
+            } else if (appUser.role === 'operations') {
+                navigateTo('/operations');
             } else {
                 navigateTo('/');
             }
