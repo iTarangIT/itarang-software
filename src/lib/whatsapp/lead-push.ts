@@ -40,6 +40,7 @@ import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { phoneLookupVariants } from "@/lib/ai/phone";
 import { db } from "@/lib/db/index";
 import {
+  dealerExtraNumbers,
   dealerOnboardingApplications,
   dealers,
   dealerSalespersons,
@@ -241,11 +242,12 @@ interface DealerChannel {
 /**
  * Every Meta address the dealer who owns this lead might be chatting from.
  *
- * Both routes in are covered, exactly as resolveWhatsAppDealer() covers them for
+ * All routes in are covered, exactly as resolveWhatsAppDealer() covers them for
  * the inbound direction: `dealer_onboarding_applications.wa_phone` for a dealer
  * who onboarded over WhatsApp, `dealers.owner_phone` for one who onboarded on
- * the web. Returns null for the house dealer — its leads are customers acting
- * for themselves, and there is no dealer sitting behind them.
+ * the web, and — E-279 — every active `dealer_extra_numbers` row (admin-added
+ * extra main numbers). Returns null for the house dealer — its leads are
+ * customers acting for themselves, and there is no dealer sitting behind them.
  */
 async function dealerChannelForLead(
   dealerCode: string | null | undefined,
@@ -289,7 +291,28 @@ async function dealerChannelForLead(
     )
     .limit(1);
 
-  const waPhones = [...apps.map((a) => a.waPhone), row?.ownerPhone]
+  // E-279 — extra main numbers registered by admin. Guarded: an environment
+  // without the table degrades to the two primary channels.
+  let extraPhones: (string | null)[] = [];
+  try {
+    const extras = await db
+      .select({ waPhone: dealerExtraNumbers.wa_phone })
+      .from(dealerExtraNumbers)
+      .where(
+        and(
+          eq(dealerExtraNumbers.dealer_code, dealerCode),
+          eq(dealerExtraNumbers.is_active, true),
+        ),
+      );
+    extraPhones = extras.map((e) => e.waPhone);
+  } catch (err) {
+    console.error(
+      "[WhatsApp/lead-push] extra-number lookup failed (is E-279 applied?):",
+      err,
+    );
+  }
+
+  const waPhones = [...apps.map((a) => a.waPhone), row?.ownerPhone, ...extraPhones]
     .flatMap((p) => (p ? [p, ...phoneLookupVariants(p)] : []))
     .map((p) => toWaPhone(p))
     .filter((p): p is string => Boolean(p));
