@@ -95,10 +95,9 @@ export const GET = withErrorHandler(async () => {
                 model_id: String(p.item_type_code),
                 detail: null,
                 unit_price: null,
-                max_quantity:
-                    p.max_qty_per_lead != null && Number(p.max_qty_per_lead) > 0
-                        ? Number(p.max_qty_per_lead)
-                        : null,
+                // Commercials quantity is unrestricted — the product-master
+                // max_qty_per_lead cap is NOT applied to quote lines.
+                max_quantity: null,
             }),
         ),
     };
