@@ -36,6 +36,7 @@ import {
   ADMIN_PARTY,
   SYSTEM_PARTY,
   actingParty,
+  adminParty,
   agentParty,
   customerParty,
   dealerParty,
@@ -1902,3 +1903,127 @@ export async function notifyQuotationDealerDecision(p: {
 
 /** Re-exported so routes need only one import. */
 export { ADMIN_AUDIENCE_ROLES };
+
+/* ================================================================== *
+ * E-275 — NBFC file rejection, admin recall / resubmit
+ * ================================================================== */
+
+/**
+ * E-275 — an NBFC rejected the whole file in its Acquire workspace. Goes to the
+ * admins ONLY: the admin is the gate (as with every NBFC ask), and forwards it
+ * to the dealer by hand or lets the rejection SLA do it. The bell carries a
+ * one-click "Forward to dealer" since the forward needs no input — the NBFC's
+ * note IS the reason the dealer gets.
+ */
+export async function notifyNbfcRejectedApplication(p: {
+  leadId: string;
+  assignmentId: string;
+  nbfcName: string;
+  note: string;
+}) {
+  const who = await leadLabel(p.leadId);
+  const note = p.note.trim();
+  const short = note.length > 200 ? `${note.slice(0, 197)}…` : note;
+  await emit({
+    type: "nbfc.application_rejected",
+    title: "NBFC rejected a file",
+    message: `${p.nbfcName} rejected ${who}'s file — reason: ${short || "none given"}. Forward the rejection to the dealer so they can choose another NBFC.`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: nbfcParty(p.nbfcName),
+    data: { assignmentId: p.assignmentId, note },
+    to: [
+      toAdmins({
+        href: adminLead(p.leadId, "#nbfc-actions"),
+        actions: [
+          {
+            label: "Forward to dealer",
+            endpoint: `/api/admin/nbfc-requests/rejections/${p.assignmentId}/forward`,
+            variant: "primary",
+            confirm: "Forward this rejection (with the NBFC's reason) to the dealer?",
+            successLabel: "Forwarded to dealer",
+          },
+        ],
+      }),
+    ],
+  });
+}
+
+/**
+ * E-275 — the rejection reached the dealer: an admin forwarded it, or the
+ * rejection SLA did (`from: SYSTEM_PARTY`, and the copy says so).
+ */
+export async function notifyLeadRejectedByNbfc(p: {
+  leadId: string;
+  nbfcName: string;
+  note: string;
+  from?: Party;
+}) {
+  const who = await leadLabel(p.leadId);
+  const note = p.note.trim();
+  const bySystem = p.from?.party === "system";
+  await emit({
+    type: "loan.rejected_by_nbfc",
+    title: "NBFC rejected the file — choose another NBFC",
+    message: `${p.nbfcName} rejected ${who}'s file — reason: ${note || "none given"}. Choose another NBFC.${
+      bySystem ? " (Forwarded automatically by iTarang after the admin SLA elapsed.)" : ""
+    }`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: p.from ?? ADMIN_PARTY,
+    data: { nbfc_name: p.nbfcName, note, by_system: bySystem },
+    to: [toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") })],
+  });
+}
+
+/**
+ * E-275 — an admin recalled the file from the NBFCs for revision. The dealer
+ * is told why; every NBFC on the lead is told its actions are paused.
+ */
+export async function notifyLeadRecalled(p: {
+  leadId: string;
+  note?: string | null;
+  adminName?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const note = (p.note ?? "").trim();
+  await emit({
+    type: "lead.recalled",
+    title: "File recalled by iTarang",
+    message: `iTarang recalled ${who}'s file for revision${note ? ` — ${note}` : ""}.`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: adminParty(p.adminName ?? null),
+    data: { note: note || null },
+    to: [
+      toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/product-selection") }),
+      toLeadNbfcs(p.leadId, {
+        href: nbfcLead(p.leadId),
+        message: `File recalled by iTarang — ${who}'s file is under revision. Actions are paused until it is resubmitted.`,
+      }),
+    ],
+  });
+}
+
+/** E-275 — the admin resubmitted a recalled file; NBFCs may act again. */
+export async function notifyLeadResubmitted(p: {
+  leadId: string;
+  adminName?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  await emit({
+    type: "lead.resubmitted",
+    title: "File resubmitted by iTarang",
+    message: `File resubmitted by iTarang — ${who}'s file is back with the NBFC. Please review again.`,
+    leadId: p.leadId,
+    stage: "Step 4 · Offers",
+    from: adminParty(p.adminName ?? null),
+    to: [
+      toLeadDealer(p.leadId, {
+        href: dealerLead(p.leadId, "/product-selection"),
+        message: `iTarang resubmitted ${who}'s file to the NBFC for review.`,
+      }),
+      toLeadNbfcs(p.leadId, { href: nbfcLead(p.leadId) }),
+    ],
+  });
+}

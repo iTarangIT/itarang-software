@@ -42,6 +42,8 @@ export function PricingSummary({
   gstSubtotal,
   netSubtotal,
   dealerMargin,
+  dealerMarginGst,
+  dealerMarginGstPct,
   marginMode,
   marginInput,
   marginPercentInput,
@@ -59,6 +61,8 @@ export function PricingSummary({
   gstSubtotal: number;
   netSubtotal: number;
   dealerMargin: number;
+  dealerMarginGst: number;
+  dealerMarginGstPct: number;
   marginMode: MarginMode;
   marginInput: string;
   marginPercentInput: string;
@@ -169,8 +173,13 @@ export function PricingSummary({
             </p>
           ) : (
             <p className="text-[10px] text-gray-400 mt-1.5 px-1">
-              Your earnings on this sale
+              Your earnings on this sale (before GST)
             </p>
+          )}
+          {dealerMargin > 0 && (
+            <div className="mt-2 px-1">
+              <PriceLine label={`GST on margin (${dealerMarginGstPct}%)`} value={dealerMarginGst} muted />
+            </div>
           )}
         </div>
 
@@ -194,7 +203,7 @@ export function PricingSummary({
         {marginMode === "rupees" && dealerMargin > 0 && netSubtotal > 0 && (
           <div className="px-3 py-2 bg-emerald-50 border border-emerald-100 rounded-lg">
             <p className="text-[10px] text-emerald-700 font-bold">
-              Margin = {((dealerMargin / netSubtotal) * 100).toFixed(1)}% of net subtotal
+              Margin = {((dealerMargin / netSubtotal) * 100).toFixed(1)}% of net subtotal (excl. GST)
             </p>
           </div>
         )}

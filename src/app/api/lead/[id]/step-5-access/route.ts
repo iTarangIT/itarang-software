@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { leads, loanSanctions } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { evaluateEnachGate } from "@/lib/nbfc/enach";
+import { externalLenderName } from "@/lib/leads/bajaj-fallback-text";
 
 // BRD V2 §4.0 — access gate for Step 5 (Loan Review + OTP + Dispatch).
 //   loan_sanctioned → scenario A (OTP + dispatch)
@@ -67,6 +68,7 @@ export async function GET(
           status: loanSanctions.status,
           sanctioned_at: loanSanctions.sanctioned_at,
           loan_approved_by: loanSanctions.loan_approved_by,
+          external_lender: loanSanctions.external_lender,
         })
         .from(loanSanctions)
         .where(eq(loanSanctions.lead_id, leadId))
@@ -86,6 +88,10 @@ export async function GET(
           loanSanctionId: loan?.id ?? null,
           sanctionedAt: loan?.sanctioned_at ?? null,
           sanctionedBy: loan?.loan_approved_by ?? null,
+          // E-275 — outside-partner sanction (Bajaj Finance): no NBFC on the
+          // lead, so nothing E-NACH-shaped applies; the OTP flow is unchanged.
+          externalLender: loan?.external_lender ?? null,
+          lenderName: externalLenderName(loan?.external_lender) ?? loan?.loan_approved_by ?? null,
           enachGate,
           dispatchBlocked: enachGate.required && !enachGate.satisfied,
         },

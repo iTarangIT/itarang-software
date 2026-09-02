@@ -43,15 +43,18 @@ import { db } from "@/lib/db";
 import {
   leads,
   loanSanctions,
+  nbfcLeadAssignments,
   otpConfirmations,
   productSelections,
 } from "@/lib/db/schema";
+import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
 import { reserveInventorySerial } from "@/lib/inventory/lifecycle";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
 import { projectDisbursedLoan } from "@/lib/nbfc/servicing/projectDisbursedLoan";
 import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyDispatchConfirmed } from "@/lib/notifications";
 import { notifyFulfilmentToAdmin, notifyLoanDisbursed } from "@/lib/notifications/events";
+import { dealerDisplayName } from "@/lib/notifications/emit";
 import { sendKycSms } from "@/lib/sms";
 
 const MAX_ATTEMPTS = 3;
@@ -84,6 +87,7 @@ export interface ConfirmDispatchResult {
   warrantyId: string;
   warrantyStart: Date;
   warrantyEnd: Date;
+  warrantyMonths: number;
   afterSalesId: string;
   /** The DB value actually written — see the note in the route's response. */
   loanStatus: "disbursed";
@@ -308,6 +312,44 @@ export async function confirmDispatch(opts: {
       lenderName: loan.loan_approved_by ?? null,
       loanAmount: loan.loan_amount ?? null,
     }).catch(() => {});
+
+    // E-276 — contact-email copy to the WINNING lender only (+ global monitoring
+    // CC). loan.nbfc_id is the tenant uuid (the sanction route writes
+    // actor.tenant_id there); when it's null (legacy/admin-sanctioned rows) fall
+    // back to the lead's selected assignment. External-lender sanctions have no
+    // tenant — the helper then delivers to the monitoring inbox alone.
+    (async () => {
+      let tenantId: string | null = loan.nbfc_id ?? null;
+      if (!tenantId) {
+        const [selected] = await db
+          .select({ tenant_id: nbfcLeadAssignments.tenant_id })
+          .from(nbfcLeadAssignments)
+          .where(
+            and(
+              eq(nbfcLeadAssignments.lead_id, leadId),
+              eq(nbfcLeadAssignments.status, "selected"),
+            ),
+          )
+          .limit(1);
+        tenantId = selected?.tenant_id ?? null;
+      }
+      await sendNbfcEventEmail({
+        tenantId,
+        leadId,
+        subject: `iTarang — Loan disbursed, battery dispatched (Lead ${leadId})`,
+        eventLabel: `The loan for Lead ${leadId} is now disbursed — the battery has been dispatched to the customer and the loan is live in your portfolio.`,
+        customerName: lead.full_name ?? lead.owner_name ?? null,
+        dealerName: await dealerDisplayName(dealerId),
+        extraRows: [
+          ["Lender", loan.loan_approved_by],
+          ["Loan amount", loan.loan_amount ? `₹${loan.loan_amount}` : null],
+          ["EMI", loan.emi ? `₹${loan.emi}` : null],
+          ["Battery serial", selection.battery_serial],
+          ["Warranty ID", result.warrantyId],
+        ],
+        bodyHtml: `<p>Update: the loan now appears in your NBFC dashboard's Portfolio Overview with its EMI schedule.</p>`,
+      });
+    })().catch(() => {});
   }
 
   // BRD §3.5: the customer is told their battery is dispatched. The "fully
@@ -334,6 +376,7 @@ export async function confirmDispatch(opts: {
     warrantyId: result.warrantyId,
     warrantyStart: result.warrantyStart,
     warrantyEnd: result.warrantyEnd,
+    warrantyMonths: result.warrantyMonths,
     afterSalesId: result.afterSalesId,
     loanStatus: "disbursed",
     batterySerial: selection.battery_serial!,

@@ -183,11 +183,14 @@ export default function CustomerDossierPanel({
   dossier,
   leadId,
   afterHero,
+  actionsExtra,
 }: {
   dossier: CustomerDossier;
   leadId: string;
   /** Optional cards rendered right after the hero, before Customer details. */
   afterHero?: React.ReactNode;
+  /** E-275 — extra control(s) in the action bar, e.g. "Reject file". */
+  actionsExtra?: React.ReactNode;
 }) {
   const { lead, productSelection: ps } = dossier;
   const batteryPhotos = (ps?.battery_photo_urls as string[] | null) ?? [];
@@ -211,7 +214,7 @@ export default function CustomerDossierPanel({
           </div>
         </div>
         <div className="bg-white px-5 py-3">
-          <DossierActions leadId={leadId} />
+          <DossierActions leadId={leadId} extra={actionsExtra} />
         </div>
       </div>
 
@@ -397,6 +400,8 @@ export default function CustomerDossierPanel({
               <Field k="Charger serial" v={ps.charger_serial} />
               <Field k="Category" v={ps.category} />
               <Field k="Model number" v={ps.model_number || dossier.productModel} />
+              <Field k="Dealer margin" v={fmtInr(ps.dealer_margin)} />
+              <Field k="GST on margin (18%)" v={fmtInr(ps.dealer_margin_gst_amount)} />
               <Field k="Final price" v={fmtInr(ps.final_price)} />
               <Field k="Payment mode" v={titleCase(ps.payment_mode)} />
             </dl>

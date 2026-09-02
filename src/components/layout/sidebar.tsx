@@ -5,8 +5,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Store,
   ShoppingCart,
   Users,
+  UserCheck,
   FileText,
   Calculator,
   Phone,
@@ -33,6 +35,7 @@ import {
   BarChart3,
   GitMerge,
   MessageSquare,
+  Languages,
   UserMinus,
   History,
   X,
@@ -51,6 +54,10 @@ import {
   ShieldCheck,
   Timer,
   CloudUpload,
+  Server,
+  Database,
+  Activity,
+  AudioLines,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -265,6 +272,27 @@ function nbfcSettingsSubnav(idPrefix: string) {
   };
 }
 
+// Settings → WhatsApp. Same shape as nbfcSettingsSubnav: one factory, called
+// once per role that shows the settings group, so both roles stay in step.
+function whatsappSettingsSubnav(idPrefix: string) {
+  return {
+    id: `${idPrefix}-whatsapp-settings`,
+    label: "WhatsApp",
+    icon: MessageSquare,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: "/admin/settings",
+    children: [
+      {
+        // Bot reply language: English / Hindi / Hinglish. Global for every flow.
+        id: `${idPrefix}-whatsapp-language`,
+        label: "Language",
+        icon: Languages,
+        href: "/admin/settings/whatsapp/language",
+      },
+    ],
+  };
+}
+
 // Per-role sections pinned BELOW COMMON_ITEMS.
 //
 // COMMON_ITEMS is appended to every role at the end of the build (see
@@ -300,6 +328,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           href: "/admin/settings/kyc-automation",
         },
         nbfcSettingsSubnav("sh"),
+        whatsappSettingsSubnav("sh"),
         {
           // E-255 — Google Drive backup of every stored document. Own entry
           // beside the NBFC group, same reasoning.
@@ -623,6 +652,15 @@ const roleNavigation: Record<string, any[]> = {
           icon: Recycle,
           href: "/admin/nbfc/scrap",
         },
+        // [E-270] The workshop end of the NBFC refurbishment loop: batches
+        // sent by NBFCs, the timeline/estimate proposal, both trucks, and the
+        // per-battery work panel.
+        {
+          id: "nbfc-refurb-desk",
+          label: "Refurbishment",
+          icon: Wrench,
+          href: "/admin/nbfc/refurbishment",
+        },
         {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",
@@ -693,6 +731,20 @@ const roleNavigation: Record<string, any[]> = {
           label: "Transfer",
           icon: ShoppingCart,
           href: "/admin/inventory/transfer",
+        },
+      ],
+    },
+    // Hostinger Ecommerce storefront. Deliberately a SEPARATE section from
+    // INVENTORY above: that one is the physical EV asset / Product Master
+    // system, this one is the online store. They share no data.
+    {
+      section: "ECOMMERCE",
+      items: [
+        {
+          id: "sh-ecommerce-products",
+          label: "Products",
+          icon: Store,
+          href: "/sales-head/ecommerce/products",
         },
       ],
     },
@@ -895,6 +947,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/settings/kyc-automation",
         },
         nbfcSettingsSubnav("admin"),
+        whatsappSettingsSubnav("admin"),
         {
           // E-255 — own entry, not a tab. See the sales_head block above.
           id: "admin-gdrive-mirror",
@@ -1362,6 +1415,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/dealer-portal/leads",
         },
         {
+          // E-277 — WhatsApp salespersons who create leads on the dealer's behalf.
+          id: "team",
+          label: "My Team",
+          icon: Users,
+          href: "/dealer-portal/team",
+        },
+        {
           id: "drafts",
           label: "My Drafts",
           icon: FileText,
@@ -1512,6 +1572,108 @@ const roleNavigation: Record<string, any[]> = {
           label: "Purchases",
           icon: Gavel,
           href: "/dealer-portal/auctions/purchases",
+        },
+      ],
+    },
+  ],
+
+  // The Ops Console — one screen per question the tech team actually asks.
+  // Order is deliberate: the one-slide board first (it is the standup
+  // screenshot), then the layers you drill into when it goes red, then the
+  // monitoring's own health last.
+  operations: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "ops-slide",
+          label: "One-Slide Board",
+          icon: LayoutDashboard,
+          href: "/operations",
+        },
+        {
+          id: "ops-alerts",
+          label: "Alerts",
+          icon: AlertTriangle,
+          href: "/operations/alerts",
+        },
+      ],
+    },
+    {
+      section: "INFRASTRUCTURE",
+      items: [
+        {
+          id: "ops-infrastructure",
+          label: "Hosts & Processes",
+          icon: Server,
+          href: "/operations/infrastructure",
+        },
+        {
+          id: "ops-database",
+          label: "Database Health",
+          icon: Database,
+          href: "/operations/database",
+        },
+        {
+          id: "ops-logs",
+          label: "Logs & Errors",
+          icon: FileText,
+          href: "/operations/logs",
+        },
+        {
+          id: "ops-system",
+          label: "System Usage",
+          icon: Activity,
+          href: "/operations/system",
+        },
+      ],
+    },
+    {
+      section: "COST & BUSINESS",
+      items: [
+        {
+          id: "ops-spend",
+          label: "Vendor Spend",
+          icon: Wallet,
+          href: "/operations/spend",
+        },
+        {
+          id: "ops-elevenlabs",
+          label: "ElevenLabs Usage",
+          icon: AudioLines,
+          href: "/operations/elevenlabs",
+        },
+        {
+          id: "ops-business",
+          label: "Business Metrics",
+          icon: TrendingUp,
+          href: "/operations/business",
+        },
+        {
+          id: "ops-team",
+          label: "Team Usage",
+          icon: Users,
+          href: "/operations/team",
+        },
+        {
+          // Distinct from "Team Usage" above: that one is licence and capacity
+          // from Supabase sign-in recency, this one is observed CRM usage from
+          // our own tables (E-214) and is the only per-person surface here.
+          id: "ops-usage",
+          label: "CRM Usage",
+          icon: UserCheck,
+          href: "/operations/usage",
+        },
+      ],
+    },
+    {
+      section: "MONITORING ITSELF",
+      items: [
+        {
+          id: "ops-jobs",
+          label: "Collector Health",
+          icon: ListChecks,
+          href: "/operations/jobs",
         },
       ],
     },
@@ -1940,6 +2102,7 @@ export function Sidebar() {
     if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
     if (pathname.startsWith("/asm")) return "asm";
     if (pathname.startsWith("/it")) return "it";
+    if (pathname.startsWith("/operations")) return "operations";
     return "user";
   })();
 
@@ -2046,7 +2209,10 @@ export function Sidebar() {
   //    we are selling scrap to is not a universal action, it is a wrong one.
   //  · "it" — the IT console is a single-purpose security surface (scanner
   //    findings + live attacks); expense filing is out of scope for it.
-  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it"]);
+  //  · "operations" — a shared monitoring login, not a person. Nobody files an
+  //    expense as operations@itarang.com, and the console is meant to be one
+  //    screen with nothing on it that isn't monitoring.
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it", "operations"]);
   let menuItems = [
     ...filteredMenuItems,
     ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),

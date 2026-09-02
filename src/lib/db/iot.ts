@@ -23,6 +23,8 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
+import { applicationNameOption } from "./applicationName";
+
 const globalForIotDb = globalThis as unknown as {
   iotPgClient: ReturnType<typeof postgres> | undefined;
   iotPgClientUrl: string | undefined;
@@ -53,7 +55,36 @@ function createClient(connectionString: string) {
     max: 5,
     idle_timeout: 30,
     connect_timeout: 8,
+    // Same reasoning as the CRM client: name the service in pg_stat_activity
+    // when we know it, and stay silent when we don't.
+    ...applicationNameOption(),
   });
+}
+
+/**
+ * The host:port this process would dial for the IoT database, with the
+ * credentials stripped — or null when IOT_DATABASE_URL is unset or unparseable.
+ *
+ * Exists for the "unreachable" message on /operations/database. The connection
+ * is an SSH tunnel to a loopback port (docs/intellicar-live-data-vps-setup.md),
+ * so "ECONNREFUSED" on its own leaves an operator unable to tell a stopped
+ * tunnel from a tunnel listening on a different port than the env expects —
+ * which is a real, current discrepancy: the runbook specifies 5500 and the
+ * environment holds 5544. Showing the target turns that into a one-glance
+ * diagnosis.
+ *
+ * NEVER returns the password: only hostname and port are read off the URL.
+ */
+export function iotTarget(): string | null {
+  const connectionString = process.env.IOT_DATABASE_URL;
+  if (!connectionString) return null;
+  try {
+    const url = new URL(connectionString);
+    const port = url.port || "5432";
+    return url.hostname ? `${url.hostname}:${port}` : null;
+  } catch {
+    return null;
+  }
 }
 
 export function getIotSql() {

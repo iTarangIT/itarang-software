@@ -247,6 +247,11 @@ export const TYPE_LABELS: Record<string, string> = {
   // E-245
   "loan.offer_closed": "Dealer closed a financing deal",
   "loan.lead_rerouted": "Lead re-routed to another NBFC",
+  // E-275
+  "nbfc.application_rejected": "NBFC rejected a customer's file",
+  "loan.rejected_by_nbfc": "NBFC rejection forwarded to the dealer",
+  "lead.recalled": "File recalled by iTarang for revision",
+  "lead.resubmitted": "File resubmitted to the NBFC by iTarang",
   "loan.winner_selected": "Winning NBFC selected",
   "loan.not_selected": "NBFC was not selected",
   "loan.sanctioned": "Loan sanctioned",
@@ -296,6 +301,25 @@ export const TYPE_LABELS: Record<string, string> = {
   "scrap.deal_agreed": "A scrap rate was agreed",
   "scrap.consignment_closed": "A scrap consignment was declined or withdrawn",
   "scrap.payment_settled": "A scrap consignment was paid for",
+  // E-270 — refurbishment lots
+  "refurb.lot_requested": "An NBFC sent batteries for refurbishment",
+  "refurb.lot_proposed": "iTarang proposed a refurbishment timeline and estimate",
+  "refurb.lot_countered": "An NBFC asked for changes to a refurbishment proposal",
+  "refurb.lot_agreed": "A refurbishment proposal was accepted",
+  "refurb.lot_cancelled": "A refurbishment lot was cancelled",
+  "refurb.lot_dispatched": "A refurbishment lot was dispatched",
+  "refurb.lot_received": "A refurbishment lot was received",
+  "refurb.work_started": "The workshop started on a refurbishment lot",
+  "refurb.lot_completed": "A refurbishment lot was completed",
+  "refurb.lot_message": "A message was posted on a refurbishment lot",
+  "refurb.advance_due": "An NBFC owes an advance on a refurbishment lot",
+  "refurb.advance_confirmed": "A refurbishment advance was confirmed",
+  "refurb.payment_recorded": "An NBFC recorded a bank transfer on a refurbishment lot",
+  "refurb.balance_due": "An NBFC owes the balance on a refurbishment lot",
+  "refurb.settled": "A refurbishment lot was settled",
+  "refurb.lot_arrived": "A refurbishment lot arrived at the receiving gate",
+  "refurb.quote_revised": "iTarang sent a revised refurbishment quote",
+  "refurb.revision_answered": "An NBFC answered a revised refurbishment quote",
 
   // --- Escalations ---
   escalation_raised: "Escalation raised (legacy)",

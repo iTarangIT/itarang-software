@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { applicationNameOption } from './applicationName';
 import * as schema from './schema';
 
 const connectionString = process.env.DATABASE_URL;
@@ -26,6 +27,11 @@ const queryClient = globalForDb.pgClient ?? postgres(connectionString, {
     max: 5,
     idle_timeout: 20,
     connect_timeout: 10,
+    // Names this process in pg_stat_activity so /operations/database can say
+    // WHICH service is holding connections instead of "postgres.js × 26".
+    // Omitted entirely when the process has no name it can honestly claim —
+    // see applicationName.ts.
+    ...applicationNameOption(),
 });
 
 if (process.env.NODE_ENV !== 'production') {

@@ -76,6 +76,8 @@ export interface PriorSelection {
   charger_price: string | null;
   paraphernalia_cost: string | null;
   dealer_margin: string | null;
+  dealer_margin_gst_percent?: string | null;
+  dealer_margin_gst_amount?: string | null;
   final_price: string | null;
   battery_gross: string | null;
   battery_gst_percent: string | null;
@@ -147,6 +149,9 @@ export interface CartTotals {
   gstSubtotal: number;
   netSubtotal: number;
   dealerMargin: number;
+  /** GST on the dealer margin (E-273) — the rate used and the rupee amount. */
+  dealerMarginGstPct: number;
+  dealerMarginGst: number;
   finalPrice: number;
 }
 
@@ -168,6 +173,8 @@ export interface ProductSelectionPayload {
   chargerPrice?: number;
   paraphernaliaCost?: number;
   dealerMargin?: number;
+  dealerMarginGstPercent?: number;
+  dealerMarginGstAmount?: number;
   finalPrice?: number;
   batteryGross?: number;
   batteryGstPercent?: number;

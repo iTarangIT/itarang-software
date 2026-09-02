@@ -22,9 +22,14 @@
 
 import "./doc-request-flow";
 import "./coborrower-flow";     // Phase 1
+import "./cash-flow";           // cash sale — counter path
 import "./step4-flow";          // Phase 2
 import "./offer-flow";          // Phase 3
 import "./dispatch-flow";       // Phase 4
+import "./extra-docs-flow";     // Step-4 extra documents (≤10 bucket)
+import "./team-flow";           // E-277 dealer "My Team" (salespersons)
+import "./team-leads-flow";     // E-278 dealer "Team Leads" (oversight + takeover)
+import "./history-flow";        // E-278 dealer "History" (per-lead timeline)
 
 import { registeredLeadStates } from "./lead-states";
 

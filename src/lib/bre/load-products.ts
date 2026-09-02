@@ -70,6 +70,10 @@ export async function loadActiveProductsForDealer(
       min_credit_score: nbfcLoanProducts.min_credit_score,
       max_credit_score: nbfcLoanProducts.max_credit_score,
       cibil_required: nbfcLoanProducts.cibil_required,
+      // Display-only (see LoanProductRow) — the matcher ignores these.
+      file_charge_fixed: nbfcLoanProducts.file_charge_fixed,
+      file_charge_pct: nbfcLoanProducts.file_charge_pct,
+      subvention_available: nbfcLoanProducts.subvention_available,
     })
     .from(nbfcLoanProducts)
     .innerJoin(nbfc, eq(nbfc.id, nbfcLoanProducts.nbfc_id));
@@ -112,5 +116,11 @@ export async function loadActiveProductsForDealer(
     min_credit_score: r.min_credit_score,
     max_credit_score: r.max_credit_score,
     cibil_required: r.cibil_required,
+    // Display-only — see LoanProductRow. Must be repeated here as well as in
+    // the select: this map re-shapes the row field by field, so anything added
+    // to `baseSelect` alone is silently dropped on the way out.
+    file_charge_fixed: r.file_charge_fixed,
+    file_charge_pct: r.file_charge_pct,
+    subvention_available: r.subvention_available,
   }));
 }

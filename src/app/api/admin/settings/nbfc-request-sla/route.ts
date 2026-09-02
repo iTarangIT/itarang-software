@@ -33,6 +33,9 @@ const BodySchema = z.object({
     pushSlaMinutes: Minutes,
     autoForwardToDealer: z.boolean().optional(),
     autoPushToNbfc: z.boolean().optional(),
+    // E-275 — NBFC file rejection → dealer leg.
+    rejectionSlaMinutes: Minutes,
+    autoForwardRejection: z.boolean().optional(),
 });
 
 export const GET = withErrorHandler(async () => {
