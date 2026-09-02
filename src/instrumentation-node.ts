@@ -1127,3 +1127,93 @@ export async function startDriveMirrorTicker() {
 
   console.log("[instrumentation] Google Drive mirror sweep (60s) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// E-280 — Google Drive sales-invoice scan.
+//
+// The revenue-side twin of startDriveExpenseTicker above. The company moved off
+// Zoho onto Vyapar, which has no API, so sales invoices now arrive only as PDFs
+// filed in Drive; without this the CEO's revenue figure stops moving.
+//
+// This is the mechanism that actually runs. Vercel crons do not fire on the
+// Hostinger PM2 boxes, so /api/cron/drive-sales is the secondary path (VPS
+// crontab) and this is the primary one.
+//
+// Concurrency is handled inside runSalesScan by a DB `running` row scoped to
+// sales runs, so this tick, the admin button and the cron route cannot
+// double-import — and a sales scan does not block an expense scan, since the
+// two read disjoint folders and write different tables.
+// ---------------------------------------------------------------------------
+export async function startDriveSalesTicker() {
+  // Skip on Vercel — the cron entry owns it there.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process double-scanning.
+  if (process.env.ENABLE_DRIVE_SALES_SCAN === "0") return;
+
+  // No service-account credentials → nothing to scan. Say so once at boot
+  // rather than failing silently every six hours.
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+    console.log(
+      "[instrumentation:drive-sales] Google service account not configured — ticker disabled",
+    );
+    return;
+  }
+
+  const SCAN_INTERVAL_MS =
+    Number(process.env.DRIVE_SALES_SCAN_INTERVAL_MS || "") || 6 * 60 * 60_000;
+  const MAX_FILES = Number(process.env.DRIVE_SALES_MAX_FILES_PER_RUN || "") || 25;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the
+      // googleapis graph is never pulled into the Edge compile.
+      const { runSalesScan } = await import("@/lib/sales/driveSalesScan");
+      const r = await runSalesScan({ triggeredBy: null, maxFiles: MAX_FILES });
+
+      // Log only when something actually happened — a quiet folder should not
+      // write a line every six hours forever.
+      if (r.status === "skipped") {
+        if (r.skipped_reason) {
+          console.log(`[instrumentation:drive-sales] skipped — ${r.skipped_reason}`);
+        }
+      } else if (r.files_new > 0 || r.failed > 0 || r.status === "failed") {
+        console.log(
+          `[instrumentation:drive-sales] status=${r.status} seen=${r.files_seen} ` +
+            `new=${r.files_new} imported=${r.imported} duplicate=${r.skipped_duplicate} ` +
+            `attention=${r.needs_attention} unsupported=${r.unsupported} failed=${r.failed} ` +
+            `durationMs=${r.duration_ms}`,
+        );
+      }
+      if (r.error) {
+        console.error(`[instrumentation:drive-sales] run failed: ${r.error}`);
+      }
+    } catch (err) {
+      // runSalesScan records its own failure to sales_scan_runs; surface it.
+      console.error(
+        "[instrumentation:drive-sales] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // 195s — the next free slot after the Drive mirror sweep at 180s, so a cold
+  // boot does not fire every job at once. This one is last on purpose: it is
+  // the least urgent and the most expensive per tick.
+  const kickoff = setTimeout(tick, 195_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, SCAN_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(
+    `[instrumentation] drive-sales-scan (${Math.round(
+      SCAN_INTERVAL_MS / 60_000,
+    )}m) started in-process`,
+  );
+}

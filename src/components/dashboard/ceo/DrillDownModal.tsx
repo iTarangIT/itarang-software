@@ -115,11 +115,17 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
       key: "invoice",
       label: "Invoice",
       render: (r) => {
-        const id = r.zoho_invoice_id;
-        if (!id || !r._first) return "—";
+        // E-280 — `document_url` already resolves per source: the Zoho PDF
+        // passthrough for a synced invoice, the stored copy of the original for
+        // one read out of Drive. The zoho_invoice_id path is kept only as a
+        // fallback for a row served before that field existed.
+        const href =
+          (r.document_url as string | null) ||
+          (r.zoho_invoice_id ? `/api/admin/zoho/invoices/${r.zoho_invoice_id}/pdf` : null);
+        if (!href || !r._first) return "—";
         return (
           <a
-            href={`/api/admin/zoho/invoices/${id}/pdf`}
+            href={href}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-brand-700 font-semibold hover:underline"

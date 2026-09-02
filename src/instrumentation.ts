@@ -31,6 +31,7 @@ export async function register() {
       startNbfcRequestSlaTicker,
       startRecordingTranscriptionTicker,
       startDriveMirrorTicker,
+      startDriveSalesTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -45,5 +46,6 @@ export async function register() {
     await startNbfcRequestSlaTicker();
     await startRecordingTranscriptionTicker();
     await startDriveMirrorTicker();
+    await startDriveSalesTicker();
   }
 }
