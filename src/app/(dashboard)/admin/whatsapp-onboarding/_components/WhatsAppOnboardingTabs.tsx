@@ -6,9 +6,10 @@ import { Tabs } from "@/components/ui/tabs";
 import { LiveConversationsView } from "./LiveConversationsView";
 import { CustomerLeadsView } from "./CustomerLeadsView";
 import { WhatsAppOperatorsView } from "./WhatsAppOperatorsView";
+import { MultiDealerNumbersView } from "./MultiDealerNumbersView";
 import type { ConversationSummary } from "./types";
 
-const TAB_VALUES = ["live", "leads", "team"] as const;
+const TAB_VALUES = ["live", "leads", "team", "multi"] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
 export function WhatsAppOnboardingTabs({ viewerRole }: { viewerRole: string }) {
@@ -43,6 +44,7 @@ export function WhatsAppOnboardingTabs({ viewerRole }: { viewerRole: string }) {
                     },
                     { value: "leads", label: "Customer leads" },
                     { value: "team", label: "Onboarding team" },
+                    { value: "multi", label: "Multiple dealer" },
                 ]}
             />
 
@@ -52,6 +54,9 @@ export function WhatsAppOnboardingTabs({ viewerRole }: { viewerRole: string }) {
             {active === "leads" && <CustomerLeadsView />}
             {active === "team" && (
                 <WhatsAppOperatorsView viewerRole={viewerRole} />
+            )}
+            {active === "multi" && (
+                <MultiDealerNumbersView viewerRole={viewerRole} />
             )}
         </div>
     );
