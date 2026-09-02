@@ -121,10 +121,6 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
             toast.error("Enter a valid quantity.");
             return;
         }
-        if (pickedOption.max_quantity != null && qty > pickedOption.max_quantity) {
-            toast.error(`Max ${pickedOption.max_quantity} per lead for ${pickedOption.label}.`);
-            return;
-        }
         setLines((prev) => {
             const idx = prev.findIndex(
                 (l) => l.asset_type === pickAssetType && l.product_id === pickedOption.id,
@@ -304,7 +300,6 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                                 <Input
                                     type="number"
                                     min={1}
-                                    max={pickedOption?.max_quantity ?? undefined}
                                     value={pickQty}
                                     onChange={(e) => setPickQty(e.target.value)}
                                     className="mt-1"
