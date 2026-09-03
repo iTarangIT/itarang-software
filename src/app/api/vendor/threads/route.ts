@@ -54,6 +54,26 @@ export const GET = withErrorHandler(async () => {
         counter_price: l.counter_price,
         agreed_price: l.agreed_price,
         photos: l.photos,
+        // E-191 declared battery spec — chemistry, kilograms, IOT, the
+        // working/non-working split. Listed one by one for the same reason the
+        // rest of this object is: the field-by-field rebuild is the second
+        // redaction boundary, and `...l` would hand it back its whole purpose.
+        //
+        // These are the fields a scrap buyer actually prices on, and the ones
+        // the quotation PDF has always shown. The portal asked for none of them,
+        // so it rendered "62V 33Ah · Dead" and stopped.
+        variant_type: l.variant_type,
+        brand: l.brand,
+        chemistry: l.chemistry,
+        form_factor: l.form_factor,
+        nominal_voltage: l.nominal_voltage,
+        nominal_ampere: l.nominal_ampere,
+        unit_weight_kg: l.unit_weight_kg,
+        warranty_cycles: l.warranty_cycles,
+        functional_qty: l.functional_qty,
+        non_functional_qty: l.non_functional_qty,
+        iot_battery: l.iot_battery,
+        iot_brand_name: l.iot_brand_name,
       })),
     }),
   );

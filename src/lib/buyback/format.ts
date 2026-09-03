@@ -160,3 +160,94 @@ export function specSummary(line: SpecSummarySource): string | null {
 
   return parts.length > 0 ? parts.join(" · ") : null;
 }
+
+/**
+ * The E-191 spec fields a VENDOR-facing line carries. Structural rather than an
+ * import of VendorLineView, because serialize.ts imports this module — typing
+ * the parameter by that view would close an import cycle.
+ */
+export interface VendorLineMetaSource {
+  variant_type?: string | null;
+  brand?: string | null;
+  chemistry?: string | null;
+  form_factor?: string | null;
+  nominal_voltage?: number | string | null;
+  nominal_ampere?: number | string | null;
+  /** As declared, per unit. */
+  unit_weight_kg?: number | string | null;
+  /** qty × unit_weight_kg — the number a scrap buyer actually prices against. */
+  line_weight_kg?: number | string | null;
+  /** RATED life. Rendered as "rated", always — see below. */
+  warranty_cycles?: number | null;
+  /** "6 working · 3 non-working · 1 untested", already assembled by the serializer. */
+  condition_split_label?: string | null;
+  iot_battery?: boolean | null;
+  /** Already carries "(assumed)" when we guessed the brand. */
+  iot_brand_label?: string | null;
+}
+
+/** A declared positive quantity as a trimmed string, or null when undeclared.
+ * Zero is NOT a declaration: a 0 kg battery is a blank field, and `"0.000"` is a
+ * truthy string, so a plain falsy check would print it. */
+function declared(value: number | string | null | undefined): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return trimNumber(n);
+}
+
+/**
+ * THE vendor-facing battery meta line, as ORDERED PARTS (never pre-joined —
+ * same reason formatBatteryLine returns parts: the PDF has to HTML-escape each
+ * one, and the portal renders them into elements).
+ *
+ * Shared by the quotation PDF and the vendor portal. Every part is a property of
+ * the BATTERY: none of it identifies who is selling, which is what makes it safe
+ * to show a vendor at all.
+ *
+ * Undeclared fields are OMITTED, not rendered as "—". A dash reads as "we asked
+ * and it has none", which is a different claim from "the dealer did not declare
+ * this" — and a vendor prices on the difference.
+ *
+ * Two rules here are load-bearing:
+ *   · warranty_cycles ALWAYS reads "rated". It is design life, not consumed
+ *     life; printed bare a vendor reads it as the cycle count they asked for,
+ *     which we do not have.
+ *   · the IOT brand is rendered from iot_brand_label — the single string that
+ *     already carries "(assumed)". A caller given the brand and a flag would
+ *     eventually print the brand and drop the caveat.
+ */
+export function vendorLineMeta(line: VendorLineMetaSource): string[] {
+  const nominalV = declared(line.nominal_voltage);
+  const nominalAh = declared(line.nominal_ampere);
+  const unitKg = declared(line.unit_weight_kg);
+  const lineKg = declared(line.line_weight_kg);
+  const cycles = declared(line.warranty_cycles);
+
+  const formFactor = line.form_factor
+    ? line.form_factor.charAt(0).toUpperCase() + line.form_factor.slice(1).toLowerCase()
+    : null;
+
+  // Whichever of volts/amp-hours was declared. Both is the normal case (the
+  // submit gate requires the pair), but dropping a declared voltage because its
+  // Ah was blank would hide a number the vendor is entitled to.
+  const nominal =
+    nominalV || nominalAh
+      ? `${[nominalV && `${nominalV}V`, nominalAh && `${nominalAh}Ah`]
+          .filter(Boolean)
+          .join(" ")} nominal`
+      : null;
+
+  return [
+    line.variant_type,
+    line.brand,
+    line.chemistry,
+    formFactor,
+    nominal,
+    unitKg && `${unitKg} kg/unit`,
+    lineKg && `${lineKg} kg total`,
+    cycles && `${cycles} cycles rated`,
+    line.condition_split_label,
+    line.iot_battery === false ? "Non-IOT" : line.iot_brand_label,
+  ].filter((part): part is string => Boolean(part));
+}

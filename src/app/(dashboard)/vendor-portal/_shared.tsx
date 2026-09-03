@@ -19,18 +19,23 @@ import type { ReactNode } from "react";
 
 import { useAuth } from "@/components/auth/AuthProvider";
 import { inr } from "@/lib/buyback/format";
+import type { VendorLineView } from "@/lib/buyback/serialize";
 
-export interface VendorLine {
-  line_id: string;
-  spec_label: string;
-  condition: string;
-  quantity: number;
-  ask_price: number | string | null;
-  counter_price: number | string | null;
-  agreed_price: number | string | null;
-  /** Battery photo ids — rendered via GET /api/vendor/threads/:id/photo. */
-  photos: { id: string }[];
-}
+/**
+ * A battery line, exactly as the serializer defines it — an ALIAS, not a copy.
+ *
+ * This used to be a hand-written subset listing six of the eighteen fields
+ * toVendorLine emits, and that is how the portal lost the whole E-191 battery
+ * spec: a type that silently described less than the payload carried, so
+ * `line.chemistry` was a type error rather than a rendered fact and nobody
+ * noticed the API had stopped sending it either. Aliasing the server's own view
+ * means the two cannot drift again — a field added there is available here the
+ * same day, and one removed there breaks the build here rather than the screen.
+ *
+ * Safe to import: serialize.ts pulls in only format/line-spec/state-machine, all
+ * pure, and this is a type-only import that erases at build.
+ */
+export type VendorLine = VendorLineView;
 
 export interface VendorThread {
   thread_id: string;
@@ -103,6 +108,22 @@ export function topPerUnit(values: Array<number | string | null>): number | null
 
 export function perUnitLabel(value: number | null): string {
   return value === null ? "—" : `${inr(value)}/u`;
+}
+
+/**
+ * The lot's declared weight — the number a recycler prices on before any other.
+ *
+ * Sums only the lines that DECLARED a unit weight, and says how many those were,
+ * so the caller can caveat a partial total. An undeclared weight is never
+ * treated as zero: that understates the lot, and understating the thing the
+ * vendor is pricing on is how you get a quote they cannot honour. Same rule as
+ * toVendorQuotation's total_weight_kg, which is what the PDF prints.
+ */
+export function lotWeight(lines: VendorLine[]): { kg: number; declared: number; of: number } | null {
+  const weighed = lines.filter((l) => Number.isFinite(Number(l.line_weight_kg)));
+  if (weighed.length === 0) return null;
+  const kg = weighed.reduce((sum, l) => sum + Number(l.line_weight_kg), 0);
+  return { kg: Math.round(kg * 1000) / 1000, declared: weighed.length, of: lines.length };
 }
 
 /** "18 Jul 2026" — or "—" for a null/invalid timestamp. */

@@ -35,7 +35,6 @@ import {
   buybackRequests,
   dealerLeads,
   expenseSubmissions,
-  zohoInvoices,
 } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
@@ -46,6 +45,14 @@ import {
   resolveWindowParams,
   type TrendGranularity,
 } from "@/lib/dashboard/salesWindow";
+// E-280 — revenue now comes from BOTH zoho_invoices and the sales invoices read
+// out of Google Drive. The rules that decide what counts live in one place so
+// this route, the drill-down, the snapshot and /ceo/invoices cannot disagree.
+import {
+  outstandingTotal,
+  revenueSeries,
+  revenueTotal,
+} from "@/lib/dashboard/revenueSource";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,34 +116,17 @@ export async function GET(req: NextRequest) {
       : defaultGranularity(resolved.window);
 
     // ── Revenue ──────────────────────────────────────────────────────────────
-    // Void excluded, drafts counted — the rule the CEO signed off on for the
-    // Revenue card, kept identical here so the two never disagree.
-    const notVoid = sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`;
-    const invoiceWindow = [notVoid];
-    if (startStr) invoiceWindow.push(gte(zohoInvoices.invoice_date, startStr));
-    if (endStr) invoiceWindow.push(lt(zohoInvoices.invoice_date, endStr));
-
-    const revenueQ = db
-      .select({ total: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)` })
-      .from(zohoInvoices)
-      .where(and(...invoiceWindow));
+    // Void excluded, drafts counted — the rule the CEO signed off on. It now
+    // lives in revenueSource.ts and spans both sources; see that module's
+    // header for why the union is built in TS rather than as a database view.
+    const revenueQ = revenueTotal(startStr, endStr);
 
     // ── Outstanding ──────────────────────────────────────────────────────────
     // Windowed on invoice_date, unlike the standalone Outstanding Credits card
     // which is an all-time snapshot. Inside the Realization drill-down it sits
     // beside a windowed revenue and a windowed expense, and a receivable from
     // outside the period would not belong next to either.
-    const outstandingWindow = [
-      sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('paid', 'void', 'draft'))`,
-      sql`COALESCE(${zohoInvoices.balance}, 0) > 0`,
-    ];
-    if (startStr) outstandingWindow.push(gte(zohoInvoices.invoice_date, startStr));
-    if (endStr) outstandingWindow.push(lt(zohoInvoices.invoice_date, endStr));
-
-    const outstandingQ = db
-      .select({ total: sql<string>`COALESCE(SUM(${zohoInvoices.balance}), 0)` })
-      .from(zohoInvoices)
-      .where(and(...outstandingWindow));
+    const outstandingQ = outstandingTotal(startStr, endStr);
 
     // ── Expense ──────────────────────────────────────────────────────────────
     // Approved submissions only, windowed on COALESCE(expense_date,
@@ -167,19 +157,7 @@ export async function GET(req: NextRequest) {
     // `granularity` is whitelisted above, so nothing user-supplied reaches raw.
     const labelFmt = bucketLabelFormat(granularity);
 
-    const revenueBucket = sql.raw(
-      `date_trunc('${granularity}', "zoho_invoices"."invoice_date")`,
-    );
-    const revenueSeriesQ = db
-      .select({
-        bucket: sql<string>`${revenueBucket}`,
-        name: sql<string>`to_char(${revenueBucket}, ${labelFmt})`,
-        revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
-      })
-      .from(zohoInvoices)
-      .where(and(...invoiceWindow))
-      .groupBy(revenueBucket)
-      .orderBy(revenueBucket);
+    const revenueSeriesQ = revenueSeries(granularity, labelFmt, startStr, endStr);
 
     // Same effective-date expression the expense total uses, so a bar and the
     // card above it are computed from one definition of "when this was spent".
@@ -228,11 +206,11 @@ export async function GET(req: NextRequest) {
     })();
 
     const [
-      [revenueAgg],
-      [outstandingAgg],
+      revenueValue,
+      outstandingValue,
       [expenseAgg],
       [leadsAgg],
-      revenueSeries,
+      revenueSeriesRows,
       expenseSeries,
       buyback,
     ] = await Promise.all([
@@ -245,9 +223,9 @@ export async function GET(req: NextRequest) {
       buybackP,
     ]);
 
-    const revenue = Number(revenueAgg?.total || 0);
+    const revenue = revenueValue;
     const expense = Number(expenseAgg?.total || 0);
-    const outstanding = Number(outstandingAgg?.total || 0);
+    const outstanding = outstandingValue;
 
     // Revenue and expense are bucketed by separate queries, so a period with
     // spend but no invoices (or the reverse) exists in only one of them. Merge
@@ -260,7 +238,7 @@ export async function GET(req: NextRequest) {
     const keyOf = (b: unknown) =>
       b instanceof Date ? b.toISOString() : String(b);
 
-    for (const r of revenueSeries) {
+    for (const r of revenueSeriesRows) {
       const key = keyOf(r.bucket);
       byBucket.set(key, {
         bucket: key,

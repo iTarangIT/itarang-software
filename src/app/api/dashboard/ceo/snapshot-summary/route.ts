@@ -19,7 +19,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { expenseSubmissions, inventory, zohoInvoices } from "@/lib/db/schema";
+import { expenseSubmissions, inventory } from "@/lib/db/schema";
+// E-280 — "Sales to Dealer" spans both revenue sources.
+import { revenueTotal } from "@/lib/dashboard/revenueSource";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import { approvedExpenseInWindow, resolveWindow } from "@/lib/dashboard/salesWindow";
@@ -75,13 +77,6 @@ export async function GET(req: NextRequest) {
     if (startStr) purchaseConds.push(gte(inventory.oem_invoice_date, sql`${startStr}::date`));
     if (endStr) purchaseConds.push(lt(inventory.oem_invoice_date, sql`${endStr}::date`));
 
-    // sales — zoho_invoices.invoice_date is a date column; compare the strings.
-    const salesConds = [
-      sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
-    ];
-    if (startStr) salesConds.push(gte(zohoInvoices.invoice_date, startStr));
-    if (endStr) salesConds.push(lt(zohoInvoices.invoice_date, endStr));
-
     // expenses — approved only, windowed on the expense's effective date
     // (E-216: COALESCE(expense_date, approved_at::date)) so `net` below is
     // computed against the same figure the Expenses card shows.
@@ -92,10 +87,8 @@ export async function GET(req: NextRequest) {
         .select({ total: sql<string>`COALESCE(SUM(${inventory.final_amount}), 0)` })
         .from(inventory)
         .where(and(...purchaseConds)),
-      db
-        .select({ total: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)` })
-        .from(zohoInvoices)
-        .where(and(...salesConds)),
+      // sales — void excluded, drafts counted, across Zoho and Drive alike.
+      revenueTotal(startStr, endStr),
       db
         .select({ total: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)` })
         .from(expenseSubmissions)
@@ -103,7 +96,7 @@ export async function GET(req: NextRequest) {
     ]);
 
     const purchases = Number(purchaseAgg[0]?.total || 0);
-    const sales = Number(salesAgg[0]?.total || 0);
+    const sales = salesAgg;
     const otherExpenses = Number(expenseAgg[0]?.total || 0);
 
     return NextResponse.json({

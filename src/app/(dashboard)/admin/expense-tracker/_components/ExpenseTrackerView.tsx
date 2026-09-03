@@ -24,7 +24,8 @@ import {
 } from "@/lib/expenses";
 import { monthLabel } from "@/lib/expenses/monthRange";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
-import { DriveFoldersPanel } from "./DriveFoldersPanel";
+import { DriveFoldersPanel, SALES_PANEL } from "./DriveFoldersPanel";
+import { SalesScanAttentionPanel } from "./SalesScanAttentionPanel";
 import { NeedsAttentionPanel } from "./NeedsAttentionPanel";
 
 interface ExtractedInvoice {
@@ -359,6 +360,16 @@ export function ExpenseTrackerView() {
           it is now the main way invoices arrive; the uploader is the exception
           for a bill that never made it into a folder. */}
       <DriveFoldersPanel />
+
+      {/* E-280 — the revenue half of the same accounts folder. Registered
+          separately with the include/exclude filters inverted, so the purchase
+          scanner and this one can never read each other's side. */}
+      <DriveFoldersPanel config={SALES_PANEL} />
+
+      {/* E-280 — sales files that never became an invoice (missing from
+          revenue) and invoices that imported but look wrong. Renders nothing
+          when both are empty. */}
+      <SalesScanAttentionPanel />
 
       {/* E-216 — anything imported that a human still needs to look at. Renders
           nothing at all when the queue is empty. */}
