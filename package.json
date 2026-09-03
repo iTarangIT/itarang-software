@@ -69,7 +69,8 @@
     "test:e2e:prod-eval": "infisical run --env=prod -- cross-env HEADED=1 E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
     "test:e2e:prod-eval:mutations": "infisical run --env=prod -- cross-env HEADED=1 E2E_ALLOW_PROD=1 E2E_PROD_MUTATIONS=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
     "test:e2e:prod-eval:headless": "infisical run --env=prod -- cross-env E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
-    "verify:whatsapp-journey": "node --import tsx --env-file=.env.local scripts/verify-whatsapp-journey.ts"
+    "verify:whatsapp-journey": "node --import tsx --env-file=.env.local scripts/verify-whatsapp-journey.ts",
+    "verify:vendor-thread-spec": "node --import tsx --env-file=.env.local scripts/verify-vendor-thread-spec.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.1118.0",

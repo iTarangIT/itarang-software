@@ -36,7 +36,7 @@
  * lying about itself. The route caps; this renders what it is given.
  */
 
-import { inr } from "../format";
+import { inr, vendorLineMeta } from "../format";
 import type { VendorQuotationView } from "../serialize";
 
 export interface QuotationTemplateInput {
@@ -78,32 +78,15 @@ export function renderQuotationHtml(input: QuotationTemplateInput): string {
 
   const rows = q.lines
     .map((line) => {
-      // What a scrap buyer actually prices on. Every part is a property of the
-      // BATTERY — none of it identifies the seller. Null parts are OMITTED, not
-      // rendered as "—": a dash reads as "we asked and it has none", which is a
-      // different claim from "the dealer did not declare this".
-      const meta = [
-        line.variant_type,
-        line.brand,
-        line.chemistry,
-        line.form_factor,
-        line.nominal_voltage && line.nominal_ampere
-          ? `${line.nominal_voltage}V ${line.nominal_ampere}Ah nominal`
-          : null,
-        line.unit_weight_kg ? `${line.unit_weight_kg} kg/unit` : null,
-        line.line_weight_kg ? `${line.line_weight_kg} kg total` : null,
-        // "rated", always. warranty_cycles is design life, not consumed life —
-        // printing it bare would let a vendor read it as the cycle count they
-        // asked for, which we do not have.
-        line.warranty_cycles ? `${line.warranty_cycles} cycles rated` : null,
-        line.condition_split_label,
-        // Already carries "(assumed)" when we guessed. One string, so it cannot
-        // be rendered without its provenance.
-        line.iot_battery === false ? "Non-IOT" : line.iot_brand_label,
-      ]
-        .filter(Boolean)
-        .map((part) => esc(part))
-        .join(" · ");
+      // What a scrap buyer actually prices on, from THE shared vendor formatter —
+      // the same parts, in the same order, that the vendor portal renders. This
+      // list used to be built here, which is precisely the per-screen template
+      // format.ts exists to prevent: the portal grew a battery view and the two
+      // immediately disagreed about what a vendor may see.
+      //
+      // Escaped part-by-part rather than after joining: every one of these is
+      // dealer-entered text, and the separator is ours.
+      const meta = vendorLineMeta(line).map(esc).join(" · ");
 
       return `
       <tr>
