@@ -240,6 +240,35 @@ export async function listPendingVendors(): Promise<PendingVendorRow[]> {
   }));
 }
 
+/**
+ * A vendor-facing thread line — the admin row PLUS the E-191 declared battery
+ * spec (item 14).
+ *
+ * A separate type rather than fields bolted onto ThreadLineRow, which
+ * threadsForDeal also returns: that query does not select any of this, and a
+ * shared type would have quietly claimed it did.
+ *
+ * Every field here is a property of the BATTERY. That is the whole test for
+ * whether something may live on this type: none of it says who is selling, so
+ * none of it can identify the dealer or reveal what we paid them. It already
+ * reaches this vendor as the quotation PDF's spec line — the portal was simply
+ * never given it, which is the bug.
+ */
+export interface VendorThreadLineRow extends ThreadLineRow {
+  variant_type: string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
+}
+
 /** One of a vendor's own threads, before serialization. */
 export interface VendorOwnThreadRow {
   thread_id: string;
@@ -250,7 +279,7 @@ export interface VendorOwnThreadRow {
   responded_at: Date | null;
   pickup_city: string | null;
   pickup_state: string | null;
-  lines: ThreadLineRow[];
+  lines: VendorThreadLineRow[];
   /** E-196 — has this vendor already raised their PO on this deal? */
   has_vendor_po: boolean;
   /** E-196 — the live proforma iTarang issued against their PO, if any. */
@@ -308,6 +337,26 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
             'ask_price',     vtl.ask_price,
             'counter_price', vtl.counter_price,
             'agreed_price',  vtl.agreed_price,
+            -- E-191 declared battery spec — the same set the quotation PDF has
+            -- carried since item 14. Selecting it here is the whole of the
+            -- portal fix: toVendorLine has always emitted these fields, so the
+            -- vendor's screens rendered them as undefined for want of a SELECT
+            -- while the PDF in that same vendor's inbox spelled them out.
+            --
+            -- All bl.* / cv.* — battery columns. Nothing dealer-side joins in,
+            -- which is the test for anything added to this object.
+            'variant_type',       cv.type,
+            'brand',              bl.brand,
+            'chemistry',          bl.chemistry,
+            'form_factor',        bl.form_factor,
+            'nominal_voltage',    bl.nominal_voltage,
+            'nominal_ampere',     bl.nominal_ampere,
+            'unit_weight_kg',     bl.unit_weight_kg,
+            'warranty_cycles',    bl.warranty_cycles,
+            'functional_qty',     bl.functional_qty,
+            'non_functional_qty', bl.non_functional_qty,
+            'iot_battery',        bl.iot_battery,
+            'iot_brand_name',     bl.iot_brand_name,
             -- Battery photo ids for this line (capped). IDs only — the vendor
             -- photo route re-scopes each id to the caller's own thread before it
             -- serves bytes, so an id is safe to hand over; a key never is.
@@ -350,7 +399,7 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
     responded_at: (r.responded_at as Date) ?? null,
     pickup_city: (r.pickup_city as string) ?? null,
     pickup_state: (r.pickup_state as string) ?? null,
-    lines: (r.lines as ThreadLineRow[]) ?? [],
+    lines: (r.lines as VendorThreadLineRow[]) ?? [],
     has_vendor_po: Boolean(r.has_vendor_po),
     proforma: (r.proforma as VendorOwnThreadRow["proforma"]) ?? null,
   }));
