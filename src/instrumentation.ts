@@ -31,6 +31,7 @@ export async function register() {
       startNbfcRequestSlaTicker,
       startRecordingTranscriptionTicker,
       startDriveMirrorTicker,
+      startDriveSalesTicker,
       startOpsMonitorTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
@@ -46,6 +47,9 @@ export async function register() {
     await startNbfcRequestSlaTicker();
     await startRecordingTranscriptionTicker();
     await startDriveMirrorTicker();
+    // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last
+    // free slot, because it is the least urgent and the most expensive per tick.
+    await startDriveSalesTicker();
     // Ops Console collector runner (E-210). Last, and its own kickoff is
     // staggered 75s out, so a cold boot finishes wiring the app before the
     // monitoring starts querying the database it monitors.
