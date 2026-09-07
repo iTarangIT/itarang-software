@@ -69,13 +69,27 @@ ALTER TABLE city_default_loan_products
 -- to include the dealer. It is strictly WIDER than the index it replaces — the
 -- existing rows all have dealer_code NULL and were already unique on
 -- (state, city) — so the rebuild cannot fail on live data.
+--
+-- Guarded the same way E-282's key is: E-289 replaces v2 with _active_key_v3
+-- (which adds the two customer columns), so re-running THIS file on an
+-- up-to-date database must not resurrect v2 — it would reject two rules that
+-- differ only in the customer they target. Dropping the E-282 key stays
+-- unconditional: nothing ever wants it back.
 DROP INDEX IF EXISTS city_default_loan_products_active_key;
-CREATE UNIQUE INDEX IF NOT EXISTS city_default_loan_products_active_key_v2
-  ON city_default_loan_products (
-    lower(coalesce(dealer_code, '')),
-    lower(coalesce(state, '')),
-    lower(coalesce(city, ''))
-  ) WHERE is_active;
+DO $do$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+     WHERE tablename = 'city_default_loan_products'
+       AND indexname = 'city_default_loan_products_active_key_v3'
+  ) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS city_default_loan_products_active_key_v2
+      ON city_default_loan_products (
+        lower(coalesce(dealer_code, '')),
+        lower(coalesce(state, '')),
+        lower(coalesce(city, ''))
+      ) WHERE is_active;
+  END IF;
+END; $do$;
 
 -- resolveDefaultProductRules() filters on is_active and matches dealer_code
 -- OR state; the state index from E-282 stays, this covers the dealer leg.
