@@ -1,5 +1,5 @@
 /**
- * GET / PUT one digest's settings (E-285, generalised by E-286).
+ * GET / PUT one digest's settings (E-287, generalised by E-288).
  *
  * Kept out of the `/api/admin/settings` bundle for the same reason
  * `/api/admin/settings/kyc-automation` is: that bundle is the BRD §0.11/§0.12
@@ -67,7 +67,7 @@ export const GET = withErrorHandler(
 
         const [settings, runs] = await Promise.all([
             getDigestSettings(kind),
-            // Empty on a database without E-286 applied — the screen still lets an
+            // Empty on a database without E-288 applied — the screen still lets an
             // admin configure the digest, it just cannot show a history yet.
             recentDigestRuns(kind.id, 8),
         ]);

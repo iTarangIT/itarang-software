@@ -1,5 +1,5 @@
 /**
- * The scheduled digest email (E-285, generalised by E-286).
+ * The scheduled digest email (E-287, generalised by E-288).
  *
  * ONE TEMPLATE, EVERY KIND, TWO MOMENTS: the 09:00 IST send that reports
  * YESTERDAY and the 19:00 IST send that reports TODAY SO FAR. What differs

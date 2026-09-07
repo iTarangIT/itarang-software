@@ -1,6 +1,6 @@
 "use client";
 
-// E-280 — the "NBFC Files" tab of the KYC review queue.
+// E-282 — the "NBFC Files" tab of the KYC review queue.
 //
 // One row per file sitting with a lender, sorted longest-waiting first, with
 // the stage it is in, how long it has been there and whose move it is. Expand a

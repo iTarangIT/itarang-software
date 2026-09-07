@@ -1,5 +1,5 @@
 /**
- * The IST day window, in SQL (E-286).
+ * The IST day window, in SQL (E-288).
  *
  * Two helpers, because this codebase has two kinds of timestamp column and using
  * the wrong helper is a silent 5h30m error in both directions.

@@ -1,5 +1,5 @@
 /**
- * "Send test now" for one digest (E-285, generalised by E-286).
+ * "Send test now" for one digest (E-287, generalised by E-288).
  *
  * Mails the real template with the real numbers, immediately, ignoring both the
  * schedule and the master switch — testing the template and the mailbox is

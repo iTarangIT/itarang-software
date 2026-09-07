@@ -1,5 +1,5 @@
 /**
- * E-283 — the purge policy for a customer application, on its own with no I/O.
+ * E-285 — the purge policy for a customer application, on its own with no I/O.
  *
  * Deleting an application is per-party: the dealer, the iTarang admin and each
  * NBFC the lead was routed to each remove it from their OWN dashboard. This

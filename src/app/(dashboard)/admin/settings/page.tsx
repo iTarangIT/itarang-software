@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 // Admin-only configuration. Two tabs, one per channel: per-dashboard notification
 // access for the in-app bell (E-231) and per-type control of the email emit()
-// sends (E-282).
+// sends (E-284).
 // KYC auto-approval (E-246) has its own route at /admin/settings/kyc-automation
 // and its own sidebar entry. The BRD §0.11/§0.12 tabs for assignment rules, the
 // holiday calendar and ASM territory mapping were removed from the tab strip on

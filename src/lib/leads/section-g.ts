@@ -198,7 +198,7 @@ export async function loadSectionGOptions(
 }
 
 /**
- * E-280/E-281/E-284 — narrow the matched list to the lender an admin pinned for
+ * E-282/E-283/E-286 — narrow the matched list to the lender an admin pinned for
  * this dealer and/or the LOCATION OF THAT DEALER (its own `accounts` address,
  * not the customer's).
  *
@@ -219,7 +219,7 @@ export async function loadSectionGOptions(
  * full list. Only when no rule fits is the full matched list returned.
  *
  * With nothing configured this is the identity function, which is what keeps
- * every un-pinned dealer and city behaving exactly as it did before E-280.
+ * every un-pinned dealer and city behaving exactly as it did before E-282.
  */
 async function applyPinnedDefault(
   lead: SectionGLead,
@@ -227,7 +227,7 @@ async function applyPinnedDefault(
 ): Promise<SectionGNbfc[]> {
   if (grouped.length === 0) return grouped;
 
-  // Dealer only: since E-284 the rule's state/city describe the DEALER, which
+  // Dealer only: since E-286 the rule's state/city describe the DEALER, which
   // the resolver reads from `accounts` itself. The customer's lead.state /
   // lead.city are no longer part of this match (they still drive the BRE's own
   // `active_locations` rule, which runs before this).

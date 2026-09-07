@@ -3,7 +3,7 @@ import { DefaultLoanProductForm } from "../_components/DefaultLoanProductForm";
 
 export const dynamic = "force-dynamic";
 
-// E-280/E-281/E-284 — Settings → Loan Product. Its own route beside KYC Automation
+// E-282/E-283/E-286 — Settings → Loan Product. Its own route beside KYC Automation
 // and NBFC Request SLA for the same reason those are: a distinct concern rather
 // than a tab. Same gate as its siblings.
 export default async function LoanProductDefaultsSettingsPage() {

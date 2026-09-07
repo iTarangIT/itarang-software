@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-283 — the delete control for a customer application, shared by the admin
+ * E-285 — the delete control for a customer application, shared by the admin
  * queues and the NBFC Acquire pipeline.
  *
  * The wording is the point. Deleting here removes the application from THIS

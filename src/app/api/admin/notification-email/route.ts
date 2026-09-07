@@ -1,5 +1,5 @@
 // GET/PATCH /api/admin/notification-email — which notification types ALSO go out
-// by email (E-282). The email-channel sibling of /api/admin/notification-access.
+// by email (E-284). The email-channel sibling of /api/admin/notification-access.
 //
 // The payload carries only the OVERRIDES plus the code's own defaults-off list,
 // never the full matrix: the type vocabulary and all ~200 labels come from

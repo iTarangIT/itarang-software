@@ -1,5 +1,5 @@
 /**
- * E-285/E-286 — verify the scheduled digests against a real DB.
+ * E-287/E-288 — verify the scheduled digests against a real DB.
  *
  * READ-ONLY. It counts and it reads; it never writes and it never sends mail.
  * (To actually send one, use a settings screen's "Send test now", or
@@ -80,7 +80,7 @@ async function main() {
   }
 
   const host = (process.env.DATABASE_URL || "").match(/@([^:/]+)/)?.[1] ?? "?";
-  console.log(`\nE-285/E-286 digests — verifying against ${host}`);
+  console.log(`\nE-285/E-288 digests — verifying against ${host}`);
   console.log(`IST day under test: ${day}   (today IST is ${istDate()})\n`);
 
   // --- The ledger, once ------------------------------------------------------
@@ -97,7 +97,7 @@ async function main() {
   if (!ledgerPresent) {
     skip(
       "digest_runs exists",
-      "E-286 not applied here — safe, but NO DIGEST WILL EVER SEND on this database",
+      "E-288 not applied here — safe, but NO DIGEST WILL EVER SEND on this database",
     );
   } else {
     pass("digest_runs exists");

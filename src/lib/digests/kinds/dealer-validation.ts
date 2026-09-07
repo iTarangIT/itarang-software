@@ -1,5 +1,5 @@
 /**
- * Dealer Validation digest (E-285), as a descriptor (E-286).
+ * Dealer Validation digest (E-287), as a descriptor (E-288).
  *
  * The numbers behind Admin → Dealer Validation (/admin/dealer-verification):
  * what the onboarding queue did in a day, and what is still sitting in it.

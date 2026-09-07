@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-// E-280 — the "NBFC Files" tab: where every file sitting with a lender is,
+// E-282 — the "NBFC Files" tab: where every file sitting with a lender is,
 // how long it has been there and whose move it is. Its own component because
 // it shares nothing with the document-review body below except this page.
 import NbfcFileTrackerTable from './_components/NbfcFileTrackerTable';
@@ -37,7 +37,7 @@ type LeadReview = {
     pending_count: number;
 };
 
-// Not a document-review filter — a sibling view on the same page (E-280).
+// Not a document-review filter — a sibling view on the same page (E-282).
 const NBFC_TAB = 'nbfc';
 
 export default function AdminKYCReviewPage() {
@@ -196,7 +196,7 @@ export default function AdminKYCReviewPage() {
                                         {expandedLead === lead.lead_id ? <ChevronDown className="w-5 h-5 text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
                                     </div>
                                 </button>
-                                {/* E-283 — clears the application from the ADMIN
+                                {/* E-285 — clears the application from the ADMIN
                                     dashboards only; dealer and lender keep theirs. */}
                                 <div className="flex items-center pr-4">
                                     <DeleteApplicationButton

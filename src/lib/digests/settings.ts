@@ -1,5 +1,5 @@
 /**
- * Digest settings — the database half (E-285, generalised by E-286).
+ * Digest settings — the database half (E-287, generalised by E-288).
  *
  * One jsonb blob per kind, under that kind's `settingsKey` in `app_settings` —
  * the same generic key/value store used by `kyc_auto_approval`,

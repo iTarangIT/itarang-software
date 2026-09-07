@@ -59,7 +59,7 @@ const acquirePendingWhere = (tenantId: string) =>
   and(
     eq(nbfcLeadAssignments.tenant_id, tenantId),
     eq(nbfcLeadAssignments.status, "pending"),
-    // E-283 — an application this tenant deleted is off its pipeline, so it
+    // E-285 — an application this tenant deleted is off its pipeline, so it
     // must not keep counting on the bell either.
     isNull(nbfcLeadAssignments.deleted_at),
   );

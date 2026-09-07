@@ -78,7 +78,7 @@ export async function GET(req: NextRequest) {
           dealer_id: leads.dealer_id,
         })
         .from(leads)
-        // E-283 — deleted by the admin: gone from this queue, still live for
+        // E-285 — deleted by the admin: gone from this queue, still live for
         // the dealer and the lender until they delete too.
         .where(and(inArray(leads.id, leadIds), isNull(leads.deleted_by_admin_at))),
       db

@@ -1,5 +1,5 @@
 /**
- * KYC Review digest (E-286).
+ * KYC Review digest (E-288).
  *
  * The numbers behind Admin → KYC Review (/admin/kyc-review): what the KYC queue
  * decided in a day, and what is still sitting in it.

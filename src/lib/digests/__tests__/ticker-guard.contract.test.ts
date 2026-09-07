@@ -13,7 +13,7 @@
  *
  * Every other ticker in instrumentation-node.ts is safe to run in dev because
  * its work is idempotent, internal, or self-correcting. This one sends once, to
- * a fixed external address, and records that it did — and since E-286 it does so
+ * a fixed external address, and records that it did — and since E-288 it does so
  * for every registered kind at once.
  *
  * If you are here because this test failed, do not delete the assertion. The
@@ -80,7 +80,7 @@ describe("digest ticker", () => {
   });
 
   it("runs every registered kind, not just one", () => {
-    // The whole point of E-286. A ticker that hard-codes one kind would leave a
+    // The whole point of E-288. A ticker that hard-codes one kind would leave a
     // newly registered digest silently never sending.
     expect(SRC.slice(SRC.indexOf("export async function startDigestTicker"))).toMatch(
       /runAllDigests/,

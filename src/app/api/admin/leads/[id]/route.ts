@@ -1,7 +1,7 @@
 /**
  * DELETE /api/admin/leads/[id]
  *
- * E-283 — the admin's half of the multi-party delete. Removes the customer
+ * E-285 — the admin's half of the multi-party delete. Removes the customer
  * application from the ADMIN dashboards (KYC Review, Product Review) only. The
  * dealer keeps their copy and the lender keeps its file; the application is
  * destroyed only when every party that holds it has deleted it.

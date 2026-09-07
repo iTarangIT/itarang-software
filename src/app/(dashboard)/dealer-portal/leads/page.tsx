@@ -500,7 +500,7 @@ function DealerLeadsContent() {
                                     </div>
                                 </div>
                             </div>
-                            {/* E-283 — a dealer delete no longer wipes the file.
+                            {/* E-285 — a dealer delete no longer wipes the file.
                                 It hides it here; iTarang admin and the lender keep
                                 their copies until they remove it too. */}
                             <p className="text-xs text-gray-500">

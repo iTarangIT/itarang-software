@@ -1,5 +1,5 @@
 /**
- * Small helpers every descriptor needs (E-286).
+ * Small helpers every descriptor needs (E-288).
  */
 
 import type { DigestDetailRow } from "../types";

@@ -91,7 +91,7 @@ export default async function AcquireLeadDetailPage({
       and(
         eq(nbfcLeadAssignments.lead_id, leadId),
         eq(nbfcLeadAssignments.tenant_id, tenant.id),
-        // E-283 — this tenant deleted the application from its pipeline; the
+        // E-285 — this tenant deleted the application from its pipeline; the
         // detail page follows the list rather than staying reachable by URL.
         isNull(nbfcLeadAssignments.deleted_at),
       ),

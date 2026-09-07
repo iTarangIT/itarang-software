@@ -4,7 +4,7 @@ import { DigestSettingsForm } from "../_components/DigestSettingsForm";
 
 export const dynamic = "force-dynamic";
 
-// E-285/E-286 — one digest's settings, on its own route so it can be its own
+// E-287/E-288 — one digest's settings, on its own route so it can be its own
 // sidebar entry beside KYC Automation rather than a tab inside Notifications.
 //
 // Deliberately NOT a tab on Settings → Notifications: that screen governs which

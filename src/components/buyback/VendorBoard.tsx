@@ -36,6 +36,14 @@
  *     payloads (kind: counter|agree|reject) and collapsing them would bury two
  *     of the three flows inside a modal the admin has no reason to open.
  *
+ * TWO SETS OF BUTTONS, AND THE DIFFERENCE MATTERS (E-281). The trio above is the
+ * ACT-AS-VENDOR fallback and is hidden behind ADMIN_CAN_ACT_AS_VENDOR. Counter /
+ * Accept their price are iTarang's OWN moves and are always shown, because they
+ * are ours to make — the same category as routing or the dealer-leg PO. Hiding
+ * them along with the fallback is what left "Reopen negotiation" (which bumps
+ * offer_version and LOSTs every open thread) as the desk's only answer to a
+ * vendor counter.
+ *
  * MARK COLLECTED (M05 + BWM 2022): completing a pickup asks for the ACTUAL
  * per-line count via a modal — what was physically on the truck — plus the
  * optional e-way bill number. A count below the dealer's declaration raises a
@@ -48,7 +56,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import BatteryLineLabel from "./BatteryLineLabel";
 import LineInputTable, { type EditableLine } from "./LineInputTable";
-import { EmptyState, EvidenceUpload } from "./ui";
+import { EmptyState, EvidenceUpload, NegotiationThread } from "./ui";
 import { inr } from "@/lib/buyback/format";
 
 interface ThreadLine {
@@ -59,7 +67,21 @@ interface ThreadLine {
   ah: number | string;
   ask_price: string | null;
   counter_price: string | null;
+  /** E-281 — our counter back. `ask_price` stays the opening ask. */
+  revised_ask_price: string | null;
   agreed_price: string | null;
+}
+
+/** E-281 — one round of the vendor-leg haggle, from `vendorNegotiationRounds`. */
+interface ThreadRound {
+  id: string;
+  round_no: number;
+  party: "VENDOR" | "ITARANG";
+  offered_by_role: string;
+  note: string | null;
+  created_at: string;
+  lines: Array<{ line_id: string; label: string; quantity: number; price_per_unit: number }>;
+  total: number;
 }
 
 interface Thread {
@@ -67,10 +89,21 @@ interface Thread {
   vendor_id: string;
   vendor_name: string;
   status: "SENT" | "COUNTERED" | "AGREED" | "LOST";
+  /**
+   * E-281 — whose move it is. The status cannot say on its own: a thread reads
+   * COUNTERED both while we owe them a reply and after we have sent one.
+   */
+  awaiting_party: "VENDOR" | "ITARANG";
   quotation_no: string | null;
   close_reason: string | null;
   lines: ThreadLine[];
+  /** What the VENDOR has bid — what below_floor and the reopen banner mean. */
   current_total: number | null;
+  /** E-281 — what WE have countered, once we have. */
+  our_counter_total: number | null;
+  /** E-281 — the live number on the table, whoever named it last. */
+  standing_total: number | null;
+  rounds: ThreadRound[];
   below_floor: boolean;
   shortfall: number;
 }
@@ -138,7 +171,17 @@ export default function VendorBoard({
   const [reloadKey, setReloadKey] = useState(0);
 
   const [picked, setPicked] = useState<string[]>([]);
-  const [respond, setRespond] = useState<{ thread: Thread; kind: "counter" | "agree" } | null>(null);
+  // `counter_vendor` (E-281) is iTarang's OWN counter and is not gated by
+  // ADMIN_CAN_ACT_AS_VENDOR; `counter` / `agree` are the act-as-vendor pair and
+  // still are. Same modal, three verbs.
+  const [respond, setRespond] = useState<{
+    thread: Thread;
+    kind: "counter" | "agree" | "counter_vendor";
+  } | null>(null);
+  /** Which thread's round history is expanded. One at a time — the cards are narrow. */
+  const [openHistory, setOpenHistory] = useState<string | null>(null);
+  /** The note that rides out with an iTarang counter (E-281). */
+  const [counterNote, setCounterNote] = useState("");
   const [prices, setPrices] = useState<Record<string, string>>({});
   const [vendorPo, setVendorPo] = useState("");
   const [vendorPoPdf, setVendorPoPdf] = useState<{ key: string; name: string } | null>(null);
@@ -207,13 +250,26 @@ export default function VendorBoard({
     null,
   );
 
-  const openRespond = (thread: Thread, kind: "counter" | "agree") => {
+  const openRespond = (thread: Thread, kind: "counter" | "agree" | "counter_vendor") => {
     setRespond({ thread, kind });
+    setError(null);
     setPrices(
       Object.fromEntries(
         thread.lines.map((l) => [
           l.line_id,
-          String(Math.round(Number(l.counter_price ?? l.ask_price ?? 0))),
+          // Seed from the last number anyone named, most recent first. For OUR
+          // counter that is our own previous counter if we have made one — the
+          // desk usually nudges its own last figure, not the vendor's.
+          String(
+            Math.round(
+              Number(
+                (kind === "counter_vendor" ? l.revised_ask_price : null) ??
+                  l.counter_price ??
+                  l.ask_price ??
+                  0,
+              ),
+            ),
+          ),
         ]),
       ),
     );
@@ -439,7 +495,23 @@ export default function VendorBoard({
                       {label}
                     </span>
                   </div>
-                  <div className="mt-0.5 text-[11px] text-slate-400">{t.quotation_no}</div>
+                  <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <span>{t.quotation_no}</span>
+                    {/* Whose move it is (E-281). A COUNTERED thread says nothing
+                        about this on its own, and "do I owe this vendor a reply?"
+                        is the only question the desk is asking of this card. */}
+                    {open && t.status === "COUNTERED" && (
+                      <span
+                        className={`rounded px-1.5 py-[1px] text-[10px] font-bold ${
+                          t.awaiting_party === "ITARANG"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-slate-100 text-slate-500"
+                        }`}
+                      >
+                        {t.awaiting_party === "ITARANG" ? "Your move" : "Waiting on vendor"}
+                      </span>
+                    )}
+                  </div>
 
                   {/* Per SKU, always. The prototype collapses this to one number. */}
                   <div className="mt-3 space-y-1.5">
@@ -454,18 +526,49 @@ export default function VendorBoard({
                             ah: l.ah,
                           }}
                         />
+                        {/* The ladder: our opening ask, their counter, our
+                            counter back. Whichever is BOLD is the live number —
+                            it is the one an Accept would book, and it moves side
+                            to side as the haggle does (E-281). */}
                         <span className="tabular-nums text-slate-700">
                           {l.agreed_price ? (
                             <b className="text-emerald-700">{inr(l.agreed_price)}</b>
-                          ) : l.counter_price ? (
-                            <>
-                              <span className="text-slate-300 line-through">
-                                {inr(l.ask_price)}
-                              </span>{" "}
-                              <b>{inr(l.counter_price)}</b>
-                            </>
                           ) : (
-                            <span className="text-slate-400">{inr(l.ask_price)}</span>
+                            <>
+                              {(l.counter_price || l.revised_ask_price) && (
+                                <span className="text-slate-300 line-through">
+                                  {inr(l.ask_price)}
+                                </span>
+                              )}{" "}
+                              {l.counter_price && (
+                                <span
+                                  className={
+                                    t.awaiting_party === "ITARANG"
+                                      ? "font-bold text-slate-900"
+                                      : "text-slate-300 line-through"
+                                  }
+                                  title="Their counter"
+                                >
+                                  {inr(l.counter_price)}
+                                </span>
+                              )}{" "}
+                              {l.revised_ask_price ? (
+                                <b
+                                  className={
+                                    t.awaiting_party === "VENDOR"
+                                      ? "text-blue-700"
+                                      : "text-slate-400"
+                                  }
+                                  title="Our counter"
+                                >
+                                  {inr(l.revised_ask_price)}
+                                </b>
+                              ) : (
+                                !l.counter_price && (
+                                  <span className="text-slate-400">{inr(l.ask_price)}</span>
+                                )
+                              )}
+                            </>
                           )}
                         </span>
                       </div>
@@ -482,6 +585,17 @@ export default function VendorBoard({
                     <b className="tabular-nums text-slate-900">{inr(t.current_total)}</b>
                   </div>
 
+                  {/* Our counter, when one is standing (E-281). A second line
+                      rather than replacing the total above: "their total" is what
+                      the below-floor banner is computed from and the desk needs
+                      both numbers to see the gap it is trying to close. */}
+                  {t.our_counter_total !== null && t.status !== "AGREED" && (
+                    <div className="mt-1 flex items-center justify-between text-xs">
+                      <span className="text-slate-500">Our counter</span>
+                      <b className="tabular-nums text-blue-700">{inr(t.our_counter_total)}</b>
+                    </div>
+                  )}
+
                   {t.below_floor && open && (
                     <div className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
                       {inr(t.shortfall)} below the floor. Agreeing would sell the lot for less
@@ -491,6 +605,82 @@ export default function VendorBoard({
 
                   {t.status === "LOST" && t.close_reason && (
                     <div className="mt-2 text-[11px] text-slate-400">{t.close_reason}</div>
+                  )}
+
+                  {/* ---- iTarang's OWN moves on this thread (E-281) ----------
+                      Deliberately OUTSIDE the ADMIN_CAN_ACT_AS_VENDOR gate. That
+                      flag hides the act-as-vendor trio below, so an admin cannot
+                      move a deal the vendor never agreed to. These two are not
+                      that: countering and accepting are iTarang's own acts, like
+                      routing or the dealer-leg PO, and hiding them is what left
+                      "Reopen negotiation" — which LOSTs every open thread — as
+                      the desk's only answer to a counter. */}
+                  {t.status === "COUNTERED" &&
+                    t.awaiting_party === "ITARANG" &&
+                    can("counter_vendor") && (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => openRespond(t, "counter_vendor")}
+                          disabled={busy}
+                          className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          Counter
+                        </button>
+                        <button
+                          onClick={() =>
+                            post(`/api/admin/buyback/threads/${t.id}/accept-counter`)
+                          }
+                          disabled={busy || t.below_floor}
+                          title={
+                            t.below_floor
+                              ? `Blocked: ${inr(t.shortfall)} below the floor. Counter them, or reopen the dealer leg.`
+                              : `Accept ${inr(t.current_total)} — closes the other vendors`
+                          }
+                          className="flex-1 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                        >
+                          Accept their price
+                        </button>
+                      </div>
+                    )}
+
+                  {/* The round history — written since Sprint 2A, rendered since
+                      E-281. Collapsed by default: the card is a summary, and the
+                      ladder above answers the usual question. */}
+                  {t.rounds.length > 0 && (
+                    <div className="mt-2">
+                      <button
+                        onClick={() => setOpenHistory((k) => (k === t.id ? null : t.id))}
+                        className="text-[11px] font-semibold text-slate-500 hover:text-slate-700"
+                      >
+                        {openHistory === t.id ? "Hide" : "Show"} negotiation ·{" "}
+                        {t.rounds.length} round{t.rounds.length === 1 ? "" : "s"}
+                      </button>
+                      {openHistory === t.id && (
+                        <div className="mt-1.5 -mx-[15px]">
+                          <NegotiationThread
+                            viewer="admin"
+                            rounds={t.rounds.map((r) => ({
+                              actor:
+                                r.party === "ITARANG"
+                                  ? "iTarang"
+                                  : `${t.vendor_name}${
+                                      // A round the VENDOR offered but an ADMIN typed
+                                      // is hearsay, and the audit log exists to keep
+                                      // that visible. Saying so here costs four words.
+                                      r.offered_by_role === "admin" ? " (recorded)" : ""
+                                    }`,
+                              side: r.party === "ITARANG" ? "admin" : "vendor",
+                              note: r.note ?? undefined,
+                              at: new Date(r.created_at).toLocaleString("en-IN"),
+                              lines: r.lines.map((l) => ({
+                                label: l.label,
+                                amount: l.price_per_unit,
+                              })),
+                            }))}
+                          />
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {open && can("record_vendor_counter") && ADMIN_CAN_ACT_AS_VENDOR && (
@@ -705,17 +895,33 @@ export default function VendorBoard({
       )}
 
       {/* --------------------------------------------------- RESPONSE MODAL */}
-      {respond && ADMIN_CAN_ACT_AS_VENDOR && (
+      {/* One modal, three verbs. `counter_vendor` is iTarang's own counter and is
+          always available; `counter` / `agree` are the act-as-vendor pair and stay
+          behind the flag — so the guard is on the KIND, not on the modal. */}
+      {respond && (respond.kind === "counter_vendor" || ADMIN_CAN_ACT_AS_VENDOR) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
             <div className="text-sm font-bold text-slate-900">
-              {respond.kind === "agree" ? "Agree with" : "Record counter from"}{" "}
+              {respond.kind === "agree"
+                ? "Agree with"
+                : respond.kind === "counter_vendor"
+                  ? "Counter"
+                  : "Record counter from"}{" "}
               {respond.thread.vendor_name}
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              Per battery variant. A single figure for the whole lot cannot be recorded —
-              each variant settles separately.
+              {respond.kind === "counter_vendor"
+                ? "Your price back to this vendor, per battery variant. They can accept it or counter again — no other vendor sees it, and the quotation stays open."
+                : "Per battery variant. A single figure for the whole lot cannot be recorded — each variant settles separately."}
             </p>
+
+            {respond.kind === "counter_vendor" && (
+              <p className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-[11px] text-slate-600">
+                They offered <b className="tabular-nums">{inr(respond.thread.current_total)}</b>.
+                The floor is <b className="tabular-nums">{inr(board.floor_total)}</b> — a counter
+                below it is refused, because it is a price we could not accept if they said yes.
+              </p>
+            )}
 
             <div className="mt-4">
               <LineInputTable
@@ -727,12 +933,29 @@ export default function VendorBoard({
               />
             </div>
 
+            {respond.kind === "counter_vendor" && (
+              <>
+                <label className="mt-3 block text-xs font-bold uppercase text-slate-500">
+                  Note to vendor (optional)
+                </label>
+                <textarea
+                  value={counterNote}
+                  onChange={(e) => setCounterNote(e.target.value)}
+                  rows={2}
+                  maxLength={2000}
+                  placeholder="Goes out with the counter — no dealer details, no margin."
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                />
+              </>
+            )}
+
             {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
 
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => {
                   setRespond(null);
+                  setCounterNote("");
                   setError(null);
                 }}
                 className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600"
@@ -741,22 +964,36 @@ export default function VendorBoard({
               </button>
               <button
                 disabled={busy}
-                onClick={() =>
-                  post(`/api/admin/buyback/threads/${respond.thread.id}/record`, {
+                onClick={() => {
+                  const lines = respond.thread.lines.map((l) => ({
+                    line_id: l.line_id,
+                    price: Number(prices[l.line_id]),
+                  }));
+
+                  if (respond.kind === "counter_vendor") {
+                    void post(`/api/admin/buyback/threads/${respond.thread.id}/counter`, {
+                      lines,
+                      ...(counterNote.trim() ? { note: counterNote.trim() } : {}),
+                    }).then((ok) => {
+                      if (ok) setCounterNote("");
+                    });
+                    return;
+                  }
+
+                  void post(`/api/admin/buyback/threads/${respond.thread.id}/record`, {
                     kind: respond.kind,
-                    lines: respond.thread.lines.map((l) => ({
-                      line_id: l.line_id,
-                      price: Number(prices[l.line_id]),
-                    })),
-                  })
-                }
+                    lines,
+                  });
+                }}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-200"
               >
                 {busy
                   ? "Saving…"
                   : respond.kind === "agree"
                     ? "Agree — closes other vendors"
-                    : "Record counter"}
+                    : respond.kind === "counter_vendor"
+                      ? "Send counter"
+                      : "Record counter"}
               </button>
             </div>
           </div>

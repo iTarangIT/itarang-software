@@ -1,7 +1,7 @@
 /**
  * DELETE /api/nbfc/acquire/[leadId]
  *
- * E-283 — the lender's half of the multi-party delete. Removes the application
+ * E-285 — the lender's half of the multi-party delete. Removes the application
  * from THIS tenant's Acquire pipeline only: the dealer keeps their copy, the
  * admin keeps theirs, and a second lender the lead was routed to still sees its
  * own row. The application is destroyed only once every party has deleted it.

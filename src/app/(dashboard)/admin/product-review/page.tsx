@@ -236,7 +236,7 @@ export default function AdminProductReviewQueuePage() {
                           >
                             Review
                           </Link>
-                          {/* E-283 — admin-side delete: clears the application
+                          {/* E-285 — admin-side delete: clears the application
                               from the admin queues only. */}
                           <DeleteApplicationButton
                             endpoint={`/api/admin/leads/${r.lead_id}`}

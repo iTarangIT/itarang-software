@@ -385,7 +385,7 @@ async function optionsFor(
     }
   }
   // Exclusions go INTO the matcher rather than being filtered off the result:
-  // E-280/E-281 narrow the list to the lender pinned for this dealer and/or
+  // E-282/E-283 narrow the list to the lender pinned for this dealer and/or
   // city, and that narrowing has to see the offerable set. Filtering afterwards
   // would let a pinned-but-already-rejected lender collapse the list to nothing
   // and drop the customer onto the Bajaj card while other lenders were still

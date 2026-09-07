@@ -1,6 +1,6 @@
 "use client";
 
-// Settings → Email Notification (E-282).
+// Settings → Email Notification (E-284).
 //
 // The email-channel sibling of NotificationAccessManager. One accordion row per
 // notification category with a tri-state master, expanding to the individual

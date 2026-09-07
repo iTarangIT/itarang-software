@@ -8,7 +8,7 @@ import { NotificationAccessManager } from "./NotificationAccessManager";
 import { EmailNotificationManager } from "./EmailNotificationManager";
 
 // Two sections, two channels: Notification Access (E-231) governs the in-app
-// bell, Email Notification (E-282) governs the email emit() sends. They belong
+// bell, Email Notification (E-284) governs the email emit() sends. They belong
 // on one page because they are the same decision asked twice, and an admin who
 // mutes a bell row almost always wants to know what the email is doing.
 //

@@ -1,5 +1,5 @@
 /**
- * E-282 — verify the email-channel override table against a real DB.
+ * E-284 — verify the email-channel override table against a real DB.
  * READ-ONLY by default: no writes unless --simulate is passed.
  *
  *   node --import tsx --env-file=.env.local scripts/verify-notification-email.ts [--simulate]
@@ -70,8 +70,8 @@ async function main() {
   if (!tbl || Number(tbl.n) === 0) {
     fail(
       "table exists",
-      "notification_email_access is missing — apply E-282. (The app is FINE " +
-        "without it: every type falls back to emailWorthy(), i.e. pre-E-282 " +
+      "notification_email_access is missing — apply E-284. (The app is FINE " +
+        "without it: every type falls back to emailWorthy(), i.e. pre-E-284 " +
         "behaviour. Only the settings tab needs the table.)",
     );
     report();
@@ -94,7 +94,7 @@ async function main() {
     (c) => !byName.has(c),
   );
   if (missing.length === 0) pass("columns present", "all four");
-  else fail("columns present", `${missing.join(", ")} missing — E-282 partly applied?`);
+  else fail("columns present", `${missing.join(", ")} missing — E-284 partly applied?`);
 
   const enabledCol = byName.get("enabled");
   if (enabledCol && enabledCol.column_default === null) {
