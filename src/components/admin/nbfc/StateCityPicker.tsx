@@ -559,21 +559,32 @@ function StateCombobox({
 
 /* ===================== City (multi-select combobox) ===================== */
 
-function CityMultiCombobox({
+// Exported so Settings -> Loan Product can pick several cities for one pinned
+// default with the same searchable chip UI used here.
+export function CityMultiCombobox({
   locations,
   stateIso,
   value,
   onChange,
+  options,
 }: {
-  locations: IndiaLocationData;
-  stateIso: string;
+  locations?: IndiaLocationData;
+  stateIso?: string;
   value: string[];
   onChange: (next: string[]) => void;
+  /**
+   * Explicit city list, instead of every city country-state-city knows for
+   * `stateIso`. Settings -> Loan Product passes this because its list is the
+   * cities iTarang actually has DEALERS in — offering any other city there
+   * would only let an admin write a rule that can never match.
+   */
+  options?: string[];
 }) {
   const cities = useMemo(() => {
-    if (!stateIso) return [];
-    return locations.getCitiesOfState(stateIso);
-  }, [stateIso, locations]);
+    if (options) return options;
+    if (!stateIso || !locations) return [];
+    return locations.getCitiesOfState(stateIso).map((c) => c.name);
+  }, [options, stateIso, locations]);
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -582,7 +593,7 @@ function CityMultiCombobox({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const all = cities.map((c) => c.name);
+    const all = cities;
     // De-duplicate (some districts list the same city under both city and town).
     const seen = new Set<string>();
     const unique = all.filter((n) => {
@@ -631,7 +642,7 @@ function CityMultiCombobox({
     }
   }
 
-  const disabled = !stateIso;
+  const disabled = options ? options.length === 0 : !stateIso;
 
   return (
     <div ref={rootRef} className="relative">
