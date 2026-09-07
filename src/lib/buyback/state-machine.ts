@@ -104,6 +104,23 @@ export const DEAL_ACTIONS = [
   // action. See VendorBoard's three buttons.
   "vendor_counter",
   "vendor_agree",
+  // iTarang's OWN moves on the vendor leg (E-281) — the mirror of the dealer
+  // leg's admin_counter / admin_accept_counter, and deliberately NOT part of the
+  // record_* family.
+  //
+  // The distinction is the same one vendorActionFor draws, pointed the other way.
+  // `record_vendor_counter` is an admin speaking FOR the vendor; `counter_vendor`
+  // is iTarang speaking for itself. Before this the desk could only agree or
+  // reopen — and reopen bumps offer_version and LOSTs every open thread, so the
+  // one thing a buyer does all day, name a different number, was the one thing
+  // the vendor leg could not express.
+  "counter_vendor",
+  // Accept the vendor's standing counter. Reaches VENDOR_AGREED exactly as
+  // record_vendor_agreement does, and is kept apart from it for the reason the
+  // whole hearsay/testimony split exists: "iTarang accepted their price" and "the
+  // vendor said yes" are different events, and an audit log that cannot tell them
+  // apart is the thing this module was built to avoid.
+  "accept_vendor_counter",
   "exchange_pos",
   "schedule_pickup",
   "complete_pickup",
@@ -285,6 +302,20 @@ export const TRANSITIONS: Record<DealState, Partial<Record<DealAction, Edge>>> =
     record_vendor_agreement: { to: "VENDOR_AGREED", roles: ["admin"] },
     vendor_counter: { to: "VENDOR_NEGOTIATING", roles: ["vendor"] },
     vendor_agree: { to: "VENDOR_AGREED", roles: ["vendor"] },
+    // iTarang's answer (E-281). Self-loop, like admin_counter on the dealer leg:
+    // a counter is a round, not a new phase, and either side may counter again.
+    //
+    // ONLY here, and deliberately not in VENDOR_ROUTED: there, nothing has been
+    // countered — our ask is the live number and revising it for one vendor while
+    // the others hold the quotation we emailed is a different feature (re-routing)
+    // with a different audit story.
+    //
+    // Whether THIS thread may be countered (status COUNTERED, awaiting_party
+    // ITARANG) is a thread-level fact and is checked in the route. This function
+    // sees only the deal triple, and a deal is VENDOR_NEGOTIATING as soon as ANY
+    // vendor has countered.
+    counter_vendor: { to: "VENDOR_NEGOTIATING", roles: ["admin"] },
+    accept_vendor_counter: { to: "VENDOR_AGREED", roles: ["admin"] },
     reopen: { to: "NEGOTIATING", roles: ["admin"] },
     cancel: { to: "CANCELLED", roles: ["admin"] },
   },
@@ -425,9 +456,14 @@ export function allowedActions(state: DealState, role: ActorRole): DealAction[] 
  * someone can later tell the difference.
  */
 export function vendorActionFor(
-  kind: "counter" | "agree",
+  kind: "counter" | "agree" | "accept_counter",
   role: "admin" | "vendor",
 ): DealAction {
+  // E-281 — iTarang accepting the vendor's standing counter. Not a `record_*`:
+  // nobody is transcribing anything, the desk is saying yes. A vendor cannot
+  // perform it (accepting their own counter is just `vendor_agree`), so the role
+  // is not consulted; the route proves staff before it gets here.
+  if (kind === "accept_counter") return "accept_vendor_counter";
   if (role === "vendor") return kind === "counter" ? "vendor_counter" : "vendor_agree";
   return kind === "counter" ? "record_vendor_counter" : "record_vendor_agreement";
 }

@@ -143,6 +143,12 @@ const ACTION_BAR_STATES = [
   "FINAL_OFFER_SENT",
 ];
 
+/**
+ * E-281 — states where a vendor is on the other end of the negotiation, so the
+ * reopen banner can point at the per-vendor Counter instead of being read as it.
+ */
+const VENDOR_LEG_STATES: string[] = ["VENDOR_ROUTED", "VENDOR_NEGOTIATING"];
+
 const TABS: TabItem[] = [
   { key: "overview", label: "Overview" },
   { key: "neg", label: "Negotiation log" },
@@ -592,15 +598,29 @@ function AdminBuybackDetail() {
       {can("reopen") && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-3.5 py-3">
           <p className="text-[12.5px] text-amber-800">
-            <span className="font-bold">Dealer acceptance is provisional.</span> Reopen until
-            vendor agreement — offer becomes v{d.offer_version + 1}, dealer notified.
+            <span className="font-bold">
+              Reopening renegotiates the DEALER&apos;s price, and withdraws every vendor
+              quotation.
+            </span>{" "}
+            The offer becomes v{d.offer_version + 1} and the dealer is notified; open vendor
+            threads close as lost.
+            {/* E-281 — the banner used to be the only lever on a vendor counter, so
+                it was pressed as if it meant "haggle with this vendor". It never
+                did. Now that Counter and Accept exist on the Vendor Board, say
+                plainly what this one is for. */}
+            {VENDOR_LEG_STATES.includes(d.status) && (
+              <>
+                {" "}
+                To answer one vendor instead, use <b>Counter</b> on the Vendor Board.
+              </>
+            )}
           </p>
           <button
             disabled={busy}
             onClick={() => void post(`/api/admin/buyback/requests/${id}/reopen`, {})}
-            className="rounded-lg border border-amber-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+            className="shrink-0 rounded-lg border border-amber-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100"
           >
-            Reopen negotiation
+            Reopen dealer leg
           </button>
         </div>
       )}

@@ -10443,7 +10443,13 @@ export const negotiationRounds = pgTable(
     counterparty_id: varchar("counterparty_id", { length: 255 }),
     round_no: integer("round_no").notNull(),
     offered_by: uuid("offered_by"),
-    offered_by_role: text("offered_by_role").notNull(), // 'dealer' | 'admin'
+    offered_by_role: text("offered_by_role").notNull(), // 'dealer' | 'admin' | 'vendor' — who TYPED it
+    // E-281 — whose OFFER this round is: 'DEALER' | 'VENDOR' | 'ITARANG'. Differs
+    // from offered_by_role only on the vendor leg, where 'admin' means an admin
+    // transcribed the vendor's email rather than iTarang making the offer. NULL on
+    // every pre-E-281 row and deliberately not backfilled — readers derive it as
+    // COALESCE(party, leg = 'VENDOR' ? 'VENDOR' : upper(offered_by_role)).
+    party: varchar("party", { length: 8 }),
     note: text(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -10776,6 +10782,11 @@ export const vendorThreads = pgTable(
     responded_at: timestamp("responded_at", { withTimezone: true }),
     closed_at: timestamp("closed_at", { withTimezone: true }),
     close_reason: text("close_reason"),
+    // E-281 — whose move it is: 'VENDOR' (we asked, or countered their counter) |
+    // 'ITARANG' (they countered; the desk owes a reply). An iTarang counter leaves
+    // `status` at COUNTERED — the negotiation is still open and the vendor may
+    // still answer — so this, not the status enum, is what says whose turn it is.
+    awaiting_party: varchar("awaiting_party", { length: 8 }).default("VENDOR").notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -10785,8 +10796,11 @@ export const vendorThreads = pgTable(
   }),
 );
 
-// The itemization (P5). ask = what we asked, counter = their latest per-SKU
-// counter, agreed = what was struck.
+// The itemization (P5). ask = our OPENING ask (never rewritten), counter = their
+// latest per-SKU counter, revised_ask = our latest counter back (E-281), agreed =
+// what was struck. Which of the two live numbers is actually ON THE TABLE is a
+// recency question, answered by vendorThreads.awaiting_party — see
+// standingPriceSql() in src/lib/buyback/standing.ts.
 export const vendorThreadLines = pgTable(
   "vendor_thread_lines",
   {
@@ -10799,6 +10813,10 @@ export const vendorThreadLines = pgTable(
       .references(() => buybackLines.id, { onDelete: "cascade" }),
     ask_price: numeric("ask_price", { precision: 12, scale: 2 }).notNull(),
     counter_price: numeric("counter_price", { precision: 12, scale: 2 }),
+    // E-281 — iTarang's latest counter back to this vendor. ask_price stays the
+    // OPENING ask the quotation PDF quoted and is never rewritten: it is evidence,
+    // and current_total / the below-floor banner are computed from it.
+    revised_ask_price: numeric("revised_ask_price", { precision: 12, scale: 2 }),
     agreed_price: numeric("agreed_price", { precision: 12, scale: 2 }),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
