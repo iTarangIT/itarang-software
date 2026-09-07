@@ -429,6 +429,9 @@ export async function listDealerDrafts(
   const conds = [
     eq(leads.dealer_id, dealerCode),
     eq(leads.source_channel, "whatsapp"),
+    // E-283 — the dealer deleted it from their dashboard; "My Leads" is the
+    // same list over WhatsApp, so it must not offer the lead back to them.
+    isNull(leads.deleted_by_dealer_at),
     or(isNull(leads.kyc_status), inArray(leads.kyc_status, DRAFT_KYC_STATUSES)),
   ];
   if (salespersonId) {

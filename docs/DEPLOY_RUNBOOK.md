@@ -335,6 +335,56 @@ CRON_SECRET=<same value as the app's env>
 # */5 * * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/kyc-auto-approval  >> /var/log/itarang-cron.log 2>&1
 ```
 
+### Scheduled digest emails (E-285/E-286) — ticker is primary, these are optional
+
+The twice-daily summary emails — **Dealer Validation** and **KYC Review**, plus
+whatever else is registered in `src/lib/digests/registry.ts` — are driven by an
+**in-process ticker** (`startDigestTicker`, every 5 min), so they work on this box
+with no crontab at all. Add these only as a belt-and-braces backstop for a web
+process that is restarted often enough to miss both windows.
+
+**The box runs UTC, so 09:00 / 19:00 IST are `30 3` / `30 13`.**
+
+```cron
+30 3  * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/digest >> /var/log/itarang-cron.log 2>&1
+30 13 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/digest >> /var/log/itarang-cron.log 2>&1
+```
+
+With no query string that runs EVERY registered digest and sends whatever is due.
+`?kind=kyc_review` narrows to one; `?slot=morning` forces one. An unknown `kind`
+is a 400 by name rather than a silent run-everything.
+
+Safe to run alongside the ticker: each send is claimed by a
+`(kind, digest_date, slot)` row in `digest_runs`, so the two split work rather
+than duplicating it — the same guarantee `kyc-auto-approval` has above. A slot
+stays due until the end of its IST day, so a curl that fires late still delivers.
+
+Recipients, times and format are set per digest at Settings → Dealer Validation
+and Settings → KYC Review, **not** here. Check it landed:
+`SELECT kind, digest_date, slot, status, attempts, triggered_by FROM digest_runs
+ORDER BY id DESC LIMIT 5;`
+
+⚠ **They ship ON**, addressed to `care.itarang@gmail.com`. The first deploy
+carrying both the code and migration E-286 starts emailing without anyone
+touching the screens.
+
+⚠ **The ticker is dark outside production, and that guard is load-bearing.**
+`npm run dev` reads `.env.local`, which points at a shared AWS database, and the
+ticker needs nothing else to fire — on 2026-09-07 a dev server mailed a real
+digest to `care.itarang@gmail.com` within 195 s of starting, and the claim it
+wrote then made that slot terminal, so the deployed app could not send it. The
+ticker now requires `NODE_ENV=production`, or an explicit
+`ENABLE_DEALER_VALIDATION_DIGEST=1` for anyone who really wants it locally.
+To exercise a mail without consuming a slot, use Settings → <digest> →
+**Send test now**, or render it without sending at all:
+`node --import tsx --env-file=.env.local scripts/verify-digests.ts <kind> <YYYY-MM-DD> --render`.
+
+⚠ **Sandbox runs `NODE_ENV=production` too.** Once this deploys there,
+`sandbox-web` will also start emailing, from its own database and its own ledger,
+so `care.itarang@gmail.com` would get two of each digest a day with different
+numbers. Set `ENABLE_DEALER_VALIDATION_DIGEST=0` in the sandbox box's
+`shared/.env` unless that is wanted.
+
 `risk-analysis` (E-187) sweeps every active tenant sequentially. It is safe to
 run while someone is using the "Re-run analysis" button: the per-tenant lock
 means that tenant is skipped rather than run twice. The whole sweep is

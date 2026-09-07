@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { AlertTriangle } from "lucide-react";
 import {
   dealers,
@@ -17,6 +17,7 @@ import AcquireCsvButton, {
   type AcquireRow,
 } from "./_components/AcquireCsvButton";
 import AcquireLeadRow from "./_components/AcquireLeadRow";
+import DeleteApplicationButton from "@/components/shared/DeleteApplicationButton";
 
 // Acquire pipeline — Addendum V0.2 §6. Lists nbfc_lead_assignments rows for the
 // current tenant with URL-driven filters, KPI summary cards, search, sort,
@@ -174,7 +175,14 @@ export default async function AcquireQueuePage({
       ),
     )
     .leftJoin(dealers, eq(dealers.dealer_id, leads.dealer_id))
-    .where(eq(nbfcLeadAssignments.tenant_id, tenant.id))
+    // E-283 — rows this tenant deleted are gone from its own pipeline; the
+    // dealer, the admin and any second lender still see the application.
+    .where(
+      and(
+        eq(nbfcLeadAssignments.tenant_id, tenant.id),
+        isNull(nbfcLeadAssignments.deleted_at),
+      ),
+    )
     .orderBy(desc(nbfcLeadAssignments.assigned_at))
     .limit(1000);
 
@@ -512,6 +520,9 @@ export default async function AcquireQueuePage({
                 <th className="px-4 py-3 text-left font-semibold">Dealer</th>
                 <th className="px-4 py-3 text-left font-semibold">Status</th>
                 <th className="px-4 py-3 text-left font-semibold">Assigned</th>
+                <th className="px-4 py-3 text-right font-semibold">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -563,6 +574,16 @@ export default async function AcquireQueuePage({
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {relativeTime(r.assigned_at)}
+                  </td>
+                  {/* E-283 — removes the file from THIS lender's pipeline only. */}
+                  <td className="px-4 py-3 text-right">
+                    <DeleteApplicationButton
+                      endpoint={`/api/nbfc/acquire/${r.lead_id}`}
+                      applicationLabel={r.customer_name ?? "This application"}
+                      applicationId={r.lead_id}
+                      scopeLabel="your Acquire pipeline"
+                      otherPartiesLabel="the dealer and iTarang admin"
+                    />
                   </td>
                 </AcquireLeadRow>
               ))}
