@@ -56,7 +56,13 @@ const RECENT_LIMIT = 10;
 
 // ── condition builders (single source of truth) ──────────────────────────────
 const acquirePendingWhere = (tenantId: string) =>
-  and(eq(nbfcLeadAssignments.tenant_id, tenantId), eq(nbfcLeadAssignments.status, "pending"));
+  and(
+    eq(nbfcLeadAssignments.tenant_id, tenantId),
+    eq(nbfcLeadAssignments.status, "pending"),
+    // E-285 — an application this tenant deleted is off its pipeline, so it
+    // must not keep counting on the bell either.
+    isNull(nbfcLeadAssignments.deleted_at),
+  );
 
 const fiWhere = (tenantId: string) =>
   and(

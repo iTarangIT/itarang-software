@@ -384,11 +384,18 @@ async function optionsFor(
       lead.city = loc.city;
     }
   }
-  const all = await loadSectionGOptions(lead, lead.requested_loan_amount ?? null);
-  return {
+  // Exclusions go INTO the matcher rather than being filtered off the result:
+  // E-282/E-283 narrow the list to the lender pinned for this dealer and/or
+  // city, and that narrowing has to see the offerable set. Filtering afterwards
+  // would let a pinned-but-already-rejected lender collapse the list to nothing
+  // and drop the customer onto the Bajaj card while other lenders were still
+  // available.
+  const options = await loadSectionGOptions(
     lead,
-    options: all.filter((o) => !exclude.includes(o.nbfcId)),
-  };
+    lead.requested_loan_amount ?? null,
+    { excludeNbfcIds: exclude },
+  );
+  return { lead, options };
 }
 
 /** Every NBFC ever on this lead, in any status — never offered again. */

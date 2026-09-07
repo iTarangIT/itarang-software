@@ -48,6 +48,7 @@ function DealerLeadsContent() {
             const res = await fetch(`/api/dealer/leads/${deleteTarget.id}`, { method: 'DELETE' });
             const data = await res.json();
             if (data.success) {
+                toast.success(data.data?.message || data.message || 'Lead removed');
                 setDeleteTarget(null);
                 fetchLeads();
             } else {
@@ -478,15 +479,15 @@ function DealerLeadsContent() {
                                     <AlertTriangle className="w-5 h-5 text-white" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-bold text-white">Delete Lead</h3>
-                                    <p className="text-red-100 text-xs mt-0.5">This action cannot be undone</p>
+                                    <h3 className="text-lg font-bold text-white">Remove Lead</h3>
+                                    <p className="text-red-100 text-xs mt-0.5">Removed from your dashboard</p>
                                 </div>
                             </div>
                         </div>
                         <div className="px-6 py-5 space-y-4">
                             <div className="bg-red-50 border border-red-100 rounded-xl p-4">
                                 <p className="text-sm text-gray-700">
-                                    Are you sure you want to permanently delete this lead?
+                                    Remove this lead from your dashboard?
                                 </p>
                                 <div className="mt-3 space-y-1.5">
                                     <div className="flex justify-between text-sm">
@@ -499,8 +500,13 @@ function DealerLeadsContent() {
                                     </div>
                                 </div>
                             </div>
+                            {/* E-285 — a dealer delete no longer wipes the file.
+                                It hides it here; iTarang admin and the lender keep
+                                their copies until they remove it too. */}
                             <p className="text-xs text-gray-500">
-                                All associated data including KYC documents, verifications, and consent records will be permanently removed.
+                                It disappears from your lead list. If iTarang admin or a lender is
+                                still holding this application, their copy stays until they remove
+                                it as well — only then is it deleted for good.
                             </p>
                         </div>
                         <div className="px-6 pb-5 flex gap-3">
@@ -511,7 +517,7 @@ function DealerLeadsContent() {
                             <button onClick={handleDelete} disabled={deleting}
                                 className="flex-1 px-4 py-3 bg-red-600 text-white rounded-xl font-semibold text-sm hover:bg-red-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                                 {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                                {deleting ? 'Deleting...' : 'Delete Lead'}
+                                {deleting ? 'Removing...' : 'Remove Lead'}
                             </button>
                         </div>
                     </div>

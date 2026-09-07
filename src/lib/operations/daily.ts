@@ -20,6 +20,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { log } from "@/lib/log";
+import { previousIstDate } from "./istClock";
 
 /** Raw samples older than this go, having been rolled up first. */
 export const SAMPLE_RETENTION_DAYS = 30;
@@ -77,35 +78,12 @@ export interface DailySnapshotResult {
   module_user_rows_pruned: number;
 }
 
-/** Today's date in IST as YYYY-MM-DD. */
-export function istDate(d: Date = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
-
-/** IST hour and minute, for the 00:15 window check. */
-export function istHourMinute(d: Date = new Date()): {
-  hour: number;
-  minute: number;
-} {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(d);
-  const [h, m] = parts.split(":").map(Number);
-  return { hour: h ?? 0, minute: m ?? 0 };
-}
-
-/** The IST day before the given instant, as YYYY-MM-DD. */
-export function previousIstDate(now: Date = new Date()): string {
-  return istDate(new Date(now.getTime() - 86_400_000));
-}
+// The IST calendar helpers now live in istClock.ts — pure, so they can be unit
+// tested without this file's `db` import dragging a database connection into
+// vitest (the same split scheduling.ts made from runner.ts). Re-exported here so
+// `@/lib/operations/daily` stays their public address and every existing caller,
+// including the dynamic import in instrumentation-node.ts, is unchanged.
+export { istDate, istHourMinute, previousIstDate } from "./istClock";
 
 /**
  * Roll one IST day of samples into ops_daily_snapshots, then prune.
