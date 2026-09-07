@@ -60,11 +60,19 @@ CREATE TABLE IF NOT EXISTS city_default_loan_products (
 -- E-283 does NOT resurrect the narrow key — it would then forbid a dealer rule
 -- and a location rule coexisting for the same city. Re-running either file in
 -- either order stays a no-op.
+-- Guarded against EVERY successor key, not just the next one: E-283 replaces
+-- this with _active_key_v2 and E-289 replaces that with _active_key_v3, so
+-- re-running this file on an up-to-date database must not resurrect the narrow
+-- key. It would forbid a dealer rule and a location rule coexisting for one
+-- city, and forbid two rules differing only in the customer they target.
 DO $do$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_indexes
      WHERE tablename = 'city_default_loan_products'
-       AND indexname = 'city_default_loan_products_active_key_v2'
+       AND indexname IN (
+         'city_default_loan_products_active_key_v2',
+         'city_default_loan_products_active_key_v3'
+       )
   ) THEN
     CREATE UNIQUE INDEX IF NOT EXISTS city_default_loan_products_active_key
       ON city_default_loan_products (lower(state), lower(coalesce(city, '')))
