@@ -16,6 +16,7 @@
 import { formatBatteryLine, lineTotal, type BatteryCondition } from "./format";
 // No cycle: line-spec imports only zod.
 import { resolveIotBrand } from "./line-spec";
+import { standingPrice } from "./standing";
 import type { DealState } from "./state-machine";
 
 /** The full internal shape, as read from the DB by the admin queries. */
@@ -646,6 +647,12 @@ export interface VendorLineView {
   ask_price: number | string | null;
   /** ₹/unit they countered with, if they have. */
   counter_price: number | string | null;
+  /**
+   * E-281 — iTarang's latest counter back, per unit. A price WE named, so it
+   * reveals nothing about the dealer or the margin; `ask_price` beside it stays
+   * the opening ask the quotation PDF quoted.
+   */
+  revised_ask_price: number | string | null;
   /** ₹/unit finally struck. */
   agreed_price: number | string | null;
   // NOTE what is absent: dealer_price and margin_value. A vendor who knows both
@@ -745,6 +752,7 @@ export interface VendorLineSource {
   ah: number | string;
   ask_price: number | string | null;
   counter_price?: number | string | null;
+  revised_ask_price?: number | string | null;
   agreed_price?: number | string | null;
   // --- E-191 dealer-declared spec. All optional: a caller that has not fetched
   //     it passes nothing and the view simply omits it. Every one of these is a
@@ -800,6 +808,7 @@ export function toVendorLine(line: VendorLineSource): VendorLineView {
     quantity: line.quantity,
     ask_price: line.ask_price,
     counter_price: line.counter_price ?? null,
+    revised_ask_price: line.revised_ask_price ?? null,
     agreed_price: line.agreed_price ?? null,
     // E-191 spec — what a scrap buyer actually prices against. The quotation
     // said "60V 120Ah · Working ×3" and nothing else, while every one of these
@@ -933,6 +942,20 @@ export interface VendorThreadView {
   ask_total: number | null;
   /** Σ qty × counter — what they have offered, once they have. */
   counter_total: number | null;
+  /** E-281 — Σ qty × revised_ask, what iTarang has countered back. */
+  our_counter_total: number | null;
+  /**
+   * E-281 — Σ qty × standing: the live number on the table, whoever named it
+   * last, and therefore exactly what this vendor's "Accept" will book. Before
+   * E-281 the portal computed this as `counter_total ?? ask_total`, which stops
+   * being right the moment iTarang can counter.
+   */
+  standing_total: number | null;
+  /**
+   * E-281 — whose move it is. `can_respond` says the thread is open; this says
+   * whether they are the one being waited on.
+   */
+  awaiting_party: "VENDOR" | "ITARANG";
   /** Σ qty × agreed — the struck price, once struck. */
   agreed_total: number | null;
   sent_at: Date | string | null;
@@ -961,6 +984,8 @@ export interface VendorThreadSource {
   pickup_city: string | null;
   pickup_state: string | null;
   lines: VendorLineSource[];
+  /** E-281. Defaults to VENDOR so a caller that predates the column still works. */
+  awaiting_party?: "VENDOR" | "ITARANG";
   sent_at: Date | string | null;
   responded_at: Date | string | null;
   /** Whether a VENDOR-leg PO already exists on this deal. */
@@ -981,6 +1006,7 @@ function sumBy(
 
 export function toVendorThread(input: VendorThreadSource): VendorThreadView {
   const lines = input.lines.map(toVendorLine);
+  const awaiting = input.awaiting_party === "ITARANG" ? "ITARANG" : "VENDOR";
 
   return {
     thread_id: input.thread_id,
@@ -992,6 +1018,12 @@ export function toVendorThread(input: VendorThreadSource): VendorThreadView {
     total_units: lines.reduce((n, l) => n + l.quantity, 0),
     ask_total: sumBy(lines, (l) => l.ask_price),
     counter_total: sumBy(lines, (l) => l.counter_price),
+    our_counter_total: sumBy(lines, (l) => l.revised_ask_price),
+    // The same rule the server books an agreement at (standingPrice), so the
+    // number on the vendor's Accept button and the number applyVendorResponse
+    // writes to agreed_price cannot drift apart.
+    standing_total: sumBy(lines, (l) => standingPrice(l, awaiting)),
+    awaiting_party: awaiting,
     agreed_total: sumBy(lines, (l) => l.agreed_price),
     sent_at: input.sent_at,
     responded_at: input.responded_at,

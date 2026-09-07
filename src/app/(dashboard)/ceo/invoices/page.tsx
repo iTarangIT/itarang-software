@@ -173,6 +173,11 @@ export default function CEOInvoicesPage() {
         needs_attention: number;
         failed: number;
         skipped_reason?: string;
+        // Why the run stopped. The scan reports a terminal fault (no OpenAI
+        // credits, Drive permission lost) here rather than throwing, so a
+        // banner that prints only counters reads as "0 imported, no reason
+        // given" — which is indistinguishable from "nothing new to import".
+        error?: string;
       };
     },
     onSuccess: () => {
@@ -425,18 +430,38 @@ export default function CEOInvoicesPage() {
       {scanResult && (
         <div
           data-testid="scan-summary"
-          className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 text-sm text-indigo-900"
+          data-status={scanResult.status}
+          className={cn(
+            "p-4 rounded-2xl border text-sm space-y-1.5",
+            scanResult.status === "failed"
+              ? "bg-red-50 border-red-200 text-red-900"
+              : "bg-indigo-50/50 border-indigo-100 text-indigo-900",
+          )}
         >
           {scanResult.status === "skipped" ? (
             <span>Drive scan skipped — {scanResult.skipped_reason}</span>
           ) : (
-            <span>
-              Drive scan: saw <b>{scanResult.files_seen}</b> file(s), processed{" "}
-              <b>{scanResult.files_new}</b> new, imported <b>{scanResult.imported}</b>,{" "}
-              <b>{scanResult.skipped_duplicate}</b> already recorded,{" "}
-              <b>{scanResult.needs_attention}</b> need attention,{" "}
-              <b>{scanResult.failed}</b> failed.
+            <span className="flex items-start gap-2">
+              {scanResult.status === "failed" && (
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
+              )}
+              <span>
+                Drive scan: saw <b>{scanResult.files_seen}</b> file(s), processed{" "}
+                <b>{scanResult.files_new}</b> new, imported <b>{scanResult.imported}</b>,{" "}
+                <b>{scanResult.skipped_duplicate}</b> already recorded,{" "}
+                <b>{scanResult.needs_attention}</b> need attention,{" "}
+                <b>{scanResult.failed}</b> failed.
+              </span>
             </span>
+          )}
+
+          {/* The counters alone cannot distinguish "nothing new" from "the
+              extractor is down", so the run's own reason is printed verbatim.
+              The admin panel has always shown this; only this page dropped it. */}
+          {scanResult.error && (
+            <p data-testid="scan-error" className="text-xs text-red-800 pl-6">
+              {scanResult.error}
+            </p>
           )}
         </div>
       )}

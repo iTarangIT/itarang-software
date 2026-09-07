@@ -467,6 +467,28 @@ function bellCopy(event: DueEvent): { title: string; message: string } {
     case "record_vendor_agreement":
     case "vendor_agree":
       return { title: "Vendor agreed", message: `A vendor agreed on ${tag}. Proceed to purchase order.` };
+    // E-281 — iTarang's own moves. Two audiences, and they need opposite copy:
+    // the vendor is being asked to do something, the desk is being told it was
+    // done.
+    case "counter_vendor":
+      return party === "VENDOR"
+        ? {
+            title: "Counter-offer from iTarang",
+            message:
+              "iTarang has countered your price on a quotation. Open your bids to accept it or counter again.",
+          }
+        : { title: "Counter sent to vendor", message: `A counter-offer was sent to a vendor on ${tagAdmin}.` };
+    case "accept_vendor_counter":
+      return party === "VENDOR"
+        ? {
+            title: "Your price was accepted",
+            message:
+              "iTarang accepted your quoted price. Raise your purchase order to continue.",
+          }
+        : {
+            title: "Vendor counter accepted",
+            message: `iTarang accepted a vendor's counter on ${tagAdmin}. Proceed to purchase order.`,
+          };
 
     // ── Purchase orders ──
     case "exchange_pos":
@@ -521,6 +543,32 @@ function bellCopy(event: DueEvent): { title: string; message: string } {
  * decided in NOTIFICATION_FOR and the payload is written by the route — but copy
  * is the last place a leak can hide, so it stays boring on purpose.
  */
+/**
+ * The per-SKU price table in a vendor email (E-281).
+ *
+ * Labels are SNAPSHOTTED into the payload at emit time, not re-derived here —
+ * same rule as recipient_ref: the message must say what we actually offered, not
+ * what the catalog would render today. Degrades to nothing rather than throwing
+ * if a legacy payload has no lines.
+ */
+function vendorLineTable(lines: unknown): string {
+  if (!Array.isArray(lines) || lines.length === 0) return "";
+  const rows = lines
+    .map((l) => {
+      const row = l as { label?: unknown; price?: unknown; quantity?: unknown };
+      const label = String(row.label ?? "Battery");
+      const qty = row.quantity == null ? "" : ` × ${Number(row.quantity)}`;
+      return (
+        `<tr><td style="padding:4px 10px 4px 0">${escapeHtml(label)}${escapeHtml(qty)}</td>` +
+        `<td style="padding:4px 0;text-align:right"><b>${escapeHtml(
+          inr(row.price as number | null),
+        )}/unit</b></td></tr>`
+      );
+    })
+    .join("");
+  return `<table style="border-collapse:collapse;margin:10px 0">${rows}</table>`;
+}
+
 function renderMessage(event: DueEvent): { subject: string; body: string } {
   const p = event.payload ?? {};
   const requestNo = String(p.request_no ?? "your request");
@@ -536,6 +584,40 @@ function renderMessage(event: DueEvent): { subject: string; body: string } {
         `<p>Hello ${escapeHtml(String(p.vendor_name ?? "there"))},</p>` +
         `<p>Thank you for quoting on this lot. On this occasion we have placed it ` +
         `elsewhere. We will be in touch with the next one.</p>` +
+        `<p>— iTarang</p>`,
+    };
+  }
+
+  // E-281 — iTarang's counter back to a vendor. Every figure here is a price WE
+  // named, per SKU. No floor, no dealer, no margin: the vendor redaction has to
+  // hold in copy too, and this is the first outbound message that carries a
+  // number we chose rather than one they did.
+  if (p.kind === "vendor_countered_by_itarang") {
+    return {
+      subject: `Counter-offer — quotation ${String(p.quotation_no ?? "iTarang buyback")}`,
+      body:
+        `<p>Hello ${escapeHtml(String(p.vendor_name ?? "there"))},</p>` +
+        `<p>Thank you for your price. We are not able to meet it, but we can do the ` +
+        `following — <b>per SKU</b>, as before:</p>` +
+        vendorLineTable(p.lines) +
+        `<p>Total for the lot: <b>${escapeHtml(inr(p.our_total as number | null))}</b></p>` +
+        (p.note ? `<p>${escapeHtml(String(p.note))}</p>` : "") +
+        `<p>Please accept or counter from your dashboard — the quotation is still open.</p>` +
+        `<p>— iTarang</p>`,
+    };
+  }
+
+  // E-281 — we took THEIR number. They have not been told yet: on a plain agree
+  // the vendor is the one who spoke, here the desk was.
+  if (p.kind === "vendor_counter_accepted") {
+    return {
+      subject: `Accepted — quotation ${String(p.quotation_no ?? "iTarang buyback")}`,
+      body:
+        `<p>Hello ${escapeHtml(String(p.vendor_name ?? "there"))},</p>` +
+        `<p>We have accepted your price of ` +
+        `<b>${escapeHtml(inr(p.agreed_total as number | null))}</b> for this lot.</p>` +
+        `<p>Please raise your purchase order from your dashboard so we can schedule ` +
+        `collection.</p>` +
         `<p>— iTarang</p>`,
     };
   }

@@ -38,6 +38,7 @@ export const GET = withErrorHandler(async () => {
       thread_id: t.thread_id,
       quotation_no: t.quotation_no ?? "—",
       status: t.status,
+      awaiting_party: t.awaiting_party,
       pickup_city: t.pickup_city,
       pickup_state: t.pickup_state,
       sent_at: t.sent_at,
@@ -52,6 +53,7 @@ export const GET = withErrorHandler(async () => {
         ah: l.ah,
         ask_price: l.ask_price,
         counter_price: l.counter_price,
+        revised_ask_price: l.revised_ask_price,
         agreed_price: l.agreed_price,
         photos: l.photos,
         // E-191 declared battery spec — chemistry, kilograms, IOT, the
