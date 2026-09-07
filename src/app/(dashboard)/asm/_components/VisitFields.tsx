@@ -152,7 +152,19 @@ export function useVisitForm(open: boolean) {
             );
             const json = await res.json();
             if (!res.ok) {
-                throw new Error(json?.error?.message ?? "Failed to log visit");
+                // A zod rejection comes back as a bare "Validation failed" with
+                // the offending fields in error.details — append them so the
+                // ASM sees which field the server refused, not just that it did.
+                const details = Array.isArray(json?.error?.details)
+                    ? json.error.details
+                          .map((d: { path?: string; message?: string }) =>
+                              [d.path, d.message].filter(Boolean).join(": "),
+                          )
+                          .filter(Boolean)
+                          .join("; ")
+                    : "";
+                const message = json?.error?.message ?? "Failed to log visit";
+                throw new Error(details ? `${message} — ${details}` : message);
             }
             toast.success("Visit logged.");
             return { next_action: nextAction };
