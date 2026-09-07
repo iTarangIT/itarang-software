@@ -25,6 +25,20 @@ import {
 
 const MUTATE_ROLES = ["asm", "admin"];
 
+// PhotoUploader posts to /api/uploads/dealer-documents, which returns an
+// absolute Supabase public URL on the Supabase backend but a same-origin
+// proxy path ("/api/files/dealer-documents/visit-photos/…") once
+// STORAGE_BACKEND=s3. `z.string().url()` rejects the relative form, so every
+// visit with a photo attached failed with "Validation failed". Accept either.
+const PHOTO_URL_RE = /^(?:https?:\/\/\S+|\/\S+)$/;
+const PhotoUrl = z
+    .string()
+    .min(1)
+    .max(2048)
+    .regex(PHOTO_URL_RE, {
+        message: "photo must be an absolute URL or a same-origin path",
+    });
+
 const BodySchema = z
     .object({
         visit_status: z.enum(VISIT_STATUS),
@@ -32,7 +46,7 @@ const BodySchema = z
         scheduled_date: z.string().date().nullable().optional(),
         visit_outcome: z.enum(VISIT_OUTCOME).nullable().optional(),
         visit_remarks: z.string().min(1).max(5000),
-        photos: z.array(z.string().url()).max(10).optional(),
+        photos: z.array(PhotoUrl).max(10).optional(),
         gps_check_in_lat: z.number().min(-90).max(90).nullable().optional(),
         gps_check_in_lng: z.number().min(-180).max(180).nullable().optional(),
         next_action: z.enum(VISIT_NEXT_ACTION),
