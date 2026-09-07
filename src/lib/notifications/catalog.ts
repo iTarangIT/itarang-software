@@ -77,6 +77,15 @@ export const CATEGORIES: NotificationCategory[] = [
   "Inventory",
   "Auctions",
   "Scrap Sales",
+  // Collection happens before the workshop, which happens before the resale.
+  //
+  // "Recovery" was declared in NotificationCategory by E-262/E-263 and mapped by
+  // CATEGORY_BY_TYPE, but never added to THIS list — and typeGroups() builds the
+  // screen from `CATEGORIES.filter(c => byCategory.has(c))`, so the four
+  // recovery.* types were silently dropped from the settings UI and could not be
+  // governed on either channel. The registry test caught it as a mismatch
+  // between typeGroups() and allGovernableTypes().
+  "Recovery",
   "Refurbishment",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
@@ -458,6 +467,67 @@ const NO_EMAIL = new Set([
   "auction.ending_soon",
   "auction.won",
 ]);
+
+/**
+ * Types whose email is the ONLY copy an external party gets — a customer or a
+ * dealer who has no bell to check, or an NBFC whose next action depends on it.
+ * The admin Email Notification screen renders these locked and the save route
+ * rejects a change to one by name (E-284).
+ *
+ * This is a much smaller list than it looks like it should be, and deliberately
+ * so: password resets, OTPs, agreement LINKS, welcome credentials and agent
+ * dispatch never pass through emit() at all — they are sent by the bespoke
+ * modules in src/lib/email/, which do not consult emailWorthy() and are
+ * therefore already beyond the reach of any settings screen. Only the emit()
+ * types that carry the same weight need pinning here.
+ */
+const EMAIL_LOCKED = new Set([
+  "onboarding.agreement_initiated",
+  "onboarding.agreement_signed",
+  "agreement.initiated",
+  "agreement.signed",
+  "agreement.recorded",
+  "consent.sent",
+  "consent.signed",
+  "loan.sanctioned",
+  "loan.disbursed",
+]);
+
+/** Whether the admin email screen may govern `type` at all. Locked = always emailed. */
+export function isEmailLocked(type: string): boolean {
+  return EMAIL_LOCKED.has(type);
+}
+
+/** Test/registry seam — the locked set, so CI can assert every member is a real type. */
+export function emailLockedTypes(): string[] {
+  return [...EMAIL_LOCKED];
+}
+
+/**
+ * THE precedence rule for the email channel, in one pure place: locked beats an
+ * admin's saved override (E-284), which beats the per-recipient flag a call site
+ * passed, which beats the code default.
+ *
+ * WHY THE OVERRIDE BEATS THE CALL SITE. `recipientFlag` is the `email: false`
+ * that three audiences in events.ts pass (notifyFulfilmentToAdmin,
+ * notifyDualApprovalRequested, notifyWalletLowBalance). They are the only
+ * per-recipient overrides in the codebase and all three suppress, so honouring
+ * them over an admin's explicit tick would leave the settings screen showing a
+ * type as emailed while the emitter silently did not send it. A screen that lies
+ * about the current state is worse than a chatty email an admin asked for and
+ * can untick again.
+ *
+ * Pure and db-free on purpose: emit.ts and email-access.ts must not be able to
+ * drift apart on this, and this module is in the client bundle.
+ */
+export function resolveEmailChannel(
+  type: string,
+  override: boolean | undefined,
+  recipientFlag: boolean | undefined,
+): boolean {
+  if (isEmailLocked(type)) return true;
+  return override ?? recipientFlag ?? emailWorthy(type);
+}
 
 export function categorize(type: string): NotificationCategory {
   if (isBuyback(type)) return buybackCategorize(type);

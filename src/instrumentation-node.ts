@@ -1245,6 +1245,132 @@ export async function startOpsMonitorTicker() {
 }
 
 // ---------------------------------------------------------------------------
+// E-287/E-288 — scheduled digest emails.
+//
+// Twice a day (09:00 and 19:00 IST by default, configurable per digest under
+// Settings) mail a summary of a queue to its configured recipients: Dealer
+// Validation and KYC Review today, whatever else is registered in
+// src/lib/digests/registry.ts tomorrow. One ticker serves them all.
+//
+// Same runtime argument as every ticker above it: vercel.json's crons do not
+// fire on the Hostinger PM2 boxes (docs/DEPLOY_RUNBOOK.md), so an in-process
+// ticker is the only mechanism that demonstrably runs in BOTH sandbox and
+// production. /api/cron/digest exists alongside it as a crontab backstop and a
+// manual handle; the two are safe to run together because each send is CLAIMED
+// by a (kind, digest_date, slot) row, so they can only ever split work, never
+// duplicate it.
+//
+// WHY EVERY FIVE MINUTES FOR A TWICE-DAILY JOB. The tick is a cheap settings read
+// that returns nothing 286 times out of 288; it is not the send. A slot stays due
+// from its configured time until the end of its IST day, so five minutes is
+// simply the worst-case lateness of a digest whose box was restarting when the
+// clock struck — and the claim is what stops the other 287 ticks resending it.
+// ---------------------------------------------------------------------------
+export async function startDigestTicker() {
+  // Skip on Vercel — a cron entry would own it there.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out, e.g. to stop a second process from contending for the
+  // claim. Contention is safe (the loser is simply told the slot is taken) but
+  // it is pointless work.
+  if (process.env.ENABLE_DEALER_VALIDATION_DIGEST === "0") {
+    console.log(
+      "[instrumentation:digests] disabled via ENABLE_DEALER_VALIDATION_DIGEST=0",
+    );
+    return;
+  }
+
+  // OPT-IN OUTSIDE PRODUCTION — and this one is not paranoia, it is a bug that
+  // already happened. `npm run dev` reads .env.local, .env.local points at a
+  // shared AWS database (which of database-1/database-2 it names drifts), and
+  // this ticker needs nothing else to fire: within 195 seconds of a developer
+  // starting a dev server it claimed the day's slot and mailed a real digest to
+  // care.itarang@gmail.com. The claim then made the slot terminal, so the
+  // deployed app could not send the mail the recipients were actually waiting
+  // for.
+  //
+  // Every OTHER ticker in this file is safe to run in dev because its work is
+  // idempotent, internal, or self-correcting. This one is neither: it sends
+  // once, to a fixed external address, and records that it did.
+  //
+  // So in development it stays dark unless somebody asks for it by name.
+  // Testing the send has a purpose-built path that does NOT consume a slot:
+  // Settings → <digest> → "Send test now", or
+  // `scripts/verify-digests.ts <kind> <day> --render` to see the mail without
+  // sending anything at all.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.ENABLE_DEALER_VALIDATION_DIGEST !== "1"
+  ) {
+    console.log(
+      "[instrumentation:digests] not production — ticker dark. " +
+        "Set ENABLE_DEALER_VALIDATION_DIGEST=1 to run it here (it sends REAL email " +
+        "to the configured recipients and consumes the day's slot).",
+    );
+    return;
+  }
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return; // a slow mail provider must not stack ticks
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the Drizzle
+      // graph is never pulled into the Edge compile.
+      const { runAllDigests } = await import("@/lib/digests/engine");
+      const r = await runAllDigests({ triggeredBy: "ticker" });
+
+      // Log only when something actually happened. A tick that finds no slot due
+      // is the normal case ~286 times a day and must not write a line.
+      for (const o of r.outcomes) {
+        if (o.sent) {
+          const headline = o.figures?.activity
+            .filter((l) => !l.indent)
+            .slice(0, 3)
+            .map((l) => `${l.label}=${l.value}`)
+            .join(" ");
+          console.log(
+            `[instrumentation:digests] sent ${o.kind} ${o.slot} digest for ${o.digestDate} ` +
+              `to ${o.recipients?.length ?? 0} recipient(s)` +
+              (headline ? ` — ${headline}` : ""),
+          );
+        } else if (o.error) {
+          console.error(
+            `[instrumentation:digests] ${o.kind} ${o.slot} digest for ${o.digestDate} FAILED: ${o.error}`,
+          );
+        }
+        // A `skipped` outcome is the ordinary "someone else already sent it"
+        // and is deliberately silent.
+      }
+    } catch (err) {
+      // Never let a bad tick kill the ticker: the slot is still unclaimed (or
+      // reclaimable), so the next tick retries it.
+      console.error(
+        "[instrumentation:digests] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Last in the staggered kickoff queue, behind ops-monitor (75s), drive (90s),
+  // oem-price (120s), scraper (135s), kyc/transcription (150s), nbfc-sla (165s),
+  // drive-mirror (180s) and drive-sales (195s). Nothing here is urgent to the
+  // minute, and a digest is the last thing that should compete with the app
+  // finishing its boot.
+  const kickoff = setTimeout(tick, 210_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] digests (5m) started in-process");
+}
+
+// ---------------------------------------------------------------------------
 // E-280 — Google Drive sales-invoice scan.
 //
 // The revenue-side twin of startDriveExpenseTicker above. The company moved off
