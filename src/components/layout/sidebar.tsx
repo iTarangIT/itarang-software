@@ -52,6 +52,7 @@ import {
   ChevronDown,
   Gavel,
   ShieldCheck,
+  MailCheck,
   Timer,
   CloudUpload,
   Server,
@@ -272,6 +273,59 @@ function nbfcSettingsSubnav(idPrefix: string) {
   };
 }
 
+// Settings → Loan Product (E-282). Same one-factory-per-role convention as
+// nbfcSettingsSubnav below it: the admin and sales_head Settings groups have to
+// stay in step, and a second hand-written copy is how they drift.
+//
+// A flat item rather than a sub-navigation node — there is one screen, and
+// getActiveItemId() is longest-href-wins, so /admin/settings/loan-products
+// beats /admin/settings (which beats /admin) when it is active.
+//
+// NOTE: distinct from the top-level /admin/loan-products screen, which is the
+// NBFC product CATALOGUE. This one pins which of those products a city is
+// offered by default. Different routes, no prefix collision.
+function loanProductSettingsItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-loan-product-defaults`,
+    label: "Loan Product",
+    icon: Coins,
+    href: "/admin/settings/loan-products",
+  };
+}
+
+// Settings → the digest screens (E-287/E-288). One factory per screen, same
+// one-factory-per-role convention as loanProductSettingsItem above — the admin
+// and sales_head Settings groups have to stay in step, and a second hand-written
+// copy is how they drift.
+//
+// Flat items, not a sub-navigation node: there is one screen each, and
+// getActiveItemId() is longest-href-wins, so /admin/settings/kyc-review beats
+// /admin/settings (which beats /admin) when it is active.
+//
+// NOTE: each is distinct from the QUEUE it reports on — /admin/dealer-verification
+// and /admin/kyc-review are the screens these digests summarise and link to.
+// Different routes, no prefix collision.
+//
+// digest-registry.contract.test.ts asserts every registered digest kind has an
+// entry here, so adding a kind without a way to configure it fails the build.
+function dealerValidationDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-dealer-validation-digest`,
+    label: "Dealer Validation",
+    icon: MailCheck,
+    href: "/admin/settings/dealer-validation",
+  };
+}
+
+function kycReviewDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-kyc-review-digest`,
+    label: "KYC Review",
+    icon: MailCheck,
+    href: "/admin/settings/kyc-review",
+  };
+}
+
 // Settings → WhatsApp. Same shape as nbfcSettingsSubnav: one factory, called
 // once per role that shows the settings group, so both roles stay in step.
 function whatsappSettingsSubnav(idPrefix: string) {
@@ -327,6 +381,9 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
+        dealerValidationDigestItem("sh"),
+        kycReviewDigestItem("sh"),
+        loanProductSettingsItem("sh"),
         nbfcSettingsSubnav("sh"),
         whatsappSettingsSubnav("sh"),
         {
@@ -946,6 +1003,9 @@ const roleNavigation: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
+        dealerValidationDigestItem("admin"),
+        kycReviewDigestItem("admin"),
+        loanProductSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),
         {
