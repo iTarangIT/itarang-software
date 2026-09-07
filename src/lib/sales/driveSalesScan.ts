@@ -989,12 +989,19 @@ export async function listSalesRunFiles(runId: string) {
     .orderBy(desc(salesScanFiles.created_at));
 }
 
-/** Files still needing a human, across all runs. */
+/**
+ * Files still needing a human, across all runs.
+ *
+ * 'unsupported' belongs here with the other two: a Google-native doc or an
+ * oversize file never became an invoice either, so its value is missing from
+ * revenue just the same. It is also settled, so no re-scan will revisit it —
+ * leaving it out of this list made it invisible everywhere.
+ */
 export async function listSalesAttentionFiles(limit = 100) {
   return db
     .select()
     .from(salesScanFiles)
-    .where(inArray(salesScanFiles.status, ["needs_attention", "failed"]))
+    .where(inArray(salesScanFiles.status, ["needs_attention", "failed", "unsupported"]))
     .orderBy(desc(salesScanFiles.created_at))
     .limit(limit);
 }
