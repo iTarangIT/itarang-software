@@ -198,9 +198,10 @@ export async function loadSectionGOptions(
 }
 
 /**
- * E-282/E-283/E-286 — narrow the matched list to the lender an admin pinned for
- * this dealer and/or the LOCATION OF THAT DEALER (its own `accounts` address,
- * not the customer's).
+ * E-282/E-283/E-286/E-289 — narrow the matched list to the lender an admin
+ * pinned for this dealer, for the LOCATION OF THAT DEALER (its own `accounts`
+ * address), for the LOCATION OF THE CUSTOMER (this lead's own address), or any
+ * combination of the three.
  *
  * Applied to the HITS, never in place of them. A pinned product is offered only
  * if it independently matched every BRE rule, so one whose `loan_amount_max`
@@ -227,11 +228,16 @@ async function applyPinnedDefault(
 ): Promise<SectionGNbfc[]> {
   if (grouped.length === 0) return grouped;
 
-  // Dealer only: since E-286 the rule's state/city describe the DEALER, which
-  // the resolver reads from `accounts` itself. The customer's lead.state /
-  // lead.city are no longer part of this match (they still drive the BRE's own
-  // `active_locations` rule, which runs before this).
-  const rules = await resolveDefaultProductRules(lead.dealer_id);
+  // Two location legs. The rule's state/city describe the DEALER (E-286) and
+  // the resolver reads those from `accounts` itself, so only the dealer code
+  // goes in for them. Its customer_state/customer_city describe the CUSTOMER
+  // (E-289) and are matched against the lead's own address — the same
+  // lead.state / lead.city the BRE's `active_locations` rule already used
+  // above, which is why nothing new had to be loaded here.
+  const rules = await resolveDefaultProductRules(lead.dealer_id, {
+    state: lead.state,
+    city: lead.city,
+  });
 
   for (const rule of rules) {
     const group = grouped.find((g) => g.nbfcId === rule.nbfcId);
