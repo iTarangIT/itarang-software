@@ -167,3 +167,53 @@ describe("a vendor's reach stops at their own leg", () => {
     }
   });
 });
+
+/**
+ * E-281 — iTarang's own moves on the vendor leg.
+ *
+ * The whole reason these are separate actions and not a `record_*` with a
+ * different flag: `record_vendor_agreement` says in an INSERT-only audit log that
+ * the VENDOR agreed. When the desk takes their standing price, nobody said that,
+ * and a log that cannot tell the two apart is a log that cannot settle a dispute
+ * about who committed to what.
+ */
+describe("iTarang's own vendor-leg moves (E-281)", () => {
+  it("maps accept_counter to the desk's own action, never a record_ one", () => {
+    expect(actionFor("accept_counter", "admin")).toBe("accept_vendor_counter");
+    expect(actionFor("accept_counter", "admin")).not.toBe(actionFor("agree", "admin"));
+    expect(actionFor("accept_counter", "admin")).not.toBe(actionFor("agree", "vendor"));
+  });
+
+  it("lets the admin counter and accept from VENDOR_NEGOTIATING", () => {
+    expect(transition("VENDOR_NEGOTIATING", "counter_vendor", "admin")).toEqual({
+      ok: true,
+      to: "VENDOR_NEGOTIATING",
+    });
+    expect(transition("VENDOR_NEGOTIATING", "accept_vendor_counter", "admin")).toEqual({
+      ok: true,
+      to: "VENDOR_AGREED",
+    });
+  });
+
+  it("refuses both to a vendor — the portal must not be able to forge our yes", () => {
+    for (const action of ["counter_vendor", "accept_vendor_counter"] as const) {
+      expect(transition("VENDOR_NEGOTIATING", action, "vendor").ok).toBe(false);
+      expect(transition("VENDOR_NEGOTIATING", action, "dealer").ok).toBe(false);
+    }
+  });
+
+  it("has no edge before a vendor has countered, or after one has agreed", () => {
+    // VENDOR_ROUTED: our ask is the live number and the other vendors hold the
+    // emailed PDF — revising it there is a re-quote, not a counter.
+    // VENDOR_AGREED: the same boundary that refuses `reopen` (M07 AC).
+    for (const state of ["MARGIN_SET", "VENDOR_ROUTED", "VENDOR_AGREED"] as DealState[]) {
+      expect(transition(state, "counter_vendor", "admin").ok).toBe(false);
+      expect(transition(state, "accept_vendor_counter", "admin").ok).toBe(false);
+    }
+  });
+
+  it("keeps the counter a self-loop, so a haggle can run as long as it needs to", () => {
+    const edge = TRANSITIONS.VENDOR_NEGOTIATING.counter_vendor;
+    expect(edge?.to).toBe("VENDOR_NEGOTIATING");
+  });
+});

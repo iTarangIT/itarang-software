@@ -47,6 +47,20 @@ export interface VendorThread {
   total_units: number;
   ask_total: number | null;
   counter_total: number | null;
+  /** E-281 — iTarang's counter back to us, once they have made one. */
+  our_counter_total: number | null;
+  /**
+   * E-281 — the live number on the table, whoever named it last. This is what
+   * "Accept" books, and it is computed server-side by the same rule the server
+   * writes agreed_price with, so the button and the outcome cannot disagree.
+   */
+  standing_total: number | null;
+  /**
+   * E-281 — 'VENDOR' when iTarang is waiting on us, 'ITARANG' when we are
+   * waiting on them. `can_respond` says the thread is open; this says whether the
+   * ball is ours.
+   */
+  awaiting_party: "VENDOR" | "ITARANG";
   agreed_total: number | null;
   sent_at: string | null;
   responded_at: string | null;

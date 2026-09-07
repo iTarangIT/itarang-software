@@ -9,7 +9,17 @@ export interface NegLine {
 
 export interface NegRound {
   actor: string;
-  side: "dealer" | "admin";
+  /**
+   * Who made this offer. `vendor` joined in E-281, when the VENDOR-leg rounds
+   * finally got a reader — they had been written since Sprint 2A and rendered
+   * nowhere, because every query filtered leg='DEALER'.
+   *
+   * It behaves as `dealer` does: both are the COUNTERPARTY, and this component
+   * only ever needs to know "us or them" to pick a side and a colour. Kept a
+   * distinct value rather than mapped to `dealer` by the caller so a screen
+   * showing both legs cannot silently label a vendor's bid as a dealer's.
+   */
+  side: "dealer" | "admin" | "vendor";
   note?: string;
   at?: string;
   lines?: NegLine[];
@@ -38,15 +48,22 @@ export default function NegotiationThread({
   rounds,
   viewer,
   offerVersion,
+  emptyLabel = "No negotiation yet.",
 }: {
   rounds: NegRound[];
   viewer: "dealer" | "admin";
   offerVersion?: number;
+  /**
+   * E-281 — the vendor leg mounts this per thread, where "No negotiation yet"
+   * reads as a bug rather than a state. Lets that caller say what it means
+   * ("Awaiting their first response") without a second component.
+   */
+  emptyLabel?: string;
 }) {
   if (rounds.length === 0) {
     return (
       <Card className="py-2">
-        <div className="p-6 text-center text-[13px] text-slate-400">No negotiation yet.</div>
+        <div className="p-6 text-center text-[13px] text-slate-400">{emptyLabel}</div>
       </Card>
     );
   }
