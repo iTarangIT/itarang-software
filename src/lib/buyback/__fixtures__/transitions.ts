@@ -603,6 +603,65 @@ export const GOLDEN_TRANSITIONS: GoldenTransition[] = [
     expect: "VENDOR_AGREED",
     why: "The vendor closed the haggle themselves.",
   },
+
+  // ---------------------------------------------------------------------------
+  // Vendor leg, iTarang's own moves (E-281)
+  //
+  // The mirror of the dealer leg's admin_counter / admin_accept_counter pair, and
+  // the reason this file needed a third vendor block: every edge above is a
+  // VENDOR's move reaching us, whoever typed it. Before E-281 the desk's only
+  // answer to a counter was `reopen` — which bumps offer_version and LOSTs every
+  // open thread, so naming a different number meant withdrawing the auction.
+  // ---------------------------------------------------------------------------
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "counter_vendor",
+    role: "admin",
+    expect: "VENDOR_NEGOTIATING",
+    why: "Self-loop: iTarang counters per SKU and stays in VENDOR_NEGOTIATING, exactly as admin_counter does on the dealer leg.",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "accept_vendor_counter",
+    role: "admin",
+    expect: "VENDOR_AGREED",
+    why: "iTarang takes the vendor's standing price. Same destination as record_vendor_agreement, kept a separate action so the audit log does not claim the vendor said yes when the desk did.",
+  },
+  {
+    state: "VENDOR_ROUTED",
+    action: "counter_vendor",
+    role: "admin",
+    expect: REFUSED,
+    why: "Nothing has been countered yet — the vendors are holding the quotation at our ask. Revising that ask is a re-quote, not a counter, and the other vendors still hold the emailed PDF.",
+  },
+  {
+    state: "VENDOR_ROUTED",
+    action: "accept_vendor_counter",
+    role: "admin",
+    expect: REFUSED,
+    why: "There is no counter of theirs to accept. Accepting our own ask on their behalf is record_vendor_agreement.",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "counter_vendor",
+    role: "vendor",
+    expect: REFUSED,
+    why: "iTarang's move is iTarang's. A vendor answering our counter uses vendor_counter.",
+  },
+  {
+    state: "VENDOR_NEGOTIATING",
+    action: "accept_vendor_counter",
+    role: "vendor",
+    expect: REFUSED,
+    why: "A vendor accepting the standing price is vendor_agree. This action is the desk's yes, and must never be forgeable from the portal.",
+  },
+  {
+    state: "VENDOR_AGREED",
+    action: "counter_vendor",
+    role: "admin",
+    expect: REFUSED,
+    why: "The price is struck and the locks are filled. Past this point the margin is a commitment to a third party — the same boundary that refuses `reopen` (M07 AC).",
+  },
   {
     state: "VENDOR_ROUTED",
     action: "vendor_counter",

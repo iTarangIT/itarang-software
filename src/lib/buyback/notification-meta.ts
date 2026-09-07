@@ -84,6 +84,11 @@ export const CATEGORY_BY_ACTION: Record<string, NotificationCategory> = {
   record_vendor_agreement: "Quotations",
   vendor_counter: "Quotations",
   vendor_agree: "Quotations",
+  // E-281 — iTarang's own moves on the same leg. Same category, so linkFor sends
+  // a vendor to /vendor-portal/bids, which is exactly where they must go to
+  // answer a counter.
+  counter_vendor: "Quotations",
+  accept_vendor_counter: "Quotations",
 
   // Purchase orders
   exchange_pos: "Purchase Orders",

@@ -45,11 +45,22 @@ export function RespondModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  // Per-line counter inputs, keyed by line_id, seeded from the standing price
-  // (their last counter where they made one, else our ask).
+  // Per-line counter inputs, keyed by line_id, seeded from the STANDING price —
+  // the last number either side named. Before E-281 that was always ours or
+  // theirs by fallback; now iTarang can counter back, so a vendor opening this
+  // after a counter should see the figure they are actually being asked about,
+  // not their own superseded one.
   const [prices, setPrices] = useState<Record<string, string>>(() =>
     Object.fromEntries(
-      thread.lines.map((l) => [l.line_id, String(l.counter_price ?? l.ask_price ?? "")]),
+      thread.lines.map((l) => [
+        l.line_id,
+        String(
+          (thread.awaiting_party === "VENDOR" ? l.revised_ask_price : null) ??
+            l.counter_price ??
+            l.ask_price ??
+            "",
+        ),
+      ]),
     ),
   );
   const [busy, setBusy] = useState<Kind | null>(null);
@@ -63,8 +74,18 @@ export function RespondModal({
   }, 0);
 
   // What "Accept" agrees to: the standing total the endpoint will use.
-  const standingTotal = thread.counter_total ?? thread.ask_total ?? 0;
-  const acceptWord = thread.status === "COUNTERED" ? "your counter" : "our ask";
+  //
+  // Served by the API now (E-281) rather than derived here. It used to be
+  // `counter_total ?? ask_total`, which stopped being right the moment iTarang
+  // could counter — a vendor would have been shown, and would have believed they
+  // were accepting, their own earlier number while the server booked ours.
+  const standingTotal = thread.standing_total ?? thread.counter_total ?? thread.ask_total ?? 0;
+  const itarangCountered = thread.awaiting_party === "VENDOR" && thread.our_counter_total !== null;
+  const acceptWord = itarangCountered
+    ? "iTarang's counter"
+    : thread.status === "COUNTERED"
+      ? "your counter"
+      : "our ask";
 
   const location = [thread.pickup_city, thread.pickup_state].filter(Boolean).join(", ");
   const weight = lotWeight(thread.lines);
@@ -155,10 +176,35 @@ export function RespondModal({
               >
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-3">
                   <span className="text-[12.5px] text-slate-500">
-                    Our ask{" "}
-                    <span className="font-semibold tabular-nums text-slate-800">
-                      {l.ask_price !== null ? `${inr(Number(l.ask_price))}/u` : "—"}
-                    </span>
+                    {/* Once iTarang has countered, THAT is the number this vendor
+                        is being asked about — the opening ask is history, and
+                        leading with it would be quoting a price nobody is
+                        offering any more (E-281). */}
+                    {itarangCountered && l.revised_ask_price !== null ? (
+                      <>
+                        iTarang now asks{" "}
+                        <span className="font-semibold tabular-nums text-bb-navy">
+                          {inr(Number(l.revised_ask_price))}/u
+                        </span>
+                        {l.ask_price !== null && (
+                          <span className="ml-1.5 text-[11.5px] text-slate-400 line-through">
+                            {inr(Number(l.ask_price))}/u
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        Our ask{" "}
+                        <span className="font-semibold tabular-nums text-slate-800">
+                          {l.ask_price !== null ? `${inr(Number(l.ask_price))}/u` : "—"}
+                        </span>
+                      </>
+                    )}
+                    {l.counter_price !== null && (
+                      <span className="ml-1.5 text-[11.5px] text-slate-400">
+                        · you bid {inr(Number(l.counter_price))}/u
+                      </span>
+                    )}
                   </span>
 
                   <label className="ml-auto flex items-center gap-1.5 text-[12.5px] text-slate-500">
