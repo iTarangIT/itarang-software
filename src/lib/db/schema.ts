@@ -522,6 +522,14 @@ export const leads = pgTable("leads", {
   recalled_by: uuid("recalled_by"),
   recall_note: text("recall_note"),
   resubmitted_at: timestamp("resubmitted_at", { withTimezone: true }),
+  // E-283 — multi-party delete. Deleting an application hides it from the
+  // deleting party's dashboard only; the row survives until the dealer, the
+  // admin AND every NBFC holding an assignment have each deleted it, at which
+  // point the hard cascade runs. See src/lib/leads/multi-party-delete.ts.
+  deleted_by_dealer_at: timestamp("deleted_by_dealer_at", { withTimezone: true }),
+  deleted_by_dealer_user: uuid("deleted_by_dealer_user"),
+  deleted_by_admin_at: timestamp("deleted_by_admin_at", { withTimezone: true }),
+  deleted_by_admin_user: uuid("deleted_by_admin_user"),
 });
 
 // E-116 — extra products attached to a lead via the new-lead form's
@@ -4299,6 +4307,33 @@ export const notificationAccess = pgTable(
   }),
 );
 
+// -----------------------------------------------------------------------------
+// E-282 — per-type control of which notifications ALSO go out by email
+// -----------------------------------------------------------------------------
+// The email-channel sibling of notification_access, and it means something
+// DIFFERENT by an absent row: NO ROW = THE CODE DEFAULT in emailWorthy()
+// (src/lib/notifications/catalog.ts), not "enabled". A row exists only where an
+// admin overrode the code, which is why `enabled` carries NO .default() — an
+// insert that does not state the answer is a bug, not an "on".
+//
+// Per-type and not per-dashboard because emit.ts has no per-role notion of
+// email: emailTargets() collects every resolved target's address and sends one
+// message. The reader (src/lib/notifications/email-access.ts) fails open to an
+// EMPTY map, so an unapplied E-282 resolves everything through emailWorthy() —
+// i.e. exactly today's behaviour. See the E-282 file for the rest.
+// -----------------------------------------------------------------------------
+
+export const notificationEmailAccess = pgTable("notification_email_access", {
+  notification_type: varchar("notification_type", { length: 50 })
+    .primaryKey()
+    .notNull(),
+  enabled: boolean().notNull(),
+  // users.id AS TEXT — matches notification_access.updated_by on the sibling
+  // tab, which joins u.id::text.
+  updated_by: text("updated_by"),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const scraperCityQueue = pgTable("scraper_city_queue", {
   id: text().primaryKey().notNull(),
   base_query: text("base_query").notNull(),
@@ -4659,6 +4694,11 @@ export const nbfcLeadAssignments = pgTable(
     rejection_admin_due_at: timestamp("rejection_admin_due_at", { withTimezone: true }),
     rejection_forwarded_at: timestamp("rejection_forwarded_at", { withTimezone: true }),
     rejection_forward_source: varchar("rejection_forward_source", { length: 16 }), // 'admin' | 'system'
+    // E-283 — this NBFC deleted the application from its own Acquire pipeline.
+    // Per-tenant on purpose: a lead routed to two lenders stays visible to the
+    // second until it deletes too.
+    deleted_at: timestamp("deleted_at", { withTimezone: true }),
+    deleted_by_user: uuid("deleted_by_user"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6720,6 +6760,62 @@ export const dealerCorrectionItems = pgTable(
 );
 
 // =============================================================================
+// E-285/E-286 — the digest send ledger
+//
+// One row per (kind, digest_date, slot) CLAIM for a scheduled digest email —
+// Dealer Validation and KYC Review today, whatever is registered tomorrow.
+//
+// Holds no digest DATA. Every number in a mail is counted live at send time by
+// that kind's descriptor in src/lib/digests/kinds/. This table exists so a slot
+// cannot be sent twice by the three things that can drive it at once: the
+// in-process ticker, a VPS crontab curl, and a second PM2 process.
+//
+// The lock is the PARTIAL unique index on (kind, digest_date, slot) WHERE slot
+// IN ('morning','evening') — 'test' sends from the settings screen are recorded
+// but never suppress a real slot.
+//
+// Was `dealer_validation_digest_runs` under E-285; renamed by E-286 when a
+// second kind arrived.
+// =============================================================================
+
+export const digestRuns = pgTable(
+  "digest_runs",
+  {
+    id: bigserial({ mode: "number" }).primaryKey().notNull(),
+    /** Descriptor id: 'dealer_validation' | 'kyc_review'. */
+    kind: varchar("kind", { length: 32 }).default("dealer_validation").notNull(),
+    /** The IST CALENDAR DAY the mail covers, not the day it was sent. */
+    digest_date: date("digest_date").notNull(),
+    /** 'morning' | 'evening' | 'test' */
+    slot: varchar("slot", { length: 16 }).notNull(),
+    /** 'sending' | 'sent' | 'failed'. 'sent' is terminal. */
+    status: varchar("status", { length: 16 }).notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    recipients: text("recipients"),
+    counts: jsonb("counts").default({}).notNull(),
+    /** 'ticker' | 'cron' | 'manual' */
+    triggered_by: varchar("triggered_by", { length: 16 })
+      .default("ticker")
+      .notNull(),
+    message_id: text("message_id"),
+    error: text("error"),
+    claimed_at: timestamp("claimed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // THE CLAIM KEY — see the block comment above.
+    kindSlotUniq: uniqueIndex("digest_runs_kind_slot_uniq")
+      .on(table.kind, table.digest_date, table.slot)
+      .where(sql`slot IN ('morning', 'evening')`),
+    createdIdx: index("digest_runs_created_idx").on(table.created_at),
+  }),
+);
+
+// =============================================================================
 // E-082 — Dual Approval Gate primitive
 // Two-person rule for high-impact NBFC actions (battery immobilisation, loan
 // restructuring, risk-rule threshold change, bulk immobilisation, auction lot
@@ -7233,6 +7329,68 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
     .defaultNow()
     .notNull(),
 });
+
+// =============================================================================
+// E-280/E-281/E-284 — Default loan product + NBFC per dealer, DEALER LOCATION,
+// or both.
+// Every scoping column is nullable and NULL means "any", so a rule matches a
+// lead when every column it actually declares matches: (dealer_code) alone is
+// a dealer-wide rule, (state, city) alone is E-280's location rule, and the
+// two together scope a dealer to one city. Ordered by priority DESC then by
+// specificity (dealer before location-only, city before state, located before
+// any-location). Read by resolveDefaultProductRules()
+// (src/lib/leads/city-default-product.ts) and applied by loadSectionGOptions()
+// to the BRE's hits — so a pinned product that does not independently match is
+// skipped and the next rule, or normal matching, is used instead.
+// Every read is guarded, so an environment without the table behaves as before.
+// =============================================================================
+export const cityDefaultLoanProducts = pgTable(
+  "city_default_loan_products",
+  {
+    id: serial("id").primaryKey(),
+    // E-281 — accounts.id / leads.dealer_id, i.e. the dealer CODE varchar and
+    // NOT dealers.id (the serial int the BRE loader uses). NULL = the rule is
+    // not dealer-scoped and applies to every dealer.
+    dealer_code: varchar("dealer_code", { length: 255 }),
+    // E-284 — the DEALER's state, matched against accounts.state, NOT the
+    // customer's leads.state (which is what E-280/E-281 compared). Compared
+    // case- and whitespace-insensitively, which matters here: a dealer address
+    // is captured at onboarding and need not be spelled the way the admin
+    // form's picker spells it. E-281 made it nullable: NULL = the rule
+    // declares no location at all, only meaningful with a dealer_code.
+    state: varchar("state", { length: 100 }),
+    // E-284 — the DEALER's city (accounts.city). NULL = every dealer city in
+    // the state (or anywhere, when state is NULL too).
+    city: varchar("city", { length: 100 }),
+    nbfc_id: integer("nbfc_id").notNull(),
+    loan_product_id: integer("loan_product_id").notNull(),
+    // E-281 — admin-chosen tie-break; highest wins, specificity breaks ties.
+    priority: integer("priority").default(0).notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    notes: text("notes"),
+    created_by: uuid("created_by"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // NOTE: the SQL migrations create these as PARTIAL, expression indexes
+    // (lower(...) WHERE is_active), and the partial UNIQUE key
+    // city_default_loan_products_active_key_v2 is not representable here at
+    // all. The .sql files are the source of truth — do not reconcile these
+    // with drizzle-kit generate.
+    activeStateIdx: index("city_default_loan_products_active_state_idx").on(
+      table.state,
+    ),
+    activeDealerIdx: index("city_default_loan_products_active_dealer_idx").on(
+      table.dealer_code,
+    ),
+  }),
+);
 
 // =============================================================================
 // E-065 — NBFC Ecosystem Overview metrics cache (BRD §6.3.2)

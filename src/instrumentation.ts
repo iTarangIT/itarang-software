@@ -32,6 +32,7 @@ export async function register() {
       startRecordingTranscriptionTicker,
       startDriveMirrorTicker,
       startOpsMonitorTicker,
+      startDigestTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -50,5 +51,9 @@ export async function register() {
     // staggered 75s out, so a cold boot finishes wiring the app before the
     // monitoring starts querying the database it monitors.
     await startOpsMonitorTicker();
+    // E-285/E-286 — the twice-daily digest emails. Truly last: the kickoff is
+    // 195s out, behind every collector, because a summary mail is the
+    // lowest-priority thing a freshly-booted process could be doing.
+    await startDigestTicker();
   }
 }

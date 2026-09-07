@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { leads, loanSanctions, productSelections, users } from "@/lib/db/schema";
@@ -78,7 +78,9 @@ export async function GET(req: NextRequest) {
           dealer_id: leads.dealer_id,
         })
         .from(leads)
-        .where(inArray(leads.id, leadIds)),
+        // E-283 — deleted by the admin: gone from this queue, still live for
+        // the dealer and the lender until they delete too.
+        .where(and(inArray(leads.id, leadIds), isNull(leads.deleted_by_admin_at))),
       db
         .select()
         .from(loanSanctions)
@@ -132,6 +134,8 @@ export async function GET(req: NextRequest) {
     // Build the unified row set first (pre-filter), then derive KPIs from it
     // so counts always reflect the same dataset the page can browse.
     const allRows = leadIds
+      // A lead missing from leadById was filtered out above as admin-deleted.
+      .filter((leadId) => leadById.has(leadId))
       .map((leadId) => {
         const sel = latestByLead.get(leadId)!;
         const lead = leadById.get(leadId);

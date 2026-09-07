@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import DeleteApplicationButton from "@/components/shared/DeleteApplicationButton";
 import Link from "next/link";
 import {
   Loader2,
@@ -228,12 +229,24 @@ export default function AdminProductReviewQueuePage() {
                         <StatusBadge status={r.status} />
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Link
-                          href={`/admin/product-review/${r.lead_id}`}
-                          className="px-3 py-1.5 bg-[#0047AB] text-white rounded-lg text-[11px] font-bold hover:bg-[#003580]"
-                        >
-                          Review
-                        </Link>
+                        <div className="flex items-center justify-end gap-1">
+                          <Link
+                            href={`/admin/product-review/${r.lead_id}`}
+                            className="px-3 py-1.5 bg-[#0047AB] text-white rounded-lg text-[11px] font-bold hover:bg-[#003580]"
+                          >
+                            Review
+                          </Link>
+                          {/* E-283 — admin-side delete: clears the application
+                              from the admin queues only. */}
+                          <DeleteApplicationButton
+                            endpoint={`/api/admin/leads/${r.lead_id}`}
+                            applicationLabel={r.owner_name}
+                            applicationId={r.lead_id}
+                            scopeLabel="the admin dashboard"
+                            otherPartiesLabel="the dealer and any lender holding the file"
+                            onDeleted={() => fetchRows(true)}
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}

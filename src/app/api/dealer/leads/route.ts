@@ -236,6 +236,9 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     const conditions = [
         eq(leads.dealer_id, dealer_id),
+        // E-283 — the dealer deleted it from THIS dashboard. The application
+        // itself may still be live with the admin and the lender.
+        isNull(leads.deleted_by_dealer_at),
         or(
             isNull(leads.status),
             and(

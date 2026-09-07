@@ -34,7 +34,8 @@ import {
 } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email/mailer";
 import { blockedDashboardsFor } from "@/lib/notifications/access";
-import { emailWorthy } from "@/lib/notifications/catalog";
+import { resolveEmailChannel } from "@/lib/notifications/catalog";
+import { emailOverrideFor } from "@/lib/notifications/email-access";
 import { getEmailTransport } from "@/lib/notifications/resolve-channel";
 import {
   ADMIN_PARTY,
@@ -294,7 +295,12 @@ function dedupe(targets: ResolvedTarget[]): ResolvedTarget[] {
 export async function emit(input: EmitInput): Promise<void> {
   const from = input.from ?? SYSTEM_PARTY;
   const type = safeType(input.type);
-  const wantEmailByDefault = input.email ?? emailWorthy(type);
+  // E-282 — the admin's saved answer for this type, fetched ONCE for the whole
+  // fan-out (like `blocked` below) so every recipient of one event is judged
+  // consistently even if the 60s cache would have expired midway through.
+  // `undefined` — the common case — means nobody has overridden the code, and
+  // resolveEmailChannel() falls through to emailWorthy() as it always did.
+  const emailOverride = await emailOverrideFor(type);
 
   // Everyone already written to in THIS emit, so a person who is both (say) an
   // admin role and the lead's dealer gets the first, most specific copy only.
@@ -357,7 +363,15 @@ export async function emit(input: EmitInput): Promise<void> {
         );
       }
 
-      const sendMail = recipient.email ?? wantEmailByDefault;
+      // Locked > admin override (E-282) > per-recipient flag > code default.
+      // The rule itself lives in catalog.ts, shared with the settings screen's
+      // own resolver, so the two can never drift; see it for why the saved row
+      // beats the `email: false` three audiences in events.ts pass.
+      const sendMail = resolveEmailChannel(
+        type,
+        emailOverride,
+        recipient.email ?? input.email,
+      );
       if (sendMail) {
         await emailTargets(targets, {
           subject: input.emailSubject ?? `[iTarang] ${title}`,

@@ -24,6 +24,7 @@ import {
   matchProducts,
   type CustomerProfile,
 } from "@/lib/bre";
+import { resolveDefaultProductRules } from "@/lib/leads/city-default-product";
 
 export interface SectionGProduct {
   id: number;
@@ -76,6 +77,16 @@ export interface SectionGLead {
   resident_status: string | null;
 }
 
+export interface SectionGOptions {
+  /**
+   * NBFCs this lead may not be offered again — every lender it has ever been
+   * assigned to. Applied BEFORE the pinned default is resolved, so a lead
+   * whose pinned lender already rejected it falls through to the next rule, or
+   * back to the other matches, instead of dead-ending on the Bajaj card.
+   */
+  excludeNbfcIds?: number[];
+}
+
 /**
  * Match a lead against the loan products its dealer may offer.
  *
@@ -90,6 +101,7 @@ export interface SectionGLead {
 export async function loadSectionGOptions(
   lead: SectionGLead,
   loanAmount?: number | null,
+  opts?: SectionGOptions,
 ): Promise<SectionGNbfc[]> {
   if (!lead.dealer_id) return [];
 
@@ -171,5 +183,66 @@ export async function loadSectionGOptions(
     byNbfc.set(hit.nbfc_id, group);
   }
 
-  return Array.from(byNbfc.values());
+  let grouped = Array.from(byNbfc.values());
+
+  // Lenders this lead can never be offered again (already assigned, in any
+  // status). Filtered here rather than by the caller so the narrowing below
+  // sees only what is actually offerable.
+  const excluded = opts?.excludeNbfcIds;
+  if (excluded && excluded.length > 0) {
+    const drop = new Set(excluded);
+    grouped = grouped.filter((g) => !drop.has(g.nbfcId));
+  }
+
+  return await applyPinnedDefault(lead, grouped);
+}
+
+/**
+ * E-280/E-281/E-284 — narrow the matched list to the lender an admin pinned for
+ * this dealer and/or the LOCATION OF THAT DEALER (its own `accounts` address,
+ * not the customer's).
+ *
+ * Applied to the HITS, never in place of them. A pinned product is offered only
+ * if it independently matched every BRE rule, so one whose `loan_amount_max`
+ * sits below the requested amount, whose battery category does not apply, that
+ * has been deactivated, whose NBFC is blocked for this dealer, or that this
+ * lead has already been assigned to, is simply absent from `grouped`.
+ *
+ * `lead.dealer_id` is the dealer CODE (accounts.id), which is exactly what
+ * `city_default_loan_products.dealer_code` stores AND what the resolver joins
+ * `accounts` on to read the dealer's state/city — no resolution needed here.
+ *
+ * Rules arrive most-preferred first (admin priority, then specificity) and the
+ * FIRST one that survived the BRE wins. A rule that did not fit is skipped
+ * rather than abandoning the pin, so a top-priority rule that is out of amount
+ * band falls through to the next rule instead of dumping the customer onto the
+ * full list. Only when no rule fits is the full matched list returned.
+ *
+ * With nothing configured this is the identity function, which is what keeps
+ * every un-pinned dealer and city behaving exactly as it did before E-280.
+ */
+async function applyPinnedDefault(
+  lead: SectionGLead,
+  grouped: SectionGNbfc[],
+): Promise<SectionGNbfc[]> {
+  if (grouped.length === 0) return grouped;
+
+  // Dealer only: since E-284 the rule's state/city describe the DEALER, which
+  // the resolver reads from `accounts` itself. The customer's lead.state /
+  // lead.city are no longer part of this match (they still drive the BRE's own
+  // `active_locations` rule, which runs before this).
+  const rules = await resolveDefaultProductRules(lead.dealer_id);
+
+  for (const rule of rules) {
+    const group = grouped.find((g) => g.nbfcId === rule.nbfcId);
+    const product = group?.activeLoanProducts.find(
+      (p) => p.id === rule.loanProductId,
+    );
+    if (!group || !product) continue;
+
+    // Exclusive: one lender, and only the pinned product of it.
+    return [{ ...group, activeLoanProducts: [product] }];
+  }
+
+  return grouped;
 }

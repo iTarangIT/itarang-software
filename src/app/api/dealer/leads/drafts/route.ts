@@ -1,7 +1,7 @@
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { db } from '@/lib/db';
 import { leads, dealerOnboardingApplications, productSelections } from '@/lib/db/schema';
-import { and, desc, eq, ilike, or } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, or } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 
 export const GET = withErrorHandler(async (req: Request) => {
@@ -31,6 +31,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     const kycConditions: any[] = [
         eq(leads.dealer_id, dealer_id),
         eq(leads.kyc_status, 'draft'),
+        // E-283 — deleted from the dealer's dashboard; don't resurface it here.
+        isNull(leads.deleted_by_dealer_at),
     ];
     if (search) {
         kycConditions.push(
@@ -91,6 +93,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         .where(
             and(
                 eq(leads.dealer_id, dealer_id),
+                isNull(leads.deleted_by_dealer_at),
                 eq(productSelections.admin_decision, 'draft'),
                 ...(search
                     ? [

@@ -8,6 +8,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+// E-280 — the "NBFC Files" tab: where every file sitting with a lender is,
+// how long it has been there and whose move it is. Its own component because
+// it shares nothing with the document-review body below except this page.
+import NbfcFileTrackerTable from './_components/NbfcFileTrackerTable';
+import DeleteApplicationButton from '@/components/shared/DeleteApplicationButton';
+
 type ReviewableDoc = {
     id: string;
     lead_id: string;
@@ -30,6 +36,9 @@ type LeadReview = {
     review_count: number;
     pending_count: number;
 };
+
+// Not a document-review filter — a sibling view on the same page (E-280).
+const NBFC_TAB = 'nbfc';
 
 export default function AdminKYCReviewPage() {
     const [leads, setLeads] = useState<LeadReview[]>([]);
@@ -56,11 +65,14 @@ export default function AdminKYCReviewPage() {
     };
 
     useEffect(() => {
+        // The NBFC tab has its own loader; nothing here applies to it.
+        if (filterStatus === NBFC_TAB) return;
         fetchReviews();
     }, [filterStatus, searchQuery]);
 
     // Auto-refresh every 30 seconds
     useEffect(() => {
+        if (filterStatus === NBFC_TAB) return;
         const interval = setInterval(() => fetchReviews(true), 30000);
         return () => clearInterval(interval);
     }, [filterStatus, searchQuery]);
@@ -117,19 +129,25 @@ export default function AdminKYCReviewPage() {
 
                 {/* Filters */}
                 <div className="flex items-center gap-3 mb-6">
-                    {['pending', 'all', 'verified', 'rejected'].map(s => (
+                    {['pending', 'all', 'verified', 'rejected', NBFC_TAB].map(s => (
                         <button key={s} onClick={() => setFilterStatus(s)} className={`px-4 py-2 rounded-xl text-sm font-bold capitalize ${filterStatus === s ? 'bg-[#0047AB] text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
-                            {s === 'pending' ? 'Needs Review' : s}
+                            {s === 'pending' ? 'Needs Review' : s === NBFC_TAB ? 'NBFC Files' : s}
                         </button>
                     ))}
                     <div className="flex-1" />
-                    <div className="relative">
-                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                        <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search lead or dealer..." className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm w-64 outline-none focus:border-[#1D4ED8]" />
-                    </div>
+                    {/* The NBFC tab carries its own filter bar, including a search box. */}
+                    {filterStatus !== NBFC_TAB && (
+                        <div className="relative">
+                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search lead or dealer..." className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm w-64 outline-none focus:border-[#1D4ED8]" />
+                        </div>
+                    )}
                 </div>
 
-                {/* Lead Review Cards */}
+                {/* Lead Review Cards, or the NBFC file tracker. */}
+                {filterStatus === NBFC_TAB ? (
+                    <NbfcFileTrackerTable />
+                ) : (
                 <div className="space-y-4">
                     {loading ? (
                         <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-[#1D4ED8]" /></div>
@@ -141,10 +159,12 @@ export default function AdminKYCReviewPage() {
                     ) : (
                         leads.map(lead => (
                             <div key={lead.lead_id} className="bg-white rounded-[20px] border border-gray-100 shadow-sm overflow-hidden">
-                                {/* Lead Header */}
+                                {/* Lead Header. The delete control is a SIBLING of the
+                                    expander, not a child: a <button> cannot nest. */}
+                                <div className="flex items-stretch">
                                 <button
                                     onClick={() => setExpandedLead(expandedLead === lead.lead_id ? null : lead.lead_id)}
-                                    className="w-full flex items-center justify-between p-6 hover:bg-gray-50/50"
+                                    className="flex-1 min-w-0 flex items-center justify-between p-6 hover:bg-gray-50/50"
                                 >
                                     <div className="flex items-center gap-4">
                                         <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center">
@@ -176,6 +196,19 @@ export default function AdminKYCReviewPage() {
                                         {expandedLead === lead.lead_id ? <ChevronDown className="w-5 h-5 text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
                                     </div>
                                 </button>
+                                {/* E-283 — clears the application from the ADMIN
+                                    dashboards only; dealer and lender keep theirs. */}
+                                <div className="flex items-center pr-4">
+                                    <DeleteApplicationButton
+                                        endpoint={`/api/admin/leads/${lead.lead_id}`}
+                                        applicationLabel={lead.owner_name}
+                                        applicationId={lead.lead_id}
+                                        scopeLabel="the admin dashboard"
+                                        otherPartiesLabel="the dealer and any lender holding the file"
+                                        onDeleted={() => fetchReviews(true)}
+                                    />
+                                </div>
+                                </div>
 
                                 {/* Expanded: Document List */}
                                 {expandedLead === lead.lead_id && (
@@ -297,6 +330,7 @@ export default function AdminKYCReviewPage() {
                         ))
                     )}
                 </div>
+                )}
             </div>
         </div>
     );
