@@ -16,6 +16,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  readJsonBody,
+  readJsonData,
+  startScanAndWait,
+} from "@/lib/drive/scanClient";
 
 const STATUS_OPTIONS = [
   "draft",
@@ -130,8 +135,7 @@ export default function CEOInvoicesPage() {
       const r = await fetch(`/api/dashboard/ceo/invoices?${queryString}`, {
         cache: "no-store",
       });
-      if (!r.ok) throw new Error("Failed to load invoices");
-      return (await r.json()) as ApiResponse;
+      return readJsonBody<ApiResponse>(r, "Failed to load invoices");
     },
   });
 
@@ -139,11 +143,7 @@ export default function CEOInvoicesPage() {
   const refresh = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/admin/zoho/sync", { method: "POST" });
-      const json = await r.json();
-      if (!r.ok || !json.success) {
-        throw new Error(json?.error?.message ?? "Sync failed");
-      }
-      return json as { upserted: number };
+      return readJsonBody<{ upserted: number }>(r, "Sync failed");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
@@ -153,33 +153,18 @@ export default function CEOInvoicesPage() {
   // E-280 — pull anything newly filed in Drive. Deliberately separate from the
   // Zoho refresh above: they read different systems and either can be stale on
   // its own.
+  //
+  // The scan runs in the background and this follows it by polling. A real scan
+  // takes minutes, and a browser holding a multi-minute connection open gets
+  // nginx's HTML error page the moment the app restarts under it — which on
+  // sandbox is every deploy. The counters, and the run's own reason for
+  // stopping, come back the same either way. See src/lib/drive/scanClient.ts.
   const scanDrive = useMutation({
-    mutationFn: async () => {
-      const r = await fetch("/api/admin/sales-invoices/drive/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const json = await r.json();
-      if (!r.ok || !json.success) {
-        throw new Error(json?.error?.message ?? "Drive scan failed");
-      }
-      return json.data as {
-        status: string;
-        files_seen: number;
-        files_new: number;
-        imported: number;
-        skipped_duplicate: number;
-        needs_attention: number;
-        failed: number;
-        skipped_reason?: string;
-        // Why the run stopped. The scan reports a terminal fault (no OpenAI
-        // credits, Drive permission lost) here rather than throwing, so a
-        // banner that prints only counters reads as "0 imported, no reason
-        // given" — which is indistinguishable from "nothing new to import".
-        error?: string;
-      };
-    },
+    mutationFn: () =>
+      startScanAndWait({
+        scanEndpoint: "/api/admin/sales-invoices/drive/scan",
+        statusEndpoint: "/api/admin/sales-invoices/drive/scan",
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
@@ -203,11 +188,7 @@ export default function CEOInvoicesPage() {
           payment_reference: args.reference.trim() || null,
         }),
       });
-      const json = await r.json();
-      if (!r.ok || !json.success) {
-        throw new Error(json?.error?.message ?? "Could not record the payment");
-      }
-      return json.data;
+      return readJsonData(r, "Could not record the payment");
     },
     onSuccess: () => {
       setPayingId(null);
@@ -424,10 +405,27 @@ export default function CEOInvoicesPage() {
         </div>
       )}
 
+      {/* A scan is minutes of work now that it actually reads invoices, so say
+          so — and say that walking away does not cancel it, because the scan
+          runs in the server process and only the following of it stops. */}
+      {scanDrive.isPending && (
+        <div
+          data-testid="scan-running"
+          className="flex items-start gap-2 p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 text-sm text-indigo-900"
+        >
+          <CloudDownload className="w-4 h-4 mt-0.5 shrink-0 animate-pulse" />
+          <span>
+            Scanning Drive — every new invoice is read by the extractor, so a first
+            scan of a full folder takes a few minutes. Leaving this page does not
+            stop it; the invoices appear here once it finishes.
+          </span>
+        </div>
+      )}
+
       {/* E-280 — the scan's own counters, not a bare "done". A scan that saw 135
           files and imported 0 is either "nothing new" or "everything is broken",
           and only the breakdown says which. */}
-      {scanResult && (
+      {scanResult && !scanDrive.isPending && (
         <div
           data-testid="scan-summary"
           data-status={scanResult.status}
