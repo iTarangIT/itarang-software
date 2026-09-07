@@ -24,7 +24,7 @@
  * own outcome row, and the loop moves on; only an unrecoverable failure (Drive
  * unreachable, DB down) marks the run itself failed.
  */
-import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -70,6 +70,10 @@ const INVOICE_MIME_TYPES = new Set([
  * and no longer blocks a new one.
  */
 const STALE_RUN_MS = 30 * 60 * 1000;
+
+/** Recorded on a run that was still 'running' when the next scan came along. */
+const ABANDONED_RUN_MESSAGE =
+  "Abandoned — the server restarted while this scan was running. Anything it had already imported was kept.";
 
 const DEFAULT_MAX_FILES = 25;
 
@@ -148,6 +152,16 @@ export async function runSalesScan(
       outcome: FileOutcome;
       proposal: SalesProposal | null;
     }) => void;
+    /**
+     * Called once the run row exists, before the first file is touched.
+     *
+     * This is what lets the "Scan now" route answer immediately instead of
+     * holding the HTTP connection open for the whole scan: it replies with the
+     * run id and the caller polls it. nginx in front of the app gives up on a
+     * request long before a real scan finishes, and when it does the browser
+     * gets an HTML gateway page instead of JSON.
+     */
+    onStart?: (runId: string) => void;
   } = {},
 ): Promise<SalesScanSummary> {
   const startedAt = Date.now();
@@ -178,6 +192,26 @@ export async function runSalesScan(
       skipped_reason:
         "Google Drive is not configured — GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY are unset.",
     });
+  }
+
+  // A run whose process died mid-scan never got to write its own ending, so it
+  // sits at 'running' forever: the history reads as "still going" and the guard
+  // below refuses every scan until the row ages out. Close those out first, so
+  // 'running' means running. Not during a dry run, which writes nothing.
+  if (!opts.dryRun) {
+    await db
+      .update(salesScanRuns)
+      .set({
+        status: "failed",
+        completed_at: new Date(),
+        error_message: ABANDONED_RUN_MESSAGE,
+      })
+      .where(
+        and(
+          eq(salesScanRuns.status, "running"),
+          lt(salesScanRuns.started_at, new Date(Date.now() - STALE_RUN_MS)),
+        ),
+      );
   }
 
   // Concurrency guard. In the DB rather than an in-memory flag so it holds
@@ -219,6 +253,7 @@ export async function runSalesScan(
       })
       .returning({ id: salesScanRuns.id });
     runId = run.id;
+    opts.onStart?.(runId);
   }
 
   const counters = {
@@ -919,6 +954,21 @@ function safeFileName(name: string): string {
 function errText(err: unknown): string {
   if (err instanceof Error) return err.message;
   return describeDriveError(err);
+}
+
+/**
+ * One run, for the caller polling the scan it just started.
+ *
+ * Returns null for an id that does not exist — a caller must be able to tell
+ * "not finished yet" from "never existed" without an exception.
+ */
+export async function getSalesRun(runId: string) {
+  const [row] = await db
+    .select()
+    .from(salesScanRuns)
+    .where(eq(salesScanRuns.id, runId))
+    .limit(1);
+  return row ?? null;
 }
 
 /** Most recent runs, for the admin panel. */
