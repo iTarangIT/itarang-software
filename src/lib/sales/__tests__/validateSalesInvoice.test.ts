@@ -89,6 +89,41 @@ describe("validateSalesInvoice", () => {
     expect(r.attention.join(" ")).toMatch(/off by 1500/);
   });
 
+  it("corrects the tax-inclusive sub-total instead of flagging it", () => {
+    // The real shape from production: the model returned the payable amount as
+    // the sub-total with GST already inside it. 263140 = 223000 + 40140, and
+    // the total is right, so this is a misread field and not a bad invoice.
+    const r = validateSalesInvoice(
+      candidate({ sub_total: 263140, tax_total: 40140, total: 263140 }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.attention).toEqual([]);
+    expect(r.value.sub_total).toBe(223000);
+    expect(r.value.total).toBe(263140);
+  });
+
+  it("still flags a sub-total that is wrong in any other way", () => {
+    // Not the inclusive shape — sub is nowhere near the total — so the doubt is
+    // real and has to stay visible.
+    const r = validateSalesInvoice(
+      candidate({ sub_total: 20000, tax_total: 4500, total: 29500 }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.attention.join(" ")).toMatch(/off by 5000/);
+    expect(r.value.sub_total).toBe(20000);
+  });
+
+  it("does not invent a sub-total when no tax was charged", () => {
+    // sub == total with zero tax is a perfectly ordinary nil-rated invoice.
+    const r = validateSalesInvoice(candidate({ sub_total: 29500, tax_total: 0, total: 29500 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.attention).toEqual([]);
+    expect(r.value.sub_total).toBe(29500);
+  });
+
   it("tolerates per-line GST rounding", () => {
     // A multi-line invoice rounds tax per line, so the parts legitimately miss
     // the total by a rupee. That must not read as a misextraction.

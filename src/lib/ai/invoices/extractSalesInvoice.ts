@@ -87,7 +87,8 @@ const JSON_SCHEMA = {
       },
       sub_total: {
         type: ["number", "null"],
-        description: "Taxable value before GST, number only",
+        description:
+          "Taxable value BEFORE GST — the 'Taxable Amount' figure. Must be smaller than total whenever GST is charged. Never the grand total.",
       },
       tax_total: {
         type: ["number", "null"],
@@ -128,6 +129,13 @@ const SYSTEM_PROMPT = [
   "Dates are printed dd-mm-yyyy on these invoices. '02-07-2026' is 2 July 2026, so invoice_date is 2026-07-02. Read the year digits carefully and copy them exactly.",
   "total is the grand total payable including GST — the figure labelled 'Total'. Do not return 'Balance Due', which may differ, and do not compute anything from the amount in words.",
   "tax_total is the whole GST charged: use IGST when present, otherwise add CGST and SGST together.",
+  // Vyapar prints the payable amount largest and repeats it in several places,
+  // and the model reached for it: sub_total came back equal to total with the
+  // tax already inside it, on every flagged invoice checked. Stating the
+  // relationship, and offering null as the honest answer, is cheaper than
+  // correcting the number afterwards.
+  "sub_total is the amount BEFORE tax, so sub_total + tax_total must equal total. On these invoices it is the 'Taxable Amount' figure, not the 'Total' at the bottom.",
+  "If the only sub-total you can find already includes GST, return null for sub_total rather than a tax-inclusive figure.",
   "Amounts are printed in the Indian grouping style (29,500.00). Return them as plain numbers with no symbols or separators.",
   "If a field is genuinely not present on the document, return null. Never guess an amount, a date or a GSTIN.",
 ].join(" ");
