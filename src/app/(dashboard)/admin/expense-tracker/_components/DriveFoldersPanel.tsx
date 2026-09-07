@@ -23,6 +23,13 @@
 
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import {
+  readJsonBody,
+  readJsonData,
+  startScanAndWait,
+  type ScanRunResult,
+} from "@/lib/drive/scanClient";
 import {
   AlertTriangle,
   Check,
@@ -45,21 +52,15 @@ interface DriveFolder {
   last_scanned_at: string | null;
 }
 
-interface ScanSummary {
-  run_id: string | null;
-  status: "success" | "failed" | "skipped";
+/**
+ * What the panel renders. The shared shape from scanClient, with the two
+ * counters this panel always shows made non-optional so a tile cannot render
+ * `undefined`.
+ */
+type ScanSummary = ScanRunResult & {
   folders_scanned: number;
-  files_seen: number;
-  files_new: number;
-  imported: number;
-  skipped_duplicate: number;
-  needs_attention: number;
   unsupported: number;
-  failed: number;
-  duration_ms: number;
-  error?: string;
-  skipped_reason?: string;
-}
+};
 
 const inputCls =
   "w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-900 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -96,6 +97,12 @@ export interface DriveFoldersPanelConfig {
   description: string;
   foldersEndpoint: string;
   scanEndpoint: string;
+  /**
+   * Same route as scanEndpoint, GET ?run_id=, for a scan that starts in the
+   * background and reports back later. Omitted by a scan that still answers
+   * synchronously — then the POST's own reply is the result.
+   */
+  statusEndpoint?: string;
   foldersQueryKey: string;
   /** Everything that reads the table this scanner writes. */
   invalidateKeys: string[][];
@@ -141,6 +148,7 @@ export const SALES_PANEL: DriveFoldersPanelConfig = {
     "Since the move off Zoho to Vyapar, revenue is read from the sale side of these folders. Scanned every few hours.",
   foldersEndpoint: "/api/admin/sales-invoices/drive/folders",
   scanEndpoint: "/api/admin/sales-invoices/drive/scan",
+  statusEndpoint: "/api/admin/sales-invoices/drive/scan",
   foldersQueryKey: "sales-folders",
   invalidateKeys: [
     ["sales-folders"],
@@ -175,9 +183,10 @@ export function DriveFoldersPanel({
       const r = await fetch(config.foldersEndpoint, {
         cache: "no-store",
       });
-      const j = await r.json();
-      if (!r.ok || !j.success) throw new Error(j?.error?.message || "Failed to load");
-      return j.data as { folders: DriveFolder[]; drive_configured: boolean };
+      return readJsonData<{ folders: DriveFolder[]; drive_configured: boolean }>(
+        r,
+        "Failed to load",
+      );
     },
   });
 
@@ -191,8 +200,7 @@ export function DriveFoldersPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ folder }),
       });
-      const j = await r.json();
-      if (!r.ok || !j.success) throw new Error(j?.error?.message || "Could not add folder");
+      await readJsonBody(r, "Could not add folder");
     },
     onSuccess: () => {
       setFolderInput("");
@@ -209,8 +217,7 @@ export function DriveFoldersPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(vars),
       });
-      const j = await r.json();
-      if (!r.ok || !j.success) throw new Error(j?.error?.message || "Update failed");
+      await readJsonBody(r, "Update failed");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: [config.foldersQueryKey] }),
     onError: (e: Error) => setError(e.message),
@@ -221,23 +228,27 @@ export function DriveFoldersPanel({
       const r = await fetch(`${config.foldersEndpoint}?id=${id}`, {
         method: "DELETE",
       });
-      const j = await r.json();
-      if (!r.ok || !j.success) throw new Error(j?.error?.message || "Remove failed");
+      await readJsonBody(r, "Remove failed");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: [config.foldersQueryKey] }),
     onError: (e: Error) => setError(e.message),
   });
 
+  // A scan that reports itself as started is followed by polling rather than by
+  // holding this request open for its whole run — see src/lib/drive/scanClient.ts
+  // for why an open multi-minute request is how a browser ends up parsing an
+  // nginx error page as JSON.
   const scan = useMutation({
-    mutationFn: async () => {
-      const r = await fetch(config.scanEndpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
+    mutationFn: async (): Promise<ScanSummary> => {
+      const result = await startScanAndWait({
+        scanEndpoint: config.scanEndpoint,
+        statusEndpoint: config.statusEndpoint,
       });
-      const j = await r.json();
-      if (!r.ok || !j.success) throw new Error(j?.error?.message || "Scan failed");
-      return j.data as ScanSummary;
+      return {
+        ...result,
+        folders_scanned: result.folders_scanned ?? 0,
+        unsupported: result.unsupported ?? 0,
+      };
     },
     onSuccess: (s) => {
       setSummary(s);
@@ -393,6 +404,16 @@ export function DriveFoldersPanel({
 }
 
 function ScanSummaryBlock({ summary: s }: { summary: ScanSummary }) {
+  // Reachable only if the scan stopped reporting while it was still running;
+  // rendering it as a success would claim 0 imported, which is a lie.
+  if (s.status === "running" || s.status === "started") {
+    return (
+      <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-700">
+        The scan is still running. Its result will show on the next refresh.
+      </div>
+    );
+  }
+
   if (s.status === "skipped") {
     return (
       <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-700">
