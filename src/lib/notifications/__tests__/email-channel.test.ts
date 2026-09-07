@@ -1,4 +1,4 @@
-// E-282 — the email channel's precedence rule.
+// E-284 — the email channel's precedence rule.
 //
 // Tests `resolveEmailChannel` and not `email-access.ts`, deliberately: that
 // module imports `@/lib/db`, which throws without DATABASE_URL and opens a
@@ -21,9 +21,9 @@ const NONE = undefined;
 
 describe("resolveEmailChannel", () => {
   it("falls through to the code default when nobody has decided", () => {
-    // The whole safety story of E-282 rests on this: an unapplied migration, a
+    // The whole safety story of E-284 rests on this: an unapplied migration, a
     // dropped connection or a fresh install all produce an empty override map,
-    // and every type must then answer exactly as it did before E-282 existed.
+    // and every type must then answer exactly as it did before E-284 existed.
     for (const type of allGovernableTypes()) {
       const expected = isEmailLocked(type) ? true : emailWorthy(type);
       expect(resolveEmailChannel(type, NONE, NONE), type).toBe(expected);

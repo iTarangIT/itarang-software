@@ -1,6 +1,6 @@
 /**
- * E-280/E-281/E-284 — Settings → Loan Product: the default NBFC + loan product
- * pinned to a dealer, to a DEALER LOCATION, or both. Since E-284 `state` and
+ * E-282/E-283/E-286 — Settings → Loan Product: the default NBFC + loan product
+ * pinned to a dealer, to a DEALER LOCATION, or both. Since E-286 `state` and
  * `city` describe the dealer's own registered address (accounts.state /
  * accounts.city), not the customer's — see city-default-product.ts.
  *
@@ -47,7 +47,7 @@ const BLOCKING_STATUSES = ["suspended", "terminated"];
 const BodySchema = z.object({
   // Omitted / null / "" = the rule applies to every dealer.
   dealer_code: z.string().trim().max(255).optional().nullable(),
-  // E-281 made this optional: omitted = the rule declares no location, which is
+  // E-283 made this optional: omitted = the rule declares no location, which is
   // only meaningful together with a dealer_code (enforced below).
   state: z.string().trim().max(100).optional().nullable(),
   // Omitted / null / "" = every dealer city in the state.

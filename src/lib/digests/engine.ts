@@ -1,5 +1,5 @@
 /**
- * One digest send — one unit of work, three callers (E-285, generalised E-286).
+ * One digest send — one unit of work, three callers (E-287, generalised E-288).
  *
  * The in-process ticker (src/instrumentation-node.ts), the cron route
  * (/api/cron/digest) and the settings screen's "Send test now" button all come
@@ -12,7 +12,7 @@
  *   boots instrumentation, plus a crontab curl. Rather than coordinate them, each
  *   races to INSERT the (kind, digest_date, slot) row and only the winner gets an
  *   id back; everyone else is told the slot is taken and returns quietly. The lock
- *   is the partial unique index from E-286, the same trick
+ *   is the partial unique index from E-288, the same trick
  *   ops_collector_runs_one_active_idx plays for the Ops collectors.
  *
  *   `kind` is part of the key, which is what lets two digests both send at 09:00.
@@ -85,7 +85,7 @@ function figuresToCounts(f: DigestFigures): Record<string, number> {
  *
  * Returns the ledger row id on success and null when the slot is unavailable —
  * already sent, in flight elsewhere, or out of retries. A DB error is also null:
- * an environment without E-286 applied simply never sends, which is the
+ * an environment without E-288 applied simply never sends, which is the
  * documented safe-to-skip behaviour.
  */
 async function claimSlot(
@@ -438,7 +438,7 @@ export type DigestRunRow = {
 
 /**
  * The most recent sends for one kind, for the settings screen's history panel.
- * Returns an empty list rather than throwing when E-286 has not been applied —
+ * Returns an empty list rather than throwing when E-288 has not been applied —
  * the screen should still let an admin configure a digest on a database that
  * cannot yet record one.
  */

@@ -9,6 +9,8 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { NotFoundError } from "./errors";
+import { formatBatteryLine } from "./format";
+import { standingPriceSql, type AwaitingParty } from "./standing";
 import type { BuybackTx } from "./tx";
 
 export interface VendorRow {
@@ -66,6 +68,8 @@ export interface ThreadLineRow {
   ah: string | number;
   ask_price: string | null;
   counter_price: string | null;
+  /** E-281 — iTarang's latest counter back. `ask_price` stays the opening ask. */
+  revised_ask_price: string | null;
   agreed_price: string | null;
   /** Battery photo row ids for this line — bytes served by the vendor photo route. */
   photos: { id: string }[];
@@ -77,6 +81,8 @@ export interface ThreadRow {
   vendor_name: string;
   vendor_email: string | null;
   status: "SENT" | "COUNTERED" | "AGREED" | "LOST";
+  /** E-281 — whose move it is. See vendor_threads.awaiting_party. */
+  awaiting_party: AwaitingParty;
   quotation_no: string | null;
   quotation_pdf_s3: string | null;
   email_message_id: string | null;
@@ -84,8 +90,19 @@ export interface ThreadRow {
   responded_at: Date | null;
   close_reason: string | null;
   lines: ThreadLineRow[];
-  /** Σ qty × (counter ?? ask) — what this vendor is currently worth to us. */
+  /**
+   * Σ qty × (counter ?? ask) — what THIS VENDOR HAS OFFERED.
+   *
+   * Deliberately NOT the standing price (E-281). The below-floor banner and the
+   * "best vendor bid" comparison are built on this number, and they are asking
+   * what the market has bid — an iTarang counter must not make a below-floor
+   * auction look healthy by raising our own ask.
+   */
   current_total: number | null;
+  /** Σ qty × revised_ask — what WE have countered, once we have (E-281). */
+  our_counter_total: number | null;
+  /** Σ qty × standing — the live number on the table, whoever said it last. */
+  standing_total: number | null;
 }
 
 /** Every vendor thread on a deal, itemized. Admin-only — this is never serialized to a dealer. */
@@ -97,6 +114,7 @@ export async function threadsForDeal(
     SELECT
       vt.id, vt.vendor_id, vt.status, vt.quotation_no, vt.quotation_pdf_s3,
       vt.email_message_id, vt.sent_at, vt.responded_at, vt.close_reason,
+      vt.awaiting_party,
       a.business_entity_name AS vendor_name,
       a.contact_email        AS vendor_email,
       COALESCE(
@@ -109,6 +127,7 @@ export async function threadsForDeal(
             'ah',            cv.ah,
             'ask_price',     vtl.ask_price,
             'counter_price', vtl.counter_price,
+            'revised_ask_price', vtl.revised_ask_price,
             'agreed_price',  vtl.agreed_price,
             -- Battery photo ids for this line (capped). IDs only — the vendor
             -- photo route re-scopes each id to the caller's own thread before it
@@ -127,10 +146,18 @@ export async function threadsForDeal(
         ) FILTER (WHERE vtl.id IS NOT NULL),
         '[]'
       ) AS lines,
-      -- The vendor's live worth: their counter where they have made one, our ask
+      -- What the VENDOR has bid: their counter where they have made one, our ask
       -- where they have not. The prototype showed a single "last" number per
       -- vendor, which cannot express a partial counter.
-      SUM(bl.quantity * COALESCE(vtl.counter_price, vtl.ask_price)) AS current_total
+      --
+      -- Unchanged by E-281 on purpose — the below-floor banner reads this, and it
+      -- must keep meaning "the best the market has offered", not "the last number
+      -- said out loud".
+      SUM(bl.quantity * COALESCE(vtl.counter_price, vtl.ask_price)) AS current_total,
+      -- What WE have countered back, once we have (E-281). NULL until then.
+      SUM(bl.quantity * vtl.revised_ask_price) AS our_counter_total,
+      -- The live number on the table, whoever spoke last — what an Accept books.
+      SUM(bl.quantity * ${standingPriceSql("vtl", "vt")}) AS standing_total
     FROM vendor_threads vt
     JOIN scrap_vendors sv ON sv.id = vt.vendor_id
     JOIN accounts a       ON a.id = sv.entity_id
@@ -148,6 +175,9 @@ export async function threadsForDeal(
     vendor_name: String(r.vendor_name),
     vendor_email: (r.vendor_email as string) ?? null,
     status: r.status as ThreadRow["status"],
+    awaiting_party: (String(r.awaiting_party) === "ITARANG"
+      ? "ITARANG"
+      : "VENDOR") as AwaitingParty,
     quotation_no: (r.quotation_no as string) ?? null,
     quotation_pdf_s3: (r.quotation_pdf_s3 as string) ?? null,
     email_message_id: (r.email_message_id as string) ?? null,
@@ -156,6 +186,8 @@ export async function threadsForDeal(
     close_reason: (r.close_reason as string) ?? null,
     lines: (r.lines as ThreadLineRow[]) ?? [],
     current_total: r.current_total === null ? null : Number(r.current_total),
+    our_counter_total: r.our_counter_total == null ? null : Number(r.our_counter_total),
+    standing_total: r.standing_total == null ? null : Number(r.standing_total),
   }));
 }
 
@@ -240,17 +272,53 @@ export async function listPendingVendors(): Promise<PendingVendorRow[]> {
   }));
 }
 
+/**
+ * A vendor-facing thread line — the admin row PLUS the E-191 declared battery
+ * spec (item 14).
+ *
+ * A separate type rather than fields bolted onto ThreadLineRow, which
+ * threadsForDeal also returns: that query does not select any of this, and a
+ * shared type would have quietly claimed it did.
+ *
+ * Every field here is a property of the BATTERY. That is the whole test for
+ * whether something may live on this type: none of it says who is selling, so
+ * none of it can identify the dealer or reveal what we paid them. It already
+ * reaches this vendor as the quotation PDF's spec line — the portal was simply
+ * never given it, which is the bug.
+ */
+export interface VendorThreadLineRow extends ThreadLineRow {
+  variant_type: string | null;
+  brand: string | null;
+  chemistry: string | null;
+  form_factor: string | null;
+  nominal_voltage: number | string | null;
+  nominal_ampere: number | string | null;
+  unit_weight_kg: number | string | null;
+  warranty_cycles: number | null;
+  functional_qty: number | null;
+  non_functional_qty: number | null;
+  iot_battery: boolean | null;
+  iot_brand_name: string | null;
+}
+
 /** One of a vendor's own threads, before serialization. */
 export interface VendorOwnThreadRow {
   thread_id: string;
   deal_id: string;
   status: "SENT" | "COUNTERED" | "AGREED" | "LOST";
+  /**
+   * E-281 — whose move it is. Safe to hand a vendor: it says nothing about the
+   * dealer or our economics, and it is the one fact their screen cannot work out
+   * for itself (a COUNTERED thread is theirs to answer when we have replied, and
+   * ours when they have).
+   */
+  awaiting_party: AwaitingParty;
   quotation_no: string | null;
   sent_at: Date | null;
   responded_at: Date | null;
   pickup_city: string | null;
   pickup_state: string | null;
-  lines: ThreadLineRow[];
+  lines: VendorThreadLineRow[];
   /** E-196 — has this vendor already raised their PO on this deal? */
   has_vendor_po: boolean;
   /** E-196 — the live proforma iTarang issued against their PO, if any. */
@@ -278,6 +346,7 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
       vt.id        AS thread_id,
       vt.deal_id,
       vt.status,
+      vt.awaiting_party,
       vt.quotation_no,
       vt.sent_at,
       vt.responded_at,
@@ -307,7 +376,31 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
             'ah',            cv.ah,
             'ask_price',     vtl.ask_price,
             'counter_price', vtl.counter_price,
+            -- E-281 — iTarang's counter back, so the portal can show the vendor
+            -- what they are actually being asked to accept. A price WE named:
+            -- it reveals nothing about the dealer or the margin.
+            'revised_ask_price', vtl.revised_ask_price,
             'agreed_price',  vtl.agreed_price,
+            -- E-191 declared battery spec — the same set the quotation PDF has
+            -- carried since item 14. Selecting it here is the whole of the
+            -- portal fix: toVendorLine has always emitted these fields, so the
+            -- vendor's screens rendered them as undefined for want of a SELECT
+            -- while the PDF in that same vendor's inbox spelled them out.
+            --
+            -- All bl.* / cv.* — battery columns. Nothing dealer-side joins in,
+            -- which is the test for anything added to this object.
+            'variant_type',       cv.type,
+            'brand',              bl.brand,
+            'chemistry',          bl.chemistry,
+            'form_factor',        bl.form_factor,
+            'nominal_voltage',    bl.nominal_voltage,
+            'nominal_ampere',     bl.nominal_ampere,
+            'unit_weight_kg',     bl.unit_weight_kg,
+            'warranty_cycles',    bl.warranty_cycles,
+            'functional_qty',     bl.functional_qty,
+            'non_functional_qty', bl.non_functional_qty,
+            'iot_battery',        bl.iot_battery,
+            'iot_brand_name',     bl.iot_brand_name,
             -- Battery photo ids for this line (capped). IDs only — the vendor
             -- photo route re-scopes each id to the caller's own thread before it
             -- serves bytes, so an id is safe to hand over; a key never is.
@@ -345,12 +438,15 @@ export async function threadsForVendor(entityId: string): Promise<VendorOwnThrea
     thread_id: String(r.thread_id),
     deal_id: String(r.deal_id),
     status: r.status as VendorOwnThreadRow["status"],
+    awaiting_party: (String(r.awaiting_party) === "ITARANG"
+      ? "ITARANG"
+      : "VENDOR") as AwaitingParty,
     quotation_no: (r.quotation_no as string) ?? null,
     sent_at: (r.sent_at as Date) ?? null,
     responded_at: (r.responded_at as Date) ?? null,
     pickup_city: (r.pickup_city as string) ?? null,
     pickup_state: (r.pickup_state as string) ?? null,
-    lines: (r.lines as ThreadLineRow[]) ?? [],
+    lines: (r.lines as VendorThreadLineRow[]) ?? [],
     has_vendor_po: Boolean(r.has_vendor_po),
     proforma: (r.proforma as VendorOwnThreadRow["proforma"]) ?? null,
   }));
@@ -388,6 +484,7 @@ export async function threadContextFor(threadId: string) {
   const rows = await db.execute(sql`
     SELECT
       vt.id, vt.deal_id, vt.vendor_id, vt.status, vt.quotation_no,
+      vt.awaiting_party,
       bd.request_id, bd.floor_total,
       br.request_no,
       a.business_entity_name AS vendor_name,
@@ -409,6 +506,9 @@ export async function threadContextFor(threadId: string) {
     dealId: String(row.deal_id),
     vendorId: String(row.vendor_id),
     status: String(row.status) as "SENT" | "COUNTERED" | "AGREED" | "LOST",
+    awaitingParty: (String(row.awaiting_party) === "ITARANG"
+      ? "ITARANG"
+      : "VENDOR") as AwaitingParty,
     quotationNo: (row.quotation_no as string) ?? null,
     requestId: String(row.request_id),
     requestNo: String(row.request_no),
@@ -522,4 +622,101 @@ export async function currentLocks(
     dealer_price: string;
     vendor_ask: string | null;
   }>;
+}
+
+/**
+ * The per-vendor negotiation history on the VENDOR leg (E-281).
+ *
+ * These rows have been written since Sprint 2A and, until now, read by NOTHING:
+ * every consumer of negotiation_rounds hardcoded `leg = 'DEALER'`, so a vendor
+ * haggle that ran five rounds showed the admin one number and no history at all.
+ *
+ * WHY `party` IS COALESCED AND NOT SELECTED RAW. Pre-E-281 rows have party NULL,
+ * and on this leg every one of them is the vendor's own offer — an admin
+ * transcribing an email wrote offered_by_role='admin', which means "typed by the
+ * desk", not "offered by iTarang". Deriving here beats backfilling a guess into
+ * an append-only audit table.
+ *
+ * Grouped by vendor by the caller: round_no is unique per (deal, leg), NOT per
+ * vendor, so rounds from different vendors interleave in one numbering. That is
+ * the E-186 schema and is left alone — counterparty_id is what separates them.
+ */
+export interface VendorNegotiationRound {
+  id: string;
+  vendor_id: string;
+  round_no: number;
+  /** 'VENDOR' — their offer | 'ITARANG' — ours. */
+  party: "VENDOR" | "ITARANG";
+  /** Who physically entered it: 'vendor' first-hand, 'admin' transcribing. */
+  offered_by_role: string;
+  note: string | null;
+  created_at: Date;
+  lines: Array<{ line_id: string; quantity: number; price_per_unit: number; label: string }>;
+  total: number;
+}
+
+export async function vendorNegotiationRounds(
+  dealId: string,
+  runner: BuybackTx | typeof db = db,
+): Promise<VendorNegotiationRound[]> {
+  const rows = await runner.execute(sql`
+    SELECT
+      nr.id,
+      nr.counterparty_id AS vendor_id,
+      nr.round_no,
+      nr.offered_by_role,
+      COALESCE(nr.party, 'VENDOR') AS party,
+      nr.note,
+      nr.created_at,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'line_id',        nrl.line_id,
+            'price_per_unit', nrl.offered_price_per_unit,
+            'quantity',       bl.quantity,
+            'condition',      bl.condition,
+            'voltage',        cv.voltage,
+            'ah',             cv.ah
+          ) ORDER BY cv.voltage, cv.ah
+        ) FILTER (WHERE nrl.id IS NOT NULL),
+        '[]'
+      ) AS lines
+    FROM negotiation_rounds nr
+    LEFT JOIN negotiation_round_lines nrl ON nrl.round_id = nr.id
+    LEFT JOIN buyback_lines bl            ON bl.id = nrl.line_id
+    LEFT JOIN catalog_variants cv         ON cv.id = bl.variant_id
+    WHERE nr.deal_id = ${dealId} AND nr.leg = 'VENDOR'
+    GROUP BY nr.id
+    ORDER BY nr.round_no ASC
+  `);
+
+  return (rows as unknown as Array<Record<string, unknown>>).map((r) => {
+    const lines = (r.lines as Array<Record<string, unknown>>).map((l) => {
+      const f = formatBatteryLine({
+        id: String(l.line_id),
+        quantity: Number(l.quantity),
+        condition: l.condition as "WORKING" | "DEAD",
+        voltage: l.voltage as string,
+        ah: l.ah as string,
+      });
+      return {
+        line_id: String(l.line_id),
+        label: `${f.specLabel} · ${f.condition}`,
+        quantity: Number(l.quantity),
+        price_per_unit: Number(l.price_per_unit),
+      };
+    });
+
+    return {
+      id: String(r.id),
+      vendor_id: String(r.vendor_id ?? ""),
+      round_no: Number(r.round_no),
+      party: (String(r.party) === "ITARANG" ? "ITARANG" : "VENDOR") as "VENDOR" | "ITARANG",
+      offered_by_role: String(r.offered_by_role),
+      note: (r.note as string) ?? null,
+      created_at: r.created_at as Date,
+      lines,
+      total: lines.reduce((sum, l) => sum + l.quantity * l.price_per_unit, 0),
+    };
+  });
 }

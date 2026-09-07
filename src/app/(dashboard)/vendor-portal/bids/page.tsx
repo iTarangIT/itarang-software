@@ -35,6 +35,12 @@ export default function VendorBidsPage() {
   const rows: DealTableRow[] = all.map((t) => {
     const topAsk = topPerUnit(t.lines.map((l) => l.ask_price));
     const lastBid = topPerUnit(t.lines.map((l) => l.counter_price));
+    // E-281 — what iTarang has countered back. Without this column a vendor who
+    // was countered sees an unchanged row with a Respond button and no reason to
+    // press it: the whole point of the counter is that there is something new to
+    // answer, so the list has to say so.
+    const theirCounter = topPerUnit(t.lines.map((l) => l.revised_ask_price));
+    const ourMove = t.awaiting_party === "VENDOR" && t.our_counter_total !== null;
     return {
       key: t.thread_id,
       onClick: () => setDetail(t),
@@ -52,6 +58,12 @@ export default function VendorBidsPage() {
         <span key="bid" className="tabular-nums text-slate-700">
           {perUnitLabel(lastBid)}
         </span>,
+        <span
+          key="theirs"
+          className={`tabular-nums ${ourMove ? "font-semibold text-bb-navy" : "text-slate-400"}`}
+        >
+          {theirCounter === null ? "—" : perUnitLabel(theirCounter)}
+        </span>,
         <span key="updated" className="text-slate-500">
           {fmtDate(t.responded_at ?? t.sent_at)}
         </span>,
@@ -63,9 +75,13 @@ export default function VendorBidsPage() {
               e.stopPropagation();
               setActive(t);
             }}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50"
+            className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold ${
+              ourMove
+                ? "bg-bb-navy text-white hover:opacity-90"
+                : "border border-slate-200 text-slate-700 hover:bg-slate-50"
+            }`}
           >
-            Respond
+            {ourMove ? "Answer counter" : "Respond"}
           </button>
         ) : (
           <span key="act" className="text-slate-300">
@@ -97,6 +113,7 @@ export default function VendorBidsPage() {
               { label: "Batteries" },
               { label: "Top Ask" },
               { label: "Your Last Bid" },
+              { label: "iTarang Counter" },
               { label: "Updated" },
               { label: "Status" },
               { label: "" },

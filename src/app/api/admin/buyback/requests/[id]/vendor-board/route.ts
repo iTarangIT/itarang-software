@@ -20,7 +20,11 @@ import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError } from "@/lib/buyback/errors";
 import { dealHeader } from "@/lib/buyback/queries";
 import { allowedActions } from "@/lib/buyback/state-machine";
-import { listRoutableVendors, threadsForDeal } from "@/lib/buyback/vendors";
+import {
+  listRoutableVendors,
+  threadsForDeal,
+  vendorNegotiationRounds,
+} from "@/lib/buyback/vendors";
 
 export const runtime = "nodejs";
 
@@ -33,9 +37,15 @@ export const GET = withErrorHandler(
     const header = await dealHeader(request.id);
     if (!header) throw new NotFoundError("Deal not found.");
 
-    const [threads, vendors, pos, pickupRows] = await Promise.all([
+    const [threads, vendors, rounds, pos, pickupRows] = await Promise.all([
       threadsForDeal(header.deal_id),
       listRoutableVendors(),
+      // E-281 — the VENDOR-leg negotiation history. These rows have been written
+      // since Sprint 2A and read by nothing: every other consumer of
+      // negotiation_rounds filters leg='DEALER'. It belongs on THIS payload and
+      // not the deal payload, because it is per-vendor and renders inside the
+      // thread card.
+      vendorNegotiationRounds(header.deal_id),
       db
         .select({
           id: purchaseOrders.id,
@@ -75,6 +85,10 @@ export const GET = withErrorHandler(
         below_floor: t.current_total !== null && t.current_total < floor,
         shortfall:
           t.current_total !== null && t.current_total < floor ? floor - t.current_total : 0,
+        // Their own rounds, in order. round_no is unique per (deal, leg) and NOT
+        // per vendor — that is the E-186 schema — so numbering interleaves across
+        // vendors and counterparty_id is what separates them.
+        rounds: rounds.filter((r) => r.vendor_id === t.vendor_id),
       })),
 
       routable_vendors: vendors

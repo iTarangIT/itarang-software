@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------------
--- E-280: default loan product + NBFC per city / state.
+-- E-282: default loan product + NBFC per city / state.
 --
 -- PROBLEM. When a finance customer reaches Step 4 — on the web
 -- (/dealer-portal/leads/[id]/product-selection) or over WhatsApp — the lender
@@ -55,9 +55,9 @@ CREATE TABLE IF NOT EXISTS city_default_loan_products (
 -- folds the NULL city into the key so the state-wide row participates.
 -- Deactivation (is_active=false) frees the slot and keeps the old row as
 -- history, mirroring dealer_salespersons / whatsapp_operators.
--- SUPERSEDED BY E-281, which widens this key to include dealer_code and drops
--- this one. Guarded so that re-running E-280 on a database that already has
--- E-281 does NOT resurrect the narrow key — it would then forbid a dealer rule
+-- SUPERSEDED BY E-283, which widens this key to include dealer_code and drops
+-- this one. Guarded so that re-running E-282 on a database that already has
+-- E-283 does NOT resurrect the narrow key — it would then forbid a dealer rule
 -- and a location rule coexisting for the same city. Re-running either file in
 -- either order stays a no-op.
 DO $do$ BEGIN
@@ -78,7 +78,7 @@ CREATE INDEX IF NOT EXISTS city_default_loan_products_active_state_idx
   ON city_default_loan_products (lower(state)) WHERE is_active;
 
 COMMENT ON TABLE city_default_loan_products IS
-  'E-280: pins one NBFC + loan product as the default offered in a city (or state-wide when city IS NULL). Applied by loadSectionGOptions() to the BRE hits, so a pinned product that does not independently match is skipped and normal matching resumes.';
+  'E-282: pins one NBFC + loan product as the default offered in a city (or state-wide when city IS NULL). Applied by loadSectionGOptions() to the BRE hits, so a pinned product that does not independently match is skipped and normal matching resumes.';
 
 COMMENT ON COLUMN city_default_loan_products.city IS
-  'E-280: NULL = state-wide default. An exact (state, city) row takes precedence over it.';
+  'E-282: NULL = state-wide default. An exact (state, city) row takes precedence over it.';

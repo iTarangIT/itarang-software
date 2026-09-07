@@ -105,6 +105,17 @@ export const NOTIFICATION_FOR: Record<
   vendor_counter: { party: "ADMIN", channel: "PORTAL" },
   vendor_agree: { party: "ADMIN", channel: "PORTAL" },
 
+  // --- Vendor leg, iTarang's own moves (E-281) ---
+  // The DEFAULT is the desk's own record, same as route_to_vendors: both routes
+  // override with a fanOut, because the party who actually needs telling is the
+  // VENDOR and they need telling twice — an email (they were quoted by email and
+  // many never log in) and a portal bell.
+  //
+  // NOT the dealer, on either, for the same reason as vendor_counter above: the
+  // gap between the two prices is iTarang's margin.
+  counter_vendor: { party: "ADMIN", channel: "PORTAL" },
+  accept_vendor_counter: { party: "ADMIN", channel: "PORTAL" },
+
   // Fulfilment — the dealer has to be somewhere at a time, so they hear about
   // it (in-app; was WhatsApp). The vendor's own PO copy is the fan-out on
   // exchange_pos.

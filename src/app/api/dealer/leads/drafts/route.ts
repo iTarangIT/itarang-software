@@ -31,7 +31,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const kycConditions: any[] = [
         eq(leads.dealer_id, dealer_id),
         eq(leads.kyc_status, 'draft'),
-        // E-283 — deleted from the dealer's dashboard; don't resurface it here.
+        // E-285 — deleted from the dealer's dashboard; don't resurface it here.
         isNull(leads.deleted_by_dealer_at),
     ];
     if (search) {

@@ -273,7 +273,7 @@ function nbfcSettingsSubnav(idPrefix: string) {
   };
 }
 
-// Settings → Loan Product (E-280). Same one-factory-per-role convention as
+// Settings → Loan Product (E-282). Same one-factory-per-role convention as
 // nbfcSettingsSubnav below it: the admin and sales_head Settings groups have to
 // stay in step, and a second hand-written copy is how they drift.
 //
@@ -293,7 +293,7 @@ function loanProductSettingsItem(idPrefix: string) {
   };
 }
 
-// Settings → the digest screens (E-285/E-286). One factory per screen, same
+// Settings → the digest screens (E-287/E-288). One factory per screen, same
 // one-factory-per-role convention as loanProductSettingsItem above — the admin
 // and sales_head Settings groups have to stay in step, and a second hand-written
 // copy is how they drift.

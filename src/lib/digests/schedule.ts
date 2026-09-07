@@ -1,5 +1,5 @@
 /**
- * Digest scheduling and settings — the pure half (E-285, generalised by E-286).
+ * Digest scheduling and settings — the pure half (E-287, generalised by E-288).
  *
  * Split from settings.ts for the same reason operations/scheduling.ts was split
  * from runner.ts: the settings store imports `db`, and vitest here is
@@ -231,7 +231,7 @@ export type DueSlot = {
  * that was restarting at 09:00 would otherwise skip the morning digest entirely;
  * with a window, it sends at 09:20 when it comes back. Double-sending is
  * prevented by the (kind, digest_date, slot) claim in the database, NOT by the
- * narrowness of this window — see E-286's migration header.
+ * narrowness of this window — see E-288's migration header.
  *
  * Both slots can be returned by one call. That happens on a box that has been
  * down since before 09:00 and boots at 20:00: it owes both the morning and the

@@ -11,7 +11,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { expenseSubmissions, inventory, manualDealerSales, users, zohoInvoices } from "@/lib/db/schema";
+import { expenseSubmissions, inventory, manualDealerSales, users } from "@/lib/db/schema";
+// E-280 — the sales and outstanding drill-downs read both revenue sources.
+import { drillDownRows } from "@/lib/dashboard/revenueSource";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import {
@@ -126,32 +128,40 @@ export async function GET(
       capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.final_amount || 0), 0);
     } else if (metric === "sales") {
-      const conds = [
-        sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
-      ];
-      if (startStr) conds.push(gte(zohoInvoices.invoice_date, startStr));
-      if (endStr) conds.push(lt(zohoInvoices.invoice_date, endStr));
-      const invoiceRows = await db
-        .select({
-          zoho_invoice_id: zohoInvoices.zoho_invoice_id,
-          organization_id: zohoInvoices.organization_id,
-          invoice_number: zohoInvoices.invoice_number,
-          customer_name: zohoInvoices.customer_name,
-          invoice_date: zohoInvoices.invoice_date,
-          total: zohoInvoices.total,
-          status: zohoInvoices.status,
-        })
-        .from(zohoInvoices)
-        .where(and(...conds))
-        .orderBy(desc(zohoInvoices.invoice_date))
-        .limit(ROW_CAP);
+      const unioned = await drillDownRows("sales", startStr, endStr, ROW_CAP);
+      // `zoho_invoice_id` survives only for Zoho rows: it is what the live
+      // line-item lookup below is keyed on, and a Drive invoice has no such id
+      // and no line-item detail to fetch. Deriving it from the union's
+      // document_url keeps the enrichment loop unchanged rather than teaching
+      // it about a second shape.
+      const invoiceRows = unioned.map((r) => ({
+        source: r.source,
+        zoho_invoice_id:
+          r.source === "zoho"
+            ? (r.document_url?.match(/invoices\/([^/]+)\/pdf/)?.[1] ?? "")
+            : "",
+        // The drill-down's "View" link. Zoho rows resolve to the PDF
+        // passthrough, Drive rows to the stored copy of the original — without
+        // this, every Drive invoice showed a dash where the link should be.
+        document_url: r.document_url,
+        organization_id: r.organization_id,
+        invoice_number: r.invoice_number,
+        customer_name: r.customer_name,
+        invoice_date: r.invoice_date,
+        total: r.total,
+        status: r.status,
+      }));
       capped = invoiceRows.length >= ROW_CAP;
       // Total reconciles with the card: sum of INVOICE totals (not line items).
       total = invoiceRows.reduce((s, r) => s + Number(r.total || 0), 0);
 
       // Enrich the most recent invoices with line items (quantity + product
       // name) via live Zoho detail calls, then expand to one row per product.
-      const toEnrich = invoiceRows.slice(0, DETAIL_CAP);
+      // Drive invoices are skipped here: they are stored as a total, not as a
+      // priced line list, so there is nothing to expand and no API to ask.
+      const toEnrich = invoiceRows
+        .filter((inv) => inv.source === "zoho" && inv.zoho_invoice_id)
+        .slice(0, DETAIL_CAP);
       const lineItemsByInvoice = new Map<string, Awaited<ReturnType<typeof fetchInvoiceLineItems>>>();
       await inBatches(toEnrich, DETAIL_CONCURRENCY, async (inv) => {
         try {
@@ -167,9 +177,11 @@ export async function GET(
         return null;
       });
 
-      rows = invoiceRows.flatMap((inv) => {
+      rows = invoiceRows.flatMap((inv): Record<string, unknown>[] => {
         const base = {
           zoho_invoice_id: inv.zoho_invoice_id,
+          source: inv.source,
+          document_url: inv.document_url,
           invoice_number: inv.invoice_number,
           customer_name: inv.customer_name,
           invoice_date: inv.invoice_date,
@@ -290,25 +302,19 @@ export async function GET(
       capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.final_amount || 0), 0);
     } else if (metric === "outstanding") {
-      rows = await db
-        .select({
-          invoice_number: zohoInvoices.invoice_number,
-          customer_name: zohoInvoices.customer_name,
-          invoice_date: zohoInvoices.invoice_date,
-          due_date: zohoInvoices.due_date,
-          total: zohoInvoices.total,
-          balance: zohoInvoices.balance,
-          status: zohoInvoices.status,
-        })
-        .from(zohoInvoices)
-        .where(
-          and(
-            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('paid', 'void', 'draft'))`,
-            sql`COALESCE(${zohoInvoices.balance}, 0) > 0`,
-          ),
-        )
-        .orderBy(desc(zohoInvoices.balance))
-        .limit(ROW_CAP);
+      // All-time snapshot, as before — a receivable does not stop being owed
+      // because the selected month ended.
+      rows = (await drillDownRows("outstanding", null, null, ROW_CAP)).map((r) => ({
+        source: r.source,
+        invoice_number: r.invoice_number,
+        customer_name: r.customer_name,
+        invoice_date: r.invoice_date,
+        due_date: r.due_date,
+        document_url: r.document_url,
+        total: r.total,
+        balance: r.balance,
+        status: r.status,
+      }));
       capped = rows.length >= ROW_CAP;
       total = rows.reduce((s, r) => s + Number(r.balance || 0), 0);
     }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { isFullyDeleted, type LeadDeleteState } from "../delete-policy";
 
-// E-283 — the rule that decides whether a customer application is destroyed.
+// E-285 — the rule that decides whether a customer application is destroyed.
 // Everything else in that module is I/O; this predicate is the whole policy,
 // and getting it wrong either erases a file a lender is still working or leaves
 // an application nobody can see but nothing deletes.
@@ -23,7 +23,7 @@ describe("isFullyDeleted", () => {
   });
 
   it("purges a dealer-only lead nobody else ever held", () => {
-    // The pre-E-283 behaviour, preserved: a junk lead the dealer discards
+    // The pre-E-285 behaviour, preserved: a junk lead the dealer discards
     // before submitting it anywhere is gone immediately.
     expect(isFullyDeleted(state({ dealerDeletedAt: T }))).toBe(true);
   });

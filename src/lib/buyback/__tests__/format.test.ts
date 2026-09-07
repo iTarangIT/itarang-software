@@ -7,7 +7,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { formatBatteryLine, inr, lineTotal, perUnit, perUnitShort } from "../format";
+import {
+  formatBatteryLine,
+  inr,
+  lineTotal,
+  perUnit,
+  perUnitShort,
+  vendorLineMeta,
+} from "../format";
+import type { VendorLineMetaSource } from "../format";
 
 const line = (over: Partial<Parameters<typeof formatBatteryLine>[0]> = {}) => ({
   id: "line-1",
@@ -108,5 +116,91 @@ describe("lineTotal", () => {
   it("is null when the price is unknown — never 0", () => {
     expect(lineTotal(3, null)).toBeNull();
     expect(lineTotal(3, undefined)).toBeNull();
+  });
+});
+
+/**
+ * vendorLineMeta — the one battery-spec meta line a VENDOR sees, shared by the
+ * quotation PDF and the vendor portal. Before this existed the PDF hand-rolled
+ * the array and the portal rendered nothing, which is exactly the per-screen
+ * template the module header forbids.
+ *
+ * Two rules are load-bearing rather than cosmetic and are pinned below:
+ * warranty_cycles must always read as RATED (it is design life, not consumed
+ * life), and the IOT brand must render as the single label string so a caller
+ * cannot print "Intellicar" and drop the "(assumed)" that qualifies it.
+ */
+describe("vendorLineMeta", () => {
+  const spec = (over: Partial<VendorLineMetaSource> = {}): VendorLineMetaSource => ({
+    variant_type: "60V 120Ah Li-ion",
+    brand: "Exide",
+    chemistry: "LFP",
+    form_factor: "prismatic",
+    nominal_voltage: "62.00",
+    nominal_ampere: "33.00",
+    unit_weight_kg: "11.500",
+    line_weight_kg: 23,
+    warranty_cycles: 800,
+    condition_split_label: "2 non-working",
+    iot_battery: false,
+    iot_brand_label: null,
+    ...over,
+  });
+
+  it("returns the declared spec as ordered parts", () => {
+    expect(vendorLineMeta(spec())).toEqual([
+      "60V 120Ah Li-ion",
+      "Exide",
+      "LFP",
+      "Prismatic",
+      "62V 33Ah nominal",
+      "11.5 kg/unit",
+      "23 kg total",
+      "800 cycles rated",
+      "2 non-working",
+      "Non-IOT",
+    ]);
+  });
+
+  it("omits what the dealer never declared rather than rendering a dash", () => {
+    expect(
+      vendorLineMeta({ brand: "Exide", chemistry: null, unit_weight_kg: null }),
+    ).toEqual(["Exide"]);
+  });
+
+  it("is empty for a line with no declared spec at all", () => {
+    expect(vendorLineMeta({})).toEqual([]);
+  });
+
+  it("labels warranty cycles as rated, never as cycles consumed", () => {
+    const parts = vendorLineMeta({ warranty_cycles: 800 });
+    expect(parts).toEqual(["800 cycles rated"]);
+  });
+
+  it("renders the IOT brand label verbatim so its provenance cannot be stripped", () => {
+    expect(vendorLineMeta({ iot_battery: true, iot_brand_label: "Intellicar (assumed)" })).toEqual([
+      "Intellicar (assumed)",
+    ]);
+  });
+
+  it("says Non-IOT only when the dealer declared it is not, not when unknown", () => {
+    expect(vendorLineMeta({ iot_battery: false })).toEqual(["Non-IOT"]);
+    expect(vendorLineMeta({ iot_battery: null })).toEqual([]);
+  });
+
+  it("keeps a nominal rating that declared only one of volts or amp-hours", () => {
+    expect(vendorLineMeta({ nominal_voltage: "62.00" })).toEqual(["62V nominal"]);
+    expect(vendorLineMeta({ nominal_ampere: "33.00" })).toEqual(["33Ah nominal"]);
+  });
+
+  it("trims the trailing zeros postgres numerics arrive with", () => {
+    expect(vendorLineMeta({ unit_weight_kg: "11.500", line_weight_kg: "23.000" })).toEqual([
+      "11.5 kg/unit",
+      "23 kg total",
+    ]);
+  });
+
+  it("does not treat a zero weight as declared", () => {
+    expect(vendorLineMeta({ unit_weight_kg: 0, line_weight_kg: 0 })).toEqual([]);
   });
 });

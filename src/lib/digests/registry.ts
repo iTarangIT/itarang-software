@@ -1,5 +1,5 @@
 /**
- * Every registered digest (E-286).
+ * Every registered digest (E-288).
  *
  * Adding one is two steps: write a descriptor in ./kinds, list it here. The
  * ticker, the cron route, the settings API, the settings form and the verifier

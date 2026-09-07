@@ -1,5 +1,5 @@
 /**
- * The contract every scheduled digest satisfies (E-286).
+ * The contract every scheduled digest satisfies (E-288).
  *
  * A digest is: some numbers about an IST day, some numbers about right now, and
  * a button onto the screen where you act on them. Everything else — the twice-
@@ -11,7 +11,7 @@
  * table, a ticker, a cron route or an email template.
  *
  * WHY THE COUNTS ARE A LIST AND NOT A RECORD
- *   E-285 modelled its figures as a fixed `{approved, rejected, …}` object, which
+ *   E-287 modelled its figures as a fixed `{approved, rejected, …}` object, which
  *   worked while there was one digest. A second kind with different figures would
  *   have forced either a union type the template must switch on, or a second
  *   template. A list of {label, value} lines renders the same way whatever is in

@@ -1,5 +1,5 @@
 /**
- * E-285/E-286 — the .xlsx a digest attaches.
+ * E-287/E-288 — the .xlsx a digest attaches.
  *
  * Pure: builds a real workbook in memory and reads it back. No database, no
  * mail, no HTTP — the builder was deliberately split out of any route so this is

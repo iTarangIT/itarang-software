@@ -10,7 +10,6 @@ import {
   pdiRecords,
   accounts,
   provisions,
-  zohoInvoices,
   expenseSubmissions,
   nbfc,
   nbfcLspAgreements,
@@ -18,6 +17,12 @@ import {
 } from "@/lib/db/schema";
 
 import { eq, gte, lt, sql, and, desc, count, inArray } from "drizzle-orm";
+import {
+  outstandingTotal,
+  recentRevenueInvoices,
+  revenueBreakdown,
+  revenueTotal,
+} from "@/lib/dashboard/revenueSource";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { approvedExpenseInWindow } from "@/lib/dashboard/salesWindow";
@@ -64,55 +69,28 @@ export const GET = withErrorHandler(
       // /api/dashboard/ceo/overview, which resolves its window through the
       // shared resolver instead of a private copy. Nothing read the old series.
 
-      // Revenue MTD — sum totals from synced Zoho invoices for current month,
-      // excluding only void (drafts are counted as revenue per CEO request).
-      const zohoRevenueQ = db
-        .select({
-          revenue_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
-        })
-        .from(zohoInvoices)
-        .where(
-          and(
-            gte(zohoInvoices.invoice_date, startOfMonthDateStr),
-            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
-          ),
-        );
+      // E-280 — revenue spans BOTH sources now: the historical Zoho sync and the
+      // sales invoices read out of Google Drive since the move to Vyapar. The
+      // rules for what counts live in revenueSource.ts so this route, the CEO
+      // overview, the snapshot and the drill-downs cannot drift apart.
+
+      // Revenue MTD — void excluded, drafts counted, per CEO request.
+      const zohoRevenueQ = revenueTotal(startOfMonthDateStr, null);
 
       // Void/draft MTD sub-totals — returned separately so the CEO can toggle
       // them into the Revenue card client-side without a refetch.
-      const zohoBreakdownQ = db
-        .select({
-          void_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
-          draft_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'draft'), 0)`,
-        })
-        .from(zohoInvoices)
-        .where(gte(zohoInvoices.invoice_date, startOfMonthDateStr));
+      const zohoBreakdownQ = revenueBreakdown(startOfMonthDateStr, null);
 
       // Last-month revenue (same void-only exclusion) for the real MoM badge.
-      const zohoRevenueLastMonthQ = db
-        .select({
-          revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
-        })
-        .from(zohoInvoices)
-        .where(
-          and(
-            gte(zohoInvoices.invoice_date, startOfLastMonthDateStr),
-            lt(zohoInvoices.invoice_date, startOfMonthDateStr),
-            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
-          ),
-        );
+      const zohoRevenueLastMonthQ = revenueTotal(
+        startOfLastMonthDateStr,
+        startOfMonthDateStr,
+      );
 
       // Financial-year-to-date revenue (since 1 April) — base excludes only
       // void (drafts counted); void returned separately so the void filter
       // toggle works in FY mode without a refetch.
-      const zohoFyQ = db
-        .select({
-          base: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void')), 0)`,
-          void_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
-          draft_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'draft'), 0)`,
-        })
-        .from(zohoInvoices)
-        .where(gte(zohoInvoices.invoice_date, fyStartStr));
+      const zohoFyQ = revenueBreakdown(fyStartStr, null);
 
       // Inventory value — total capital across all inventory rows.
       const inventoryAggQ = db
@@ -127,14 +105,9 @@ export const GET = withErrorHandler(
       // too). Without the draft exclusion this over-reports by the full draft
       // total (e.g. ₹1.08Cr of drafts inflated the figure to ₹1.16Cr vs the
       // true ₹7.89L of overdue balances).
-      const outstandingAggQ = db
-        .select({
-          outstanding: sql<string>`COALESCE(SUM(${zohoInvoices.balance}), 0)`,
-        })
-        .from(zohoInvoices)
-        .where(
-          sql`${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('paid', 'void', 'draft')`,
-        );
+      // All-time snapshot, deliberately unwindowed — a receivable does not stop
+      // being owed because the month turned over.
+      const outstandingAggQ = outstandingTotal();
 
       // OEM purchases MTD — aggregate from inventory.oem_invoice_date /
       // final_amount. If the inventory table isn't being populated, this
@@ -185,18 +158,10 @@ export const GET = withErrorHandler(
         .where(approvedThisMonth)
         .groupBy(deptExpr, projectExpr);
 
-      const recentInvoicesQ = db
-        .select({
-          id: zohoInvoices.id,
-          invoice_number: zohoInvoices.invoice_number,
-          customer_name: zohoInvoices.customer_name,
-          invoice_date: zohoInvoices.invoice_date,
-          total: zohoInvoices.total,
-          status: zohoInvoices.status,
-        })
-        .from(zohoInvoices)
-        .orderBy(desc(zohoInvoices.invoice_date))
-        .limit(5);
+      // E-280 — spans both sources, so the "Recent Zoho Invoices" rail keeps
+      // showing the newest invoices after the move off Zoho rather than
+      // freezing on the last one the API ever synced.
+      const recentInvoicesQ = recentRevenueInvoices(5);
 
       const recentExpensesQ = db
         .select({
@@ -328,12 +293,12 @@ export const GET = withErrorHandler(
       // queues the overflow, so wall-clock is bounded by the slowest few
       // round-trips instead of the sum of all ~20.
       const [
-        [zohoRevenue],
-        [zohoBreakdown],
-        [zohoRevenueLastMonth],
-        [zohoFy],
+        zohoRevenue,
+        zohoBreakdown,
+        zohoRevenueLastMonth,
+        zohoFy,
         [inventoryAgg],
-        [outstandingAgg],
+        outstandingAgg,
         [purchasesAgg],
         [expensesAgg],
         expensesByDepartment,
@@ -392,8 +357,8 @@ export const GET = withErrorHandler(
         };
       });
 
-      const revenueMtd = Number(zohoRevenue?.revenue_mtd || 0);
-      const revenueLastMonth = Number(zohoRevenueLastMonth?.revenue || 0);
+      const revenueMtd = zohoRevenue;
+      const revenueLastMonth = zohoRevenueLastMonth;
       const revenueChange =
         revenueLastMonth > 0
           ? ((revenueMtd - revenueLastMonth) / revenueLastMonth) * 100
@@ -431,11 +396,11 @@ export const GET = withErrorHandler(
       return successResponse({
         revenue: revenueMtd,
         revenue_mtd: revenueMtd,
-        revenue_void_mtd: Number(zohoBreakdown?.void_mtd || 0),
-        revenue_draft_mtd: Number(zohoBreakdown?.draft_mtd || 0),
-        revenue_fytd: Number(zohoFy?.base || 0),
-        revenue_void_fytd: Number(zohoFy?.void_amt || 0),
-        revenue_draft_fytd: Number(zohoFy?.draft_amt || 0),
+        revenue_void_mtd: zohoBreakdown.voided,
+        revenue_draft_mtd: zohoBreakdown.draft,
+        revenue_fytd: zohoFy.base,
+        revenue_void_fytd: zohoFy.voided,
+        revenue_draft_fytd: zohoFy.draft,
         fyStartLabel: `1 Apr ${fyStartYear}`,
         revenueChange,
         purchases_mtd: Number(purchasesAgg?.purchases_mtd || 0),
@@ -450,7 +415,7 @@ export const GET = withErrorHandler(
           total: Number(r.total),
         })),
         inventoryValue: Number(inventoryAgg?.inventory_value || 0),
-        outstandingCredits: Number(outstandingAgg?.outstanding || 0),
+        outstandingCredits: outstandingAgg,
         recent_invoices: recentInvoices,
         recent_expenses: recentExpenses,
         conversionRate,

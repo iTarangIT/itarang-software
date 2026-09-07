@@ -1,6 +1,6 @@
 "use client";
 
-// E-285/E-286 — the scheduled digest emails. One form, every kind: the sections,
+// E-287/E-288 — the scheduled digest emails. One form, every kind: the sections,
 // the headings and the button label all come from the descriptor over the wire,
 // so a new digest needs no change here.
 

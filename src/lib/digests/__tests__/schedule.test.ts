@@ -1,5 +1,5 @@
 /**
- * E-285/E-286 — digest scheduling and settings normalisation.
+ * E-287/E-288 — digest scheduling and settings normalisation.
  *
  * Pure, no I/O, which is the whole reason `slotsDueAt` takes `now` as an argument
  * instead of calling `Date.now()`. The interesting cases are all IST-vs-UTC: the

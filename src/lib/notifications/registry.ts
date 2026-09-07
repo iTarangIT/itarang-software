@@ -375,6 +375,11 @@ export const TYPE_LABELS: Record<string, string> = {
   "buyback.record_vendor_agreement": "Vendor agreement recorded",
   "buyback.vendor_counter": "Vendor countered the quote",
   "buyback.vendor_agree": "Vendor agreed to the quote",
+  // E-281 — iTarang's own moves on the vendor leg. Phrased from the reader's
+  // side: these reach both the desk and the vendor, and the vendor is the one
+  // being asked to act.
+  "buyback.counter_vendor": "iTarang countered the vendor",
+  "buyback.accept_vendor_counter": "Vendor's counter accepted",
 
   // --- Buyback: purchase orders ---
   "buyback.exchange_pos": "Purchase orders exchanged",

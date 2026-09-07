@@ -1,4 +1,4 @@
--- E-282: per-type control of which notifications ALSO go out by email.
+-- E-284: per-type control of which notifications ALSO go out by email.
 --
 -- WHY
 --   E-231 gave admins a switch on the in-app bell and said so in its own header:
@@ -13,7 +13,7 @@
 --   moved out of the source file and onto a settings screen.
 --
 -- NO ROW = THE CODE DEFAULT, NOT "ENABLED"
---   This is the one place E-282 deliberately differs from E-231. There, absence
+--   This is the one place E-284 deliberately differs from E-231. There, absence
 --   meant ENABLED, because the code had no opinion. Here the code DOES have an
 --   opinion — emailWorthy() — and it is a good one: the NO_EMAIL entries each
 --   carry a reason (auction.outbid can fire several times inside one second;
@@ -33,7 +33,7 @@
 --   (see MIGRATION_CHECKLIST.md) and migrations have silently stopped applying
 --   on prod before, around E-145 by that file's own account.
 --
---   The contrast is E-280/E-281, which ARE required before their code deploys
+--   The contrast is E-282/E-283, which ARE required before their code deploys
 --   because schema.ts names their columns in a bare select. Nothing here is
 --   selected by any other query.
 --
@@ -78,27 +78,27 @@ CREATE TABLE IF NOT EXISTS notification_email_access (
 );
 
 COMMENT ON TABLE notification_email_access IS
-  'E-282: explicit per-type overrides for the generic email channel emit() sends. '
+  'E-284: explicit per-type overrides for the generic email channel emit() sends. '
   'NO ROW = the code default in emailWorthy() (src/lib/notifications/catalog.ts). '
   'Unlike notification_access (E-231), absence does NOT mean enabled — it means '
   '"nobody has overridden the code for this type". Read by '
   'src/lib/notifications/email-access.ts, which fails OPEN to an empty map.';
 
 COMMENT ON COLUMN notification_email_access.notification_type IS
-  'E-282: notifications.type verbatim — both the modern <domain>.<event> form and '
+  'E-284: notifications.type verbatim — both the modern <domain>.<event> form and '
   'the legacy flat types (kyc_accepted, inventory_assigned, delivery_confirmed). '
   'varchar(50) to match notifications.type and notification_access exactly; a '
   'longer string is truncated by emit.ts safeType() and would become ungovernable.';
 
 COMMENT ON COLUMN notification_email_access.enabled IS
-  'E-282: true = email this type, false = do not. Overrides BOTH emailWorthy() and '
+  'E-284: true = email this type, false = do not. Overrides BOTH emailWorthy() and '
   'the per-recipient `email: false` overrides in events.ts, so the settings screen '
   'never claims something the emitter contradicts. It cannot override EMAIL_LOCKED, '
   'and it has no effect at all on the in-app bell (that is E-231) or on the bespoke '
   'senders in src/lib/email/.';
 
 COMMENT ON COLUMN notification_email_access.updated_by IS
-  'E-282: users.id AS TEXT, matching notification_access.updated_by on the sibling '
+  'E-284: users.id AS TEXT, matching notification_access.updated_by on the sibling '
   'tab (which joins u.id::text = na.updated_by). Per-save history is additionally '
   'written to audit_logs with action=''notification_email_access.updated''.';
 

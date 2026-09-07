@@ -1,7 +1,13 @@
 "use client";
 
 /**
- * E-216 — Google Drive folder management + "Scan now" for the expense tracker.
+ * E-216 — Google Drive folder management + "Scan now".
+ *
+ * E-280 made this generic over WHICH side of the accounts folder is being read.
+ * The same panel now drives two independent scanners: the purchase side into
+ * expense_submissions, and the sale side into sales_invoices. They are separate
+ * folder registrations with inverted include/exclude filters, so one component
+ * with a config beats two 380-line copies that drift.
  *
  * Kept out of ExpenseTrackerView (already 736 lines) so the manual-upload flow
  * and the automated flow stay separately readable.
@@ -78,16 +84,95 @@ function fmtWhen(iso: string | null): string {
   });
 }
 
-export function DriveFoldersPanel() {
+/**
+ * Everything that differs between the purchase and sale sides. The endpoints
+ * and query keys are the load-bearing part; the copy matters because the
+ * include-filter is the single setting that decides whether this imports
+ * company spend or company revenue.
+ */
+export interface DriveFoldersPanelConfig {
+  testId: string;
+  title: string;
+  description: string;
+  foldersEndpoint: string;
+  scanEndpoint: string;
+  foldersQueryKey: string;
+  /** Everything that reads the table this scanner writes. */
+  invalidateKeys: string[][];
+  scanLabel: string;
+  emptyHint: string;
+  removeTitle: string;
+  includeHint: (tokens: string) => string;
+  noFilterWarning: string;
+}
+
+export const EXPENSE_PANEL: DriveFoldersPanelConfig = {
+  testId: "drive-folders-panel",
+  title: "Google Drive folders — purchases",
+  description:
+    "Invoices and costing sheets dropped in these folders are imported as expenses every few hours.",
+  foldersEndpoint: "/api/admin/ai-expenses/drive/folders",
+  scanEndpoint: "/api/admin/ai-expenses/drive/scan",
+  foldersQueryKey: "drive-folders",
+  invalidateKeys: [
+    ["drive-folders"],
+    ["drive-runs"],
+    ["drive-attention"],
+    ["ai-expenses"],
+    ["ai-expense-tags"],
+    ["dashboard-metrics", "ceo"],
+    ["ceo-expenses-summary"],
+    ["ceo-snapshot-summary"],
+  ],
+  scanLabel: "Scan now",
+  emptyHint:
+    "No folders yet. Share a Drive folder with the service account, then paste its link above.",
+  removeTitle: "Remove folder (imported expenses are kept)",
+  includeHint: (tokens) =>
+    `Importing only what is inside folders named ${tokens}. The sale side is read separately into revenue, so it stays out of expenses.`,
+  noFilterWarning:
+    "No purchase filter set — every folder in this tree is imported, including customer invoices, which would book revenue as spend.",
+};
+
+export const SALES_PANEL: DriveFoldersPanelConfig = {
+  testId: "sales-folders-panel",
+  title: "Google Drive folders — sales invoices",
+  description:
+    "Since the move off Zoho to Vyapar, revenue is read from the sale side of these folders. Scanned every few hours.",
+  foldersEndpoint: "/api/admin/sales-invoices/drive/folders",
+  scanEndpoint: "/api/admin/sales-invoices/drive/scan",
+  foldersQueryKey: "sales-folders",
+  invalidateKeys: [
+    ["sales-folders"],
+    ["sales-runs"],
+    ["ceo-invoices"],
+    ["dashboard-metrics", "ceo"],
+    ["ceo-snapshot-summary"],
+  ],
+  scanLabel: "Scan sales now",
+  emptyHint:
+    "No folders yet. Share the accounts folder with the service account, then paste its link above.",
+  removeTitle: "Remove folder (imported invoices are kept)",
+  includeHint: (tokens) =>
+    `Importing only what is inside folders named ${tokens}. The purchase side is read separately into expenses, so it stays out of revenue.`,
+  noFilterWarning:
+    "No sale filter set — every folder in this tree is imported, including supplier bills, which would book spend as revenue.",
+};
+
+export function DriveFoldersPanel({
+  config = EXPENSE_PANEL,
+}: {
+  config?: DriveFoldersPanelConfig;
+} = {}) {
   const qc = useQueryClient();
   const [folderInput, setFolderInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<ScanSummary | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["drive-folders"],
+    queryKey: [config.foldersQueryKey],
     queryFn: async () => {
-      const r = await fetch("/api/admin/ai-expenses/drive/folders", {
+      const r = await fetch(config.foldersEndpoint, {
         cache: "no-store",
       });
       const j = await r.json();
@@ -101,7 +186,7 @@ export function DriveFoldersPanel() {
 
   const addFolder = useMutation({
     mutationFn: async (folder: string) => {
-      const r = await fetch("/api/admin/ai-expenses/drive/folders", {
+      const r = await fetch(config.foldersEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ folder }),
@@ -112,14 +197,14 @@ export function DriveFoldersPanel() {
     onSuccess: () => {
       setFolderInput("");
       setError(null);
-      qc.invalidateQueries({ queryKey: ["drive-folders"] });
+      qc.invalidateQueries({ queryKey: [config.foldersQueryKey] });
     },
     onError: (e: Error) => setError(e.message),
   });
 
   const toggleFolder = useMutation({
     mutationFn: async (vars: { id: string; is_active: boolean }) => {
-      const r = await fetch("/api/admin/ai-expenses/drive/folders", {
+      const r = await fetch(config.foldersEndpoint, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(vars),
@@ -127,25 +212,25 @@ export function DriveFoldersPanel() {
       const j = await r.json();
       if (!r.ok || !j.success) throw new Error(j?.error?.message || "Update failed");
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["drive-folders"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [config.foldersQueryKey] }),
     onError: (e: Error) => setError(e.message),
   });
 
   const removeFolder = useMutation({
     mutationFn: async (id: string) => {
-      const r = await fetch(`/api/admin/ai-expenses/drive/folders?id=${id}`, {
+      const r = await fetch(`${config.foldersEndpoint}?id=${id}`, {
         method: "DELETE",
       });
       const j = await r.json();
       if (!r.ok || !j.success) throw new Error(j?.error?.message || "Remove failed");
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["drive-folders"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [config.foldersQueryKey] }),
     onError: (e: Error) => setError(e.message),
   });
 
   const scan = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/admin/ai-expenses/drive/scan", {
+      const r = await fetch(config.scanEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",
@@ -157,17 +242,8 @@ export function DriveFoldersPanel() {
     onSuccess: (s) => {
       setSummary(s);
       setError(null);
-      // Every surface that reads expense_submissions, in one go.
-      for (const key of [
-        ["drive-folders"],
-        ["drive-runs"],
-        ["drive-attention"],
-        ["ai-expenses"],
-        ["ai-expense-tags"],
-        ["dashboard-metrics", "ceo"],
-        ["ceo-expenses-summary"],
-        ["ceo-snapshot-summary"],
-      ]) {
+      // Every surface that reads the table this scanner writes, in one go.
+      for (const key of config.invalidateKeys) {
         qc.invalidateQueries({ queryKey: key });
       }
     },
@@ -179,15 +255,12 @@ export function DriveFoldersPanel() {
   return (
     <div
       className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm space-y-5"
-      data-testid="drive-folders-panel"
+      data-testid={config.testId}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-gray-900">Google Drive folders</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Invoices and costing sheets dropped in these folders are imported
-            automatically every few hours.
-          </p>
+          <h2 className="text-sm font-semibold text-gray-900">{config.title}</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{config.description}</p>
         </div>
         <Button
           type="button"
@@ -200,7 +273,7 @@ export function DriveFoldersPanel() {
           ) : (
             <RefreshCw className="w-4 h-4 mr-2" />
           )}
-          Scan now
+          {config.scanLabel}
         </Button>
       </div>
 
@@ -260,10 +333,7 @@ export function DriveFoldersPanel() {
           <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading folders…
         </p>
       ) : folders.length === 0 ? (
-        <p className="text-xs text-gray-500">
-          No folders yet. Share a Drive folder with the service account, then paste its
-          link above.
-        </p>
+        <p className="text-xs text-gray-500">{config.emptyHint}</p>
       ) : (
         <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
           {folders.map((f) => (
@@ -278,21 +348,15 @@ export function DriveFoldersPanel() {
                   {fmtWhen(f.last_scanned_at)}
                 </p>
                 {/* Visible, not buried in config — this setting is the
-                    difference between importing expenses and importing the
-                    company's entire turnover. */}
+                    difference between booking the company's spend and booking
+                    its entire turnover. */}
                 {f.include_names?.trim() ? (
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    Importing only what is inside folders named{" "}
-                    <span className="font-medium text-gray-700">
-                      {tokenList(f.include_names)}
-                    </span>
-                    . Sales invoices are revenue and come from Zoho, so they stay out.
+                    {config.includeHint(tokenList(f.include_names))}
                   </p>
                 ) : (
                   <p className="text-[11px] text-amber-700 mt-0.5">
-                    No purchase filter set — every folder in this tree is imported,
-                    including customer invoices, which would double-count revenue as
-                    expenses.
+                    {config.noFilterWarning}
                   </p>
                 )}
               </div>
@@ -312,7 +376,7 @@ export function DriveFoldersPanel() {
                 type="button"
                 onClick={() => removeFolder.mutate(f.id)}
                 disabled={removeFolder.isPending}
-                title="Remove folder (imported expenses are kept)"
+                title={config.removeTitle}
                 className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50"
               >
                 <Trash2 className="w-4 h-4" />

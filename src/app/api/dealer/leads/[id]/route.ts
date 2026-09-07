@@ -49,7 +49,7 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
 
     const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
     if (!lead) return errorResponse('Lead not found', 404);
-    // E-283 — deleted from the dealer side. It may still be live for the admin
+    // E-285 — deleted from the dealer side. It may still be live for the admin
     // and the lender, but it is gone as far as this dashboard is concerned.
     if (lead.deleted_by_dealer_at) return errorResponse('Lead not found', 404);
 
@@ -255,7 +255,7 @@ export const DELETE = withErrorHandler(async (req: Request, { params }: { params
     if (lead.deleted_by_dealer_at) return errorResponse('Lead already deleted', 404);
 
     try {
-        // E-283 — this hides the application from the DEALER's dashboard only.
+        // E-285 — this hides the application from the DEALER's dashboard only.
         // The admin's and the NBFC's copies stay put; the row is destroyed only
         // once every party holding it has deleted it too.
         const { purged } = await markLeadDeleted({ leadId: id, scope: 'dealer', userId: user.id });

@@ -1,5 +1,5 @@
 /**
- * E-283 — multi-party delete for a customer application (`leads`).
+ * E-285 — multi-party delete for a customer application (`leads`).
  *
  * Before this, "delete" existed in exactly one place — the dealer's Lead
  * Management list — and it was a hard cascade: one dealer click removed the
@@ -75,7 +75,7 @@ export async function purgeLeadCascade(tx: Executor, leadId: string): Promise<vo
   await tx.execute(sql`DELETE FROM call_records WHERE lead_id = ${leadId}`);
   await tx.execute(sql`DELETE FROM deployed_assets WHERE lead_id = ${leadId}`);
 
-  // E-283 — the rows the admin and NBFC surfaces are driven by. They were not
+  // E-285 — the rows the admin and NBFC surfaces are driven by. They were not
   // in the dealer cascade before because the dealer could not previously be the
   // last deleter of a file those parties held; now the purge only happens once
   // every party has deleted, and these go with the lead.

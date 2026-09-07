@@ -1,5 +1,5 @@
 /**
- * E-280/E-281/E-284 — the default loan product + NBFC an admin has pinned, for
+ * E-282/E-283/E-286 — the default loan product + NBFC an admin has pinned, for
  * a dealer, for the LOCATION OF THE DEALER, or both.
  *
  * `nbfc_loan_products.active_locations` decides which lenders CAN serve a
@@ -7,9 +7,9 @@
  * separate: coverage is the lender's own declaration, the default is iTarang's
  * commercial choice on top of it.
  *
- * WHOSE LOCATION (E-284). `state` / `city` describe the DEALER, read from
+ * WHOSE LOCATION (E-286). `state` / `city` describe the DEALER, read from
  * `accounts.state` / `accounts.city` — the dealer's own registered address —
- * NOT the customer's. E-280/E-281 matched the customer's `leads.state` /
+ * NOT the customer's. E-282/E-283 matched the customer's `leads.state` /
  * `leads.city`; that was changed because the commercial arrangement is with the
  * dealer, so "dealers in Maharashtra sell iTarang F1" is the rule the business
  * actually writes. A consequence worth knowing: a lead with no dealer can no
@@ -34,7 +34,7 @@
  * Every read is guarded and returns `[]` on failure. That is what keeps the
  * feature skippable at deploy: on a database without these columns, Step 4
  * keeps showing the full BRE-matched list rather than failing outright.
- * E-280 and E-281 must be applied together — see the E-281 header. E-284 is
+ * E-282 and E-283 must be applied together — see the E-283 header. E-286 is
  * comments only and changes no data.
  */
 
@@ -132,7 +132,7 @@ export async function resolveDefaultProductRules(
     }));
   } catch (err) {
     // Almost always a missing relation or column on an environment where
-    // E-280/E-281 have not been applied. Never break Step 4 over it.
+    // E-282/E-283 have not been applied. Never break Step 4 over it.
     console.error("[city-default-product] lookup failed:", err);
     return [];
   }

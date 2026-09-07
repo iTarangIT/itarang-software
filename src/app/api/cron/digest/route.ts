@@ -1,5 +1,5 @@
 /**
- * Cron: the twice-daily digest emails (E-285, generalised by E-286).
+ * Cron: the twice-daily digest emails (E-287, generalised by E-288).
  *
  * The BACKSTOP and the manual handle. The primary driver is the in-process
  * ticker in src/instrumentation-node.ts — vercel.json's crons do not fire on the

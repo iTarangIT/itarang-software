@@ -1,5 +1,5 @@
 /**
- * The .xlsx a scheduled digest can attach (E-285, generalised by E-286).
+ * The .xlsx a scheduled digest can attach (E-287, generalised by E-288).
  *
  * TWO SHEETS, ONE DAY. "Figures" is what the mail said, so a disputed number can
  * be checked without recomputing it. "Detail" is every item behind those figures,

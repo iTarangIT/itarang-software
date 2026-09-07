@@ -1,4 +1,4 @@
-// E-282 — the guards the PATCH /api/admin/notification-email route applies
+// E-284 — the guards the PATCH /api/admin/notification-email route applies
 // before it writes, asserted directly.
 //
 // The route module itself cannot be imported here: it pulls in `@/lib/db`,

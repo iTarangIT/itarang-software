@@ -295,7 +295,7 @@ function dedupe(targets: ResolvedTarget[]): ResolvedTarget[] {
 export async function emit(input: EmitInput): Promise<void> {
   const from = input.from ?? SYSTEM_PARTY;
   const type = safeType(input.type);
-  // E-282 — the admin's saved answer for this type, fetched ONCE for the whole
+  // E-284 — the admin's saved answer for this type, fetched ONCE for the whole
   // fan-out (like `blocked` below) so every recipient of one event is judged
   // consistently even if the 60s cache would have expired midway through.
   // `undefined` — the common case — means nobody has overridden the code, and
@@ -363,7 +363,7 @@ export async function emit(input: EmitInput): Promise<void> {
         );
       }
 
-      // Locked > admin override (E-282) > per-recipient flag > code default.
+      // Locked > admin override (E-284) > per-recipient flag > code default.
       // The rule itself lives in catalog.ts, shared with the settings screen's
       // own resolver, so the two can never drift; see it for why the saved row
       // beats the `email: false` three audiences in events.ts pass.

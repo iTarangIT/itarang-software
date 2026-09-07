@@ -1,5 +1,5 @@
 /**
- * The gate behind the admin "Email Notification" tab (E-282): which notification
+ * The gate behind the admin "Email Notification" tab (E-284): which notification
  * types have had their EMAIL channel overridden by an admin.
  *
  * The sibling of src/lib/notifications/access.ts, which does the same job for
@@ -16,7 +16,7 @@
  *
  * WHY IT FAILS OPEN TO AN EMPTY MAP, NOT TO "SEND EVERYTHING".
  * Empty map => every type resolves through emailWorthy() => byte-for-byte the
- * behaviour this app had before E-282 existed. That is a stronger guarantee
+ * behaviour this app had before E-284 existed. That is a stronger guarantee
  * than "everyone gets the email": it also preserves the NO_EMAIL suppressions,
  * so a missing table cannot start emailing auction.outbid several times a
  * second. There is no migration runner in this project and migrations have
@@ -67,8 +67,8 @@ async function load(): Promise<Snapshot> {
       lastErrorLoggedAt = Date.now();
       console.error(
         "[notification-email] could not read notification_email_access — falling " +
-          "back to emailWorthy() for every type (i.e. pre-E-282 behaviour). " +
-          "Is E-282 applied on this database?",
+          "back to emailWorthy() for every type (i.e. pre-E-284 behaviour). " +
+          "Is E-284 applied on this database?",
         error,
       );
     }

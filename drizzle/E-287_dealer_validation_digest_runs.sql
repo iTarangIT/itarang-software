@@ -1,11 +1,11 @@
--- E-285: the send ledger for the twice-daily Dealer Validation digest email.
+-- E-287: the send ledger for the twice-daily Dealer Validation digest email.
 --
--- SUPERSEDED BY E-286, WHICH RENAMES THIS TABLE TO `digest_runs`.
+-- SUPERSEDED BY E-288, WHICH RENAMES THIS TABLE TO `digest_runs`.
 --   Kept because it was APPLIED to database-1 and database-2 on 2026-09-07 and
 --   the migration checklist records it as such. An applied migration keeps its
 --   file: deleting it would leave the checklist pointing at nothing and the next
 --   person unable to see what was actually run. A fresh database can skip
---   straight to E-286, whose CREATE TABLE IF NOT EXISTS covers this one.
+--   straight to E-288, whose CREATE TABLE IF NOT EXISTS covers this one.
 --
 -- WHY
 --   Admin -> Dealer Validation (/admin/dealer-verification) is where dealer
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS dealer_validation_digest_runs (
 );
 
 -- THE CLAIM KEY. Partial so a 'test' send never consumes a real slot.
--- REPLACED BY digest_runs_kind_slot_uniq IN E-286, which adds `kind` to the key.
+-- REPLACED BY digest_runs_kind_slot_uniq IN E-288, which adds `kind` to the key.
 CREATE UNIQUE INDEX IF NOT EXISTS dealer_validation_digest_runs_slot_uniq
   ON dealer_validation_digest_runs (digest_date, slot)
   WHERE slot IN ('morning', 'evening');
@@ -83,5 +83,5 @@ CREATE INDEX IF NOT EXISTS dealer_validation_digest_runs_created_idx
   ON dealer_validation_digest_runs (created_at DESC);
 
 COMMENT ON TABLE dealer_validation_digest_runs IS
-  'E-285: send ledger for the twice-daily Dealer Validation digest email. Renamed to '
-  'digest_runs by E-286 when a second digest kind arrived.';
+  'E-287: send ledger for the twice-daily Dealer Validation digest email. Renamed to '
+  'digest_runs by E-288 when a second digest kind arrived.';

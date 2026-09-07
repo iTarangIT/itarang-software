@@ -530,7 +530,7 @@ export async function GET(req: NextRequest) {
         })
         .from(leads)
         .leftJoin(accounts, eq(accounts.id, leads.dealer_id))
-        // E-283 — an application the admin deleted drops out of this queue.
+        // E-285 — an application the admin deleted drops out of this queue.
         // The dealer and the lender keep their own copies.
         .where(and(inArray(leads.id, leadIds), isNull(leads.deleted_by_admin_at))),
       db

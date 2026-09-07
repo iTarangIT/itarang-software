@@ -335,7 +335,7 @@ CRON_SECRET=<same value as the app's env>
 # */5 * * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/kyc-auto-approval  >> /var/log/itarang-cron.log 2>&1
 ```
 
-### Scheduled digest emails (E-285/E-286) — ticker is primary, these are optional
+### Scheduled digest emails (E-287/E-288) — ticker is primary, these are optional
 
 The twice-daily summary emails — **Dealer Validation** and **KYC Review**, plus
 whatever else is registered in `src/lib/digests/registry.ts` — are driven by an
@@ -365,7 +365,7 @@ and Settings → KYC Review, **not** here. Check it landed:
 ORDER BY id DESC LIMIT 5;`
 
 ⚠ **They ship ON**, addressed to `care.itarang@gmail.com`. The first deploy
-carrying both the code and migration E-286 starts emailing without anyone
+carrying both the code and migration E-288 starts emailing without anyone
 touching the screens.
 
 ⚠ **The ticker is dark outside production, and that guard is load-bearing.**

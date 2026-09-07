@@ -472,7 +472,7 @@ const NO_EMAIL = new Set([
  * Types whose email is the ONLY copy an external party gets — a customer or a
  * dealer who has no bell to check, or an NBFC whose next action depends on it.
  * The admin Email Notification screen renders these locked and the save route
- * rejects a change to one by name (E-282).
+ * rejects a change to one by name (E-284).
  *
  * This is a much smaller list than it looks like it should be, and deliberately
  * so: password resets, OTPs, agreement LINKS, welcome credentials and agent
@@ -505,7 +505,7 @@ export function emailLockedTypes(): string[] {
 
 /**
  * THE precedence rule for the email channel, in one pure place: locked beats an
- * admin's saved override (E-282), which beats the per-recipient flag a call site
+ * admin's saved override (E-284), which beats the per-recipient flag a call site
  * passed, which beats the code default.
  *
  * WHY THE OVERRIDE BEATS THE CALL SITE. `recipientFlag` is the `email: false`

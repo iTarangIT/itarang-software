@@ -1,6 +1,6 @@
 "use client";
 
-// E-280/E-281/E-284 — Settings → Loan Product. One table of pinned defaults
+// E-282/E-283/E-286 — Settings → Loan Product. One table of pinned defaults
 // plus an add row. A rule names a dealer, a dealer LOCATION, or both; every
 // field it leaves blank means "any".
 //

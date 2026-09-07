@@ -1,7 +1,7 @@
 /**
- * E-280/E-281/E-284 — verify the pinned default loan product against a real DB.
+ * E-282/E-283/E-286 — verify the pinned default loan product against a real DB.
  *
- * E-284: a rule's state/city are the DEALER's (accounts.state / accounts.city),
+ * E-286: a rule's state/city are the DEALER's (accounts.state / accounts.city),
  * not the customer's, so every assertion below probes by dealer code and the
  * locations it uses are locations dealers really are in.
  * READ-ONLY by default: no writes unless --simulate is passed.
@@ -13,15 +13,15 @@
  * and a city.
  *
  * What it asserts:
- *   1. city_default_loan_products exists, carries the E-281 columns
+ *   1. city_default_loan_products exists, carries the E-283 columns
  *      (dealer_code, priority), has a nullable `state`, and has the widened
- *      partial unique key _active_key_v2 in place of the E-280 _active_key.
+ *      partial unique key _active_key_v2 in place of the E-282 _active_key.
  *   2. Every ACTIVE rule points at an active, tenant-bound loan product that
  *      really belongs to the named NBFC — a rule failing this can never fire.
  *   3. Every ACTIVE rule can match at least one real dealer: a location-only
  *      rule names a location some dealer is registered in, and a rule naming
  *      both a dealer and a location names a location THAT dealer is in. This
- *      replaces E-280's product-coverage check, which compared
+ *      replaces E-282's product-coverage check, which compared
  *      active_locations — a rule about the CUSTOMER's city — against what is
  *      now a dealer location, and so no longer means anything.
  *   4. Every ACTIVE rule naming a dealer names one that exists.
@@ -36,7 +36,7 @@
  *   7. --simulate only: end-to-end proof covering the dealer-beats-location
  *      tiebreak, priority overriding it, and fall-through when the top rule's
  *      product is not in the hits. The LEAD's location stays synthetic (it
- *      isolates the BRE's own geography rule), but since E-284 the temporary
+ *      isolates the BRE's own geography rule), but since E-286 the temporary
  *      RULES must name the probe dealer's REAL location to match at all — so
  *      for the few seconds they exist they also apply to other dealers in that
  *      same city. They are deleted in a finally block.
@@ -74,10 +74,10 @@ async function main() {
   const { loadSectionGOptions } = await import("@/lib/leads/section-g");
 
   const host = (process.env.DATABASE_URL || "").match(/@([^:/]+)/)?.[1] ?? "?";
-  console.log(`\nE-280/E-281/E-284 pinned default loan products — verifying against ${host}\n`);
+  console.log(`\nE-280/E-283/E-286 pinned default loan products — verifying against ${host}\n`);
 
   /**
-   * E-284 — the code of any dealer registered in this location, or null. Every
+   * E-286 — the code of any dealer registered in this location, or null. Every
    * ordering assertion needs one: since a rule's location is now the DEALER's,
    * the only way to exercise a location rule is through a dealer that sits in
    * it. `accounts.id` is what the rules and `leads.dealer_id` both carry.
@@ -104,7 +104,7 @@ async function main() {
      WHERE table_name = 'city_default_loan_products'
   `);
   if (!tbl || Number(tbl.n) === 0) {
-    fail("table exists", "city_default_loan_products is missing — apply E-280 first");
+    fail("table exists", "city_default_loan_products is missing — apply E-282 first");
     report();
     return;
   }
@@ -118,11 +118,11 @@ async function main() {
 
   const missing = ["dealer_code", "priority"].filter((c) => !byName.has(c));
   if (missing.length === 0) {
-    pass("E-281 columns present", "dealer_code, priority");
+    pass("E-283 columns present", "dealer_code, priority");
   } else {
     fail(
-      "E-281 columns present",
-      `${missing.join(", ")} missing — apply E-281 (it must be applied WITH E-280, ` +
+      "E-283 columns present",
+      `${missing.join(", ")} missing — apply E-283 (it must be applied WITH E-282, ` +
         `or the resolver throws on every lookup and no default is ever offered)`,
     );
     report();
@@ -132,7 +132,7 @@ async function main() {
   if (byName.get("state") === "YES") {
     pass("state is nullable", "dealer-only rules can declare no location");
   } else {
-    fail("state is nullable", "state is still NOT NULL — E-281 did not fully apply");
+    fail("state is nullable", "state is still NOT NULL — E-283 did not fully apply");
   }
 
   const idxRows = await db.execute<{ indexname: string }>(sql`
@@ -150,12 +150,12 @@ async function main() {
   }
   if (idxNames.has("city_default_loan_products_active_key")) {
     fail(
-      "E-280 unique key replaced",
+      "E-282 unique key replaced",
       "the old city_default_loan_products_active_key still exists — it would block a " +
         "dealer rule and a location rule for the same city",
     );
   } else {
-    pass("E-280 unique key replaced");
+    pass("E-282 unique key replaced");
   }
 
   // ── 2 + 3 + 4. Every active rule is coherent and reachable ──────────────
@@ -208,7 +208,7 @@ async function main() {
       );
     }
 
-    // E-284 — a rule's location is the DEALER's, so "can this rule ever fire?"
+    // E-286 — a rule's location is the DEALER's, so "can this rule ever fire?"
     // is answered by the dealer directory, not by the product's
     // active_locations (which the BRE matches against the CUSTOMER's city and
     // which therefore says nothing about a dealer-scoped rule).
@@ -276,7 +276,7 @@ async function main() {
       "no state with both a city row and an equal-priority wildcard row",
     );
   } else {
-    // E-284 — the resolver reads the location off the dealer, so this needs a
+    // E-286 — the resolver reads the location off the dealer, so this needs a
     // dealer actually registered in that city to probe with.
     const probeCode = await dealerCodeIn(cityRule.state, cityRule.city);
     if (!probeCode) {
@@ -369,7 +369,7 @@ async function main() {
       `${baseline.reduce((s, o) => s + o.activeLoanProducts.length, 0)} product(s)\n`,
   );
 
-  // E-284 — dealer only; the location comes off that dealer's own account.
+  // E-286 — dealer only; the location comes off that dealer's own account.
   const live = await resolveDefaultProductRules(lead.dealer_id);
   if (live.length > 0) {
     // Whichever rule was applied must be one of the candidates, and it must be
@@ -487,7 +487,7 @@ async function simulateNarrowing() {
     return;
   }
 
-  // E-284 - the probe dealer must have a real registered location, because
+  // E-286 - the probe dealer must have a real registered location, because
   // that is what the temporary LOCATION rules have to name to match at all.
   // Joining accounts also proves the two id spaces line up for this dealer,
   // which loadSectionGOptions independently depends on.
@@ -604,7 +604,7 @@ async function simulateNarrowing() {
       );
     }
 
-    // ── E-281: a dealer rule beats a location rule at equal priority ──────
+    // ── E-283: a dealer rule beats a location rule at equal priority ──────
     const dealerId = await insert(
       dealer.dealer_id,
       RULE_STATE,
@@ -632,7 +632,7 @@ async function simulateNarrowing() {
       );
     }
 
-    // ── E-281: priority overrides that specificity tiebreak ───────────────
+    // ── E-283: priority overrides that specificity tiebreak ───────────────
     await db.execute(
       sql`UPDATE city_default_loan_products SET priority = 100 WHERE id = ${locId}`,
     );
@@ -654,7 +654,7 @@ async function simulateNarrowing() {
       );
     }
 
-    // ── E-281: a top rule that does not fit falls through to the next ─────
+    // ── E-283: a top rule that does not fit falls through to the next ─────
     // Point the p100 location rule at a product that is in no hit list at all.
     // The dealer rule at p0 must then be the one offered, rather than the pin
     // being abandoned and the full list returned.
