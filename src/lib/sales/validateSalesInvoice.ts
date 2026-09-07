@@ -124,13 +124,26 @@ export function validateSalesInvoice(
   // --- arithmetic ----------------------------------------------------------
   const sub = typeof candidate.sub_total === "number" ? candidate.sub_total : null;
   const tax = typeof candidate.tax_total === "number" ? candidate.tax_total : null;
+  let subTotal = sub;
   if (sub != null && tax != null) {
     const drift = Math.abs(sub + tax - total);
     if (drift > ARITHMETIC_TOLERANCE) {
-      attention.push(
-        `Sub-total ${sub.toFixed(2)} + tax ${tax.toFixed(2)} = ${(sub + tax).toFixed(2)}, ` +
-          `but the total reads ${total.toFixed(2)} (off by ${drift.toFixed(2)}).`,
-      );
+      // The tax-inclusive misread. Vyapar prints the payable amount largest, so
+      // the model returns it as the sub-total with the GST already inside it —
+      // sub == total, tax stated separately. Every flagged invoice checked on
+      // production had this exact shape, and in every one the TOTAL was right.
+      //
+      // Correct the field rather than flag the invoice: the arithmetic still
+      // has to close, it just closes against the base the sub-total should have
+      // held. Anything that is not this shape still flags.
+      if (Math.abs(sub - total) <= ARITHMETIC_TOLERANCE && tax > 0 && total - tax > 0) {
+        subTotal = Math.round((total - tax) * 100) / 100;
+      } else {
+        attention.push(
+          `Sub-total ${sub.toFixed(2)} + tax ${tax.toFixed(2)} = ${(sub + tax).toFixed(2)}, ` +
+            `but the total reads ${total.toFixed(2)} (off by ${drift.toFixed(2)}).`,
+        );
+      }
     }
   } else {
     attention.push("Sub-total or tax could not be read, so the total is unchecked.");
@@ -182,7 +195,7 @@ export function validateSalesInvoice(
       customer_gstin: candidate.customer_gstin?.trim() || null,
       seller_gstin: candidate.seller_gstin?.trim() || null,
       place_of_supply: candidate.place_of_supply?.trim() || null,
-      sub_total: sub,
+      sub_total: subTotal,
       tax_total: tax,
       total,
     },
