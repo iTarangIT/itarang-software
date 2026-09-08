@@ -57,17 +57,6 @@ export const maxDuration = 300;
 
 const ALLOWED_ROLES = new Set(["admin", "sales_head", "ceo"]);
 
-const MANUAL_MAX_FILES = 100;
-
-/**
- * How long the background scan works before stopping cleanly. Nothing waits on
- * it any more, so this is not a request timeout — it is how much of a large
- * folder one press gets through. Stopping early costs nothing: "already
- * processed" is a property of the file's checksum, so the next press resumes
- * exactly where this one ended.
- */
-const MANUAL_TIME_BUDGET_MS = 240_000;
-
 const BodySchema = z.object({
   /** sales_invoice_folders.id — omit to scan every active folder. */
   folder_id: z.string().uuid().optional(),
@@ -123,8 +112,11 @@ export async function POST(req: NextRequest) {
       runSalesScan({
         folderId: parsed.data.folder_id,
         triggeredBy: guard.user.id,
-        maxFiles: MANUAL_MAX_FILES,
-        timeBudgetMs: MANUAL_TIME_BUDGET_MS,
+        // One press, one job: keep going until the folder is finished rather
+        // than stopping at a per-run cap that nothing in the UI explains.
+        // Nothing waits on this request, so a long scan costs the caller
+        // nothing — they poll GET below.
+        drain: true,
         onStart: (runId) => answer({ status: "started", run_id: runId }),
       }).then(
         (summary) => answer(summary),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTerminalModelFailure } from "@/lib/sales/terminalModelFailure";
+import { isTerminalModelFailure } from "@/lib/ai/invoices/terminalModelFailure";
 
 describe("isTerminalModelFailure", () => {
   it("aborts on the exhausted-balance error the live run actually hit", () => {
