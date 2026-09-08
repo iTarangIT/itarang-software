@@ -7331,14 +7331,18 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
 });
 
 // =============================================================================
-// E-282/E-283/E-286 — Default loan product + NBFC per dealer, DEALER LOCATION,
-// or both.
-// Every scoping column is nullable and NULL means "any", so a rule matches a
-// lead when every column it actually declares matches: (dealer_code) alone is
-// a dealer-wide rule, (state, city) alone is E-282's location rule, and the
-// two together scope a dealer to one city. Ordered by priority DESC then by
-// specificity (dealer before location-only, city before state, located before
-// any-location). Read by resolveDefaultProductRules()
+// E-282/E-283/E-286/E-289 — Default loan product + NBFC per dealer, DEALER
+// LOCATION, CUSTOMER LOCATION, or any combination.
+// TWO location pairs, deliberately independent: (state, city) is where the
+// DEALER is registered (accounts), (customer_state, customer_city) is where
+// the CUSTOMER lives (leads). Every scoping column is nullable and NULL means
+// "any", so a rule matches a lead when every column it actually declares
+// matches: (dealer_code) alone is a dealer-wide rule, (state, city) alone
+// covers every dealer in a place, (customer_state, customer_city) alone covers
+// every customer living in one. Ordered by priority DESC, then by how MANY of
+// the five scoping columns the rule declares, then the old ladder (dealer,
+// customer city, customer state, dealer city, dealer state). Read by
+// resolveDefaultProductRules()
 // (src/lib/leads/city-default-product.ts) and applied by loadSectionGOptions()
 // to the BRE's hits — so a pinned product that does not independently match is
 // skipped and the next rule, or normal matching, is used instead.
@@ -7362,6 +7366,16 @@ export const cityDefaultLoanProducts = pgTable(
     // E-286 — the DEALER's city (accounts.city). NULL = every dealer city in
     // the state (or anywhere, when state is NULL too).
     city: varchar("city", { length: 100 }),
+    // E-289 — the CUSTOMER's state, matched against leads.state. This is the
+    // other half of the pair E-286 gave to the dealer: coverage of a place is
+    // the lender's own declaration (nbfc_loan_products.active_locations),
+    // this is iTarang's choice of WHICH covered lender is offered there.
+    // Spelled by `country-state-city`, like leads.state itself. NULL = the
+    // rule is not customer-scoped and applies to every customer.
+    customer_state: varchar("customer_state", { length: 100 }),
+    // E-289 — the CUSTOMER's city (leads.city). NULL = every customer city in
+    // customer_state (or every customer, when customer_state is NULL too).
+    customer_city: varchar("customer_city", { length: 100 }),
     nbfc_id: integer("nbfc_id").notNull(),
     loan_product_id: integer("loan_product_id").notNull(),
     // E-283 — admin-chosen tie-break; highest wins, specificity breaks ties.
@@ -7380,15 +7394,18 @@ export const cityDefaultLoanProducts = pgTable(
   (table) => ({
     // NOTE: the SQL migrations create these as PARTIAL, expression indexes
     // (lower(...) WHERE is_active), and the partial UNIQUE key
-    // city_default_loan_products_active_key_v2 is not representable here at
-    // all. The .sql files are the source of truth — do not reconcile these
-    // with drizzle-kit generate.
+    // city_default_loan_products_active_key_v3 (E-289, five columns) is not
+    // representable here at all. The .sql files are the source of truth — do
+    // not reconcile these with drizzle-kit generate.
     activeStateIdx: index("city_default_loan_products_active_state_idx").on(
       table.state,
     ),
     activeDealerIdx: index("city_default_loan_products_active_dealer_idx").on(
       table.dealer_code,
     ),
+    activeCustomerStateIdx: index(
+      "city_default_loan_products_active_customer_state_idx",
+    ).on(table.customer_state),
   }),
 );
 
