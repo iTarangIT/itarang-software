@@ -16,7 +16,7 @@
  * own outcome row, and the loop moves on; only an unrecoverable failure (Drive
  * unreachable, DB down) marks the run itself failed.
  */
-import { and, desc, eq, gt, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
 
 import { db } from "@/lib/db";
@@ -42,6 +42,8 @@ import {
 } from "@/lib/google/drive";
 import { extractInvoice } from "@/lib/ai/invoices/extractInvoice";
 import { extractCostingSheet } from "@/lib/ai/invoices/extractCostingSheet";
+import { isTerminalModelFailure } from "@/lib/ai/invoices/terminalModelFailure";
+import { isSettledFileVersion } from "@/lib/expenses/retryPolicy";
 import {
   formatAttentionReason,
   validateExpense,
@@ -91,6 +93,22 @@ const DEFAULT_MAX_FILES = 25;
  */
 const DEFAULT_TIME_BUDGET_MS = 4 * 60_000;
 
+/**
+ * The `drain` budget: keep going until the folder is actually finished.
+ *
+ * Deliberately UNDER `STALE_RUN_MS` (30 min). A drain holds one `running` row
+ * for its whole life, and that row is also the concurrency lock — if a working
+ * drain outlived the stale threshold, the ticker would decide it was dead,
+ * reclaim it, and start a second scan alongside it.
+ */
+const DRAIN_TIME_BUDGET_MS = 25 * 60_000;
+
+/** Backstop on a drain, so a misconfigured folder cannot bill without limit. */
+const DRAIN_MAX_FILES = 1000;
+
+/** Flush the counters to the run row every N files, so a poller sees progress. */
+const PROGRESS_FLUSH_EVERY = 10;
+
 export interface DriveScanSummary {
   run_id: string | null;
   status: "success" | "failed" | "skipped";
@@ -121,10 +139,38 @@ export async function runDriveScan(opts: {
   maxFiles?: number;
   /** Stop cleanly after this long. See DEFAULT_TIME_BUDGET_MS. */
   timeBudgetMs?: number;
+  /**
+   * Keep going until a full pass finds nothing left to do, instead of stopping
+   * at `maxFiles`.
+   *
+   * A first scan of a two-year folder is thousands of files; at 25 or even 100
+   * a press, "Scan now" is a button you have to keep pressing with nothing
+   * telling you how many times. The loop stays inside ONE run row so the DB
+   * concurrency lock still holds — chaining separate runDriveScan calls would
+   * have each pass blocked by its predecessor's own `running` row.
+   */
+  drain?: boolean;
+  /**
+   * Retry files that are resting under RETRY_COOLDOWN_MS. What the "Retry
+   * these" button passes: a person asking has decided it is worth the money.
+   */
+  ignoreCooldown?: boolean;
+  /**
+   * Called once the run row exists, before the first file is touched.
+   *
+   * Lets the "Scan now" route answer immediately and have the browser poll,
+   * instead of holding an HTTP connection open for the whole scan — nginx
+   * answers a request that outlives a pm2 restart with its own HTML page, and
+   * the browser then reports `Unexpected token '<'` over a scan that was in
+   * fact working.
+   */
+  onStart?: (runId: string) => void;
 } = {}): Promise<DriveScanSummary> {
   const startedAt = Date.now();
-  const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
-  const deadline = startedAt + (opts.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS);
+  const maxFiles = opts.maxFiles ?? (opts.drain ? DRAIN_MAX_FILES : DEFAULT_MAX_FILES);
+  const deadline =
+    startedAt +
+    (opts.timeBudgetMs ?? (opts.drain ? DRAIN_TIME_BUDGET_MS : DEFAULT_TIME_BUDGET_MS));
   const outOfTime = () => Date.now() >= deadline;
 
   const empty = (
@@ -151,6 +197,26 @@ export async function runDriveScan(opts: {
         "Google Drive is not configured — GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY are unset.",
     });
   }
+
+  // A run whose process died mid-scan never wrote its own ending, so it sits
+  // at 'running' for ever: the history reads "still going" and the guard below
+  // only stops looking at it once it ages past STALE_RUN_MS. Close them out
+  // first, so the run log says what actually happened. (Two such rows were
+  // sitting on prod, from 2026-08-17 and 2026-09-07.)
+  await db
+    .update(driveScanRuns)
+    .set({
+      status: "failed",
+      completed_at: new Date(),
+      error_message:
+        "Abandoned — the app restarted while this scan was running. Anything already imported was kept.",
+    })
+    .where(
+      and(
+        eq(driveScanRuns.status, "running"),
+        lt(driveScanRuns.started_at, new Date(Date.now() - STALE_RUN_MS)),
+      ),
+    );
 
   // Concurrency guard. In the DB rather than an in-memory flag so it holds
   // across the manual button, the ticker and the cron route — three entry
@@ -187,6 +253,8 @@ export async function runDriveScan(opts: {
     })
     .returning({ id: driveScanRuns.id });
 
+  opts.onStart?.(run.id);
+
   const counters = {
     files_seen: 0,
     files_new: 0,
@@ -195,6 +263,21 @@ export async function runDriveScan(opts: {
     needs_attention: 0,
     unsupported: 0,
     failed: 0,
+  };
+
+  // Progress is only visible to a poller if it is written down before the run
+  // ends. Cheap: one indexed UPDATE per PROGRESS_FLUSH_EVERY files, against a
+  // scan that spends ~15s per file.
+  let sinceFlush = 0;
+  const flushProgress = async (force = false) => {
+    sinceFlush += 1;
+    if (!force && sinceFlush < PROGRESS_FLUSH_EVERY) return;
+    sinceFlush = 0;
+    try {
+      await db.update(driveScanRuns).set({ ...counters }).where(eq(driveScanRuns.id, run.id));
+    } catch {
+      // Progress reporting must never be the thing that fails a scan.
+    }
   };
 
   try {
@@ -251,6 +334,9 @@ export async function runDriveScan(opts: {
       }
 
       counters.files_seen += files.length;
+      // Publish the denominator the moment the walk finishes, so a poller can
+      // render "0 of 333" instead of "0 of 0" for the first half-minute.
+      await flushProgress(true);
 
       const submitter = await resolveSubmitter(folder.created_by, opts.triggeredBy);
       if (!submitter) {
@@ -272,22 +358,46 @@ export async function runDriveScan(opts: {
         version: f.md5Checksum ?? f.modifiedTime ?? "unknown",
       }));
 
-      const seen = await loadSeenVersions(withVersion.map((w) => w.file.id));
+      const seen = await loadSeenVersions(
+        withVersion.map((w) => w.file.id),
+        { ignoreCooldown: opts.ignoreCooldown },
+      );
 
       for (const { file, version } of withVersion) {
         if (budget <= 0 || outOfTime()) break;
-        if (seen.has(`${file.id}::${version}`)) continue; // already processed, no download
+        const key = `${file.id}::${version}`;
+        if (seen.settled.has(key)) continue; // already processed, no download
+
+        // A retry re-reads bytes we have read before. A file whose checksum has
+        // changed since we last saw it is NOT a retry — someone replaced the
+        // PDF or edited the Sheet, and that new content genuinely needs reading.
+        const isRetry = seen.recorded.has(key);
 
         budget -= 1;
         counters.files_new += 1;
 
         let outcome: FileOutcome;
         try {
-          outcome = await processFile(file, {
-            existingTags,
-            submitterId: submitter,
-            driveFolderRowId: folder.id,
-          });
+          // Last line of defence before spending a model call on a retry: has
+          // this file already booked rows that neither its status nor its
+          // expense_ids admitted to? See existingRowCount.
+          const already = isRetry ? await existingRowCount(file.id) : 0;
+          if (already > 0) {
+            outcome = {
+              status: "duplicate",
+              reason: `Already imported by an earlier run (${already} row${
+                already === 1 ? "" : "s"
+              }) — not re-read.`,
+              expenseIds: [],
+              storageKey: null,
+            };
+          } else {
+            outcome = await processFile(file, {
+              existingTags,
+              submitterId: submitter,
+              driveFolderRowId: folder.id,
+            });
+          }
         } catch (err) {
           outcome = {
             status: "failed",
@@ -295,6 +405,22 @@ export async function runDriveScan(opts: {
             expenseIds: [],
             storageKey: null,
           };
+        }
+
+        // Stop the whole run rather than writing one unfixable error across
+        // every remaining file. This is exactly how the 33 stuck invoices were
+        // created: the account ran out of OpenAI credit and the scan carried
+        // on, recording "429 You have no credits remaining" against each file
+        // it touched — and, before the retry fix above, that was permanent.
+        // The sales scanner has had this guard since E-280.
+        if (outcome.status === "failed" && isTerminalModelFailure(outcome.reason ?? "")) {
+          await recordFile(run.id, folder.id, file, outcome, version);
+          counters.failed += 1;
+          await flushProgress(true);
+          throw new Error(
+            `Extraction is unavailable, so the scan stopped after ${counters.files_new} file(s): ` +
+              `${outcome.reason}`,
+          );
         }
 
         switch (outcome.status) {
@@ -316,6 +442,7 @@ export async function runDriveScan(opts: {
         }
 
         await recordFile(run.id, folder.id, file, outcome, version);
+        await flushProgress();
       }
 
       await db
@@ -742,23 +869,105 @@ async function loadExistingProjectTags(): Promise<string[]> {
   return rows.map((r) => r.tag).filter(Boolean) as string[];
 }
 
-/** `${fileId}::${version}` for every file version already processed. */
-async function loadSeenVersions(fileIds: string[]): Promise<Set<string>> {
-  if (fileIds.length === 0) return new Set();
-  const seen = new Set<string>();
+/**
+ * `${fileId}::${version}` for every file version that must NOT be read again.
+ *
+ * Two independent reasons to settle a file, and BOTH are needed:
+ *
+ *  1. Its status is in SETTLED_FILE_STATUSES — see that constant for why
+ *     `failed` and `needs_attention` are deliberately absent.
+ *
+ *  2. It already produced expense rows, whatever its status says. This is not
+ *     redundant: `importSheet` returns `needs_attention` with a NON-EMPTY
+ *     `expenseIds` when some rows of a costing sheet validated and others did
+ *     not. Re-reading such a file inserts nothing (its rows carry a non-NULL
+ *     `drive_row_ref`, so the E-216 unique index does bite) but it would
+ *     rewrite the file row to `duplicate` with an empty id array — quietly
+ *     dropping the un-imported lines out of the needs-attention queue and
+ *     losing the audit trail of what the sheet did produce.
+ *
+ * `ignoreCooldown` is what the manual "Retry these" button passes. Otherwise a
+ * retryable file rests for RETRY_COOLDOWN_MS after its last attempt, so the
+ * six-hourly ticker cannot re-bill a permanently broken file every tick.
+ */
+async function loadSeenVersions(
+  fileIds: string[],
+  opts: { ignoreCooldown?: boolean } = {},
+): Promise<{ settled: Set<string>; recorded: Set<string> }> {
+  if (fileIds.length === 0) return { settled: new Set(), recorded: new Set() };
+  const settled = new Set<string>();
+  // Every version ever recorded, settled or not. The difference between the two
+  // sets is what distinguishes a RETRY (this exact version failed before) from
+  // a genuinely new version of a file we have seen (someone replaced the PDF,
+  // or edited a Google Sheet, so its checksum changed).
+  const recorded = new Set<string>();
+  const now = Date.now();
+
   // Chunked: a folder can hold more ids than one IN list should carry.
+  //
+  // Filtered in TypeScript rather than in the WHERE clause on purpose: the rule
+  // is subtle enough to deserve unit tests, and `isSettledFileVersion` is the
+  // one place it is written down. A folder's file log is hundreds of narrow
+  // rows, so reading them all costs nothing next to one model call.
   for (let i = 0; i < fileIds.length; i += 500) {
     const chunk = fileIds.slice(i, i + 500);
     const rows = await db
       .select({
         drive_file_id: driveExpenseFiles.drive_file_id,
         md5_checksum: driveExpenseFiles.md5_checksum,
+        status: driveExpenseFiles.status,
+        expense_ids: driveExpenseFiles.expense_ids,
+        updated_at: driveExpenseFiles.updated_at,
       })
       .from(driveExpenseFiles)
       .where(inArray(driveExpenseFiles.drive_file_id, chunk));
-    for (const r of rows) seen.add(`${r.drive_file_id}::${r.md5_checksum ?? "unknown"}`);
+
+    for (const r of rows) {
+      const key = `${r.drive_file_id}::${r.md5_checksum ?? "unknown"}`;
+      recorded.add(key);
+      const isSettled = isSettledFileVersion(
+        {
+          status: r.status,
+          expenseIdCount: Array.isArray(r.expense_ids) ? r.expense_ids.length : 0,
+          lastAttemptedAt: r.updated_at ?? null,
+        },
+        { now, ignoreCooldown: opts.ignoreCooldown },
+      );
+      if (isSettled) settled.add(key);
+    }
   }
-  return seen;
+  return { settled, recorded };
+}
+
+/**
+ * How many expense rows this Drive file has ALREADY booked.
+ *
+ * The belt to `expense_ids`' braces, checked before a retry spends a model
+ * call. A file that threw *after* inserting rows — a costing sheet that failed
+ * part-way — is recorded by the catch in the scan loop with an empty id array,
+ * so the array under-reports and the file looks retryable when it is not.
+ *
+ * This matters more than it looks: for an invoice `drive_row_ref` is NULL, and
+ * a Postgres UNIQUE index treats NULLs as distinct, so
+ * `expense_submissions_drive_row_unique` does NOT stop the same file importing
+ * twice (E-216's comment claiming it does is wrong). The only other guard is
+ * E-172's index on the invoice number, which is partial on the number being
+ * present — so an invoice whose number could not be read has no backstop at
+ * all. This query is it.
+ *
+ * Served by that same partial index, so it costs one probe and no model call.
+ */
+async function existingRowCount(driveFileId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(expenseSubmissions)
+    .where(
+      and(
+        eq(expenseSubmissions.drive_file_id, driveFileId),
+        eq(expenseSubmissions.source, "ai"),
+      ),
+    );
+  return row?.n ?? 0;
 }
 
 async function recordFile(
@@ -768,28 +977,51 @@ async function recordFile(
   outcome: FileOutcome,
   version?: string,
 ): Promise<void> {
-  try {
-    await db.insert(driveExpenseFiles).values({
-      run_id: runId,
-      folder_id: folderRowId,
-      drive_file_id: file.id,
-      drive_file_name: file.name.slice(0, 512),
-      folder_path: file.folderPath || null,
-      mime_type: file.mimeType.slice(0, 160),
-      md5_checksum: (version ?? file.md5Checksum ?? file.modifiedTime ?? "unknown").slice(0, 128),
-      drive_modified_time: file.modifiedTime ? new Date(file.modifiedTime) : null,
-      status: outcome.status,
-      reason: outcome.reason,
-      expense_ids: outcome.expenseIds as never,
-      storage_key: outcome.storageKey,
+  const values = {
+    run_id: runId,
+    folder_id: folderRowId,
+    drive_file_id: file.id,
+    drive_file_name: file.name.slice(0, 512),
+    folder_path: file.folderPath || null,
+    mime_type: file.mimeType.slice(0, 160),
+    md5_checksum: (version ?? file.md5Checksum ?? file.modifiedTime ?? "unknown").slice(0, 128),
+    drive_modified_time: file.modifiedTime ? new Date(file.modifiedTime) : null,
+    status: outcome.status,
+    reason: outcome.reason,
+    expense_ids: outcome.expenseIds as never,
+    storage_key: outcome.storageKey,
+  };
+
+  // UPSERT, not insert-and-swallow-23505.
+  //
+  // A retried file already has a row on (drive_file_id, md5_checksum) — that is
+  // the whole point of retrying it. The old code caught the 23505 and returned,
+  // so the retry's outcome was DISCARDED: the expense was imported and the log
+  // still read `failed`, for ever. It also left `expense_ids` empty, which the
+  // retry predicate and any later re-read both depend on.
+  //
+  // `updated_at` doubles as "last attempted at" — nothing wrote it before — and
+  // is what RETRY_COOLDOWN_MS measures against.
+  await db
+    .insert(driveExpenseFiles)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [driveExpenseFiles.drive_file_id, driveExpenseFiles.md5_checksum],
+      set: {
+        // Repointed so the run-detail drawer shows the run that did the work.
+        run_id: values.run_id,
+        folder_id: values.folder_id,
+        drive_file_name: values.drive_file_name,
+        folder_path: values.folder_path,
+        mime_type: values.mime_type,
+        drive_modified_time: values.drive_modified_time,
+        status: values.status,
+        reason: values.reason,
+        expense_ids: values.expense_ids,
+        storage_key: values.storage_key,
+        updated_at: new Date(),
+      },
     });
-  } catch (e: unknown) {
-    // The (file_id, version) unique index firing here means a concurrent run
-    // already logged this file. Nothing to do — the counters are approximate
-    // by design and the expense rows are guarded by their own indexes.
-    if (typeof e === "object" && e !== null && (e as { code?: string }).code === "23505") return;
-    throw e;
-  }
 }
 
 /**
@@ -914,11 +1146,92 @@ export async function listRunFiles(runId: string) {
 }
 
 /** Files still needing a human, across all runs. */
-export async function listAttentionFiles(limit = 100) {
+export async function listAttentionFiles(limit = 200) {
   return db
     .select()
     .from(driveExpenseFiles)
     .where(inArray(driveExpenseFiles.status, ["needs_attention", "failed"]))
     .orderBy(desc(driveExpenseFiles.created_at))
     .limit(limit);
+}
+
+/** One run's current state, for the caller polling a scan it started. */
+export async function getDriveRun(runId: string) {
+  const [row] = await db
+    .select()
+    .from(driveScanRuns)
+    .where(eq(driveScanRuns.id, runId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * What has become of every file this scanner has ever recorded, per folder.
+ *
+ * The panel only ever showed the LAST run's counters, so a settled folder
+ * reported "333 files, 0 new" with five zeroes under it — identical output
+ * whether every file imported or every file was stuck on a dead API key. This
+ * is the lifetime split behind that line, and `retryable` is the number that
+ * answers "so is anything actually going to happen if I press it again?".
+ */
+export interface FolderCoverage {
+  folder_id: string;
+  label: string | null;
+  drive_folder_id: string;
+  total: number;
+  imported: number;
+  duplicate: number;
+  needs_attention: number;
+  unsupported: number;
+  failed: number;
+  expense_rows: number;
+  retryable: number;
+}
+
+export async function loadFolderCoverage(): Promise<FolderCoverage[]> {
+  // LEFT JOIN so a folder that has never been scanned reports zeroes rather
+  // than vanishing. Folder-level placeholder rows (drive_file_id 'folder:<id>',
+  // written when a whole folder is unreachable) are excluded — they are run
+  // errors, not files, and would read as failed invoices.
+  const rows = await db.execute(sql`
+    SELECT f.id                                        AS folder_id,
+           f.label                                     AS label,
+           f.drive_folder_id                           AS drive_folder_id,
+           count(df.id)                                AS total,
+           count(df.id) FILTER (WHERE df.status = 'imported')        AS imported,
+           count(df.id) FILTER (WHERE df.status = 'duplicate')       AS duplicate,
+           count(df.id) FILTER (WHERE df.status = 'needs_attention') AS needs_attention,
+           count(df.id) FILTER (WHERE df.status = 'unsupported')     AS unsupported,
+           count(df.id) FILTER (WHERE df.status = 'failed')          AS failed,
+           coalesce(sum(jsonb_array_length(df.expense_ids)), 0)      AS expense_rows,
+           count(df.id) FILTER (
+             WHERE df.status IN ('failed', 'needs_attention')
+               AND jsonb_array_length(df.expense_ids) = 0
+           )                                                         AS retryable
+      FROM drive_expense_folders f
+      LEFT JOIN drive_expense_files df
+             ON df.folder_id = f.id
+            AND df.drive_file_id NOT LIKE 'folder:%'
+     GROUP BY f.id, f.label, f.drive_folder_id
+     ORDER BY f.created_at
+  `);
+
+  const list = (Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows ?? []) as Record<
+    string,
+    unknown
+  >[];
+  const n = (v: unknown) => Number(v ?? 0);
+  return list.map((r) => ({
+    folder_id: String(r.folder_id),
+    label: (r.label as string | null) ?? null,
+    drive_folder_id: String(r.drive_folder_id),
+    total: n(r.total),
+    imported: n(r.imported),
+    duplicate: n(r.duplicate),
+    needs_attention: n(r.needs_attention),
+    unsupported: n(r.unsupported),
+    failed: n(r.failed),
+    expense_rows: n(r.expense_rows),
+    retryable: n(r.retryable),
+  }));
 }

@@ -119,15 +119,27 @@ No new environment variables are required — Drive reuses
   every 6 hours, first run 90s after boot. Vercel crons do not fire on the
   Hostinger PM2 boxes (see `DEPLOY_RUNBOOK.md`), so this ticker is the real
   scheduler.
-- **On demand** — the *Scan now* button, which processes up to 100 new files
-  and shows the result.
+- **On demand** — the *Scan now* button. It starts the scan in the background
+  and answers immediately; the browser then polls `GET .../drive/scan?run_id=`
+  and shows the counters moving. It **drains**: one press keeps going until the
+  folder is finished (bounded at 25 minutes and 1000 files), rather than
+  stopping at a per-run cap that nothing in the UI explained.
+
+  The request no longer stays open for the whole scan, because when it did, any
+  pm2 restart under it answered the browser with nginx's HTML error page and the
+  user saw `Unexpected token '<'` over a scan that had in fact imported.
 - **From cron** — `GET /api/cron/drive-expenses` with
   `Authorization: Bearer $CRON_SECRET`, for the VPS root crontab.
 
 All three call the same `runDriveScan`. A `status='running'` row in
 `drive_scan_runs` is the lock, so two triggers landing together cannot
 double-import. A run stuck 'running' for over 30 minutes is treated as dead
-(pm2 restarted mid-scan) and stops blocking.
+(pm2 restarted mid-scan): it is marked `failed` with an "Abandoned" message and
+stops blocking. The drain budget is deliberately under that 30 minutes, so a
+scan that is still working is never mistaken for a dead one.
+
+Because a drain can run for many minutes, the browser's poll gives up on
+**silence** (10 minutes with no counter moving) rather than on elapsed time.
 
 A scan does not have to finish a folder in one pass. "Already processed" is a
 property of the file, not of the run, so each run resumes where the last
@@ -142,10 +154,47 @@ Three layers, each catching what the one above cannot:
 |---|---|---|
 | File version | `drive_expense_files (drive_file_id, md5_checksum)` | Re-scanning an unchanged file. No download, no model call — this is what makes routine scans free. |
 | Invoice | `expense_submissions (lower(invoice_number)) WHERE source='ai'` (E-172) | The same invoice arriving as a different file — renamed, re-uploaded, copied to a second folder. |
-| Sheet row | `expense_submissions (drive_file_id, drive_row_ref)` | Individual cost lines, which carry no invoice number of their own. |
+| Sheet row | `expense_submissions (drive_file_id, drive_row_ref)` | Individual cost lines, which carry no invoice number of their own. **Invoices are NOT covered** — they set `drive_row_ref` to NULL, and a Postgres UNIQUE index treats NULLs as distinct, so two invoice rows from the same file both insert. An earlier comment in E-216 claimed otherwise; it was wrong. An invoice with no readable number therefore has no index-level backstop, which is why a forced re-read must delete before it re-imports. |
 
 Native Google Sheets have no `md5Checksum`; the code stores `modifiedTime`
 instead, so editing a Sheet makes it eligible for re-processing.
+
+### When a recorded file IS read again
+
+Layer 1 used to settle a file on *any* recorded outcome, and a PDF's md5 never
+changes — so one bad run marked its files done for ever. On 2026-09-03 the
+OpenAI account ran out of credit and 33 purchase invoices were written off as
+`failed — "429 You have no credits remaining"`. Every later scan reported
+"333 files, 0 new" and imported nothing, with no way to retry from the UI.
+
+The rule now lives in `src/lib/expenses/retryPolicy.ts` (pure, unit-tested):
+
+| Recorded status | Read again? |
+|---|---|
+| `imported`, `duplicate` | No — the row exists. |
+| `unsupported` | No — mimetype and size cannot change without a new checksum. |
+| `failed` | **Yes** — the reason belongs to the API or the network, not the file. |
+| `needs_attention` | **Yes**, unless the file already produced expense rows. |
+
+Two qualifiers:
+
+- **Any file that produced expense rows is settled, whatever its status says.**
+  A costing sheet where some rows validated and others did not is recorded as
+  `needs_attention` *with* a non-empty `expense_ids`. Re-reading it would insert
+  nothing but would rewrite the file row to `duplicate` with an empty id array,
+  dropping the un-imported lines out of the needs-attention queue.
+- **A cooldown** (`DRIVE_EXPENSE_RETRY_COOLDOWN_MS`, default 12h) keeps the
+  six-hourly ticker from re-billing a permanently unreadable file four times a
+  day. "Retry these" in the needs-attention panel waives it.
+
+`recordFile` upserts on `(drive_file_id, md5_checksum)`, so a retry's outcome
+replaces the old one and `updated_at` records the attempt. Before that it caught
+the 23505 and returned, which would have made the retry import the expense while
+the log still read `failed`.
+
+The **sales** scanner (E-280) deliberately keeps `needs_attention` settled: its
+`sales_scan_files` has no `updated_at`, so it has no cooldown to bound the cost
+with, and its own header records the reasoning. `failed` is retried there too.
 
 ## Foreign-currency invoices (E-217)
 
@@ -319,6 +368,13 @@ account's Google Cloud project.
 **Files import but the CEO card does not move.** Check `status` is `approved`
 and the invoice date falls in the window being viewed — a bill dated three
 months ago now correctly counts in *that* month, not this one.
+
+**Scan says "N new: 0" but invoices are missing.** Read the folder's coverage
+line in the panel — "333 files on record · 288 imported · 33 failed" — or run
+`node --import tsx --env-file=.env.production scripts/_verify-drive-scan-state.ts`,
+which prints the lifetime status split, the recorded reasons, and exactly which
+files the next scan would re-read. `failed` files are retried automatically once
+past the cooldown; "Retry these" in the needs-attention panel does it now.
 
 **Everything is a duplicate after a re-scan.** Working as intended: layer 1
 skipped the unchanged files, layer 2 caught the invoice numbers.

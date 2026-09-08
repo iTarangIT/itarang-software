@@ -23,8 +23,16 @@
 
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, ExternalLink, FileWarning, Loader2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ExternalLink,
+  FileWarning,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { startScanAndWait } from "@/lib/drive/scanClient";
 import { EXPENSE_DEPARTMENTS } from "@/lib/expenses";
 
 interface FlaggedExpense {
@@ -53,6 +61,7 @@ const inputCls =
 
 export function NeedsAttentionPanel() {
   const qc = useQueryClient();
+  const [retryNote, setRetryNote] = useState<string | null>(null);
 
   const { data: expenses, isLoading: loadingExpenses } = useQuery({
     queryKey: ["ai-expenses", "attention"],
@@ -81,6 +90,45 @@ export function NeedsAttentionPanel() {
   const flagged = expenses ?? [];
   const unreadable = files ?? [];
   const total = flagged.length + unreadable.length;
+
+  // Re-read the files that produced nothing.
+  //
+  // Until E-216's dedup was fixed, this was impossible: `loadSeenVersions`
+  // matched a file by (id, checksum) alone, and a PDF's checksum never changes,
+  // so one bad run — the OpenAI account running out of credit, in the case that
+  // prompted this — put 33 invoices permanently beyond reach with no way to ask
+  // for another attempt. `retry_now` also waives the cooldown, because a person
+  // pressing this has already decided it is worth the model call.
+  const retry = useMutation({
+    mutationFn: async () => {
+      return startScanAndWait({
+        scanEndpoint: "/api/admin/ai-expenses/drive/scan",
+        statusEndpoint: "/api/admin/ai-expenses/drive/scan",
+        body: { retry_now: true },
+        onProgress: (r) =>
+          setRetryNote(`Re-reading… ${r.imported} imported, ${r.failed} still failing.`),
+      });
+    },
+    onSuccess: (r) => {
+      setRetryNote(
+        r.status === "skipped"
+          ? r.skipped_reason || "Nothing to re-read."
+          : `Re-read ${r.files_new} file(s): ${r.imported} imported, ${r.needs_attention} still unreadable, ${r.failed} failed.` +
+              (r.error ? ` ${r.error}` : ""),
+      );
+      for (const key of [
+        ["drive-attention"],
+        ["drive-coverage"],
+        ["drive-runs"],
+        ["ai-expenses"],
+        ["dashboard-metrics", "ceo"],
+        ["ceo-expenses-summary"],
+      ]) {
+        qc.invalidateQueries({ queryKey: key });
+      }
+    },
+    onError: (e: Error) => setRetryNote(e.message),
+  });
 
   if (loadingExpenses || loadingFiles) {
     return (
@@ -113,10 +161,30 @@ export function NeedsAttentionPanel() {
             Could not be imported ({unreadable.length})
           </p>
           <p className="text-xs text-gray-500">
-            No amount could be read from these files, so no expense was recorded — this
-            spend is not on the dashboard. Fix the file in Drive (a clearer scan, or the
-            original PDF) and it will be picked up on the next scan.
+            No expense was recorded for these files, so this spend is not on the
+            dashboard. Most are here because the extraction call itself failed —
+            no OpenAI credit, a rate limit, a timeout — rather than because
+            anything is wrong with the file. Retry reads them again; it costs one
+            model call each. If a file genuinely cannot be read, replace it in
+            Drive with a clearer scan and the next scan will pick that up.
           </p>
+          <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => retry.mutate()}
+              disabled={retry.isPending}
+            >
+              {retry.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 mr-2" />
+              )}
+              Retry these ({unreadable.length})
+            </Button>
+            {retryNote && <span className="text-xs text-gray-600">{retryNote}</span>}
+          </div>
           <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
             {unreadable.map((f) => (
               <li key={f.id} className="px-4 py-3 flex items-start gap-3">
