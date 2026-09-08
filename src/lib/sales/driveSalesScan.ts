@@ -45,7 +45,7 @@ import {
 } from "@/lib/google/drive";
 import { extractSalesInvoice } from "@/lib/ai/invoices/extractSalesInvoice";
 import { customerKey } from "@/lib/sales/customerKey";
-import { isTerminalModelFailure } from "@/lib/sales/terminalModelFailure";
+import { isTerminalModelFailure } from "@/lib/ai/invoices/terminalModelFailure";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
 import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import {
@@ -87,6 +87,22 @@ const DEFAULT_MAX_FILES = 25;
  * property of the file's checksum, so the next run resumes where this stopped.
  */
 const DEFAULT_TIME_BUDGET_MS = 4 * 60_000;
+
+/**
+ * The `drain` budget: keep going until the folder is actually finished.
+ *
+ * Deliberately UNDER STALE_RUN_MS (30 min). A drain holds one `running` row for
+ * its whole life and that row is also the concurrency lock — a drain outliving
+ * the stale threshold would be reclaimed as dead by the ticker, which would
+ * then start a second scan alongside the one still working.
+ */
+const DRAIN_TIME_BUDGET_MS = 25 * 60_000;
+
+/** Backstop on a drain, so a misconfigured folder cannot bill without limit. */
+const DRAIN_MAX_FILES = 1000;
+
+/** Flush counters to the run row every N files, so a poller sees progress. */
+const PROGRESS_FLUSH_EVERY = 10;
 
 export interface SalesScanSummary {
   run_id: string | null;
@@ -162,11 +178,21 @@ export async function runSalesScan(
      * gets an HTML gateway page instead of JSON.
      */
     onStart?: (runId: string) => void;
+    /**
+     * Keep going until a full pass finds nothing left to do, instead of
+     * stopping at `maxFiles`. What the "Scan sales now" button sends: one press
+     * should mean one job, not a button you have to keep pressing with nothing
+     * telling you how many times. Stays inside ONE run row so the DB
+     * concurrency lock still holds.
+     */
+    drain?: boolean;
   } = {},
 ): Promise<SalesScanSummary> {
   const startedAt = Date.now();
-  const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
-  const deadline = startedAt + (opts.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS);
+  const maxFiles = opts.maxFiles ?? (opts.drain ? DRAIN_MAX_FILES : DEFAULT_MAX_FILES);
+  const deadline =
+    startedAt +
+    (opts.timeBudgetMs ?? (opts.drain ? DRAIN_TIME_BUDGET_MS : DEFAULT_TIME_BUDGET_MS));
   const outOfTime = () => Date.now() >= deadline;
 
   const empty = (
@@ -266,6 +292,22 @@ export async function runSalesScan(
     failed: 0,
   };
 
+  // Progress is only visible to a poller if it is written down before the run
+  // ends. Cheap: one indexed UPDATE per PROGRESS_FLUSH_EVERY files, against a
+  // scan that spends seconds per file.
+  let sinceFlush = 0;
+  const flushProgress = async (force = false) => {
+    if (!runId) return;
+    sinceFlush += 1;
+    if (!force && sinceFlush < PROGRESS_FLUSH_EVERY) return;
+    sinceFlush = 0;
+    try {
+      await db.update(salesScanRuns).set({ ...counters }).where(eq(salesScanRuns.id, runId));
+    } catch {
+      // Progress reporting must never be the thing that fails a scan.
+    }
+  };
+
   try {
     // Loaded ONCE per run, not per file. The Drive tree holds the Zoho era as
     // well as the Vyapar one, so most of a backfill's files are invoices we
@@ -323,6 +365,9 @@ export async function runSalesScan(
       }
 
       counters.files_seen += files.length;
+      // Publish the denominator as soon as the walk finishes, so a poller can
+      // render "0 of 148" instead of "0 of 0" while it lists the folder.
+      await flushProgress(true);
 
       // Version key: Google's md5 where it exists, modifiedTime where it does
       // not. Never null, so the unique index bites.
@@ -388,6 +433,7 @@ export async function runSalesScan(
         }
 
         if (runId) await recordFile(runId, folder.id, file, outcome, version);
+        await flushProgress();
       }
 
       if (!opts.dryRun) {
