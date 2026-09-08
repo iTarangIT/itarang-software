@@ -62,6 +62,23 @@ type ScanSummary = ScanRunResult & {
   unsupported: number;
 };
 
+/**
+ * What became of every file this folder has ever recorded — the lifetime view,
+ * as opposed to a single run's counters. `retryable` is the number that makes
+ * "0 new" actionable instead of a dead end.
+ */
+interface FolderCoverage {
+  folder_id: string;
+  total: number;
+  imported: number;
+  duplicate: number;
+  needs_attention: number;
+  unsupported: number;
+  failed: number;
+  expense_rows: number;
+  retryable: number;
+}
+
 const inputCls =
   "w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-900 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 
@@ -103,6 +120,11 @@ export interface DriveFoldersPanelConfig {
    * synchronously — then the POST's own reply is the result.
    */
   statusEndpoint?: string;
+  /**
+   * Lifetime per-folder status split. Omitted by a side that has no coverage
+   * reader yet, in which case the panel simply does not render the line.
+   */
+  coverageEndpoint?: string;
   foldersQueryKey: string;
   /** Everything that reads the table this scanner writes. */
   invalidateKeys: string[][];
@@ -120,11 +142,14 @@ export const EXPENSE_PANEL: DriveFoldersPanelConfig = {
     "Invoices and costing sheets dropped in these folders are imported as expenses every few hours.",
   foldersEndpoint: "/api/admin/ai-expenses/drive/folders",
   scanEndpoint: "/api/admin/ai-expenses/drive/scan",
+  statusEndpoint: "/api/admin/ai-expenses/drive/scan",
+  coverageEndpoint: "/api/admin/ai-expenses/drive/runs?view=coverage",
   foldersQueryKey: "drive-folders",
   invalidateKeys: [
     ["drive-folders"],
     ["drive-runs"],
     ["drive-attention"],
+    ["drive-coverage"],
     ["ai-expenses"],
     ["ai-expense-tags"],
     ["dashboard-metrics", "ceo"],
@@ -193,6 +218,20 @@ export function DriveFoldersPanel({
   const folders = data?.folders ?? [];
   const driveConfigured = data?.drive_configured ?? false;
 
+  // The lifetime split behind "N unchanged, not re-read". Refetched after a
+  // scan (via invalidateKeys) so the numbers move as files are recovered.
+  const { data: coverage } = useQuery({
+    queryKey: ["drive-coverage"],
+    enabled: Boolean(config.coverageEndpoint),
+    queryFn: async () => {
+      const r = await fetch(config.coverageEndpoint as string, { cache: "no-store" });
+      return readJsonData<{ coverage: FolderCoverage[] }>(r, "Failed to load");
+    },
+  });
+  const coverageByFolder = new Map(
+    (coverage?.coverage ?? []).map((c) => [c.folder_id, c]),
+  );
+
   const addFolder = useMutation({
     mutationFn: async (folder: string) => {
       const r = await fetch(config.foldersEndpoint, {
@@ -239,16 +278,21 @@ export function DriveFoldersPanel({
   // for why an open multi-minute request is how a browser ends up parsing an
   // nginx error page as JSON.
   const scan = useMutation({
-    mutationFn: async (): Promise<ScanSummary> => {
+    mutationFn: async (vars: { retryNow?: boolean } = {}): Promise<ScanSummary> => {
+      const normalise = (r: ScanRunResult): ScanSummary => ({
+        ...r,
+        folders_scanned: r.folders_scanned ?? 0,
+        unsupported: r.unsupported ?? 0,
+      });
       const result = await startScanAndWait({
         scanEndpoint: config.scanEndpoint,
         statusEndpoint: config.statusEndpoint,
+        body: vars.retryNow ? { retry_now: true } : undefined,
+        // A drain runs for as long as the folder needs. Showing each poll turns
+        // a multi-minute spinner into something that visibly counts up.
+        onProgress: (r) => setSummary(normalise(r)),
       });
-      return {
-        ...result,
-        folders_scanned: result.folders_scanned ?? 0,
-        unsupported: result.unsupported ?? 0,
-      };
+      return normalise(result);
     },
     onSuccess: (s) => {
       setSummary(s);
@@ -275,7 +319,7 @@ export function DriveFoldersPanel({
         </div>
         <Button
           type="button"
-          onClick={() => scan.mutate()}
+          onClick={() => scan.mutate({})}
           disabled={scan.isPending || activeCount === 0 || !driveConfigured}
           className="bg-brand-600 hover:bg-brand-700 text-white"
         >
@@ -370,6 +414,7 @@ export function DriveFoldersPanel({
                     {config.noFilterWarning}
                   </p>
                 )}
+                <CoverageLine coverage={coverageByFolder.get(f.id)} />
               </div>
               <button
                 type="button"
@@ -403,13 +448,62 @@ export function DriveFoldersPanel({
   );
 }
 
+/**
+ * The lifetime split for one folder.
+ *
+ * Exists because "Scanned 333 files — 0 new (333 unchanged, not re-read)" is
+ * the same sentence whether every file imported or every file is stuck on a
+ * dead API key, and the panel offered nothing else to tell them apart. The
+ * last line is the actionable half: how many the NEXT scan will pick up.
+ */
+function CoverageLine({ coverage: c }: { coverage?: FolderCoverage }) {
+  if (!c || c.total === 0) return null;
+
+  const parts = [
+    `${c.imported} imported`,
+    c.expense_rows ? `${c.expense_rows} expense rows` : null,
+    c.duplicate ? `${c.duplicate} duplicate` : null,
+    c.needs_attention ? `${c.needs_attention} need attention` : null,
+    c.unsupported ? `${c.unsupported} unsupported` : null,
+    c.failed ? `${c.failed} failed` : null,
+  ].filter(Boolean);
+
+  return (
+    <p className="text-[11px] text-gray-500 mt-0.5">
+      <span className="font-semibold text-gray-700">{c.total} files on record</span>
+      {" · "}
+      {parts.join(" · ")}
+      {c.retryable > 0 && (
+        <span className="text-amber-700">
+          {" — "}
+          {c.retryable} will be retried on the next scan.
+        </span>
+      )}
+    </p>
+  );
+}
+
 function ScanSummaryBlock({ summary: s }: { summary: ScanSummary }) {
-  // Reachable only if the scan stopped reporting while it was still running;
-  // rendering it as a success would claim 0 imported, which is a lie.
+  // A drain runs until the folder is finished, which can be many minutes. The
+  // counters are flushed to the run row as it goes, so show them moving rather
+  // than a spinner that says nothing — "read 42 of 333" is the difference
+  // between a scan that is working and one that has hung.
   if (s.status === "running" || s.status === "started") {
     return (
-      <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-700">
-        The scan is still running. Its result will show on the next refresh.
+      <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-700 flex items-center gap-2">
+        <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-500" />
+        <span>
+          Scanning…{" "}
+          {s.files_seen > 0 ? (
+            <>
+              read <span className="font-semibold">{s.files_new}</span> of {s.files_seen}{" "}
+              file{s.files_seen === 1 ? "" : "s"} · {s.imported} imported
+              {s.failed > 0 && ` · ${s.failed} failed`}
+            </>
+          ) : (
+            "listing the folder…"
+          )}
+        </span>
       </div>
     );
   }

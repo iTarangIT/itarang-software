@@ -42,11 +42,32 @@ export interface ScanRunResult {
 const POLL_INTERVAL_MS = 4_000;
 
 /**
- * Give up following a run after this long. Longer than a full scan can take
- * (a ~25s folder walk plus the route's 240s budget), so reaching it means the
- * run stopped reporting — almost always a restart mid-scan.
+ * Give up after this long WITHOUT the counters moving.
+ *
+ * Deliberately idle time, not wall-clock. A draining scan runs until the folder
+ * is finished — far past any fixed ceiling — and the old wall-clock limit would
+ * have declared a healthy 20-minute drain "interrupted" at minute ten, in front
+ * of the person watching it work. What actually signals a dead run is silence:
+ * the scanner flushes its counters every few files, so nothing moving for ten
+ * minutes means nothing is running.
  */
-const POLL_CEILING_MS = 10 * 60_000;
+const POLL_IDLE_CEILING_MS = 10 * 60_000;
+
+/** Absolute backstop, so a stuck-but-chatty run cannot poll for ever. */
+const POLL_ABSOLUTE_CEILING_MS = 3 * 60 * 60_000;
+
+/** Counters as one string: if this changes, the run is alive. */
+function progressFingerprint(r: ScanRunResult): string {
+  return [
+    r.files_seen,
+    r.files_new,
+    r.imported,
+    r.skipped_duplicate,
+    r.needs_attention,
+    r.unsupported ?? 0,
+    r.failed,
+  ].join("|");
+}
 
 /** Consecutive failed polls tolerated before giving up. */
 const POLL_FAILURES_ALLOWED = 5;
@@ -137,11 +158,13 @@ export async function startScanAndWait(opts: {
   if (!runId) return first;
 
   const url = `${opts.statusEndpoint}${opts.statusEndpoint.includes("?") ? "&" : "?"}run_id=${encodeURIComponent(runId)}`;
-  const deadline = Date.now() + POLL_CEILING_MS;
+  const absoluteDeadline = Date.now() + POLL_ABSOLUTE_CEILING_MS;
+  let idleDeadline = Date.now() + POLL_IDLE_CEILING_MS;
   let consecutiveFailures = 0;
   let last: ScanRunResult = { ...first, status: "running" };
+  let fingerprint = progressFingerprint(last);
 
-  while (Date.now() < deadline) {
+  while (Date.now() < idleDeadline && Date.now() < absoluteDeadline) {
     await sleep(POLL_INTERVAL_MS);
 
     try {
@@ -149,6 +172,15 @@ export async function startScanAndWait(opts: {
       const run = await readJsonData<ScanRunResult>(res, "Could not read the scan's progress");
       consecutiveFailures = 0;
       last = run;
+
+      // Any counter moving proves the scan is alive, however long it has been
+      // going — that is what lets a drain outlive the idle ceiling.
+      const next = progressFingerprint(run);
+      if (next !== fingerprint) {
+        fingerprint = next;
+        idleDeadline = Date.now() + POLL_IDLE_CEILING_MS;
+      }
+
       opts.onProgress?.(run);
       if (run.status !== "running") return run;
     } catch {
@@ -171,6 +203,8 @@ export async function startScanAndWait(opts: {
     ...last,
     status: "failed",
     error:
-      "The scan has not reported back for 10 minutes, so it was most likely interrupted. Anything already imported was kept; press the button again to carry on from there.",
+      Date.now() >= absoluteDeadline
+        ? "The scan has been running for over three hours, so this page stopped following it. It may still be working — reload to see where it got to."
+        : "The scan has made no progress for 10 minutes, so it was most likely interrupted. Anything already imported was kept; press the button again to carry on from there.",
   };
 }

@@ -6,6 +6,7 @@
  *   (no params)      → the last 20 runs
  *   ?run_id=<uuid>   → that run's per-file outcomes
  *   ?view=attention  → every file still needing a human, across all runs
+ *   ?view=coverage   → per folder, what became of every file ever recorded
  *
  * The run log is what makes a quiet scanner debuggable: without it, "no new
  * expenses" and "the ticker has not run since the last deploy" look identical.
@@ -20,6 +21,7 @@ import {
   listAttentionFiles,
   listRecentRuns,
   listRunFiles,
+  loadFolderCoverage,
 } from "@/lib/expenses/driveScan";
 
 export const runtime = "nodejs";
@@ -38,6 +40,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         success: true,
         data: { files: await listRunFiles(runId) },
+      });
+    }
+
+    // The lifetime split behind "N unchanged, not re-read". Without it a
+    // settled folder and a folder whose every file is stuck on a dead API key
+    // render identically: five zeroes and no way to tell them apart.
+    if (view === "coverage") {
+      return NextResponse.json({
+        success: true,
+        data: { coverage: await loadFolderCoverage() },
       });
     }
 
