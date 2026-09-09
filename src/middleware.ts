@@ -407,6 +407,9 @@ export async function middleware(request: NextRequest) {
     // E-195 — the scrap vendor's own portal. Adding it here also protects the
     // path: isProtectedRoute is derived from these values.
     scrap_vendor: "/vendor-portal",
+    // E-292 — the refurbishment partner's own portal (refurbish flow v3).
+    // Same rule as the vendor: listing it here is what protects the path.
+    refurbisher: "/refurbisher-portal",
     // The Ops Console — infrastructure/DB/spend monitoring for the tech team,
     // single login operations@itarang.com. Adding it here also protects the
     // path (isProtectedRoute is derived from these values) and sets the

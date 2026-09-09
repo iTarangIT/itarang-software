@@ -55,6 +55,12 @@ export interface SettlementListItem {
    * selected it.
    */
   winner_kind: "dealer" | "nbfc";
+  /**
+   * [E-292] Marketplace hand-off (refurbish flow v3): once a winning bid is
+   * approved the seller and the winner settle DIRECT, so each side gets the
+   * other's contact. Null until the winner is a dealer with an accounts row.
+   */
+  winner_contact: { name: string | null; phone: string | null; email: string | null } | null;
   status: SettlementStatus;
   updated_at: string;
 }
@@ -106,6 +112,8 @@ export async function listSettlements(
       updated_at: auctionSettlements.updated_at,
       tenant_name: nbfcTenants.display_name,
       dealer_name: accounts.business_entity_name,
+      dealer_phone: accounts.contact_phone,
+      dealer_email: accounts.contact_email,
     })
     .from(auctionSettlements)
     .leftJoin(auctionLots, eq(auctionLots.id, auctionSettlements.lot_id))
@@ -145,6 +153,9 @@ export async function listSettlements(
         ? (r.dealer_name ?? r.winner_dealer_id ?? "")
         : (r.tenant_name ?? ""),
       winner_kind: isDealerWin ? "dealer" : "nbfc",
+      winner_contact: isDealerWin
+        ? { name: r.dealer_name ?? null, phone: r.dealer_phone ?? null, email: r.dealer_email ?? null }
+        : null,
       status: r.status as SettlementStatus,
       updated_at: (r.updated_at as Date).toISOString(),
     };

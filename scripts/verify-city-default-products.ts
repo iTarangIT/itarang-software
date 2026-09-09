@@ -1,14 +1,18 @@
 /**
- * E-282/E-283/E-286/E-289 — verify the pinned default loan product against a
- * real DB.
+ * E-282/E-283/E-286/E-290/E-291 — verify the pinned default loan product
+ * against a real DB.
  *
- * E-286: a rule's state/city are the DEALER's (accounts.state / accounts.city),
- * not the customer's, so every assertion below probes by dealer code and the
- * locations it uses are locations dealers really are in.
- * E-289: a rule ALSO has customer_state / customer_city, matched against the
- * lead's own address, so the resolver now takes that address as a second
- * argument and the ordering counts declared columns before it walks the
- * dealer-first ladder.
+ * E-290: a rule is exactly ONE OF THREE KINDS and THE MOST SPECIFIC ONE WINS.
+ * `priority` and the E-289 `customer_state`/`customer_city` columns are
+ * retired: they survive as history but are written 0/NULL and ignored, and a
+ * row still declaring a customer location is EXCLUDED by the resolver rather
+ * than reinterpreted as "any customer".
+ * E-291: the three kinds are a dealer, a CUSTOMER city, or a CUSTOMER state —
+ * `state`/`city` are matched against leads.state / leads.city, not the dealer's
+ * accounts address (which is what they meant between E-286 and E-290). So a
+ * location assertion probes with a LOCATION and no longer has to find a dealer
+ * registered there — which is what E-286 made impossible in practice, since
+ * `dealers JOIN accounts` yields no dealer with an address on either host.
  * READ-ONLY by default: no writes unless --simulate is passed.
  *
  *   node --import tsx --env-file=.env.local scripts/verify-city-default-products.ts [LEAD-ID] [--simulate]
@@ -20,38 +24,41 @@
  * What it asserts:
  *   1. city_default_loan_products exists, carries the E-283 columns
  *      (dealer_code, priority) and the E-289 columns (customer_state,
- *      customer_city), has a nullable `state`, and has the widened partial
- *      unique key _active_key_v3 in place of _active_key_v2 and _active_key.
+ *      customer_city) — the resolver still names the latter two, to EXCLUDE
+ *      them — has a nullable `state`, and has the partial unique key
+ *      _active_key_v3 in place of _active_key_v2 and _active_key. E-290 leaves
+ *      that key alone deliberately: it coalesces the two now-always-NULL
+ *      customer columns to '', so it already behaves as a three-column key.
  *   2. Every ACTIVE rule points at an active, tenant-bound loan product that
  *      really belongs to the named NBFC — a rule failing this can never fire.
- *   3. Every ACTIVE rule can match at least one real dealer: a location-only
- *      rule names a location some dealer is registered in, and a rule naming
- *      both a dealer and a location names a location THAT dealer is in. This
- *      replaces E-282's product-coverage check, which compared
- *      active_locations — a rule about the CUSTOMER's city — against what is
- *      now a dealer location, and so no longer means anything.
+ *   3. Every ACTIVE location rule pins a product that actually SERVES that
+ *      location — its NBFC's `active_locations` covers it, or is empty (serves
+ *      everywhere). A rule failing this can never fire: the BRE drops the
+ *      product before the pin is read. This is E-282's original
+ *      product-coverage check, which E-286 had to remove (it compares a
+ *      CUSTOMER location, which `state`/`city` briefly stopped being) and
+ *      E-291 makes meaningful again.
  *   4. Every ACTIVE rule naming a dealer names one that exists.
- *   5. resolveDefaultProductRules() orders candidates by priority DESC, then by
- *      specificity: dealer rules before location-only ones, exact city before
- *      the state-wide wildcard.
+ *   5. No ACTIVE rule still declares a customer location (E-290's cleanup), and
+ *      resolveDefaultProductRules() returns candidates most-specific first:
+ *      dealer, then city, then state.
  *   6. Against a real lead: with no rule the option list is unchanged; with a
  *      rule whose product IS in the hits, exactly one NBFC and one product come
  *      back; with a rule whose product is NOT in the hits, the next rule (or
  *      the full list) is returned — the "never show a product that would reject
  *      them" rule; and excludeNbfcIds removes a lender without collapsing it.
- *   7. --simulate only: end-to-end proof covering the dealer-beats-location
- *      tiebreak, priority overriding it, and fall-through when the top rule's
- *      product is not in the hits.
- *   8. --simulate only (E-289): a customer-location rule narrows on the LEAD's
- *      own address, a rule declaring more columns beats one declaring fewer at
- *      equal priority, and a lead whose address is still 'Unknown' matches no
- *      customer rule and sees the full list. Safer than 7: the rules name the
- *      synthetic location the probe lead invents, so they cannot apply to
- *      anyone real even for the seconds they exist. The LEAD's location stays synthetic (it
- *      isolates the BRE's own geography rule), but since E-286 the temporary
- *      RULES must name the probe dealer's REAL location to match at all — so
- *      for the few seconds they exist they also apply to other dealers in that
- *      same city. They are deleted in a finally block.
+ *   7. --simulate only: the whole ladder end to end — a state rule narrows, a
+ *      city rule beats it, a dealer rule beats that, and each in turn falls
+ *      through to the next when its product is not in the hits, until the full
+ *      list comes back. Since E-291 the temporary RULES name the SYNTHETIC
+ *      location the probe lead invents, so they cannot apply to a single real
+ *      applicant even for the seconds they exist — under E-286 they had to name
+ *      the probe dealer's real town and so briefly applied to its neighbours.
+ *      They are deleted in a finally block.
+ *   8. --simulate only (E-290): a row that still declares a customer location
+ *      is INERT — it does not narrow, and it is not reinterpreted as applying
+ *      to every customer. Safer than 7: it names the synthetic location the
+ *      probe lead invents, so it cannot touch anyone real even in principle.
  */
 
 export {}; // module scope — keeps Step/steps/failed off the global script namespace
@@ -87,30 +94,8 @@ async function main() {
 
   const host = (process.env.DATABASE_URL || "").match(/@([^:/]+)/)?.[1] ?? "?";
   console.log(
-    `\nE-282/E-283/E-286/E-289 pinned default loan products — verifying against ${host}\n`,
+    `\nE-282/E-283/E-286/E-290/E-291 pinned default loan products — verifying against ${host}\n`,
   );
-
-  /**
-   * E-286 — the code of any dealer registered in this location, or null. Every
-   * ordering assertion needs one: since a rule's location is now the DEALER's,
-   * the only way to exercise a location rule is through a dealer that sits in
-   * it. `accounts.id` is what the rules and `leads.dealer_id` both carry.
-   */
-  const dealerCodeIn = async (
-    state: string | null,
-    city: string | null,
-  ): Promise<string | null> => {
-    if (!state) return null;
-    const [row] = await db.execute<{ id: string }>(sql`
-      SELECT a.id
-        FROM accounts a
-       WHERE lower(btrim(a.state)) = ${n0(state)}
-         AND (${city}::text IS NULL OR lower(btrim(a.city)) = ${city ? n0(city) : null})
-       ORDER BY a.id
-       LIMIT 1
-    `);
-    return row?.id ?? null;
-  };
 
   // ── 1. Table, columns and indexes ───────────────────────────────────────
   const [tbl] = await db.execute<{ n: number }>(sql`
@@ -147,12 +132,16 @@ async function main() {
     (c) => !byName.has(c),
   );
   if (missingE289.length === 0) {
-    pass("E-289 columns present", "customer_state, customer_city");
+    pass(
+      "E-289 columns present",
+      "customer_state, customer_city (retired by E-290, still named to exclude)",
+    );
   } else {
     fail(
       "E-289 columns present",
-      `${missingE289.join(", ")} missing — apply E-289 (without it the resolver ` +
-        `throws on every lookup and no default is ever offered)`,
+      `${missingE289.join(", ")} missing — apply E-289 (the resolver names both ` +
+        `columns to EXCLUDE retired rules, so without them it throws on every ` +
+        `lookup and no default is ever offered)`,
     );
     report();
     return;
@@ -186,8 +175,8 @@ async function main() {
   } else {
     fail(
       "superseded unique keys replaced",
-      `${staleKeys.join(", ")} still exists — a narrower key blocks two rules that ` +
-        `differ only in the customer they target (re-run E-289 if E-283 was re-applied)`,
+      `${staleKeys.join(", ")} still exists — a narrower key blocks legitimate ` +
+        `rules (re-run E-289 if E-283 was re-applied)`,
     );
   }
 
@@ -204,6 +193,7 @@ async function main() {
     loan_product_id: number;
     product_nbfc_id: number | null;
     product_status: string | null;
+    active_locations: { state: string; city: string }[] | null;
     tenant_id: string | null;
     dealer_exists: boolean;
   }>(sql`
@@ -211,6 +201,7 @@ async function main() {
            c.customer_state, c.customer_city,
            c.priority, c.nbfc_id, c.loan_product_id,
            p.nbfc_id AS product_nbfc_id, p.status AS product_status,
+           p.active_locations,
            n.tenant_id::text AS tenant_id,
            (c.dealer_code IS NULL OR a.id IS NOT NULL) AS dealer_exists
       FROM city_default_loan_products c
@@ -218,20 +209,40 @@ async function main() {
       LEFT JOIN nbfc n ON n.id = c.nbfc_id
       LEFT JOIN accounts a ON a.id = c.dealer_code
      WHERE c.is_active
-     ORDER BY c.priority DESC,
-              ( (c.dealer_code    IS NOT NULL)::int
-              + (c.customer_city  IS NOT NULL)::int
-              + (c.customer_state IS NOT NULL)::int
-              + (c.city           IS NOT NULL)::int
-              + (c.state          IS NOT NULL)::int ) DESC,
-              (c.dealer_code IS NULL), (c.customer_city IS NULL),
-              (c.customer_state IS NULL), (c.city IS NULL), (c.state IS NULL),
+     ORDER BY (c.dealer_code IS NULL), (c.city IS NULL), (c.state IS NULL),
               c.id DESC
   `);
 
+  // ── E-290 — the retired customer leg must be gone from the ACTIVE set ────
+  // A row that still declares one is inert either way (the resolver excludes
+  // it), but it would sit in the table forever with no UI to explain it.
+  const retired = rules.filter((m) => m.customer_state || m.customer_city);
+  if (retired.length === 0) {
+    pass("no active rule declares a customer location", "E-290 cleanup is in place");
+  } else {
+    fail(
+      "no active rule declares a customer location",
+      `${retired.length} row(s) still do — inert (the resolver excludes them) but ` +
+        `invisible in the admin table; apply E-290: ` +
+        retired.map((m) => `#${m.id}`).join(", "),
+    );
+  }
+
+  const stillPrioritised = rules.filter((m) => Number(m.priority) !== 0);
+  if (stillPrioritised.length > 0) {
+    console.log(
+      `  · note: ${stillPrioritised.length} active rule(s) carry a non-zero priority; ` +
+        `it is IGNORED since E-290 — order is dealer, then city, then state`,
+    );
+  }
+
+  // Only rules the resolver will actually consider take part in the ordering
+  // assertions below.
+  const liveRules = rules.filter((m) => !m.customer_state && !m.customer_city);
+
   if (rules.length === 0) {
     skip("active rules are coherent", "no defaults configured yet");
-    skip("active rules can match a real dealer", "no defaults configured yet");
+    skip("active rules pin a product that serves the location", "no defaults configured yet");
     skip("active rules name a real dealer", "no defaults configured yet");
   } else {
     const bad = rules.filter(
@@ -253,34 +264,35 @@ async function main() {
       );
     }
 
-    // E-286 — a rule's location is the DEALER's, so "can this rule ever fire?"
-    // is answered by the dealer directory, not by the product's
-    // active_locations (which the BRE matches against the CUSTOMER's city and
-    // which therefore says nothing about a dealer-scoped rule).
+    // E-291 — a rule's location is the CUSTOMER's again, so "can this rule ever
+    // fire?" is answered by the pinned product's own coverage: the BRE drops a
+    // product whose `active_locations` does not cover the lead, and the pin is
+    // applied to what survives, so a pin on a product that cannot serve the
+    // very place the rule names is dead on arrival. Matched exactly the way
+    // `src/lib/bre/match.ts` matches it — case-sensitively, an empty leg
+    // meaning "any" — so this agrees with the router rather than being a
+    // second, kinder opinion.
     const unmatchable: string[] = [];
     for (const m of rules) {
       if (!m.state) continue; // no location declared — always matchable
-      const [hit] = await db.execute<{ c: number }>(sql`
-        SELECT count(*)::int AS c
-          FROM accounts a
-         WHERE lower(btrim(a.state)) = ${n0(m.state)}
-           AND (${m.city}::text IS NULL OR lower(btrim(a.city)) = ${m.city ? n0(m.city) : null})
-           AND (${m.dealer_code}::text IS NULL OR a.id = ${m.dealer_code})
-      `);
-      if (Number(hit?.c ?? 0) === 0) {
+      const locs = m.active_locations ?? [];
+      if (locs.length === 0) continue; // serves everywhere
+      const served = locs.some(
+        (loc) =>
+          (!loc.state || loc.state === m.state) &&
+          (!loc.city || !m.city || loc.city === m.city),
+      );
+      if (!served) {
         unmatchable.push(
-          `#${m.id} ${scopeOf(m)}` +
-            (m.dealer_code
-              ? " (that dealer is not registered in that location)"
-              : " (no dealer is registered there)"),
+          `#${m.id} ${scopeOf(m)} (product ${m.loan_product_id} does not serve there)`,
         );
       }
     }
     if (unmatchable.length === 0) {
-      pass("active rules can match a real dealer");
+      pass("active rules pin a product that serves the location");
     } else {
       fail(
-        "active rules can match a real dealer",
+        "active rules pin a product that serves the location",
         `${unmatchable.length} rule(s) can never fire: ${unmatchable.join("; ")}`,
       );
     }
@@ -298,89 +310,68 @@ async function main() {
     }
   }
 
-  // ── 5a. Exact city beats the state-wide wildcard ────────────────────────
-  // Only meaningful between rules the admin left at the SAME priority — a
-  // higher-priority wildcard is supposed to win, and that is asserted in 5b.
-  const cityRule = rules.find(
+  // ── 5a. A city rule beats a state rule ──────────────────────────────────
+  const cityRule = liveRules.find(
     (m) =>
       m.city &&
       !m.dealer_code &&
-      // E-289 — probed with no customer address, so a customer-scoped rule
-      // would (correctly) not come back at all.
-      !m.customer_state &&
-      rules.some(
+      liveRules.some(
         (w) =>
-          !w.city &&
-          !w.dealer_code &&
-          !w.customer_state &&
-          w.state &&
-          m.state &&
-          n0(w.state) === n0(m.state) &&
-          w.priority === m.priority,
+          !w.city && !w.dealer_code && w.state && m.state && n0(w.state) === n0(m.state),
       ),
   );
   if (!cityRule) {
     skip(
-      "exact city beats the state wildcard",
-      "no state with both a city row and an equal-priority wildcard row",
+      "a city rule beats a state rule",
+      "no state carries both a city row and a state-wide row",
     );
   } else {
-    // E-286 — the resolver reads the location off the dealer, so this needs a
-    // dealer actually registered in that city to probe with.
-    const probeCode = await dealerCodeIn(cityRule.state, cityRule.city);
-    if (!probeCode) {
-      skip(
-        "exact city beats the state wildcard",
-        `no dealer is registered in ${cityRule.city}, ${cityRule.state} to probe with`,
-      );
+    // E-291 — the location is the CUSTOMER's, so the probe IS the location.
+    // No dealer code goes in: a dealer rule would legitimately outrank both
+    // rungs and this assertion is only about the two location ones.
+    const got = await resolveDefaultProductRules({
+      dealerCode: null,
+      customerState: cityRule.state,
+      customerCity: cityRule.city,
+    });
+    const topLocation = got.find((r) => !r.dealerCode);
+    if (topLocation && topLocation.city && n0(topLocation.city) === n0(cityRule.city!)) {
+      pass("a city rule beats a state rule", `${cityRule.city}, ${cityRule.state}`);
     } else {
-      const got = await resolveDefaultProductRules(probeCode);
-      if (got[0] && got[0].city && n0(got[0].city) === n0(cityRule.city!)) {
-        pass("exact city beats the state wildcard", `${cityRule.city}, ${cityRule.state}`);
-      } else {
-        fail(
-          "exact city beats the state wildcard",
-          `resolveDefaultProductRules(${probeCode}) led with ` +
-            (got[0] ? `city=${got[0].city ?? "*"}` : "nothing"),
-        );
-      }
+      fail(
+        "a city rule beats a state rule",
+        `a customer in ${cityRule.city}, ${cityRule.state} led with ` +
+          (topLocation ? `city=${topLocation.city ?? "*"}` : "nothing"),
+      );
     }
   }
 
-  // ── 5b. Priority is the primary sort ────────────────────────────────────
-  // Whatever rules exist, the list must come back non-increasing in priority.
-  const anyDealerRule = rules.find((m) => m.dealer_code);
-  const probe = anyDealerRule ?? rules[0];
+  // ── 5b. Specificity is the ONLY sort ────────────────────────────────────
+  // Whatever rules exist, the list must come back most-specific first: every
+  // dealer rule, then every city rule, then every state rule.
+  const anyDealerRule = liveRules.find((m) => m.dealer_code);
+  const probe = anyDealerRule ?? liveRules[0];
   if (!probe) {
-    skip("candidates come back highest-priority first", "no defaults configured yet");
+    skip("candidates come back most-specific first", "no defaults configured yet");
   } else {
-    const probeCode =
-      probe.dealer_code ?? (await dealerCodeIn(probe.state, probe.city));
-    // E-289 — pass the probe rule's OWN customer location, so a customer-scoped
-    // rule is actually among the candidates being ordered.
-    const got = probeCode
-      ? await resolveDefaultProductRules(probeCode, {
-          state: probe.customer_state,
-          city: probe.customer_city,
-        })
-      : [];
-    const descending = got.every(
-      (r, i) => i === 0 || got[i - 1].priority >= r.priority,
-    );
-    if (!probeCode) {
-      skip(
-        "candidates come back highest-priority first",
-        `no dealer registered in ${scopeOf(probe)} to probe with`,
-      );
-    } else if (descending) {
+    // Probe with everything this rule names — its dealer AND its location —
+    // so every rung that could apply to such a lead comes back at once.
+    const got = await resolveDefaultProductRules({
+      dealerCode: probe.dealer_code,
+      customerState: probe.state,
+      customerCity: probe.city,
+    });
+    const ascending = got.every((r, i) => i === 0 || tierOf(got[i - 1]) <= tierOf(r));
+    if (ascending) {
       pass(
-        "candidates come back highest-priority first",
-        `${got.length} candidate(s) for ${scopeOf(probe)}`,
+        "candidates come back most-specific first",
+        `${got.length} candidate(s) for ${scopeOf(probe)}: ` +
+          (got.map((r) => TIER_NAME[tierOf(r)]).join(" → ") || "none"),
       );
     } else {
       fail(
-        "candidates come back highest-priority first",
-        got.map((r) => `#${r.id}:p${r.priority}`).join(" "),
+        "candidates come back most-specific first",
+        got.map((r) => `#${r.id}:${TIER_NAME[tierOf(r)]}`).join(" "),
       );
     }
   }
@@ -413,7 +404,7 @@ async function main() {
     skip("narrowing against a real lead", leadArg ? `lead ${leadArg} not found` : "no suitable finance lead found");
     // The simulations need no real lead, so they still run.
     await simulateNarrowing();
-    await simulateCustomerLocation();
+    await simulateRetiredCustomerLeg();
     report();
     return;
   }
@@ -426,12 +417,12 @@ async function main() {
       `${baseline.reduce((s, o) => s + o.activeLoanProducts.length, 0)} product(s)\n`,
   );
 
-  // E-286 — the dealer legs come off that dealer's own account, so only the
-  // code goes in for them. E-289 — the customer legs are the lead's own
-  // address, exactly as applyPinnedDefault() passes it.
-  const live = await resolveDefaultProductRules(lead.dealer_id, {
-    state: lead.state,
-    city: lead.city,
+  // E-291 — the dealer AND the customer's own location go in, exactly as
+  // applyPinnedDefault() passes them.
+  const live = await resolveDefaultProductRules({
+    dealerCode: lead.dealer_id,
+    customerState: lead.state,
+    customerCity: lead.city,
   });
   if (live.length > 0) {
     // Whichever rule was applied must be one of the candidates, and it must be
@@ -459,7 +450,7 @@ async function main() {
       if (hit) {
         pass(
           "first fitting rule is the one offered",
-          `rule #${expected.id} (p${expected.priority}) → nbfc ${expected.nbfcId} / product ${expected.loanProductId}`,
+          `rule #${expected.id} (${TIER_NAME[tierOf(expected)]}) → nbfc ${expected.nbfcId} / product ${expected.loanProductId}`,
         );
       } else {
         fail(
@@ -511,25 +502,36 @@ async function main() {
   }
 
   await simulateNarrowing();
-  await simulateCustomerLocation();
+  await simulateRetiredCustomerLeg();
 
   report();
 }
 
 /**
- * Prove the narrowing end to end, with no effect on any real customer.
+ * Prove the whole ladder end to end, with no effect on any real customer.
  *
- * Only runs with --simulate. It pins rules on a SYNTHETIC city that no lead
- * lives in, asks for the options as a synthetic lead in that city, and deletes
- * every row again in a finally. A real applicant is never routed differently,
- * because no real applicant is in this city — and the dealer rule is scoped to
- * that invented city too, so the dealer's real customers are untouched.
+ * Only runs with --simulate. The probe LEAD lives in a SYNTHETIC city no real
+ * lead is in, so the BRE's own geography rule stays isolated to lenders with no
+ * active_locations restriction — and since E-291 the temporary RULES name that
+ * same invented location, so they cannot apply to a single real applicant even
+ * in principle. (Under E-286 they had to name the probe dealer's REAL town and
+ * so briefly applied to its neighbours.) Every row is deleted in a finally.
  *
- * The lenders come from products with NO active_locations restriction — the
- * only kind that can match an invented city.
+ * Six phases, walking the E-290 ladder down and then back up:
+ *   1. a STATE rule alone narrows to itself
+ *   2. its lender being excluded falls back to the full list, not to nothing
+ *   3. a CITY rule beats the state rule
+ *   4. a DEALER rule beats the city rule
+ *   5. the dealer rule's product going missing falls through to the city rule,
+ *      then the city rule's to the state rule
+ *   6. with none of the three fitting, the full matched list comes back
+ *
+ * Two lenders are enough to make every phase unambiguous: A is pinned by the
+ * state and dealer rules, B by the city rule, and B can only win while the city
+ * rule is the most specific one that fits.
  */
 async function simulateNarrowing() {
-  const name = "narrowing pins one lender (simulated)";
+  const name = "a dealer rule narrows to one lender (simulated)";
   if (!process.argv.includes("--simulate")) {
     skip(name, "pass --simulate to exercise it (inserts and deletes rows)");
     return;
@@ -538,6 +540,9 @@ async function simulateNarrowing() {
   const { db } = await import("@/lib/db");
   const { sql } = await import("drizzle-orm");
   const { loadSectionGOptions } = await import("@/lib/leads/section-g");
+  const { resolveDefaultProductRules } = await import(
+    "@/lib/leads/city-default-product"
+  );
 
   const CITY = "ZZ Verify City";
   const STATE = "ZZ Verify State";
@@ -550,32 +555,27 @@ async function simulateNarrowing() {
     return;
   }
 
-  // E-286 - the probe dealer must have a real registered location, because
-  // that is what the temporary LOCATION rules have to name to match at all.
-  // Joining accounts also proves the two id spaces line up for this dealer,
-  // which loadSectionGOptions independently depends on.
-  const [dealer] = await db.execute<{
-    id: number;
-    dealer_id: string;
-    acc_state: string;
-    acc_city: string;
-  }>(
-    sql`SELECT d.id, d.dealer_id, a.state AS acc_state, a.city AS acc_city
+  // Any dealer with a code will do: since E-291 a location rule keys on the
+  // LEAD's location, not the dealer's, so no registered address is needed and
+  // every rung of the ladder is provable against any dealer. Joining accounts
+  // still proves the two id spaces line up for this dealer, which
+  // loadSectionGOptions independently depends on.
+  const [dealer] = await db.execute<{ id: number; dealer_id: string }>(
+    sql`SELECT d.id, d.dealer_id
           FROM dealers d
           JOIN accounts a ON a.id = d.dealer_id
          WHERE d.dealer_id IS NOT NULL
-           AND btrim(coalesce(a.state, '')) <> ''
-           AND btrim(coalesce(a.city, '')) <> ''
-         ORDER BY d.id ASC LIMIT 1`,
+         ORDER BY d.id ASC
+         LIMIT 1`,
   );
   if (!dealer) {
-    skip(name, "no dealer with both a dealer code and a registered state/city");
+    skip(name, "no dealer with a dealer code to probe with");
     return;
   }
-  // The RULES key on where the dealer is; the LEAD keeps the invented location
-  // so the BRE's own geography rule stays isolated to unrestricted lenders.
-  const RULE_STATE = dealer.acc_state;
-  const RULE_CITY = dealer.acc_city;
+  // Both the RULES and the LEAD name the invented location — that is what
+  // keeps these rows unable to touch anyone real.
+  const RULE_STATE = STATE;
+  const RULE_CITY = CITY;
 
   const lead = {
     dealer_id: dealer.dealer_id,
@@ -594,13 +594,15 @@ async function simulateNarrowing() {
     return;
   }
 
-  // Deliberately NOT the first lender: narrowing to what was already at the top
-  // would pass even if the code did nothing.
-  const locTarget = before[1];
-  const locProduct = locTarget.activeLoanProducts[0];
-  // A different lender for the dealer rule, so "which rule won" is observable.
-  const dealerTarget = before[0];
-  const dealerProduct = dealerTarget.activeLoanProducts[0];
+  // A is deliberately NOT the first lender: narrowing to what was already at
+  // the top would pass even if the code did nothing. B is a different lender,
+  // so "which rule won" is always observable.
+  const lenderA = before[1];
+  const productA = lenderA.activeLoanProducts[0];
+  const lenderB = before[0];
+  const productB = lenderB.activeLoanProducts[0];
+
+  const MISSING_PRODUCT = 2147483647;
 
   const inserted: number[] = [];
   const insert = async (
@@ -609,12 +611,13 @@ async function simulateNarrowing() {
     city: string | null,
     nbfcId: number,
     productId: number,
-    priority: number,
   ) => {
     const [row] = await db.execute<{ id: number }>(sql`
       INSERT INTO city_default_loan_products
-             (dealer_code, state, city, nbfc_id, loan_product_id, priority, notes)
-      VALUES (${dealerCode}, ${state}, ${city}, ${nbfcId}, ${productId}, ${priority},
+             (dealer_code, state, city, customer_state, customer_city,
+              nbfc_id, loan_product_id, notes)
+      VALUES (${dealerCode}, ${state}, ${city}, NULL, NULL,
+              ${nbfcId}, ${productId},
               'temporary row written by verify-city-default-products.ts --simulate')
       RETURNING id
     `);
@@ -622,42 +625,42 @@ async function simulateNarrowing() {
     return Number(row.id);
   };
 
+  /** Did the options collapse to exactly this lender and this product? */
+  const isOnly = (
+    got: { nbfcId: number; activeLoanProducts: { id: number }[] }[],
+    nbfcId: number,
+    productId: number,
+  ) =>
+    got.length === 1 &&
+    got[0].nbfcId === nbfcId &&
+    got[0].activeLoanProducts.length === 1 &&
+    got[0].activeLoanProducts[0].id === productId;
+
   try {
-    // ── location rule alone narrows to itself ─────────────────────────────
-    const locId = await insert(
-      null,
-      RULE_STATE,
-      RULE_CITY,
-      locTarget.nbfcId,
-      locProduct.id,
-      0,
-    );
+    // ── 1. a DEALER rule alone narrows to itself ──────────────────────────
+    // Written the shape the form now produces: a dealer rule declares NO
+    // location, because the dealer already has one.
+    const dealerId = await insert(dealer.dealer_id, null, null, lenderA.nbfcId, productA.id);
 
-    const after = await loadSectionGOptions(lead, null);
-    const narrowed =
-      after.length === 1 &&
-      after[0].nbfcId === locTarget.nbfcId &&
-      after[0].activeLoanProducts.length === 1 &&
-      after[0].activeLoanProducts[0].id === locProduct.id;
-
-    if (narrowed) {
-      pass(name, `${before.length} lender(s) → 1 (nbfc ${locTarget.nbfcId} / product ${locProduct.id})`);
+    const afterDealer = await loadSectionGOptions(lead, null);
+    if (isOnly(afterDealer, lenderA.nbfcId, productA.id)) {
+      pass(name, `${before.length} lender(s) → 1 (nbfc ${lenderA.nbfcId} / product ${productA.id})`);
     } else {
       fail(
         name,
-        `expected exactly nbfc ${locTarget.nbfcId} / product ${locProduct.id}, got ` +
-          describe(after),
+        `expected exactly nbfc ${lenderA.nbfcId} / product ${productA.id}, got ` +
+          describe(afterDealer),
       );
     }
 
-    // The pinned lender being excluded must fall back to the full list, not
-    // collapse to nothing — decision (2) at its sharpest.
+    // ── 2. the pinned lender being excluded falls back to the full list ───
+    // Not to nothing — decision (2) at its sharpest.
     const excluded = await loadSectionGOptions(lead, null, {
-      excludeNbfcIds: [locTarget.nbfcId],
+      excludeNbfcIds: [lenderA.nbfcId],
     });
     if (
       excluded.length === before.length - 1 &&
-      excluded.every((o) => o.nbfcId !== locTarget.nbfcId)
+      excluded.every((o) => o.nbfcId !== lenderA.nbfcId)
     ) {
       pass("pinned-but-excluded lender falls back to the full list", `${excluded.length} lender(s)`);
     } else {
@@ -667,97 +670,107 @@ async function simulateNarrowing() {
       );
     }
 
-    // ── E-283: a dealer rule beats a location rule at equal priority ──────
-    const dealerId = await insert(
-      dealer.dealer_id,
-      RULE_STATE,
-      RULE_CITY,
-      dealerTarget.nbfcId,
-      dealerProduct.id,
-      0,
-    );
-
-    const withDealer = await loadSectionGOptions(lead, null);
-    if (
-      withDealer.length === 1 &&
-      withDealer[0].nbfcId === dealerTarget.nbfcId &&
-      withDealer[0].activeLoanProducts[0]?.id === dealerProduct.id
-    ) {
-      pass(
-        "dealer rule beats a location rule at equal priority",
-        `nbfc ${dealerTarget.nbfcId} / product ${dealerProduct.id}`,
-      );
-    } else {
-      fail(
-        "dealer rule beats a location rule at equal priority",
-        `expected nbfc ${dealerTarget.nbfcId} / product ${dealerProduct.id}, got ` +
-          describe(withDealer),
-      );
-    }
-
-    // ── E-283: priority overrides that specificity tiebreak ───────────────
-    await db.execute(
-      sql`UPDATE city_default_loan_products SET priority = 100 WHERE id = ${locId}`,
-    );
-    const withPriority = await loadSectionGOptions(lead, null);
-    if (
-      withPriority.length === 1 &&
-      withPriority[0].nbfcId === locTarget.nbfcId &&
-      withPriority[0].activeLoanProducts[0]?.id === locProduct.id
-    ) {
-      pass(
-        "higher priority outranks the more specific rule",
-        `location rule at p100 beat the dealer rule at p0`,
-      );
-    } else {
-      fail(
-        "higher priority outranks the more specific rule",
-        `expected nbfc ${locTarget.nbfcId} / product ${locProduct.id}, got ` +
-          describe(withPriority),
-      );
-    }
-
-    // ── E-283: a top rule that does not fit falls through to the next ─────
-    // Point the p100 location rule at a product that is in no hit list at all.
-    // The dealer rule at p0 must then be the one offered, rather than the pin
-    // being abandoned and the full list returned.
+    // ── 3. a dealer rule that does not fit falls back to the full list ────
+    // With nothing below it on the ladder, the pin is skipped rather than
+    // leaving the customer with nothing.
     await db.execute(
       sql`UPDATE city_default_loan_products
-             SET loan_product_id = 2147483647
-           WHERE id = ${locId}`,
-    );
-    const fellThrough = await loadSectionGOptions(lead, null);
-    if (
-      fellThrough.length === 1 &&
-      fellThrough[0].nbfcId === dealerTarget.nbfcId &&
-      fellThrough[0].activeLoanProducts[0]?.id === dealerProduct.id
-    ) {
-      pass(
-        "a top rule that does not fit falls through to the next",
-        `p100 rule skipped, dealer rule #${dealerId} offered instead`,
-      );
-    } else {
-      fail(
-        "a top rule that does not fit falls through to the next",
-        `expected nbfc ${dealerTarget.nbfcId} / product ${dealerProduct.id}, got ` +
-          describe(fellThrough),
-      );
-    }
-
-    // ── and when NO rule fits, the full list comes back ───────────────────
-    await db.execute(
-      sql`UPDATE city_default_loan_products
-             SET loan_product_id = 2147483647
+             SET loan_product_id = ${MISSING_PRODUCT}
            WHERE id = ${dealerId}`,
     );
-    const noneFit = await loadSectionGOptions(lead, null);
-    if (noneFit.length === before.length) {
-      pass("no rule fits — the full matched list is returned", `${noneFit.length} lender(s)`);
+    const dealerMissed = await loadSectionGOptions(lead, null);
+    if (dealerMissed.length === before.length) {
+      pass(
+        "a dealer rule that does not fit falls back to the full list",
+        `${dealerMissed.length} lender(s)`,
+      );
     } else {
       fail(
-        "no rule fits — the full matched list is returned",
-        `expected ${before.length} lender(s), got ${noneFit.length}`,
+        "a dealer rule that does not fit falls back to the full list",
+        `expected ${before.length} lender(s), got ` + describe(dealerMissed),
       );
+    }
+
+    // ── 4-6. the location rungs ───────────────────────────────────────────
+    {
+      // Put the dealer rule back the way it was, so it can be outranked and
+      // then fall through on its own terms.
+      await db.execute(
+        sql`UPDATE city_default_loan_products
+               SET loan_product_id = ${productA.id}
+             WHERE id = ${dealerId}`,
+      );
+
+      const stateId = await insert(null, RULE_STATE, null, lenderB.nbfcId, productB.id);
+      const cityId = await insert(null, RULE_STATE, RULE_CITY, lenderB.nbfcId, productB.id);
+
+      // The dealer rule still outranks both.
+      const withAll = await loadSectionGOptions(lead, null);
+      if (isOnly(withAll, lenderA.nbfcId, productA.id)) {
+        pass(
+          "a dealer rule beats a city rule",
+          `rule #${dealerId} → nbfc ${lenderA.nbfcId} / product ${productA.id}`,
+        );
+      } else {
+        fail(
+          "a dealer rule beats a city rule",
+          `expected nbfc ${lenderA.nbfcId} / product ${productA.id}, got ` + describe(withAll),
+        );
+      }
+
+      // Drop the dealer rung: the CITY rule must be what answers, not the
+      // state rule — both point at B, so prove it by id instead.
+      await db.execute(
+        sql`UPDATE city_default_loan_products
+               SET loan_product_id = ${MISSING_PRODUCT}
+             WHERE id = ${dealerId}`,
+      );
+      const ordered = await resolveDefaultProductRules({
+        dealerCode: dealer.dealer_id,
+        customerState: STATE,
+        customerCity: CITY,
+      });
+      const rungs = ordered.map((r) => r.id);
+      if (rungs.indexOf(cityId) >= 0 && rungs.indexOf(cityId) < rungs.indexOf(stateId)) {
+        pass(
+          "a city rule beats a state rule (simulated)",
+          `#${cityId} (city) ahead of #${stateId} (state)`,
+        );
+      } else {
+        fail(
+          "a city rule beats a state rule (simulated)",
+          `expected #${cityId} before #${stateId}, got ${rungs.join(" → ") || "nothing"}`,
+        );
+      }
+
+      const fellToCity = await loadSectionGOptions(lead, null);
+      if (isOnly(fellToCity, lenderB.nbfcId, productB.id)) {
+        pass(
+          "each rung falls through to the next one down",
+          `#${dealerId} skipped → #${cityId} offered`,
+        );
+      } else {
+        fail(
+          "each rung falls through to the next one down",
+          `expected nbfc ${lenderB.nbfcId} / product ${productB.id}, got ` + describe(fellToCity),
+        );
+      }
+
+      // And with none of the three fitting, the full list comes back.
+      await db.execute(
+        sql`UPDATE city_default_loan_products
+               SET loan_product_id = ${MISSING_PRODUCT}
+             WHERE id IN (${cityId}, ${stateId})`,
+      );
+      const noneFit = await loadSectionGOptions(lead, null);
+      if (noneFit.length === before.length) {
+        pass("no rule fits — the full matched list is returned", `${noneFit.length} lender(s)`);
+      } else {
+        fail(
+          "no rule fits — the full matched list is returned",
+          `expected ${before.length} lender(s), got ${noneFit.length}`,
+        );
+      }
     }
   } finally {
     for (const id of inserted) {
@@ -770,21 +783,21 @@ async function simulateNarrowing() {
 }
 
 /**
- * E-289 — prove the CUSTOMER leg end to end, with no effect on anyone real.
+ * E-290 — prove the RETIRED customer leg is inert, with no effect on anyone.
  *
- * Safer than simulateNarrowing(): every rule here names the synthetic location
- * the probe lead invents, so — unlike a dealer-location rule, which has to name
- * a real dealer's real city to match at all — these cannot apply to a single
- * live applicant even for the seconds they exist. Deleted in a finally either
- * way.
+ * The danger the resolver's `customer_state IS NULL AND customer_city IS NULL`
+ * guard exists to prevent is the opposite of the obvious one: not that such a
+ * row keeps narrowing, but that dropping the columns from the WHERE clause
+ * would silently promote "customers in Pune only" into "every customer". So
+ * this asserts the row does NOTHING — the full matched list comes back either
+ * way — which covers both failure modes at once.
  *
- * Asserts three things: a customer-location rule narrows on the LEAD's address;
- * a rule declaring MORE scoping columns wins at equal priority; and a lead whose
- * address is still the WhatsApp placeholder matches no customer rule at all and
- * falls straight back to the full matched list.
+ * Safer than simulateNarrowing(): the row names the synthetic location the
+ * probe lead invents, so it cannot apply to a single live applicant even in
+ * principle. Deleted in a finally regardless.
  */
-async function simulateCustomerLocation() {
-  const name = "customer-location rule narrows on the lead's address (simulated)";
+async function simulateRetiredCustomerLeg() {
+  const name = "a retired customer-location rule is inert (simulated)";
   if (!process.argv.includes("--simulate")) {
     skip(name, "pass --simulate to exercise it (inserts and deletes rows)");
     return;
@@ -829,97 +842,38 @@ async function simulateCustomerLocation() {
   if (before.length < 2) {
     skip(
       name,
-      `only ${before.length} unrestricted lender(s) match an invented city — need 2+ to prove narrowing`,
+      `only ${before.length} unrestricted lender(s) match an invented city — need 2+ to prove nothing narrowed`,
     );
     return;
   }
 
-  // Deliberately NOT the first lender for the customer-only rule: narrowing to
-  // what was already at the top would pass even if the code did nothing.
-  const custTarget = before[1];
-  const custProduct = custTarget.activeLoanProducts[0];
-  // A different lender for the dealer+customer rule, so "which rule won" is
-  // observable.
-  const bothTarget = before[0];
-  const bothProduct = bothTarget.activeLoanProducts[0];
+  // Deliberately NOT the first lender: if the guard failed and this row DID
+  // narrow, the result would differ from the full list in an obvious way.
+  const target = before[1];
+  const product = target.activeLoanProducts[0];
 
   const inserted: number[] = [];
-  const insert = async (
-    dealerCode: string | null,
-    nbfcId: number,
-    productId: number,
-  ) => {
+  try {
     const [row] = await db.execute<{ id: number }>(sql`
       INSERT INTO city_default_loan_products
              (dealer_code, state, city, customer_state, customer_city,
-              nbfc_id, loan_product_id, priority, notes)
-      VALUES (${dealerCode}, NULL, NULL, ${STATE}, ${CITY},
-              ${nbfcId}, ${productId}, 0,
+              nbfc_id, loan_product_id, notes)
+      VALUES (NULL, NULL, NULL, ${STATE}, ${CITY},
+              ${target.nbfcId}, ${product.id},
               'temporary row written by verify-city-default-products.ts --simulate')
       RETURNING id
     `);
     inserted.push(Number(row.id));
-    return Number(row.id);
-  };
 
-  try {
-    // ── a customer-location rule alone narrows to itself ──────────────────
-    await insert(null, custTarget.nbfcId, custProduct.id);
-
+    // The lead lives in exactly the place this row names, so under E-289 it
+    // would have narrowed. It must not now.
     const after = await loadSectionGOptions(lead, null);
-    const narrowed =
-      after.length === 1 &&
-      after[0].nbfcId === custTarget.nbfcId &&
-      after[0].activeLoanProducts.length === 1 &&
-      after[0].activeLoanProducts[0].id === custProduct.id;
-    if (narrowed) {
-      pass(name, `${before.length} lender(s) → 1 (nbfc ${custTarget.nbfcId} / product ${custProduct.id})`);
+    if (after.length === before.length) {
+      pass(name, `${after.length} lender(s) — unchanged, the row was excluded`);
     } else {
       fail(
         name,
-        `expected exactly nbfc ${custTarget.nbfcId} / product ${custProduct.id}, got ` +
-          describe(after),
-      );
-    }
-
-    // ── an unread WhatsApp address matches no customer rule ───────────────
-    const unresolved = await loadSectionGOptions(
-      { ...lead, state: "Unknown", city: "Unknown" },
-      null,
-    );
-    if (unresolved.length === before.length) {
-      pass(
-        "an unresolved lead address matches no customer rule",
-        `${unresolved.length} lender(s) — full list, pin skipped`,
-      );
-    } else {
-      fail(
-        "an unresolved lead address matches no customer rule",
-        `expected the full ${before.length} lender(s), got ` + describe(unresolved),
-      );
-    }
-
-    // ── more declared columns wins at equal priority ──────────────────────
-    const bothId = await insert(
-      dealer.dealer_id,
-      bothTarget.nbfcId,
-      bothProduct.id,
-    );
-    const withBoth = await loadSectionGOptions(lead, null);
-    if (
-      withBoth.length === 1 &&
-      withBoth[0].nbfcId === bothTarget.nbfcId &&
-      withBoth[0].activeLoanProducts[0]?.id === bothProduct.id
-    ) {
-      pass(
-        "a rule declaring more columns wins at equal priority",
-        `dealer + customer rule #${bothId} beat the customer-only rule`,
-      );
-    } else {
-      fail(
-        "a rule declaring more columns wins at equal priority",
-        `expected nbfc ${bothTarget.nbfcId} / product ${bothProduct.id}, got ` +
-          describe(withBoth),
+        `expected the full ${before.length} lender(s), got ` + describe(after),
       );
     }
   } finally {
@@ -947,17 +901,29 @@ function scopeOf(m: {
   dealer_code: string | null;
   state: string | null;
   city: string | null;
-  customer_state?: string | null;
-  customer_city?: string | null;
 }): string {
   const where = m.city ? `${m.city}, ${m.state}` : m.state ? `all of ${m.state}` : "any location";
-  const who = m.customer_city
-    ? `customers in ${m.customer_city}, ${m.customer_state}`
-    : m.customer_state
-      ? `customers in all of ${m.customer_state}`
-      : null;
-  const parts = [m.dealer_code, where, who].filter(Boolean) as string[];
+  const parts = [m.dealer_code, where].filter(Boolean) as string[];
   return parts.join(" — ");
+}
+
+/**
+ * E-290 — which of the three kinds a rule is, as its rank. 0 beats 1 beats 2,
+ * which is exactly what the resolver's
+ * `(dealer_code IS NULL), (city IS NULL), (state IS NULL)` ordering produces.
+ * Accepts either the raw DB row or the resolved rule, since the two spell the
+ * dealer column differently.
+ */
+const TIER_NAME = ["dealer", "city", "state"] as const;
+
+function tierOf(m: {
+  dealer_code?: string | null;
+  dealerCode?: string | null;
+  city: string | null;
+}): 0 | 1 | 2 {
+  if (m.dealer_code ?? m.dealerCode) return 0;
+  if (m.city) return 1;
+  return 2;
 }
 
 function n0(v: string): string {

@@ -73,6 +73,10 @@ export async function login(formData: FormData) {
     redirect("/vendor-portal");
   }
 
+  if (appUser.role === "refurbisher") {
+    redirect("/refurbisher-portal");
+  }
+
   if (appUser.role === "admin") {
     redirect("/admin");
   }

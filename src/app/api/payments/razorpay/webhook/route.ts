@@ -3,7 +3,6 @@ import { db } from '@/lib/db';
 import { facilitationPayments } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { verifyWebhookSignature } from '@/lib/razorpay';
-import { confirmRefurbPaymentFromWebhook } from '@/lib/nbfc/recovery/refurb-payments';
 
 export async function POST(req: NextRequest) {
     try {
@@ -29,21 +28,14 @@ export async function POST(req: NextRequest) {
         const event = JSON.parse(body);
         const eventType = event.event;
 
-        // [E-271] Refurbishment-lot advance / balance paid through Checkout.
-        // Routed on the order's notes (same purpose-keying as wallet-webhook),
-        // so a closed browser tab still confirms the money. Idempotent.
+        // [E-292] Refurbishment-lot money is OFFLINE since v3 (NBFC pays into
+        // iTarang's bank and records the UTR). A late `payment.captured` for a
+        // v2 `refurb_advance` / `refurb_balance` order is acknowledged and
+        // ignored rather than confirming anything.
         if (eventType === 'payment.captured' || eventType === 'order.paid') {
-            const pay = event.payload?.payment?.entity;
-            const purpose = String(pay?.notes?.itarang_purpose ?? '');
+            const purpose = String(event.payload?.payment?.entity?.notes?.itarang_purpose ?? '');
             if (purpose === 'refurb_advance' || purpose === 'refurb_balance') {
-                const result = await confirmRefurbPaymentFromWebhook({
-                    lot_id: String(pay.notes.lot_id ?? ''),
-                    leg: purpose === 'refurb_advance' ? 'advance' : 'balance',
-                    order_id: String(pay.order_id ?? ''),
-                    payment_id: String(pay.id ?? ''),
-                    amount_paise: Number(pay.amount ?? 0),
-                });
-                return NextResponse.json({ status: result, purpose });
+                return NextResponse.json({ status: 'ignored', reason: 'refurbishment money is recorded offline since E-292', purpose });
             }
         }
 

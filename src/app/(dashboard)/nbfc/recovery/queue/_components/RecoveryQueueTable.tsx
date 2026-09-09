@@ -72,6 +72,8 @@ export interface AssignmentRow {
   agent_id: string | null;
   agent_name: string | null;
   agent_phone: string | null;
+  /** From the agents table at read time — the assignment row does not store it. */
+  agent_email: string | null;
   assigned_at: string | null;
   due_at: string | null;
   link_sent_at: string | null;
@@ -190,6 +192,7 @@ const STAGES: Array<{ id: string; label: string }> = [
   { id: "ready_for_auction", label: "Ready for auction" },
   { id: "scrap", label: "Scrap" },
   { id: "resold", label: "Resold" },
+  { id: "redeploy", label: "Redeploy" },
 ];
 
 /**
@@ -245,6 +248,7 @@ function stageTone(stage: string | null): string {
     case "scrap":
       return "warn";
     case "resold":
+    case "redeploy":
       return "muted";
     default:
       return "";
