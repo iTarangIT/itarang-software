@@ -1,79 +1,76 @@
 /**
- * E-282/E-283/E-286/E-289 — the default loan product + NBFC an admin has
- * pinned, for a dealer, for the LOCATION OF THE DEALER, for the LOCATION OF THE
- * CUSTOMER, or any combination.
+ * E-282/E-283/E-286/E-290/E-291 — the default loan product + NBFC an admin has
+ * pinned, for a dealer or for WHERE THE CUSTOMER LIVES.
  *
  * `nbfc_loan_products.active_locations` decides which lenders CAN serve a
  * place. This decides which one actually gets offered. The two are deliberately
  * separate: coverage is the lender's own declaration, the default is iTarang's
- * commercial choice on top of it.
+ * commercial choice on top of it. So a pin never widens coverage — by the time
+ * it is read, the BRE has already dropped every lender that cannot serve this
+ * customer, and the pin only chooses among the ones that can.
  *
- * TWO LOCATION PAIRS. `state` / `city` describe the DEALER, read from
- * `accounts.state` / `accounts.city` — its own registered address (E-286,
- * because "dealers in Maharashtra sell iTarang F1" is the rule the business
- * actually writes). `customer_state` / `customer_city` describe the CUSTOMER,
- * read straight off `leads.state` / `leads.city` (E-289, because "customers in
- * Pune are financed by iTarang F1, whichever dealer they walked into" is the
- * other rule the business writes). They are independent: a rule may declare
- * either pair, both, or neither.
+ * ONE LOCATION PAIR. `state` / `city` describe the CUSTOMER, matched against
+ * `leads.state` / `leads.city` (E-291). They were the dealer's own registered
+ * address between E-286 and E-290; that leg is gone, because a default is
+ * written about a market ("customers in Kolkata get product X"), not about
+ * where the shop happens to be registered.
  *
- * Every scoping column is nullable and NULL means "any", so a rule matches a
- * lead when every column it actually declares matches:
+ * A rule is exactly ONE OF THREE KINDS, and they form a ladder with no ties:
  *
- *   dealer_code  state      city    customer_state  customer_city  meaning
- *   -----------  ---------  ------  --------------  -------------  ----------
- *   ACC-…-971    NULL       NULL    NULL            NULL           that dealer, wherever it is
- *   ACC-…-971    Delhi      Delhi   NULL            NULL           that dealer, and only while it is in Delhi
- *   NULL         Delhi      Delhi   NULL            NULL           every dealer located in Delhi
- *   NULL         Telangana  NULL    NULL            NULL           every dealer located in Telangana
- *   NULL         NULL       NULL    Maharashtra     Pune           every customer living in Pune
- *   NULL         NULL       NULL    Maharashtra     NULL           every customer living in Maharashtra
- *   ACC-…-971    NULL       NULL    Maharashtra     Pune           that dealer's Pune customers
+ *   dealer_code  state        city      meaning
+ *   -----------  -----------  --------  -------------------------------------
+ *   ACC-…-971    NULL         NULL      that dealer, whoever the customer is
+ *   NULL         West Bengal  Kolkata   customers in Kolkata
+ *   NULL         West Bengal  NULL      customers anywhere in West Bengal
  *
- * A lead whose location is still the WhatsApp placeholder "Unknown" matches no
- * rule that DECLARES a customer location — it falls through to the next rule
- * and then to the full matched list. `reresolveLeadLocationFromDocs()` patches
- * the placeholder from the Aadhaar/address proof before the WhatsApp Step-4
- * match asks, so that is a fallback rather than the normal path.
+ * Ordering is that ladder and nothing else: THE MOST SPECIFIC RULE WINS —
+ * dealer, then city, then state. There is no priority number; the admin does
+ * not rank rules, specificity does it for them. `_active_key_v3` allows only
+ * one active row per scope, so two rules can never tie; `id DESC` is a
+ * total-order guard for legacy rows that predate this shape.
  *
- * Ordering is the admin's `priority` first — they decide, rather than a
- * hard-coded rule deciding for them. Specificity only breaks ties, and since
- * E-289 it breaks them by COUNT first: the rule that pins down more of the five
- * scoping columns is checked first, and only then the old ladder (dealer,
- * customer city, customer state, dealer city, dealer state, newest). Counting
- * first is what keeps "dealer X + customers in Pune" ahead of both "dealer X"
- * and "customers in Pune" without having to rank the two pairs against each
- * other. The caller walks the returned list in order and takes the first rule
- * that survived the BRE, so a pin that does not fit this customer falls through
- * to the next one rather than being abandoned.
+ * The caller walks the returned list in order and takes the first rule that
+ * survived the BRE, so a pin that does not fit this customer falls through to
+ * the next one rather than dead-ending them.
+ *
+ * `customer_state` / `customer_city` are RETIRED (E-289, removed by E-290) and
+ * NOT the columns this reads — E-291 put the customer back on `state`/`city`
+ * rather than resurrecting them, so the five-column unique key keeps working
+ * unchanged. Any row that still declares one is excluded outright below rather
+ * than being reinterpreted, which is what makes this correct on a database
+ * where E-290's cleanup has not been run.
  *
  * Every read is guarded and returns `[]` on failure. That is what keeps the
  * feature skippable at deploy: on a database without these columns, Step 4
  * keeps showing the full BRE-matched list rather than failing outright.
  * E-282 and E-283 must be applied together — see the E-283 header. E-286 is
- * comments only. E-289 is additive and independently skippable.
+ * comments only. E-290 and E-291 are data-only and independently skippable.
  */
 
 import { sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { isUnresolvedLocation } from "@/lib/leads/resolve-location";
 
 export interface DefaultProductRule {
   id: number;
-  /** null = applies to every dealer. */
+  /** null = applies to every dealer, i.e. the rule is location-scoped. */
   dealerCode: string | null;
-  /** null = applies to a dealer in any state. */
+  /** The CUSTOMER's state. null = the rule is dealer-scoped instead. */
   state: string | null;
-  /** null = applies to a dealer in any city of `state`. */
+  /** The CUSTOMER's city. null = every city of `state`. */
   city: string | null;
-  /** null = applies to a customer living in any state. */
-  customerState: string | null;
-  /** null = applies to a customer living in any city of `customerState`. */
-  customerCity: string | null;
   nbfcId: number;
   loanProductId: number;
-  priority: number;
+}
+
+/** What a lead offers a rule to match on: its dealer, and where it lives. */
+export interface DefaultProductScope {
+  /** `leads.dealer_id`, which IS `accounts.id` — the dealer CODE. */
+  dealerCode: string | null | undefined;
+  /** `leads.state` — where the CUSTOMER lives. */
+  customerState: string | null | undefined;
+  /** `leads.city` — where the CUSTOMER lives. */
+  customerCity: string | null | undefined;
 }
 
 type Row = {
@@ -81,103 +78,59 @@ type Row = {
   dealer_code: string | null;
   state: string | null;
   city: string | null;
-  customer_state: string | null;
-  customer_city: string | null;
   nbfc_id: number;
   loan_product_id: number;
-  priority: number;
 };
 
-/** The lead's own address, for the customer leg of the match (E-289). */
-export interface CustomerLocation {
-  state?: string | null;
-  city?: string | null;
-}
-
 /**
- * Every pinned rule that applies to this lead, most-preferred first.
+ * Every pinned rule that applies to this lead, most-specific first.
  *
- * Takes the lead's dealer CODE (`leads.dealer_id`, which IS `accounts.id`) —
- * which identifies both the dealer leg and the dealer-location leg, because the
- * location those compare against is that dealer's own — and, since E-289, the
- * lead's own `state`/`city` for the customer leg.
+ * Returns `[]` when nothing is configured, when the lead offers neither a
+ * dealer nor a state to match on, or when the table/columns do not exist yet.
  *
- * Returns `[]` when nothing is configured, when the lead has no dealer, or when
- * the table/columns do not exist yet.
- *
- * Matched case- and whitespace-insensitively. That matters most for the dealer
- * legs: a dealer's address is captured during onboarding and may not be spelled
- * exactly as the admin form spells it. The customer legs are both written from
- * `country-state-city`, so they agree already — but they are normalised the
- * same way rather than relying on it.
+ * Matched case- and whitespace-insensitively, which matters because a lead's
+ * city is typed during capture (and arrives over WhatsApp as free text) and
+ * need not be spelled exactly as the admin form's picker spells it.
  */
 export async function resolveDefaultProductRules(
-  dealerCode: string | null | undefined,
-  customer?: CustomerLocation,
+  scope: DefaultProductScope,
 ): Promise<DefaultProductRule[]> {
-  const dealerKey = norm(dealerCode);
+  const dealerKey = norm(scope.dealerCode);
+  const stateKey = norm(scope.customerState);
+  const cityKey = norm(scope.customerCity);
 
-  // No dealer, no dealer location — nothing any rule could match on.
-  if (!dealerKey) return [];
-
-  // An unread WhatsApp address is no address at all. Normalised to "" here,
-  // which matches no rule that declares a customer location, rather than
-  // matching a literal city named after the placeholder.
-  const customerStateKey = isUnresolvedLocation(customer?.state)
-    ? ""
-    : norm(customer?.state);
-  const customerCityKey = isUnresolvedLocation(customer?.city)
-    ? ""
-    : norm(customer?.city);
+  // Neither leg has anything to match on — no rule of any kind could fire.
+  if (!dealerKey && !stateKey) return [];
 
   try {
-    // The LEFT JOIN is on a constant (a primary-key lookup independent of `r`),
-    // so it contributes exactly one row — or NULLs when the dealer has no
-    // account, in which case only rules that declare no dealer location can
-    // match.
+    // An unknown leg is compared as '' rather than special-cased: no stored
+    // scope normalises to the empty string, so a rule that declares that leg
+    // simply cannot match, which is exactly the intent. A rule that leaves the
+    // leg NULL is unscoped there and still matches.
     //
     // `false` sorts before `true` in Postgres, so each `IS NULL` term puts the
-    // more specific row first. The count above them makes an overall-more-
-    // specific rule win outright; the ladder only settles rules that declare
-    // the same NUMBER of columns. `id DESC` last makes the order total and
-    // stable, so two rules an admin left at the same priority still resolve
-    // deterministically rather than by whatever the planner returns.
+    // more specific row first: dealer, then city, then state. `id DESC` last
+    // makes the order total and stable rather than leaving it to the planner.
     const rows = await db.execute<Row>(sql`
       SELECT r.id, r.dealer_code, r.state, r.city,
-             r.customer_state, r.customer_city,
-             r.nbfc_id, r.loan_product_id, r.priority
+             r.nbfc_id, r.loan_product_id
         FROM city_default_loan_products r
-        LEFT JOIN accounts a ON a.id = ${dealerCode}
        WHERE r.is_active
+         AND r.customer_state IS NULL
+         AND r.customer_city IS NULL
          AND (
            r.dealer_code IS NULL
            OR lower(btrim(r.dealer_code)) = ${dealerKey}
          )
          AND (
            r.state IS NULL
-           OR lower(btrim(r.state)) = lower(btrim(a.state))
+           OR lower(btrim(r.state)) = ${stateKey}
          )
          AND (
            r.city IS NULL
-           OR lower(btrim(r.city)) = lower(btrim(a.city))
+           OR lower(btrim(r.city)) = ${cityKey}
          )
-         AND (
-           r.customer_state IS NULL
-           OR lower(btrim(r.customer_state)) = ${customerStateKey}
-         )
-         AND (
-           r.customer_city IS NULL
-           OR lower(btrim(r.customer_city)) = ${customerCityKey}
-         )
-       ORDER BY r.priority DESC,
-                ( (r.dealer_code    IS NOT NULL)::int
-                + (r.customer_city  IS NOT NULL)::int
-                + (r.customer_state IS NOT NULL)::int
-                + (r.city           IS NOT NULL)::int
-                + (r.state          IS NOT NULL)::int ) DESC,
-                (r.dealer_code IS NULL),
-                (r.customer_city IS NULL),
-                (r.customer_state IS NULL),
+       ORDER BY (r.dealer_code IS NULL),
                 (r.city IS NULL),
                 (r.state IS NULL),
                 r.id DESC
@@ -188,15 +141,12 @@ export async function resolveDefaultProductRules(
       dealerCode: row.dealer_code,
       state: row.state,
       city: row.city,
-      customerState: row.customer_state,
-      customerCity: row.customer_city,
       nbfcId: Number(row.nbfc_id),
       loanProductId: Number(row.loan_product_id),
-      priority: Number(row.priority),
     }));
   } catch (err) {
     // Almost always a missing relation or column on an environment where
-    // E-282/E-283/E-289 have not been applied. Never break Step 4 over it.
+    // E-282/E-283 have not been applied. Never break Step 4 over it.
     console.error("[city-default-product] lookup failed:", err);
     return [];
   }

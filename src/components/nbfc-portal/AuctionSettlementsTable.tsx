@@ -38,6 +38,25 @@ export interface SettlementRow {
   /** E-252. Present once money has actually been captured. */
   paid_at?: string | null;
   payment_ref?: string | null;
+  /** [E-292] The winner's contact — you settle direct with them. */
+  winner_contact?: { name: string | null; phone: string | null; email: string | null } | null;
+}
+
+/**
+ * [E-292] Marketplace hand-off: the seller and the winner exchange contact
+ * via the platform and settle direct (COD-style — the buyer may refuse on a
+ * discrepancy). Rendered once a settlement row exists, i.e. the winner was
+ * approved.
+ */
+function ContactCard({ c, who }: { c: SettlementRow["winner_contact"]; who: string }) {
+  if (!c || (!c.phone && !c.email)) return <span className="auc-subtle">no contact on file</span>;
+  return (
+    <div className="auc-subtle" style={{ display: "grid", gap: ".125rem" }}>
+      <span>Settle direct with {c.name ?? who}:</span>
+      {c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : null}
+      {c.email ? <a href={`mailto:${c.email}`}>{c.email}</a> : null}
+    </div>
+  );
 }
 
 interface AuctionSettlementsTableProps {
@@ -169,6 +188,7 @@ export function AuctionSettlementsTable({
                         {row.winner_kind === "nbfc" ? "NBFC" : "Dealer"}
                       </span>
                     </div>
+                    {row.winner_kind === "dealer" ? <ContactCard c={row.winner_contact} who="the dealer" /> : null}
                   </td>
                   <td>
                     <span
@@ -235,6 +255,7 @@ export function AuctionSettlementsTable({
                     <span className="auc-subtle">
                       {row.winner_kind === "nbfc" ? " · NBFC" : " · Dealer"}
                     </span>
+                    {row.winner_kind === "dealer" ? <ContactCard c={row.winner_contact} who="the dealer" /> : null}
                   </dd>
                 </div>
                 <div>

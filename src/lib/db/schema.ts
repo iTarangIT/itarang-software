@@ -49,6 +49,12 @@ export const users = pgTable("users", {
    * dealers row, so those joins would return nothing rather than fail.
    */
   vendor_entity_id: varchar("vendor_entity_id", { length: 255 }),
+  /**
+   * E-292 — refurbishers.id this login acts for (role 'refurbisher'); NULL
+   * for everyone else. Same reasoning as vendor_entity_id: its own column so a
+   * refurbisher can never be mistaken for a dealer or a vendor.
+   */
+  refurbisher_id: uuid("refurbisher_id"),
   phone: text(),
   avatar_url: text("avatar_url"),
   is_active: boolean("is_active").default(true).notNull(),
@@ -5604,6 +5610,18 @@ export const recoveryBatteries = pgTable(
     // state_code='scrapped' from a bare status into "sold under SCR-000123",
     // which is what anyone auditing a scrapped battery actually asks.
     scrap_consignment_id: uuid("scrap_consignment_id"),
+    // [E-292] Recovery triage (refurbish flow v3, R2/R3): rated vs measured
+    // pack voltage → health %; the system SUGGESTS fit_as_is | refurbish |
+    // scrap, the NBFC CHOOSES auction | redeploy | refurbish | scrap.
+    rated_voltage_v: numeric("rated_voltage_v", { precision: 6, scale: 2 }),
+    measured_voltage_v: numeric("measured_voltage_v", { precision: 6, scale: 2 }),
+    health_pct: numeric("health_pct", { precision: 5, scale: 2 }),
+    triage_condition: varchar("triage_condition", { length: 16 }), // good | fair | poor
+    triage_note: text("triage_note"),
+    triage_suggestion: varchar("triage_suggestion", { length: 16 }), // fit_as_is | refurbish | scrap
+    triage_choice: varchar("triage_choice", { length: 16 }), // auction | redeploy | refurbish | scrap
+    triaged_at: timestamp("triaged_at", { withTimezone: true }),
+    triaged_by: uuid("triaged_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6163,6 +6181,15 @@ export const refurbishmentJobs = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     ret_received_at: timestamp("ret_received_at", { withTimezone: true }),
+    // [E-292] The refurbisher's per-battery bill (labour + parts) and the
+    // final cost — refurbisher_cost + accessories + pro-rata iTarang margin —
+    // which is what rolls into the auction base price once the job is returned.
+    refurbisher_cost: numeric("refurbisher_cost", { precision: 12, scale: 2 }),
+    refurbisher_parts: jsonb("refurbisher_parts").notNull().default(sql`'[]'::jsonb`),
+    refurbisher_note: text("refurbisher_note"),
+    costed_at: timestamp("costed_at", { withTimezone: true }),
+    costed_by: uuid("costed_by"),
+    final_cost: numeric("final_cost", { precision: 12, scale: 2 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6192,17 +6219,17 @@ export const refurbishmentLots = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     ref_code: varchar("ref_code", { length: 24 }).notNull(),
-    // E-271 vocabulary: requested | proposed | countered | agreed |
-    // awaiting_advance | advance_paid | pickup_scheduled | in_transit_out |
-    // delivered | received | in_progress | revision_pending | ready |
-    // in_transit_return | delivered_back | balance_due | settled | cancelled
+    // E-292 vocabulary: requested | reviewed | estimated | countered | agreed |
+    // pi_sent | pi_accepted | advance_recorded | in_transit_out | received |
+    // at_refurbisher | in_progress | costed | ready | in_transit_return |
+    // delivered_back | balance_due | settled | closed | cancelled
     status: varchar("status", { length: 24 }).notNull().default("requested"),
     battery_count: integer("battery_count").notNull().default(0),
     note: text("note"),
 
     current_round: integer("current_round").notNull().default(0),
-    // 'nbfc' | 'admin' — who moved last; the other side owes the next move.
-    last_party: varchar("last_party", { length: 8 }),
+    // 'nbfc' | 'admin' | 'refurbisher' — who moved last (widened by E-292).
+    last_party: varchar("last_party", { length: 16 }),
     expected_receipt_date: date("expected_receipt_date"),
     expected_return_date: date("expected_return_date"),
     estimated_labour_total: numeric("estimated_labour_total", { precision: 14, scale: 2 }),
@@ -6255,7 +6282,7 @@ export const refurbishmentLots = pgTable(
     completed_at: timestamp("completed_at", { withTimezone: true }),
     cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
     cancelled_by: uuid("cancelled_by"),
-    cancelled_by_party: varchar("cancelled_by_party", { length: 8 }),
+    cancelled_by_party: varchar("cancelled_by_party", { length: 16 }),
     cancel_reason: text("cancel_reason"),
 
     // ---- E-271: pickup / e-way bill / custody --------------------------------
@@ -6293,6 +6320,8 @@ export const refurbishmentLots = pgTable(
     advance_recorded_at: timestamp("advance_recorded_at", { withTimezone: true }),
     advance_confirmed_at: timestamp("advance_confirmed_at", { withTimezone: true }),
     advance_confirmed_by: uuid("advance_confirmed_by"),
+    // E-293: NBFC-uploaded payment slip(s) for the advance (optional).
+    advance_proof_urls: text("advance_proof_urls").array().notNull().default(sql`'{}'::text[]`),
     // ---- E-271: balance = final_total - advance -------------------------------
     final_total: numeric("final_total", { precision: 14, scale: 2 }),
     balance_amount: numeric("balance_amount", { precision: 14, scale: 2 }),
@@ -6305,7 +6334,50 @@ export const refurbishmentLots = pgTable(
     balance_recorded_at: timestamp("balance_recorded_at", { withTimezone: true }),
     balance_confirmed_at: timestamp("balance_confirmed_at", { withTimezone: true }),
     balance_confirmed_by: uuid("balance_confirmed_by"),
+    // E-293: NBFC-uploaded payment slip(s) for the balance — REQUIRED before the
+    // balance can be recorded; the return dispatch is refused while pending.
+    balance_proof_urls: text("balance_proof_urls").array().notNull().default(sql`'{}'::text[]`),
     settled_at: timestamp("settled_at", { withTimezone: true }),
+
+    // ---- E-292: review / counter -------------------------------------------
+    reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+    reviewed_by: uuid("reviewed_by"),
+    counter_total: numeric("counter_total", { precision: 14, scale: 2 }),
+    counter_advance_pct: numeric("counter_advance_pct", { precision: 5, scale: 2 }),
+    counter_receipt_date: date("counter_receipt_date"),
+    counter_return_date: date("counter_return_date"),
+    counter_message: text("counter_message"),
+    // ---- E-292: the proforma invoice (steps 5/6) ---------------------------
+    pi_number: varchar("pi_number", { length: 64 }),
+    pi_url: text("pi_url"),
+    pi_amount: numeric("pi_amount", { precision: 14, scale: 2 }),
+    pi_advance_pct: numeric("pi_advance_pct", { precision: 5, scale: 2 }),
+    pi_advance_amount: numeric("pi_advance_amount", { precision: 14, scale: 2 }),
+    // {account_name, account_number, ifsc, bank_name, upi?}
+    pi_bank_details: jsonb("pi_bank_details"),
+    pi_note: text("pi_note"),
+    pi_sent_at: timestamp("pi_sent_at", { withTimezone: true }),
+    pi_sent_by: uuid("pi_sent_by"),
+    pi_accepted_at: timestamp("pi_accepted_at", { withTimezone: true }),
+    pi_accepted_by: uuid("pi_accepted_by"),
+    pi_acceptance_note: text("pi_acceptance_note"),
+    // ---- E-292: the refurbisher (steps 10-12) ------------------------------
+    refurbisher_id: uuid("refurbisher_id"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    assigned_by: uuid("assigned_by"),
+    refurbisher_note: text("refurbisher_note"),
+    refurbisher_total: numeric("refurbisher_total", { precision: 14, scale: 2 }),
+    costed_at: timestamp("costed_at", { withTimezone: true }),
+    // ---- E-292: final bill = refurbisher_total + margin (step 13) ----------
+    itarang_margin_pct: numeric("itarang_margin_pct", { precision: 5, scale: 2 }),
+    itarang_margin_amount: numeric("itarang_margin_amount", { precision: 14, scale: 2 }),
+    final_sent_at: timestamp("final_sent_at", { withTimezone: true }),
+    final_sent_by: uuid("final_sent_by"),
+    // ---- E-292: redeploy | auction (step 17) --------------------------------
+    close_outcome: varchar("close_outcome", { length: 16 }),
+    closed_at: timestamp("closed_at", { withTimezone: true }),
+    closed_by: uuid("closed_by"),
+    close_note: text("close_note"),
 
     created_by: uuid("created_by"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -6315,6 +6387,65 @@ export const refurbishmentLots = pgTable(
     refUnique: uniqueIndex("refurbishment_lots_ref_uidx").on(table.ref_code),
     tenantIdx: index("refurbishment_lots_tenant_idx").on(table.tenant_id, table.created_at),
     statusIdx: index("refurbishment_lots_status_idx").on(table.status, table.created_at),
+    // The E-292 partial index (WHERE refurbisher_id IS NOT NULL) lives in the migration only.
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-292 — refurbishers: the onboarded refurbishment partners (the "P Camp"
+// model). Not an `accounts` row — a refurbisher is a workshop iTarang pays,
+// not a counterparty it invoices — so it gets its own small table and its own
+// login link, users.refurbisher_id. Mirrors drizzle/E-292_refurbish_flow_v3.sql.
+// -----------------------------------------------------------------------------
+export const refurbishers = pgTable(
+  "refurbishers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    contact_name: varchar("contact_name", { length: 120 }),
+    email: varchar("email", { length: 200 }).notNull(),
+    phone: varchar("phone", { length: 20 }),
+    address: text("address"),
+    city: varchar("city", { length: 120 }),
+    state: varchar("state", { length: 120 }),
+    gstin: varchar("gstin", { length: 20 }),
+    notes: text("notes"),
+    is_active: boolean("is_active").default(true).notNull(),
+    // pending | dispatched | credential_dispatch_failed — the latest attempt.
+    credential_dispatch_status: varchar("credential_dispatch_status", { length: 32 }),
+    credential_dispatched_at: timestamp("credential_dispatched_at", { withTimezone: true }),
+    credential_last_error: text("credential_last_error"),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // lower(email) unique index lives in the migration (expression index).
+    activeIdx: index("refurbishers_active_idx").on(t.is_active),
+  }),
+);
+
+/**
+ * E-292 — one row per credentials-email ATTEMPT for a refurbisher login. No
+ * password column, ever (vendor_portal_credentials shape).
+ */
+export const refurbisherPortalCredentials = pgTable(
+  "refurbisher_portal_credentials",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    refurbisher_id: uuid("refurbisher_id")
+      .notNull()
+      .references(() => refurbishers.id, { onDelete: "cascade" }),
+    supabase_user_id: uuid("supabase_user_id").notNull(),
+    email: varchar("email", { length: 200 }).notNull(),
+    /** pending | dispatched | credential_dispatch_failed */
+    dispatch_status: varchar("dispatch_status", { length: 32 }).notNull(),
+    last_error: text("last_error"),
+    email_dispatched_at: timestamp("email_dispatched_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    refIdx: index("refurbisher_portal_credentials_ref_idx").on(t.refurbisher_id, t.created_at),
   }),
 );
 
@@ -6327,7 +6458,7 @@ export const refurbishmentLotEvents = pgTable(
       .references(() => refurbishmentLots.id, { onDelete: "cascade" }),
     tenant_id: uuid("tenant_id").notNull(),
     seq: integer("seq").notNull(),
-    party: varchar("party", { length: 8 }).notNull(), // nbfc | admin | system
+    party: varchar("party", { length: 16 }).notNull(), // nbfc | admin | refurbisher | system (E-292 widened)
     kind: varchar("kind", { length: 24 }).notNull(),
     message: text("message"),
     payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
@@ -7331,18 +7462,16 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
 });
 
 // =============================================================================
-// E-282/E-283/E-286/E-289 — Default loan product + NBFC per dealer, DEALER
-// LOCATION, CUSTOMER LOCATION, or any combination.
-// TWO location pairs, deliberately independent: (state, city) is where the
-// DEALER is registered (accounts), (customer_state, customer_city) is where
-// the CUSTOMER lives (leads). Every scoping column is nullable and NULL means
-// "any", so a rule matches a lead when every column it actually declares
-// matches: (dealer_code) alone is a dealer-wide rule, (state, city) alone
-// covers every dealer in a place, (customer_state, customer_city) alone covers
-// every customer living in one. Ordered by priority DESC, then by how MANY of
-// the five scoping columns the rule declares, then the old ladder (dealer,
-// customer city, customer state, dealer city, dealer state). Read by
-// resolveDefaultProductRules()
+// E-282/E-283/E-286/E-290/E-291 — Default loan product + NBFC per dealer or per
+// CUSTOMER LOCATION.
+// ONE location pair: (state, city) is where the CUSTOMER lives, matched against
+// leads.state / leads.city (E-291; it was the dealer's own accounts address
+// between E-286 and E-290). A rule is exactly one of three kinds — a dealer, a
+// customer city, or a customer state — and THE MOST SPECIFIC ONE WINS, in that
+// order. There is no priority number (E-290 retired it). A location rule does
+// not widen coverage: the BRE has already dropped every lender that cannot
+// serve where the lead lives before a pin is consulted, so the pin only
+// chooses among the lenders that can. Read by resolveDefaultProductRules()
 // (src/lib/leads/city-default-product.ts) and applied by loadSectionGOptions()
 // to the BRE's hits — so a pinned product that does not independently match is
 // skipped and the next rule, or normal matching, is used instead.
@@ -7356,29 +7485,33 @@ export const cityDefaultLoanProducts = pgTable(
     // NOT dealers.id (the serial int the BRE loader uses). NULL = the rule is
     // not dealer-scoped and applies to every dealer.
     dealer_code: varchar("dealer_code", { length: 255 }),
-    // E-286 — the DEALER's state, matched against accounts.state, NOT the
-    // customer's leads.state (which is what E-282/E-283 compared). Compared
-    // case- and whitespace-insensitively, which matters here: a dealer address
-    // is captured at onboarding and need not be spelled the way the admin
-    // form's picker spells it. E-283 made it nullable: NULL = the rule
+    // E-291 — the CUSTOMER's state, matched against leads.state. It held the
+    // DEALER's accounts.state between E-286 and E-290; E-291 moved the meaning
+    // back onto this column rather than resurrecting customer_state below, so
+    // the five-column unique key needs no _v4. Compared case- and
+    // whitespace-insensitively, which matters here: a lead's location is typed
+    // at capture (free text over WhatsApp) and need not be spelled the way the
+    // admin form's picker spells it. E-283 made it nullable: NULL = the rule
     // declares no location at all, only meaningful with a dealer_code.
     state: varchar("state", { length: 100 }),
-    // E-286 — the DEALER's city (accounts.city). NULL = every dealer city in
-    // the state (or anywhere, when state is NULL too).
+    // E-291 — the CUSTOMER's city (leads.city). NULL = every city in the state
+    // (or anywhere, when state is NULL too).
     city: varchar("city", { length: 100 }),
-    // E-289 — the CUSTOMER's state, matched against leads.state. This is the
-    // other half of the pair E-286 gave to the dealer: coverage of a place is
-    // the lender's own declaration (nbfc_loan_products.active_locations),
-    // this is iTarang's choice of WHICH covered lender is offered there.
-    // Spelled by `country-state-city`, like leads.state itself. NULL = the
-    // rule is not customer-scoped and applies to every customer.
+    // E-289, RETIRED BY E-290, and NOT revived by E-291 — the customer legs
+    // live on `state`/`city` above instead. Kept for history rather than
+    // dropped (migrations here are strictly additive), always written NULL,
+    // and IGNORED on read. The resolver and the settings GET both exclude any
+    // row that still declares one, rather than reinterpreting it — that guard
+    // is what keeps them correct on a database where E-290's cleanup has not
+    // been run.
     customer_state: varchar("customer_state", { length: 100 }),
-    // E-289 — the CUSTOMER's city (leads.city). NULL = every customer city in
-    // customer_state (or every customer, when customer_state is NULL too).
+    // E-289, RETIRED BY E-290 — see customer_state above.
     customer_city: varchar("customer_city", { length: 100 }),
     nbfc_id: integer("nbfc_id").notNull(),
     loan_product_id: integer("loan_product_id").notNull(),
-    // E-283 — admin-chosen tie-break; highest wins, specificity breaks ties.
+    // E-283, RETIRED BY E-290 — an admin-chosen tie-break, replaced by the
+    // dealer/city/state ladder. Kept for history; always 0 on new rows and
+    // ignored on read.
     priority: integer("priority").default(0).notNull(),
     is_active: boolean("is_active").default(true).notNull(),
     notes: text("notes"),
@@ -7395,8 +7528,10 @@ export const cityDefaultLoanProducts = pgTable(
     // NOTE: the SQL migrations create these as PARTIAL, expression indexes
     // (lower(...) WHERE is_active), and the partial UNIQUE key
     // city_default_loan_products_active_key_v3 (E-289, five columns) is not
-    // representable here at all. The .sql files are the source of truth — do
-    // not reconcile these with drizzle-kit generate.
+    // representable here at all. E-290 deliberately leaves that key alone —
+    // it already coalesces the two now-always-NULL customer columns to '', so
+    // it keeps working and no _v4 has to be introduced. The .sql files are the
+    // source of truth — do not reconcile these with drizzle-kit generate.
     activeStateIdx: index("city_default_loan_products_active_state_idx").on(
       table.state,
     ),

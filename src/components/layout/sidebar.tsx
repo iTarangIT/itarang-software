@@ -718,6 +718,14 @@ const roleNavigation: Record<string, any[]> = {
           icon: Wrench,
           href: "/admin/nbfc/refurbishment",
         },
+        // [E-292] The refurbisher partner directory: who does the physical
+        // work in the v3 flow, and their portal logins.
+        {
+          id: "nbfc-refurbishers",
+          label: "Refurbishers",
+          icon: Wrench,
+          href: "/admin/nbfc/refurbishers",
+        },
         {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",
@@ -1392,6 +1400,38 @@ const roleNavigation: Record<string, any[]> = {
           icon: Megaphone,
           href: "/asm/campaigns",
           // Not `exact`, for the same reason as the inside-sales twin above.
+        },
+      ],
+    },
+  ],
+
+  /**
+   * Refurbisher portal — the refurbishment partner's side (E-292, refurbish
+   * flow v3). As small as the vendor's: the lots iTarang assigned them, and
+   * nothing else. No money, no NBFC identity beyond a name.
+   */
+  refurbisher: [
+    {
+      section: "WORKSHOP",
+      items: [
+        {
+          id: "refurbisher-lots",
+          label: "My lots",
+          icon: Wrench,
+          href: "/refurbisher-portal",
+          exact: true,
+        },
+        {
+          id: "refurbisher-lots-all",
+          label: "All lots",
+          icon: FileText,
+          href: "/refurbisher-portal/lots",
+        },
+        {
+          id: "refurbisher-notifications",
+          label: "Notifications",
+          icon: Bell,
+          href: "/refurbisher-portal/notifications",
         },
       ],
     },
@@ -2148,6 +2188,7 @@ export function Sidebar() {
     if (user?.role) return user.role.toLowerCase();
     if (pathname.startsWith("/dealer-portal")) return "dealer";
     if (pathname.startsWith("/vendor-portal")) return "scrap_vendor";
+    if (pathname.startsWith("/refurbisher-portal")) return "refurbisher";
     if (pathname.startsWith("/admin")) return "admin";
     if (pathname.startsWith("/ceo")) return "ceo";
     if (pathname.startsWith("/sales-head")) return "sales_head";
@@ -2272,7 +2313,7 @@ export function Sidebar() {
   //  · "operations" — a shared monitoring login, not a person. Nobody files an
   //    expense as operations@itarang.com, and the console is meant to be one
   //    screen with nothing on it that isn't monitoring.
-  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "it", "operations"]);
+  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "refurbisher", "it", "operations"]);
   let menuItems = [
     ...filteredMenuItems,
     ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),

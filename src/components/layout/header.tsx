@@ -46,7 +46,7 @@ export function Header() {
     // Which portal's "View all notifications" page this viewer belongs on.
     const role = (user?.role ?? '').toLowerCase();
     const portalRole: NotificationRole =
-        role === 'scrap_vendor'
+        role === 'scrap_vendor' || role === 'refurbisher'
             ? 'vendor'
             : role.startsWith('nbfc') || role === 'risk_head'
                 ? 'nbfc'

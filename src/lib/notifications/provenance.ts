@@ -48,6 +48,12 @@ export const vendorParty = (label: string, actor?: string | null): Party => ({
   label: label || "Vendor",
   actor: actor ?? null,
 });
+/** [E-292] A refurbishment partner. Rendered with the vendor icon — same "outside workshop" kind. */
+export const refurbisherParty = (label: string, actor?: string | null): Party => ({
+  party: "vendor",
+  label: label || "Refurbisher",
+  actor: actor ?? null,
+});
 export const customerParty = (label: string): Party => ({ party: "customer", label: label || "Customer" });
 export const agentParty = (label: string): Party => ({ party: "agent", label: label || "Field agent" });
 
@@ -124,6 +130,7 @@ export async function actingParty(hint?: {
     if (hint?.tenantName) return nbfcParty(hint.tenantName, actor);
     if (role.startsWith("nbfc")) return nbfcParty(await nbfcLabel(hint?.tenantId), actor);
     if (role === "scrap_vendor") return vendorParty(await dealerLabel(row?.dealer_id), actor);
+    if (role === "refurbisher") return refurbisherParty("Refurbisher", actor);
     if (role === "dealer") return dealerParty(await dealerLabel(row?.dealer_id), actor);
     if (ADMIN_ROLES.has(role)) return adminParty(actor);
     return { party: "system", label: "iTarang", actor };

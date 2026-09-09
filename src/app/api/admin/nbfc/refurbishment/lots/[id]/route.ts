@@ -1,35 +1,40 @@
 /**
- * E-270 / E-271 — one refurbishment lot, from iTarang's side.
+ * E-292 — one refurbishment lot, from iTarang's side (refurbish flow v3).
  *
- *   GET   — the lot, its batteries (with custody), both legs, money, timeline (+ can_act)
- *   POST  — the workshop's moves:
- *             review | propose | cancel | message
- *             confirm-payment (advance or balance, after the NBFC recorded a UTR)
- *             pickup (itarang_pickup mode, with e-way bill) | arrive (out leg) |
- *             confirm-receipt (out leg) | start-work | update-item | mark-ready |
- *             revise-quote | dispatch (return leg, with e-way bill)
+ *   GET   — the lot, its batteries (with custody), the PI, both legs, money,
+ *           the refurbisher, timeline (+ can_act). Unredacted.
+ *   POST  — the desk's moves:
+ *             review (decline per battery; empty = "mark reviewed") | estimate |
+ *             cancel | send-pi | confirm-payment (advance or balance) |
+ *             pickup (itarang_pickup mode) | arrive (out) | confirm-receipt (out) |
+ *             assign (refurbisher) | start-work · update-item · cost-item (admin
+ *             override of the refurbisher's moves) | set-final-cost | mark-ready |
+ *             dispatch (return) | message (to nbfc | refurbisher)
  *
  * WHO MAY ACT. Reading is open to the full admin role set. Acting is the same
  * four roles the request notification goes to (admin, ceo, business_head,
- * sales_head). Confirming a bank transfer is money ARRIVING, not leaving, so it
- * sits with the same set rather than the payout bar.
+ * sales_head). Marking a bank transfer received is money ARRIVING, not
+ * leaving, so it sits with the same set rather than the payout bar.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { clientError, validationError } from "@/lib/nbfc/http-error";
 import { resolveAdminActor, statusFromError, ADMIN_ROLES } from "@/lib/nbfc/admin/auth";
 import {
+  assignRefurbisher,
   cancelLot,
   confirmReceipt,
+  costItem,
+  estimateLot,
   getLot,
   markArrived,
   markItemReady,
   postMessage,
-  proposeLot,
   recordDispatch,
   recordPickup,
   reviewLotItems,
-  reviseQuote,
+  sendPi,
+  setFinalCost,
   startWork,
   updateLotItem,
 } from "@/lib/nbfc/recovery/refurbishment-lots";
@@ -37,13 +42,17 @@ import { confirmRefurbOfflinePayment } from "@/lib/nbfc/recovery/refurb-payments
 import { PICKUP_MODES, RECEIPT_CONDITIONS } from "@/lib/nbfc/recovery/refurbishment-lot-status";
 import {
   notifyRefurbArrived,
+  notifyRefurbAssigned,
   notifyRefurbCancelled,
+  notifyRefurbCosted,
   notifyRefurbDispatched,
+  notifyRefurbEstimated,
+  notifyRefurbFinalBill,
   notifyRefurbMessage,
   notifyRefurbPaymentConfirmed,
-  notifyRefurbProposed,
-  notifyRefurbQuoteRevised,
+  notifyRefurbPiSent,
   notifyRefurbReceived,
+  notifyRefurbReviewed,
   notifyRefurbWorkStarted,
 } from "@/lib/nbfc/recovery/refurbish-notify";
 
@@ -65,28 +74,38 @@ const Checklist = z.object({
   done: z.boolean(),
   note: z.string().trim().max(500).nullable().optional(),
 });
+const Part = z.object({
+  label: z.string().trim().min(1).max(120),
+  qty: z.number().min(0).max(1000),
+  unit_cost: z.number().min(0).max(10_000_000),
+});
 
 const ActionBody = z
   .object({
     action: z.enum([
       "review",
-      "propose",
+      "estimate",
       "cancel",
+      "send-pi",
       "confirm-payment",
       "pickup",
       "arrive",
       "confirm-receipt",
+      "assign",
       "start-work",
       "update-item",
+      "cost-item",
+      "set-final-cost",
       "mark-ready",
-      "revise-quote",
       "dispatch",
       "message",
     ]),
     message: z.string().trim().max(2000).optional(),
+    // message: which thread
+    to: z.enum(["nbfc", "refurbisher"]).optional(),
     // review
     decisions: z.array(z.object({ job_id: z.string().uuid(), decision: z.enum(["accept", "decline"]), reason: z.string().trim().max(1000).nullable().optional() })).max(100).optional(),
-    // propose
+    // estimate
     expected_receipt_date: DateStr.optional(),
     expected_return_date: DateStr.optional(),
     pickup_mode: z.enum(PICKUP_MODES as [string, ...string[]]).optional(),
@@ -107,15 +126,36 @@ const ActionBody = z
       )
       .max(100)
       .optional(),
-    // update-item / mark-ready
+    // send-pi
+    pi_number: z.string().trim().max(64).nullable().optional(),
+    pi_url: z.string().max(500).nullable().optional(),
+    pi_amount: z.number().min(0).max(100_000_000).optional(),
+    pi_advance_pct: z.number().min(0).max(100).optional(),
+    bank_details: z
+      .object({
+        account_name: z.string().trim().max(120).nullable().optional(),
+        account_number: z.string().trim().max(34).nullable().optional(),
+        ifsc: z.string().trim().max(11).nullable().optional(),
+        bank_name: z.string().trim().max(120).nullable().optional(),
+        upi: z.string().trim().max(80).nullable().optional(),
+      })
+      .optional(),
+    // confirm-payment
+    leg: z.enum(["advance", "balance"]).optional(),
+    reference: z.string().trim().min(3).max(120).nullable().optional(),
+    // assign
+    refurbisher_id: z.string().uuid().optional(),
+    // update-item / cost-item / mark-ready
     job_id: z.string().uuid().optional(),
     checklist: z.array(Checklist).max(50).optional(),
     accessories: z.array(Accessory).max(20).optional(),
-    actual_cost: z.number().min(0).max(10_000_000).nullable().optional(),
+    refurbisher_parts: z.array(Part).max(50).optional(),
+    refurbisher_cost: z.number().min(0).max(10_000_000).nullable().optional(),
+    refurbisher_note: z.string().trim().max(2000).nullable().optional(),
     notes: z.string().trim().max(2000).nullable().optional(),
-    assigned_workshop: z.string().trim().max(160).nullable().optional(),
-    // revise-quote
-    revised_total: z.number().min(0).max(100_000_000).optional(),
+    // set-final-cost
+    margin_pct: z.number().min(0).max(100).nullable().optional(),
+    margin_amount: z.number().min(0).max(100_000_000).nullable().optional(),
     // pickup / dispatch
     carrier: z.string().trim().max(120).nullable().optional(),
     vehicle_no: z.string().trim().max(32).nullable().optional(),
@@ -124,8 +164,6 @@ const ActionBody = z
     eway_bill_url: z.string().max(500).nullable().optional(),
     dispatched_on: DateStr.optional(),
     photo_urls: z.array(z.string().max(500)).max(20).optional(),
-    // confirm-payment
-    leg: z.enum(["advance", "balance"]).optional(),
   })
   .strict();
 
@@ -134,7 +172,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const actor = await resolveAdminActor(req.headers);
     if (!(ADMIN_ROLES as readonly string[]).includes(actor.role)) throw new Error("FORBIDDEN: not an admin");
     const { id } = await ctx.params;
-    const lot = await getLot(id, null);
+    const lot = await getLot(id, null, "admin");
     if (!lot) return NextResponse.json({ ok: false, error: "NOT_FOUND: lot not found" }, { status: 404 });
     return NextResponse.json({ ok: true, lot, can_act: REFURB_ACT_ROLES.has(actor.role) });
   } catch (e) {
@@ -165,7 +203,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const bad = (m: string) => NextResponse.json({ ok: false, error: `BAD_REQUEST: ${m}` }, { status: 400 });
     const transport = (dispatched_on: string) => ({
       lot_id: id,
-      tenant_id: null,
+      scope: null,
       actor_user_id: actorId,
       carrier: b.carrier ?? null,
       vehicle_no: b.vehicle_no ?? null,
@@ -179,19 +217,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     switch (b.action) {
       case "review": {
-        if (!b.decisions?.length) return bad("decisions are required");
-        const lot = await reviewLotItems({ lot_id: id, actor_user_id: actorId, decisions: b.decisions });
+        const decisions = b.decisions ?? [];
+        const lot = await reviewLotItems({ lot_id: id, actor_user_id: actorId, decisions, note: b.message ?? null });
         if (lot.status === "cancelled") await notifyRefurbCancelled(lot, "admin", "every battery was declined");
+        else {
+          const declined = decisions.filter((d) => d.decision === "decline");
+          await notifyRefurbReviewed(lot, declined.length, declined.map((d) => d.reason ?? "").filter(Boolean));
+        }
         return NextResponse.json({ ok: true, lot });
       }
-      case "propose": {
+      case "estimate": {
         if (!b.expected_receipt_date || !b.expected_return_date) return bad("both dates are required");
         if (!b.items?.length) return bad("a per-battery estimate is required");
         const items = b.items.map((i) => {
           if (i.estimated_cost === undefined) throw new Error(`BAD_REQUEST: estimated_cost missing for job ${i.job_id}`);
           return { job_id: i.job_id, estimated_cost: i.estimated_cost, accessories: i.accessories };
         });
-        const lot = await proposeLot({
+        const lot = await estimateLot({
           lot_id: id,
           actor_user_id: actorId,
           expected_receipt_date: b.expected_receipt_date,
@@ -204,7 +246,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           scheduled_pickup_date: b.scheduled_pickup_date ?? null,
           advance_pct: b.advance_pct ?? 0,
         });
-        await notifyRefurbProposed(lot, lot.items.filter((i) => i.status === "declined").length);
+        await notifyRefurbEstimated(lot);
         return NextResponse.json({ ok: true, lot });
       }
       case "cancel": {
@@ -212,20 +254,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         await notifyRefurbCancelled(lot, "admin", b.message ?? null);
         return NextResponse.json({ ok: true, lot });
       }
+      case "send-pi": {
+        if (b.pi_amount === undefined) return bad("pi_amount is required");
+        const before = await getLot(id, null, "admin");
+        const lot = await sendPi({
+          lot_id: id,
+          actor_user_id: actorId,
+          pi_number: b.pi_number ?? null,
+          pi_url: b.pi_url ?? null,
+          pi_amount: b.pi_amount,
+          pi_advance_pct: b.pi_advance_pct,
+          bank_details: b.bank_details ?? {},
+          note: b.message ?? null,
+        });
+        await notifyRefurbPiSent(lot, !!before?.pi.sent_at);
+        return NextResponse.json({ ok: true, lot });
+      }
       case "confirm-payment": {
         if (!b.leg) return bad("leg is required");
-        const lot = await confirmRefurbOfflinePayment({ lot_id: id, actor_user_id: actorId, leg: b.leg, note: b.message ?? null });
+        const lot = await confirmRefurbOfflinePayment({ lot_id: id, actor_user_id: actorId, leg: b.leg, reference: b.reference ?? null, note: b.message ?? null });
         await notifyRefurbPaymentConfirmed(lot, b.leg);
         return NextResponse.json({ ok: true, lot });
       }
       case "pickup": {
         if (!b.dispatched_on) return bad("dispatched_on (pickup date) is required");
         const lot = await recordPickup(transport(b.dispatched_on));
-        await notifyRefurbDispatched(lot, "out", "picked_up");
+        await notifyRefurbDispatched(lot, "out", "picked_up", "admin");
         return NextResponse.json({ ok: true, lot });
       }
       case "arrive": {
-        const lot = await markArrived({ lot_id: id, tenant_id: null, actor_user_id: actorId, leg: "out", note: b.message ?? null });
+        const lot = await markArrived({ lot_id: id, scope: null, actor_user_id: actorId, leg: "out", note: b.message ?? null });
         await notifyRefurbArrived(lot, "out");
         return NextResponse.json({ ok: true, lot });
       }
@@ -235,20 +293,39 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           if (!i.condition) throw new Error(`BAD_REQUEST: condition missing for job ${i.job_id}`);
           return { job_id: i.job_id, condition: i.condition, note: i.note ?? null, photo_urls: i.photo_urls };
         });
-        const lot = await confirmReceipt({ lot_id: id, tenant_id: null, actor_user_id: actorId, leg: "out", items, note: b.message ?? null, photo_urls: b.photo_urls ?? [] });
+        const lot = await confirmReceipt({ lot_id: id, scope: null, actor_user_id: actorId, leg: "out", items, note: b.message ?? null, photo_urls: b.photo_urls ?? [] });
         const tally = { received: 0, damaged: 0, missing: 0 };
         for (const it of items) tally[it.condition]++;
         await notifyRefurbReceived(lot, "out", tally);
         return NextResponse.json({ ok: true, lot });
       }
+      case "assign": {
+        if (!b.refurbisher_id) return bad("refurbisher_id is required");
+        const before = await getLot(id, null, "admin");
+        const lot = await assignRefurbisher({ lot_id: id, actor_user_id: actorId, refurbisher_id: b.refurbisher_id, note: b.message ?? null });
+        await notifyRefurbAssigned(lot, !!before?.refurbisher && before.refurbisher.id !== b.refurbisher_id);
+        return NextResponse.json({ ok: true, lot });
+      }
       case "start-work": {
-        const lot = await startWork({ lot_id: id, actor_user_id: actorId });
+        const lot = await startWork({ lot_id: id, scope: null, actor_user_id: actorId, party: "admin" });
         await notifyRefurbWorkStarted(lot);
         return NextResponse.json({ ok: true, lot });
       }
       case "update-item": {
         if (!b.job_id) return bad("job_id is required");
-        const lot = await updateLotItem({ lot_id: id, job_id: b.job_id, actor_user_id: actorId, checklist: b.checklist, accessories: b.accessories, actual_cost: b.actual_cost, notes: b.notes, assigned_workshop: b.assigned_workshop });
+        const lot = await updateLotItem({ lot_id: id, job_id: b.job_id, scope: null, actor_user_id: actorId, checklist: b.checklist, accessories: b.accessories, refurbisher_parts: b.refurbisher_parts, refurbisher_cost: b.refurbisher_cost, refurbisher_note: b.refurbisher_note, notes: b.notes });
+        return NextResponse.json({ ok: true, lot });
+      }
+      case "cost-item": {
+        if (!b.job_id) return bad("job_id is required");
+        if (b.refurbisher_cost == null) return bad("refurbisher_cost is required");
+        const lot = await costItem({ lot_id: id, job_id: b.job_id, scope: null, actor_user_id: actorId, party: "admin", refurbisher_cost: b.refurbisher_cost, refurbisher_parts: b.refurbisher_parts, checklist: b.checklist, accessories: b.accessories, note: b.refurbisher_note ?? b.message ?? null });
+        if (lot.status === "costed" && lot.events.at(-1)?.kind === "all_costed") await notifyRefurbCosted(lot);
+        return NextResponse.json({ ok: true, lot });
+      }
+      case "set-final-cost": {
+        const lot = await setFinalCost({ lot_id: id, actor_user_id: actorId, margin_pct: b.margin_pct ?? null, margin_amount: b.margin_amount ?? null, note: b.message ?? null });
+        await notifyRefurbFinalBill(lot);
         return NextResponse.json({ ok: true, lot });
       }
       case "mark-ready": {
@@ -256,22 +333,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         const lot = await markItemReady({ lot_id: id, job_id: b.job_id, actor_user_id: actorId });
         return NextResponse.json({ ok: true, lot });
       }
-      case "revise-quote": {
-        if (b.revised_total === undefined) return bad("revised_total is required");
-        const lot = await reviseQuote({ lot_id: id, actor_user_id: actorId, revised_total: b.revised_total, note: b.message ?? null });
-        await notifyRefurbQuoteRevised(lot);
-        return NextResponse.json({ ok: true, lot });
-      }
       case "dispatch": {
         if (!b.dispatched_on) return bad("dispatched_on is required");
-        const lot = await recordDispatch({ ...transport(b.dispatched_on), leg: "return" });
-        await notifyRefurbDispatched(lot, "return");
+        const lot = await recordDispatch({ ...transport(b.dispatched_on), leg: "return", party: "admin" });
+        await notifyRefurbDispatched(lot, "return", "dispatched", "admin");
         return NextResponse.json({ ok: true, lot });
       }
       case "message": {
         if (!b.message?.trim()) return bad("message is required");
-        const lot = await postMessage({ lot_id: id, tenant_id: null, actor_user_id: actorId, party: "admin", message: b.message });
-        await notifyRefurbMessage(lot, "admin", b.message);
+        const to = b.to ?? "nbfc";
+        const lot = await postMessage({ lot_id: id, scope: null, actor_user_id: actorId, party: "admin", message: b.message, to });
+        await notifyRefurbMessage(lot, "admin", b.message, to);
         return NextResponse.json({ ok: true, lot });
       }
     }
