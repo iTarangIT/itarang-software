@@ -36,15 +36,28 @@ export async function createOrAdoptVendorAuthUser(
   email: string,
   password: string,
 ): Promise<string> {
+  return createOrAdoptAuthUser(email, password, "scrap_vendor");
+}
+
+/**
+ * [E-292] The same create-or-adopt rule for any partner role — the refurbisher
+ * login (src/lib/refurbisher/credentials.ts) is the second consumer. Same
+ * pre-check contract as above: callers MUST have refused a live `users` row.
+ */
+export async function createOrAdoptAuthUser(
+  email: string,
+  password: string,
+  role: string,
+): Promise<string> {
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
     // MUST be set here. Middleware reads the role off the JWT's app_metadata and
     // falls back to user_metadata; the RDS role only reaches the JWT after
-    // /api/user/profile has run once. Without this a brand-new vendor resolves to
-    // "user" on their first navigation and gets bounced off /vendor-portal.
-    user_metadata: { role: "scrap_vendor" },
+    // /api/user/profile has run once. Without this a brand-new partner resolves
+    // to "user" on their first navigation and gets bounced off their portal.
+    user_metadata: { role },
   });
   if (data?.user?.id) return data.user.id;
 
@@ -56,13 +69,13 @@ export async function createOrAdoptVendorAuthUser(
     );
   }
 
-  // Adopt: set the password + the vendor role, then hand back the existing id
-  // so the DB rows are created against the same auth user.
+  // Adopt: set the password + the role, then hand back the existing id so the
+  // DB rows are created against the same auth user.
   const { error: adoptError } = await supabaseAdmin.auth.admin.updateUserById(orphan.id, {
     password,
     email_confirm: true,
-    user_metadata: { ...(orphan.user_metadata ?? {}), role: "scrap_vendor" },
-    app_metadata: { ...(orphan.app_metadata ?? {}), role: "scrap_vendor" },
+    user_metadata: { ...(orphan.user_metadata ?? {}), role },
+    app_metadata: { ...(orphan.app_metadata ?? {}), role },
   });
   if (adoptError) throw new ValidationError(adoptError.message);
   return orphan.id;

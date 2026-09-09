@@ -381,6 +381,11 @@ export default function AgentActionPanel({
               <dd>
                 {a.agent_name ?? dash}
                 {a.agent_phone ? ` · ${a.agent_phone}` : ""}
+                {a.agent_email ? (
+                  <div className="auc-subtle" style={{ wordBreak: "break-all" }}>
+                    {a.agent_email}
+                  </div>
+                ) : null}
               </dd>
             </div>
             <div>

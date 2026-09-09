@@ -79,6 +79,9 @@ function portalRoleFor(role: string | null | undefined, hasDealerId: boolean): N
   const r = (role ?? "").toLowerCase();
   if (r.startsWith("nbfc") || r === "risk_head") return "nbfc";
   if (r === "scrap_vendor") return "vendor";
+  // [E-292] The refurbisher shares the vendor portal-role bucket: same
+  // "outside partner" fallback links, and NotificationRole has no fifth value.
+  if (r === "refurbisher") return "vendor";
   if (r === "dealer" && hasDealerId) return "dealer";
   return "admin";
 }

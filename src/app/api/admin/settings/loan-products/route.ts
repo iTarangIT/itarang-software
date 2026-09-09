@@ -1,10 +1,15 @@
 /**
- * E-282/E-283/E-286/E-289 — Settings → Loan Product: the default NBFC + loan
- * product pinned to a dealer, to a DEALER LOCATION, to a CUSTOMER LOCATION, or
- * any combination. `state`/`city` describe the dealer's own registered address
- * (accounts.state / accounts.city) since E-286; `customer_state`/
- * `customer_city` describe where the applicant lives (leads.state / leads.city)
- * since E-289 — see city-default-product.ts.
+ * E-282/E-283/E-286/E-290/E-291 — Settings → Loan Product: the default NBFC +
+ * loan product pinned to a dealer, or to a CUSTOMER LOCATION. `state`/`city`
+ * are matched against `leads.state` / `leads.city` (E-291); they described the
+ * dealer's own registered address between E-286 and E-290 — see
+ * city-default-product.ts.
+ *
+ * A rule is exactly one of three kinds — a dealer, a customer city, or a
+ * customer state — and the most specific one wins. There is no priority
+ * number. A location rule does not widen coverage: the BRE has already dropped
+ * every lender that cannot serve where the lead lives before a pin is
+ * consulted, so the pin only chooses among the lenders that can.
  *
  * Kept out of the `/api/admin/settings` bundle for the same reason
  * `/api/admin/settings/nbfc-request-sla` is: it is its own concern, not part of
@@ -14,15 +19,14 @@
  *
  * GET    → the current rules plus the NBFC/product options the form needs.
  * GET ?dealerCode= → the NBFC ids blocked for that dealer, for the form warning.
- * POST   → create or replace the rule for a (dealer, dealer state, dealer city,
- *          customer state, customer city). `cities` and `customer_cities` may
- *          each name several at once; every PAIR becomes its own row, because
- *          that is what resolveDefaultProductRules() and the partial unique
- *          index key on.
+ * POST   → create or replace the rule for a (dealer, customer state, customer
+ *          city). `cities` may name several at once; each becomes its own row,
+ *          because that is what resolveDefaultProductRules() and the partial
+ *          unique index key on.
  * DELETE → deactivate one rule by id.
  */
 
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
@@ -52,29 +56,18 @@ const BLOCKING_STATUSES = ["suspended", "terminated"];
 const BodySchema = z.object({
   // Omitted / null / "" = the rule applies to every dealer.
   dealer_code: z.string().trim().max(255).optional().nullable(),
-  // E-283 made this optional: omitted = the rule declares no location, which is
-  // only meaningful together with a dealer_code (enforced below).
+  // The CUSTOMER's state (E-291). E-283 made it optional: omitted = the rule
+  // declares no location, which is only meaningful together with a dealer_code
+  // (enforced below).
   state: z.string().trim().max(100).optional().nullable(),
-  // Omitted / null / "" = every dealer city in the state.
+  // The CUSTOMER's city. Omitted / null / "" = every city in the state.
   city: z.string().trim().max(100).optional().nullable(),
   // Several cities pinned to the same lender + product in one go; each is
   // saved as its own rule. Kept alongside `city` so a caller may send either.
   // Capped so a mis-click cannot write hundreds of rules in one request.
   cities: z.array(z.string().trim().max(100)).max(200).optional().nullable(),
-  // E-289 — where the CUSTOMER lives (leads.state / leads.city), the other,
-  // independent location pair. Omitted / null / "" = every customer.
-  customer_state: z.string().trim().max(100).optional().nullable(),
-  customer_city: z.string().trim().max(100).optional().nullable(),
-  customer_cities: z
-    .array(z.string().trim().max(100))
-    .max(200)
-    .optional()
-    .nullable(),
   nbfc_id: z.number().int().positive(),
   loan_product_id: z.number().int().positive(),
-  // Highest wins; specificity breaks ties. Bounded so a typo cannot create a
-  // rule that can never be outranked.
-  priority: z.number().int().min(0).max(1000).optional(),
   notes: z.string().trim().max(500).optional().nullable(),
 });
 
@@ -121,9 +114,6 @@ export const GET = withErrorHandler(async (req: Request) => {
       dealerCode: cityDefaultLoanProducts.dealer_code,
       state: cityDefaultLoanProducts.state,
       city: cityDefaultLoanProducts.city,
-      customerState: cityDefaultLoanProducts.customer_state,
-      customerCity: cityDefaultLoanProducts.customer_city,
-      priority: cityDefaultLoanProducts.priority,
       nbfcId: cityDefaultLoanProducts.nbfc_id,
       loanProductId: cityDefaultLoanProducts.loan_product_id,
       notes: cityDefaultLoanProducts.notes,
@@ -141,24 +131,22 @@ export const GET = withErrorHandler(async (req: Request) => {
       nbfcLoanProducts,
       eq(nbfcLoanProducts.id, cityDefaultLoanProducts.loan_product_id),
     )
-    .where(eq(cityDefaultLoanProducts.is_active, true))
+    .where(
+      and(
+        eq(cityDefaultLoanProducts.is_active, true),
+        // Retired customer-scoped rules (E-289, removed by E-290) are hidden
+        // rather than reinterpreted. The resolver excludes them with the same
+        // two predicates, so the table and the router agree even on a database
+        // where E-290's cleanup has not been run.
+        isNull(cityDefaultLoanProducts.customer_state),
+        isNull(cityDefaultLoanProducts.customer_city),
+      ),
+    )
     // The SAME order resolveDefaultProductRules() applies, so the admin reads
-    // the table top-down as the resolution order rather than inferring it.
+    // the table top-down as the resolution order rather than inferring it:
+    // dealer, then city, then state.
     .orderBy(
-      desc(cityDefaultLoanProducts.priority),
-      // E-289 — how many of the five scoping columns the rule declares, most
-      // first; the ladder below only settles rules that declare the same
-      // number of them.
-      sql`(
-        (${cityDefaultLoanProducts.dealer_code} IS NOT NULL)::int
-      + (${cityDefaultLoanProducts.customer_city} IS NOT NULL)::int
-      + (${cityDefaultLoanProducts.customer_state} IS NOT NULL)::int
-      + (${cityDefaultLoanProducts.city} IS NOT NULL)::int
-      + (${cityDefaultLoanProducts.state} IS NOT NULL)::int
-      ) DESC`,
       sql`(${cityDefaultLoanProducts.dealer_code} IS NULL)`,
-      sql`(${cityDefaultLoanProducts.customer_city} IS NULL)`,
-      sql`(${cityDefaultLoanProducts.customer_state} IS NULL)`,
       sql`(${cityDefaultLoanProducts.city} IS NULL)`,
       sql`(${cityDefaultLoanProducts.state} IS NULL)`,
       desc(cityDefaultLoanProducts.id),
@@ -178,11 +166,6 @@ export const GET = withErrorHandler(async (req: Request) => {
       productName: nbfcLoanProducts.product_name,
       loanAmountMin: nbfcLoanProducts.loan_amount_min,
       loanAmountMax: nbfcLoanProducts.loan_amount_max,
-      // E-289 — the lender's own coverage. The BRE drops a product whose
-      // active_locations do not cover the customer BEFORE any pin is
-      // consulted, so the form warns when a customer-scoped rule names a
-      // place its product does not serve.
-      activeLocations: nbfcLoanProducts.active_locations,
     })
     .from(nbfcLoanProducts)
     .innerJoin(nbfc, eq(nbfc.id, nbfcLoanProducts.nbfc_id))
@@ -203,7 +186,6 @@ export const GET = withErrorHandler(async (req: Request) => {
         productName: string;
         loanAmountMin: number;
         loanAmountMax: number;
-        activeLocations: { state: string; city: string }[];
       }[];
     }
   >();
@@ -220,7 +202,6 @@ export const GET = withErrorHandler(async (req: Request) => {
       productName: r.productName,
       loanAmountMin: r.loanAmountMin,
       loanAmountMax: r.loanAmountMax,
-      activeLocations: r.activeLocations ?? [],
     });
     byNbfc.set(r.nbfcId, entry);
   }
@@ -245,15 +226,16 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   const dealerCode =
     b.dealer_code && b.dealer_code.length > 0 ? b.dealer_code : null;
-  const state = b.state && b.state.length > 0 ? b.state : null;
-  const customerState =
-    b.customer_state && b.customer_state.length > 0 ? b.customer_state : null;
-  const priority = b.priority ?? 0;
+  // A rule is exactly ONE of the three kinds the resolver orders by, so a
+  // dealer rule carries no location: "this dealer" already answers who the
+  // default is for, and adding "…but only customers in Kolkata" would be a
+  // fourth kind the ladder has no rung for. The form hides the location fields
+  // once a dealer is picked; this is the boundary that enforces it.
+  const state = !dealerCode && b.state && b.state.length > 0 ? b.state : null;
 
   // `city` and `cities` fold into one list. Blank entries drop out, and
   // duplicates are collapsed case-insensitively so two spellings of the same
   // city cannot trip the partial unique index against each other mid-loop.
-  // The customer pair (E-289) folds exactly the same way.
   function foldCities(
     single: string | null | undefined,
     many?: string[] | null,
@@ -271,55 +253,40 @@ export const POST = withErrorHandler(async (req: Request) => {
     return out;
   }
 
-  const cityList = foldCities(b.city, b.cities);
-  const customerCityList = foldCities(b.customer_city, b.customer_cities);
-  // No city named at all = one state-wide (or unlocated) rule on that leg.
+  const cityList = dealerCode ? [] : foldCities(b.city, b.cities);
+  // No city named at all = one state-wide rule (or, for a dealer, unlocated).
   const dealerTargets: (string | null)[] =
     cityList.length > 0 ? cityList : [null];
-  const customerTargets: (string | null)[] =
-    customerCityList.length > 0 ? customerCityList : [null];
 
-  // A rule with no dealer AND no location of either kind matches every finance
-  // lead in the country. That is almost certainly a misconfiguration rather
-  // than an intent, and it would shadow every other rule sharing its priority.
+  // A rule with neither a dealer nor a location matches every finance lead in
+  // the country. That is almost certainly a misconfiguration rather than an
+  // intent, and it would shadow every other rule.
   //
-  // The state/city named here are the DEALER's, and they are NOT validated
-  // against the dealer directory: a dealer can move, and a rule written ahead
-  // of a dealer's onboarding is legitimate. The admin form warns when a named
-  // dealer is not in the named location, which is the only combination that
-  // can never match. The CUSTOMER location (E-289) is not validated either — a
-  // rule may legitimately be written before the first lead from that city.
-  if (!dealerCode && !state && !customerState) {
+  // The state/city named here are the CUSTOMER's (E-291) and are NOT validated
+  // against anything: a rule written for a city iTarang has no lead in yet is
+  // legitimate — that is the point of setting a default ahead of the market.
+  // A city no lender covers is harmless too, since the pin is applied to the
+  // BRE's hits and simply finds none.
+  if (!dealerCode && !state) {
     return errorResponse(
-      "A default must name a dealer, a dealer location, or a customer location.",
+      "A default must name a dealer or a customer location.",
       400,
     );
   }
 
   // A city without a state cannot be matched — the resolver keys on both.
   if (cityList.length > 0 && !state) {
-    return errorResponse("Select a dealer state before choosing a city.", 400);
-  }
-  if (customerCityList.length > 0 && !customerState) {
-    return errorResponse(
-      "Select a customer state before choosing a customer city.",
-      400,
-    );
+    return errorResponse("Select a state before choosing a city.", 400);
   }
 
-  // Two multi-selects MULTIPLY: one row per (dealer city, customer city) pair.
-  // The per-array cap no longer bounds the row count on its own, so bound the
-  // product before a mis-click writes tens of thousands of rules.
-  const rowCount = dealerTargets.length * customerTargets.length;
+  // One row per city, so the per-array cap already bounds this — checked again
+  // because `city` and `cities` fold together and the route is the boundary.
+  const rowCount = dealerTargets.length;
   if (rowCount > 200) {
     return errorResponse(
       "That selection would write " +
         rowCount +
-        " rules (" +
-        dealerTargets.length +
-        " dealer cities x " +
-        customerTargets.length +
-        " customer cities). Narrow one of the two lists — at most 200 rules can be saved at once.",
+        " rules. Pick fewer cities — at most 200 rules can be saved at once.",
       400,
     );
   }
@@ -368,53 +335,46 @@ export const POST = withErrorHandler(async (req: Request) => {
   // ACTIVE row per (dealer_code, state, city, customer_state, customer_city),
   // and deactivating keeps the old row as history — the same pattern
   // dealer_salespersons uses. The predicate must match that key exactly, NULLs
-  // included, or the insert trips it.
+  // included, or the insert trips it. The customer_state / customer_city
+  // columns are the RETIRED E-289 pair and stay NULL: E-291 put the customer
+  // back on `state`/`city` precisely so this five-column key keeps working
+  // unchanged (see the E-291 migration header).
   //
-  // One (dealer city, customer city) pair per row, so a multi-select on either
-  // leg is a nested loop — inside a single transaction, so a failure part-way
-  // through leaves none of the pairs half-applied against the ones they
-  // replaced.
+  // One city per row, so a multi-select is a loop — inside a single
+  // transaction, so a failure part-way through leaves none of the cities
+  // half-applied against the ones they replaced.
   await db.transaction(async (tx) => {
     for (const city of dealerTargets) {
-      for (const customerCity of customerTargets) {
-        await tx
-          .update(cityDefaultLoanProducts)
-          .set({
-            is_active: false,
-            updated_by: actor.id,
-            updated_at: new Date(),
-          })
-          .where(
-            and(
-              eq(cityDefaultLoanProducts.is_active, true),
-              matchesScope(cityDefaultLoanProducts.dealer_code, dealerCode),
-              matchesScope(cityDefaultLoanProducts.state, state),
-              matchesScope(cityDefaultLoanProducts.city, city),
-              matchesScope(
-                cityDefaultLoanProducts.customer_state,
-                customerState,
-              ),
-              matchesScope(
-                cityDefaultLoanProducts.customer_city,
-                customerCity,
-              ),
-            ),
-          );
-
-        await tx.insert(cityDefaultLoanProducts).values({
-          dealer_code: dealerCode,
-          state,
-          city,
-          customer_state: customerState,
-          customer_city: customerCity,
-          priority,
-          nbfc_id: b.nbfc_id,
-          loan_product_id: b.loan_product_id,
-          notes: b.notes ?? null,
-          created_by: actor.id,
+      await tx
+        .update(cityDefaultLoanProducts)
+        .set({
+          is_active: false,
           updated_by: actor.id,
-        });
-      }
+          updated_at: new Date(),
+        })
+        .where(
+          and(
+            eq(cityDefaultLoanProducts.is_active, true),
+            matchesScope(cityDefaultLoanProducts.dealer_code, dealerCode),
+            matchesScope(cityDefaultLoanProducts.state, state),
+            matchesScope(cityDefaultLoanProducts.city, city),
+            matchesScope(cityDefaultLoanProducts.customer_state, null),
+            matchesScope(cityDefaultLoanProducts.customer_city, null),
+          ),
+        );
+
+      await tx.insert(cityDefaultLoanProducts).values({
+        dealer_code: dealerCode,
+        state,
+        city,
+        customer_state: null,
+        customer_city: null,
+        nbfc_id: b.nbfc_id,
+        loan_product_id: b.loan_product_id,
+        notes: b.notes ?? null,
+        created_by: actor.id,
+        updated_by: actor.id,
+      });
     }
   });
 

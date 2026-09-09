@@ -33,6 +33,11 @@ export const RECOVERY_STAGES = [
   "scrap",
   "ready_for_auction",
   "resold",
+  // [E-292] The NBFC chose to put the battery back into service (triage R3
+  // "fit as-is → redeploy", or step 17 after refurbishment) rather than sell
+  // it. A STUB: recorded and admin is notified; the redeployment workflow
+  // itself is a separate flow the v3 design leaves for later.
+  "redeploy",
 ] as const;
 export type RecoveryStage = (typeof RECOVERY_STAGES)[number];
 
@@ -44,13 +49,15 @@ export const ALLOWED_TRANSITIONS: Record<RecoveryStage, RecoveryStage[]> = {
   // so a battery that came back in perfect condition had to be booked into a
   // workshop it did not need before it could be sold. That was not a policy
   // decision, it was a missing edge.
-  needs_inspection: ["refurbishable", "scrap", "ready_for_auction"],
+  needs_inspection: ["refurbishable", "scrap", "ready_for_auction", "redeploy"],
   // A battery can also turn out to be beyond repair once the workshop opens
   // it, which is the other edge that was missing.
-  refurbishable: ["ready_for_auction", "scrap"],
+  refurbishable: ["ready_for_auction", "scrap", "redeploy"],
   scrap: [], // terminal
-  ready_for_auction: ["resold"],
+  // [E-292] After refurbishment the NBFC chooses: auction (stays here) or redeploy.
+  ready_for_auction: ["resold", "redeploy"],
   resold: [], // terminal
+  redeploy: [], // terminal (stub)
 };
 
 // ---------------------------------------------------------------------------
@@ -214,6 +221,11 @@ export interface TransitionInput {
   recovery_pipeline_id: string;
   target_stage: RecoveryStage;
   note?: string;
+  /**
+   * [E-292] The triage health % (measured ÷ rated voltage), used as the SOH
+   * when no 3-step evaluation exists. An evaluation, when present, still wins.
+   */
+  soh_fallback?: number | null;
 }
 
 export interface TransitionResult {
@@ -287,12 +299,20 @@ export async function transitionStage(
     .orderBy(desc(nbfcBatteryEvaluations.created_at))
     .limit(1);
 
-  const soh =
+  const evalSoh =
     latestEval && typeof latestEval.step1 === "object" && latestEval.step1 !== null
       ? Number((latestEval.step1 as Record<string, unknown>).soh_percent)
       : null;
+  // [E-292] A triaged battery without a wizard evaluation is judged on its
+  // health % — otherwise "refurbish" from the triage panel would be refused
+  // for want of the very evaluation the triage replaces.
+  const soh = Number.isFinite(evalSoh as number)
+    ? (evalSoh as number)
+    : input.soh_fallback != null && Number.isFinite(input.soh_fallback)
+      ? input.soh_fallback
+      : null;
 
-  assertSohAllowsStage(Number.isFinite(soh as number) ? (soh as number) : null, input.target_stage);
+  assertSohAllowsStage(soh, input.target_stage);
 
   const now = new Date();
 

@@ -48,6 +48,12 @@ export type LeadFilters = {
     /** created_at range, YYYY-MM-DD. */
     from: string;
     to: string;
+    /**
+     * assigned_at range, YYYY-MM-DD. Oversight roles only (canSeeOwnerAsm) —
+     * the API ignores the params for anyone else, same as owner_id.
+     */
+    assignedFrom: string;
+    assignedTo: string;
     // ── Call disposition, L1 → L2 → L3 (E-236) ───────────────────────────
     // Three fields rather than one because each level is independently useful:
     // "everything Not Connected" and "everything we lost" are questions in their
@@ -87,6 +93,8 @@ export const EMPTY_FILTERS: LeadFilters = {
     city: "",
     from: "",
     to: "",
+    assignedFrom: "",
+    assignedTo: "",
     connectStatus: "",
     dispositionBucket: "",
     disposition: "",
@@ -162,6 +170,8 @@ export function toSearchParams(
     if (f.city) p.set("city", f.city);
     if (f.from) p.set("from", f.from);
     if (f.to) p.set("to", f.to);
+    if (f.assignedFrom) p.set("assigned_from", f.assignedFrom);
+    if (f.assignedTo) p.set("assigned_to", f.assignedTo);
     if (f.connectStatus) p.set("connect_status", f.connectStatus);
     if (f.dispositionBucket) p.set("disposition_bucket", f.dispositionBucket);
     if (f.disposition) p.set("disposition", f.disposition);
@@ -201,6 +211,8 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
         city: sp.get("city") ?? "",
         from: sp.get("from") ?? "",
         to: sp.get("to") ?? "",
+        assignedFrom: sp.get("assigned_from") ?? "",
+        assignedTo: sp.get("assigned_to") ?? "",
         // Validated, not trusted: these seed a <select> whose value must be one
         // of its options, and an unrecognised one would render as a blank
         // selection that silently filters nothing. `disposition` is deliberately

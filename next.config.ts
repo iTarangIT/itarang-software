@@ -70,11 +70,27 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // PRODUCTION ONLY. Built chunk filenames are content-hashed, so caching
+        // them for a year cannot serve stale code.
+        //
+        // In DEV they are not: Turbopack reuses the same
+        // `_next/static/chunks/<module-path>_<hash>._.js` path across rebuilds,
+        // so `immutable` told the browser never to revalidate and it kept
+        // replaying a PRE-EDIT chunk for a year. The symptom is a runtime error
+        // that survives restarting the dev server and deleting `.next`:
+        //   Module .../lucide-react/dist/esm/icons/info.js <export default as
+        //   Info> was instantiated because it was required from module
+        //   .../DefaultLoanProductForm.tsx, but the module factory is not
+        //   available. It might have been deleted in an HMR update.
+        // — the cached chunk still imported an icon the edited source had
+        // dropped. So in dev these must revalidate like everything else.
         source: "/_next/static/:path*",
         headers: [
           {
             key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
+            value: isDev
+              ? "no-store, must-revalidate"
+              : "public, max-age=31536000, immutable",
           },
         ],
       },

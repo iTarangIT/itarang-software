@@ -4,140 +4,195 @@ import {
   CANCELLABLE_LOT_STATUSES,
   OPEN_LOT_STATUSES,
   CLOSED_LOT_STATUSES,
+  FINISHED_LOT_STATUSES,
+  allOpenItemsCosted,
   allOpenItemsReady,
   assertLotMove,
   awaitingParty,
+  balanceClearedForReturn,
   custodyForItem,
   moveParty,
-  nextAfterAdvance,
-  nextAfterAgreed,
   nextAfterReceipt,
   nextLotStatus,
-  withinApprovedQuote,
+  partyMayMove,
+  shippableOut,
+  splitMargin,
 } from "../refurbishment-lot-status";
 
-describe("refurbishment lot status machine (E-270 / E-271)", () => {
-  it("walks the full happy path: advance + iTarang pickup + revision + balance", () => {
+describe("refurbishment lot status machine (E-292, v3)", () => {
+  it("walks the long path: counter, PI, advance, pickup, refurbisher, margin, balance, close", () => {
     let s = "requested";
     const walk = (move: Parameters<typeof assertLotMove>[1], to: string) => {
       s = assertLotMove(s, move);
       expect(s).toBe(to);
     };
-    walk("propose", "proposed");
+    walk("review", "reviewed");
+    walk("review", "reviewed"); // re-entrant: a second pass of declines
+    walk("estimate", "estimated");
     walk("counter", "countered");
-    walk("propose", "proposed");
+    walk("estimate", "estimated");
     walk("accept", "agreed");
-    // accept lands on awaiting_advance when the quote carries an advance
-    s = nextAfterAgreed({ advance_pct: 30, pickup_mode: "itarang_pickup" });
-    expect(s).toBe("awaiting_advance");
-    walk("advance_paid", "advance_paid");
-    s = nextAfterAdvance({ pickup_mode: "itarang_pickup" });
-    expect(s).toBe("pickup_scheduled");
+    walk("send_pi", "pi_sent");
+    walk("send_pi", "pi_sent"); // corrected PDF before acceptance
+    walk("accept_pi", "pi_accepted");
+    walk("advance_received", "advance_recorded");
     walk("pickup", "in_transit_out");
-    walk("arrive_out", "delivered");
-    walk("receive_out", "received");
+    walk("receive_out", "received"); // "arrived" is a timestamp, not a state
+    walk("assign", "at_refurbisher");
+    walk("assign", "at_refurbisher"); // re-assign before work starts
     walk("start_work", "in_progress");
-    walk("revise", "revision_pending");
-    walk("reject_revision", "in_progress");
-    walk("revise", "revision_pending");
-    walk("approve_revision", "in_progress");
+    walk("all_costed", "costed");
     walk("all_ready", "ready");
     walk("dispatch_return", "in_transit_return");
     walk("arrive_return", "delivered_back");
     walk("receive_return", "balance_due");
     walk("settle", "settled");
+    walk("close", "closed");
   });
 
   it("walks the lean path: no advance, NBFC ships, nothing owed at the end", () => {
-    expect(nextAfterAgreed({ advance_pct: 0, pickup_mode: "nbfc_ships" })).toBe("agreed");
-    expect(nextLotStatus("agreed", "dispatch_out")).toBe("in_transit_out");
+    expect(nextLotStatus("pi_accepted", "dispatch_out")).toBe("in_transit_out");
+    expect(shippableOut({ status: "pi_accepted", advance_status: "not_required" })).toBe(true);
+    expect(shippableOut({ status: "pi_accepted", advance_status: "pending" })).toBe(false);
+    expect(shippableOut({ status: "pi_accepted", advance_status: "recorded" })).toBe(false);
+    expect(shippableOut({ status: "advance_recorded", advance_status: "confirmed" })).toBe(true);
+    expect(shippableOut({ status: "agreed" })).toBe(false);
     expect(nextAfterReceipt(0)).toBe("settled");
     expect(nextAfterReceipt(null)).toBe("settled");
     expect(nextAfterReceipt(1200)).toBe("balance_due");
   });
 
-  it("routes agreed → pickup_scheduled when iTarang collects and no advance is due", () => {
-    expect(nextAfterAgreed({ advance_pct: 0, pickup_mode: "itarang_pickup" })).toBe("pickup_scheduled");
-    expect(nextAfterAdvance({ pickup_mode: "nbfc_ships" })).toBe("advance_paid");
-    expect(nextLotStatus("advance_paid", "dispatch_out")).toBe("in_transit_out");
-    expect(nextLotStatus("pickup_scheduled", "dispatch_out")).toBeNull(); // NBFC cannot ship a pickup lot
-    expect(nextLotStatus("agreed", "pickup")).toBeNull(); // and iTarang cannot pick up an nbfc_ships lot
+  it("E-293: the balance is paid before the return truck — a confirmed balance settles on receipt, a pending one holds the truck", () => {
+    // paid (confirmed) while the batteries were still away → receipt settles the lot
+    expect(nextAfterReceipt(1200, "confirmed")).toBe("settled");
+    // merely recorded (slip + UTR) → iTarang still owes the confirmation after receipt
+    expect(nextAfterReceipt(1200, "recorded")).toBe("balance_due");
+    expect(nextAfterReceipt(1200, "pending")).toBe("balance_due");
+    // the return dispatch gate
+    expect(balanceClearedForReturn({ balance_status: "pending" })).toBe(false);
+    expect(balanceClearedForReturn({ balance_status: "recorded" })).toBe(true);
+    expect(balanceClearedForReturn({ balance_status: "confirmed" })).toBe(true);
+    expect(balanceClearedForReturn({ balance_status: "not_due" })).toBe(true);
+    expect(balanceClearedForReturn({})).toBe(true);
+    // who is waited on while the lot is ready
+    expect(awaitingParty("ready", { balance_status: "pending" })).toBe("nbfc");
+    expect(awaitingParty("ready", { balance_status: "recorded" })).toBe("admin");
+    expect(awaitingParty("ready", { balance_status: "confirmed" })).toBe("admin");
+    expect(awaitingParty("ready")).toBe("admin");
   });
 
   it("refuses moves out of order", () => {
+    expect(nextLotStatus("requested", "estimate")).toBeNull(); // must review first
     expect(nextLotStatus("requested", "accept")).toBeNull();
-    expect(nextLotStatus("requested", "dispatch_out")).toBeNull();
-    expect(nextLotStatus("proposed", "propose")).toBeNull();
-    expect(nextLotStatus("in_transit_out", "receive_out")).toBeNull(); // must arrive first
-    expect(nextLotStatus("in_transit_return", "receive_return")).toBeNull();
+    expect(nextLotStatus("estimated", "send_pi")).toBeNull(); // must be agreed first
+    expect(nextLotStatus("agreed", "dispatch_out")).toBeNull(); // PI not accepted
+    expect(nextLotStatus("pi_sent", "dispatch_out")).toBeNull();
+    expect(nextLotStatus("in_transit_return", "receive_return")).toBeNull(); // must arrive first
+    expect(nextLotStatus("in_progress", "all_ready")).toBeNull(); // must be costed first
+    expect(nextLotStatus("received", "start_work")).toBeNull(); // must be assigned first
     expect(nextLotStatus("in_progress", "dispatch_return")).toBeNull();
-    expect(nextLotStatus("ready", "revise")).toBeNull();
-    expect(nextLotStatus("settled", "cancel")).toBeNull();
+    expect(nextLotStatus("balance_due", "close")).toBeNull(); // must settle first
+    expect(nextLotStatus("closed", "close")).toBeNull();
     expect(() => assertLotMove("received", "accept")).toThrow(/^CONFLICT:/);
   });
 
-  it("allows cancel only before anything has moved", () => {
+  it("allows cancel only before anything has moved, by nbfc or admin only", () => {
     for (const s of CANCELLABLE_LOT_STATUSES) expect(nextLotStatus(s, "cancel")).toBe("cancelled");
-    for (const s of ["in_transit_out", "delivered", "received", "in_progress", "revision_pending", "ready", "in_transit_return", "delivered_back", "balance_due", "settled", "cancelled"]) {
+    for (const s of ["in_transit_out", "received", "at_refurbisher", "in_progress", "costed", "ready", "in_transit_return", "delivered_back", "balance_due", "settled", "closed", "cancelled"]) {
       expect(nextLotStatus(s, "cancel")).toBeNull();
     }
-    expect(moveParty("cancel")).toBe("either");
+    expect(moveParty("cancel")).toEqual(["nbfc", "admin"]);
+    expect(partyMayMove("refurbisher", "cancel")).toBe(false);
   });
 
-  it("names who owes the next move, including the money sub-states", () => {
+  it("knows which party performs which move", () => {
+    expect(partyMayMove("refurbisher", "start_work")).toBe(true);
+    expect(partyMayMove("admin", "start_work")).toBe(true); // admin override
+    expect(partyMayMove("nbfc", "start_work")).toBe(false);
+    expect(partyMayMove("refurbisher", "dispatch_return")).toBe(true);
+    expect(partyMayMove("refurbisher", "send_pi")).toBe(false);
+    expect(partyMayMove("nbfc", "close")).toBe(true);
+    expect(moveParty("all_costed")).toBe("system");
+    expect(partyMayMove("admin", "all_costed")).toBe(false);
+  });
+
+  it("names who owes the next move, including the money sub-states and the refurbisher", () => {
     expect(awaitingParty("requested")).toBe("admin");
-    expect(awaitingParty("proposed")).toBe("nbfc");
-    expect(awaitingParty("pickup_scheduled")).toBe("admin");
-    expect(awaitingParty("advance_paid")).toBe("nbfc");
-    expect(awaitingParty("delivered")).toBe("admin");
-    expect(awaitingParty("revision_pending")).toBe("nbfc");
+    expect(awaitingParty("reviewed")).toBe("admin");
+    expect(awaitingParty("estimated")).toBe("nbfc");
+    expect(awaitingParty("countered")).toBe("admin");
+    expect(awaitingParty("agreed")).toBe("admin");
+    expect(awaitingParty("pi_sent")).toBe("nbfc");
+    expect(awaitingParty("pi_accepted", { advance_status: "pending" })).toBe("nbfc");
+    expect(awaitingParty("pi_accepted", { advance_status: "recorded" })).toBe("admin");
+    expect(awaitingParty("pi_accepted", { advance_status: "not_required", pickup_mode: "nbfc_ships" })).toBe("nbfc");
+    expect(awaitingParty("pi_accepted", { advance_status: "not_required", pickup_mode: "itarang_pickup" })).toBe("admin");
+    expect(awaitingParty("advance_recorded", { pickup_mode: "nbfc_ships" })).toBe("nbfc");
+    expect(awaitingParty("advance_recorded", { pickup_mode: "itarang_pickup" })).toBe("admin");
+    expect(awaitingParty("in_transit_out")).toBe("admin");
+    expect(awaitingParty("received")).toBe("admin");
+    expect(awaitingParty("at_refurbisher")).toBe("refurbisher");
+    expect(awaitingParty("in_progress")).toBe("refurbisher");
+    expect(awaitingParty("costed")).toBe("admin");
+    expect(awaitingParty("ready")).toBe("admin");
     expect(awaitingParty("delivered_back")).toBe("nbfc");
-    expect(awaitingParty("awaiting_advance", { advance_status: "pending" })).toBe("nbfc");
-    expect(awaitingParty("awaiting_advance", { advance_status: "recorded" })).toBe("admin");
     expect(awaitingParty("balance_due", { balance_status: "pending" })).toBe("nbfc");
     expect(awaitingParty("balance_due", { balance_status: "recorded" })).toBe("admin");
-    expect(awaitingParty("settled")).toBeNull();
+    expect(awaitingParty("settled")).toBe("nbfc"); // owes the redeploy / auction choice
+    expect(awaitingParty("closed")).toBeNull();
     expect(awaitingParty("cancelled")).toBeNull();
   });
 
-  it("keeps the open/closed split total", () => {
+  it("keeps the open/closed split total and settled open", () => {
     expect(new Set([...OPEN_LOT_STATUSES, ...CLOSED_LOT_STATUSES]).size).toBe(LOT_STATUSES.length);
-    expect(LOT_STATUSES.length).toBe(18);
+    expect(LOT_STATUSES.length).toBe(20);
+    expect(OPEN_LOT_STATUSES).toContain("settled");
+    expect(FINISHED_LOT_STATUSES).toEqual(["settled", "closed", "cancelled"]);
   });
 
-  it("only calls a lot ready when every live battery is", () => {
+  it("only calls a lot ready / costed when every live battery is", () => {
     expect(allOpenItemsReady([])).toBe(false);
     expect(allOpenItemsReady(["ready", "ready"])).toBe(true);
-    expect(allOpenItemsReady(["ready", "in_progress"])).toBe(false);
+    expect(allOpenItemsReady(["ready", "at_refurbisher"])).toBe(false);
     expect(allOpenItemsReady(["ready", "declined", "cancelled"])).toBe(true);
     expect(allOpenItemsReady(["declined"])).toBe(false);
     expect(allOpenItemsReady(["returned", "ready"])).toBe(true);
+    expect(allOpenItemsCosted([])).toBe(false);
+    expect(allOpenItemsCosted([{ status: "at_refurbisher", costed_at: "x" }, { status: "declined" }])).toBe(true);
+    expect(allOpenItemsCosted([{ status: "at_refurbisher", costed_at: "x" }, { status: "at_refurbisher", costed_at: null }])).toBe(false);
   });
 
-  it("gates ready on the approved quote", () => {
-    expect(withinApprovedQuote(23000, 23000)).toBe(true);
-    expect(withinApprovedQuote(23000.004, 23000)).toBe(true);
-    expect(withinApprovedQuote(23001, 23000)).toBe(false);
-    expect(withinApprovedQuote(99999, null)).toBe(true); // legacy lots without a frozen quote
-    expect(withinApprovedQuote(null, 100)).toBe(true);
+  it("splits the margin pro-rata and sums exactly to the final total", () => {
+    expect(splitMargin([4200 + 7500, 7800 + 7500], 4050)).toEqual([11700 + 1755, 15300 + 2295]);
+    const out = splitMargin([100, 100, 100], 10);
+    expect(out.reduce((s, x) => s + x, 0)).toBeCloseTo(310, 2);
+    expect(splitMargin([0, 0], 100)).toEqual([50, 50]);
+    expect(splitMargin([1000], 0)).toEqual([1000]);
+    expect(splitMargin([], 100)).toEqual([]);
   });
 
   it("derives where a battery is from lot status + its own receipt facts", () => {
     const j = (status: string, extra: Record<string, string | null> = {}) => ({ status, ...extra });
-    expect(custodyForItem("requested", j("requested"))).toBe("at_nbfc");
-    expect(custodyForItem("awaiting_advance", j("requested"))).toBe("at_nbfc");
-    expect(custodyForItem("pickup_scheduled", j("requested"))).toBe("awaiting_pickup");
-    expect(custodyForItem("in_transit_out", j("requested"))).toBe("in_transit_to_workshop");
-    expect(custodyForItem("delivered", j("requested"))).toBe("at_workshop_gate");
-    expect(custodyForItem("received", j("requested"))).toBe("at_workshop");
-    expect(custodyForItem("in_progress", j("in_progress"))).toBe("at_workshop");
-    expect(custodyForItem("in_progress", j("requested", { out_received_condition: "missing" }))).toBe("unknown_lost");
-    expect(custodyForItem("in_progress", j("cancelled", { out_received_condition: "missing" }))).toBe("unknown_lost");
-    expect(custodyForItem("in_transit_return", j("ready"))).toBe("in_transit_to_nbfc");
-    expect(custodyForItem("delivered_back", j("ready"))).toBe("at_nbfc_gate");
-    expect(custodyForItem("balance_due", j("returned"))).toBe("back_at_nbfc");
-    expect(custodyForItem("settled", j("returned"))).toBe("back_at_nbfc");
+    const L = (status: string, extra: Record<string, string | null> = {}) => ({ status, ...extra });
+    expect(custodyForItem(L("requested"), j("requested"))).toBe("with_nbfc");
+    expect(custodyForItem(L("pi_sent"), j("requested"))).toBe("with_nbfc");
+    expect(custodyForItem(L("pi_accepted", { advance_status: "pending", pickup_mode: "itarang_pickup" }), j("requested"))).toBe("with_nbfc");
+    expect(custodyForItem(L("advance_recorded", { advance_status: "confirmed", pickup_mode: "itarang_pickup" }), j("requested"))).toBe("awaiting_pickup");
+    expect(custodyForItem(L("advance_recorded", { advance_status: "confirmed", pickup_mode: "nbfc_ships" }), j("requested"))).toBe("with_nbfc");
+    expect(custodyForItem(L("in_transit_out"), j("requested"))).toBe("in_transit_to_itarang");
+    expect(custodyForItem(L("received"), j("requested"))).toBe("at_itarang");
+    expect(custodyForItem(L("at_refurbisher"), j("at_refurbisher"))).toBe("at_refurbisher");
+    expect(custodyForItem(L("in_progress"), j("at_refurbisher"))).toBe("at_refurbisher");
+    expect(custodyForItem(L("costed"), j("at_refurbisher"))).toBe("at_refurbisher");
+    expect(custodyForItem(L("ready"), j("ready"))).toBe("at_refurbisher");
+    expect(custodyForItem(L("in_progress"), j("requested", { out_received_condition: "missing" }))).toBe("unknown_lost");
+    expect(custodyForItem(L("in_progress"), j("cancelled", { out_received_condition: "missing" }))).toBe("unknown_lost");
+    expect(custodyForItem(L("in_transit_return"), j("ready"))).toBe("in_transit_to_nbfc");
+    expect(custodyForItem(L("delivered_back"), j("ready"))).toBe("at_nbfc_gate");
+    expect(custodyForItem(L("balance_due"), j("returned"))).toBe("back_with_nbfc");
+    expect(custodyForItem(L("settled"), j("returned"))).toBe("back_with_nbfc");
+    expect(custodyForItem(L("closed"), j("returned"))).toBe("back_with_nbfc");
     // a declined battery never left the NBFC, whatever the lot went on to do
-    expect(custodyForItem("in_transit_out", j("declined"))).toBe("at_nbfc");
+    expect(custodyForItem(L("in_transit_out"), j("declined"))).toBe("with_nbfc");
   });
 });

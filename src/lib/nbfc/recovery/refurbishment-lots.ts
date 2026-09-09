@@ -1,5 +1,5 @@
 /**
- * E-270 / E-271 — refurbishment LOTS: the NBFC ⇄ iTarang workshop loop, as writes.
+ * E-292 — refurbishment LOTS, v3: the NBFC ⇄ iTarang ⇄ refurbisher loop, as writes.
  *
  * Every function here is one MOVE on a lot: it loads the lot, asserts the move
  * is legal from its status (refurbishment-lot-status.ts), and then, in ONE
@@ -8,22 +8,24 @@
  * move to refurbishment_lot_events. The route that called it then sends the
  * notification (refurbish-notify.ts) — outside the transaction, same as scrap.
  *
+ * THREE PARTIES, TWO WALLS. The NBFC never sees the refurbisher (who it is,
+ * what it charged, its messages); the refurbisher never sees the money (PI,
+ * advance, balance, margin, final bill). Both walls are enforced HERE, in
+ * getLot(viewer), not in the components — see redact().
+ *
  * WHAT THE BATTERY DOES AT EACH MOVE
  *   createLot          inspected -> refurbishing, pipeline -> refurbishable
  *   decline / cancel   -> inspected, pipeline -> needs_inspection
- *   money / pickup / dispatch / arrive / receipt / work / ready   (no change)
+ *   PI / money / trucks / receipt / assign / work / ready   (no change)
  *   NBFC receipt `received`       -> ready + grade refurbished,
  *                                    pipeline -> ready_for_auction
+ *   close (redeploy)              pipeline -> redeploy (stub)
  *
- * The last row is the whole point: the NBFC signing for the battery is what
+ * The receipt row is the whole point: the NBFC signing for the battery is what
  * sets the job `returned`, and `returned` is the only status
- * refurbishmentCostForBatteries() counts — so the repair cost rolls into the
- * auction base price at exactly the moment the battery is back in the NBFC's
- * hands and eligible for a lot.
- *
- * E-271 added the money legs (advance / balance — see refurb-payments.ts for
- * the Razorpay + offline write path), the pickup / arrival steps, the frozen
- * approved quote with its revision round, and derived custody per battery.
+ * refurbishmentCostForBatteries() counts — so the FINAL cost (refurbisher +
+ * accessories + pro-rata margin) rolls into the auction base price at exactly
+ * the moment the battery is back in the NBFC's hands.
  */
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db";
@@ -32,6 +34,7 @@ import {
   refurbishmentLots,
   refurbishmentLotEvents,
   refurbishmentJobs,
+  refurbishers,
   recoveryBatteries,
   nbfcRecoveryPipeline,
   nbfcBatteryEvaluations,
@@ -43,26 +46,32 @@ import {
   REQUIRED_ACCESSORIES,
   OPEN_STATUSES,
   accessoriesTotal,
+  partsTotal,
   num,
   iso,
   shapeJob,
   type AccessoryLine,
   type ChecklistItem,
+  type RefurbisherPart,
   type RefurbishmentJobRow,
 } from "@/lib/nbfc/recovery/refurbishment";
 import {
   assertLotMove,
   awaitingParty,
+  allOpenItemsCosted,
   allOpenItemsReady,
+  balanceClearedForReturn,
   custodyForItem,
-  nextAfterAgreed,
-  nextAfterAdvance,
   nextAfterReceipt,
-  withinApprovedQuote,
+  shippableOut,
+  splitMargin,
   CANCELLABLE_LOT_STATUSES,
+  CLOSED_LOT_STATUSES,
+  CLOSE_OUTCOMES,
   OPEN_LOT_STATUSES,
   LOT_STATUSES,
   PICKUP_MODES,
+  type CloseOutcome,
   type Custody,
   type LotStatus,
   type Party,
@@ -74,13 +83,20 @@ import {
 export type LotRow = typeof refurbishmentLots.$inferSelect;
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/** Who is reading — drives redaction. */
+export type Viewer = Party;
+/** Who is allowed to see the row at all. `null` = iTarang admin, unscoped. */
+export type LotScope = { tenant_id?: string | null; refurbisher_id?: string | null } | null;
+
 // ---------------------------------------------------------------------------
 // Shapes the API returns
 // ---------------------------------------------------------------------------
+export type EventParty = Party | "system";
+
 export interface LotEvent {
   id: string;
   seq: number;
-  party: "nbfc" | "admin" | "system";
+  party: EventParty;
   kind: EventKind | string;
   message: string | null;
   payload: Record<string, unknown>;
@@ -92,9 +108,11 @@ export interface LotItem extends RefurbishmentJobRow {
   capacity: string | null;
   condition_grade: string | null;
   soh_pct: number | null;
+  /** [E-292] triage health % — the SOH stand-in when no evaluation exists. */
+  health_pct: number | null;
   image_urls: string[];
   battery_state: string | null;
-  /** [E-271] Where this battery physically is, derived. */
+  /** Where this battery physically is, derived. */
   custody: Custody;
 }
 
@@ -121,11 +139,49 @@ export interface MoneyLeg {
   /** not_required|pending|recorded|confirmed (advance) · not_due|pending|recorded|confirmed (balance) */
   status: string;
   provider: string | null;
-  order_id: string | null;
-  payment_id: string | null;
   reference: string | null;
   recorded_at: string | null;
   confirmed_at: string | null;
+  /** E-293: NBFC-uploaded payment slips (relative /api/files paths). */
+  proof_urls: string[];
+}
+
+export interface PiBankDetails {
+  account_name?: string | null;
+  account_number?: string | null;
+  ifsc?: string | null;
+  bank_name?: string | null;
+  upi?: string | null;
+}
+
+export interface PiView {
+  number: string | null;
+  url: string | null;
+  amount: number | null;
+  advance_pct: number | null;
+  advance_amount: number | null;
+  bank_details: PiBankDetails | null;
+  note: string | null;
+  sent_at: string | null;
+  accepted_at: string | null;
+  acceptance_note: string | null;
+}
+
+export interface CounterView {
+  total: number | null;
+  advance_pct: number | null;
+  receipt_date: string | null;
+  return_date: string | null;
+  message: string | null;
+}
+
+export interface RefurbisherView {
+  id: string;
+  name: string;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  city: string | null;
 }
 
 export interface Lot {
@@ -140,28 +196,38 @@ export interface Lot {
   note: string | null;
   current_round: number;
   last_party: Party | null;
+  reviewed_at: string | null;
   expected_receipt_date: string | null;
   expected_return_date: string | null;
   estimated_labour_total: number | null;
   estimated_accessories_total: number | null;
   estimated_total: number | null;
   proposal_note: string | null;
+  counter: CounterView;
   agreed_at: string | null;
-  // E-271
   pickup_mode: PickupMode;
   pickup_address: string | null;
   workshop_address: string | null;
   scheduled_pickup_date: string | null;
+  /** The agreed commercial baseline — the PI amount once accepted, the estimate before that. */
   quote_approved_total: number | null;
   quote_approved_at: string | null;
-  revised_total: number | null;
-  revision_note: string | null;
-  revision_round: number;
+  pi: PiView;
   advance_pct: number;
   advance: MoneyLeg;
+  refurbisher: RefurbisherView | null;
+  assigned_at: string | null;
+  refurbisher_note: string | null;
+  refurbisher_total: number | null;
+  costed_at: string | null;
+  margin: { pct: number | null; amount: number | null };
   final_total: number | null;
+  final_sent_at: string | null;
   balance: MoneyLeg;
   settled_at: string | null;
+  close_outcome: CloseOutcome | null;
+  closed_at: string | null;
+  close_note: string | null;
   out: Leg;
   ret: Leg;
   work_started_at: string | null;
@@ -176,10 +242,8 @@ export interface Lot {
 export interface LotDetail extends Lot {
   items: LotItem[];
   events: LotEvent[];
-  /** Sum of actual (or estimated) labour + included accessories over live items. */
+  /** Sum of refurbisher (or legacy actual / estimated) labour + parts + included accessories over live items. */
   actual_total: number | null;
-  /** [E-271] actual_total > quote_approved_total → admin must send a revision. */
-  over_approved_quote: boolean;
 }
 
 function leg(row: LotRow, p: "out" | "ret"): Leg {
@@ -209,15 +273,25 @@ function money(row: LotRow, p: "advance" | "balance"): MoneyLeg {
     amount: num(r[`${p}_amount`]),
     status: String(r[`${p}_status`] ?? (p === "advance" ? "not_required" : "not_due")),
     provider: (r[`${p}_provider`] as string | null) ?? null,
-    order_id: (r[`${p}_order_id`] as string | null) ?? null,
-    payment_id: (r[`${p}_payment_id`] as string | null) ?? null,
     reference: (r[`${p}_reference`] as string | null) ?? null,
     recorded_at: iso(r[`${p}_recorded_at`]),
     confirmed_at: iso(r[`${p}_confirmed_at`]),
+    proof_urls: (r[`${p}_proof_urls`] as string[] | null) ?? [],
   };
 }
 
-export function shapeLot(row: LotRow, tenant_name: string | null): Lot {
+const EMPTY_MONEY = (p: "advance" | "balance"): MoneyLeg => ({
+  amount: null,
+  status: p === "advance" ? "not_required" : "not_due",
+  provider: null,
+  reference: null,
+  proof_urls: [],
+  recorded_at: null,
+  confirmed_at: null,
+});
+const EMPTY_PI: PiView = { number: null, url: null, amount: null, advance_pct: null, advance_amount: null, bank_details: null, note: null, sent_at: null, accepted_at: null, acceptance_note: null };
+
+export function shapeLot(row: LotRow, tenant_name: string | null, refurbisher: RefurbisherView | null): Lot {
   return {
     id: row.id,
     ref_code: row.ref_code,
@@ -227,17 +301,27 @@ export function shapeLot(row: LotRow, tenant_name: string | null): Lot {
     awaiting: awaitingParty(row.status, {
       advance_status: row.advance_status,
       balance_status: row.balance_status,
+      pickup_mode: row.pickup_mode,
+      final_sent_at: row.final_sent_at,
     }),
     battery_count: row.battery_count,
     note: row.note ?? null,
     current_round: row.current_round,
     last_party: (row.last_party as Party | null) ?? null,
+    reviewed_at: iso(row.reviewed_at),
     expected_receipt_date: iso(row.expected_receipt_date),
     expected_return_date: iso(row.expected_return_date),
     estimated_labour_total: num(row.estimated_labour_total),
     estimated_accessories_total: num(row.estimated_accessories_total),
     estimated_total: num(row.estimated_total),
     proposal_note: row.proposal_note ?? null,
+    counter: {
+      total: num(row.counter_total),
+      advance_pct: num(row.counter_advance_pct),
+      receipt_date: iso(row.counter_receipt_date),
+      return_date: iso(row.counter_return_date),
+      message: row.counter_message ?? null,
+    },
     agreed_at: iso(row.agreed_at),
     pickup_mode: (row.pickup_mode as PickupMode) ?? "nbfc_ships",
     pickup_address: row.pickup_address ?? null,
@@ -245,14 +329,33 @@ export function shapeLot(row: LotRow, tenant_name: string | null): Lot {
     scheduled_pickup_date: iso(row.scheduled_pickup_date),
     quote_approved_total: num(row.quote_approved_total),
     quote_approved_at: iso(row.quote_approved_at),
-    revised_total: num(row.revised_total),
-    revision_note: row.revision_note ?? null,
-    revision_round: row.revision_round ?? 0,
+    pi: {
+      number: row.pi_number ?? null,
+      url: row.pi_url ?? null,
+      amount: num(row.pi_amount),
+      advance_pct: num(row.pi_advance_pct),
+      advance_amount: num(row.pi_advance_amount),
+      bank_details: (row.pi_bank_details as PiBankDetails | null) ?? null,
+      note: row.pi_note ?? null,
+      sent_at: iso(row.pi_sent_at),
+      accepted_at: iso(row.pi_accepted_at),
+      acceptance_note: row.pi_acceptance_note ?? null,
+    },
     advance_pct: num(row.advance_pct) ?? 0,
     advance: money(row, "advance"),
+    refurbisher,
+    assigned_at: iso(row.assigned_at),
+    refurbisher_note: row.refurbisher_note ?? null,
+    refurbisher_total: num(row.refurbisher_total),
+    costed_at: iso(row.costed_at),
+    margin: { pct: num(row.itarang_margin_pct), amount: num(row.itarang_margin_amount) },
     final_total: num(row.final_total),
+    final_sent_at: iso(row.final_sent_at),
     balance: money(row, "balance"),
     settled_at: iso(row.settled_at),
+    close_outcome: (row.close_outcome as CloseOutcome | null) ?? null,
+    closed_at: iso(row.closed_at),
+    close_note: row.close_note ?? null,
     out: leg(row, "out"),
     ret: leg(row, "ret"),
     work_started_at: iso(row.work_started_at),
@@ -280,11 +383,18 @@ async function nextRefCode(): Promise<string> {
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
-export async function loadLot(id: string, tenant_id: string | null): Promise<LotRow> {
+function scopeCond(scope: LotScope) {
+  return and(
+    scope?.tenant_id ? eq(refurbishmentLots.tenant_id, scope.tenant_id) : undefined,
+    scope?.refurbisher_id ? eq(refurbishmentLots.refurbisher_id, scope.refurbisher_id) : undefined,
+  );
+}
+
+export async function loadLot(id: string, scope: LotScope): Promise<LotRow> {
   const [row] = await db
     .select()
     .from(refurbishmentLots)
-    .where(and(eq(refurbishmentLots.id, id), tenant_id ? eq(refurbishmentLots.tenant_id, tenant_id) : undefined))
+    .where(and(eq(refurbishmentLots.id, id), scopeCond(scope)))
     .limit(1);
   if (!row) throw new Error("NOT_FOUND: refurbishment lot not found");
   return row;
@@ -325,16 +435,21 @@ async function loadItems(lot: LotRow): Promise<LotItem[]> {
     lot.tenant_id,
     rows.map((r) => r.job.recovery_pipeline_id).filter((x): x is string => !!x),
   );
-  return rows.map((r) => ({
-    ...shapeJob(r.job, r.battery?.serial ?? null),
-    model: r.battery?.model ?? null,
-    capacity: r.battery?.capacity ?? null,
-    condition_grade: r.battery?.condition_grade ?? null,
-    soh_pct: r.job.recovery_pipeline_id ? (soh.get(r.job.recovery_pipeline_id) ?? null) : null,
-    image_urls: r.battery?.image_urls ?? [],
-    battery_state: r.battery?.state_code ?? null,
-    custody: custodyForItem(lot.status, r.job),
-  }));
+  return rows.map((r) => {
+    const health = num(r.battery?.health_pct);
+    const measured = r.job.recovery_pipeline_id ? (soh.get(r.job.recovery_pipeline_id) ?? null) : null;
+    return {
+      ...shapeJob(r.job, r.battery?.serial ?? null),
+      model: r.battery?.model ?? null,
+      capacity: r.battery?.capacity ?? null,
+      condition_grade: r.battery?.condition_grade ?? null,
+      soh_pct: measured ?? health,
+      health_pct: health,
+      image_urls: r.battery?.image_urls ?? [],
+      battery_state: r.battery?.state_code ?? null,
+      custody: custodyForItem(lot, r.job),
+    };
+  });
 }
 
 async function loadEvents(lot_id: string): Promise<LotEvent[]> {
@@ -346,7 +461,7 @@ async function loadEvents(lot_id: string): Promise<LotEvent[]> {
   return rows.map((e) => ({
     id: e.id,
     seq: e.seq,
-    party: e.party as LotEvent["party"],
+    party: e.party as EventParty,
     kind: e.kind,
     message: e.message ?? null,
     payload: (e.payload as Record<string, unknown>) ?? {},
@@ -359,31 +474,120 @@ async function tenantName(tenant_id: string): Promise<string | null> {
   return t?.name ?? null;
 }
 
+async function refurbisherView(id: string | null): Promise<RefurbisherView | null> {
+  if (!id) return null;
+  const [r] = await db
+    .select({ id: refurbishers.id, name: refurbishers.name, contact_name: refurbishers.contact_name, phone: refurbishers.phone, email: refurbishers.email, city: refurbishers.city })
+    .from(refurbishers)
+    .where(eq(refurbishers.id, id))
+    .limit(1);
+  return r ? { id: r.id, name: r.name, contact_name: r.contact_name ?? null, phone: r.phone ?? null, email: r.email ?? null, city: r.city ?? null } : null;
+}
+
 const liveOf = <T extends { status: string }>(jobs: T[]) =>
   jobs.filter((j) => j.status !== "declined" && j.status !== "cancelled");
 
-export async function getLot(id: string, tenant_id: string | null): Promise<LotDetail | null> {
-  let lot: LotRow;
-  try {
-    lot = await loadLot(id, tenant_id);
-  } catch {
-    return null;
+/** The refurbisher-side cost of one battery: labour + parts + included accessories. */
+function itemBase(j: { refurbisher_cost: unknown; actual_cost: unknown; estimated_cost: unknown; refurbisher_parts: unknown; accessories: unknown }): number {
+  const labour = num(j.refurbisher_cost) ?? num(j.actual_cost) ?? num(j.estimated_cost) ?? 0;
+  return money2(labour + partsTotal((j.refurbisher_parts as RefurbisherPart[]) ?? []) + accessoriesTotal((j.accessories as AccessoryLine[]) ?? []));
+}
+
+/** Σ itemBase over live jobs. */
+function actualTotalOf(jobs: Array<{ status: string; refurbisher_cost: unknown; actual_cost: unknown; estimated_cost: unknown; refurbisher_parts: unknown; accessories: unknown }>): number {
+  return money2(liveOf(jobs).reduce((s, j) => s + itemBase(j), 0));
+}
+
+// The NBFC ⇄ refurbisher walls. A message event carries `payload.to` when an
+// admin wrote it, so each side only sees the thread addressed to it.
+const NBFC_HIDDEN_KINDS = new Set(["refurbisher_assigned", "item_costed", "all_costed"]);
+const REFURBISHER_HIDDEN_KINDS = new Set([
+  "estimated", "countered", "accepted", "pi_sent", "pi_accepted", "advance_recorded", "advance_confirmed",
+  "balance_recorded", "balance_confirmed", "settled", "final_bill_sent", "closed", "item_declined", "reviewed", "requested",
+]);
+
+function redactEvents(events: LotEvent[], viewer: Viewer): LotEvent[] {
+  if (viewer === "admin") return events;
+  return events
+    .filter((e) => {
+      if (e.kind === "message") {
+        const to = String(e.payload?.to ?? "nbfc");
+        if (viewer === "nbfc") return e.party === "nbfc" || e.party === "system" || (e.party === "admin" && to === "nbfc");
+        return e.party === "refurbisher" || e.party === "system" || (e.party === "admin" && to === "refurbisher");
+      }
+      return viewer === "nbfc" ? !NBFC_HIDDEN_KINDS.has(e.kind) : !REFURBISHER_HIDDEN_KINDS.has(e.kind);
+    })
+    // From the NBFC's side the refurbisher IS iTarang, and the final bill is
+    // one number — the refurbisher total / margin split is iTarang's business.
+    .map((e) => {
+      if (viewer !== "nbfc") return e;
+      const party = e.party === "refurbisher" ? ("admin" as const) : e.party;
+      if (e.kind === "final_bill_sent") {
+        // Refurbisher total, margin and billed_from stay iTarang-internal.
+        const { final_total, balance_expected, resent } = e.payload as { final_total?: unknown; balance_expected?: unknown; resent?: unknown };
+        return { ...e, party, payload: { final_total, balance_expected, resent } };
+      }
+      return { ...e, party };
+    });
+}
+
+function redact(detail: LotDetail, viewer: Viewer): LotDetail {
+  if (viewer === "admin") return detail;
+  if (viewer === "nbfc") {
+    return {
+      ...detail,
+      refurbisher: null,
+      refurbisher_note: null,
+      refurbisher_total: null,
+      margin: { pct: null, amount: null },
+      items: detail.items.map((i) => ({ ...i, refurbisher_cost: null, refurbisher_parts: [], refurbisher_note: null, costed_at: null })),
+      events: redactEvents(detail.events, viewer),
+    };
   }
-  const [items, events, name] = await Promise.all([loadItems(lot), loadEvents(lot.id), tenantName(lot.tenant_id)]);
-  const live = liveOf(items);
-  const actual_total = live.length ? money2(live.reduce((s, i) => s + (i.total_cost ?? 0), 0)) : null;
-  const approved = num(lot.quote_approved_total);
+  // refurbisher: no money, no commercials, no NBFC-facing figures
   return {
-    ...shapeLot(lot, name),
-    items,
-    events,
-    actual_total,
-    over_approved_quote: !withinApprovedQuote(actual_total, approved),
+    ...detail,
+    note: null,
+    estimated_labour_total: null,
+    estimated_accessories_total: null,
+    estimated_total: null,
+    proposal_note: null,
+    counter: { total: null, advance_pct: null, receipt_date: null, return_date: null, message: null },
+    quote_approved_total: null,
+    quote_approved_at: null,
+    pi: EMPTY_PI,
+    advance_pct: 0,
+    advance: EMPTY_MONEY("advance"),
+    margin: { pct: null, amount: null },
+    final_total: null,
+    final_sent_at: detail.final_sent_at, // "costs are frozen" is something the refurbisher must know
+    balance: EMPTY_MONEY("balance"),
+    settled_at: null,
+    close_outcome: null,
+    closed_at: null,
+    close_note: null,
+    actual_total: null,
+    items: detail.items.map((i) => ({ ...i, estimated_cost: null, actual_cost: null, total_cost: null, final_cost: null, decline_reason: null })),
+    events: redactEvents(detail.events, viewer),
   };
 }
 
+export async function getLot(id: string, scope: LotScope, viewer: Viewer = "admin"): Promise<LotDetail | null> {
+  let lot: LotRow;
+  try {
+    lot = await loadLot(id, scope);
+  } catch {
+    return null;
+  }
+  const [items, events, name, ref] = await Promise.all([loadItems(lot), loadEvents(lot.id), tenantName(lot.tenant_id), refurbisherView(lot.refurbisher_id)]);
+  const live = liveOf(items);
+  const actual_total = live.length ? actualTotalOf(items as never) : null;
+  return redact({ ...shapeLot(lot, name, ref), items, events, actual_total }, viewer);
+}
+
 export async function listLots(input: {
-  tenant_id: string | null;
+  tenant_id?: string | null;
+  refurbisher_id?: string | null;
   status?: LotStatus | "open" | "closed" | "all";
 }): Promise<{ items: Lot[]; counts: Record<string, number> }> {
   const status = input.status ?? "open";
@@ -393,29 +597,38 @@ export async function listLots(input: {
       : status === "open"
         ? inArray(refurbishmentLots.status, OPEN_LOT_STATUSES)
         : status === "closed"
-          ? inArray(refurbishmentLots.status, ["settled", "cancelled"])
+          ? inArray(refurbishmentLots.status, CLOSED_LOT_STATUSES)
           : eq(refurbishmentLots.status, status);
-  const tenantCond = input.tenant_id ? eq(refurbishmentLots.tenant_id, input.tenant_id) : undefined;
+  const scope = scopeCond({ tenant_id: input.tenant_id ?? null, refurbisher_id: input.refurbisher_id ?? null });
 
   const [rows, countRows] = await Promise.all([
     db
-      .select({ lot: refurbishmentLots, tenant_name: nbfcTenants.display_name })
+      .select({ lot: refurbishmentLots, tenant_name: nbfcTenants.display_name, ref: refurbishers })
       .from(refurbishmentLots)
       .leftJoin(nbfcTenants, eq(nbfcTenants.id, refurbishmentLots.tenant_id))
-      .where(and(tenantCond, statusCond))
+      .leftJoin(refurbishers, eq(refurbishers.id, refurbishmentLots.refurbisher_id))
+      .where(and(scope, statusCond))
       .orderBy(desc(refurbishmentLots.created_at))
       .limit(200),
     db
       .select({ status: refurbishmentLots.status, n: sql<number>`count(*)::int` })
       .from(refurbishmentLots)
-      .where(tenantCond)
+      .where(scope)
       .groupBy(refurbishmentLots.status),
   ]);
   const counts: Record<string, number> = {};
   for (const s of LOT_STATUSES) counts[s] = 0;
   for (const r of countRows) counts[r.status] = Number(r.n);
   counts.open = OPEN_LOT_STATUSES.reduce((s, k) => s + (counts[k] ?? 0), 0);
-  return { items: rows.map((r) => shapeLot(r.lot, r.tenant_name ?? null)), counts };
+  const items = rows.map((r) => {
+    const ref = r.ref ? { id: r.ref.id, name: r.ref.name, contact_name: r.ref.contact_name ?? null, phone: r.ref.phone ?? null, email: r.ref.email ?? null, city: r.ref.city ?? null } : null;
+    const lot = shapeLot(r.lot, r.tenant_name ?? null, ref);
+    // List rows are read by all three sides; strip the same walls.
+    if (input.refurbisher_id) return { ...lot, pi: EMPTY_PI, advance: EMPTY_MONEY("advance"), balance: EMPTY_MONEY("balance"), final_total: null, margin: { pct: null, amount: null }, quote_approved_total: null, estimated_total: null, note: null };
+    if (input.tenant_id) return { ...lot, refurbisher: null, refurbisher_total: null, refurbisher_note: null, margin: { pct: null, amount: null } };
+    return lot;
+  });
+  return { items, counts };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,11 +641,14 @@ export interface EligibleBattery {
   capacity: string | null;
   condition_grade: string | null;
   soh_pct: number | null;
+  /** [E-292] triage health % (the SOH stand-in) and what the NBFC chose. */
+  health_pct: number | null;
+  triage_choice: string | null;
   image_urls: string[];
   recovery_pipeline_id: string | null;
   /** null = eligible; otherwise the reason it is listed greyed out. */
   blocked_reason: string | null;
-  /** [E-271] Why iTarang refused it last time — so the NBFC fixes that before resubmitting. */
+  /** Why iTarang refused it last time — so the NBFC fixes that before resubmitting. */
   last_decline_reason: string | null;
   last_declined_at: string | null;
 }
@@ -467,11 +683,12 @@ export async function listEligibleBatteries(tenant_id: string): Promise<Eligible
   const lastDecline = new Map(declined.map((d) => [d.battery_id, d]));
 
   return rows.map((b) => {
-    const s = b.recovery_pipeline_id ? (soh.get(b.recovery_pipeline_id) ?? null) : null;
+    const health = num(b.health_pct);
+    const s = (b.recovery_pipeline_id ? (soh.get(b.recovery_pipeline_id) ?? null) : null) ?? health;
     let blocked: string | null = null;
     if (busy.has(b.id)) blocked = "already has an open refurbishment job";
-    else if (s === null) blocked = "no state of health recorded — evaluate it first";
-    else if (s < SOH_REFURBISHABLE_MIN) blocked = `SOH ${s}% is below the ${SOH_REFURBISHABLE_MIN}% refurbishment threshold`;
+    else if (s === null) blocked = "no state of health recorded — record the recovery details (triage) or evaluate it first";
+    else if (s < SOH_REFURBISHABLE_MIN) blocked = `health ${s}% is below the ${SOH_REFURBISHABLE_MIN}% refurbishment floor — not suitable for refurbishing`;
     const d = lastDecline.get(b.id);
     return {
       id: b.id,
@@ -480,6 +697,8 @@ export async function listEligibleBatteries(tenant_id: string): Promise<Eligible
       capacity: b.capacity ?? null,
       condition_grade: b.condition_grade ?? null,
       soh_pct: s,
+      health_pct: health,
+      triage_choice: b.triage_choice ?? null,
       image_urls: b.image_urls ?? [],
       recovery_pipeline_id: b.recovery_pipeline_id ?? null,
       blocked_reason: blocked,
@@ -495,7 +714,7 @@ export async function listEligibleBatteries(tenant_id: string): Promise<Eligible
 export async function appendEvent(
   tx: Tx,
   lot: { id: string; tenant_id: string },
-  ev: { party: "nbfc" | "admin" | "system"; kind: EventKind; message?: string | null; payload?: Record<string, unknown>; actor?: string | null },
+  ev: { party: EventParty; kind: EventKind; message?: string | null; payload?: Record<string, unknown>; actor?: string | null },
 ): Promise<void> {
   const [m] = await tx
     .select({ seq: sql<number>`coalesce(max(${refurbishmentLotEvents.seq}), 0)::int` })
@@ -558,14 +777,8 @@ async function serialOf(tx: Tx, battery_id: string): Promise<string | null> {
   return b?.serial ?? null;
 }
 
-/** actual (or estimated) labour + included accessories over live jobs. */
-function actualTotalOf(jobs: Array<{ status: string; actual_cost: unknown; estimated_cost: unknown; accessories: unknown }>): number {
-  return money2(
-    liveOf(jobs).reduce((s, j) => {
-      const labour = num(j.actual_cost) ?? num(j.estimated_cost) ?? 0;
-      return s + labour + accessoriesTotal((j.accessories as AccessoryLine[]) ?? []);
-    }, 0),
-  );
+async function reload(lot_id: string, scope: LotScope, viewer: Viewer): Promise<LotDetail> {
+  return (await getLot(lot_id, scope, viewer))!;
 }
 
 // ---------------------------------------------------------------------------
@@ -592,7 +805,8 @@ export async function createLot(input: {
   }
   const soh = await sohByPipeline(input.tenant_id, batteries.map((b) => b.recovery_pipeline_id).filter((x): x is string => !!x));
   for (const b of batteries) {
-    const s = b.recovery_pipeline_id ? (soh.get(b.recovery_pipeline_id) ?? null) : null;
+    // The evaluation wins; the triage health % stands in when there is none.
+    const s = (b.recovery_pipeline_id ? (soh.get(b.recovery_pipeline_id) ?? null) : null) ?? num(b.health_pct);
     try {
       assertSohAllowsStage(s, "refurbishable");
     } catch (e) {
@@ -608,7 +822,7 @@ export async function createLot(input: {
     const serial = batteries.find((b) => b.id === open[0].battery_id)?.serial ?? open[0].battery_id;
     throw new Error(`CONFLICT: battery ${serial} already has an open refurbishment job`);
   }
-  // Resubmission after a decline (review point 1): link the previous lot.
+  // Resubmission after a decline: link the previous lot.
   const prior = await db
     .select({ lot_id: refurbishmentJobs.lot_id, battery_id: refurbishmentJobs.battery_id })
     .from(refurbishmentJobs)
@@ -664,6 +878,8 @@ export async function createLot(input: {
           payload: {
             serials: batteries.map((b) => b.serial),
             battery_count: batteries.length,
+            // step 1: "recovery details carried over"
+            triage: batteries.map((b) => ({ serial: b.serial, health_pct: num(b.health_pct), rated_v: num(b.rated_voltage_v), measured_v: num(b.measured_voltage_v), condition: b.triage_condition ?? null })),
             resubmitted_from_lot: prior[0]?.lot_id ?? null,
           },
         });
@@ -677,21 +893,20 @@ export async function createLot(input: {
     }
   }
   if (!lotId) throw new Error("CONFLICT: could not allocate a lot reference");
-  return (await getLot(lotId, input.tenant_id))!;
+  return reload(lotId, { tenant_id: input.tenant_id }, "nbfc");
 }
 
 // ---------------------------------------------------------------------------
-// 2. Admin: per-battery review (decline some, keep the rest)
+// 2. Admin: review — decline per battery, then "mark reviewed"
 // ---------------------------------------------------------------------------
 export async function reviewLotItems(input: {
   lot_id: string;
   actor_user_id: string | null;
   decisions: Array<{ job_id: string; decision: "accept" | "decline"; reason?: string | null }>;
+  note?: string | null;
 }): Promise<LotDetail> {
   const lot = await loadLot(input.lot_id, null);
-  if (lot.status !== "requested" && lot.status !== "countered") {
-    throw new Error(`CONFLICT: batteries can only be reviewed while the lot is requested or countered (it is ${lot.status})`);
-  }
+  const to = assertLotMove(lot.status, "review");
   const now = new Date();
   await db.transaction(async (tx) => {
     const jobs = await lotJobs(tx, lot.id);
@@ -728,35 +943,36 @@ export async function reviewLotItems(input: {
         battery_count: remaining,
         ...(allGone
           ? { status: "cancelled", cancelled_at: now, cancelled_by: asUuid(input.actor_user_id), cancelled_by_party: "admin", cancel_reason: "every battery in the lot was declined", last_party: "admin" }
-          : {}),
+          : { status: to, reviewed_at: now, reviewed_by: asUuid(input.actor_user_id), last_party: "admin" }),
         updated_at: now,
       })
       .where(eq(refurbishmentLots.id, lot.id));
     if (allGone) {
       await appendEvent(tx, lot, { party: "system", kind: "cancelled", message: "Every battery was declined, so the lot is closed.", payload: { by: "admin" } });
+    } else if (lot.status === "requested" || declined > 0) {
+      await appendEvent(tx, lot, { party: "admin", kind: "reviewed", message: input.note ?? null, actor: input.actor_user_id, payload: { declined, battery_count: remaining } });
     }
-    await audit(tx, lot, input.actor_user_id, "refurb_lot_reviewed", { battery_count: lot.battery_count }, { declined, battery_count: remaining, status: allGone ? "cancelled" : lot.status });
+    await audit(tx, lot, input.actor_user_id, "refurb_lot_reviewed", { battery_count: lot.battery_count, status: lot.status }, { declined, battery_count: remaining, status: allGone ? "cancelled" : to });
   });
-  return (await getLot(lot.id, null))!;
+  return reload(lot.id, null, "admin");
 }
 
 // ---------------------------------------------------------------------------
-// 3. Admin: the quote — timeline + pickup plan + estimate + advance
+// 3. Admin: the estimate — timeline + costing + advance %
 // ---------------------------------------------------------------------------
-export interface ProposalItem {
+export interface EstimateItem {
   job_id: string;
   estimated_cost: number;
   accessories?: AccessoryLine[];
 }
 
-export async function proposeLot(input: {
+export async function estimateLot(input: {
   lot_id: string;
   actor_user_id: string | null;
   expected_receipt_date: string; // YYYY-MM-DD
   expected_return_date: string;
-  items: ProposalItem[];
+  items: EstimateItem[];
   note?: string | null;
-  // E-271
   pickup_mode?: PickupMode;
   pickup_address?: string | null;
   workshop_address?: string | null;
@@ -764,22 +980,19 @@ export async function proposeLot(input: {
   advance_pct?: number;
 }): Promise<LotDetail> {
   const lot = await loadLot(input.lot_id, null);
-  const to = assertLotMove(lot.status, "propose");
+  const to = assertLotMove(lot.status, "estimate");
   if (input.expected_return_date < input.expected_receipt_date) {
     throw new Error("BAD_REQUEST: the return date cannot be before the receipt date");
   }
   const pickup_mode: PickupMode = input.pickup_mode ?? "nbfc_ships";
   if (!PICKUP_MODES.includes(pickup_mode)) throw new Error("BAD_REQUEST: unknown pickup mode");
-  if (pickup_mode === "itarang_pickup" && !input.scheduled_pickup_date) {
-    throw new Error("BAD_REQUEST: an iTarang pickup needs a scheduled pickup date");
-  }
   const advance_pct = input.advance_pct ?? 0;
   if (advance_pct < 0 || advance_pct > 100) throw new Error("BAD_REQUEST: advance must be between 0 and 100 percent");
 
   const now = new Date();
   await db.transaction(async (tx) => {
     const jobs = liveOf(await lotJobs(tx, lot.id));
-    if (jobs.length === 0) throw new Error("CONFLICT: the lot has no batteries left to quote on");
+    if (jobs.length === 0) throw new Error("CONFLICT: the lot has no batteries left to estimate");
     const byId = new Map(input.items.map((i) => [i.job_id, i]));
     let labour = 0;
     let acc = 0;
@@ -824,7 +1037,7 @@ export async function proposeLot(input: {
       .where(eq(refurbishmentLots.id, lot.id));
     await appendEvent(tx, lot, {
       party: "admin",
-      kind: "proposed",
+      kind: "estimated",
       message: input.note ?? null,
       actor: input.actor_user_id,
       payload: {
@@ -843,53 +1056,65 @@ export async function proposeLot(input: {
         items: snapshot,
       },
     });
-    await audit(tx, lot, input.actor_user_id, "refurb_lot_proposed", { status: lot.status }, { status: to, round, estimated_total: total, advance_pct, pickup_mode });
+    await audit(tx, lot, input.actor_user_id, "refurb_lot_estimated", { status: lot.status }, { status: to, round, estimated_total: total, advance_pct, pickup_mode });
   });
-  return (await getLot(lot.id, null))!;
+  return reload(lot.id, null, "admin");
 }
 
 // ---------------------------------------------------------------------------
-// 4. NBFC: approve the quote, or counter
+// 4. NBFC: accept the estimate, or counter (cost / timeline / advance %)
 // ---------------------------------------------------------------------------
-export async function respondToProposal(input: {
+export async function respondToEstimate(input: {
   lot_id: string;
   tenant_id: string;
   actor_user_id: string | null;
   kind: "accept" | "counter";
   message?: string | null;
+  counter_total?: number | null;
+  counter_advance_pct?: number | null;
   requested_receipt_date?: string | null;
   requested_return_date?: string | null;
 }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
-  assertLotMove(lot.status, input.kind);
-  if (input.kind === "counter" && !input.message?.trim() && !input.requested_receipt_date && !input.requested_return_date) {
-    throw new Error("BAD_REQUEST: say what should change — a message or the dates you need");
+  const lot = await loadLot(input.lot_id, { tenant_id: input.tenant_id });
+  const to = assertLotMove(lot.status, input.kind);
+  if (
+    input.kind === "counter" &&
+    !input.message?.trim() &&
+    input.counter_total == null &&
+    input.counter_advance_pct == null &&
+    !input.requested_receipt_date &&
+    !input.requested_return_date
+  ) {
+    throw new Error("BAD_REQUEST: say what should change — a price, an advance %, the dates you need, or a message");
+  }
+  if (input.counter_advance_pct != null && (input.counter_advance_pct < 0 || input.counter_advance_pct > 100)) {
+    throw new Error("BAD_REQUEST: advance must be between 0 and 100 percent");
   }
   const now = new Date();
   const total = num(lot.estimated_total) ?? 0;
-  const advance_pct = num(lot.advance_pct) ?? 0;
-  const advance_amount = advance_pct > 0 ? money2((total * advance_pct) / 100) : 0;
-  const landing: LotStatus =
-    input.kind === "accept" ? nextAfterAgreed({ advance_pct, pickup_mode: lot.pickup_mode }) : "countered";
 
   await db.transaction(async (tx) => {
     await tx
       .update(refurbishmentLots)
       .set({
-        status: landing,
+        status: to,
         last_party: "nbfc",
         ...(input.kind === "accept"
           ? {
               agreed_at: now,
               agreed_by: asUuid(input.actor_user_id),
-              // THE approval (review points 2 & 5): frozen here, enforced at ready.
+              // The commercial baseline until the PI replaces it.
               quote_approved_total: String(total),
               quote_approved_at: now,
               quote_approved_by: asUuid(input.actor_user_id),
-              advance_amount: advance_pct > 0 ? String(advance_amount) : null,
-              advance_status: advance_pct > 0 ? "pending" : "not_required",
             }
-          : {}),
+          : {
+              counter_total: input.counter_total != null ? String(money2(input.counter_total)) : null,
+              counter_advance_pct: input.counter_advance_pct != null ? String(input.counter_advance_pct) : null,
+              counter_receipt_date: input.requested_receipt_date ?? null,
+              counter_return_date: input.requested_return_date ?? null,
+              counter_message: input.message?.trim() || null,
+            }),
         updated_at: now,
       })
       .where(eq(refurbishmentLots.id, lot.id));
@@ -900,52 +1125,134 @@ export async function respondToProposal(input: {
       actor: input.actor_user_id,
       payload:
         input.kind === "accept"
-          ? {
-              round: lot.current_round,
-              expected_receipt_date: iso(lot.expected_receipt_date),
-              expected_return_date: iso(lot.expected_return_date),
-              quote_approved_total: total,
-              advance_amount,
-              pickup_mode: lot.pickup_mode,
-              landing,
-            }
-          : { round: lot.current_round, requested_receipt_date: input.requested_receipt_date ?? null, requested_return_date: input.requested_return_date ?? null },
+          ? { round: lot.current_round, expected_receipt_date: iso(lot.expected_receipt_date), expected_return_date: iso(lot.expected_return_date), agreed_total: total, advance_pct: num(lot.advance_pct) ?? 0, pickup_mode: lot.pickup_mode }
+          : { round: lot.current_round, counter_total: input.counter_total ?? null, counter_advance_pct: input.counter_advance_pct ?? null, requested_receipt_date: input.requested_receipt_date ?? null, requested_return_date: input.requested_return_date ?? null },
     });
-    if (input.kind === "accept" && landing === "pickup_scheduled") {
-      await appendEvent(tx, lot, {
-        party: "system",
-        kind: "pickup_scheduled",
-        payload: { scheduled_pickup_date: iso(lot.scheduled_pickup_date), pickup_address: lot.pickup_address },
-      });
-    }
-    await audit(tx, lot, input.actor_user_id, input.kind === "accept" ? "refurb_lot_agreed" : "refurb_lot_countered", { status: lot.status }, { status: landing, round: lot.current_round, quote_approved_total: total });
+    await audit(tx, lot, input.actor_user_id, input.kind === "accept" ? "refurb_lot_agreed" : "refurb_lot_countered", { status: lot.status }, { status: to, round: lot.current_round, agreed_total: total, counter_total: input.counter_total ?? null });
   });
-  return (await getLot(lot.id, input.tenant_id))!;
-}
-
-/** After the advance is confirmed (refurb-payments.ts calls this inside its tx). */
-export async function advanceToShipping(tx: Tx, lot: LotRow, actor: string | null, now: Date): Promise<LotStatus> {
-  assertLotMove(lot.status, "advance_paid");
-  const landing = nextAfterAdvance({ pickup_mode: lot.pickup_mode });
-  await tx.update(refurbishmentLots).set({ status: landing, last_party: "admin", updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
-  if (landing === "pickup_scheduled") {
-    await appendEvent(tx, lot, { party: "system", kind: "pickup_scheduled", payload: { scheduled_pickup_date: iso(lot.scheduled_pickup_date), pickup_address: lot.pickup_address } });
-  }
-  void actor;
-  return landing;
+  return reload(lot.id, { tenant_id: input.tenant_id }, "nbfc");
 }
 
 // ---------------------------------------------------------------------------
-// Cancel — either side, only before anything moved
+// 5 / 6. The proforma invoice — admin sends, NBFC accepts
+// ---------------------------------------------------------------------------
+export async function sendPi(input: {
+  lot_id: string;
+  actor_user_id: string | null;
+  pi_number?: string | null;
+  /** Relative /api/files path from the `pi_document` upload; falls back to the one already on the lot. */
+  pi_url?: string | null;
+  pi_amount: number;
+  pi_advance_pct?: number;
+  bank_details: PiBankDetails;
+  note?: string | null;
+}): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, null);
+  const to = assertLotMove(lot.status, "send_pi");
+  const url = input.pi_url ?? lot.pi_url ?? null;
+  if (!url) throw new Error("BAD_REQUEST: upload the proforma invoice PDF first");
+  if (!(input.pi_amount > 0)) throw new Error("BAD_REQUEST: the PI amount must be positive");
+  const pct = input.pi_advance_pct ?? num(lot.advance_pct) ?? 0;
+  if (pct < 0 || pct > 100) throw new Error("BAD_REQUEST: advance must be between 0 and 100 percent");
+  const bank = input.bank_details ?? {};
+  if (!(bank.account_number?.trim() && bank.ifsc?.trim()) && !bank.upi?.trim()) {
+    throw new Error("BAD_REQUEST: give the bank details the NBFC pays into — account number + IFSC, or a UPI id");
+  }
+  const amount = money2(input.pi_amount);
+  const advance_amount = pct > 0 ? money2((amount * pct) / 100) : 0;
+  const number = input.pi_number?.trim() || `PI-${lot.ref_code}${lot.pi_sent_at ? `-${Date.now().toString(36).toUpperCase().slice(-4)}` : ""}`;
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(refurbishmentLots)
+      .set({
+        status: to,
+        last_party: "admin",
+        pi_number: number,
+        pi_url: url,
+        pi_amount: String(amount),
+        pi_advance_pct: String(pct),
+        pi_advance_amount: pct > 0 ? String(advance_amount) : null,
+        pi_bank_details: bank,
+        pi_note: input.note ?? null,
+        pi_sent_at: now,
+        pi_sent_by: asUuid(input.actor_user_id),
+        // a re-sent PI supersedes any earlier acceptance
+        pi_accepted_at: null,
+        pi_accepted_by: null,
+        pi_acceptance_note: null,
+        updated_at: now,
+      })
+      .where(eq(refurbishmentLots.id, lot.id));
+    await appendEvent(tx, lot, {
+      party: "admin",
+      kind: "pi_sent",
+      message: input.note ?? null,
+      actor: input.actor_user_id,
+      payload: { pi_number: number, pi_amount: amount, advance_pct: pct, advance_amount, resent: !!lot.pi_sent_at, bank_name: bank.bank_name ?? null },
+    });
+    await audit(tx, lot, input.actor_user_id, "refurb_pi_sent", { status: lot.status, pi_amount: num(lot.pi_amount) }, { status: to, pi_number: number, pi_amount: amount, advance_pct: pct });
+  });
+  return reload(lot.id, null, "admin");
+}
+
+export async function acceptPi(input: { lot_id: string; tenant_id: string; actor_user_id: string | null; note?: string | null }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, { tenant_id: input.tenant_id });
+  const to = assertLotMove(lot.status, "accept_pi");
+  const amount = num(lot.pi_amount) ?? 0;
+  const pct = num(lot.pi_advance_pct) ?? 0;
+  const advance_amount = pct > 0 ? money2((amount * pct) / 100) : 0;
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(refurbishmentLots)
+      .set({
+        status: to,
+        last_party: "nbfc",
+        pi_accepted_at: now,
+        pi_accepted_by: asUuid(input.actor_user_id),
+        pi_acceptance_note: input.note ?? null,
+        // The PI is now THE commercial baseline.
+        quote_approved_total: String(amount),
+        quote_approved_at: now,
+        quote_approved_by: asUuid(input.actor_user_id),
+        advance_pct: String(pct),
+        advance_amount: pct > 0 ? String(advance_amount) : null,
+        advance_status: pct > 0 ? "pending" : "not_required",
+        updated_at: now,
+      })
+      .where(eq(refurbishmentLots.id, lot.id));
+    await appendEvent(tx, lot, {
+      party: "nbfc",
+      kind: "pi_accepted",
+      message: input.note ?? null,
+      actor: input.actor_user_id,
+      payload: { pi_number: lot.pi_number, pi_amount: amount, advance_pct: pct, advance_amount, advance_required: pct > 0 },
+    });
+    await audit(tx, lot, input.actor_user_id, "refurb_pi_accepted", { status: lot.status }, { status: to, pi_amount: amount, advance_amount });
+  });
+  return reload(lot.id, { tenant_id: input.tenant_id }, "nbfc");
+}
+
+/** After admin confirms the advance (refurb-payments.ts calls this inside its tx). */
+export async function confirmAdvance(tx: Tx, lot: LotRow, actor: string | null, now: Date): Promise<LotStatus> {
+  const to = assertLotMove(lot.status, "advance_received");
+  await tx.update(refurbishmentLots).set({ status: to, last_party: "admin", updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
+  void actor;
+  return to;
+}
+
+// ---------------------------------------------------------------------------
+// Cancel — NBFC or admin, only before anything moved
 // ---------------------------------------------------------------------------
 export async function cancelLot(input: {
   lot_id: string;
   tenant_id: string | null;
   actor_user_id: string | null;
-  party: Party;
+  party: "nbfc" | "admin";
   reason?: string | null;
 }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
+  const lot = await loadLot(input.lot_id, input.tenant_id ? { tenant_id: input.tenant_id } : null);
   if (!(CANCELLABLE_LOT_STATUSES as readonly string[]).includes(lot.status)) {
     throw new Error(`CONFLICT: a lot that is ${lot.status.replace(/_/g, " ")} cannot be cancelled — the batteries have already moved`);
   }
@@ -971,19 +1278,20 @@ export async function cancelLot(input: {
     });
     await audit(tx, lot, input.actor_user_id, "refurb_lot_cancelled", { status: lot.status }, { status: "cancelled", by: input.party });
   });
-  return (await getLot(lot.id, input.tenant_id))!;
+  return reload(lot.id, input.tenant_id ? { tenant_id: input.tenant_id } : null, input.party);
 }
 
 // ---------------------------------------------------------------------------
-// 5 / 8. Trucks — NBFC dispatch, iTarang pickup, admin return dispatch
+// 8a / 8b / 14. Trucks — NBFC dispatch, iTarang pickup, return dispatch
 // ---------------------------------------------------------------------------
 export interface TransportInput {
   lot_id: string;
-  tenant_id: string | null;
+  scope: LotScope;
   actor_user_id: string | null;
   carrier?: string | null;
   vehicle_no?: string | null;
   docket_no?: string | null;
+  /** Optional on both legs (v3). */
   eway_bill_no?: string | null;
   eway_bill_url?: string | null;
   dispatched_on: string; // YYYY-MM-DD
@@ -991,14 +1299,7 @@ export interface TransportInput {
   photo_urls?: string[];
 }
 
-async function writeTransport(
-  tx: Tx,
-  lot: LotRow,
-  p: "out" | "ret",
-  input: TransportInput,
-  extra: Partial<LotRow>,
-  now: Date,
-) {
+async function writeTransport(tx: Tx, lot: LotRow, p: "out" | "ret", input: TransportInput, extra: Partial<LotRow>, now: Date) {
   const existing = ((lot as unknown as Record<string, unknown>)[`${p}_photo_urls`] as string[]) ?? [];
   await tx
     .update(refurbishmentLots)
@@ -1027,28 +1328,55 @@ async function writeTransport(
   };
 }
 
-/** NBFC ships (nbfc_ships mode) or admin ships back. */
-export async function recordDispatch(input: TransportInput & { leg: "out" | "return" }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
+/** 8a: NBFC ships (nbfc_ships mode). 14: admin or refurbisher ships back. */
+export async function recordDispatch(input: TransportInput & { leg: "out" | "return"; party: Party }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, input.scope);
+  if (input.leg === "out") {
+    if (input.party !== "nbfc") throw new Error("FORBIDDEN: only the NBFC dispatches to iTarang");
+    if (!shippableOut(lot)) {
+      throw new Error(
+        lot.status === "pi_accepted"
+          ? `CONFLICT: the advance is ${lot.advance_status === "recorded" ? "recorded but not yet confirmed by iTarang" : "still due"} — the batteries move once it is received`
+          : `CONFLICT: a lot that is ${lot.status.replace(/_/g, " ")} cannot be dispatched`,
+      );
+    }
+    if (lot.pickup_mode === "itarang_pickup") {
+      throw new Error("CONFLICT: iTarang is collecting this lot — its agent records the pickup, not the NBFC");
+    }
+  } else if (input.party === "nbfc") {
+    throw new Error("FORBIDDEN: the return truck is recorded by iTarang or the refurbisher");
+  } else if (!balanceClearedForReturn(lot)) {
+    // E-293: the batteries stay with the refurbisher until the NBFC has
+    // uploaded the balance payment slip and its bank reference.
+    throw new Error(
+      `CONFLICT: the balance of ₹${(num(lot.balance_amount) ?? 0).toLocaleString("en-IN")} is still due — the NBFC uploads the payment slip and bank reference before the batteries ship back`,
+    );
+  }
   const move = input.leg === "out" ? "dispatch_out" : "dispatch_return";
   const to = assertLotMove(lot.status, move);
-  if (input.leg === "out" && lot.pickup_mode === "itarang_pickup") {
-    throw new Error("CONFLICT: iTarang is collecting this lot — its agent records the pickup, not the NBFC");
-  }
   const p = input.leg === "out" ? "out" : "ret";
-  const party: Party = input.leg === "out" ? "nbfc" : "admin";
   const now = new Date();
   await db.transaction(async (tx) => {
-    const payload = await writeTransport(tx, lot, p, input, { status: to, last_party: party }, now);
-    await appendEvent(tx, lot, { party, kind: input.leg === "out" ? "dispatched_out" : "dispatched_return", message: input.note ?? null, actor: input.actor_user_id, payload });
-    await audit(tx, lot, input.actor_user_id, "refurb_lot_dispatched", { status: lot.status }, { status: to, leg: input.leg, docket_no: input.docket_no ?? null, eway_bill_no: input.eway_bill_no ?? null });
+    const payload = await writeTransport(tx, lot, p, input, { status: to, last_party: input.party }, now);
+    await appendEvent(tx, lot, { party: input.party, kind: input.leg === "out" ? "dispatched_out" : "dispatched_return", message: input.note ?? null, actor: input.actor_user_id, payload });
+    await audit(tx, lot, input.actor_user_id, "refurb_lot_dispatched", { status: lot.status }, { status: to, leg: input.leg, by: input.party, docket_no: input.docket_no ?? null, eway_bill_no: input.eway_bill_no ?? null });
   });
-  return (await getLot(lot.id, input.tenant_id))!;
+  return reload(lot.id, input.scope, input.party);
 }
 
-/** iTarang's agent collected the batteries (itarang_pickup mode). */
+/** 8b: iTarang's agent collected the batteries (itarang_pickup mode). */
 export async function recordPickup(input: TransportInput): Promise<LotDetail> {
   const lot = await loadLot(input.lot_id, null);
+  if (!shippableOut(lot)) {
+    throw new Error(
+      lot.status === "pi_accepted"
+        ? `CONFLICT: the advance is ${lot.advance_status === "recorded" ? "recorded but not yet confirmed" : "still due"} — confirm it before collecting`
+        : `CONFLICT: a lot that is ${lot.status.replace(/_/g, " ")} cannot be picked up`,
+    );
+  }
+  if (lot.pickup_mode !== "itarang_pickup") {
+    throw new Error("CONFLICT: the NBFC ships this lot — it records the dispatch, not iTarang");
+  }
   const to = assertLotMove(lot.status, "pickup");
   const now = new Date();
   await db.transaction(async (tx) => {
@@ -1056,33 +1384,41 @@ export async function recordPickup(input: TransportInput): Promise<LotDetail> {
     await appendEvent(tx, lot, { party: "admin", kind: "picked_up", message: input.note ?? null, actor: input.actor_user_id, payload });
     await audit(tx, lot, input.actor_user_id, "refurb_lot_picked_up", { status: lot.status }, { status: to, docket_no: input.docket_no ?? null, eway_bill_no: input.eway_bill_no ?? null });
   });
-  return (await getLot(lot.id, null))!;
+  return reload(lot.id, null, "admin");
 }
 
-/** The truck reached the gate (review point 8). Receipt battery-by-battery comes next. */
-export async function markArrived(input: { lot_id: string; tenant_id: string | null; actor_user_id: string | null; leg: "out" | "return"; note?: string | null }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
-  const to = assertLotMove(lot.status, input.leg === "out" ? "arrive_out" : "arrive_return");
-  const p = input.leg === "out" ? "out" : "ret";
-  const party: Party = input.leg === "out" ? "admin" : "nbfc";
+/**
+ * The truck reached the gate. On the OUT leg this is a timestamp + event only
+ * (the receipt is the state change); on the RETURN leg it is `delivered_back`.
+ */
+export async function markArrived(input: { lot_id: string; scope: LotScope; actor_user_id: string | null; leg: "out" | "return"; note?: string | null }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, input.scope);
   const now = new Date();
+  if (input.leg === "out") {
+    if (lot.status !== "in_transit_out") throw new Error(`CONFLICT: a lot that is ${lot.status.replace(/_/g, " ")} is not on its way to iTarang`);
+    if (lot.out_delivered_at) throw new Error("CONFLICT: this lot was already marked arrived — sign for each battery next");
+    await db.transaction(async (tx) => {
+      await tx.update(refurbishmentLots).set({ out_delivered_at: now, out_delivered_by: asUuid(input.actor_user_id), updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
+      await appendEvent(tx, lot, { party: "admin", kind: "arrived_out", message: input.note ?? null, actor: input.actor_user_id, payload: { leg: "out" } });
+      await audit(tx, lot, input.actor_user_id, "refurb_lot_arrived", { status: lot.status }, { status: lot.status, leg: "out" });
+    });
+    return reload(lot.id, input.scope, "admin");
+  }
+  const to = assertLotMove(lot.status, "arrive_return");
   await db.transaction(async (tx) => {
-    await tx
-      .update(refurbishmentLots)
-      .set({ status: to, last_party: party, [`${p}_delivered_at`]: now, [`${p}_delivered_by`]: asUuid(input.actor_user_id), updated_at: now } as Partial<LotRow>)
-      .where(eq(refurbishmentLots.id, lot.id));
-    await appendEvent(tx, lot, { party, kind: input.leg === "out" ? "arrived_out" : "arrived_return", message: input.note ?? null, actor: input.actor_user_id, payload: { leg: input.leg } });
-    await audit(tx, lot, input.actor_user_id, "refurb_lot_arrived", { status: lot.status }, { status: to, leg: input.leg });
+    await tx.update(refurbishmentLots).set({ status: to, last_party: "nbfc", ret_delivered_at: now, ret_delivered_by: asUuid(input.actor_user_id), updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
+    await appendEvent(tx, lot, { party: "nbfc", kind: "arrived_return", message: input.note ?? null, actor: input.actor_user_id, payload: { leg: "return" } });
+    await audit(tx, lot, input.actor_user_id, "refurb_lot_arrived", { status: lot.status }, { status: to, leg: "return" });
   });
-  return (await getLot(lot.id, input.tenant_id))!;
+  return reload(lot.id, input.scope, "nbfc");
 }
 
 // ---------------------------------------------------------------------------
-// 6 / 9. Receipt — admin signs for the batteries, NBFC signs for them back
+// 9 / 15. Receipt — admin signs for the batteries, NBFC signs for them back
 // ---------------------------------------------------------------------------
 export interface ReceiptInput {
   lot_id: string;
-  tenant_id: string | null;
+  scope: LotScope;
   actor_user_id: string | null;
   leg: "out" | "return";
   items: Array<{ job_id: string; condition: ReceiptCondition; note?: string | null; photo_urls?: string[] }>;
@@ -1091,7 +1427,7 @@ export interface ReceiptInput {
 }
 
 export async function confirmReceipt(input: ReceiptInput): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
+  const lot = await loadLot(input.lot_id, input.scope);
   const to = assertLotMove(lot.status, input.leg === "out" ? "receive_out" : "receive_return");
   const p = input.leg === "out" ? "out" : "ret";
   const party: Party = input.leg === "out" ? "admin" : "nbfc";
@@ -1135,23 +1471,28 @@ export async function confirmReceipt(input: ReceiptInput): Promise<LotDetail> {
     }
 
     const after = await lotJobs(tx, lot.id);
-    const stillOpen = after.filter((j) => j.status === "ready" || j.status === "in_progress" || j.status === "requested");
+    const stillOpen = after.filter((j) => j.status === "ready" || j.status === "at_refurbisher" || j.status === "in_progress" || j.status === "requested");
 
-    // Money on the return leg (review point 3): final bill minus the advance.
+    // Money on the return leg: final bill minus the confirmed advance.
     let moneyPatch: Partial<LotRow> = {};
     let lotStatus: LotStatus = to;
     if (input.leg === "return") {
       if (stillOpen.length > 0) {
         lotStatus = "delivered_back"; // partial receipt — still waiting on the flagged ones
       } else {
-        const final_total = actualTotalOf(after);
+        // final_total was fixed at step 13 (setFinalCost); a legacy lot without one falls back to the actuals.
+        const final_total = num(lot.final_total) ?? actualTotalOf(after);
         const advanceConfirmed = lot.advance_status === "confirmed" ? (num(lot.advance_amount) ?? 0) : 0;
-        const balance = money2(Math.max(0, final_total - advanceConfirmed));
-        lotStatus = nextAfterReceipt(balance);
+        // E-293: the balance leg was opened when the final bill went out and
+        // is normally recorded/confirmed by now (it gates the return truck).
+        // Never reopen a leg the NBFC has already paid against.
+        const legOpen = lot.balance_status === "recorded" || lot.balance_status === "confirmed";
+        const balance = legOpen ? (num(lot.balance_amount) ?? money2(Math.max(0, final_total - advanceConfirmed))) : money2(Math.max(0, final_total - advanceConfirmed));
+        lotStatus = nextAfterReceipt(balance, lot.balance_status);
         moneyPatch = {
           final_total: String(final_total),
           balance_amount: String(balance),
-          balance_status: balance > 0.005 ? "pending" : "not_due",
+          balance_status: legOpen ? lot.balance_status : balance > 0.005 ? "pending" : "not_due",
           completed_at: now,
           ...(lotStatus === "settled" ? { settled_at: now } : {}),
         };
@@ -1169,6 +1510,8 @@ export async function confirmReceipt(input: ReceiptInput): Promise<LotDetail> {
         [`${p}_receipt_note`]: input.note ?? null,
         [`${p}_receipt_photo_urls`]: [...existing, ...(input.photo_urls ?? [])],
         [`${p}_has_mismatch`]: mismatch,
+        // receipt without a separate "arrived" click still stamps the arrival
+        ...(input.leg === "out" && !lot.out_delivered_at ? { out_delivered_at: now, out_delivered_by: asUuid(input.actor_user_id) } : {}),
         ...moneyPatch,
         updated_at: now,
       } as Partial<LotRow>)
@@ -1186,48 +1529,93 @@ export async function confirmReceipt(input: ReceiptInput): Promise<LotDetail> {
     }
     await audit(tx, lot, input.actor_user_id, lotStatus === "settled" ? "refurb_lot_settled" : "refurb_lot_received", { status: lot.status }, { status: lotStatus, leg: input.leg, ...tally });
   });
-  return (await getLot(lot.id, input.tenant_id))!;
+  return reload(lot.id, input.scope, party);
 }
 
 // ---------------------------------------------------------------------------
-// 7. Admin: work, and the approved-quote gate with its revision round
+// 10. Admin: assign the lot to a refurbisher (internal — the NBFC is not told)
 // ---------------------------------------------------------------------------
-export async function startWork(input: { lot_id: string; actor_user_id: string | null }): Promise<LotDetail> {
+export async function assignRefurbisher(input: { lot_id: string; actor_user_id: string | null; refurbisher_id: string; note?: string | null }): Promise<LotDetail> {
   const lot = await loadLot(input.lot_id, null);
-  const to = assertLotMove(lot.status, "start_work");
+  const to = assertLotMove(lot.status, "assign");
+  if (lot.work_started_at) throw new Error("CONFLICT: the refurbisher has already started — the lot cannot be re-assigned");
+  const [ref] = await db.select({ id: refurbishers.id, name: refurbishers.name, active: refurbishers.is_active }).from(refurbishers).where(eq(refurbishers.id, input.refurbisher_id)).limit(1);
+  if (!ref) throw new Error("NOT_FOUND: refurbisher not found");
+  if (!ref.active) throw new Error(`CONFLICT: ${ref.name} is deactivated — pick an active refurbisher`);
   const now = new Date();
   await db.transaction(async (tx) => {
     const jobs = liveOf(await lotJobs(tx, lot.id));
     const workable = jobs.filter((j) => j.status === "requested" && j.out_received_condition !== "missing");
     if (workable.length) {
-      await tx.update(refurbishmentJobs).set({ status: "in_progress", started_at: now, updated_at: now }).where(inArray(refurbishmentJobs.id, workable.map((j) => j.id)));
+      await tx.update(refurbishmentJobs).set({ status: "at_refurbisher", assigned_workshop: ref.name, updated_at: now }).where(inArray(refurbishmentJobs.id, workable.map((j) => j.id)));
     }
+    // A battery that never arrived closes out here and goes back to the NBFC's register.
     const missing = jobs.filter((j) => j.out_received_condition === "missing" && j.status === "requested");
     if (missing.length) {
-      await tx.update(refurbishmentJobs).set({ status: "cancelled", notes: "missing at workshop receipt", updated_at: now }).where(inArray(refurbishmentJobs.id, missing.map((j) => j.id)));
+      await tx.update(refurbishmentJobs).set({ status: "cancelled", notes: "missing at iTarang receipt", updated_at: now }).where(inArray(refurbishmentJobs.id, missing.map((j) => j.id)));
       for (const j of missing) await releaseBattery(tx, j, now);
     }
-    await tx.update(refurbishmentLots).set({ status: to, work_started_at: now, last_party: "admin", battery_count: workable.length, updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
-    await appendEvent(tx, lot, { party: "admin", kind: "work_started", actor: input.actor_user_id, payload: { batteries: workable.length, missing_closed: missing.length } });
-    await audit(tx, lot, input.actor_user_id, "refurb_lot_started", { status: lot.status }, { status: to });
+    const already = jobs.filter((j) => j.status === "at_refurbisher");
+    if (already.length && lot.refurbisher_id !== ref.id) {
+      await tx.update(refurbishmentJobs).set({ assigned_workshop: ref.name, updated_at: now }).where(inArray(refurbishmentJobs.id, already.map((j) => j.id)));
+    }
+    const count = workable.length + already.length;
+    if (count === 0) throw new Error("CONFLICT: no battery in this lot arrived — nothing to assign");
+    await tx
+      .update(refurbishmentLots)
+      .set({ status: to, refurbisher_id: ref.id, assigned_at: now, assigned_by: asUuid(input.actor_user_id), refurbisher_note: input.note ?? null, battery_count: count, last_party: "admin", updated_at: now })
+      .where(eq(refurbishmentLots.id, lot.id));
+    await appendEvent(tx, lot, {
+      party: "admin",
+      kind: "refurbisher_assigned",
+      message: input.note ?? null,
+      actor: input.actor_user_id,
+      payload: { refurbisher_id: ref.id, refurbisher_name: ref.name, batteries: count, missing_closed: missing.length, reassigned: !!lot.refurbisher_id && lot.refurbisher_id !== ref.id },
+    });
+    await audit(tx, lot, input.actor_user_id, "refurb_ref_assigned", { status: lot.status, refurbisher_id: lot.refurbisher_id }, { status: to, refurbisher_id: ref.id, batteries: count });
   });
-  return (await getLot(lot.id, null))!;
+  return reload(lot.id, null, "admin");
 }
 
+// ---------------------------------------------------------------------------
+// 11 / 12. Refurbisher (or admin override): work, cost per battery
+// ---------------------------------------------------------------------------
+export async function startWork(input: { lot_id: string; scope: LotScope; actor_user_id: string | null; party: "refurbisher" | "admin" }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, input.scope);
+  const to = assertLotMove(lot.status, "start_work");
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    const jobs = liveOf(await lotJobs(tx, lot.id)).filter((j) => j.status === "at_refurbisher");
+    if (jobs.length) {
+      await tx.update(refurbishmentJobs).set({ started_at: now, updated_at: now }).where(inArray(refurbishmentJobs.id, jobs.map((j) => j.id)));
+    }
+    await tx.update(refurbishmentLots).set({ status: to, work_started_at: now, last_party: input.party, updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
+    await appendEvent(tx, lot, { party: input.party, kind: "work_started", actor: input.actor_user_id, payload: { batteries: jobs.length } });
+    await audit(tx, lot, input.actor_user_id, "refurb_lot_started", { status: lot.status }, { status: to, by: input.party });
+  });
+  return reload(lot.id, input.scope, input.party);
+}
+
+const WORK_EDITABLE: LotStatus[] = ["at_refurbisher", "in_progress", "costed"];
+
+/** Edit a battery's checklist / accessories / notes while the lot sits with the refurbisher (no event). */
 export async function updateLotItem(input: {
   lot_id: string;
   job_id: string;
+  scope: LotScope;
   actor_user_id: string | null;
   checklist?: ChecklistItem[];
   accessories?: AccessoryLine[];
-  actual_cost?: number | null;
+  refurbisher_parts?: RefurbisherPart[];
+  refurbisher_cost?: number | null;
+  refurbisher_note?: string | null;
   notes?: string | null;
-  assigned_workshop?: string | null;
 }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, null);
-  if (!["in_progress", "received", "ready", "revision_pending"].includes(lot.status)) {
-    throw new Error(`CONFLICT: work details can only be edited while the lot is at the workshop (it is ${lot.status})`);
+  const lot = await loadLot(input.lot_id, input.scope);
+  if (!WORK_EDITABLE.includes(lot.status as LotStatus)) {
+    throw new Error(`CONFLICT: work details can only be edited while the lot is with the refurbisher (it is ${lot.status.replace(/_/g, " ")})`);
   }
+  if (lot.final_sent_at) throw new Error("CONFLICT: the final bill has been sent to the NBFC — costs are frozen");
   const [job] = await db.select().from(refurbishmentJobs).where(and(eq(refurbishmentJobs.id, input.job_id), eq(refurbishmentJobs.lot_id, lot.id))).limit(1);
   if (!job) throw new Error("NOT_FOUND: job is not in this lot");
   await db
@@ -1235,157 +1623,283 @@ export async function updateLotItem(input: {
     .set({
       ...(input.checklist !== undefined ? { checklist: input.checklist } : {}),
       ...(input.accessories !== undefined ? { accessories: input.accessories } : {}),
-      ...(input.actual_cost !== undefined ? { actual_cost: input.actual_cost === null ? null : String(input.actual_cost) } : {}),
+      ...(input.refurbisher_parts !== undefined ? { refurbisher_parts: input.refurbisher_parts } : {}),
+      ...(input.refurbisher_cost !== undefined ? { refurbisher_cost: input.refurbisher_cost === null ? null : String(money2(input.refurbisher_cost)) } : {}),
+      ...(input.refurbisher_note !== undefined ? { refurbisher_note: input.refurbisher_note } : {}),
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
-      ...(input.assigned_workshop !== undefined ? { assigned_workshop: input.assigned_workshop } : {}),
       updated_at: new Date(),
     })
     .where(eq(refurbishmentJobs.id, job.id));
-  return (await getLot(lot.id, null))!;
+  return reload(lot.id, input.scope, input.scope?.refurbisher_id ? "refurbisher" : "admin");
 }
 
-export async function markItemReady(input: { lot_id: string; job_id: string; actor_user_id: string | null }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, null);
-  if (lot.status !== "in_progress") {
-    throw new Error(`CONFLICT: a battery can only be marked ready while the lot is in progress (it is ${lot.status})`);
+/** 12: the refurbisher's final cost for ONE battery. When every live battery is costed the lot is `costed`. */
+export async function costItem(input: {
+  lot_id: string;
+  job_id: string;
+  scope: LotScope;
+  actor_user_id: string | null;
+  party: "refurbisher" | "admin";
+  refurbisher_cost: number;
+  refurbisher_parts?: RefurbisherPart[];
+  checklist?: ChecklistItem[];
+  accessories?: AccessoryLine[];
+  note?: string | null;
+}): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, input.scope);
+  if (lot.status !== "in_progress" && lot.status !== "costed") {
+    throw new Error(`CONFLICT: a battery can only be costed while work is in progress (the lot is ${lot.status.replace(/_/g, " ")})`);
   }
+  if (lot.final_sent_at) throw new Error("CONFLICT: the final bill has been sent to the NBFC — costs are frozen");
+  if (!(input.refurbisher_cost >= 0)) throw new Error("BAD_REQUEST: the cost cannot be negative");
   const now = new Date();
   await db.transaction(async (tx) => {
     const jobs = await lotJobs(tx, lot.id);
     const job = jobs.find((j) => j.id === input.job_id);
     if (!job) throw new Error("NOT_FOUND: job is not in this lot");
-    if (job.status !== "in_progress") throw new Error(`CONFLICT: job is ${job.status}, not in progress`);
+    if (job.status !== "at_refurbisher") throw new Error(`CONFLICT: job is ${job.status.replace(/_/g, " ")}, not at the refurbisher`);
+    const parts = input.refurbisher_parts ?? ((job.refurbisher_parts as RefurbisherPart[]) ?? []);
+    const accessories = input.accessories ?? ((job.accessories as AccessoryLine[]) ?? []);
+    await tx
+      .update(refurbishmentJobs)
+      .set({
+        refurbisher_cost: String(money2(input.refurbisher_cost)),
+        refurbisher_parts: parts,
+        accessories,
+        ...(input.checklist !== undefined ? { checklist: input.checklist } : {}),
+        refurbisher_note: input.note ?? job.refurbisher_note ?? null,
+        costed_at: now,
+        costed_by: asUuid(input.actor_user_id),
+        updated_at: now,
+      })
+      .where(eq(refurbishmentJobs.id, job.id));
+    const after = (await lotJobs(tx, lot.id)).map((j) => ({ ...j }));
+    const base = itemBase({ refurbisher_cost: input.refurbisher_cost, actual_cost: null, estimated_cost: null, refurbisher_parts: parts, accessories });
+    await appendEvent(tx, lot, {
+      party: input.party,
+      kind: "item_costed",
+      message: input.note ?? null,
+      actor: input.actor_user_id,
+      payload: { job_id: job.id, serial: await serialOf(tx, job.battery_id), refurbisher_cost: money2(input.refurbisher_cost), parts_total: partsTotal(parts), accessories_total: accessoriesTotal(accessories), base },
+    });
+    const allCosted = allOpenItemsCosted(after);
+    const refurbisher_total = actualTotalOf(after);
+    if (allCosted) {
+      const to = lot.status === "in_progress" ? assertLotMove(lot.status, "all_costed") : lot.status;
+      await tx
+        .update(refurbishmentLots)
+        .set({ status: to, refurbisher_total: String(refurbisher_total), costed_at: lot.costed_at ?? now, last_party: input.party, updated_at: now })
+        .where(eq(refurbishmentLots.id, lot.id));
+      if (lot.status === "in_progress") {
+        await appendEvent(tx, lot, { party: "system", kind: "all_costed", payload: { refurbisher_total, batteries: liveOf(after).length } });
+      }
+    } else {
+      await tx.update(refurbishmentLots).set({ refurbisher_total: String(refurbisher_total), last_party: input.party, updated_at: now }).where(eq(refurbishmentLots.id, lot.id));
+    }
+    await audit(tx, lot, input.actor_user_id, "refurb_item_costed", { job_status: job.status }, { job_id: job.id, refurbisher_cost: input.refurbisher_cost, lot_status: allCosted ? "costed" : lot.status });
+  });
+  return reload(lot.id, input.scope, input.party);
+}
 
+// ---------------------------------------------------------------------------
+// 13. Admin: final bill → NBFC; mark ready
+//
+// The NBFC is billed the PROFORMA INVOICE amount it accepted at step 7 — that
+// figure was fixed when it accepted, and the advance was paid against it. The
+// refurbisher's actual cost stays internal to iTarang ⇄ refurbisher: the
+// iTarang margin is simply PI − refurbisher total (negative when the workshop
+// cost more than was quoted), and it is spread across the batteries so each
+// carries its true cost into an auction. Margin inputs are only honoured on a
+// legacy lot that never had a PI accepted.
+// ---------------------------------------------------------------------------
+export async function setFinalCost(input: {
+  lot_id: string;
+  actor_user_id: string | null;
+  margin_pct?: number | null;
+  margin_amount?: number | null;
+  note?: string | null;
+}): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, null);
+  if (lot.status !== "costed") throw new Error(`CONFLICT: the final bill can only be set once every battery is costed (the lot is ${lot.status.replace(/_/g, " ")})`);
+  const piAmount = lot.pi_accepted_at ? num(lot.pi_amount) : null;
+  const billedFromPi = piAmount != null && piAmount > 0;
+  if (!billedFromPi) {
+    if (input.margin_pct != null && input.margin_amount != null) throw new Error("BAD_REQUEST: give the margin as a percentage OR an amount, not both");
+    if (input.margin_pct != null && (input.margin_pct < 0 || input.margin_pct > 100)) throw new Error("BAD_REQUEST: margin must be between 0 and 100 percent");
+    if (input.margin_amount != null && input.margin_amount < 0) throw new Error("BAD_REQUEST: margin cannot be negative");
+  }
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    const jobs = await lotJobs(tx, lot.id);
+    const live = liveOf(jobs);
+    if (live.some((j) => j.status === "ready")) throw new Error("CONFLICT: batteries are already marked ready against the current bill");
+    const bases = live.map((j) => itemBase(j));
+    const refurbisher_total = money2(bases.reduce((s, b) => s + b, 0));
+    let margin_amount: number;
+    let margin_pct: number;
+    let final_total: number;
+    if (billedFromPi) {
+      final_total = money2(piAmount);
+      margin_amount = money2(final_total - refurbisher_total);
+      margin_pct = refurbisher_total > 0 ? money2((margin_amount / refurbisher_total) * 100) : 0;
+    } else {
+      margin_amount = money2(input.margin_amount != null ? input.margin_amount : ((refurbisher_total * (input.margin_pct ?? 0)) / 100));
+      margin_pct = input.margin_pct != null ? input.margin_pct : refurbisher_total > 0 ? money2((margin_amount / refurbisher_total) * 100) : 0;
+      final_total = money2(refurbisher_total + margin_amount);
+    }
+    const finals = splitMargin(bases, margin_amount);
+    for (let i = 0; i < live.length; i++) {
+      await tx.update(refurbishmentJobs).set({ final_cost: String(finals[i]), updated_at: now }).where(eq(refurbishmentJobs.id, live[i].id));
+    }
+    const advanceConfirmed = lot.advance_status === "confirmed" ? (num(lot.advance_amount) ?? 0) : 0;
+    const balanceAmount = money2(Math.max(0, final_total - advanceConfirmed));
+    // E-293: the balance is due NOW — before the batteries ship back. A
+    // re-sent bill re-opens a leg that was merely pending; one the NBFC has
+    // already recorded / iTarang confirmed keeps its state and its slips.
+    const balanceStatus =
+      lot.balance_status === "recorded" || lot.balance_status === "confirmed"
+        ? lot.balance_status
+        : balanceAmount > 0.005 ? "pending" : "not_due";
+    await tx
+      .update(refurbishmentLots)
+      .set({
+        refurbisher_total: String(refurbisher_total),
+        itarang_margin_pct: String(margin_pct),
+        itarang_margin_amount: String(margin_amount),
+        final_total: String(final_total),
+        balance_amount: String(balanceAmount),
+        balance_status: balanceStatus,
+        final_sent_at: now,
+        final_sent_by: asUuid(input.actor_user_id),
+        last_party: "admin",
+        updated_at: now,
+      })
+      .where(eq(refurbishmentLots.id, lot.id));
+    await appendEvent(tx, lot, {
+      party: "admin",
+      kind: "final_bill_sent",
+      message: input.note ?? null,
+      actor: input.actor_user_id,
+      payload: { refurbisher_total, margin_pct, margin_amount, final_total, billed_from: billedFromPi ? "pi" : "margin", pi_amount: piAmount, advance_confirmed: advanceConfirmed, balance_expected: money2(Math.max(0, final_total - advanceConfirmed)), resent: !!lot.final_sent_at },
+    });
+    await audit(tx, lot, input.actor_user_id, "refurb_final_bill", { final_total: num(lot.final_total) }, { refurbisher_total, margin_pct, margin_amount, final_total, billed_from: billedFromPi ? "pi" : "margin" });
+  });
+  return reload(lot.id, null, "admin");
+}
+
+export async function markItemReady(input: { lot_id: string; job_id: string; actor_user_id: string | null }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, null);
+  if (lot.status !== "costed") {
+    throw new Error(`CONFLICT: a battery can only be marked ready once the lot is costed (it is ${lot.status.replace(/_/g, " ")})`);
+  }
+  if (!lot.final_sent_at) throw new Error("CONFLICT: send the final bill to the NBFC before marking batteries ready");
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    const jobs = await lotJobs(tx, lot.id);
+    const job = jobs.find((j) => j.id === input.job_id);
+    if (!job) throw new Error("NOT_FOUND: job is not in this lot");
+    if (job.status !== "at_refurbisher") throw new Error(`CONFLICT: job is ${job.status.replace(/_/g, " ")}, not at the refurbisher`);
     const statuses = jobs.map((j) => (j.id === job.id ? "ready" : j.status));
     const allReady = allOpenItemsReady(statuses);
-    // THE approved-quote gate (review points 2 & 5). The last battery cannot
-    // close the lot while the bill exceeds what the NBFC signed off.
-    const actual = actualTotalOf(jobs);
-    const approved = num(lot.quote_approved_total);
-    if (allReady && !withinApprovedQuote(actual, approved)) {
-      throw new Error(
-        `CONFLICT: actual work is ₹${actual.toLocaleString("en-IN")} against an approved quote of ₹${(approved ?? 0).toLocaleString("en-IN")} — send the NBFC a revised quote before marking the last battery ready`,
-      );
-    }
-
     await tx.update(refurbishmentJobs).set({ status: "ready", ready_at: now, updated_at: now }).where(eq(refurbishmentJobs.id, job.id));
     await appendEvent(tx, lot, {
       party: "admin",
       kind: "item_ready",
       actor: input.actor_user_id,
-      payload: { job_id: job.id, serial: await serialOf(tx, job.battery_id), actual_cost: num(job.actual_cost), accessories_total: accessoriesTotal((job.accessories as AccessoryLine[]) ?? []), lot_ready: allReady },
+      payload: { job_id: job.id, serial: await serialOf(tx, job.battery_id), final_cost: num(job.final_cost), lot_ready: allReady },
     });
     await tx
       .update(refurbishmentLots)
-      .set(allReady ? { status: "ready", last_party: "admin", updated_at: now } : { updated_at: now })
+      .set(allReady ? { status: assertLotMove(lot.status, "all_ready"), last_party: "admin", updated_at: now } : { updated_at: now })
       .where(eq(refurbishmentLots.id, lot.id));
     await audit(tx, lot, input.actor_user_id, "refurb_item_ready", { job_status: job.status }, { job_id: job.id, lot_status: allReady ? "ready" : lot.status });
   });
-  return (await getLot(lot.id, null))!;
+  return reload(lot.id, null, "admin");
 }
 
-/** Admin: the bill will exceed the approved quote — ask the NBFC to approve the new total. */
-export async function reviseQuote(input: { lot_id: string; actor_user_id: string | null; revised_total: number; note?: string | null }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, null);
-  const to = assertLotMove(lot.status, "revise");
-  const approved = num(lot.quote_approved_total) ?? 0;
-  if (input.revised_total <= approved) {
-    throw new Error(`BAD_REQUEST: the revised total must exceed the approved ₹${approved.toLocaleString("en-IN")} — otherwise no revision is needed`);
-  }
-  const now = new Date();
-  const round = (lot.revision_round ?? 0) + 1;
-  await db.transaction(async (tx) => {
-    await tx
-      .update(refurbishmentLots)
-      .set({ status: to, last_party: "admin", revised_total: String(money2(input.revised_total)), revision_note: input.note ?? null, revision_round: round, updated_at: now })
-      .where(eq(refurbishmentLots.id, lot.id));
-    await appendEvent(tx, lot, { party: "admin", kind: "revision_proposed", message: input.note ?? null, actor: input.actor_user_id, payload: { round, approved_total: approved, revised_total: money2(input.revised_total) } });
-    await audit(tx, lot, input.actor_user_id, "refurb_quote_revised", { quote_approved_total: approved }, { revised_total: input.revised_total, round });
-  });
-  return (await getLot(lot.id, null))!;
-}
-
-/** NBFC: approve (new cap) or reject (admin must fit the original) the revised quote. */
-export async function respondToRevision(input: { lot_id: string; tenant_id: string; actor_user_id: string | null; kind: "approve" | "reject"; message?: string | null }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
-  const to = assertLotMove(lot.status, input.kind === "approve" ? "approve_revision" : "reject_revision");
+// ---------------------------------------------------------------------------
+// 17. NBFC: redeploy or auction — the lot closes
+// ---------------------------------------------------------------------------
+export async function closeLot(input: { lot_id: string; tenant_id: string; actor_user_id: string | null; outcome: CloseOutcome; note?: string | null }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, { tenant_id: input.tenant_id });
+  const to = assertLotMove(lot.status, "close");
+  if (!CLOSE_OUTCOMES.includes(input.outcome)) throw new Error("BAD_REQUEST: choose redeploy or auction");
   const now = new Date();
   await db.transaction(async (tx) => {
+    const jobs = (await lotJobs(tx, lot.id)).filter((j) => j.status === "returned");
+    let moved = 0;
+    if (input.outcome === "redeploy") {
+      // Stub: the pipeline row records the choice; the battery stays `ready`.
+      const pids = jobs.map((j) => j.recovery_pipeline_id).filter((x): x is string => !!x);
+      if (pids.length) {
+        const r = await tx.update(nbfcRecoveryPipeline).set({ stage: "redeploy", updated_at: now }).where(and(inArray(nbfcRecoveryPipeline.id, pids), eq(nbfcRecoveryPipeline.stage, "ready_for_auction"))).returning({ id: nbfcRecoveryPipeline.id });
+        moved = r.length;
+      }
+    }
     await tx
       .update(refurbishmentLots)
-      .set({
-        status: to,
-        last_party: "nbfc",
-        ...(input.kind === "approve" ? { quote_approved_total: lot.revised_total, quote_approved_at: now, quote_approved_by: asUuid(input.actor_user_id) } : {}),
-        revised_total: null,
-        updated_at: now,
-      })
+      .set({ status: to, close_outcome: input.outcome, closed_at: now, closed_by: asUuid(input.actor_user_id), close_note: input.note ?? null, last_party: "nbfc", updated_at: now })
       .where(eq(refurbishmentLots.id, lot.id));
-    await appendEvent(tx, lot, {
-      party: "nbfc",
-      kind: input.kind === "approve" ? "revision_approved" : "revision_rejected",
-      message: input.message ?? null,
-      actor: input.actor_user_id,
-      payload: { round: lot.revision_round, revised_total: num(lot.revised_total), approved_total: input.kind === "approve" ? num(lot.revised_total) : num(lot.quote_approved_total) },
-    });
-    await audit(tx, lot, input.actor_user_id, "refurb_revision_answer", { revised_total: num(lot.revised_total) }, { kind: input.kind, quote_approved_total: input.kind === "approve" ? num(lot.revised_total) : num(lot.quote_approved_total) });
+    await appendEvent(tx, lot, { party: "nbfc", kind: "closed", message: input.note ?? null, actor: input.actor_user_id, payload: { outcome: input.outcome, batteries: jobs.length, redeploy_moved: moved } });
+    await audit(tx, lot, input.actor_user_id, "refurb_lot_closed", { status: lot.status }, { status: to, outcome: input.outcome, batteries: jobs.length });
   });
-  return (await getLot(lot.id, input.tenant_id))!;
+  return reload(lot.id, { tenant_id: input.tenant_id }, "nbfc");
 }
 
 // ---------------------------------------------------------------------------
 // Thread + photos
 // ---------------------------------------------------------------------------
-export async function postMessage(input: { lot_id: string; tenant_id: string | null; actor_user_id: string | null; party: Party; message: string }): Promise<LotDetail> {
-  const lot = await loadLot(input.lot_id, input.tenant_id);
+/** `to` matters only for admin messages: the NBFC thread and the refurbisher thread are separate walls. */
+export async function postMessage(input: { lot_id: string; scope: LotScope; actor_user_id: string | null; party: Party; message: string; to?: "nbfc" | "refurbisher" }): Promise<LotDetail> {
+  const lot = await loadLot(input.lot_id, input.scope);
   if (!input.message.trim()) throw new Error("BAD_REQUEST: empty message");
+  const to = input.party === "admin" ? (input.to ?? "nbfc") : input.party === "nbfc" ? "admin" : "admin";
   await db.transaction(async (tx) => {
-    await appendEvent(tx, lot, { party: input.party, kind: "message", message: input.message.trim(), actor: input.actor_user_id });
+    await appendEvent(tx, lot, { party: input.party, kind: "message", message: input.message.trim(), actor: input.actor_user_id, payload: { to } });
     await tx.update(refurbishmentLots).set({ updated_at: new Date() }).where(eq(refurbishmentLots.id, lot.id));
   });
-  return (await getLot(lot.id, input.tenant_id))!;
+  return reload(lot.id, input.scope, input.party);
 }
 
-export type PhotoTarget = "out_dispatch" | "out_receipt" | "ret_dispatch" | "ret_receipt" | "out_eway_bill" | "ret_eway_bill";
+export type PhotoTarget =
+  | "out_dispatch" | "out_receipt" | "ret_dispatch" | "ret_receipt" | "out_eway_bill" | "ret_eway_bill" | "pi_document"
+  // E-293: NBFC payment slips (image / PDF), one list per money leg
+  | "advance_slip" | "balance_slip";
 
-/** Photos append to a list; an e-way bill REPLACES (one document per leg). */
-export async function attachLotPhotos(lot_id: string, tenant_id: string | null, target: PhotoTarget, paths: string[]): Promise<string[]> {
-  const lot = await loadLot(lot_id, tenant_id);
-  if (target === "out_eway_bill" || target === "ret_eway_bill") {
-    const col = target === "out_eway_bill" ? "out_eway_bill_url" : "ret_eway_bill_url";
+/** Photos append to a list; an e-way bill or the PI REPLACES (one document each). */
+export async function attachLotPhotos(lot_id: string, scope: LotScope, target: PhotoTarget, paths: string[]): Promise<string[]> {
+  const lot = await loadLot(lot_id, scope);
+  if (target === "out_eway_bill" || target === "ret_eway_bill" || target === "pi_document") {
+    const col = target === "out_eway_bill" ? "out_eway_bill_url" : target === "ret_eway_bill" ? "ret_eway_bill_url" : "pi_url";
     const url = paths[paths.length - 1] ?? null;
     await db.update(refurbishmentLots).set({ [col]: url, updated_at: new Date() } as Partial<LotRow>).where(eq(refurbishmentLots.id, lot.id));
     return url ? [url] : [];
   }
+  if (target === "advance_slip" || target === "balance_slip") {
+    const leg = target === "advance_slip" ? "advance" : "balance";
+    const st = String((lot as unknown as Record<string, unknown>)[`${leg}_status`] ?? "");
+    if (st === "confirmed") throw new Error(`CONFLICT: the ${leg} is already confirmed — its slip is part of the record`);
+    if (leg === "balance" && st === "not_due") throw new Error("CONFLICT: the balance is not due yet — iTarang sends the final bill first");
+  }
   const col =
-    target === "out_dispatch" ? "out_photo_urls" : target === "out_receipt" ? "out_receipt_photo_urls" : target === "ret_dispatch" ? "ret_photo_urls" : "ret_receipt_photo_urls";
+    target === "out_dispatch" ? "out_photo_urls"
+      : target === "out_receipt" ? "out_receipt_photo_urls"
+        : target === "ret_dispatch" ? "ret_photo_urls"
+          : target === "advance_slip" ? "advance_proof_urls"
+            : target === "balance_slip" ? "balance_proof_urls"
+              : "ret_receipt_photo_urls";
   const existing = ((lot as unknown as Record<string, unknown>)[col] as string[]) ?? [];
   const next = [...existing, ...paths];
   await db.update(refurbishmentLots).set({ [col]: next, updated_at: new Date() } as Partial<LotRow>).where(eq(refurbishmentLots.id, lot.id));
   return next;
 }
 
-export async function attachItemPhotos(lot_id: string, tenant_id: string | null, job_id: string, leg: "out" | "return", paths: string[]): Promise<string[]> {
-  await loadLot(lot_id, tenant_id);
+export async function attachItemPhotos(lot_id: string, scope: LotScope, job_id: string, leg: "out" | "return", paths: string[]): Promise<string[]> {
+  await loadLot(lot_id, scope);
   const [job] = await db.select().from(refurbishmentJobs).where(and(eq(refurbishmentJobs.id, job_id), eq(refurbishmentJobs.lot_id, lot_id))).limit(1);
   if (!job) throw new Error("NOT_FOUND: job is not in this lot");
   const col = leg === "out" ? "out_received_photo_urls" : "ret_received_photo_urls";
   const next = [...(job[col] ?? []), ...paths];
   await db.update(refurbishmentJobs).set({ [col]: next, updated_at: new Date() }).where(eq(refurbishmentJobs.id, job.id));
   return next;
-}
-
-/** Where every battery of an NBFC that is currently `refurbishing` sits — for the battery register. */
-export async function custodyForTenantBatteries(tenant_id: string, battery_ids: string[]): Promise<Map<string, { custody: Custody; lot_id: string; ref_code: string }>> {
-  const out = new Map<string, { custody: Custody; lot_id: string; ref_code: string }>();
-  if (battery_ids.length === 0) return out;
-  const rows = await db
-    .select({ job: refurbishmentJobs, lot: refurbishmentLots })
-    .from(refurbishmentJobs)
-    .innerJoin(refurbishmentLots, eq(refurbishmentLots.id, refurbishmentJobs.lot_id))
-    .where(and(eq(refurbishmentJobs.tenant_id, tenant_id), inArray(refurbishmentJobs.battery_id, battery_ids), inArray(refurbishmentJobs.status, OPEN_STATUSES)));
-  for (const r of rows) {
-    out.set(r.job.battery_id, { custody: custodyForItem(r.lot.status, r.job), lot_id: r.lot.id, ref_code: r.lot.ref_code });
-  }
-  return out;
 }

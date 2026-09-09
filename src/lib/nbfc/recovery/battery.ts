@@ -91,6 +91,15 @@ export interface BatteryRow {
   image_urls: string[];
   state_code: string;
   notes: string | null;
+  /** [E-292] Recovery triage (refurbish flow v3 R2/R3). */
+  rated_voltage_v: number | null;
+  measured_voltage_v: number | null;
+  health_pct: number | null;
+  triage_condition: string | null;
+  triage_note: string | null;
+  triage_suggestion: string | null;
+  triage_choice: string | null;
+  triaged_at: string | null;
   created_at: string;
 }
 
@@ -126,6 +135,14 @@ function shape(row: typeof recoveryBatteries.$inferSelect): BatteryRow {
     image_urls: row.image_urls ?? [],
     state_code: row.state_code,
     notes: row.notes ?? null,
+    rated_voltage_v: toNum(row.rated_voltage_v),
+    measured_voltage_v: toNum(row.measured_voltage_v),
+    health_pct: toNum(row.health_pct),
+    triage_condition: row.triage_condition ?? null,
+    triage_note: row.triage_note ?? null,
+    triage_suggestion: row.triage_suggestion ?? null,
+    triage_choice: row.triage_choice ?? null,
+    triaged_at: iso(row.triaged_at),
     created_at: iso(row.created_at) ?? "",
   };
 }

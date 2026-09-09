@@ -29,6 +29,7 @@ import {
   auctionLotItems,
   recoveryBatteries,
   nbfcTenants,
+  nbfc,
   nbfcAuditLog,
 } from "@/lib/db/schema";
 
@@ -50,6 +51,12 @@ export interface DealerPurchase {
   refinance_loan_id: string | null;
   updated_at: string;
   items: Array<{ serial: string; condition: string }>;
+  /**
+   * [E-292] Marketplace hand-off (refurbish flow v3): the winner and the
+   * NBFC settle DIRECT, so the buyer gets the seller's phone + email. The
+   * phone lives on the `nbfc` master row, joined by slug = lower(nbfc_id).
+   */
+  seller_contact: { name: string | null; phone: string | null; email: string | null } | null;
 }
 
 /** Everything this dealer has won, newest first. */
@@ -66,6 +73,9 @@ export async function listDealerPurchases(
       final_price: auctionSettlements.final_price,
       status: auctionSettlements.status,
       seller_name: nbfcTenants.display_name,
+      seller_email: nbfcTenants.contact_email,
+      seller_phone: nbfc.primary_contact_phone,
+      seller_contact_name: nbfc.primary_contact_name,
       paid_at: auctionSettlements.paid_at,
       payment_ref: auctionSettlements.payment_ref,
       payment_provider: auctionSettlements.payment_provider,
@@ -79,6 +89,9 @@ export async function listDealerPurchases(
       nbfcTenants,
       eq(nbfcTenants.id, auctionSettlements.seller_tenant_id),
     )
+    // The tenant row carries an email; the phone is on the onboarding master
+    // (activate-nbfc.ts sets slug = lower(nbfc_id)).
+    .leftJoin(nbfc, sql`lower(${nbfc.nbfc_id}) = ${nbfcTenants.slug}`)
     .where(eq(auctionSettlements.winner_dealer_id, dealer_id))
     .orderBy(desc(auctionSettlements.updated_at))
     .limit(100);
@@ -126,6 +139,9 @@ export async function listDealerPurchases(
     refinance_loan_id: r.refinance_loan_id ?? null,
     updated_at: (r.updated_at as Date).toISOString(),
     items: byLot.get(r.lot_id) ?? [],
+    seller_contact: r.seller_name
+      ? { name: r.seller_contact_name ?? r.seller_name ?? null, phone: r.seller_phone ?? null, email: r.seller_email ?? null }
+      : null,
   }));
 }
 
