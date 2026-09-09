@@ -51,6 +51,7 @@ export const EXTERNAL_ROLES = new Set([
   "dealer",
   "scrap_vendor",
   "nbfc_partner",
+  "refurbisher", // E-292 — refurbishment partner, not staff
 ]);
 
 /**

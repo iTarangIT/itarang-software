@@ -289,6 +289,31 @@ export default async function NbfcRecoveryQueuePage() {
     assignmentRows.map((a) => [a.loan_sanction_id, a]),
   );
 
+  // The assignment row denormalises name + phone only. Email is what the link
+  // actually went to, so the reviewer wants it beside the phone. Looked up on
+  // the agents table by id — deactivated agents included, because a live
+  // assignment can still name one.
+  const assignedAgentIds = [
+    ...new Set(
+      assignmentRows.map((a) => a.agent_id).filter((id): id is string => !!id),
+    ),
+  ];
+  const assignedAgentRows =
+    assignedAgentIds.length > 0
+      ? await db
+          .select({ id: nbfcRecoveryAgents.id, email: nbfcRecoveryAgents.email })
+          .from(nbfcRecoveryAgents)
+          .where(
+            and(
+              eq(nbfcRecoveryAgents.tenant_id, tenant.id),
+              inArray(nbfcRecoveryAgents.id, assignedAgentIds),
+            ),
+          )
+      : [];
+  const agentEmailById = new Map(
+    assignedAgentRows.map((a) => [a.id, a.email ?? null]),
+  );
+
   // The agent's evidence, for the handful of jobs that are actually waiting on
   // a decision. Fetched HERE rather than by the panel on open, for two reasons:
   // the reviewer should see the photographs the instant they expand a row, and
@@ -472,6 +497,7 @@ export default async function NbfcRecoveryQueuePage() {
           agent_id: a.agent_id,
           agent_name: a.agent_name,
           agent_phone: a.agent_phone,
+          agent_email: a.agent_id ? (agentEmailById.get(a.agent_id) ?? null) : null,
           assigned_at: a.assigned_at ? a.assigned_at.toISOString() : null,
           due_at: a.due_at ? a.due_at.toISOString() : null,
           link_sent_at: a.link_sent_at ? a.link_sent_at.toISOString() : null,

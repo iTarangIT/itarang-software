@@ -41,6 +41,7 @@ import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { getVehicleStates } from "@/lib/db/iot-queries";
 import RecoveryKanban from "./_components/RecoveryKanban";
 import BatteryEvaluationPanel from "./_components/BatteryEvaluationPanel";
+import RecoveryTriageSection from "./_components/RecoveryTriageSection";
 import {
   AuctionLotsGrid,
   type AuctionLot,
@@ -63,6 +64,8 @@ const STAGES = [
   "ready_for_auction",
   "resold",
   "scrap",
+  // [E-292] NBFC chose to redeploy (stub stage).
+  "redeploy",
 ] as const;
 
 type Stage = (typeof STAGES)[number];
@@ -73,6 +76,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   ready_for_auction: "Ready for Auction",
   resold: "Resold",
   scrap: "Scrap",
+  redeploy: "Redeploy",
 };
 
 // The pipeline strip surfaces 4 stages; ready_for_auction stays in the kanban.
@@ -428,6 +432,9 @@ export default async function RecoveryPage() {
       winner_dealer_id: auctionSettlements.winner_dealer_id,
       tenant_name: nbfcTenants.display_name,
       dealer_name: accounts.business_entity_name,
+      // [E-292] marketplace hand-off: the seller gets the winner's contact.
+      dealer_phone: accounts.contact_phone,
+      dealer_email: accounts.contact_email,
       status: auctionSettlements.status,
       updated_at: auctionSettlements.updated_at,
     })
@@ -460,6 +467,9 @@ export default async function RecoveryPage() {
         ? (s.dealer_name ?? s.winner_dealer_id ?? "")
         : (s.tenant_name ?? ""),
       winner_kind: isDealerWin ? "dealer" : "nbfc",
+      winner_contact: isDealerWin
+        ? { name: s.dealer_name ?? null, phone: s.dealer_phone ?? null, email: s.dealer_email ?? null }
+        : null,
       status: s.status as SettlementStatus,
       updated_at: s.updated_at.toISOString(),
     };
@@ -575,7 +585,10 @@ export default async function RecoveryPage() {
             )}
           </div>
           <aside className="lg:col-span-1">
-            <div className="lg:sticky lg:top-6">
+            <div className="lg:sticky lg:top-6 space-y-4">
+              {/* [E-292] v3 triage sits above the 3-step wizard: voltage →
+                  health % → branch. The wizard stays for auction pricing. */}
+              <RecoveryTriageSection />
               <BatteryEvaluationPanel candidates={pendingEvaluations} />
             </div>
           </aside>

@@ -24,6 +24,7 @@ const Body = z.object({
     "scrap",
     "ready_for_auction",
     "resold",
+    "redeploy",
   ]),
   note: z.string().min(5).optional(),
 });

@@ -31,6 +31,8 @@ interface Purchase {
   refinance_loan_id: string | null;
   updated_at: string;
   items: Array<{ serial: string; condition: string }>;
+  /** [E-292] The seller's contact — settle direct with them. */
+  seller_contact: { name: string | null; phone: string | null; email: string | null } | null;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -230,6 +232,18 @@ export default function Purchases() {
                   <ConditionChip condition={i.condition} />
                 </span>
               ))}
+            </div>
+          ) : null}
+
+          {/* [E-292] Marketplace hand-off: the winner and the NBFC settle
+              direct. The seller sees your contact the same way. */}
+          {p.seller_contact && (p.seller_contact.phone || p.seller_contact.email) ? (
+            <div className="auc-hint" style={{ marginBlockStart: "0.625rem" }}>
+              <b>Settle direct with {p.seller_contact.name ?? p.seller_name ?? "the seller"}:</b>{" "}
+              {p.seller_contact.phone ? <a href={`tel:${p.seller_contact.phone}`}>{p.seller_contact.phone}</a> : null}
+              {p.seller_contact.phone && p.seller_contact.email ? " · " : ""}
+              {p.seller_contact.email ? <a href={`mailto:${p.seller_contact.email}`}>{p.seller_contact.email}</a> : null}
+              <div className="auc-subtle">Cash on collection is fine — check the batteries against the listing before you pay; you may refuse on a discrepancy.</div>
             </div>
           ) : null}
 

@@ -274,6 +274,14 @@ export const GET = withErrorHandler(async (req: Request) => {
     // field the caller isn't allowed to see.
     ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
     asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
+    // Assigned-date range rides on the same gate: it is only meaningful
+    // beside the Owner column, and the UI only offers it to those roles.
+    assignedFrom: caps.canSeeOwnerAsm
+      ? searchParams.get("assigned_from")?.trim() || null
+      : null,
+    assignedTo: caps.canSeeOwnerAsm
+      ? searchParams.get("assigned_to")?.trim() || null
+      : null,
   };
 
   // ?ids_only=1 — every id matching these filters, for "select all N matching".

@@ -227,6 +227,23 @@ async function main() {
   const creator = await creatorUserId();
   const uploadEventId = newId("UPL");
   const dealerTag = (dealer.id.split("-").pop() ?? dealer.id).slice(0, 8).toUpperCase();
+
+  // The clear-out above only removes units still 'available'; anything the
+  // demo already reserved/dispatched keeps its serial. inventory_serial_unique
+  // means restarting the counter at 001 would collide with those survivors, so
+  // resume numbering past the highest DEMO-<tag>-NNN serial in the table
+  // (checked table-wide, not per dealer — the constraint is table-wide too).
+  const [{ max_seq } = { max_seq: 0 }] = await db
+    .select({
+      max_seq: sql<number>`coalesce(max((regexp_match(${inventory.serial_number}, '^DEMO-' || ${dealerTag} || '-(\\d+)$'))[1]::int), 0)`,
+    })
+    .from(inventory)
+    .where(like(inventory.serial_number, `DEMO-${dealerTag}-%`));
+  const seqStart = Number(max_seq ?? 0);
+  if (seqStart > 0) {
+    console.log(`  • resuming serials at DEMO-${dealerTag}-${String(seqStart + 1).padStart(3, "0")}`);
+  }
+
   // Stagger invoice dates so all three ageing badges show in the demo
   // (<=90d fresh / 91-180 ageing / >180 old).
   const ageDays = [12, 26, 41, 58, 74, 96, 118, 141, 168, 194, 212, 233];
@@ -241,7 +258,7 @@ async function main() {
     const invoiceDate = daysAgo(ageDays[i % ageDays.length]);
     const warrantyMonths = m.warranty_months ?? 36;
     const subCategory = toStringArray(m.compatible_sub_categories)[0] ?? "3W";
-    const seq = String(i + 1).padStart(3, "0");
+    const seq = String(seqStart + i + 1).padStart(3, "0");
 
     rows.push({
       id: newId("INV"),

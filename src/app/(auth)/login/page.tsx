@@ -144,6 +144,8 @@ export default function LoginPage() {
                 navigateTo('/dealer-portal');
             } else if (appUser.role === 'scrap_vendor') {
                 navigateTo('/vendor-portal');
+            } else if (appUser.role === 'refurbisher') {
+                navigateTo('/refurbisher-portal');
             } else if (appUser.role === 'admin') {
                 navigateTo('/admin');
             } else if (appUser.role === 'ceo') {

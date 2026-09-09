@@ -29,6 +29,9 @@ import { assertSohAllowsStage } from "@/lib/nbfc/recovery/stages";
 export const REFURB_STATUSES = [
   "requested",
   "declined",
+  // [E-292] A lot item at the refurbisher partner (v3). `in_progress` stays
+  // for the legacy E-233 single-job path only.
+  "at_refurbisher",
   "in_progress",
   "ready",
   "returned",
@@ -36,14 +39,15 @@ export const REFURB_STATUSES = [
 ] as const;
 export type RefurbStatus = (typeof REFURB_STATUSES)[number];
 
-/** Open = occupying the one-job-per-battery slot enforced by E-233/E-270's index. */
-export const OPEN_STATUSES: RefurbStatus[] = ["requested", "in_progress", "ready"];
+/** Open = occupying the one-job-per-battery slot enforced by E-233/E-270/E-292's index. */
+export const OPEN_STATUSES: RefurbStatus[] = ["requested", "in_progress", "at_refurbisher", "ready"];
 
 export const ALLOWED_TRANSITIONS: Record<RefurbStatus, RefurbStatus[]> = {
-  requested: ["in_progress", "declined", "cancelled"],
+  requested: ["in_progress", "at_refurbisher", "declined", "cancelled"],
   // `returned` straight from in_progress is the legacy single-job path (E-233);
-  // a lot item goes in_progress -> ready -> returned.
+  // a lot item goes at_refurbisher -> ready -> returned (E-292).
   in_progress: ["ready", "returned", "cancelled"],
+  at_refurbisher: ["ready", "returned", "cancelled"],
   ready: ["returned", "cancelled"],
   returned: [], // terminal
   declined: [], // terminal
@@ -109,6 +113,23 @@ export interface RefurbishmentJobRow {
   ret_received_note: string | null;
   ret_received_photo_urls: string[];
   ret_received_at: string | null;
+  /** [E-292] the refurbisher's bill for this battery, and the final cost incl. margin. */
+  refurbisher_cost: number | null;
+  refurbisher_parts: RefurbisherPart[];
+  refurbisher_note: string | null;
+  costed_at: string | null;
+  final_cost: number | null;
+}
+
+/** [E-292] One replaced part on a refurbisher's per-battery bill. */
+export interface RefurbisherPart {
+  label: string;
+  qty: number;
+  unit_cost: number;
+}
+
+export function partsTotal(parts: RefurbisherPart[] | null | undefined): number {
+  return (parts ?? []).reduce((s, p) => s + (Number(p.qty) || 0) * (Number(p.unit_cost) || 0), 0);
 }
 
 export function num(v: unknown): number | null {
@@ -161,7 +182,8 @@ export function shapeJob(
   battery_serial: string | null,
 ): RefurbishmentJobRow {
   const accessories = (row.accessories as AccessoryLine[]) ?? [];
-  const labour = num(row.actual_cost) ?? num(row.estimated_cost);
+  // [E-292] the refurbisher's figure wins over the legacy actual_cost.
+  const labour = num(row.refurbisher_cost) ?? num(row.actual_cost) ?? num(row.estimated_cost);
   return {
     id: row.id,
     tenant_id: row.tenant_id,
@@ -190,6 +212,11 @@ export function shapeJob(
     ret_received_note: row.ret_received_note ?? null,
     ret_received_photo_urls: row.ret_received_photo_urls ?? [],
     ret_received_at: iso(row.ret_received_at),
+    refurbisher_cost: num(row.refurbisher_cost),
+    refurbisher_parts: (row.refurbisher_parts as RefurbisherPart[]) ?? [],
+    refurbisher_note: row.refurbisher_note ?? null,
+    costed_at: iso(row.costed_at),
+    final_cost: num(row.final_cost),
   };
 }
 
@@ -487,6 +514,10 @@ export async function listRefurbishmentJobs(input: {
  * The refurbishment spend to roll into a lot's base price (BRD §15).
  * Returned jobs only — an open job has not been paid for and its estimate is
  * not a cost.
+ *
+ * [E-292] Prefers `final_cost` — refurbisher cost + accessories + the
+ * battery's pro-rata share of the iTarang margin, i.e. what the NBFC actually
+ * paid for this battery. Legacy jobs fall back to actual/estimated + accessories.
  */
 export async function refurbishmentCostForBatteries(
   battery_ids: string[],
@@ -495,6 +526,8 @@ export async function refurbishmentCostForBatteries(
   const rows = await db
     .select({
       battery_id: refurbishmentJobs.battery_id,
+      final_cost: refurbishmentJobs.final_cost,
+      refurbisher_cost: refurbishmentJobs.refurbisher_cost,
       actual_cost: refurbishmentJobs.actual_cost,
       estimated_cost: refurbishmentJobs.estimated_cost,
       accessories: refurbishmentJobs.accessories,
@@ -509,8 +542,9 @@ export async function refurbishmentCostForBatteries(
 
   const out = new Map<string, number>();
   for (const r of rows) {
-    const labour = num(r.actual_cost) ?? num(r.estimated_cost) ?? 0;
-    const total = labour + accessoriesTotal((r.accessories as AccessoryLine[]) ?? []);
+    const final = num(r.final_cost);
+    const labour = num(r.refurbisher_cost) ?? num(r.actual_cost) ?? num(r.estimated_cost) ?? 0;
+    const total = final ?? labour + accessoriesTotal((r.accessories as AccessoryLine[]) ?? []);
     out.set(r.battery_id, (out.get(r.battery_id) ?? 0) + total);
   }
   return out;

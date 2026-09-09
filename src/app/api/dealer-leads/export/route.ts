@@ -172,6 +172,14 @@ export const GET = withErrorHandler(async (req: Request) => {
         disposition: searchParams.get("disposition")?.trim() || null,
         ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
         asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
+        // Assigned-date range rides on the same gate: it is only meaningful
+        // beside the Owner column, and the UI only offers it to those roles.
+        assignedFrom: caps.canSeeOwnerAsm
+          ? searchParams.get("assigned_from")?.trim() || null
+          : null,
+        assignedTo: caps.canSeeOwnerAsm
+          ? searchParams.get("assigned_to")?.trim() || null
+          : null,
     };
 
     const where = buildExportWhere(filters);
