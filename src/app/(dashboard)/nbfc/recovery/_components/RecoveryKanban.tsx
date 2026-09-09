@@ -19,7 +19,8 @@ type Stage =
   | "refurbishable"
   | "ready_for_auction"
   | "resold"
-  | "scrap";
+  | "scrap"
+  | "redeploy";
 
 interface Row {
   id: string;
@@ -62,11 +63,14 @@ interface Props {
 // recommended, never mandatory (Battery Auction BRD §5), so a healthy battery
 // skips the workshop.
 const ALLOWED_NEXT: Record<Stage, Stage[]> = {
-  needs_inspection: ["refurbishable", "scrap", "ready_for_auction"],
-  refurbishable: ["ready_for_auction", "scrap"],
-  ready_for_auction: ["resold"],
+  // [E-292] `redeploy` on three of them: the NBFC's "put it back into service"
+  // choice from the v3 triage / post-refurbishment step (a stub stage).
+  needs_inspection: ["refurbishable", "scrap", "ready_for_auction", "redeploy"],
+  refurbishable: ["ready_for_auction", "scrap", "redeploy"],
+  ready_for_auction: ["resold", "redeploy"],
   resold: [],
   scrap: [],
+  redeploy: [],
 };
 
 // [E-233] The one set of SOH bands, mirrored from stages.ts for button state.
@@ -82,6 +86,7 @@ const STAGE_TONE: Record<Stage, string> = {
   ready_for_auction: "bg-violet-50 border-violet-200",
   resold: "bg-emerald-50 border-emerald-200",
   scrap: "bg-slate-100 border-slate-200",
+  redeploy: "bg-teal-50 border-teal-200",
 };
 
 export default function RecoveryKanban({

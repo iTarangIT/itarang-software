@@ -1,8 +1,8 @@
 /**
- * E-270 — POST /api/admin/nbfc/refurbishment/lots/[id]/photos (iTarang side)
+ * E-270 / E-292 — POST /api/admin/nbfc/refurbishment/lots/[id]/photos (iTarang side)
  *
- * Multipart `file[]` + `target` (out_receipt | ret_dispatch | item:<job>:out).
- * See src/lib/nbfc/recovery/refurb-photo-upload.ts.
+ * Multipart `file[]` + `target` (out_receipt | ret_dispatch | pi_document |
+ * item:<job>:out …). See src/lib/nbfc/recovery/refurb-photo-upload.ts.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const actor = await resolveAdminActor(req.headers);
     if (!REFURB_ACT_ROLES.has(actor.role)) throw new Error("FORBIDDEN: cannot act on refurbishment lots");
     const { id } = await ctx.params;
-    return await handleLotPhotoUpload(req, id, null);
+    return await handleLotPhotoUpload(req, id, null, "admin");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ ok: false, error: clientError(e) }, { status: statusFromError(msg) });

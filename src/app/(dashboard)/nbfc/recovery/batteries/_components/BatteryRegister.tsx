@@ -28,6 +28,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { nbfcFetch } from "@/lib/auction/client";
 import BatteryPhotoCapture from "@/components/nbfc-portal/BatteryPhotoCapture";
+import RecoveryTriagePanel from "@/components/nbfc-portal/RecoveryTriagePanel";
 import { ConditionChip } from "@/components/auction/AuctionPrimitives";
 
 interface Battery {
@@ -43,6 +44,16 @@ interface Battery {
   image_urls: string[];
   state_code: string;
   notes: string | null;
+  recovery_pipeline_id: string | null;
+  /** [E-292] recovery triage (refurbish flow v3). */
+  rated_voltage_v: number | null;
+  measured_voltage_v: number | null;
+  health_pct: number | null;
+  triage_condition: string | null;
+  triage_note: string | null;
+  triage_suggestion: string | null;
+  triage_choice: string | null;
+  triaged_at: string | null;
   created_at: string;
 }
 
@@ -201,14 +212,26 @@ export default function BatteryRegister() {
     setExpanded((cur) => (cur === id ? null : id));
   }
 
+  // [E-292] The row expander is the triage desk too: photographs first (the
+  // auction reuses them), then rated / measured voltage → health % → the
+  // branch the NBFC chooses.
   const photoPanel = (b: Battery) => (
-    <BatteryPhotoCapture
-      batteryId={b.id}
-      initialUrls={b.image_urls}
-      onChange={() =>
-        qc.invalidateQueries({ queryKey: ["auction", "nbfc", "batteries"] })
-      }
-    />
+    <>
+      <BatteryPhotoCapture
+        batteryId={b.id}
+        initialUrls={b.image_urls}
+        onChange={() =>
+          qc.invalidateQueries({ queryKey: ["auction", "nbfc", "batteries"] })
+        }
+      />
+      <RecoveryTriagePanel
+        key={`${b.id}-${b.triaged_at ?? ""}-${b.triage_choice ?? ""}`}
+        battery={b}
+        onChange={() =>
+          qc.invalidateQueries({ queryKey: ["auction", "nbfc", "batteries"] })
+        }
+      />
+    </>
   );
 
   return (

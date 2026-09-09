@@ -8,10 +8,10 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-// E-282 — the "NBFC Files" tab: where every file sitting with a lender is,
-// how long it has been there and whose move it is. Its own component because
-// it shares nothing with the document-review body below except this page.
-import NbfcFileTrackerTable from './_components/NbfcFileTrackerTable';
+// E-282 — lender status inline on each lead card: which NBFC holds the file,
+// what stage it is in, how long, and whose move it is. Fetched per visible
+// lead from the file-tracker API and merged client-side; no separate tab.
+import LeadNbfcUpdates, { LenderChip, type TrackerRow } from './_components/LeadNbfcUpdates';
 import DeleteApplicationButton from '@/components/shared/DeleteApplicationButton';
 
 type ReviewableDoc = {
@@ -37,11 +37,14 @@ type LeadReview = {
     pending_count: number;
 };
 
-// Not a document-review filter — a sibling view on the same page (E-282).
-const NBFC_TAB = 'nbfc';
+// Lead ids per file-tracker request. Keeps the query string short and stays
+// well under the route's 500-row JSON cap for any one call.
+const NBFC_FETCH_CHUNK = 100;
 
 export default function AdminKYCReviewPage() {
     const [leads, setLeads] = useState<LeadReview[]>([]);
+    // leadId → one row per lender assignment (a lead can be with >1 NBFC).
+    const [nbfcFiles, setNbfcFiles] = useState<Record<string, TrackerRow[]>>({});
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterStatus, setFilterStatus] = useState('pending');
@@ -53,26 +56,50 @@ export default function AdminKYCReviewPage() {
     const [additionalDocRequest, setAdditionalDocRequest] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
+    // Lender status for the leads on screen. Failures are silent: the card
+    // simply shows no lender chip until the next refresh.
+    const fetchNbfcFiles = async (leadIds: string[]) => {
+        if (leadIds.length === 0) { setNbfcFiles({}); return; }
+        try {
+            const chunks: string[][] = [];
+            for (let i = 0; i < leadIds.length; i += NBFC_FETCH_CHUNK) {
+                chunks.push(leadIds.slice(i, i + NBFC_FETCH_CHUNK));
+            }
+            const results = await Promise.all(chunks.map(async chunk => {
+                const params = new URLSearchParams({ leadIds: chunk.join(',') });
+                const res = await fetch(`/api/admin/nbfc-file-tracker?${params}`, { cache: 'no-store' });
+                const json = await res.json();
+                return res.ok && json.success ? (json.data.rows as TrackerRow[]) : [];
+            }));
+            const byLead: Record<string, TrackerRow[]> = {};
+            for (const row of results.flat()) {
+                (byLead[row.leadId] ??= []).push(row);
+            }
+            setNbfcFiles(byLead);
+        } catch { /* silent */ }
+    };
+
     const fetchReviews = async (silent = false) => {
         try {
             if (!silent) setLoading(true);
             const params = new URLSearchParams({ status: filterStatus, search: searchQuery });
             const res = await fetch(`/api/admin/kyc-reviews?${params}`);
             const data = await res.json();
-            if (data.success) setLeads(data.data);
+            if (data.success) {
+                const list = data.data as LeadReview[];
+                setLeads(list);
+                void fetchNbfcFiles(list.map(l => l.lead_id));
+            }
         } catch { /* silent */ }
         finally { if (!silent) setLoading(false); }
     };
 
     useEffect(() => {
-        // The NBFC tab has its own loader; nothing here applies to it.
-        if (filterStatus === NBFC_TAB) return;
         fetchReviews();
     }, [filterStatus, searchQuery]);
 
     // Auto-refresh every 30 seconds
     useEffect(() => {
-        if (filterStatus === NBFC_TAB) return;
         const interval = setInterval(() => fetchReviews(true), 30000);
         return () => clearInterval(interval);
     }, [filterStatus, searchQuery]);
@@ -129,25 +156,19 @@ export default function AdminKYCReviewPage() {
 
                 {/* Filters */}
                 <div className="flex items-center gap-3 mb-6">
-                    {['pending', 'all', 'verified', 'rejected', NBFC_TAB].map(s => (
+                    {['pending', 'all', 'verified', 'rejected'].map(s => (
                         <button key={s} onClick={() => setFilterStatus(s)} className={`px-4 py-2 rounded-xl text-sm font-bold capitalize ${filterStatus === s ? 'bg-[#0047AB] text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
-                            {s === 'pending' ? 'Needs Review' : s === NBFC_TAB ? 'NBFC Files' : s}
+                            {s === 'pending' ? 'Needs Review' : s}
                         </button>
                     ))}
                     <div className="flex-1" />
-                    {/* The NBFC tab carries its own filter bar, including a search box. */}
-                    {filterStatus !== NBFC_TAB && (
-                        <div className="relative">
-                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search lead or dealer..." className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm w-64 outline-none focus:border-[#1D4ED8]" />
-                        </div>
-                    )}
+                    <div className="relative">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search lead or dealer..." className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm w-64 outline-none focus:border-[#1D4ED8]" />
+                    </div>
                 </div>
 
-                {/* Lead Review Cards, or the NBFC file tracker. */}
-                {filterStatus === NBFC_TAB ? (
-                    <NbfcFileTrackerTable />
-                ) : (
+                {/* Lead Review Cards */}
                 <div className="space-y-4">
                     {loading ? (
                         <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-[#1D4ED8]" /></div>
@@ -186,6 +207,14 @@ export default function AdminKYCReviewPage() {
                                         <span className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${lead.kyc_status === 'verified' ? 'bg-green-50 text-green-700' : lead.kyc_status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                                             {lead.kyc_status || 'pending'}
                                         </span>
+                                        {/* E-282 — one chip per lender holding this file. */}
+                                        {(nbfcFiles[lead.lead_id] ?? []).length > 0 && (
+                                            <div className="flex flex-col items-end gap-1">
+                                                {nbfcFiles[lead.lead_id].map(row => (
+                                                    <LenderChip key={row.assignmentId} row={row} />
+                                                ))}
+                                            </div>
+                                        )}
                                         <a
                                             href={`/admin/kyc-review/${lead.lead_id}`}
                                             onClick={(e) => e.stopPropagation()}
@@ -213,6 +242,8 @@ export default function AdminKYCReviewPage() {
                                 {/* Expanded: Document List */}
                                 {expandedLead === lead.lead_id && (
                                     <div className="border-t border-gray-100 px-6 pb-6">
+                                        {/* E-282 — lender stage / waiting-on / age + action history. */}
+                                        <LeadNbfcUpdates leadId={lead.lead_id} rows={nbfcFiles[lead.lead_id] ?? []} />
                                         <table className="w-full text-sm mt-4">
                                             <thead>
                                                 <tr className="border-b border-gray-100">
@@ -330,7 +361,6 @@ export default function AdminKYCReviewPage() {
                         ))
                     )}
                 </div>
-                )}
             </div>
         </div>
     );

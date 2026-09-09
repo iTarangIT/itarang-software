@@ -22,6 +22,8 @@ const USER_COLUMNS = {
   role: users.role,
   dealer_id: users.dealer_id,
   vendor_entity_id: users.vendor_entity_id,
+  // E-292 — requireRefurbisher (src/lib/refurbisher/auth.ts) reads this.
+  refurbisher_id: users.refurbisher_id,
   phone: users.phone,
   avatar_url: users.avatar_url,
   is_active: users.is_active,
@@ -93,6 +95,7 @@ export async function requireAuthWithSupabaseUser() {
           role: "user",
           dealer_id: null,
           vendor_entity_id: null,
+          refurbisher_id: null,
           phone: null,
           avatar_url: null,
           is_active: true,

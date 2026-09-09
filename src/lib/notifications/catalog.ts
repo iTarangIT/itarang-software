@@ -310,8 +310,18 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "refurb.balance_due": "Refurbishment",
   "refurb.settled": "Refurbishment",
   "refurb.lot_arrived": "Refurbishment",
+  // Legacy (v2) — no longer emitted since E-292, kept so stored rows still resolve.
   "refurb.quote_revised": "Refurbishment",
   "refurb.revision_answered": "Refurbishment",
+  // [E-292] v3: review, proforma invoice, refurbisher partner, final bill, close
+  "refurb.lot_reviewed": "Refurbishment",
+  "refurb.pi_sent": "Refurbishment",
+  "refurb.pi_accepted": "Refurbishment",
+  "refurb.lot_assigned": "Refurbishment",
+  "refurb.lot_costed": "Refurbishment",
+  "refurb.final_bill": "Refurbishment",
+  "refurb.lot_closed": "Refurbishment",
+  "refurb.redeploy_requested": "Refurbishment",
 
   // --- Vendor & NBFC ops ---
   "vendor.registered": "Onboarding",
@@ -432,6 +442,13 @@ const WARNING = new Set([
   "refurb.payment_recorded",
   "refurb.lot_arrived",
   "refurb.quote_revised",
+  // E-292 — a PI to accept, a lot for the refurbisher to start, costs for admin
+  // to price, a redeploy the NBFC wants help with. `pi_accepted`, `final_bill`
+  // and `lot_closed` close an action and are deliberately not amber.
+  "refurb.pi_sent",
+  "refurb.lot_assigned",
+  "refurb.lot_costed",
+  "refurb.redeploy_requested",
 ]);
 
 /**
@@ -640,6 +657,9 @@ export function linkFor(
     // without one. Land on the list.
     if (role === "dealer") return null; // dealers are not party to a refurbishment
     if (role === "nbfc") return "/nbfc/recovery/refurbishment";
+    // [E-292] A scrap vendor is never party to a refurbishment, so the vendor
+    // portal-role bucket here can only be a refurbisher login.
+    if (role === "vendor") return "/refurbisher-portal/lots";
     return "/admin/nbfc/refurbishment";
   }
 

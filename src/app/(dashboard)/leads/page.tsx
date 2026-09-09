@@ -1211,6 +1211,9 @@ export default function LeadsUnifiedPage() {
   const setDateRange = useCallback((from: string, to: string) => {
     setDraft((d) => ({ ...d, from, to }));
   }, []);
+  const setAssignedRange = useCallback((from: string, to: string) => {
+    setDraft((d) => ({ ...d, assignedFrom: from, assignedTo: to }));
+  }, []);
   const clearFilters = useCallback(() => setDraft(EMPTY_FILTERS), []);
 
   // Bulk NeoDove hand-off. Selection is scoped to the leads currently on
@@ -2029,6 +2032,7 @@ export default function LeadsUnifiedPage() {
             showMore={showMoreFilters}
             onToggleMore={() => setShowMoreFilters((v) => !v)}
             onDateRange={setDateRange}
+            onAssignedRange={setAssignedRange}
             busy={leadsLoading}
           />
         </div>
