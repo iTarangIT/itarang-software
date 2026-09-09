@@ -86,6 +86,15 @@ export type LeadListFilters = {
     /** created_at calendar-date range, inclusive both ends (YYYY-MM-DD). */
     from?: string | null;
     to?: string | null;
+    /**
+     * assigned_at calendar-date range, inclusive both ends (YYYY-MM-DD).
+     * `dealer_leads.assigned_at` is re-stamped by every hand-off path
+     * (assignOwner.ts, reactivation.ts), so this is "when the CURRENT owner
+     * got it", not first assignment. Oversight-only, like ownerId/asmId — the
+     * routes null it for roles that cannot see who owns a lead.
+     */
+    assignedFrom?: string | null;
+    assignedTo?: string | null;
     // ── Call disposition (E-236) ─────────────────────────────────────────
     // The three levels are ANDed independently rather than resolved to one
     // predicate: the UI narrows them, but each is a legitimate question on its
@@ -420,6 +429,14 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     }
     if (f.to && ISO_DATE_RE.test(f.to)) {
         conds.push(sql`dl.created_at::date <= ${f.to}`);
+    }
+    // An unassigned lead has assigned_at NULL, so any assigned-date bound
+    // excludes it — which is the right answer to "assigned between X and Y".
+    if (f.assignedFrom && ISO_DATE_RE.test(f.assignedFrom)) {
+        conds.push(sql`dl.assigned_at::date >= ${f.assignedFrom}`);
+    }
+    if (f.assignedTo && ISO_DATE_RE.test(f.assignedTo)) {
+        conds.push(sql`dl.assigned_at::date <= ${f.assignedTo}`);
     }
     if (f.search) {
         const like = `%${f.search}%`;

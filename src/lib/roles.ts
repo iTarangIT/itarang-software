@@ -17,6 +17,7 @@ const ROLE_PATH_PREFIXES: Array<[string, string]> = [
   ["/service-engineer", "service_engineer"],
   ["/inside-sales", "inside_sales_rep"],
   ["/sales-insight", "sales_insight"],
+  ["/refurbisher-portal", "refurbisher"],
   ["/vendor-portal", "scrap_vendor"],
   ["/dealer-portal", "dealer"],
   ["/business-head", "business_head"],

@@ -60,7 +60,9 @@ export type Audience =
   | { kind: "nbfc"; tenantId: string }
   /** Every NBFC routed to this lead (nbfc_lead_assignments), optionally minus one. */
   | { kind: "lead_nbfc"; leadId: string; exceptTenantId?: string | null }
-  | { kind: "vendor"; email?: string | null; vendorEntityId?: string | null };
+  | { kind: "vendor"; email?: string | null; vendorEntityId?: string | null }
+  /** [E-292] Every active login of one refurbisher partner (users.refurbisher_id). */
+  | { kind: "refurbisher"; refurbisherId: string };
 
 /**
  * A one-click action rendered as a button on the notification row.
@@ -271,6 +273,14 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
           .map((r) => ({ userId: r.id, email: r.email ?? null, role: r.role }));
       }
       return [];
+    }
+
+    case "refurbisher": {
+      if (!audience.refurbisherId) return [];
+      const rows = await usersWhere(
+        and(eq(users.refurbisher_id, audience.refurbisherId), eq(users.is_active, true)),
+      );
+      return rows.map((r) => ({ userId: r.id, email: r.email ?? null, role: r.role }));
     }
 
     default:

@@ -88,6 +88,7 @@ const ROLE_LABELS: Record<string, string> = {
     nbfc_partner: 'NBFC Partner',
     nbfc_risk_head: 'Risk Head',
     scrap_vendor: 'Scrap Vendor',
+    refurbisher: 'Refurbisher',
     asm: 'ASM',
     admin: 'Admin',
 };

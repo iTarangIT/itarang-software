@@ -38,6 +38,13 @@ import {
 } from "@/lib/leads/campaign";
 import { IDLE_RANGES, IDLE_RANGE_KEYS } from "@/lib/leads/idle";
 import {
+    ASSIGNED_PRESETS,
+    assignedPresetRange,
+    isAssignedPresetKey,
+    matchAssignedPreset,
+    toLocalIsoDate,
+} from "@/lib/leads/assignedPresets";
+import {
     countSecondary,
     hasAnyFilter,
     type LeadFilters,
@@ -100,6 +107,8 @@ type Props = {
     onToggleMore: () => void;
     /** Set both ends of the created range at once (month presets). */
     onDateRange: (from: string, to: string) => void;
+    /** Set both ends of the assigned range at once (presets / clear). */
+    onAssignedRange: (from: string, to: string) => void;
     busy?: boolean;
 };
 
@@ -113,6 +122,7 @@ export function LeadsFilterBar({
     showMore,
     onToggleMore,
     onDateRange,
+    onAssignedRange,
     busy,
 }: Props) {
     const moreCount = countSecondary(draft);
@@ -154,11 +164,21 @@ export function LeadsFilterBar({
         const now = new Date();
         const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
         const end = new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
-        const iso = (d: Date) =>
-            `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-                d.getDate(),
-            ).padStart(2, "0")}`;
-        onDateRange(iso(start), iso(end));
+        onDateRange(toLocalIsoDate(start), toLocalIsoDate(end));
+    };
+
+    // ── Assigned-date range (oversight roles) ──
+    // The dropdown is DERIVED from the two date boxes rather than held as its
+    // own state: a range that arrived via a bookmarked URL shows as the preset
+    // it equals, and editing a box by hand flips it to "Custom" on its own.
+    const assignedPreset = matchAssignedPreset(draft.assignedFrom, draft.assignedTo);
+    const applyAssignedPreset = (value: string) => {
+        if (value === "") return onAssignedRange("", "");
+        if (isAssignedPresetKey(value)) {
+            const r = assignedPresetRange(value);
+            return onAssignedRange(r.from, r.to);
+        }
+        // "custom" — leave whatever is in the boxes; the operator types a range.
     };
 
     return (
@@ -421,6 +441,60 @@ export function LeadsFilterBar({
                     </button>
                 )}
             </div>
+
+            {/* ── Assigned-date range ──
+                Same gate as the Owner column: "when was it assigned" only
+                means something to the people who can see who it was assigned
+                to, and the API drops the params for everyone else. */}
+            {caps.canSeeOwnerAsm && (
+                <div className="flex flex-wrap items-center gap-2">
+                    <span className="mr-0.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                        Assigned
+                    </span>
+                    <select
+                        aria-label="Assigned date preset"
+                        className={`${SELECT_CLASS} min-w-[150px]`}
+                        value={assignedPreset}
+                        onChange={(e) => applyAssignedPreset(e.target.value)}
+                    >
+                        <option value="">Any time</option>
+                        {ASSIGNED_PRESETS.map((p) => (
+                            <option key={p.key} value={p.key}>
+                                {p.label}
+                            </option>
+                        ))}
+                        <option value="custom">Custom range</option>
+                    </select>
+                    <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 transition-colors focus-within:border-gray-400">
+                        <input
+                            type="date"
+                            value={draft.assignedFrom}
+                            max={draft.assignedTo || undefined}
+                            onChange={(e) => onChange("assignedFrom", e.target.value)}
+                            aria-label="From (lead assigned date)"
+                            className="bg-transparent text-sm text-gray-700 outline-none"
+                        />
+                        <span className="text-gray-300">–</span>
+                        <input
+                            type="date"
+                            value={draft.assignedTo}
+                            min={draft.assignedFrom || undefined}
+                            onChange={(e) => onChange("assignedTo", e.target.value)}
+                            aria-label="To (lead assigned date)"
+                            className="bg-transparent text-sm text-gray-700 outline-none"
+                        />
+                    </div>
+                    {(draft.assignedFrom || draft.assignedTo) && (
+                        <button
+                            type="button"
+                            onClick={() => onAssignedRange("", "")}
+                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+                        >
+                            <X className="h-3.5 w-3.5" /> Clear dates
+                        </button>
+                    )}
+                </div>
+            )}
 
             {/* ── More filters ── */}
             {showMore && (

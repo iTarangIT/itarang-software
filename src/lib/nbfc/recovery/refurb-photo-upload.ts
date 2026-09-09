@@ -1,5 +1,6 @@
 /**
- * E-270 — the shared body of the two lot-photo upload routes (NBFC + admin).
+ * E-270 / E-292 — the shared body of the lot-photo upload routes (NBFC, admin,
+ * refurbisher).
  *
  * Same-origin multipart written server-side, never a presigned PUT: the bucket
  * carries no CORS rules, so a browser PUT dies in preflight. Identical guards
@@ -8,7 +9,12 @@
  * `target` says where the pictures belong:
  *   out_dispatch | out_receipt | ret_dispatch | ret_receipt   → the lot (photos, append)
  *   out_eway_bill | ret_eway_bill                              → the lot (one document, replaces; PDF allowed)
+ *   pi_document                                                → the lot's proforma invoice (one PDF, replaces) [E-292]
+ *   advance_slip | balance_slip                                → the NBFC's payment slips (append; PDF allowed) [E-293]
  *   item:<job_id>:out | item:<job_id>:return                   → one battery's receipt
+ *
+ * `scope` is the caller's ownership: `{tenant_id}` for the NBFC,
+ * `{refurbisher_id}` for the refurbisher, `null` for iTarang admin.
  */
 import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
@@ -17,13 +23,15 @@ import {
   attachItemPhotos,
   attachLotPhotos,
   getLot,
+  type LotScope,
   type PhotoTarget,
 } from "@/lib/nbfc/recovery/refurbishment-lots";
+import { FINISHED_LOT_STATUSES } from "@/lib/nbfc/recovery/refurbishment-lot-status";
 
 const BUCKET = "documents";
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
-// [E-271] An e-way bill is a PDF from the GST portal far more often than a photo.
+// An e-way bill or a PI is a PDF far more often than a photo.
 const DOC_TYPES = new Set([...ALLOWED_TYPES, "application/pdf"]);
 const EXTENSION: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -33,20 +41,28 @@ const EXTENSION: Record<string, string> = {
   "image/heif": "heif",
   "application/pdf": "pdf",
 };
-const LOT_TARGETS: PhotoTarget[] = ["out_dispatch", "out_receipt", "ret_dispatch", "ret_receipt", "out_eway_bill", "ret_eway_bill"];
-const DOC_TARGETS = new Set<string>(["out_eway_bill", "ret_eway_bill"]);
+const LOT_TARGETS: PhotoTarget[] = ["out_dispatch", "out_receipt", "ret_dispatch", "ret_receipt", "out_eway_bill", "ret_eway_bill", "pi_document", "advance_slip", "balance_slip"];
+// Documents may be PDFs: e-way bills, the PI, and (E-293) the NBFC's payment slips.
+const DOC_TARGETS = new Set<string>(["out_eway_bill", "ret_eway_bill", "pi_document", "advance_slip", "balance_slip"]);
+
+/** Which targets each side may write. Admin: everything. */
+const SIDE_TARGETS: Record<"nbfc" | "refurbisher", Set<string>> = {
+  nbfc: new Set(["out_dispatch", "out_eway_bill", "ret_receipt", "item:return", "advance_slip", "balance_slip"]),
+  refurbisher: new Set(["ret_dispatch", "ret_eway_bill"]),
+};
 
 export async function handleLotPhotoUpload(
   req: NextRequest,
   lotId: string,
-  tenantId: string | null,
+  scope: LotScope,
+  side: "nbfc" | "admin" | "refurbisher" = scope?.tenant_id ? "nbfc" : scope?.refurbisher_id ? "refurbisher" : "admin",
 ): Promise<NextResponse> {
   // Ownership first — before a byte of the body is read.
-  const lot = await getLot(lotId, tenantId);
+  const lot = await getLot(lotId, scope, side);
   if (!lot) return NextResponse.json({ ok: false, error: "NOT_FOUND: lot not found" }, { status: 404 });
-  if (lot.status === "settled" || lot.status === "cancelled") {
+  if ((FINISHED_LOT_STATUSES as readonly string[]).includes(lot.status)) {
     return NextResponse.json(
-      { ok: false, error: `CONFLICT: lot is ${lot.status} — its photographs are part of a closed record` },
+      { ok: false, error: `CONFLICT: lot is ${lot.status} — its documents are part of a finished record` },
       { status: 409 },
     );
   }
@@ -74,6 +90,12 @@ export async function handleLotPhotoUpload(
   const itemMatch = target.match(/^item:([0-9a-f-]{36}):(out|return)$/i);
   if (!itemMatch && !(LOT_TARGETS as string[]).includes(target)) {
     return NextResponse.json({ ok: false, error: `BAD_REQUEST: unknown photo target ${target}` }, { status: 400 });
+  }
+  if (side !== "admin") {
+    const key = itemMatch ? `item:${itemMatch[2]}` : target;
+    if (!SIDE_TARGETS[side].has(key)) {
+      return NextResponse.json({ ok: false, error: `FORBIDDEN: ${side} cannot upload ${target}` }, { status: 403 });
+    }
   }
 
   const paths: string[] = [];
@@ -105,8 +127,8 @@ export async function handleLotPhotoUpload(
   }
 
   const photo_urls = itemMatch
-    ? await attachItemPhotos(lotId, tenantId, itemMatch[1], itemMatch[2] as "out" | "return", paths)
-    : await attachLotPhotos(lotId, tenantId, target as PhotoTarget, paths);
+    ? await attachItemPhotos(lotId, scope, itemMatch[1], itemMatch[2] as "out" | "return", paths)
+    : await attachLotPhotos(lotId, scope, target as PhotoTarget, paths);
 
   return NextResponse.json({ ok: true, uploaded: paths.length, paths, photo_urls });
 }

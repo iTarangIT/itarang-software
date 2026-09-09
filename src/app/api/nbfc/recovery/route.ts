@@ -24,6 +24,7 @@ const Query = z.object({
       "scrap",
       "ready_for_auction",
       "resold",
+      "redeploy",
     ])
     .optional(),
   page: z.coerce.number().int().min(1).default(1),

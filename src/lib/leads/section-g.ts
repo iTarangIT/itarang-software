@@ -198,10 +198,8 @@ export async function loadSectionGOptions(
 }
 
 /**
- * E-282/E-283/E-286/E-289 — narrow the matched list to the lender an admin
- * pinned for this dealer, for the LOCATION OF THAT DEALER (its own `accounts`
- * address), for the LOCATION OF THE CUSTOMER (this lead's own address), or any
- * combination of the three.
+ * E-282/E-283/E-286/E-290/E-291 — narrow the matched list to the lender an
+ * admin pinned for this dealer, or for WHERE THIS CUSTOMER LIVES.
  *
  * Applied to the HITS, never in place of them. A pinned product is offered only
  * if it independently matched every BRE rule, so one whose `loan_amount_max`
@@ -210,14 +208,15 @@ export async function loadSectionGOptions(
  * lead has already been assigned to, is simply absent from `grouped`.
  *
  * `lead.dealer_id` is the dealer CODE (accounts.id), which is exactly what
- * `city_default_loan_products.dealer_code` stores AND what the resolver joins
- * `accounts` on to read the dealer's state/city — no resolution needed here.
+ * `city_default_loan_products.dealer_code` stores — no resolution needed here.
+ * `lead.state` / `lead.city` are the customer's own, the same pair the
+ * `active_locations` rule above matched on.
  *
- * Rules arrive most-preferred first (admin priority, then specificity) and the
+ * Rules arrive most-specific first (dealer, then city, then state) and the
  * FIRST one that survived the BRE wins. A rule that did not fit is skipped
- * rather than abandoning the pin, so a top-priority rule that is out of amount
- * band falls through to the next rule instead of dumping the customer onto the
- * full list. Only when no rule fits is the full matched list returned.
+ * rather than abandoning the pin, so a dealer-specific rule that is out of
+ * amount band falls through to the city rule instead of dumping the customer
+ * onto the full list. Only when no rule fits is the full matched list returned.
  *
  * With nothing configured this is the identity function, which is what keeps
  * every un-pinned dealer and city behaving exactly as it did before E-282.
@@ -228,15 +227,15 @@ async function applyPinnedDefault(
 ): Promise<SectionGNbfc[]> {
   if (grouped.length === 0) return grouped;
 
-  // Two location legs. The rule's state/city describe the DEALER (E-286) and
-  // the resolver reads those from `accounts` itself, so only the dealer code
-  // goes in for them. Its customer_state/customer_city describe the CUSTOMER
-  // (E-289) and are matched against the lead's own address — the same
-  // lead.state / lead.city the BRE's `active_locations` rule already used
-  // above, which is why nothing new had to be loaded here.
-  const rules = await resolveDefaultProductRules(lead.dealer_id, {
-    state: lead.state,
-    city: lead.city,
+  // One location leg, and it is the CUSTOMER's (E-291). This does not widen
+  // coverage: the BRE's `active_locations` rule above has already dropped every
+  // lender that cannot serve this lead, so a pin only ever chooses among the
+  // lenders that can — a rule naming a city no lender covers simply finds
+  // nothing in `grouped` and falls through.
+  const rules = await resolveDefaultProductRules({
+    dealerCode: lead.dealer_id,
+    customerState: lead.state,
+    customerCity: lead.city,
   });
 
   for (const rule of rules) {

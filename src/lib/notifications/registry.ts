@@ -88,6 +88,11 @@ export const DASHBOARDS: DashboardMeta[] = [
     label: "Scrap Vendor Portal",
     note: "External surface. Muting here changes what your vendors are told.",
   },
+  {
+    value: "refurbisher",
+    label: "Refurbisher Portal",
+    note: "External surface (E-292). Muting here changes what your refurbishment partners are told.",
+  },
 ];
 
 const DASHBOARD_VALUES = new Set(DASHBOARDS.map((d) => d.value));
@@ -303,9 +308,9 @@ export const TYPE_LABELS: Record<string, string> = {
   "scrap.payment_settled": "A scrap consignment was paid for",
   // E-270 — refurbishment lots
   "refurb.lot_requested": "An NBFC sent batteries for refurbishment",
-  "refurb.lot_proposed": "iTarang proposed a refurbishment timeline and estimate",
-  "refurb.lot_countered": "An NBFC asked for changes to a refurbishment proposal",
-  "refurb.lot_agreed": "A refurbishment proposal was accepted",
+  "refurb.lot_proposed": "iTarang sent a refurbishment estimate (timeline, costing, advance)",
+  "refurb.lot_countered": "An NBFC countered a refurbishment estimate",
+  "refurb.lot_agreed": "A refurbishment estimate was accepted",
   "refurb.lot_cancelled": "A refurbishment lot was cancelled",
   "refurb.lot_dispatched": "A refurbishment lot was dispatched",
   "refurb.lot_received": "A refurbishment lot was received",
@@ -316,10 +321,19 @@ export const TYPE_LABELS: Record<string, string> = {
   "refurb.advance_confirmed": "A refurbishment advance was confirmed",
   "refurb.payment_recorded": "An NBFC recorded a bank transfer on a refurbishment lot",
   "refurb.balance_due": "An NBFC owes the balance on a refurbishment lot",
-  "refurb.settled": "A refurbishment lot was settled",
+  "refurb.settled": "A refurbishment balance was received (the lot settles once the batteries are back)",
   "refurb.lot_arrived": "A refurbishment lot arrived at the receiving gate",
-  "refurb.quote_revised": "iTarang sent a revised refurbishment quote",
-  "refurb.revision_answered": "An NBFC answered a revised refurbishment quote",
+  "refurb.quote_revised": "iTarang sent a revised refurbishment quote (legacy v2)",
+  "refurb.revision_answered": "An NBFC answered a revised refurbishment quote (legacy v2)",
+  // E-292 — v3
+  "refurb.lot_reviewed": "iTarang declined batteries from a refurbishment lot",
+  "refurb.pi_sent": "iTarang sent a proforma invoice for a refurbishment lot",
+  "refurb.pi_accepted": "An NBFC accepted a refurbishment proforma invoice",
+  "refurb.lot_assigned": "A refurbishment lot was assigned to a refurbisher",
+  "refurb.lot_costed": "A refurbisher submitted final costs for a lot",
+  "refurb.final_bill": "iTarang sent the final refurbishment bill to an NBFC",
+  "refurb.lot_closed": "An NBFC closed a refurbishment lot (auction)",
+  "refurb.redeploy_requested": "An NBFC asked iTarang to help redeploy refurbished batteries",
 
   // --- Escalations ---
   escalation_raised: "Escalation raised (legacy)",

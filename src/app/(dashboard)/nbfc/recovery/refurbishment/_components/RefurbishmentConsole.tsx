@@ -1,22 +1,19 @@
 "use client";
 
 /**
- * E-270 — the NBFC's refurbishment console.
+ * E-292 — the NBFC's refurbishment console (v3).
  *
- * Before E-270 this screen raised ONE job at a time and then let the NBFC
- * press "Start work" / "Mark returned" on behalf of a workshop it does not
- * run. Now it sends a LOT — one or many inspected batteries — and every step
- * after that is the workshop's, pushed back here as it happens:
+ * The NBFC sends a LOT of triaged batteries and then answers what iTarang
+ * sends back: an estimate to accept or counter, a proforma invoice to accept,
+ * an advance to pay into iTarang's bank and record, a truck to dispatch, a
+ * truck to sign for, a balance to pay, and finally the choice — redeploy or
+ * auction. Everything in between (which refurbisher, what it charged) is
+ * iTarang's business and never reaches this screen.
  *
- *   send batch → iTarang reviews + proposes timeline & estimate → accept or
- *   ask for changes → dispatch (docket, photos) → iTarang signs for each
- *   battery → work → iTarang dispatches back → sign for each battery →
- *   battery is `ready`, graded `refurbished`, cost rolled into the lot price.
- *
- * The detail panel is the same component the admin desk renders, told which
- * side it is on (src/components/refurbishment/RefurbLotDetail.tsx).
+ * The detail panel is the same component the admin desk and the refurbisher
+ * portal render, told which side it is on (src/components/refurbishment/RefurbLotDetail.tsx).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { nbfcFetch, formatINR } from "@/lib/auction/client";
 import RefurbLotDetail, {
@@ -28,13 +25,14 @@ import RefurbLotDetail, {
 
 const TABS = [
   { key: "open", label: "Open" },
-  { key: "proposed", label: "Quote to approve" },
-  { key: "awaiting_advance", label: "Advance due" },
-  { key: "agreed", label: "To dispatch" },
-  { key: "revision_pending", label: "Revision to approve" },
+  { key: "estimated", label: "Estimate to answer" },
+  { key: "pi_sent", label: "PI to accept" },
+  { key: "pi_accepted", label: "Advance / dispatch" },
   { key: "in_transit_return", label: "Coming back" },
+  { key: "delivered_back", label: "To sign for" },
   { key: "balance_due", label: "Balance due" },
-  { key: "settled", label: "Settled" },
+  { key: "settled", label: "Choose next step" },
+  { key: "closed", label: "Closed" },
   { key: "all", label: "All" },
 ] as const;
 
@@ -45,6 +43,8 @@ interface Eligible {
   capacity: string | null;
   condition_grade: string | null;
   soh_pct: number | null;
+  health_pct: number | null;
+  triage_choice: string | null;
   image_urls: string[];
   blocked_reason: string | null;
   last_decline_reason: string | null;
@@ -119,7 +119,7 @@ export default function RefurbishmentConsole() {
         method: "POST",
         body: JSON.stringify({ battery_ids: Array.from(picked), note: note.trim() || null }),
       });
-      toast.success(`${r.lot.ref_code} sent to the iTarang workshop`);
+      toast.success(`${r.lot.ref_code} sent to iTarang`);
       setComposing(false);
       setPicked(new Set());
       setNote("");
@@ -138,26 +138,21 @@ export default function RefurbishmentConsole() {
     if (!detail) return;
     setBusy(true);
     try {
-      const r = await nbfcFetch<{ lot?: LotView; intent?: unknown }>(`/api/nbfc/recovery/refurbishment/lots/${detail.id}`, {
+      const r = await nbfcFetch<{ lot?: LotView; next?: string | null }>(`/api/nbfc/recovery/refurbishment/lots/${detail.id}`, {
         method: "POST",
         body: JSON.stringify({ action, ...payload }),
       });
-      // `pay-order` answers with a payment intent, not a lot — hand it back to
-      // the pay panel, which opens Checkout with it.
-      if (action === "pay-order") return r;
       if (r.lot) setDetail(r.lot);
       const said: Partial<Record<LotAction, string>> = {
-        accept: "Quote approved.",
-        "approve-quote": "Quote approved.",
-        arrive: "Marked arrived — now check each battery.",
-        "pay-verify": "Payment received.",
-        "record-payment": "Recorded — iTarang will confirm the transfer.",
-        "approve-revision": "Revised quote approved.",
-        "reject-revision": "Revision rejected — the approved quote stands.",
-        counter: "Sent to iTarang.",
+        accept: "Estimate accepted — iTarang will send the proforma invoice.",
+        counter: "Counter sent to iTarang.",
+        "accept-pi": r.lot?.advance.status === "pending" ? "PI accepted — pay the advance into iTarang's account and record the UTR." : "PI accepted — the batteries can move.",
+        "record-payment": "Recorded — iTarang will mark it received.",
+        arrive: "Marked arrived — now sign for each battery.",
         cancel: "Lot cancelled; the batteries are back at inspected.",
         dispatch: "Dispatch recorded — iTarang will confirm receipt.",
         "confirm-receipt": "Receipt recorded.",
+        close: payload.outcome === "auction" ? "Closed — compose an auction lot from the Recovery & Auction page." : "Closed — iTarang has been asked to help redeploy.",
         message: "Sent.",
       };
       if (said[action]) toast.success(said[action]);
@@ -183,21 +178,22 @@ export default function RefurbishmentConsole() {
       toast.error(m);
       return [];
     }
-    toast.success(`${body.uploaded} photograph(s) added`);
+    toast.success(`${body.uploaded} file(s) added`);
     return body.paths ?? [];
   }
 
   const eligibleOk = useMemo(() => (eligible ?? []).filter((b) => !b.blocked_reason), [eligible]);
   const needsMe = rows.filter((r) => r.awaiting === "nbfc").length;
+  const withItarang = (counts.in_transit_out ?? 0) + (counts.received ?? 0) + (counts.at_refurbisher ?? 0) + (counts.in_progress ?? 0) + (counts.costed ?? 0) + (counts.ready ?? 0);
 
   return (
     <>
       <div className="auc-kpis">
         <div className="auc-kpi" data-tone={needsMe > 0 ? "warn" : undefined}><b>{needsMe}</b><span>Waiting on you</span></div>
         <div className="auc-kpi"><b>{counts.open ?? 0}</b><span>Open lots</span></div>
-        <div className="auc-kpi"><b>{(counts.received ?? 0) + (counts.in_progress ?? 0) + (counts.ready ?? 0)}</b><span>At the workshop</span></div>
-        <div className="auc-kpi" data-tone={(counts.awaiting_advance ?? 0) + (counts.balance_due ?? 0) > 0 ? "warn" : undefined}><b>{(counts.awaiting_advance ?? 0) + (counts.balance_due ?? 0)}</b><span>Payments due</span></div>
-        <div className="auc-kpi" data-tone="live"><b>{counts.settled ?? 0}</b><span>Settled</span></div>
+        <div className="auc-kpi"><b>{withItarang}</b><span>With iTarang</span></div>
+        <div className="auc-kpi" data-tone={(counts.pi_accepted ?? 0) + (counts.balance_due ?? 0) > 0 ? "warn" : undefined}><b>{(counts.pi_accepted ?? 0) + (counts.balance_due ?? 0)}</b><span>Payments open</span></div>
+        <div className="auc-kpi" data-tone={(counts.settled ?? 0) > 0 ? "warn" : undefined}><b>{counts.settled ?? 0}</b><span>Choose next step</span></div>
       </div>
 
       <div className="auc-toolbar">
@@ -220,12 +216,12 @@ export default function RefurbishmentConsole() {
           <header><span className="auc-panel-n">＋</span><h3>New refurbishment lot</h3></header>
           <div className="auc-panel-body">
             <span className="auc-hint">
-              Tick the batteries to send — one lot, one job per battery. Only inspected batteries at or above the 70 % threshold are eligible; iTarang re-checks this on receipt of the request.
+              Tick the batteries to send — one lot, one job per battery. Only triaged / inspected batteries at or above the 70 % health floor are eligible; refurbishment is optional, never forced.
             </span>
             {!eligible ? (
               <p className="auc-subtle" style={{ marginBlockStart: ".5rem" }}>Loading batteries…</p>
             ) : eligible.length === 0 ? (
-              <p className="auc-subtle" style={{ marginBlockStart: ".5rem" }}>No inspected batteries. Evaluate recovered batteries on the recovery board first.</p>
+              <p className="auc-subtle" style={{ marginBlockStart: ".5rem" }}>No inspected batteries. Record recovery details (rated / measured voltage) on the battery register first.</p>
             ) : (
               <div style={{ overflowX: "auto", marginBlockStart: ".5rem" }}>
                 <table className="auc-table">
@@ -235,7 +231,7 @@ export default function RefurbishmentConsole() {
                         <input type="checkbox" aria-label="select all eligible" checked={eligibleOk.length > 0 && eligibleOk.every((b) => picked.has(b.id))}
                           onChange={(e) => setPicked(e.target.checked ? new Set(eligibleOk.map((b) => b.id)) : new Set())} />
                       </th>
-                      <th>Serial</th><th>Model</th><th>SOH</th><th>Grade</th><th />
+                      <th>Serial</th><th>Model</th><th>Health</th><th>Triage</th><th>Grade</th><th />
                     </tr>
                   </thead>
                   <tbody>
@@ -248,6 +244,7 @@ export default function RefurbishmentConsole() {
                         <td><span className="auc-pick-serial">{b.serial}</span></td>
                         <td>{b.model ?? "—"}{b.capacity ? ` · ${b.capacity}` : ""}</td>
                         <td>{b.soh_pct != null ? `${b.soh_pct}%` : "—"}</td>
+                        <td>{b.triage_choice ? <span className="auc-chip" data-tone={b.triage_choice === "refurbish" ? "live" : undefined}>{b.triage_choice}</span> : "—"}</td>
                         <td>{b.condition_grade ?? "—"}</td>
                         <td className="auc-subtle">
                           {b.blocked_reason ?? ""}
@@ -282,34 +279,44 @@ export default function RefurbishmentConsole() {
       ) : rows.length === 0 ? (
         <div className="auc-empty" style={{ marginBlockStart: "1.25rem" }}>
           <p>No lots in this view</p>
-          <p className="auc-empty-hint">Send inspected batteries to the iTarang workshop with the button above. Repair is recommended, never mandatory — a battery graded partial working can go straight to auction.</p>
+          <p className="auc-empty-hint">Send triaged batteries to iTarang with the button above. Refurbishment is optional — a battery that is fit as-is can go straight to auction or redeployment.</p>
         </div>
       ) : (
         <div style={{ overflowX: "auto", marginBlockStart: "1rem" }}>
           <table className="auc-table">
-            <thead><tr><th>Ref</th><th>Batteries</th><th>Status</th><th>Waiting on</th><th>Return by</th><th>Estimate</th><th /></tr></thead>
+            <thead><tr><th>Ref</th><th>Batteries</th><th>Status</th><th>Waiting on</th><th>Return by</th><th>Amount</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id}>
+                <Fragment key={r.id}>
+                <tr>
                   <td style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.ref_code}</td>
                   <td>{r.battery_count}</td>
                   <td><LotStatusChip status={r.status} /></td>
-                  <td>{r.awaiting === "nbfc" ? "You" : r.awaiting === "admin" ? "iTarang" : "—"}</td>
+                  <td>{r.awaiting === "nbfc" ? "You" : r.awaiting ? "iTarang" : "—"}</td>
                   <td>{r.expected_return_date ? new Date(r.expected_return_date).toLocaleDateString("en-IN") : "—"}</td>
-                  <td className="auc-num">{formatINR(r.estimated_total)}</td>
+                  <td className="auc-num">{formatINR(r.final_total ?? r.pi.amount ?? r.estimated_total)}</td>
                   <td><button type="button" className="auc-btn" data-variant="ghost" onClick={() => setOpenId(r.id === openId ? null : r.id)}>{r.id === openId ? "Close" : "Open"}</button></td>
                 </tr>
+                {r.id === openId ? (
+                  <tr>
+                    <td colSpan={7} style={{ padding: 0 }}>
+                      {detail && detail.id === r.id ? (
+                        <div style={{ padding: "0.75rem 0 1rem" }}>
+                          <RefurbLotDetail lot={detail} side="nbfc" canAct busy={busy} onAction={act} onUpload={upload} />
+                        </div>
+                      ) : (
+                        <p className="auc-subtle" style={{ padding: "0.75rem 1rem" }}>Loading lot…</p>
+                      )}
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>
         </div>
       )}
 
-      {detail ? (
-        <div style={{ marginBlockStart: "1rem" }}>
-          <RefurbLotDetail lot={detail} side="nbfc" canAct busy={busy} onAction={act} onUpload={upload} />
-        </div>
-      ) : null}
     </>
   );
 }
