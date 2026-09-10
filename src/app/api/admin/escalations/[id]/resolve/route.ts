@@ -58,6 +58,11 @@ export const POST = withErrorHandler(
             return errorResponse("This escalation is already resolved.", 409);
         }
 
+        // E-295: the hop this resolution records, for Lead Tracking. Stays
+        // null on the non-reassign actions (no ownership change).
+        let ownership: { fromOwnerId: string | null; toOwnerId: string | null } | null =
+            null;
+
         // Reassign — validate the target, then flip ownership (BRD §0.3 Path D).
         if (body.action === "reassign") {
             const targets = await db.execute<{
@@ -72,13 +77,25 @@ export const POST = withErrorHandler(
             if (target.is_active === false) {
                 return errorResponse("Target user is inactive.", 400);
             }
-            await db.execute(sql`
-                UPDATE dealer_leads
-                SET current_owner_id = ${body.target_user_id},
-                    assigned_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = ${esc.dealer_lead_id}
+            // Lock + swap + return the previous owner in one statement, so the
+            // touchpoint below records the hop that actually happened.
+            const swapped = await db.execute<{ from_owner_id: string | null }>(sql`
+                WITH prev AS (
+                    SELECT id, current_owner_id FROM dealer_leads
+                     WHERE id = ${esc.dealer_lead_id} FOR UPDATE
+                )
+                UPDATE dealer_leads dl
+                   SET current_owner_id = ${body.target_user_id},
+                       assigned_at = NOW(),
+                       updated_at = NOW()
+                  FROM prev
+                 WHERE dl.id = prev.id
+                RETURNING prev.current_owner_id AS from_owner_id
             `);
+            ownership = {
+                fromOwnerId: swapped[0]?.from_owner_id ?? null,
+                toOwnerId: body.target_user_id ?? null,
+            };
         }
 
         // Mark the escalation resolved.
@@ -115,6 +132,7 @@ export const POST = withErrorHandler(
             touchpointType: TOUCHPOINT[body.action],
             performedBy: user.id,
             remarks: body.resolution_notes,
+            ...(ownership ?? {}),
         });
 
         return successResponse({ ok: true, action: body.action });

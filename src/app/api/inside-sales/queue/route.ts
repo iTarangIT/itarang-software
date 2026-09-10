@@ -1,13 +1,15 @@
 // GET /api/inside-sales/queue?tab=...&page=...&limit=...&q=...&neodove=1
 // Paginated rows for one queue tab (BRD §0.5).
+// &ids_only=1 returns just the first `limit` ids in queue order (≤ BULK_CLAIM_CAP)
+// — feeds "Select first N" on the Unassigned tab.
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { fetchQueueRows, countQueueRows } from "@/lib/inside-sales/queryBuilder";
+import { fetchQueueRows, countQueueRows, fetchQueueIds } from "@/lib/inside-sales/queryBuilder";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
-import { QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
+import { BULK_CLAIM_CAP, QUEUE_TABS, type QueueResponse } from "@/lib/inside-sales/types";
 import { readQueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort } from "@/lib/leads/queueSort";
 
@@ -33,6 +35,7 @@ const QuerySchema = z.object({
     neodove: z.literal("1").optional(),
     // Leads who asked to be called back — the AI cannot, so they need a person.
     callback: z.literal("1").optional(),
+    ids_only: z.literal("1").optional(),
 });
 
 export const GET = withErrorHandler(async (req: NextRequest) => {
@@ -45,6 +48,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         q: url.searchParams.get("q") ?? undefined,
         neodove: url.searchParams.get("neodove") ?? undefined,
         callback: url.searchParams.get("callback") ?? undefined,
+        ids_only: url.searchParams.get("ids_only") ?? undefined,
     });
     const neodoveOnly = parsed.neodove === "1";
     const callbackOnly = parsed.callback === "1";
@@ -55,6 +59,20 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // Order only — validated the same way, so an unknown key falls back to the
     // tab's own order rather than reaching the SQL builder.
     const sort = readQueueSort(url.searchParams);
+
+    if (parsed.ids_only === "1") {
+        const ids = await fetchQueueIds({
+            tab: parsed.tab,
+            userId: user.id,
+            limit: Math.min(parsed.limit, BULK_CLAIM_CAP),
+            q: parsed.q ?? null,
+            neodoveOnly,
+            callbackOnly,
+            filters,
+            sort,
+        });
+        return successResponse({ ids, cap: BULK_CLAIM_CAP });
+    }
 
     const [rows, total] = await Promise.all([
         fetchQueueRows({

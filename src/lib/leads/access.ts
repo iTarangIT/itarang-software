@@ -95,6 +95,40 @@ export const LEAD_HISTORY_EXPORT_ROLES = [
 ] as const;
 
 /**
+ * Roles that may open a lead's TRACKING view — the journey (who held it, for
+ * how long, what they did) — and download it as CSV (E-295).
+ *
+ * ⚠ This IS the list GET /api/dealer-leads/[id]/tracking enforces, so the
+ * "Lead tracking" section and the endpoint cannot drift apart.
+ *
+ * Two tiers inside it:
+ *   admin, ceo, sales_head        — any lead.
+ *   inside_sales_rep, asm         — only leads they have handled, see
+ *                                   LEAD_TRACKING_OWN_ONLY_ROLES.
+ * The bulk "Lead Tracking CSV" (many leads, one file) rides on
+ * LEADS_BULK_ROLES instead — same bar, same endpoint gate as Export CSV.
+ *
+ * business_head / sales_manager are deliberately not here: the request named
+ * these five roles, and widening who can pull a lead's whole hand-off history
+ * is a team decision, not a side effect.
+ */
+export const LEAD_TRACKING_ROLES = [
+  "admin",
+  "ceo",
+  "sales_head",
+  "inside_sales_rep",
+  "asm",
+] as const;
+
+/**
+ * Roles whose tracking access is scoped to leads THEY have handled: current
+ * owner, ASM, originator, or the recipient of any recorded hand-off
+ * (lead_touchpoints.to_owner_id, or a lead_claimed they performed). Enforced
+ * server-side in canViewLeadTracking() — src/lib/leads/tracking.ts.
+ */
+export const LEAD_TRACKING_OWN_ONLY_ROLES = ["inside_sales_rep", "asm"] as const;
+
+/**
  * Roles that can be handed ownership of a lead — the target list for the
  * reassign pickers.
  *
@@ -183,6 +217,8 @@ export type LeadsCapabilities = {
   canSeeCostAnalytics: boolean;
   canReviewIntent: boolean;
   canCurateIntent: boolean;
+  /** May open the "Lead tracking" section and download a single lead's CSV. */
+  canTrackLeads: boolean;
 };
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
@@ -213,6 +249,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canSeeCostAnalytics: COST_ANALYTICS_ROLES.includes(r),
     canReviewIntent: (INTENT_REVIEW_ROLES as readonly string[]).includes(r),
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
+    canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
   };
 }
 
@@ -224,4 +261,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canSeeCostAnalytics: false,
   canReviewIntent: false,
   canCurateIntent: false,
+  canTrackLeads: false,
 };

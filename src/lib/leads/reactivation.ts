@@ -46,9 +46,10 @@ export async function reactivateLead(opts: {
             lead_status: string | null;
             lost_reason: string | null;
             originator_id: string | null;
+            current_owner_id: string | null;
         }>(sql`
-            SELECT lead_status, lost_reason, originator_id
-            FROM dealer_leads WHERE id = ${leadId} LIMIT 1
+            SELECT lead_status, lost_reason, originator_id, current_owner_id
+            FROM dealer_leads WHERE id = ${leadId} LIMIT 1 FOR UPDATE
         `);
         const lead = leadRows[0];
         if (!lead) throw new Error("Lead not found.");
@@ -96,13 +97,17 @@ export async function reactivateLead(opts: {
         `);
 
         // reactivated_via_* touchpoint — keeps the unified history complete.
+        // E-295: from/to owner recorded so Lead Tracking sees the hop (a Lost
+        // lead usually still carries its last owner; reactivation hands it to
+        // the originator or back to the pool).
         await tx.execute(sql`
             INSERT INTO lead_touchpoints
                 (dealer_lead_id, touchpoint_type, performed_by, performed_at,
-                 remarks, sync_method)
+                 remarks, sync_method, from_owner_id, to_owner_id)
             VALUES (${leadId}, ${TRIGGER_TOUCHPOINT[trigger]}, ${performedBy},
                 NOW(), ${opts.notes ?? `Reactivated from Lost via ${trigger}`},
-                ${performedBy ? "manual" : "system"})
+                ${performedBy ? "manual" : "system"},
+                ${lead.current_owner_id}, ${newOwnerId})
         `);
 
         return { new_status: newStatus, new_owner_id: newOwnerId };
