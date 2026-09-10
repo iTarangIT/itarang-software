@@ -3,7 +3,7 @@
 // One audited touchpoint per affected lead.
 //
 // Actions: reassign · mark_lost · push_to_ai · reactivate · export(CSV) ·
-// export_touchpoints(XLSX).
+// export_touchpoints(XLSX) · export_tracking(CSV, E-295 lead journey).
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -16,6 +16,8 @@ import {
 } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { buildTouchpointWorkbook } from "@/lib/leads/touchpointWorkbook";
+import { buildLeadTracking } from "@/lib/leads/tracking";
+import { trackingCsvResponse } from "@/lib/leads/trackingCsv";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { assignLeadOwner, resolveAssignTarget } from "@/lib/leads/assignOwner";
 import {
@@ -41,6 +43,7 @@ const BodySchema = z.object({
         "reactivate",
         "export",
         "export_touchpoints",
+        "export_tracking",
     ]),
     lead_ids: z.array(z.string().min(1)).min(1).max(5000),
     target_user_id: z.string().min(1).optional(),
@@ -111,6 +114,14 @@ export const POST = withErrorHandler(async (req: Request) => {
                 "Cache-Control": "no-store",
             },
         });
+    }
+
+    // ── Export lead tracking — one CSV of every selected lead's journey. ───
+    // Read-only like the two above. Leads come out in the order the tracking
+    // builder returns them; rows inside a lead run oldest-first.
+    if (body.action === "export_tracking") {
+        const trackings = await buildLeadTracking(ids);
+        return trackingCsvResponse([...trackings.values()], "lead-tracking");
     }
 
     // Load the selected leads' current state.

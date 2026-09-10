@@ -80,6 +80,9 @@ export const POST = withErrorHandler(
                     ? `\n\nPending: ${body.pending_items.join(", ")}`
                     : ""
             }${body.out_of_territory_reason ? `\n\nOut-of-territory: ${body.out_of_territory_reason}` : ""}`,
+            // E-295: assertOwner above proved the caller held the lead.
+            fromOwnerId: user.id,
+            toOwnerId: body.asm_id,
             statusChange: {
                 from: fromStatus,
                 to: "Transferred_to_ASM",

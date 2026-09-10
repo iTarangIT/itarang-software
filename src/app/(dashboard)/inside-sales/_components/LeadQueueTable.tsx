@@ -31,6 +31,16 @@ type Props = {
     onPageChange: (p: number) => void;
     viewerId: string;
     holidaySet: Set<string>;
+    /**
+     * Present only when the viewer may bulk-claim on this tab. Absent = no
+     * checkbox column, so the other tabs render exactly as before.
+     */
+    selection?: {
+        selected: Set<string>;
+        onToggle: (id: string) => void;
+        /** Header checkbox: tick every row on this page, or untick them all. */
+        onToggleAll: () => void;
+    };
 };
 
 const STALE_ROW_BG: Record<ReturnType<typeof staleSeverity>, string> = {
@@ -71,8 +81,12 @@ export function LeadQueueTable({
     onPageChange,
     viewerId,
     holidaySet,
+    selection,
 }: Props) {
     const router = useRouter();
+    const colCount = selection ? 10 : 9;
+    const allOnPageSelected =
+        !!selection && rows.length > 0 && rows.every((r) => selection.selected.has(r.id));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
     const end = Math.min(page * pageSize, total);
@@ -94,6 +108,18 @@ export function LeadQueueTable({
                 <table className="w-full text-sm">
                     <thead className="bg-gray-50/50 text-[11px] uppercase tracking-wide text-gray-500">
                         <tr>
+                            {selection && (
+                                <th className="w-10 px-4 py-3 text-left font-semibold">
+                                    <input
+                                        type="checkbox"
+                                        aria-label="Select all on this page"
+                                        checked={allOnPageSelected}
+                                        onChange={selection.onToggleAll}
+                                        disabled={rows.length === 0}
+                                        className="cursor-pointer"
+                                    />
+                                </th>
+                            )}
                             <th className="text-left px-4 py-3 font-semibold">Dealer / Shop</th>
                             <th className="text-left px-4 py-3 font-semibold">Phone</th>
                             <th className="text-left px-4 py-3 font-semibold">Region</th>
@@ -108,7 +134,7 @@ export function LeadQueueTable({
                     <tbody className="divide-y divide-gray-100">
                         {loading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                                <td colSpan={colCount} className="px-4 py-12 text-center text-gray-400">
                                     <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
                                     Loading queue…
                                 </td>
@@ -116,7 +142,7 @@ export function LeadQueueTable({
                         )}
                         {!loading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={9} className="px-4 py-16 text-center text-gray-400">
+                                <td colSpan={colCount} className="px-4 py-16 text-center text-gray-400">
                                     <InboxIcon className="h-8 w-8 mx-auto mb-2" />
                                     {tab === "unassigned"
                                         ? "No leads waiting to be claimed."
@@ -140,6 +166,23 @@ export function LeadQueueTable({
                                     onClick={() => router.push(href)}
                                     className={`cursor-pointer hover:bg-blue-50/40 transition ${STALE_ROW_BG[sev]}`}
                                 >
+                                    {selection && (
+                                        // The row itself navigates on click, so the
+                                        // cell must swallow the event or a tick
+                                        // would open the lead.
+                                        <td
+                                            className="px-4 py-3 align-top"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                aria-label={`Select ${row.dealer_name || row.shop_name || "lead"}`}
+                                                checked={selection.selected.has(row.id)}
+                                                onChange={() => selection.onToggle(row.id)}
+                                                className="cursor-pointer"
+                                            />
+                                        </td>
+                                    )}
                                     <td className="px-4 py-3 align-top">
                                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
                                             <Link

@@ -53,6 +53,9 @@ export const POST = withErrorHandler(
             touchpointType: "ownership_transfer",
             performedBy: user.id,
             remarks: body.reason,
+            // E-295: assertOwner above proved the caller held the lead.
+            fromOwnerId: user.id,
+            toOwnerId: body.target_user_id,
         });
 
         return successResponse({ ok: true, notify_admin: !!body.notify_admin });

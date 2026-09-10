@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ExternalLink, Loader2, Phone, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
 import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
 import type { LeadStatus } from "@/lib/lifecycle/transitions";
@@ -350,11 +351,25 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                     </Link>
                 </div>
 
+                {/* Middle column: Lead tracking (E-295) above the reassign
+                    form, in one scroll container so the journey and the
+                    action on it stay together. The tracking endpoint enforces
+                    the own-only scope for reps and ASMs itself. */}
+                <div className="flex-1 overflow-y-auto">
+                {caps.canTrackLeads && (
+                    <div className="border-b border-gray-100">
+                        <LeadTrackingPanel
+                            leadId={lead.id}
+                            canDownload={caps.canTrackLeads}
+                            compact
+                        />
+                    </div>
+                )}
+
                 {/* Reassign form — bulk-capable roles only. Hiding it is cosmetic;
                     /api/admin/leads/bulk enforces the same list server-side. */}
                 {caps.canBulkAct ? (
-                    <>
-                        <div className="flex-1 overflow-y-auto px-5 py-4">
+                        <div className="px-5 py-4">
                             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
                                 <RotateCcw className="h-3.5 w-3.5 text-gray-500" />
                                 Reassign owner
@@ -417,7 +432,16 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                 )}
                             </div>
                         </div>
+                ) : (
+                        <div className="px-5 py-4">
+                            <p className="text-[11px] text-gray-400">
+                                Reassignment is limited to admins and the sales head.
+                            </p>
+                        </div>
+                )}
+                </div>
 
+                {caps.canBulkAct && (
                         <div className="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3">
                             <Button
                                 type="button"
@@ -442,13 +466,6 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                 Reassign
                             </Button>
                         </div>
-                    </>
-                ) : (
-                    <div className="flex-1 overflow-y-auto px-5 py-4">
-                        <p className="text-[11px] text-gray-400">
-                            Reassignment is limited to admins and the sales head.
-                        </p>
-                    </div>
                 )}
             </aside>
         </div>
