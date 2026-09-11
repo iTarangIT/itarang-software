@@ -25,6 +25,7 @@ const ROLE_PATH_PREFIXES: Array<[string, string]> = [
   ["/sales-executive", "sales_executive"],
   ["/sales-head", "sales_head"],
   ["/operations", "operations"],
+  ["/partner", "partner"],
   ["/nbfc", "nbfc_partner"],
   ["/asm", "asm"],
   ["/ceo", "ceo"],

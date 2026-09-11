@@ -16,7 +16,7 @@ import {
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 
-const MUTATE_ROLES = ["admin", "sales_head"];
+const MUTATE_ROLES = ["admin", "sales_head", "partner"];
 
 const BodySchema = z
     .object({

@@ -239,8 +239,12 @@ export async function assignLeadOwner(
     // ── Inside Sales Rep target: lift an unassigned lead into the rep's
     // "active" queue by promoting New_Unassigned → Assigned_Not_Contacted
     // (matches /api/inside-sales/lead/[id]/claim).
+    //
+    // `partner` works the same queue shape (/partner/leads) and takes the same
+    // lift; without it a lead handed to the partner would keep a NULL status and
+    // land on nobody's page (the E-140 trap documented in neodove/roles.ts).
     if (
-        target.role === "inside_sales_rep" &&
+        (target.role === "inside_sales_rep" || target.role === "partner") &&
         (fromStatus === "New_Unassigned" || !inPipeline)
     ) {
         // New_Unassigned → Assigned_Not_Contacted is a guarded BRD transition;

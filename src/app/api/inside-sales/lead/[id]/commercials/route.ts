@@ -26,7 +26,7 @@ import {
     type OemEvaluation,
 } from "@/lib/leads/oemPricing";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 const BodySchema = z.object({
     event_type: z.enum([

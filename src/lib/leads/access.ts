@@ -26,6 +26,8 @@
  *                                            Analytics tab lives on this page, so
  *                                            excluding it would strand that tab
  *   sales_insight, inside_sales_rep, asm   — the pipeline this list describes
+ *   partner                                — Chirag's login: sales_head-level lead
+ *                                            scope by decision (2026-09-10)
  */
 export const LEADS_PAGE_ROLES = [
   "admin",
@@ -38,6 +40,7 @@ export const LEADS_PAGE_ROLES = [
   "inside_sales_rep",
   "asm",
   "finance_controller",
+  "partner",
 ] as const;
 
 /**
@@ -57,6 +60,7 @@ export const LEADS_OVERSIGHT_ROLES = [
   "ceo",
   "business_head",
   "sales_manager",
+  "partner",
 ] as const;
 
 /**
@@ -67,7 +71,7 @@ export const LEADS_OVERSIGHT_ROLES = [
  * so showing this bar to a role the API refuses renders three buttons that all
  * 403. The reassign form in the lead drawer posts to the same endpoint.
  */
-export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo"] as const;
+export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo", "partner"] as const;
 
 /**
  * Roles that may download a single lead's touchpoint history as .xlsx — the
@@ -92,6 +96,7 @@ export const LEAD_HISTORY_EXPORT_ROLES = [
   "sales_manager",
   "sales_head",
   "business_head",
+  "partner",
 ] as const;
 
 /**
@@ -118,6 +123,7 @@ export const LEAD_TRACKING_ROLES = [
   "sales_head",
   "inside_sales_rep",
   "asm",
+  "partner",
 ] as const;
 
 /**
@@ -153,6 +159,7 @@ export const LEAD_ASSIGNEE_ROLES = [
   "sales_executive",
   "sales_manager",
   "sales_head",
+  "partner",
 ] as const;
 
 /**
@@ -191,13 +198,15 @@ export const INTENT_REVIEW_ROLES = [
   "sales_head",
   "asm",
   "inside_sales_rep",
+  "partner",
 ] as const;
 
 /**
  * Roles that may promote a correction into the extraction prompt — the
  * /admin/ai-intent console.
  *
- * Kept to the three oversight roles on purpose. A promoted example is a
+ * Kept to the oversight roles on purpose (plus `partner`, which reaches
+ * /admin/ai-intent through its own sharedRouteAccess row in middleware). A promoted example is a
  * few-shot the LLM reads on EVERY subsequent call, so one careless promotion
  * degrades scoring for the whole pipeline. That is the entire reason the
  * learning loop is curated rather than automatic: everyone in
@@ -208,7 +217,7 @@ export const INTENT_REVIEW_ROLES = [
  * (sharedRouteAccess: admin, sales_head, ceo). Adding a role here that
  * middleware bounces would render a console the user can never reach.
  */
-export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head"] as const;
+export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head", "partner"] as const;
 
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
@@ -231,6 +240,7 @@ const NEODOVE_ROLES = [
   "business_head",
   "ceo",
   "sales_manager",
+  "partner",
 ];
 const COST_ANALYTICS_ROLES = [
   "ceo",
@@ -238,6 +248,7 @@ const COST_ANALYTICS_ROLES = [
   "sales_head",
   "finance_controller",
   "admin",
+  "partner",
 ];
 
 export function capabilitiesFor(role: string | null | undefined): LeadsCapabilities {

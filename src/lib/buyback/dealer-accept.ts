@@ -40,7 +40,7 @@ interface AcceptStandingInput {
   offerVersion: number;
   /** Who is accepting — decides whose counter must be standing, and the action. */
   acceptedBy: "admin" | "dealer";
-  actor: { id: string; role: "admin" | "dealer" };
+  actor: { id: string; role: "admin" | "dealer"; crmRole?: string };
 }
 
 interface RoundRow {

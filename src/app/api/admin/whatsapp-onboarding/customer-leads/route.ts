@@ -26,7 +26,7 @@ import {
 import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 /** createCustomerLead's placeholder until the customer's name is known. */
 const PENDING_CUSTOMER_NAME = "Customer";

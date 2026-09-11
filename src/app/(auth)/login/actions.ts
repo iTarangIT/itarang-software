@@ -101,6 +101,10 @@ export async function login(formData: FormData) {
     redirect("/operations");
   }
 
+  if (appUser.role === "partner") {
+    redirect("/partner");
+  }
+
   redirect("/");
 }
 
