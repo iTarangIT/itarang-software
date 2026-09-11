@@ -13,7 +13,7 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
-const MUTATE_ROLES = ["inside_sales_rep", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "admin", "partner"];
 
 const BodySchema = z.object({
     asm_id: z.string().min(1),
@@ -80,6 +80,9 @@ export const POST = withErrorHandler(
                     ? `\n\nPending: ${body.pending_items.join(", ")}`
                     : ""
             }${body.out_of_territory_reason ? `\n\nOut-of-territory: ${body.out_of_territory_reason}` : ""}`,
+            // E-295: assertOwner above proved the caller held the lead.
+            fromOwnerId: user.id,
+            toOwnerId: body.asm_id,
             statusChange: {
                 from: fromStatus,
                 to: "Transferred_to_ASM",

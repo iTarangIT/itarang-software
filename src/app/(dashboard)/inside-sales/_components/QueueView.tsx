@@ -5,10 +5,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Search, Loader2, Plus, Upload } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
+import { BulkClaimBar } from "./BulkClaimBar";
 import { CreateLeadModal } from "./modals/CreateLeadModal";
 import { QueueFilterBar } from "@/components/leads/QueueFilterBar";
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
@@ -28,6 +30,7 @@ import {
     type QueueSort,
 } from "@/lib/leads/queueSort";
 import {
+    CLAIM_ROLES,
     QUEUE_TABS,
     type QueueCounts,
     type QueueResponse,
@@ -37,6 +40,10 @@ import {
 type Props = {
     viewerId: string;
     viewerRole: string;
+    /** The page this view is mounted on — URL sync writes here. */
+    basePath?: string;
+    /** Lead-detail route prefix for row clicks; twins (/partner) pass their own. */
+    leadHrefBase?: string;
 };
 
 // Roles allowed to bulk-upload leads — must match the upload page + API gate.
@@ -49,8 +56,16 @@ function parseTab(raw: string | null): QueueTab {
 
 const PAGE_SIZE = 25;
 
-export function QueueView({ viewerId, viewerRole }: Props) {
+export function QueueView({
+    viewerId,
+    viewerRole,
+    basePath = "/inside-sales",
+    leadHrefBase = "/inside-sales/lead",
+}: Props) {
     const canUpload = UPLOAD_ROLES.includes(viewerRole);
+    // Same list the claim routes enforce: a ceo/sales_head can read the
+    // Unassigned tab but cannot claim, so they get no checkbox column.
+    const canClaim = (CLAIM_ROLES as readonly string[]).includes(viewerRole);
     const router = useRouter();
     const queryClient = useQueryClient();
     const params = useSearchParams();
@@ -115,8 +130,8 @@ export function QueueView({ viewerId, viewerRole }: Props) {
         if (tab !== "my_open") next.set("tab", tab);
         if (page !== 1) next.set("page", String(page));
         const queryString = next.toString();
-        router.replace(`/inside-sales${queryString ? `?${queryString}` : ""}`, { scroll: false });
-    }, [tab, page, filterKey, router]);
+        router.replace(`${basePath}${queryString ? `?${queryString}` : ""}`, { scroll: false });
+    }, [tab, page, filterKey, router, basePath]);
 
     // 300ms debounce on the search box.
     useEffect(() => {
@@ -193,6 +208,78 @@ export function QueueView({ viewerId, viewerRole }: Props) {
     });
 
     const data = rowsQuery.data?.data;
+
+    // ── Bulk claim selection (Unassigned tab only) ───────────────────────
+    const selectable = tab === "unassigned" && canClaim;
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+    // Clear on tab or filter change — a selection carried across a filter
+    // change could claim leads the rep can no longer see. Paging deliberately
+    // does NOT clear: ticking across pages is the point, and the sticky bar
+    // keeps the running count visible the whole time.
+    //
+    // Done as a "reset during render" (React's sanctioned pattern for state
+    // that depends on a prop/state key) rather than an effect, so the stale
+    // selection is never painted for a frame.
+    const selectionScope = `${tab}|${filterKey}`;
+    const [selectionScopeSeen, setSelectionScopeSeen] = useState(selectionScope);
+    if (selectionScopeSeen !== selectionScope) {
+        setSelectionScopeSeen(selectionScope);
+        setSelectedIds(new Set());
+    }
+
+    const toggleSelected = useCallback((id: string) => {
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
+    const toggleAllOnPage = useCallback(() => {
+        const pageRows = data?.rows ?? [];
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            const allTicked = pageRows.length > 0 && pageRows.every((r) => next.has(r.id));
+            if (allTicked) pageRows.forEach((r) => next.delete(r.id));
+            else pageRows.forEach((r) => next.add(r.id));
+            return next;
+        });
+    }, [data]);
+
+    // "Select first N": ask the API for the top N ids under the SAME tab,
+    // filters and sort the table is showing, and make them the selection.
+    const [selectingFirstN, setSelectingFirstN] = useState(false);
+    const selectFirstN = useCallback(
+        async (n: number) => {
+            setSelectingFirstN(true);
+            try {
+                const u = new URL("/api/inside-sales/queue", window.location.origin);
+                u.search = filterKey;
+                u.searchParams.set("tab", tab);
+                u.searchParams.set("ids_only", "1");
+                u.searchParams.set("limit", String(n));
+                const res = await fetch(u.toString(), { cache: "no-store" });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json?.error?.message ?? "Failed to select leads");
+                const ids: string[] = json.data?.ids ?? [];
+                setSelectedIds(new Set(ids));
+                setPage(1);
+                toast.success(`Selected the first ${ids.length} lead${ids.length === 1 ? "" : "s"}`);
+            } catch (err) {
+                toast.error((err as Error).message);
+            } finally {
+                setSelectingFirstN(false);
+            }
+        },
+        [filterKey, tab],
+    );
+
+    const onBulkClaimed = useCallback(() => {
+        setSelectedIds(new Set());
+        queryClient.invalidateQueries({ queryKey: ["inside-sales-queue"] });
+        queryClient.invalidateQueries({ queryKey: ["inside-sales-counts"] });
+    }, [queryClient]);
 
     const exportHref = useMemo(() => {
         const p = new URLSearchParams(filterKey);
@@ -337,6 +424,7 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                 </div>
                 <LeadQueueTable
                     tab={tab}
+                    leadHrefBase={leadHrefBase}
                     rows={data?.rows ?? []}
                     total={data?.total ?? 0}
                     page={page}
@@ -346,8 +434,27 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                     onPageChange={setPage}
                     viewerId={viewerId}
                     holidaySet={holidaySet}
+                    selection={
+                        selectable
+                            ? {
+                                  selected: selectedIds,
+                                  onToggle: toggleSelected,
+                                  onToggleAll: toggleAllOnPage,
+                              }
+                            : undefined
+                    }
                 />
             </div>
+            {selectable && (
+                <BulkClaimBar
+                    selectedIds={Array.from(selectedIds)}
+                    total={data?.total ?? 0}
+                    selectFirstN={selectFirstN}
+                    selectingFirstN={selectingFirstN}
+                    onClear={() => setSelectedIds(new Set())}
+                    onClaimed={onBulkClaimed}
+                />
+            )}
             <CreateLeadModal
                 open={createOpen}
                 onClose={() => setCreateOpen(false)}
@@ -355,7 +462,9 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                     setCreateOpen(false);
                     queryClient.invalidateQueries({ queryKey: ["inside-sales-queue"] });
                     queryClient.invalidateQueries({ queryKey: ["inside-sales-counts"] });
-                    setTab("unassigned");
+                    // Roles that keep what they create (asm, partner) land in My Open;
+                    // everyone else's new lead goes to the claim pool.
+                    setTab(viewerRole === "asm" || viewerRole === "partner" ? "my_open" : "unassigned");
                     setPage(1);
                 }}
             />

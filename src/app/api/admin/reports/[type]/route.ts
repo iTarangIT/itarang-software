@@ -16,7 +16,7 @@ import { REPORT_TYPES } from "@/lib/admin/types";
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 const TypeSchema = z.enum(REPORT_TYPES);
 
 export const GET = withErrorHandler(

@@ -12,7 +12,7 @@ import { fetchEscalationThread } from "@/lib/admin/listQueries";
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 export const GET = withErrorHandler(
     async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {

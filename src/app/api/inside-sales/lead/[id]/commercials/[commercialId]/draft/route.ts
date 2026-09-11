@@ -34,6 +34,7 @@ const ALLOWED_ROLES = new Set([
   "business_head",
   "admin",
   "ceo",
+  "partner",
 ]);
 
 const BodySchema = z

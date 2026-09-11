@@ -26,6 +26,8 @@
  *                                            Analytics tab lives on this page, so
  *                                            excluding it would strand that tab
  *   sales_insight, inside_sales_rep, asm   — the pipeline this list describes
+ *   partner                                — Chirag's login: sales_head-level lead
+ *                                            scope by decision (2026-09-10)
  */
 export const LEADS_PAGE_ROLES = [
   "admin",
@@ -38,6 +40,7 @@ export const LEADS_PAGE_ROLES = [
   "inside_sales_rep",
   "asm",
   "finance_controller",
+  "partner",
 ] as const;
 
 /**
@@ -57,6 +60,7 @@ export const LEADS_OVERSIGHT_ROLES = [
   "ceo",
   "business_head",
   "sales_manager",
+  "partner",
 ] as const;
 
 /**
@@ -67,7 +71,7 @@ export const LEADS_OVERSIGHT_ROLES = [
  * so showing this bar to a role the API refuses renders three buttons that all
  * 403. The reassign form in the lead drawer posts to the same endpoint.
  */
-export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo"] as const;
+export const LEADS_BULK_ROLES = ["admin", "sales_head", "ceo", "partner"] as const;
 
 /**
  * Roles that may download a single lead's touchpoint history as .xlsx — the
@@ -92,7 +96,43 @@ export const LEAD_HISTORY_EXPORT_ROLES = [
   "sales_manager",
   "sales_head",
   "business_head",
+  "partner",
 ] as const;
+
+/**
+ * Roles that may open a lead's TRACKING view — the journey (who held it, for
+ * how long, what they did) — and download it as CSV (E-295).
+ *
+ * ⚠ This IS the list GET /api/dealer-leads/[id]/tracking enforces, so the
+ * "Lead tracking" section and the endpoint cannot drift apart.
+ *
+ * Two tiers inside it:
+ *   admin, ceo, sales_head        — any lead.
+ *   inside_sales_rep, asm         — only leads they have handled, see
+ *                                   LEAD_TRACKING_OWN_ONLY_ROLES.
+ * The bulk "Lead Tracking CSV" (many leads, one file) rides on
+ * LEADS_BULK_ROLES instead — same bar, same endpoint gate as Export CSV.
+ *
+ * business_head / sales_manager are deliberately not here: the request named
+ * these five roles, and widening who can pull a lead's whole hand-off history
+ * is a team decision, not a side effect.
+ */
+export const LEAD_TRACKING_ROLES = [
+  "admin",
+  "ceo",
+  "sales_head",
+  "inside_sales_rep",
+  "asm",
+  "partner",
+] as const;
+
+/**
+ * Roles whose tracking access is scoped to leads THEY have handled: current
+ * owner, ASM, originator, or the recipient of any recorded hand-off
+ * (lead_touchpoints.to_owner_id, or a lead_claimed they performed). Enforced
+ * server-side in canViewLeadTracking() — src/lib/leads/tracking.ts.
+ */
+export const LEAD_TRACKING_OWN_ONLY_ROLES = ["inside_sales_rep", "asm"] as const;
 
 /**
  * Roles that can be handed ownership of a lead — the target list for the
@@ -119,6 +159,7 @@ export const LEAD_ASSIGNEE_ROLES = [
   "sales_executive",
   "sales_manager",
   "sales_head",
+  "partner",
 ] as const;
 
 /**
@@ -157,13 +198,15 @@ export const INTENT_REVIEW_ROLES = [
   "sales_head",
   "asm",
   "inside_sales_rep",
+  "partner",
 ] as const;
 
 /**
  * Roles that may promote a correction into the extraction prompt — the
  * /admin/ai-intent console.
  *
- * Kept to the three oversight roles on purpose. A promoted example is a
+ * Kept to the oversight roles on purpose (plus `partner`, which reaches
+ * /admin/ai-intent through its own sharedRouteAccess row in middleware). A promoted example is a
  * few-shot the LLM reads on EVERY subsequent call, so one careless promotion
  * degrades scoring for the whole pipeline. That is the entire reason the
  * learning loop is curated rather than automatic: everyone in
@@ -174,7 +217,7 @@ export const INTENT_REVIEW_ROLES = [
  * (sharedRouteAccess: admin, sales_head, ceo). Adding a role here that
  * middleware bounces would render a console the user can never reach.
  */
-export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head"] as const;
+export const INTENT_CURATOR_ROLES = ["admin", "ceo", "sales_head", "partner"] as const;
 
 export type LeadsCapabilities = {
   canSeeOwnerAsm: boolean;
@@ -183,6 +226,8 @@ export type LeadsCapabilities = {
   canSeeCostAnalytics: boolean;
   canReviewIntent: boolean;
   canCurateIntent: boolean;
+  /** May open the "Lead tracking" section and download a single lead's CSV. */
+  canTrackLeads: boolean;
 };
 
 // Mirrors NEODOVE_ADMIN_ROLES (src/lib/neodove/roles.ts) and the server gate on
@@ -195,6 +240,7 @@ const NEODOVE_ROLES = [
   "business_head",
   "ceo",
   "sales_manager",
+  "partner",
 ];
 const COST_ANALYTICS_ROLES = [
   "ceo",
@@ -202,6 +248,7 @@ const COST_ANALYTICS_ROLES = [
   "sales_head",
   "finance_controller",
   "admin",
+  "partner",
 ];
 
 export function capabilitiesFor(role: string | null | undefined): LeadsCapabilities {
@@ -213,6 +260,7 @@ export function capabilitiesFor(role: string | null | undefined): LeadsCapabilit
     canSeeCostAnalytics: COST_ANALYTICS_ROLES.includes(r),
     canReviewIntent: (INTENT_REVIEW_ROLES as readonly string[]).includes(r),
     canCurateIntent: (INTENT_CURATOR_ROLES as readonly string[]).includes(r),
+    canTrackLeads: (LEAD_TRACKING_ROLES as readonly string[]).includes(r),
   };
 }
 
@@ -224,4 +272,5 @@ export const NO_CAPABILITIES: LeadsCapabilities = {
   canSeeCostAnalytics: false,
   canReviewIntent: false,
   canCurateIntent: false,
+  canTrackLeads: false,
 };

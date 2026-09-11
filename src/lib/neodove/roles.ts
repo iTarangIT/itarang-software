@@ -13,6 +13,7 @@ export const NEODOVE_ADMIN_ROLES = [
     "business_head",
     "ceo",
     "sales_manager",
+    "partner",
 ];
 
 // Roles a pushed lead may be assigned to in the CRM (E-237).
@@ -39,4 +40,8 @@ export const NEODOVE_ADMIN_ROLES = [
 // workspace, and pre_transfer_status is stamped so the original state survives
 // — but an ASM-assigned pushed lead will read as "transferred" on the timeline
 // before anyone has spoken to the dealer.
-export const NEODOVE_ASSIGNEE_ROLES = ["inside_sales_rep", "asm"];
+//
+// `partner` takes the inside_sales_rep lift in assignLeadOwner (→
+// Assigned_Not_Contacted) and works the same queue shape at /partner/leads, so
+// it is safe here for the same reason inside_sales_rep is.
+export const NEODOVE_ASSIGNEE_ROLES = ["inside_sales_rep", "asm", "partner"];

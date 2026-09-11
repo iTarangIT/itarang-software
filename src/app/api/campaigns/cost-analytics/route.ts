@@ -32,6 +32,7 @@ const ALLOWED_ROLES = [
   "sales_head",
   "finance_controller",
   "admin",
+  "partner",
 ] as const;
 
 function parseFilters(searchParams: URLSearchParams): CostAnalyticsFilters {

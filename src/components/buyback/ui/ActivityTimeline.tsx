@@ -14,6 +14,8 @@ const ROLE_COLOR: Record<string, string> = {
   dealer: "#2563EB",
   admin: "#0B2239",
   vendor: "#0D9488",
+  // The partner login is the one staff role tagged as itself on the log.
+  partner: "#7C3AED",
   system: "#64748B",
 };
 

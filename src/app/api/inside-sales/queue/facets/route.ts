@@ -20,6 +20,7 @@ const READ_ROLES = [
     "sales_manager",
     "sales_head",
     "business_head",
+    "partner",
 ];
 
 const QuerySchema = z.object({
