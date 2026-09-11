@@ -60,6 +60,12 @@ export interface BuybackActor {
   role: ActorRole;
   /** accounts.id — set for dealers, null for admins. */
   entityId: string | null;
+  /**
+   * users.role of the session, for AUDIT TAGGING ONLY. The state machine
+   * still sees `role` ("admin" for every staff login); the activity log
+   * writes "partner" when this says so — see auditRoleOf() in transition.ts.
+   */
+  crmRole?: string;
 }
 
 /**
@@ -99,7 +105,12 @@ export async function requireDealer(): Promise<BuybackActor> {
 /** The caller must be iTarang staff. */
 export async function requireBuybackAdmin(): Promise<BuybackActor> {
   const user = await requireRole([...BUYBACK_ADMIN_ROLES]);
-  return { id: user.id, role: "admin", entityId: null };
+  return {
+    id: user.id,
+    role: "admin",
+    entityId: null,
+    crmRole: String(user.role ?? "").toLowerCase(),
+  };
 }
 
 /**

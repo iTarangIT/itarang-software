@@ -61,6 +61,7 @@ export const DASHBOARDS: DashboardMeta[] = [
   { value: "ceo", label: "CEO Dashboard" },
   { value: "business_head", label: "Business Head Dashboard" },
   { value: "sales_head", label: "Sales Head Dashboard" },
+  { value: "partner", label: "Partner Dashboard" },
   { value: "sales_manager", label: "Sales Manager Dashboard" },
   { value: "asm", label: "ASM Dashboard" },
   { value: "sales_executive", label: "Sales Executive Dashboard" },

@@ -14,7 +14,7 @@ import { desc, eq, sql } from "drizzle-orm";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { db } from "@/lib/db";
-import { buybackActivityLog, infoRequests } from "@/lib/db/schema";
+import { buybackActivityLog, infoRequests, users } from "@/lib/db/schema";
 import { requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError } from "@/lib/buyback/errors";
 import { formatBatteryLine } from "@/lib/buyback/format";
@@ -38,9 +38,24 @@ export const GET = withErrorHandler(
     const rounds = await negotiationThread(header.deal_id);
     const offers = await offerHistory(header.deal_id);
 
+    // The log stores actor_id only. The name is joined in so the timeline can
+    // attribute a row to the PERSON — which is the whole point of the `partner`
+    // audit role: "partner" alone names a seat, not who used it.
     const activity = await db
-      .select()
+      .select({
+        id: buybackActivityLog.id,
+        request_id: buybackActivityLog.request_id,
+        deal_id: buybackActivityLog.deal_id,
+        actor_id: buybackActivityLog.actor_id,
+        actor_name: users.name,
+        role: buybackActivityLog.role,
+        action: buybackActivityLog.action,
+        before: buybackActivityLog.before,
+        after: buybackActivityLog.after,
+        created_at: buybackActivityLog.created_at,
+      })
       .from(buybackActivityLog)
+      .leftJoin(users, eq(users.id, buybackActivityLog.actor_id))
       .where(eq(buybackActivityLog.request_id, requestId))
       .orderBy(desc(buybackActivityLog.created_at));
 

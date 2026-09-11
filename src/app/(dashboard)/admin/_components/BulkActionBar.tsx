@@ -11,6 +11,7 @@ import {
     FileSpreadsheet,
     Loader2,
     Repeat,
+    Route,
     X,
     XCircle,
 } from "lucide-react";
@@ -42,7 +43,7 @@ export function BulkActionBar({
     // actually clicked — `busy` alone is shared with the modal and would spin
     // both export buttons at once.
     const [downloading, setDownloading] = useState<
-        null | "export" | "export_touchpoints"
+        null | "export" | "export_touchpoints" | "export_tracking"
     >(null);
 
     const usersQuery = useQuery<{ success: true; data: { users: UserOption[] } }>({
@@ -66,7 +67,7 @@ export function BulkActionBar({
     // Content-Disposition, but with a blob: URL the client-side `download`
     // attribute is what names the saved file.
     async function downloadExport(
-        action: "export" | "export_touchpoints",
+        action: "export" | "export_touchpoints" | "export_tracking",
         filename: string,
     ) {
         setBusy(true);
@@ -212,6 +213,26 @@ export function BulkActionBar({
                         <FileSpreadsheet className="h-3.5 w-3.5 mr-1" />
                     )}
                     Export Touchpoints
+                </Button>
+                {/* E-295. The journey, not the log: who held each lead, for
+                    how long, and what they did while holding it — HOLD and
+                    ACTION rows per lead, oldest first. */}
+                <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                        downloadExport("export_tracking", "lead-tracking.csv")
+                    }
+                    disabled={busy}
+                    title="Download the ownership journey of every selected lead — who held it, for how long, what they did — as one CSV"
+                >
+                    {downloading === "export_tracking" ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    ) : (
+                        <Route className="h-3.5 w-3.5 mr-1" />
+                    )}
+                    Lead Tracking CSV
                 </Button>
                 <button
                     type="button"

@@ -20,7 +20,17 @@ export default async function LeadDetailPage({
         "sales_manager",
         "sales_head",
         "business_head",
+        // Quotation notifications deep-link here for every role, including the
+        // partner, whose own queue lives at /partner/leads.
+        "partner",
     ]);
     const { id } = await params;
-    return <LeadDetailView leadId={id} viewerId={user.id} viewerRole={user.role} />;
+    return (
+        <LeadDetailView
+            leadId={id}
+            viewerId={user.id}
+            viewerRole={user.role}
+            backHref={user.role === "partner" ? "/partner/leads" : "/inside-sales"}
+        />
+    );
 }
