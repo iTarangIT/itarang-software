@@ -18,7 +18,8 @@ export type DashboardRole =
     | 'inventory_manager'
     | 'service_engineer'
     | 'sales_order_manager'
-    | 'dealer';
+    | 'dealer'
+    | 'partner';
 
 export interface DashboardMetrics {
     revenue: number;

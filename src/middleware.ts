@@ -420,6 +420,10 @@ export async function middleware(request: NextRequest) {
     // resolveActor(headers) against the NBFC tenant and is never compared to
     // users.role. These two namespaces must not be conflated.
     operations: "/operations",
+    // Partner login (chirag) — sales-head-level leads + NeoDove, ASM-level PI
+    // raising, full Battery Buyback admin. Own prefix so the bounce below and
+    // the sidebar identify it as `partner`, not as any of the roles it borrows.
+    partner: "/partner",
   };
 
   // E-212 — /reset-password is reached from an emailed token link by a user who
@@ -617,6 +621,39 @@ export async function middleware(request: NextRequest) {
     // entry below — it admits business_head to buyback only, and the bare
     // "/admin" entry (without business_head) would otherwise match first.
     "/admin/buyback": [...BUYBACK_ADMIN_ROLES],
+    // The partner role mirrors sales_head's LEAD MANAGEMENT pages, which live
+    // under /admin. Each gets its own row so the partner reaches exactly these
+    // and nothing else under the bare "/admin" prefix below. The page and API
+    // gates for each carry "partner" too.
+    "/admin/upload": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/reports": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/escalations": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/merge-requests": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/onboarding-dropouts": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/whatsapp-onboarding": ["admin", "sales_head", "ceo", "partner"],
+    "/admin/ai-intent": ["admin", "sales_head", "ceo", "partner"],
+    // The bell's "View all" for every iTarang-side login resolves to
+    // /admin/notifications (header.tsx maps partner to the admin portal role,
+    // as it must — the partner's feed IS the admin feed). Without this row the
+    // bare "/admin" entry below bounced the partner to /partner, so the only
+    // link out of their bell was a dead end. The page renders nothing of its
+    // own: NotificationCenter reads /api/notifications, which is scoped to the
+    // caller's own rows, so admitting a role here shows it only its own feed.
+    "/admin/notifications": ["admin", "sales_head", "ceo", "partner"],
+    // The ISR lead-detail page is where quotation notifications deep-link
+    // (src/lib/notifications/events.ts → /inside-sales/lead/{id}?quote=…). The
+    // page already admits these roles; without this row middleware bounced
+    // every one of them except inside_sales_rep off the link.
+    "/inside-sales/lead": [
+      "inside_sales_rep",
+      "asm",
+      "admin",
+      "ceo",
+      "sales_manager",
+      "sales_head",
+      "business_head",
+      "partner",
+    ],
     // Part 0 Module 3 — the admin / ops workspace. The Ops-Manager persona is
     // held by the sales_head account, so sales_head gets full access (admin +
     // CEO too). This bare "/admin" prefix is LAST so the specific entries

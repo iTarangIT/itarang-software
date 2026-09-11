@@ -11,12 +11,14 @@ import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
-const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin"];
+const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 type Props = {
     bundle: LeadDetailBundle;
     viewerId: string;
     viewerRole?: string;
+    /** Where "Back to queue" goes — the ISR workspace unless a twin says otherwise. */
+    backHref?: string;
     onUpdated?: () => void;
     // Dedicated-flow modals the parent view can open from the status editor.
     statusModalActions?: StatusModalAction[];
@@ -57,6 +59,7 @@ export function LeadDetailHeader({
     bundle,
     viewerId,
     viewerRole,
+    backHref = "/inside-sales",
     onUpdated,
     statusModalActions,
     onStatusModal,
@@ -75,7 +78,7 @@ export function LeadDetailHeader({
         <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
             <div className="px-6 py-4 flex items-start justify-between gap-6">
                 <div className="min-w-0 flex-1">
-                    <Link href="/inside-sales" className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2">
+                    <Link href={backHref} className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2">
                         <ArrowLeft className="h-3 w-3" />
                         Back to queue
                     </Link>

@@ -40,6 +40,34 @@ import {
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
 
+/**
+ * E-295 — swap the owner and return who held the lead BEFORE, in one
+ * statement. The CTE locks the row so a concurrent assign cannot slip between
+ * the read and the write and leave the touchpoint recording a hop that never
+ * happened. `extra` carries the branch-specific SET fragments (asm_id,
+ * pre_transfer_status, originator_id).
+ */
+async function swapOwner(
+    leadId: string,
+    toOwnerId: string,
+    extra: ReturnType<typeof sql> = sql``,
+): Promise<string | null> {
+    const rows = await db.execute<{ from_owner_id: string | null }>(sql`
+        WITH prev AS (
+            SELECT id, current_owner_id FROM dealer_leads
+             WHERE id = ${leadId} FOR UPDATE
+        )
+        UPDATE dealer_leads dl
+           SET current_owner_id = ${toOwnerId},
+               assigned_at = NOW(), updated_at = NOW()
+               ${extra}
+          FROM prev
+         WHERE dl.id = prev.id
+        RETURNING prev.current_owner_id AS from_owner_id
+    `);
+    return rows[0]?.from_owner_id ?? null;
+}
+
 export type AssignTarget = {
     /** users.id::text — dealer_leads.current_owner_id is text, users.id is uuid. */
     id: string;
@@ -159,19 +187,19 @@ export async function assignLeadOwner(
     if (target.role === "asm") {
         if (fromStatus === "Transferred_to_ASM") {
             // Already an ASM lead — just swap which ASM owns it.
-            await db.execute(sql`
-                UPDATE dealer_leads
-                SET current_owner_id = ${target.id},
-                    asm_id = ${target.id},
-                    assigned_at = NOW(), updated_at = NOW()
-                WHERE id = ${leadId}
-            `);
+            const fromOwnerId = await swapOwner(
+                leadId,
+                target.id,
+                sql`, asm_id = ${target.id}`,
+            );
             await writeTouchpoint({
                 dealerLeadId: leadId,
                 touchpointType: "asm_transfer",
                 performedBy: actorId,
                 remarks,
                 externalSystem,
+                fromOwnerId,
+                toOwnerId: target.id,
             });
             return { assigned: true, path: "asm_swap", statusLiftedTo: null };
         }
@@ -179,20 +207,19 @@ export async function assignLeadOwner(
             // Open lead — or a not-yet-in-pipeline manual / scraped lead
             // (NULL / legacy status) — admin override flip to Transferred_to_ASM
             // so it lands on the ASM's queue.
-            await db.execute(sql`
-                UPDATE dealer_leads
-                SET pre_transfer_status = lead_status,
-                    current_owner_id = ${target.id},
-                    asm_id = ${target.id},
-                    assigned_at = NOW(), updated_at = NOW()
-                WHERE id = ${leadId}
-            `);
+            const fromOwnerId = await swapOwner(
+                leadId,
+                target.id,
+                sql`, pre_transfer_status = dl.lead_status, asm_id = ${target.id}`,
+            );
             await writeTouchpoint({
                 dealerLeadId: leadId,
                 touchpointType: "asm_transfer",
                 performedBy: actorId,
                 remarks,
                 externalSystem,
+                fromOwnerId,
+                toOwnerId: target.id,
                 statusChange: {
                     from: fromStatus ?? "New_Unassigned",
                     to: "Transferred_to_ASM",
@@ -212,8 +239,12 @@ export async function assignLeadOwner(
     // ── Inside Sales Rep target: lift an unassigned lead into the rep's
     // "active" queue by promoting New_Unassigned → Assigned_Not_Contacted
     // (matches /api/inside-sales/lead/[id]/claim).
+    //
+    // `partner` works the same queue shape (/partner/leads) and takes the same
+    // lift; without it a lead handed to the partner would keep a NULL status and
+    // land on nobody's page (the E-140 trap documented in neodove/roles.ts).
     if (
-        target.role === "inside_sales_rep" &&
+        (target.role === "inside_sales_rep" || target.role === "partner") &&
         (fromStatus === "New_Unassigned" || !inPipeline)
     ) {
         // New_Unassigned → Assigned_Not_Contacted is a guarded BRD transition;
@@ -228,19 +259,19 @@ export async function assignLeadOwner(
                   })
                 : { ok: true as const };
         if (transition.ok) {
-            await db.execute(sql`
-                UPDATE dealer_leads
-                SET current_owner_id = ${target.id},
-                    originator_id = COALESCE(originator_id, ${target.id}),
-                    assigned_at = NOW(), updated_at = NOW()
-                WHERE id = ${leadId}
-            `);
+            const fromOwnerId = await swapOwner(
+                leadId,
+                target.id,
+                sql`, originator_id = COALESCE(dl.originator_id, ${target.id})`,
+            );
             await writeTouchpoint({
                 dealerLeadId: leadId,
                 touchpointType,
                 performedBy: actorId,
                 remarks,
                 externalSystem,
+                fromOwnerId,
+                toOwnerId: target.id,
                 statusChange: {
                     from: fromStatus ?? "New_Unassigned",
                     to: "Assigned_Not_Contacted",
@@ -258,18 +289,15 @@ export async function assignLeadOwner(
 
     // ── Default: plain ownership swap (other roles, terminal leads, or any
     // case where the role-specific status flip was skipped).
-    await db.execute(sql`
-        UPDATE dealer_leads
-        SET current_owner_id = ${target.id},
-            assigned_at = NOW(), updated_at = NOW()
-        WHERE id = ${leadId}
-    `);
+    const fromOwnerId = await swapOwner(leadId, target.id);
     await writeTouchpoint({
         dealerLeadId: leadId,
         touchpointType,
         performedBy: actorId,
         remarks,
         externalSystem,
+        fromOwnerId,
+        toOwnerId: target.id,
     });
     return { assigned: true, path: "owner_swap", statusLiftedTo: null };
 }

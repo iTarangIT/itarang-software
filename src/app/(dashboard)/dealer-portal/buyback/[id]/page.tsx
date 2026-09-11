@@ -442,7 +442,15 @@ function DealerRequestDetail() {
   // ---- Activity tab: payload → the ActivityTimeline atom's shape -----------
   const activityEntries: ActivityEntry[] = detail.activity.map((a) => ({
     at: new Date(a.created_at).toLocaleString("en-IN"),
-    actor: a.role === "dealer" ? "You" : a.role === "admin" ? "iTarang" : "system",
+    // `partner` is an iTarang seat on the dealer's side of the glass — the
+    // dealer sees the desk, never the internal person's name (the dealer API
+    // deliberately strips actor ids). Before this it rendered as "system".
+    actor:
+      a.role === "dealer"
+        ? "You"
+        : a.role === "admin" || a.role === "partner"
+          ? "iTarang"
+          : "system",
     role: a.role,
     action: a.action,
   }));

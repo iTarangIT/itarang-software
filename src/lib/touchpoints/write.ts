@@ -81,6 +81,25 @@ export type WriteTouchpointInput = {
   /** 'inside_sales' | 'neodove' | 'ai_dialer'. Defaults to 'inside_sales'. */
   dispositionSource?: string | null;
   statusChange?: StatusChange;
+  /**
+   * E-295 — the ownership hop this touchpoint records, for Lead Tracking.
+   *
+   * `fromOwnerId` is the dealer_leads.current_owner_id BEFORE the write (null =
+   * the lead was unassigned), `toOwnerId` the owner AFTER it (null = released
+   * to the pool). Pass BOTH whenever the call changed hands — assignOwner,
+   * claim, reassign, transfer-asm, escalation reassign, reactivation — and
+   * NEITHER otherwise. `performed_by` stays the ACTOR (the admin who
+   * reassigned), which is not the same person as the recipient; that
+   * distinction is the whole reason these columns exist.
+   *
+   * Like the E-236 disposition, the columns are NOT in schema.ts (see its
+   * header) and are written by a raw UPDATE inside this transaction, emitted
+   * ONLY when at least one of the two is set. A host without E-295 therefore
+   * fails ownership writes and nothing else — the checklist marks the
+   * migration as required before deploy.
+   */
+  fromOwnerId?: string | null;
+  toOwnerId?: string | null;
 };
 
 export type WriteTouchpointResult = {
@@ -152,6 +171,17 @@ export async function writeTouchpoint(
            -- source precedence.
            AND (last_disposition_at IS NULL
                 OR last_disposition_at <= ${at}::timestamptz)
+      `);
+    }
+
+    // 1c. E-295 ownership hop — who held the lead before and after this
+    //     touchpoint. Raw for the same reason as 1b.
+    if (input.fromOwnerId !== undefined || input.toOwnerId !== undefined) {
+      await tx.execute(sql`
+        UPDATE lead_touchpoints
+           SET from_owner_id = ${input.fromOwnerId ?? null},
+               to_owner_id   = ${input.toOwnerId ?? null}
+         WHERE touchpoint_id = ${touchpoint!.touchpoint_id}::uuid
       `);
     }
 

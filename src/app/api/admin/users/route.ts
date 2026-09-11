@@ -10,7 +10,7 @@ import type { UserOption } from "@/lib/admin/types";
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 const DEFAULT_ROLES = ["inside_sales_rep", "asm"];
 
 export const GET = withErrorHandler(async (req: NextRequest) => {

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 // BRD §0.4 — admin bulk CSV upload. Admin-only.
 export default async function AdminUploadPage() {
-    await requireRole(["admin", "sales_head"]);
+    await requireRole(["admin", "sales_head", "ceo", "partner"]);
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-6 max-w-[1200px]">

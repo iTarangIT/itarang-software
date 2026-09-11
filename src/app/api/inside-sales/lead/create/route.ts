@@ -14,7 +14,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 const BodySchema = z.object({
     dealer_name: z.string().trim().min(2).max(200),
@@ -51,6 +51,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     // not the unassigned claim pool. Inside Sales / admin keep the claim-queue
     // behaviour (New_Unassigned, no owner).
     const isAsm = user.role === "asm";
+    // The partner login also keeps what it creates — same lift as the ASM so
+    // the lead lands in /partner/leads "My Open" — but it is not an ASM, so
+    // asm_id stays null.
+    const selfAssigns = isAsm || user.role === "partner";
 
     try {
         await db.insert(dealerLeads).values({
@@ -63,13 +67,13 @@ export const POST = withErrorHandler(async (req: Request) => {
             location: body.city || null,
             language: body.language || "hindi",
             interest_level: body.interest_level || null,
-            lead_status: isAsm ? "Assigned_Not_Contacted" : "New_Unassigned",
+            lead_status: selfAssigns ? "Assigned_Not_Contacted" : "New_Unassigned",
             current_status: "new",
             source: "manual_upload_lead",
             originator_id: user.id,
-            current_owner_id: isAsm ? user.id : null,
+            current_owner_id: selfAssigns ? user.id : null,
             asm_id: isAsm ? user.id : null,
-            assigned_at: isAsm ? now : null,
+            assigned_at: selfAssigns ? now : null,
             is_active: true,
             total_attempts: 0,
             final_intent_score: 0,

@@ -10,7 +10,7 @@ import { fetchOnboardingDropouts } from "@/lib/admin/listQueries";
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 const QuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),

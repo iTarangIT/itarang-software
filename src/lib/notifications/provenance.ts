@@ -48,6 +48,19 @@ export const vendorParty = (label: string, actor?: string | null): Party => ({
   label: label || "Vendor",
   actor: actor ?? null,
 });
+/**
+ * The `partner` CRM login (Chirag). Same side of the glass as admin — same icon
+ * and colour — but the LABEL carries the person, because a partner's action has
+ * to be attributable to them and the bell renders `label` only; `actor` is
+ * stored on the row and shown nowhere. Falls back to a nameless label rather
+ * than pretending the action came from the admin desk.
+ */
+export const partnerParty = (actor?: string | null): Party => ({
+  party: "admin",
+  label: actor ? `iTarang · by ${actor}` : "iTarang Partner",
+  actor: actor ?? null,
+});
+
 /** [E-292] A refurbishment partner. Rendered with the vendor icon — same "outside workshop" kind. */
 export const refurbisherParty = (label: string, actor?: string | null): Party => ({
   party: "vendor",
@@ -63,6 +76,7 @@ const ADMIN_ROLES = new Set([
   "ceo",
   "business_head",
   "sales_head",
+  "partner",
   "sales_manager",
   "sales_executive",
   "finance_controller",
@@ -131,6 +145,9 @@ export async function actingParty(hint?: {
     if (role.startsWith("nbfc")) return nbfcParty(await nbfcLabel(hint?.tenantId), actor);
     if (role === "scrap_vendor") return vendorParty(await dealerLabel(row?.dealer_id), actor);
     if (role === "refurbisher") return refurbisherParty("Refurbisher", actor);
+    // Before ADMIN_ROLES — `partner` is in that set (it IS iTarang staff for
+    // hand-off purposes) but must not be flattened into the admin label.
+    if (role === "partner") return partnerParty(actor);
     if (role === "dealer") return dealerParty(await dealerLabel(row?.dealer_id), actor);
     if (ADMIN_ROLES.has(role)) return adminParty(actor);
     return { party: "system", label: "iTarang", actor };

@@ -13,7 +13,7 @@ import { assertOwner } from "@/lib/leads/ownership";
 import { OPEN_STATUSES, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { notifyRoles } from "@/lib/notifications/notify";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 // BRD §0.6 reason picker — IS Rep options. ASM options will land in Module 2.
 const IS_REP_REASONS = [
@@ -99,10 +99,12 @@ export const POST = withErrorHandler(
         // escalation; CEO additionally on Urgent. Wrapped — a notification
         // failure must never break escalation creation.
         try {
+            // `partner` runs the lead desk at sales_head scope and can open
+            // /admin/escalations, so it is notified on the same terms.
             const roles =
                 body.urgency === "urgent"
-                    ? ["admin", "sales_head", "ceo"]
-                    : ["admin", "sales_head"];
+                    ? ["admin", "sales_head", "ceo", "partner"]
+                    : ["admin", "sales_head", "partner"];
             await notifyRoles(roles, {
                 type: "escalation_raised",
                 title:

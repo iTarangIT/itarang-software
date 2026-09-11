@@ -34,9 +34,11 @@ type Props = {
     leadId: string;
     viewerId: string;
     viewerRole: string;
+    /** Where "Back to queue" goes. Twins of this view (/partner) pass their own. */
+    backHref?: string;
 };
 
-export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
+export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/inside-sales" }: Props) {
     const qc = useQueryClient();
     const [activeModal, setActiveModal] = useState<ActiveModal>(null);
     const [staleInfo, setStaleInfo] = useState<{
@@ -88,7 +90,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                         {(query.error as Error | undefined)?.message ?? "Lead not found or no longer accessible."}
                     </div>
                 </div>
-                <Link href="/inside-sales" className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">
+                <Link href={backHref} className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">
                     <ArrowLeft className="h-4 w-4" />
                     Back to queue
                 </Link>
@@ -107,6 +109,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 bundle={bundle}
                 viewerId={viewerId}
                 viewerRole={viewerRole}
+                backHref={backHref}
                 onUpdated={invalidate}
                 statusModalActions={["mark_converted", "mark_lost", "transfer_asm"]}
                 onStatusModal={(a) => setActiveModal(a)}

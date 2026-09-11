@@ -19,7 +19,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { inviteDealerToApplication } from "@/lib/whatsapp/operator-handoff";
 import { toWaPhone } from "@/lib/whatsapp/operator-identity";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 export const POST = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {

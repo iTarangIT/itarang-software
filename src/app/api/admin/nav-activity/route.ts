@@ -28,7 +28,10 @@ import { requireRole } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 
 // The roles whose sidebar actually carries at least one of these three links.
-const READ_ROLES = ["admin", "sales_head", "ceo", "business_head"];
+// `partner` carries WhatsApp Onboarding, and sidebar.tsx already calls this
+// endpoint for it — leaving it out here meant every partner session fired a
+// request that 403'd, so the badges silently never appeared.
+const READ_ROLES = ["admin", "sales_head", "ceo", "business_head", "partner"];
 
 const QuerySchema = z.object({
   dealerValidation: z.coerce.date().optional(),

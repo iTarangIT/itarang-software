@@ -122,7 +122,14 @@ interface Detail {
   lines: Line[];
   negotiation: Round[];
   final_offers?: FinalOffer[];
-  activity: Array<{ id: string; action: string; role: string; created_at: string }>;
+  activity: Array<{
+    id: string;
+    action: string;
+    role: string;
+    created_at: string;
+    /** users.name of whoever acted — null for a system row or a deleted user. */
+    actor_name?: string | null;
+  }>;
   allowed_actions: string[];
   review_actions: ReviewAction[];
 }
@@ -464,12 +471,19 @@ function AdminBuybackDetail() {
   // ---- Activity tab: payload → the ActivityTimeline atom's shape -----------
   const activityEntries: ActivityEntry[] = d.activity.map((a) => ({
     at: new Date(a.created_at).toLocaleString("en-IN"),
+    // A `partner` row is named after the PERSON ("by Chirag"), not the desk.
+    // That is the reason auditRoleOf() writes "partner" through in the first
+    // place: every other staff login logs as "admin" and reads as "iTarang",
+    // so without the name a partner's action was indistinguishable from a
+    // system row — it rendered as literally "system" before this.
     actor:
       a.role === "dealer"
         ? (d.dealer_name ?? "Dealer")
-        : a.role === "admin"
-          ? "iTarang"
-          : "system",
+        : a.role === "partner"
+          ? `by ${a.actor_name ?? "partner"}`
+          : a.role === "admin"
+            ? "iTarang"
+            : "system",
     role: a.role,
     action: a.action.replace(/_/g, " "),
   }));

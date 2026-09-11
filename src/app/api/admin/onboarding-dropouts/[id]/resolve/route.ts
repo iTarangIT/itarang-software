@@ -16,7 +16,7 @@ import {
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { ONBOARDING_DROPOUT_REASONS } from "@/lib/admin/types";
 
-const MUTATE_ROLES = ["admin", "sales_head"];
+const MUTATE_ROLES = ["admin", "sales_head", "partner"];
 
 const BodySchema = z.object({
     action: z.enum(["keep_converted", "flip_to_lost", "re_engage"]),
@@ -34,8 +34,9 @@ export const POST = withErrorHandler(
         const leadRows = await db.execute<{
             lead_status: string | null;
             originator_id: string | null;
+            current_owner_id: string | null;
         }>(sql`
-            SELECT lead_status, originator_id FROM dealer_leads
+            SELECT lead_status, originator_id, current_owner_id FROM dealer_leads
             WHERE id = ${id} LIMIT 1
         `);
         const lead = leadRows[0];
@@ -124,13 +125,17 @@ export const POST = withErrorHandler(
                     VALUES (${id}, 'Converted', ${newStatus}, ${user.id}, NOW(),
                         ${body.onboarding_dropout_notes})
                 `);
+                // E-295: from/to owner recorded so Lead Tracking sees the hop
+                // (the closer keeps current_owner_id on a Converted lead; the
+                // re-engage hands it to the originator or back to the pool).
                 await tx.execute(sql`
                     INSERT INTO lead_touchpoints
                         (dealer_lead_id, touchpoint_type, performed_by,
-                         performed_at, remarks, sync_method)
+                         performed_at, remarks, sync_method,
+                         from_owner_id, to_owner_id)
                     VALUES (${id}, 'onboarding_dropout_action', ${user.id}, NOW(),
                         ${`Re-engaged after onboarding dropout — ${body.onboarding_dropout_notes}`},
-                        'manual')
+                        'manual', ${lead.current_owner_id}, ${newOwnerId})
                 `);
             });
         }

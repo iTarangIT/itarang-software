@@ -19,7 +19,7 @@ import {
     PHONE_COLLISION_ACTIONS,
 } from "@/lib/admin/types";
 
-const MUTATE_ROLES = ["admin", "sales_head"];
+const MUTATE_ROLES = ["admin", "sales_head", "partner"];
 
 const BodySchema = z.object({
     resolution_action: z.string().min(1),
