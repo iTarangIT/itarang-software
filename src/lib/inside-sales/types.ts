@@ -311,7 +311,7 @@ export type AsmOption = {
  * QueueView checkbox gate — the UI decides whether the column renders, the
  * routes decide whether it works, and they must agree.
  */
-export const CLAIM_ROLES = ["inside_sales_rep", "admin"] as const;
+export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner"] as const;
 
 /** Most leads one bulk claim accepts. Zod max on the API, guard in the bar. */
 export const BULK_CLAIM_CAP = 100;

@@ -15,7 +15,7 @@ import {
 } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 // BRD §0.13 closing_role audit:
 //   is_phone        — IS rep closed via phone workflow

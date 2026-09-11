@@ -20,7 +20,7 @@ import {
     type ClassifiedDisposition,
 } from "@/lib/leads/dispositions";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 const BodySchema = z.object({
     touchpoint_type: z.enum(TOUCHPOINT_TYPE),

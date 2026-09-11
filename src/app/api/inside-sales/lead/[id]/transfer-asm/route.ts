@@ -13,7 +13,7 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
-const MUTATE_ROLES = ["inside_sales_rep", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "admin", "partner"];
 
 const BodySchema = z.object({
     asm_id: z.string().min(1),

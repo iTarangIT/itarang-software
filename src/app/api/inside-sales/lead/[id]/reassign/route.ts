@@ -10,7 +10,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 const BodySchema = z.object({
     target_user_id: z.string().min(1),

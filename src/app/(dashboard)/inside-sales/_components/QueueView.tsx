@@ -40,6 +40,10 @@ import {
 type Props = {
     viewerId: string;
     viewerRole: string;
+    /** The page this view is mounted on — URL sync writes here. */
+    basePath?: string;
+    /** Lead-detail route prefix for row clicks; twins (/partner) pass their own. */
+    leadHrefBase?: string;
 };
 
 // Roles allowed to bulk-upload leads — must match the upload page + API gate.
@@ -52,7 +56,12 @@ function parseTab(raw: string | null): QueueTab {
 
 const PAGE_SIZE = 25;
 
-export function QueueView({ viewerId, viewerRole }: Props) {
+export function QueueView({
+    viewerId,
+    viewerRole,
+    basePath = "/inside-sales",
+    leadHrefBase = "/inside-sales/lead",
+}: Props) {
     const canUpload = UPLOAD_ROLES.includes(viewerRole);
     // Same list the claim routes enforce: a ceo/sales_head can read the
     // Unassigned tab but cannot claim, so they get no checkbox column.
@@ -121,8 +130,8 @@ export function QueueView({ viewerId, viewerRole }: Props) {
         if (tab !== "my_open") next.set("tab", tab);
         if (page !== 1) next.set("page", String(page));
         const queryString = next.toString();
-        router.replace(`/inside-sales${queryString ? `?${queryString}` : ""}`, { scroll: false });
-    }, [tab, page, filterKey, router]);
+        router.replace(`${basePath}${queryString ? `?${queryString}` : ""}`, { scroll: false });
+    }, [tab, page, filterKey, router, basePath]);
 
     // 300ms debounce on the search box.
     useEffect(() => {
@@ -415,6 +424,7 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                 </div>
                 <LeadQueueTable
                     tab={tab}
+                    leadHrefBase={leadHrefBase}
                     rows={data?.rows ?? []}
                     total={data?.total ?? 0}
                     page={page}
@@ -452,7 +462,9 @@ export function QueueView({ viewerId, viewerRole }: Props) {
                     setCreateOpen(false);
                     queryClient.invalidateQueries({ queryKey: ["inside-sales-queue"] });
                     queryClient.invalidateQueries({ queryKey: ["inside-sales-counts"] });
-                    setTab("unassigned");
+                    // Roles that keep what they create (asm, partner) land in My Open;
+                    // everyone else's new lead goes to the claim pool.
+                    setTab(viewerRole === "asm" || viewerRole === "partner" ? "my_open" : "unassigned");
                     setPage(1);
                 }}
             />

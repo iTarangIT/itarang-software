@@ -46,8 +46,17 @@ import {
 
 export type { Party };
 
-/** Admin-side roles that receive "goes to iTarang" notifications by default. */
-export const ADMIN_AUDIENCE_ROLES = ["admin", "ceo", "business_head", "sales_head"];
+/**
+ * Admin-side roles that receive "goes to iTarang" notifications by default.
+ *
+ * `partner` is here because that login runs the lead desk at sales_head scope
+ * and the buyback desk at admin scope — an audience it is not in is an event it
+ * never learns about, and its whole job is the two pipelines these notifications
+ * describe. A partner who wants less can mute a type for the Partner dashboard
+ * on the Notification Access screen (E-231); silence by omission is not a
+ * setting anybody can see or undo.
+ */
+export const ADMIN_AUDIENCE_ROLES = ["admin", "ceo", "business_head", "sales_head", "partner"];
 
 export type Audience =
   | { kind: "roles"; roles: string[] }

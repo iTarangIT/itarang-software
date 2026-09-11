@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 // BRD §0.11 — the 6 pre-canned operational reports. Admin + CEO, read-only.
 export default async function AdminReportsPage() {
-    await requireRole(["admin", "sales_head", "ceo"]);
+    await requireRole(["admin", "sales_head", "ceo", "partner"]);
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">

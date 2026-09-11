@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Store,
+  UserPlus,
   ShoppingCart,
   Users,
   UserCheck,
@@ -838,6 +839,118 @@ const roleNavigation: Record<string, any[]> = {
           label: "Search History",
           icon: History,
           href: "/admin/calculator/search-history",
+        },
+      ],
+    },
+    NEODOVE_SECTION,
+    BUYBACK_ADMIN_SECTION,
+  ],
+
+  /**
+   * Partner login (chirag) — three surfaces no other role holds together:
+   * sales-head-level lead management + NeoDove, ASM-level PI (quotation)
+   * raising with CEO approval, and the full Battery Buyback admin module.
+   * Every href here has a matching grant: middleware sharedRouteAccess for the
+   * /admin/* rows, the role arrays in src/lib/leads/access.ts and the
+   * inside-sales API routes, BUYBACK_ADMIN_ROLES for the buyback section. A
+   * link this role can see but not open is worse than no link, so nothing is
+   * listed that the API would 403 — Ops Dashboard (/admin) is deliberately
+   * absent.
+   */
+  partner: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "dashboard",
+          label: "Dashboard",
+          icon: LayoutDashboard,
+          href: "/partner",
+          exact: true,
+        },
+      ],
+    },
+    {
+      section: "MY WORK",
+      items: [
+        {
+          id: "partner-my-leads",
+          label: "My Leads",
+          icon: ListChecks,
+          href: "/partner/leads",
+          // Not `exact` — /partner/lead/[id] must keep this lit (longest match).
+        },
+        {
+          id: "partner-quotations",
+          label: "My Quotations (PI)",
+          icon: Receipt,
+          href: "/partner/quotations",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "partner-leads",
+          label: "Leads",
+          icon: Users,
+          href: "/leads",
+          exact: true,
+        },
+        {
+          id: "partner-new-lead",
+          label: "New Lead",
+          icon: UserPlus,
+          href: "/leads/new",
+        },
+        {
+          id: "partner-ai-intent",
+          label: "AI Intent Learning",
+          icon: GraduationCap,
+          href: "/admin/ai-intent",
+        },
+        {
+          id: "partner-ai-campaigns",
+          label: "AI Campaigns",
+          icon: Megaphone,
+          href: "/partner/campaigns",
+        },
+        {
+          id: "partner-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "partner-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "partner-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "partner-whatsapp-onboarding",
+          label: "WhatsApp Onboarding",
+          icon: MessageSquare,
+          href: "/admin/whatsapp-onboarding",
+        },
+        {
+          id: "partner-lead-upload",
+          label: "Bulk Lead Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "partner-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
         },
       ],
     },
@@ -2204,6 +2317,7 @@ export function Sidebar() {
     if (pathname.startsWith("/asm")) return "asm";
     if (pathname.startsWith("/it")) return "it";
     if (pathname.startsWith("/operations")) return "operations";
+    if (pathname.startsWith("/partner")) return "partner";
     return "user";
   })();
 
@@ -2313,7 +2427,16 @@ export function Sidebar() {
   //  · "operations" — a shared monitoring login, not a person. Nobody files an
   //    expense as operations@itarang.com, and the console is meant to be one
   //    screen with nothing on it that isn't monitoring.
-  const NO_COMMON_ITEMS = new Set(["user", "scrap_vendor", "refurbisher", "it", "operations"]);
+  //  · "partner" — an external partner, not iTarang staff. Their expenses are
+  //    settled under the partner agreement, not filed for CEO approval here.
+  const NO_COMMON_ITEMS = new Set([
+    "user",
+    "scrap_vendor",
+    "refurbisher",
+    "it",
+    "operations",
+    "partner",
+  ]);
   let menuItems = [
     ...filteredMenuItems,
     ...(NO_COMMON_ITEMS.has(inferredRole) ? [] : COMMON_ITEMS),
@@ -2421,6 +2544,7 @@ export function Sidebar() {
       "ceo",
       "business_head",
       "sales_head",
+      "partner",
     ].includes(inferredRole) &&
     // A NEW-battery dealer has no buyback surface at all (E-202), so polling
     // their unread counts is a request whose answer can only ever be zero.
@@ -2432,7 +2556,7 @@ export function Sidebar() {
   // New arrivals in the admin work queues since this person last opened each
   // page — Dealer Validation, KYC Review, WhatsApp Onboarding. Clears on visit.
   const navActivity = useNavActivity(
-    ["admin", "sales_head", "ceo", "business_head"].includes(inferredRole),
+    ["admin", "sales_head", "ceo", "business_head", "partner"].includes(inferredRole),
     pathname,
   );
 

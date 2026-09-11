@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 // BRD §0.13 Point B — onboarding dropout loopback. Resolution is admin-only.
 export default async function AdminOnboardingDropoutsPage() {
-    const user = await requireRole(["admin", "sales_head", "ceo"]);
+    const user = await requireRole(["admin", "sales_head", "ceo", "partner"]);
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">

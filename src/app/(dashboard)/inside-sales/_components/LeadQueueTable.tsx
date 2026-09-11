@@ -31,6 +31,8 @@ type Props = {
     onPageChange: (p: number) => void;
     viewerId: string;
     holidaySet: Set<string>;
+    /** Lead-detail route prefix. Twins of the ISR queue (/partner) pass their own. */
+    leadHrefBase?: string;
     /**
      * Present only when the viewer may bulk-claim on this tab. Absent = no
      * checkbox column, so the other tabs render exactly as before.
@@ -81,6 +83,7 @@ export function LeadQueueTable({
     onPageChange,
     viewerId,
     holidaySet,
+    leadHrefBase = "/inside-sales/lead",
     selection,
 }: Props) {
     const router = useRouter();
@@ -159,7 +162,7 @@ export function LeadQueueTable({
                             const sev = staleSeverity(days);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;
-                            const href = `/inside-sales/lead/${encodeURIComponent(row.id)}`;
+                            const href = `${leadHrefBase}/${encodeURIComponent(row.id)}`;
                             return (
                                 <tr
                                     key={row.id}

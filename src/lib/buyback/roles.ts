@@ -7,4 +7,4 @@
  * into middleware — so this list lives here, and `auth.ts` re-exports it for
  * every existing import site.
  */
-export const BUYBACK_ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head"] as const;
+export const BUYBACK_ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head", "partner"] as const;

@@ -15,7 +15,7 @@ import type {
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["inside_sales_rep", "asm", "admin"];
+const READ_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 export const GET = withErrorHandler(async () => {
     await requireRole(READ_ROLES);

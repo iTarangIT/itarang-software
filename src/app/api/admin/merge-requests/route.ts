@@ -9,7 +9,7 @@ import { fetchMergeRequests } from "@/lib/admin/listQueries";
 
 export const dynamic = "force-dynamic";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 const QuerySchema = z.object({
     status: z.enum(["pending", "resolved"]).default("pending"),

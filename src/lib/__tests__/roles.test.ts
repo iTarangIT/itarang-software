@@ -46,6 +46,8 @@ describe("inferRoleFromPath", () => {
     ["/sales-order-manager", "sales_order_manager"],
     ["/operations", "operations"],
     ["/operations/infrastructure", "operations"],
+    ["/partner", "partner"],
+    ["/partner/quotations", "partner"],
   ])("%s → %s", (path, role) => {
     expect(inferRoleFromPath(path)).toBe(role);
   });

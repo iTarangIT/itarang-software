@@ -33,7 +33,7 @@ export const maxDuration = 300;
 
 // ⚠ MUST stay equal to LEADS_BULK_ROLES in src/lib/leads/access.ts — that list
 // decides whether the bulk bar renders, this one decides whether it works.
-const MUTATE_ROLES = ["admin", "sales_head", "ceo"];
+const MUTATE_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 const BodySchema = z.object({
     action: z.enum([
