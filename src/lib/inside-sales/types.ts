@@ -300,3 +300,30 @@ export type AsmOption = {
     email: string;
     in_territory: boolean;
 };
+
+// ───────────────────────────── bulk claim ─────────────────────────────────
+// Constants live HERE, not in claimLead.ts, because that module imports the
+// server DB client and the QueueView / BulkClaimBar client components need
+// these values too.
+
+/**
+ * Roles that may claim. ⚠ Shared by the single route, the bulk route and the
+ * QueueView checkbox gate — the UI decides whether the column renders, the
+ * routes decide whether it works, and they must agree.
+ */
+export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner"] as const;
+
+/** Most leads one bulk claim accepts. Zod max on the API, guard in the bar. */
+export const BULK_CLAIM_CAP = 100;
+
+export type BulkClaimInput = {
+    lead_ids: string[];
+};
+
+export type BulkClaimResult = {
+    ok: true;
+    claimed: number;
+    skipped_already_owned: number;
+    skipped_terminal: number;
+    skipped_not_found: number;
+};

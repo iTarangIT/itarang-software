@@ -47,6 +47,8 @@ const ROLES_IN_MIDDLEWARE = [
   "scrap_vendor",
   // E-292 — the refurbishment partner's portal (refurbish flow v3).
   "refurbisher",
+  // Partner login — leads + PI + buyback in one dashboard.
+  "partner",
 ];
 
 describe("notification registry", () => {

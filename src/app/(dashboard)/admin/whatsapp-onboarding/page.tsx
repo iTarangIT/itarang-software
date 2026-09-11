@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 // Read is open to admin / sales_head / ceo; the mutating operator APIs are
 // tighter (admin + sales_head), so ceo is effectively read-only here.
 export default async function AdminWhatsAppOnboardingPage() {
-    const user = await requireRole(["admin", "sales_head", "ceo"]);
+    const user = await requireRole(["admin", "sales_head", "ceo", "partner"]);
 
     return (
         <div className="px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">

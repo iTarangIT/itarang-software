@@ -17,7 +17,7 @@ import { assertOwner } from "@/lib/leads/ownership";
 import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
 import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 // BRD §0.13 closing_role audit — derived from actor role + lead history. An
 // Inside Sales rep closing a lead that passed through an ASM (asm_id set, then
@@ -117,7 +117,7 @@ export const POST = withErrorHandler(
                 leadId: id,
                 data: { onboarding_application_id: onboardingApplicationId },
             });
-            await notifyRoles(["admin", "sales_head"], {
+            await notifyRoles(["admin", "sales_head", "partner"], {
                 type: "onboarding_initiated",
                 title: "New dealer onboarding application created",
                 message: `${user.name} converted a lead — onboarding application created.`,

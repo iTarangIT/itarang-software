@@ -205,6 +205,35 @@ export async function fetchQueueRows({
     return rows as unknown as QueueRow[];
 }
 
+/**
+ * The first `limit` lead ids in this tab's order under the same filters —
+ * what "Select first N" on the Unassigned tab ticks. Same WHERE and ORDER BY
+ * as fetchQueueRows so the ids are exactly the top of the table the rep is
+ * looking at.
+ */
+export async function fetchQueueIds({
+    tab,
+    userId,
+    limit,
+    q,
+    neodoveOnly,
+    callbackOnly,
+    filters,
+    sort,
+}: Omit<BuildArgs, "page">): Promise<string[]> {
+    const where = tabFilter(tab, userId);
+    const order = queueSortOrder(sort, tabOrder(tab));
+    const search = extraFilters({ q, neodoveOnly, callbackOnly, filters });
+    const rows = await db.execute<{ id: string }>(sql`
+        SELECT dl.id
+        FROM dealer_leads dl
+        WHERE ${where} ${search}
+        ${order}
+        LIMIT ${limit}
+    `);
+    return rows.map((r) => r.id);
+}
+
 export async function countQueueRows({
     tab,
     userId,

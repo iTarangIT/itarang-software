@@ -11,7 +11,7 @@ import { dealerLeads, interestLevelOverrides } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
 const BodySchema = z.object({
     interest_level: z.enum(["hot", "warm", "cold"]),

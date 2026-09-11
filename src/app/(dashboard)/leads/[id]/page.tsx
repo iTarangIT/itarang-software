@@ -5,7 +5,9 @@ import { requireRole } from "@/lib/auth-utils";
 import {
   LEADS_PAGE_ROLES,
   LEAD_HISTORY_EXPORT_ROLES,
+  LEAD_TRACKING_ROLES,
 } from "@/lib/leads/access";
+import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
 import { redirect } from "next/navigation";
@@ -185,6 +187,14 @@ export default async function LeadDetailPage({ params }: any) {
         </div>
 
         <LeadDetailClient calls={calls} lead={lead} />
+
+        {/* E-295 — the journey: who held the lead, for how long, what they
+            did. The endpoint scopes reps / ASMs to their own leads. */}
+        {(LEAD_TRACKING_ROLES as readonly string[]).includes(user.role) && (
+          <div className="mt-6 bg-white rounded-2xl border border-gray-100 shadow-sm">
+            <LeadTrackingPanel leadId={id} canDownload />
+          </div>
+        )}
 
         <div className="mt-6">
           <TouchpointTimeline

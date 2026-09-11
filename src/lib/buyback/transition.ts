@@ -177,7 +177,7 @@ export interface ApplyTransitionArgs {
   /** The deal's offer_version, read inside this transaction. */
   offerVersion: number;
   action: DealAction;
-  actor: { id: string | null; role: ActorRole };
+  actor: { id: string | null; role: ActorRole; crmRole?: string };
   /** before → after for prices and the like (BRD M21). */
   before?: unknown;
   after?: unknown;
@@ -204,6 +204,19 @@ export interface TransitionOutcome {
   from: DealState;
   to: DealState;
   offerVersion: number;
+}
+
+/**
+ * The role written to buyback_activity_log.role.
+ *
+ * The state machine only knows dealer | admin | vendor, and every staff login
+ * acts as "admin" there. The `partner` login is the one CRM role whose actions
+ * must be attributed as its own on the audit trail, so it — and only it — is
+ * written through. Every other staff role keeps logging "admin", so existing
+ * rows, readers and the timeline pill are unchanged.
+ */
+export function auditRoleOf(actor: { role: ActorRole; crmRole?: string }): string {
+  return actor.crmRole === "partner" ? "partner" : actor.role;
 }
 
 export async function applyTransition({
@@ -254,7 +267,7 @@ export async function applyTransition({
     request_id: requestId,
     deal_id: dealId,
     actor_id: actor.id,
-    role: actor.role,
+    role: auditRoleOf(actor),
     action,
     before: (before ?? { status: currentStatus }) as never,
     after: (after ?? { status: result.to }) as never,
@@ -388,7 +401,7 @@ export async function recordActivity({
   tx: BuybackTx;
   requestId: string;
   dealId: string;
-  actor: { id: string | null; role: ActorRole };
+  actor: { id: string | null; role: ActorRole; crmRole?: string };
   action: string;
   before?: unknown;
   after?: unknown;
@@ -397,7 +410,7 @@ export async function recordActivity({
     request_id: requestId,
     deal_id: dealId,
     actor_id: actor.id,
-    role: actor.role,
+    role: auditRoleOf(actor),
     action,
     before: (before ?? null) as never,
     after: (after ?? null) as never,

@@ -176,6 +176,8 @@ export default function LoginPage() {
                 navigateTo('/it');
             } else if (appUser.role === 'operations') {
                 navigateTo('/operations');
+            } else if (appUser.role === 'partner') {
+                navigateTo('/partner');
             } else {
                 navigateTo('/');
             }

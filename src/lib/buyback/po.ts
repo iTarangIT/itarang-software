@@ -41,7 +41,7 @@ export interface RecordVendorPoInput {
   /** S3 key of the vendor's uploaded PO PDF, if they attached one. */
   pdfS3?: string | null;
   /** Who is recording it. 'vendor' = first-hand; 'admin' = transcribing an email. */
-  actor: { id: string | null; role: "admin" | "vendor" };
+  actor: { id: string | null; role: "admin" | "vendor"; crmRole?: string };
   requestNo: string;
 }
 

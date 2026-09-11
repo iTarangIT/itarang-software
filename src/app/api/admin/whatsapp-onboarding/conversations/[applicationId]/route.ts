@@ -36,7 +36,7 @@ import {
 } from "@/lib/whatsapp/stage";
 import type { Ctx } from "@/lib/whatsapp/session-store";
 
-const READ_ROLES = ["admin", "sales_head", "ceo"];
+const READ_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 export const GET = withErrorHandler(
   async (
