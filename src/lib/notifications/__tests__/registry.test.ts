@@ -108,6 +108,8 @@ describe("notification registry", () => {
       const scope = editableDashboardsFor("sales_head");
       expect(scope).toContain("sales_head");
       expect(scope).toContain("asm");
+      // `partner` reports into the same line — see SALES_HEAD_SCOPE.
+      expect(scope).toContain("partner");
       // Granted on request despite the supervisor/contractual concerns noted on
       // SALES_HEAD_SCOPE — asserted so re-tightening is a deliberate edit.
       expect(scope).toContain("ceo");
