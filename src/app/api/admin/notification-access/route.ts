@@ -21,6 +21,7 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { invalidateNotificationAccessCache } from "@/lib/notifications/access";
+import { ADMIN_AUDIENCE_ROLES } from "@/lib/notifications/emit";
 import {
   DASHBOARDS,
   editableDashboardsFor,
@@ -30,6 +31,19 @@ import {
 export const dynamic = "force-dynamic";
 
 const EDITOR_ROLES = ["admin", "sales_head", "ceo"];
+
+/**
+ * Dashboards whose bell is filled by an audience they share with other roles.
+ *
+ * Only `partner` today: emit()'s ADMIN_AUDIENCE_ROLES puts it in every
+ * "goes to iTarang" audience alongside admin, ceo, business_head and sales_head,
+ * so those four are a truthful stand-in for the history it has not accumulated
+ * yet. Derived from that constant rather than restated, so adding a role to the
+ * audience keeps this correct.
+ */
+const AUDIENCE_PEERS: Record<string, string[]> = {
+  partner: ADMIN_AUDIENCE_ROLES.filter((r) => r !== "partner"),
+};
 
 export const GET = withErrorHandler(async () => {
   const user = await requireRole(EDITOR_ROLES);
@@ -91,10 +105,40 @@ export const GET = withErrorHandler(async () => {
      WHERE n.created_at > now() - interval '180 days'
        AND u.role IS NOT NULL
   `);
-  const observed: Record<string, string[]> = {};
+  const byRole: Record<string, Set<string>> = {};
   for (const row of seen) {
-    if (!editable.has(row.role)) continue;
-    (observed[row.role] ??= []).push(row.notification_type);
+    (byRole[row.role] ??= new Set()).add(row.notification_type);
+  }
+  const observed: Record<string, string[]> = {};
+  for (const [role, types] of Object.entries(byRole)) {
+    if (!editable.has(role)) continue;
+    observed[role] = [...types];
+  }
+
+  // WHAT A NEW DASHBOARD IS ROUTED, BEFORE IT HAS ANY HISTORY OF ITS OWN.
+  //
+  // `observed` is per-role, so a role added recently looks like it receives
+  // nothing and its panel lists all ~200 types with no way to tell which of them
+  // will ever arrive. `partner` is exactly that case: it was added to
+  // ADMIN_AUDIENCE_ROLES, so every "goes to iTarang" event reaches it — but the
+  // bell has no rows to prove it yet.
+  //
+  // Roles that sit in ONE audience receive the same events by construction, so
+  // the peers' 180-day history is a sound answer for the newcomer. This is still
+  // the bell's own record, not a hand-derived type->role map: the route header
+  // explains why such a map was tried and rejected, and that reasoning stands.
+  //
+  // Informational, exactly like `observed` — the client uses it to decide what
+  // to list FIRST. Every type stays toggleable on every dashboard.
+  const peer_observed: Record<string, string[]> = {};
+  for (const [dashboard, peers] of Object.entries(AUDIENCE_PEERS)) {
+    if (!editable.has(dashboard)) continue;
+    const union = new Set<string>();
+    for (const peer of peers) {
+      for (const type of byRole[peer] ?? []) union.add(type);
+    }
+    for (const own of byRole[dashboard] ?? []) union.delete(own);
+    if (union.size > 0) peer_observed[dashboard] = [...union];
   }
 
   return successResponse({
@@ -103,6 +147,8 @@ export const GET = withErrorHandler(async () => {
     last_change: last[0] ?? null,
     unknown_roles,
     observed,
+    peer_observed,
+    audience_peers: AUDIENCE_PEERS,
   });
 });
 

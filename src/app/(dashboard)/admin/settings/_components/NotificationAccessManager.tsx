@@ -22,13 +22,22 @@
 // collapsed. A type that has not fired YET is not the same as one that cannot,
 // and the two are indistinguishable from here; demoting is honest, removing
 // would be a guess that silently costs an admin control they have today.
+//
+// A DASHBOARD WITH NO HISTORY OF ITS OWN. `observed` is per-role, so a role
+// added recently reads as "nothing delivered here" and its panel opens on all
+// ~200 types with nothing to separate the ones it will actually be sent.
+// `peer_observed` (see the API route) answers that from the bell's own record:
+// the roles it shares an audience with. Where it is present the panel leads with
+// what that audience receives and collapses the rest, which is the same
+// delivered/not-seen split every other panel already uses — one honest basis,
+// two sources.
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BellOff, ChevronRight, Loader2 } from "lucide-react";
 
 import { TriStateCheckbox, type TriState } from "@/components/ui/tri-state-checkbox";
-import { typeGroups, type DashboardMeta } from "@/lib/notifications/registry";
+import { DASHBOARDS, typeGroups, type DashboardMeta } from "@/lib/notifications/registry";
 
 interface DeniedRow {
     dashboard: string;
@@ -42,9 +51,21 @@ interface Payload {
     unknown_roles: string[];
     /** dashboard -> types actually delivered to it in the last 180 days. */
     observed: Record<string, string[]>;
+    /**
+     * dashboard -> types delivered to the roles it SHARES AN AUDIENCE WITH, for
+     * a dashboard too new to have a history of its own. Absent for every
+     * dashboard that stands alone, which is all of them but `partner`.
+     */
+    peer_observed?: Record<string, string[]>;
+    /** dashboard -> the peer roles peer_observed was read from. */
+    audience_peers?: Record<string, string[]>;
 }
 
 const key = (dashboard: string, type: string) => `${dashboard}|${type}`;
+
+/** A role value as the screen names it, so a peer list reads like the rows above it. */
+const dashboardLabel = (value: string) =>
+    DASHBOARDS.find((d) => d.value === value)?.label ?? value;
 
 export function NotificationAccessManager() {
     const qc = useQueryClient();
@@ -243,14 +264,23 @@ export function NotificationAccessManager() {
 
             <div className="divide-y divide-border rounded-lg border border-border">
                 {data.dashboards.map((dash) => {
-                    const seen = new Set(data.observed?.[dash.value] ?? []);
+                    // What this dashboard is routed: its own 180 days, plus — for
+                    // one too new to have any — what the roles it shares an
+                    // audience with were sent. `peers` is empty for every
+                    // dashboard that stands alone, so `routed` is then exactly
+                    // the delivered set this panel has always shown.
+                    const peers = data.audience_peers?.[dash.value] ?? [];
+                    const routed = new Set([
+                        ...(data.observed?.[dash.value] ?? []),
+                        ...(data.peer_observed?.[dash.value] ?? []),
+                    ]);
                     const seenGroups = groups
-                        .map((g) => ({ ...g, types: g.types.filter((t) => seen.has(t.value)) }))
+                        .map((g) => ({ ...g, types: g.types.filter((t) => routed.has(t.value)) }))
                         .filter((g) => g.types.length > 0);
                     const unseenGroups = groups
-                        .map((g) => ({ ...g, types: g.types.filter((t) => !seen.has(t.value)) }))
+                        .map((g) => ({ ...g, types: g.types.filter((t) => !routed.has(t.value)) }))
                         .filter((g) => g.types.length > 0);
-                    const unseenCount = totalTypes - seen.size;
+                    const unseenCount = totalTypes - routed.size;
                     // Muted is counted over what actually arrives here; a mute on
                     // something never delivered is not a silenced notification.
                     const mutedCount = seenGroups.reduce(
@@ -281,17 +311,17 @@ export function NotificationAccessManager() {
                                     )}
                                 </span>
                                 <span className="shrink-0 text-xs text-ink-muted">
-                                    {seen.size === 0 ? (
+                                    {routed.size === 0 ? (
                                         <span className="inline-flex items-center gap-1">
                                             <AlertTriangle className="h-3 w-3" />
                                             nothing delivered here in 180d
                                         </span>
                                     ) : mutedCount === 0 ? (
-                                        `all ${seen.size} delivered here are on`
+                                        `all ${routed.size} ${peers.length > 0 ? "routed" : "delivered"} here are on`
                                     ) : (
                                         <span className="inline-flex items-center gap-1">
                                             <BellOff className="h-3 w-3" />
-                                            {mutedCount} of {seen.size} muted
+                                            {mutedCount} of {routed.size} muted
                                         </span>
                                     )}
                                 </span>
@@ -300,16 +330,25 @@ export function NotificationAccessManager() {
                             {open && (
                                 <div className="border-t border-border bg-bg/40 px-4 pb-3">
                                     <p className="pt-3 text-xs text-ink-muted">
-                                        {seen.size === 0 ? (
+                                        {routed.size === 0 ? (
                                             <>
                                                 No notification has reached this dashboard in the
                                                 last 180 days. Every type below is listed for
                                                 completeness, but muting one changes nothing until
                                                 something is actually routed here.
                                             </>
+                                        ) : peers.length > 0 ? (
+                                            <>
+                                                This dashboard shares one audience with{" "}
+                                                <strong>{peers.map(dashboardLabel).join(", ")}</strong>, so it is sent
+                                                what they are sent. The{" "}
+                                                <strong>{routed.size}</strong> types that audience
+                                                actually received in the last 180 days are listed
+                                                here; the other {unseenCount} are collapsed below.
+                                            </>
                                         ) : (
                                             <>
-                                                <strong>{seen.size}</strong> of {totalTypes} types
+                                                <strong>{routed.size}</strong> of {totalTypes} types
                                                 have actually been delivered to this dashboard in
                                                 the last 180 days. The rest are listed under “not
                                                 seen” below.
@@ -331,16 +370,19 @@ export function NotificationAccessManager() {
                                                     className={`h-3.5 w-3.5 transition-transform ${unseenOpen ? "rotate-90" : ""}`}
                                                 />
                                                 {unseenCount} type
-                                                {unseenCount === 1 ? "" : "s"} not seen on this
-                                                dashboard in 180 days
+                                                {unseenCount === 1 ? "" : "s"}{" "}
+                                                {peers.length > 0
+                                                    ? "not routed to this dashboard"
+                                                    : "not seen on this dashboard in 180 days"}
                                             </button>
                                             {unseenOpen && (
                                                 <div className="opacity-70">
                                                     <p className="py-2 text-xs text-ink-muted">
-                                                        These are still muteable. Not-seen means it
-                                                        has not arrived here recently — it may be an
-                                                        event this dashboard is never routed, or one
-                                                        that simply has not fired yet.
+                                                        These are still muteable. It means the event
+                                                        has not arrived here recently — it may be
+                                                        one this dashboard is never routed (a dealer
+                                                        or NBFC portal event, say), or one that
+                                                        simply has not fired yet.
                                                     </p>
                                                     {renderGroups(dash, unseenGroups, "unseen")}
                                                 </div>
