@@ -33,7 +33,7 @@ export const dynamic = "force-dynamic";
 // is its primary user (the page itself gates ["admin","sales_head"]).
 //
 // It is worth being clear about what that grants, because it is WIDER than the
-// bell tab. There, editableDashboardsFor() confines sales_head to 9 dashboards.
+// bell tab. There, editableDashboardsFor() confines sales_head to 10 dashboards.
 // Email has no dashboard axis at all — emit()'s emailTargets() sends ONE message
 // to every resolved target — so any edit here is global by construction. The
 // blast radius is bounded instead by EMAIL_LOCKED and by the bespoke senders in
