@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 // SALES_HEAD AND THE EMAIL TAB. sales_head edits it, same as the bell tab beside
 // it — this page is the notification owner's screen and sales_head is its main
 // user. The scope IS wider there, and worth knowing: editableDashboardsFor()
-// confines them to 9 dashboards on the bell, whereas email has no dashboard axis
+// confines them to 10 dashboards on the bell, whereas email has no dashboard axis
 // at all, so any edit is global. EMAIL_LOCKED and the bespoke senders in
 // src/lib/email/ are what bound it instead. The client still honours a
 // `can_edit: false` from the API (read-only banner, no Save button) if those role
