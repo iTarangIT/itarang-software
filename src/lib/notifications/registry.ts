@@ -122,6 +122,10 @@ export function isKnownDashboard(value: string): boolean {
 const SALES_HEAD_SCOPE = [
   "ceo",
   "sales_head",
+  // `partner` reports into the sales_head line — it sees the same leads as a
+  // sales head and carries the ASM PI surface, so its bell belongs in the same
+  // hands. Added on request after the screen shipped without it.
+  "partner",
   "sales_manager",
   "asm",
   "sales_executive",
