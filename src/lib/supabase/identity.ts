@@ -78,6 +78,39 @@ async function findAppDbUserProfile<
   }
 }
 
+/**
+ * The app users row for the signed-in auth user, for flows that write rows
+ * keyed on users.id. users.id is NOT always the Supabase auth id — older rows
+ * were created with a random UUID (anirudh@itarang.com: auth cb73a41c…, users
+ * 95875fbc…) — so this falls back to case-insensitive email, as requireAuth
+ * does. Use the returned `id` for users / FK'd tables; keep `authUser.id` for
+ * Supabase Auth admin calls. Throws on DB error (callers already try/catch).
+ */
+export async function findAppUserForAuth(authUser: AuthUserIdentity) {
+  const selection = {
+    id: users.id,
+    email: users.email,
+    name: users.name,
+    is_active: users.is_active,
+  };
+  let [row] = await db
+    .select(selection)
+    .from(users)
+    .where(eq(users.id, authUser.id))
+    .limit(1);
+  if (!row) {
+    const email = normalizeEmail(authUser.email);
+    if (email) {
+      [row] = await db
+        .select(selection)
+        .from(users)
+        .where(eq(sql`lower(${users.email})`, email))
+        .limit(1);
+    }
+  }
+  return row ?? null;
+}
+
 export async function findSupabaseUserProfile<
   T extends Record<string, unknown> = Record<string, unknown>,
 >(supabase: any, authUser: AuthUserIdentity, selectClause: string) {
