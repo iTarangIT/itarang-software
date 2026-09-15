@@ -3,6 +3,7 @@ import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, passwordChangeOtps } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { findAppUserForAuth } from "@/lib/supabase/identity";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { log } from "@/lib/log";
@@ -71,6 +72,19 @@ export async function POST(req: NextRequest) {
 
     const now = new Date();
 
+    // OTP rows are keyed on users.id, which is not always the auth id.
+    const me = await findAppUserForAuth(authUser);
+    if (!me) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "NO_ACCOUNT",
+          message: "Account record not found. Contact it@itarang.com.",
+        },
+        { status: 404 },
+      );
+    }
+
     // Atomic single-use claim. The conditional UPDATE ... RETURNING is the
     // mutex: a double-clicked submit produces exactly one winner at the
     // Postgres row level, with no advisory locks and no transaction plumbing.
@@ -79,7 +93,7 @@ export async function POST(req: NextRequest) {
       .set({ consumed_at: now, updated_at: now })
       .where(
         and(
-          eq(passwordChangeOtps.user_id, authUser.id),
+          eq(passwordChangeOtps.user_id, me.id),
           isNotNull(passwordChangeOtps.verified_at),
           isNull(passwordChangeOtps.consumed_at),
           gt(passwordChangeOtps.expires_at, now),
@@ -113,14 +127,18 @@ export async function POST(req: NextRequest) {
     // /api/auth/change-password route uses: updateUser rotates the session
     // tokens, which can sign the user out mid-modal. The admin path leaves the
     // caller's session intact so they stay on the page they were on.
+    //
+    // authUser.id, NOT claimed.user_id: the latter is users.id, which for older
+    // accounts is a different UUID than the Supabase auth user.
     const { error: supabaseError } = await supabaseAdmin.auth.admin.updateUserById(
-      claimed.user_id,
+      authUser.id,
       { password },
     );
 
     if (supabaseError) {
       log.error("[CHANGE-PASSWORD-OTP] supabase update failed", {
         userId: claimed.user_id,
+        authId: authUser.id,
         err: supabaseError.message,
       });
       if (/at least|password/i.test(supabaseError.message)) {

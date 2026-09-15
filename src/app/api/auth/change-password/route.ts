@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "@/lib/auth/hashPassword";
+import { findAppUserForAuth } from "@/lib/supabase/identity";
 
 export async function POST(req: NextRequest) {
   try {
@@ -48,17 +49,22 @@ export async function POST(req: NextRequest) {
     // and Postgres `=` is case-sensitive — matching by email updated 0 rows, so
     // must_change_password never cleared and every login looped back here. The
     // row's id IS the Supabase auth user id (set at activation).
+    // Some older rows have a users.id different from the auth id, so resolve
+    // the row (id, then case-insensitive email) and update by ITS id.
     const newHash = await hashPassword(password);
+    const me = await findAppUserForAuth(user);
 
-    const updated = await db
-      .update(users)
-      .set({
-        password_hash: newHash,
-        must_change_password: false,
-        updated_at: new Date(),
-      })
-      .where(eq(users.id, user.id))
-      .returning({ id: users.id });
+    const updated = me
+      ? await db
+          .update(users)
+          .set({
+            password_hash: newHash,
+            must_change_password: false,
+            updated_at: new Date(),
+          })
+          .where(eq(users.id, me.id))
+          .returning({ id: users.id })
+      : [];
 
     if (updated.length === 0) {
       console.error(`CHANGE PASSWORD: no users row for auth id ${user.id} (${user.email})`);
