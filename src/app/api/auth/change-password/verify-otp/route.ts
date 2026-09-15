@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { passwordChangeOtps } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { findAppUserForAuth } from "@/lib/supabase/identity";
 import { log } from "@/lib/log";
 import { clientIp, takeIpToken } from "@/lib/auth/reset-throttle";
 import {
@@ -63,6 +64,19 @@ export async function POST(req: NextRequest) {
 
     const now = new Date();
 
+    // OTP rows are keyed on users.id, which is not always the auth id.
+    const me = await findAppUserForAuth(authUser);
+    if (!me) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "NO_ACCOUNT",
+          message: "Account record not found. Contact it@itarang.com.",
+        },
+        { status: 404 },
+      );
+    }
+
     // Sessions are scoped by user_id, so one user can never verify another's
     // code — a mismatched caller simply has no open row.
     const [session] = await db
@@ -70,7 +84,7 @@ export async function POST(req: NextRequest) {
       .from(passwordChangeOtps)
       .where(
         and(
-          eq(passwordChangeOtps.user_id, authUser.id),
+          eq(passwordChangeOtps.user_id, me.id),
           isNull(passwordChangeOtps.verified_at),
           isNull(passwordChangeOtps.consumed_at),
         ),

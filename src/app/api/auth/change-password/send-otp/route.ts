@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq, isNull, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { users, passwordChangeOtps } from "@/lib/db/schema";
+import { passwordChangeOtps } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { findAppUserForAuth } from "@/lib/supabase/identity";
 import { log } from "@/lib/log";
 import { clientIp, takeIpToken } from "@/lib/auth/reset-throttle";
 import { maskEmail } from "@/lib/auth/reset-token";
@@ -67,20 +68,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const [me] = await db
-      .select({
-        id: users.id,
-        email: users.email,
-        name: users.name,
-        is_active: users.is_active,
-      })
-      .from(users)
-      .where(eq(users.id, authUser.id))
-      .limit(1);
+    // id first, then case-insensitive email: some users rows predate
+    // "users.id = auth id" and only match by email.
+    const me = await findAppUserForAuth(authUser);
 
     if (!me) {
-      log.error("[CHANGE-PASSWORD-OTP] no users row for auth id", {
+      log.error("[CHANGE-PASSWORD-OTP] no users row for auth user", {
         authId: authUser.id,
+        email: authUser.email,
       });
       return NextResponse.json(
         {
@@ -118,7 +113,7 @@ export async function POST(req: NextRequest) {
       .orderBy(desc(passwordChangeOtps.created_at))
       .limit(1);
 
-    let session = existing;
+    let session: typeof existing | undefined = existing;
 
     if (session) {
       // Hard cap: MAX_SENDS codes, then a cooldown measured from the session's
