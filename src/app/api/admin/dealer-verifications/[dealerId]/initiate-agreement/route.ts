@@ -590,7 +590,8 @@ export async function POST(
       : null;
 
     const createAgreementPayload = {
-      applicationId: application.id,
+      // (applicationId is set once, below — the later duplicate key was the one
+      // that won at runtime, so only that one is kept.)
       company: {
         companyName: application.company_name || "",
         companyType: application.company_type || "",

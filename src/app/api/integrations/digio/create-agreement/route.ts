@@ -344,7 +344,7 @@ export async function POST(req: NextRequest) {
     const storeUnsignedCopy = !!body.storeUnsignedCopy;
     const applicationId = cleanString(body.applicationId);
     // Dealer type selects the agreement template (E-202). Absent → base template.
-    const dealerType = cleanString(body.dealerType) || null;
+    const dealerType = cleanString(body.dealerType ?? undefined) || null;
 
     const dealerSigner = buildSigner(
       agreement.dealerSignerEmail,

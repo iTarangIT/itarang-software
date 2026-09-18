@@ -23,7 +23,13 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import type { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
-export const STORAGE_BACKEND = (process.env.STORAGE_BACKEND).toLowerCase();
+const storageBackendRaw = process.env.STORAGE_BACKEND;
+if (!storageBackendRaw) {
+  // Same failure as before (this threw a TypeError on `.toLowerCase()` of
+  // undefined at import time) — just a readable message now.
+  throw new Error("STORAGE_BACKEND is not set (expected 'supabase' or 's3')");
+}
+export const STORAGE_BACKEND = storageBackendRaw.toLowerCase();
 export const isS3Backend = STORAGE_BACKEND === "s3";
 
 const REGION = process.env.AWS_REGION;

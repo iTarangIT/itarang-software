@@ -220,14 +220,19 @@ export async function createPaymentIntent(input: {
     };
   }
 
-  const { createEmandateOrder } = await import("@/lib/razorpay");
-  const order = await createEmandateOrder({
-    amount,
-    currency: "INR",
+  // A plain Checkout order. This used to call createEmandateOrder with an
+  // object it does not accept and then read `.id` off a response that has no
+  // such field — so it always ended in "did not return an order id".
+  // final_price is rupees; Razorpay wants paise (Purchases.tsx does the same
+  // ×100 for the Checkout widget).
+  const { createStandardOrder } = await import("@/lib/razorpay");
+  const order = await createStandardOrder({
+    amountPaise: Math.round(amount * 100),
     receipt: `auction-${row.id.slice(0, 18)}`,
-  } as Parameters<typeof createEmandateOrder>[0]);
+    notes: { itarang_settlement_id: row.id },
+  });
 
-  const orderId = (order as { id?: string })?.id ?? null;
+  const orderId = order.order_id || null;
   if (!orderId) {
     throw new Error("CONFLICT: the payment gateway did not return an order id");
   }
@@ -255,6 +260,8 @@ export async function createPaymentIntent(input: {
  */
 export async function confirmPayment(input: {
   dealer_id: string;
+  /** users.id of the dealer user confirming — nbfc_audit_log.user_id is NOT NULL. */
+  actor_user_id: string;
   settlement_id: string;
   razorpay_order_id: string;
   razorpay_payment_id: string;
@@ -298,7 +305,7 @@ export async function confirmPayment(input: {
 
   await db.insert(nbfcAuditLog).values({
     tenant_id: row.seller_tenant_id,
-    user_id: null,
+    user_id: input.actor_user_id,
     action_type: "auction_settlement_paid",
     action_id: row.id,
     before_state: { status: row.status, paid_at: null },

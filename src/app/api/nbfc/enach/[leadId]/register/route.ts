@@ -106,6 +106,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         { status: 400 },
       );
     }
+    // Non-null for the two handoff modes that use it — the guard above already
+    // rejected a missing endpoint for them.
+    const handoffEndpoint = endpoint ?? "";
 
     let origin: string;
     try {
@@ -266,8 +269,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     // Redirect/deep-link → return the URL for the UI to open. The NBFC app
     // collects bank details and posts the result to callback_url.
     if (method === "redirect") {
-      const sep = endpoint.includes("?") ? "&" : "?";
-      const redirectUrl = `${endpoint}${sep}ref=${encodeURIComponent(enachRef)}&callback=${encodeURIComponent(callbackUrl)}`;
+      const sep = handoffEndpoint.includes("?") ? "&" : "?";
+      const redirectUrl = `${handoffEndpoint}${sep}ref=${encodeURIComponent(enachRef)}&callback=${encodeURIComponent(callbackUrl)}`;
       return NextResponse.json({
         ok: true,
         mandate_id: mandate.id,
@@ -279,7 +282,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     // Webhook → POST the payload to the NBFC endpoint server-to-server. A
     // delivery failure leaves the attempt in_progress so it can be retried.
     try {
-      const resp = await fetch(endpoint, {
+      const resp = await fetch(handoffEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),

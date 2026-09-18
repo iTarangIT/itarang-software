@@ -187,5 +187,7 @@ function renderChart(result: ReportResult): React.ReactElement {
                     <Bar dataKey="converted" name="Converted" fill={SUCCESS} radius={[4, 4, 0, 0]} />
                 </BarChart>
             );
+        default:
+            return <></>;
     }
 }

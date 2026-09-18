@@ -39,7 +39,7 @@ type CardSpec = {
   label: string;
   value: string;
   caption: string;
-  Icon: React.ComponentType<{ className?: string }>;
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   tone: "neutral" | "success" | "warning";
   /** When set, the card becomes a drill-through link to a related screen. */
   href?: string;

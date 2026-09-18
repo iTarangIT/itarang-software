@@ -373,7 +373,10 @@ export const GET = withErrorHandler(async (req: Request) => {
   // Fold the per-status funnel rows into the 5 fixed stages, in order, always
   // emitting all five (zeros included). Statuses outside every bucket (DRAFT,
   // DEALER_REOPENED, REJECTED, CANCELLED) are dropped — same as the old map.
-  const funnelByKey = new Map(
+  const funnelByKey = new Map<
+    string,
+    { stage: string; key: string; deals: number; units: number; value_at_stake: number }
+  >(
     STAGE_BUCKETS.map((b) => [
       b.key,
       { stage: b.label, key: b.key, deals: 0, units: 0, value_at_stake: 0 },

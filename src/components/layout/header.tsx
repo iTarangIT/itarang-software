@@ -10,7 +10,7 @@ import NotificationBell from '@/components/shared/NotificationBell';
 import type { NotificationRole } from '@/lib/notifications/catalog';
 // Dependency-free by design (middleware runs it on Edge), so a client component
 // can share the one list rather than keep a second copy that drifts.
-import { BUYBACK_ADMIN_ROLES } from '@/lib/buyback/roles';
+import { isBuybackAdminRole } from '@/lib/buyback/roles';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useUIStore } from '@/store/uiStore';
 import { toast } from 'sonner';
@@ -50,7 +50,7 @@ export function Header() {
             ? 'vendor'
             : role.startsWith('nbfc') || role === 'risk_head'
                 ? 'nbfc'
-                : BUYBACK_ADMIN_ROLES.includes(role)
+                : isBuybackAdminRole(role)
                     ? 'admin'
                     : 'dealer';
 

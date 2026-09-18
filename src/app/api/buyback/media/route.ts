@@ -47,7 +47,7 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
 import { buybackRequests } from "@/lib/db/schema";
-import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/auth";
+import { isBuybackAdminRole } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
 import { getObject } from "@/lib/storage/s3";
@@ -77,7 +77,7 @@ export const GET = withErrorHandler(async (req: Request) => {
   const user = await requireAuth();
   const url = new URL(req.url);
 
-  const isAdmin = BUYBACK_ADMIN_ROLES.includes(String(user.role).toLowerCase());
+  const isAdmin = isBuybackAdminRole(String(user.role).toLowerCase());
   const dealerEntityId = user.dealer_id ?? null;
 
   // A non-admin with no dealer entity owns nothing and may see nothing. Bailing

@@ -127,11 +127,14 @@ async function main() {
   // ---- 5. Delete, both tables in one transaction.
   const scrapedIds = foreign.map((r) => r.id);
   const result = await sql.begin(async (tx) => {
+    // postgres.js types TransactionSql as Omit<Sql, …>, which drops the call
+    // signature; at runtime it is the same tagged template as `sql`.
+    const t = tx as unknown as typeof sql;
     const dl = ids.length
-      ? await tx`DELETE FROM dealer_leads WHERE id = ANY(${ids}) RETURNING id`
+      ? await t`DELETE FROM dealer_leads WHERE id = ANY(${ids}) RETURNING id`
       : [];
     const sdl = scrapedIds.length
-      ? await tx`DELETE FROM scraped_dealer_leads WHERE id = ANY(${scrapedIds}) RETURNING id`
+      ? await t`DELETE FROM scraped_dealer_leads WHERE id = ANY(${scrapedIds}) RETURNING id`
       : [];
     return { dl: dl.length, sdl: sdl.length };
   });

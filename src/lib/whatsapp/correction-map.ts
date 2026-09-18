@@ -22,6 +22,9 @@ export const CATALOG_TO_WHATSAPP_DOC: Record<CorrectionDocumentKey, string> = {
   passport_photo: "owner_photo",
   udyam_certificate: "udyam",
   owner_photo: "owner_photo",
+  // Same as the catalog key — the fallback the request-correction route used
+  // while this entry was missing.
+  owner_aadhaar: "owner_aadhaar",
   partnership_deed: "partnership_deed",
   mou_document: "mou",
   aoa_document: "aoa",

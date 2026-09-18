@@ -63,7 +63,7 @@ const BodySchema = z.object({
     .optional(),
 });
 
-interface QuoteRow {
+type QuoteRow = {
   commercial_id: string;
   dealer_lead_id: string;
   approval_status: string | null;

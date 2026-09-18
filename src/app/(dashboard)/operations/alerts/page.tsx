@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatIst, formatMetricValue, formatMinutesAgo, minutesSince } from "@/lib/operations/format";
+import { isMetricUnit } from "@/lib/operations/registry";
 import { getAlertsView, type AlertRow } from "@/lib/operations/alertsView";
 
 import { ANY_SOURCE } from "@/lib/operations/alertRouting";
@@ -68,12 +69,12 @@ function AlertTable({
               <td className="py-2.5 pr-3 text-right tabular-nums text-ink">
                 {alert.value_num == null
                   ? "—"
-                  : formatMetricValue(alert.value_num, alert.unit)}
+                  : formatMetricValue(alert.value_num, isMetricUnit(alert.unit) ? alert.unit : "count")}
               </td>
               <td className="py-2.5 pr-3 text-right tabular-nums text-ink-muted">
                 {alert.threshold == null
                   ? "—"
-                  : formatMetricValue(alert.threshold, alert.unit)}
+                  : formatMetricValue(alert.threshold, isMetricUnit(alert.unit) ? alert.unit : "count")}
               </td>
               <td className="py-2.5 pr-3 text-xs text-ink-muted">
                 {resolved ? (

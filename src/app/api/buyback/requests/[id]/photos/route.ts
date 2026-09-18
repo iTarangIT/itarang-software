@@ -30,7 +30,7 @@ import {
   buybackPhotos,
   buybackUnits,
 } from "@/lib/db/schema";
-import { BUYBACK_ADMIN_ROLES, loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
+import { isBuybackAdminRole, loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 import { BUYBACK_BUCKET } from "@/lib/buyback/storage";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
@@ -215,7 +215,7 @@ export const GET = withErrorHandler(
     const { id: requestId } = await ctx.params;
 
     const user = await requireAuth();
-    const isAdmin = BUYBACK_ADMIN_ROLES.includes(String(user.role).toLowerCase());
+    const isAdmin = isBuybackAdminRole(String(user.role).toLowerCase());
 
     if (!isAdmin && !user.dealer_id) throw new NotFoundError("Request not found.");
 

@@ -59,7 +59,7 @@ const BILLING_SOURCE = sql`
        AND NOT EXISTS (SELECT 1 FROM sales_invoices s2 WHERE s2.invoice_number = z.invoice_number)
 `;
 
-export interface LeadsExportRow {
+export type LeadsExportRow = {
     lead_id: string;
     dealer_name: string | null;
     shop_name: string | null;

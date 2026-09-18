@@ -155,12 +155,14 @@ export function SalesFilterBar({
                         <RotateCcw className="mr-1 h-3.5 w-3.5" />
                         Reset
                     </Button>
-                    <Button asChild variant="outline" size="sm">
-                        <a href={csvHref} download>
-                            <Download className="mr-1 h-3.5 w-3.5" />
-                            Download CSV
-                        </a>
-                    </Button>
+                    <a
+                        href={csvHref}
+                        download
+                        className="inline-flex h-8 items-center justify-center rounded-lg border border-gray-300 bg-transparent px-3 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <Download className="mr-1 h-3.5 w-3.5" />
+                        Download CSV
+                    </a>
                 </div>
             </div>
             {summary && (

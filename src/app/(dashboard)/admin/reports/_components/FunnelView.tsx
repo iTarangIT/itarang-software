@@ -160,12 +160,14 @@ export function FunnelView() {
                         <Button type="button" variant="outline" size="sm" disabled={!dirty} onClick={() => { setFrom(""); setTo(""); setState(""); setCity(""); setDealerId(""); setNbfcId(""); setGroupBy("none"); }}>
                             Reset
                         </Button>
-                        <Button asChild variant="outline" size="sm">
-                            <a href={csvHref} download>
-                                <Download className="mr-1 h-3.5 w-3.5" />
-                                Export CSV
-                            </a>
-                        </Button>
+                        <a
+                            href={csvHref}
+                            download
+                            className="inline-flex h-8 items-center justify-center rounded-lg border border-gray-300 bg-transparent px-3 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                            <Download className="mr-1 h-3.5 w-3.5" />
+                            Export CSV
+                        </a>
                     </div>
                 </div>
                 {d && (
