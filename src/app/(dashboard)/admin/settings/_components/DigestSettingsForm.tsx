@@ -28,6 +28,8 @@ type KindMeta = {
     ctaHref: string;
     ctaLabel: string;
     sections: Section[];
+    /** Which daily slots this kind sends in. Older API responses omit it = both. */
+    slots?: Array<"morning" | "evening">;
 };
 
 type Settings = {
@@ -333,20 +335,22 @@ export function DigestSettingsForm({ kind }: { kind: string }) {
                             className="w-32"
                         />
                     </div>
-                    <div className="space-y-1">
-                        <span className="block text-xs text-ink-muted">
-                            Evening — covers today so far
-                        </span>
-                        <Input
-                            type="time"
-                            value={toTimeValue(settings.eveningHour, settings.eveningMinute)}
-                            onChange={(e) => {
-                                const t = fromTimeValue(e.target.value);
-                                if (t) patch({ eveningHour: t.hour, eveningMinute: t.minute });
-                            }}
-                            className="w-32"
-                        />
-                    </div>
+                    {(meta.slots ?? ["morning", "evening"]).includes("evening") && (
+                        <div className="space-y-1">
+                            <span className="block text-xs text-ink-muted">
+                                Evening — covers today so far
+                            </span>
+                            <Input
+                                type="time"
+                                value={toTimeValue(settings.eveningHour, settings.eveningMinute)}
+                                onChange={(e) => {
+                                    const t = fromTimeValue(e.target.value);
+                                    if (t) patch({ eveningHour: t.hour, eveningMinute: t.minute });
+                                }}
+                                className="w-32"
+                            />
+                        </div>
+                    )}
                 </div>
                 <p className="text-xs text-ink-muted">
                     The scheduler checks every five minutes, so a digest can arrive a few

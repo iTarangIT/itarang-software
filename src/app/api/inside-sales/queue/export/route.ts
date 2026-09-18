@@ -1,5 +1,6 @@
-// GET /api/inside-sales/queue/export?tab=...&q=...&neodove=1&callback=1&<filters>
-// The Inside Sales queue, as a CSV, for the CURRENT TAB AND FILTERS.
+// GET /api/inside-sales/queue/export?tab=...&q=...&neodove=1&callback=1&<filters>[&format=xlsx]
+// The Inside Sales queue, as a CSV (default) or an Excel workbook (format=xlsx),
+// for the CURRENT TAB AND FILTERS — including business_type (E-296).
 //
 // TAKES THE SAME PARAMS AS THE LIST and runs the SAME builder, so the sheet and
 // the screen can never disagree about which leads matched. That is why it is a
@@ -25,8 +26,11 @@ import {
     csvPretty,
     csvResponse,
     QUEUE_EXPORT_ROW_CAP,
+    xlsxResponse,
     type CsvColumn,
 } from "@/lib/leads/queueCsv";
+import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
+import { businessTypeLabel } from "@/lib/leads/businessType";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,9 +51,12 @@ const QuerySchema = z.object({
     q: z.string().trim().min(1).max(120).optional(),
     neodove: z.literal("1").optional(),
     callback: z.literal("1").optional(),
+    format: z.enum(["csv", "xlsx"]).default("csv"),
 });
 
-const COLUMNS: CsvColumn<QueueRow>[] = [
+type ExportRow = QueueRow & { business_type?: string | null };
+
+const COLUMNS: CsvColumn<ExportRow>[] = [
     { header: "Dealer", value: (r) => r.dealer_name ?? "" },
     { header: "Shop", value: (r) => r.shop_name ?? "" },
     { header: "Mobile Number", value: (r) => r.phone ?? "" },
@@ -61,6 +68,8 @@ const COLUMNS: CsvColumn<QueueRow>[] = [
         // screen it came from name a stage identically.
         value: (r) => (r.lead_status ? LEAD_STATUS_LABEL[r.lead_status] : ""),
     },
+    // E-296. "Not set" rather than blank, matching the chip on screen.
+    { header: "Business Type", value: (r) => businessTypeLabel(r.business_type) },
     { header: "Interest", value: (r) => csvPretty(r.interest_level) },
     { header: "Intent Score", value: (r) => r.final_intent_score?.toString() ?? "" },
     { header: "Owner", value: (r) => r.current_owner_name ?? "" },
@@ -82,6 +91,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         q: url.searchParams.get("q") ?? undefined,
         neodove: url.searchParams.get("neodove") ?? undefined,
         callback: url.searchParams.get("callback") ?? undefined,
+        format: url.searchParams.get("format") ?? undefined,
     });
     const common = {
         tab: parsed.tab,
@@ -106,14 +116,25 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // Who handed each lead over. Decorated in a SEPARATE, fail-tolerant
     // statement exactly as the list route does it, so a failure here drops one
     // column rather than the whole export.
-    const assignedBy = await fetchAssignedByForLeads(
-        rows.map((r) => r.id).filter(Boolean),
-    );
+    const ids = rows.map((r) => r.id).filter(Boolean);
+    const assignedBy = await fetchAssignedByForLeads(ids);
+    // E-296 business_type — same separate, fail-tolerant decoration: on a
+    // database without the migration the column reads "Not set".
+    const businessTypes = await fetchBusinessTypeForLeads(ids);
 
-    return csvResponse({
-        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null })),
+    const args = {
+        rows: rows.map(
+            (r): ExportRow => ({
+                ...r,
+                assigned_by: assignedBy[r.id] ?? null,
+                business_type: businessTypes[r.id] ?? null,
+            }),
+        ),
         columns: COLUMNS,
         filename: `inside-sales-${TAB_LABELS[parsed.tab].toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
         total,
-    });
+    };
+    return parsed.format === "xlsx"
+        ? xlsxResponse({ ...args, sheetName: TAB_LABELS[parsed.tab] })
+        : csvResponse(args);
 });

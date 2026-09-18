@@ -17,6 +17,8 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { fetchAsmQueueRows, countAsmQueueRows } from "@/lib/asm/queryBuilder";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
 import { fetchAssignedByForLeads } from "@/lib/leads/leadAssignedBy";
+import { fetchBusinessTypeForLeads } from "@/lib/leads/leadListQuery";
+import { businessTypeLabel } from "@/lib/leads/businessType";
 import {
     ASM_QUEUE_TABS,
     ASM_TAB_LABELS,
@@ -58,6 +60,8 @@ const COLUMNS: CsvColumn<AsmQueueRow>[] = [
     { header: "Mobile Number", value: (r) => r.phone ?? "" },
     { header: "City", value: (r) => r.city ?? "" },
     { header: "State", value: (r) => r.state ?? "" },
+    // E-296 — decorated separately, same as the inside-sales sheet.
+    { header: "Business Type", value: (r) => businessTypeLabel(r.business_type) },
     {
         header: "Lead Status",
         // Through the same label map the row's chip uses, so a sheet and the
@@ -118,12 +122,18 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     // statement exactly as the list route does it — the builder does not select
     // it, and a column that always printed blank would read as data loss rather
     // than as a stamp this sheet chose not to carry.
-    const assignedBy = await fetchAssignedByForLeads(
-        rows.map((r) => r.id).filter(Boolean),
-    );
+    const ids = rows.map((r) => r.id).filter(Boolean);
+    const [assignedBy, businessTypes] = await Promise.all([
+        fetchAssignedByForLeads(ids),
+        fetchBusinessTypeForLeads(ids),
+    ]);
 
     return csvResponse({
-        rows: rows.map((r) => ({ ...r, assigned_by: assignedBy[r.id] ?? null })),
+        rows: rows.map((r) => ({
+            ...r,
+            assigned_by: assignedBy[r.id] ?? null,
+            business_type: businessTypes[r.id] ?? null,
+        })),
         columns: COLUMNS,
         filename: `asm-${ASM_TAB_LABELS[parsed.tab].toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
         total,

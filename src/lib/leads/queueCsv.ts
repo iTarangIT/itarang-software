@@ -12,6 +12,9 @@
  * exports all open the same way in the same spreadsheet.
  */
 
+import ExcelJS from "exceljs";
+import { styleHeader, zebra } from "@/lib/excel/sheetStyle";
+
 /** RFC-4180: quote only when the value needs it, doubling any quote inside. */
 export function csvEscape(v: unknown): string {
     if (v == null) return "";
@@ -75,6 +78,66 @@ export type CsvColumn<R> = { header: string; value: (row: R) => string };
  * quietly short-changing the sheet, which is what makes an export untrustworthy.
  */
 export const QUEUE_EXPORT_ROW_CAP = 5_000;
+
+/**
+ * The same export as csvResponse(), as an .xlsx workbook.
+ *
+ * Same columns, same row values (so the sheet and the CSV cannot disagree),
+ * same X-Export-* headers so QueueCsvButton reports truncation identically.
+ * Styled with the shared header band / zebra from src/lib/excel/sheetStyle.ts.
+ */
+export async function xlsxResponse<R>({
+    rows,
+    columns,
+    filename,
+    total,
+    sheetName = "Leads",
+}: {
+    rows: R[];
+    columns: CsvColumn<R>[];
+    /** Without the extension or the timestamp — both are added here. */
+    filename: string;
+    /** How many rows MATCHED, which may exceed how many were exported. */
+    total: number;
+    sheetName?: string;
+}): Promise<Response> {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "iTarang CRM";
+    wb.created = new Date();
+    const ws = wb.addWorksheet(sheetName.slice(0, 31), {
+        views: [{ state: "frozen", ySplit: 1 }],
+    });
+    ws.columns = columns.map((c) => ({
+        header: c.header,
+        // Rough fit: header length, floored so short headers still show data.
+        width: Math.min(60, Math.max(14, c.header.length + 4)),
+    }));
+    styleHeader(ws.getRow(1));
+    rows.forEach((r, i) => {
+        const row = ws.addRow(columns.map((c) => c.value(r)));
+        zebra(row, i);
+    });
+    if (rows.length > 0) {
+        ws.autoFilter = {
+            from: { row: 1, column: 1 },
+            to: { row: 1, column: columns.length },
+        };
+    }
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const stamp = csvDateTime(new Date()).replace(/[: ]/g, "-");
+    return new Response(new Uint8Array(buffer as ArrayBuffer), {
+        headers: {
+            "Content-Type":
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Content-Disposition": `attachment; filename="${filename}-${stamp}.xlsx"`,
+            "Cache-Control": "no-store",
+            "X-Export-Rows": String(rows.length),
+            "X-Export-Total": String(total),
+            "X-Export-Truncated": total > rows.length ? "1" : "0",
+        },
+    });
+}
 
 export function csvResponse<R>({
     rows,

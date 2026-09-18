@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/select-dropdown";
 import type { RegionsResponse } from "@/app/api/locations/regions/route";
+import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
 
 type Props = {
     open: boolean;
@@ -31,6 +32,8 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
     const [stateCode, setStateCode] = useState("");
     const [city, setCity] = useState("");
     const [interest, setInterest] = useState<"hot" | "warm" | "cold" | "">("");
+    // E-296 "Type of Business". "" = not set.
+    const [businessType, setBusinessType] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
     // Canonical state + city reference lists (E-108/E-110/E-111). Loaded once
@@ -64,6 +67,7 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
         setStateCode("");
         setCity("");
         setInterest("");
+        setBusinessType("");
     };
 
     const handleClose = () => {
@@ -94,11 +98,15 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     city: city || null,
                     state: stateName || null,
                     interest_level: interest || null,
+                    business_type: businessType || null,
                 }),
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to create lead");
             toast.success("Lead created — find it in the Unassigned (Claim) tab.");
+            if (json?.data?.business_type_saved === false) {
+                toast.warning("Type of Business could not be saved on this database.");
+            }
             reset();
             onSuccess();
         } catch (err) {
@@ -180,6 +188,19 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     >
                         <option value="">—</option>
                         {INTEREST.map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <Label>Type of business</Label>
+                    <select
+                        className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
+                        value={businessType}
+                        onChange={(e) => setBusinessType(e.target.value)}
+                    >
+                        <option value="">Not set</option>
+                        {BUSINESS_TYPE_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
                     </select>
                 </div>
             </form>

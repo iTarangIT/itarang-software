@@ -239,7 +239,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       lenderName,
       tenantId: actor.tenant_id,
       loanAmount: offer?.loan_amount ?? null,
+      sanctionId: loanSanctionId,
+      disbursedAt: now,
     });
+
+    // B15 — the dealer's disbursement confirmation on WhatsApp (date, amount,
+    // reference) + the History line. Best-effort and not awaited: the sanction
+    // is committed and a messaging failure must not undo it. The "Loan
+    // approved" push below stays — that one opens Step 5 for the customer.
+    void import("@/lib/whatsapp/notifications")
+      .then(({ sendDisbursementWhatsApp }) =>
+        sendDisbursementWhatsApp({
+          leadId,
+          loanAmount: offer?.loan_amount ?? null,
+          disbursedAt: now,
+          sanctionId: loanSanctionId,
+        }),
+      )
+      .then((r) => {
+        if (r.error) console.error("[nbfc/sanction] disbursement WhatsApp not delivered:", r.error);
+      })
+      .catch((err) => console.error("[nbfc/sanction] disbursement WhatsApp failed:", err));
 
     // E-276 — contact-email copy to the sanctioning NBFC (+ global monitoring CC).
     (async () => {

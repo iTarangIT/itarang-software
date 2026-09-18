@@ -30,6 +30,7 @@ import "./extra-docs-flow";     // Step-4 extra documents (≤10 bucket)
 import "./team-flow";           // E-277 dealer "My Team" (salespersons)
 import "./team-leads-flow";     // E-278 dealer "Team Leads" (oversight + takeover)
 import "./history-flow";        // E-278 dealer "History" (per-lead timeline)
+import "./payment-confirm-flow"; // E-298 dealer confirms loan payment received
 
 import { registeredLeadStates } from "./lead-states";
 

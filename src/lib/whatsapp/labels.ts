@@ -44,3 +44,41 @@ export function formatWaPhone(waPhone: string | null | undefined): string {
   const trimmed = waPhone.trim();
   return trimmed.startsWith("+") ? trimmed : `+${trimmed}`;
 }
+
+/**
+ * Pile B item 10 — `leads.kyc_status` as a dealer reads it. The WhatsApp
+ * 🕘 History card used to print the raw column (`pending_final_approval`).
+ * Unknown values fall back to a de-snaked, capitalised form rather than blank.
+ */
+const LEAD_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  not_started: "Not started",
+  pending: "KYC pending",
+  in_progress: "KYC in progress",
+  submitted: "Submitted to iTarang",
+  docs_requested: "Documents requested",
+  pending_itarang_reverification: "Under iTarang re-verification",
+  pending_final_approval: "Awaiting final approval",
+  verified: "KYC verified",
+  kyc_approved: "KYC approved",
+  completed: "KYC approved",
+  kyc_rejected: "KYC rejected",
+  failed: "KYC failed",
+  product_selection_in_progress: "Choosing product / lender",
+  awaiting_enach: "Awaiting E-NACH mandate",
+  loan_sanctioned: "Loan sanctioned — awaiting dispatch",
+  loan_rejected: "Loan rejected",
+  closed_loan_rejected: "Closed — loan rejected",
+  financing_unavailable: "Financing unavailable",
+  dispatched: "Dispatched — loan disbursed",
+  sold: "Delivered",
+};
+
+export function leadStatusLabel(status: string | null | undefined): string {
+  const raw = (status ?? "").trim().toLowerCase();
+  if (!raw) return "Draft";
+  const known = LEAD_STATUS_LABELS[raw];
+  if (known) return known;
+  const words = raw.replace(/[_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}

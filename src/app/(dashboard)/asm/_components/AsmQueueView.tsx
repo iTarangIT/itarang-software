@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { Search, Loader2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,9 @@ import {
     QUEUE_SELECT_CLASS,
 } from "@/components/leads/QueueFilterBar";
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
+import { BulkClaimBar } from "@/components/leads/BulkClaimBar";
+import { ClaimLeadConfirm } from "@/components/leads/ClaimLeadConfirm";
+import { CLAIM_ROLES } from "@/lib/inside-sales/types";
 import {
     EMPTY_QUEUE_FILTERS,
     hasAnyQueueFilter,
@@ -37,12 +41,14 @@ import {
     VISIT_STATUS,
     type AsmQueueCounts,
     type AsmQueueResponse,
+    type AsmQueueRow,
     type AsmQueueTab,
     type VisitOutcome,
 } from "@/lib/asm/types";
 
 type Props = {
     viewerId: string;
+    viewerRole: string;
 };
 
 const PAGE_SIZE = 25;
@@ -57,10 +63,13 @@ function pretty(v: string): string {
     return v.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function AsmQueueView({ viewerId }: Props) {
+export function AsmQueueView({ viewerId, viewerRole }: Props) {
     const router = useRouter();
     const params = useSearchParams();
     const queryClient = useQueryClient();
+    // B3: the claim routes gate on CLAIM_ROLES; a ceo / sales_head browsing
+    // this queue sees the pool but gets no Claim controls rather than a 403.
+    const canClaim = (CLAIM_ROLES as readonly string[]).includes(viewerRole);
     const [tab, setTab] = useState<AsmQueueTab>(parseTab(params.get("tab")));
     const [page, setPage] = useState(Math.max(1, Number(params.get("page") ?? "1")));
     const [search, setSearch] = useState(params.get("q") ?? "");
@@ -200,6 +209,78 @@ export function AsmQueueView({ viewerId }: Props) {
 
     const data = rowsQuery.data?.data;
 
+    // ── B3: claim from the territory pool ────────────────────────────────
+    const refreshAfterClaim = useCallback(() => {
+        queryClient.invalidateQueries({ queryKey: ["asm-queue"] });
+        queryClient.invalidateQueries({ queryKey: ["asm-counts"] });
+    }, [queryClient]);
+
+    const [claimTarget, setClaimTarget] = useState<AsmQueueRow | null>(null);
+
+    // Bulk selection on the two tabs that surface unowned leads: Unclaimed
+    // (every row claimable) and Territory Feed (mixed — only the unowned rows
+    // get a checkbox). Same reset-on-scope-change pattern as the Inside Sales
+    // queue: a tab or filter change drops the selection, paging keeps it.
+    const selectable = (tab === "unclaimed" || tab === "territory") && canClaim;
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+    const selectionScope = `${tab}|${filterKey}`;
+    const [selectionScopeSeen, setSelectionScopeSeen] = useState(selectionScope);
+    if (selectionScopeSeen !== selectionScope) {
+        setSelectionScopeSeen(selectionScope);
+        setSelectedIds(new Set());
+    }
+
+    const toggleSelected = useCallback((id: string) => {
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
+    const toggleAllOnPage = useCallback(() => {
+        const pageRows = (data?.rows ?? []).filter((r) => !r.current_owner_id);
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            const allTicked = pageRows.length > 0 && pageRows.every((r) => next.has(r.id));
+            if (allTicked) pageRows.forEach((r) => next.delete(r.id));
+            else pageRows.forEach((r) => next.add(r.id));
+            return next;
+        });
+    }, [data]);
+
+    const [selectingFirstN, setSelectingFirstN] = useState(false);
+    const selectFirstN = useCallback(
+        async (n: number) => {
+            setSelectingFirstN(true);
+            try {
+                const u = new URL("/api/asm/queue", window.location.origin);
+                u.search = filterKey;
+                u.searchParams.set("tab", tab);
+                u.searchParams.set("ids_only", "1");
+                u.searchParams.set("limit", String(n));
+                const res = await fetch(u.toString(), { cache: "no-store" });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json?.error?.message ?? "Failed to select leads");
+                const ids: string[] = json.data?.ids ?? [];
+                setSelectedIds(new Set(ids));
+                setPage(1);
+                toast.success(`Selected the first ${ids.length} lead${ids.length === 1 ? "" : "s"}`);
+            } catch (err) {
+                toast.error((err as Error).message);
+            } finally {
+                setSelectingFirstN(false);
+            }
+        },
+        [filterKey, tab],
+    );
+
+    const onBulkClaimed = useCallback(() => {
+        setSelectedIds(new Set());
+        refreshAfterClaim();
+    }, [refreshAfterClaim]);
+
     const exportHref = useMemo(() => {
         const p = new URLSearchParams(filterKey);
         p.set("tab", tab);
@@ -300,7 +381,39 @@ export function AsmQueueView({ viewerId }: Props) {
                 error={rowsQuery.error ? (rowsQuery.error as Error).message : null}
                 onPageChange={setPage}
                 viewerId={viewerId}
+                onClaim={canClaim ? setClaimTarget : undefined}
+                selection={
+                    selectable
+                        ? {
+                              selected: selectedIds,
+                              onToggle: toggleSelected,
+                              onToggleAll: toggleAllOnPage,
+                          }
+                        : undefined
+                }
             />
+            {selectable && (
+                <BulkClaimBar
+                    selectedIds={Array.from(selectedIds)}
+                    total={data?.total ?? 0}
+                    selectFirstN={selectFirstN}
+                    selectingFirstN={selectingFirstN}
+                    onClear={() => setSelectedIds(new Set())}
+                    onClaimed={onBulkClaimed}
+                />
+            )}
+            {claimTarget && (
+                <ClaimLeadConfirm
+                    open
+                    onClose={() => setClaimTarget(null)}
+                    leadId={claimTarget.id}
+                    dealerName={claimTarget.dealer_name || claimTarget.shop_name || "this lead"}
+                    onSuccess={() => {
+                        setClaimTarget(null);
+                        refreshAfterClaim();
+                    }}
+                />
+            )}
             <CreateLeadModal
                 open={createOpen}
                 onClose={() => setCreateOpen(false)}

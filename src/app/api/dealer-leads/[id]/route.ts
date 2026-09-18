@@ -28,13 +28,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { eq, and, ne } from "drizzle-orm";
+import { eq, and, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { normalizePhone } from "@/lib/leads/dedupe";
+import { BusinessTypeSchema } from "@/lib/leads/businessType";
 import {
   normalizeCity,
   normalizeState,
@@ -58,6 +59,11 @@ const PatchSchema = z.object({
   language: z.string().trim().optional(),
   source: z.string().trim().max(40).optional(),
   overall_summary: z.string().trim().max(5000).optional(),
+  // E-296 "Type of Business". null / "" clears it. Not on the Drizzle object —
+  // written by a raw UPDATE below.
+  business_type: z
+    .union([BusinessTypeSchema, z.literal(""), z.null()])
+    .optional(),
 });
 
 export const PATCH = withErrorHandler(
@@ -171,17 +177,41 @@ export const PATCH = withErrorHandler(
       }
     }
 
-    if (Object.keys(updates).length === 0) {
+    const businessTypeTouched = body.business_type !== undefined;
+
+    if (Object.keys(updates).length === 0 && !businessTypeTouched) {
       return NextResponse.json({ success: true, id, updated: 0 });
     }
 
-    updates.updated_at = new Date();
-    await db.update(dealerLeads).set(updates).where(eq(dealerLeads.id, id));
+    if (Object.keys(updates).length > 0) {
+      updates.updated_at = new Date();
+      await db.update(dealerLeads).set(updates).where(eq(dealerLeads.id, id));
+    }
+
+    // E-296. Its own raw statement, allowed to fail: on a database without the
+    // migration the profile edit above still lands and the response says the
+    // type did not.
+    let businessTypeSaved: boolean | undefined;
+    if (businessTypeTouched) {
+      try {
+        await db.execute(
+          sql`UPDATE dealer_leads
+                 SET business_type = ${body.business_type || null},
+                     updated_at = NOW()
+               WHERE id = ${id}`,
+        );
+        businessTypeSaved = true;
+      } catch (e) {
+        businessTypeSaved = false;
+        console.warn("[DEALER-LEADS] business_type not saved (E-296 applied?):", e);
+      }
+    }
 
     return NextResponse.json({
       success: true,
       id,
-      updated: Object.keys(updates).length,
+      updated: Object.keys(updates).length + (businessTypeSaved ? 1 : 0),
+      ...(businessTypeTouched ? { business_type_saved: businessTypeSaved } : {}),
     });
   },
 );

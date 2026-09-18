@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { EditLeadForm } from "@/components/leads/edit-lead-form";
@@ -36,6 +36,22 @@ export default async function EditLeadPage({
     );
   }
 
+  // E-296 "Type of Business" — not on the Drizzle object (see schema.ts), so
+  // read separately through to_jsonb: NULL, not an error, on a database
+  // without the migration.
+  let businessType: string | null = null;
+  try {
+    const rows = (await db.execute<{ business_type: string | null }>(sql`
+      SELECT to_jsonb(dl) ->> 'business_type' AS business_type
+        FROM dealer_leads dl
+       WHERE dl.id = ${id}
+       LIMIT 1
+    `)) as unknown as { business_type: string | null }[];
+    businessType = rows[0]?.business_type ?? null;
+  } catch {
+    // leave null → "Not set"
+  }
+
   return (
     <div className="max-w-3xl mx-auto py-10 px-6">
 
@@ -48,7 +64,10 @@ export default async function EditLeadPage({
 
       <div className="bg-white border rounded-2xl shadow-sm p-8">
         <h1 className="text-2xl font-semibold mb-6">Edit Lead</h1>
-        <EditLeadForm initialData={lead} leadId={id} />
+        <EditLeadForm
+          initialData={{ ...lead, business_type: businessType }}
+          leadId={id}
+        />
       </div>
 
     </div>

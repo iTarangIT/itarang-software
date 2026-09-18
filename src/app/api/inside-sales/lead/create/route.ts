@@ -13,6 +13,7 @@ import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { recordLeadCapture } from "@/lib/leads/lead-registry";
+import { BusinessTypeSchema } from "@/lib/leads/businessType";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -27,6 +28,8 @@ const BodySchema = z.object({
     state: z.string().trim().max(120).optional().nullable(),
     interest_level: z.enum(["hot", "warm", "cold"]).optional().nullable(),
     language: z.string().trim().max(40).optional().nullable(),
+    // E-296 "Type of Business". Optional; "" = not set.
+    business_type: z.union([BusinessTypeSchema, z.literal("")]).optional().nullable(),
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
@@ -89,6 +92,22 @@ export const POST = withErrorHandler(async (req: Request) => {
         throw err;
     }
 
+    // E-296 — not on the Drizzle object (see schema.ts), so a raw UPDATE after
+    // the insert. Allowed to fail: the lead exists either way, and the response
+    // says the type did not land on a database without the migration.
+    let businessTypeSaved: boolean | undefined;
+    if (body.business_type) {
+        try {
+            await db.execute(
+                sql`UPDATE dealer_leads SET business_type = ${body.business_type} WHERE id = ${id}`,
+            );
+            businessTypeSaved = true;
+        } catch (e) {
+            businessTypeSaved = false;
+            console.warn("[inside-sales/lead/create] business_type not saved (E-296 applied?):", e);
+        }
+    }
+
     // E-179 central registry — dealer prospect captured by Inside Sales / ASM.
     await recordLeadCapture({
         leadType: "dealer",
@@ -99,5 +118,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         sourceId: id,
     });
 
-    return successResponse({ id });
+    return successResponse({
+        id,
+        ...(businessTypeSaved !== undefined ? { business_type_saved: businessTypeSaved } : {}),
+    });
 });

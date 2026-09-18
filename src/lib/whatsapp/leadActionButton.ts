@@ -43,6 +43,9 @@ export const LEAD_ACTIONS = {
   dp_web: "dp_web:",
   /** Step-4 extra documents: open the ≤10 bucket for this lead in chat. */
   xd_start: "xd_start:",
+  /** E-298: dealer confirms the loan payment reached them / did not. */
+  pay_ok: "pay_ok:",
+  pay_no: "pay_no:",
 } as const;
 
 export type LeadActionKey = keyof typeof LEAD_ACTIONS;

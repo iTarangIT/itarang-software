@@ -62,6 +62,11 @@ import {
   toSearchParams,
   type LeadFilters,
 } from "./_components/filters";
+import {
+  BUSINESS_TYPE_OPTIONS,
+  BUSINESS_TYPE_UNSET,
+  BUSINESS_TYPE_UNSET_LABEL,
+} from "@/lib/leads/businessType";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
@@ -301,6 +306,14 @@ function normalizeRow(row: Record<string, string>) {
     pincode: get("pincode", "pin", "postal_code", "zip", "zipcode"),
     language: get("language", "lang") ?? "hindi",
     current_status: get("status", "current_status", "lead status") ?? "new",
+    // E-296 optional "Business Type" column. Sent raw — the import route
+    // normalises labels ("Battery Sale") and values ("battery_sale") alike.
+    business_type: get(
+      "business type",
+      "business_type",
+      "type of business",
+      "lead type",
+    ),
   };
 }
 
@@ -519,6 +532,7 @@ function UploadModal({
                       { col: "dealer_name / name", req: false },
                       { col: "shop_name", req: false },
                       { col: "location / city", req: false },
+                      { col: "business type", req: false },
                     ].map(({ col, req }) => (
                       <div
                         key={col}
@@ -1172,6 +1186,13 @@ export default function LeadsUnifiedPage() {
   // Owner / ASM / source dropdown options, served alongside the rows so the
   // filter bar never needs its own request.
   const [facets, setFacets] = useState<LeadListFacets | undefined>(undefined);
+  // E-296 per-type counts for the bifurcation chips — under the current
+  // filters minus business_type. null = the column is absent on this DB (or
+  // not loaded yet), in which case the chips are hidden.
+  const [businessTypeCounts, setBusinessTypeCounts] = useState<Record<
+    string,
+    number
+  > | null>(null);
   // Lead opened in the side drawer (row click).
   const [drawerLead, setDrawerLead] = useState<LeadRow | null>(null);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
@@ -1375,6 +1396,7 @@ export default function LeadsUnifiedPage() {
           setLeadsTotal(data.total);
           if (data.stats) setLeadsStats(data.stats);
           if (data.facets) setFacets(data.facets);
+          setBusinessTypeCounts(data.business_type_counts ?? null);
           // The server decides what this role may see and do; the client just
           // renders it. Keeps the gate in one place instead of duplicating role
           // lists here and hoping they stay in sync with the APIs.
@@ -1526,12 +1548,51 @@ export default function LeadsUnifiedPage() {
     [applied, LIMIT],
   );
 
-  // CSV of every lead matching the ACTIVE filters — not the page, not the
-  // selection. Same params the table fetched with, so the sheet is exactly what
-  // is on screen, only complete.
-  const [exportingCsv, setExportingCsv] = useState(false);
-  const exportFilteredCsv = useCallback(async () => {
-    setExportingCsv(true);
+  // Excel workbook of every lead matching the ACTIVE filters — not the page,
+  // not the selection. Same params the table fetched with (status, owner, date
+  // range, business type, …), so the sheet is exactly what is on screen, only
+  // complete. The route still serves CSV without format=xlsx.
+  // B11 — the FULL export: every matching lead with visit, call, remarks and
+  // billing columns, from /api/admin/exports/leads.xlsx. Same filter params as
+  // the follow-up export above; the route refuses (400) above its row cap
+  // instead of truncating, and that message is what the toast shows.
+  const [exportingAll, setExportingAll] = useState(false);
+  const exportAllLeads = useCallback(async () => {
+    setExportingAll(true);
+    try {
+      const params = toSearchParams(applied, 1, 1);
+      params.delete("page");
+      params.delete("limit");
+      const res = await fetch(`/api/admin/exports/leads.xlsx?${params.toString()}`);
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const j = await res.json();
+          detail = j?.error?.message ?? j?.error ?? "";
+        } catch {
+          detail = await res.text().catch(() => "");
+        }
+        throw new Error(String(detail).slice(0, 240) || "Export failed");
+      }
+      const rowCount = Number(res.headers.get("X-Export-Rows") ?? 0);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "all-leads.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"} with visits, calls and billing.`);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setExportingAll(false);
+    }
+  }, [applied]);
+
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const exportFilteredExcel = useCallback(async () => {
+    setExportingExcel(true);
     try {
       // page/limit are irrelevant to the export but toSearchParams is the one
       // place that knows every filter's query-param name; passing 1 and 1 keeps
@@ -1539,9 +1600,10 @@ export default function LeadsUnifiedPage() {
       const params = toSearchParams(applied, 1, 1);
       params.delete("page");
       params.delete("limit");
+      params.set("format", "xlsx");
       const res = await fetch(`/api/dealer-leads/export?${params.toString()}`);
       if (!res.ok) {
-        // The route returns JSON on failure and CSV on success, so read as text
+        // The route returns JSON on failure and a file on success, so read as text
         // and show whatever it said rather than downloading an error page.
         const detail = await res.text().catch(() => "");
         throw new Error(detail.slice(0, 200) || "Export failed");
@@ -1556,7 +1618,7 @@ export default function LeadsUnifiedPage() {
       a.href = url;
       // Server already set a dated filename in Content-Disposition; this is the
       // fallback for browsers that ignore it on a blob URL.
-      a.download = "leads-export.csv";
+      a.download = "leads-export.xlsx";
       a.click();
       URL.revokeObjectURL(url);
 
@@ -1572,7 +1634,7 @@ export default function LeadsUnifiedPage() {
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
-      setExportingCsv(false);
+      setExportingExcel(false);
     }
   }, [applied]);
 
@@ -1922,22 +1984,40 @@ export default function LeadsUnifiedPage() {
             </button>
           )}
           {/* Exports what the FILTERS match, not what is selected — the bulk
-              bar's Export CSV already covers a selection. Uses `applied`, the
+              bar's export already covers a selection. Uses `applied`, the
               debounced filter state the table itself is showing, so the sheet
               and the screen are the same set of leads. */}
           {tab === "leads" && (
             <button
-              onClick={exportFilteredCsv}
-              disabled={exportingCsv}
-              title="Download every lead matching the current filters"
+              onClick={exportFilteredExcel}
+              disabled={exportingExcel}
+              title="Download every lead matching the current filters as an Excel sheet"
               className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-50"
             >
-              {exportingCsv ? (
+              {exportingExcel ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Download className="w-4 h-4" />
               )}
-              Export CSV
+              Export to Excel
+            </button>
+          )}
+          {/* B11 — the full export (visits, calls, remarks, billing). Roles
+              outside the route's gate get its 403 as a toast rather than a
+              hidden button, so the export is discoverable. */}
+          {tab === "leads" && (
+            <button
+              onClick={exportAllLeads}
+              disabled={exportingAll}
+              title="Download every lead matching the current filters with visit, call, remarks and billing columns"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-50"
+            >
+              {exportingAll ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="w-4 h-4" />
+              )}
+              Export all leads
             </button>
           )}
           {/* "Add Lead" stood here — single-lead entry into the PROSPECT pool
@@ -2091,6 +2171,47 @@ export default function LeadsUnifiedPage() {
               onClose={() => setShowBulkNeodove(false)}
               onSent={() => setSelectedLeadIds(new Set())}
             />
+          )}
+
+          {/* Type of Business bifurcation (E-296). Counts are under the
+              current filters minus the type itself, so every chip stays
+              clickable while one is active. Clicking the active chip clears
+              it. Hidden when the API sends no counts (column absent). */}
+          {businessTypeCounts && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 px-1">
+              <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                Business type
+              </span>
+              {[
+                ...BUSINESS_TYPE_OPTIONS,
+                { value: BUSINESS_TYPE_UNSET, label: BUSINESS_TYPE_UNSET_LABEL },
+              ].map((o) => {
+                const active = draft.businessType === o.value;
+                const n = businessTypeCounts[o.value] ?? 0;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() =>
+                      setFilter("businessType", active ? "" : o.value)
+                    }
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                      active
+                        ? "border-gray-900 bg-gray-900 text-white"
+                        : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
+                    }`}
+                  >
+                    {o.label}
+                    <span
+                      className={`tabular-nums ${active ? "text-white/80" : "text-gray-400"}`}
+                    >
+                      {n.toLocaleString("en-IN")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           )}
 
           {/* Rows-per-page, ABOVE the table as well as below it.

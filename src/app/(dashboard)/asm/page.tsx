@@ -1,5 +1,6 @@
 import { requireRole } from "@/lib/auth-utils";
 import { AsmQueueView } from "./_components/AsmQueueView";
+import { AsmPerformanceStrip } from "@/components/dashboard/sales/AsmPerformanceStrip";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,9 @@ export default async function AsmQueuePage() {
                     </p>
                 </div>
             </header>
-            <AsmQueueView viewerId={user.id} />
+            {/* B7 — the rep's own visits / calls / hot-warm-cold at a glance. */}
+            <AsmPerformanceStrip />
+            <AsmQueueView viewerId={user.id} viewerRole={user.role} />
         </div>
     );
 }

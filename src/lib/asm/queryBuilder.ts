@@ -1,4 +1,4 @@
-// SQL builder for the 4 ASM queue tabs (BRD §0.8). Raw SQL via db.execute().
+// SQL builder for the 5 ASM queue tabs (BRD §0.8). Raw SQL via db.execute().
 // All tabs join lead_visits to surface the latest visit row's status/date —
 // the queue exists to drive the ASM's visit cadence, not just owner status.
 
@@ -62,6 +62,22 @@ function tabFilter(tab: AsmQueueTab, asmId: string) {
                 )
                 OR dl.current_owner_id IS NULL
             ) AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
+        case "unclaimed":
+            // B3 claim pool: strictly IN territory AND owned by nobody. Unlike
+            // the Territory Feed there is no "OR unowned anywhere" — an ASM in
+            // another city must not see (or claim) this lead. Not-terminal and
+            // active mirror what claimLead() itself accepts, so every row here
+            // is one the Claim button can actually take.
+            return sql`EXISTS (
+                    SELECT 1 FROM asm_territories t
+                    WHERE t.asm_id = ${asmId}
+                      AND t.state = dl.state
+                      AND (t.city IS NULL OR t.city = dl.city)
+                      AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
+                      AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
+                )
+                AND dl.current_owner_id IS NULL
+                AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
         case "my_closed":
             return sql`dl.closing_owner_id = ${asmId} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
     }
@@ -75,6 +91,7 @@ function tabOrder(tab: AsmQueueTab) {
         case "my_closed":
             return sql`dl.closed_at DESC NULLS LAST`;
         case "territory":
+        case "unclaimed":
             return sql`dl.final_intent_score DESC NULLS LAST, dl.created_at DESC`;
         case "my_visits":
         default:
@@ -212,7 +229,41 @@ export async function countAsmQueueRows({
 }
 
 /**
- * Badge counts for all four tabs in one round trip.
+ * The first `limit` CLAIMABLE ids under the SAME tab, filters and sort the
+ * table shows — feeds "Select first N" on the bulk-claim bar. Mirrors
+ * fetchQueueIds on the Inside Sales queue; the caller caps `limit` at
+ * BULK_CLAIM_CAP.
+ *
+ * The extra `current_owner_id IS NULL` is for Territory Feed, where owned
+ * rows sit beside unowned ones: "select first 10" must hand back 10 leads the
+ * claim will actually take, not 10 rows of which 7 come back "skipped".
+ */
+export async function fetchAsmQueueIds({
+    tab,
+    asmId,
+    limit,
+    q,
+    filters,
+    visitStatus,
+    visitOutcome,
+    sort,
+}: Omit<BuildArgs, "page">): Promise<string[]> {
+    const where = tabFilter(tab, asmId);
+    const order = queueSortOrder(sort, tabOrder(tab));
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome });
+    const rows = await db.execute<{ id: string }>(sql`
+        SELECT dl.id
+        FROM dealer_leads dl
+        ${LATEST_VISIT_JOIN}
+        WHERE ${where} ${search} AND dl.current_owner_id IS NULL
+        ${order}
+        LIMIT ${limit}
+    `);
+    return rows.map((r) => r.id);
+}
+
+/**
+ * Badge counts for all five tabs in one round trip.
  *
  * The filters are threaded through for the same reason the Inside Sales badges
  * take them: a badge reading "My Active Visits 3" above a table filtered down to
@@ -232,12 +283,14 @@ export async function fetchAllAsmTabCounts(
         my_visits: string;
         today: string;
         territory: string;
+        unclaimed: string;
         my_closed: string;
     }>(sql`
         SELECT
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_visits", asmId)} ${extra}) AS my_visits,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("today", asmId)} ${extra}) AS today,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("territory", asmId)} ${extra}) AS territory,
+            (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("unclaimed", asmId)} ${extra}) AS unclaimed,
             (SELECT COUNT(*)::text FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${tabFilter("my_closed", asmId)} ${extra}) AS my_closed
     `);
     const r = rows[0]!;
@@ -245,6 +298,7 @@ export async function fetchAllAsmTabCounts(
         my_visits: Number(r.my_visits ?? 0),
         today: Number(r.today ?? 0),
         territory: Number(r.territory ?? 0),
+        unclaimed: Number(r.unclaimed ?? 0),
         my_closed: Number(r.my_closed ?? 0),
     };
 }
