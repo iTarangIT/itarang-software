@@ -66,7 +66,7 @@ export default function AuctionAnalytics() {
     <>
       <Eyebrow>scheduler</Eyebrow>
       {health.isLoading ? (
-        <div className="auc-skel" style={{ height: "6rem", marginBlockTop: "0.75rem" }} />
+        <div className="auc-skel" style={{ height: "6rem", marginBlockStart: "0.75rem" }} />
       ) : health.isError ? (
         <div className="auc-inline-error">
           {(health.error as Error).message}

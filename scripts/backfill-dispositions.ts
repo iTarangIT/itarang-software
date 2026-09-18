@@ -277,7 +277,8 @@ async function passFromSyncEvents(sql: postgres.Sql, counts: Counters) {
     }
 
     const last = events[events.length - 1];
-    const next = { created_at: last.created_at_key, id: last.id_text };
+    // Annotated to break the inference loop `after` → `next` → `events` → `after`.
+    const next: { created_at: string; id: string } = { created_at: last.created_at_key, id: last.id_text };
     // Belt and braces after the precision bug above: if a batch ends where the
     // previous one did, the cursor is not advancing and the only thing another
     // query can do is loop forever.

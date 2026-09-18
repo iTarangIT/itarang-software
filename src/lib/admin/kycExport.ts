@@ -46,7 +46,7 @@ export interface KycExportFilters {
     lead_ids?: string[] | null;
 }
 
-export interface KycExportRow {
+export type KycExportRow = {
     lead_id: string;
     applicant_name: string | null;
     phone: string | null;

@@ -6,7 +6,8 @@
  * Non-mutating.
  */
 import type { Probe, ProbeContext } from "../probe-context";
-import type { RawFinding, Severity } from "../types";
+import type { Severity } from "../severity";
+import type { RawFinding } from "../types";
 import { get, looksLikeData, detectPii } from "./util";
 import { SENSITIVE_UNAUTH_ROUTES, DEBUG_ROUTES } from "../crawl";
 

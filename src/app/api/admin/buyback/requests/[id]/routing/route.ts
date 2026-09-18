@@ -180,7 +180,13 @@ export const POST = withErrorHandler(
 
     const serial = request.request_no.replace(/^BB-/, "");
 
-    const prepared = [];
+    const prepared: Array<{
+      threadId: string;
+      quotationNo: string;
+      vendor: (typeof vendors)[number];
+      key: string;
+      askTotal: ReturnType<typeof toVendorQuotation>["ask_total"];
+    }> = [];
     for (const [i, vendor] of vendors.entries()) {
       const threadId = randomUUID();
       const quotationNo = `QTN-${serial}-${i + 1}`;

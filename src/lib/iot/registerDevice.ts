@@ -13,7 +13,8 @@ import { eq, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { iotDevices } from "@/lib/db/schema";
 
-type Db = typeof db;
+/** The pooled client or a transaction handle — both expose the same query API. */
+type Db = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export interface RegisterDeviceInput {
   serialNumber: string;
@@ -61,15 +62,24 @@ export async function registerIotDevice(
   }
 
   try {
+    // iot_devices.dealer_id / model / category are NOT NULL (verified on
+    // database-1). A missing value used to surface as a Postgres NOT NULL
+    // violation out of the same catch; now it is said in words.
+    const { dealerId, model, category } = input;
+    if (!dealerId || !model || !category) {
+      throw new Error(
+        `iot_devices needs dealer_id, model and category (got ${JSON.stringify({ dealerId, model, category })})`,
+      );
+    }
     const [inserted] = await conn
       .insert(iotDevices)
       .values({
         device_id: deviceId,
         serial_number: serialNumber,
         imei_id: imeiId,
-        dealer_id: input.dealerId ?? null,
-        model: input.model ?? null,
-        category: input.category ?? null,
+        dealer_id: dealerId,
+        model,
+        category,
         device_status: "registered",
       })
       .returning({

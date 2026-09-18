@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications, users, accounts, dealers } from "@/lib/db/schema";
+import {
+  dealerOnboardingApplications,
+  users,
+  accounts,
+  dealers,
+  whatsappOperators,
+} from "@/lib/db/schema";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";

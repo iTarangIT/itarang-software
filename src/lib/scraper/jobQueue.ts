@@ -149,7 +149,7 @@ const ELIGIBLE = sql`(
   )
 )`;
 
-interface ClaimedJob {
+type ClaimedJob = {
   id: string;
   query_text: string;
   city: string | null;
@@ -413,7 +413,7 @@ export async function cancelBatch(
 
 // ── reads ──────────────────────────────────────────────────────────────────
 
-export interface BatchSummary {
+export type BatchSummary = {
   batch_id: string;
   total: number;
   queued: number;

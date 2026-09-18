@@ -16,7 +16,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  type TooltipProps,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
 import { formatINR, costCentsToInr } from "@/lib/currency";
@@ -29,7 +28,15 @@ function shortDate(iso: string): string {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
-function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+/** What recharts passes to `content={<CustomTooltip />}` — all optional so the
+ *  bare element type-checks (recharts 3's TooltipContentProps are all required). */
+type CustomTooltipProps = {
+  active?: boolean;
+  payload?: ReadonlyArray<{ value?: number | string; payload?: unknown }>;
+  label?: string | number;
+};
+
+function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   if (!active || !payload?.length) return null;
   const point = payload[0];
   const inrValue = Number(point.value ?? 0);

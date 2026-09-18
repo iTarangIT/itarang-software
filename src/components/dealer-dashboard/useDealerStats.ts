@@ -36,6 +36,18 @@ export type DealerApiData = {
   isApproved: boolean;
 };
 
+export type LeadItem = {
+  id: string;
+  owner_name?: string | null;
+  owner_contact?: string | null;
+  interest_level?: string | null;
+  lead_status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  current_address?: string | null;
+  payment_method?: string | null;
+};
+
 export type DealerStatsResponse = {
   dealer: DealerApiData | null;
   metrics: {
@@ -48,7 +60,7 @@ export type DealerStatsResponse = {
     loanCount: number;
     rewards: number;
   };
-  recentLeads: unknown[];
+  recentLeads: LeadItem[];
 };
 
 let inFlight: Promise<DealerStatsResponse | null> | null = null;

@@ -12,7 +12,7 @@
 
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 
-export interface MixDatum {
+export type MixDatum = {
   key: string;
   units: number;
 }
