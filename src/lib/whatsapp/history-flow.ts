@@ -32,6 +32,7 @@ import {
   listFlowEvents,
   type LeadFlowEvent,
 } from "./lead-events";
+import { leadStatusLabel } from "./labels";
 import { registerLeadState } from "./lead-states";
 import {
   mergeContext,
@@ -198,6 +199,11 @@ function eventLabel(e: LeadFlowEvent): string {
   if (e.action === "submitted") return "submitted the lead to iTarang";
   if (e.action === "takeover")
     return e.note ? `took over the lead (from ${e.note})` : "took over the lead";
+  // B14 — a stage update pushed to this chat (FI scheduled / done, agreement
+  // sent / signed …). The note is the notification's title.
+  if (e.action === "notify") return e.note ? `updated you: *${e.note}*` : "sent you an update";
+  // B15 — the lender disbursed the loan.
+  if (e.action === "disbursed") return e.note ? `confirmed the loan was *disbursed* (${e.note})` : "confirmed the loan was *disbursed*";
   if (e.action.startsWith("action:")) {
     const key = e.action.slice("action:".length);
     switch (key) {
@@ -225,6 +231,10 @@ function eventLabel(e: LeadFlowEvent): string {
         return "opened *Extra documents*";
       case "dr_send":
         return "sent a requested document";
+      case "pay_ok":
+        return "confirmed the loan payment *received*";
+      case "pay_no":
+        return "reported the loan payment *not received*";
       default:
         return `tapped ${key}`;
     }
@@ -271,7 +281,7 @@ export async function leadHistoryCard(
   const head = [
     `🕘 *History — ${name}* (${mobile})`,
     `Created by *${row.salespersonName ?? "you"}* — ${fmtWhen(row.createdAt)}`,
-    `Status: ${row.kycStatus || "draft"}${row.paymentMethod ? ` · ${row.paymentMethod}` : ""}`,
+    `Status: ${leadStatusLabel(row.kycStatus)}${row.paymentMethod ? ` · ${row.paymentMethod.replace(/_/g, " ")}` : ""}`,
   ].join("\n");
 
   const events = await listFlowEvents(leadId, 30);

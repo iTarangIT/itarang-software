@@ -29,6 +29,7 @@ import GoToStepButton from "../_components/GoToStepButton";
 import RejectFileButton from "../_components/RejectFileButton";
 import SanctionPanel from "../_components/SanctionPanel";
 import NbfcVerificationPanel from "../_components/NbfcVerificationPanel";
+import DealerPaymentChip from "@/components/loans/DealerPaymentChip";
 import LeadStageStepper, {
   type NextAction,
   type StepperStage,
@@ -880,6 +881,11 @@ export default async function AcquireLeadDetailPage({
             <p className="text-xs text-slate-500 mt-2">
               Assigned {fmtDate(assignment.assigned_at)}
             </p>
+            {sold ? (
+              <div className="mt-2">
+                <DealerPaymentChip leadId={leadId} tenantId={tenant.id} />
+              </div>
+            ) : null}
           </div>
         </div>
       </header>

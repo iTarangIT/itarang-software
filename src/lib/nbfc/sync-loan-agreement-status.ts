@@ -23,6 +23,8 @@ import { nbfcLoanAgreements } from "@/lib/db/schema";
 import { getDigioBaseUrl, getDigioBasicAuth } from "@/lib/digio/client";
 import { getLatestAgreement } from "@/lib/nbfc/agreement";
 import { fetchSignedLoanAgreementPdfAndAuditTrail } from "@/lib/nbfc/fetchSignedAgreementPdf";
+import { notifyLoanAgreementEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 interface DigioParty {
   identifier?: string;
@@ -132,6 +134,19 @@ export async function syncLoanAgreementStatusFromDigio(
         }
       }
       await db.update(nbfcLoanAgreements).set(updates).where(eq(nbfcLoanAgreements.id, row.id));
+      // B14 — the webhook announces a signature; a signature the poll found
+      // (webhook missed / not configured) must reach the same three parties.
+      // The emit hook dedupes with the webhook's own emit for ten minutes.
+      try {
+        await notifyLoanAgreementEvent({
+          leadId: row.lead_id,
+          event: "signed",
+          nbfcName: await tenantDisplayName(row.tenant_id),
+          tenantId: row.tenant_id,
+        });
+      } catch (err) {
+        console.error("[sync-loan-agreement-status] signed notification failed:", err);
+      }
       console.info("[sync-loan-agreement-status] promoted to signed", {
         leadId,
         nbfcId,

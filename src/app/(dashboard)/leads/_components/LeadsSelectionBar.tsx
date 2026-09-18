@@ -13,9 +13,11 @@
 // offers the rest.
 
 import { useState } from "react";
-import { Loader2, Send, X } from "lucide-react";
+import { Loader2, Send, Tag, X } from "lucide-react";
+import { toast } from "sonner";
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
 import type { LeadsCapabilities } from "@/lib/leads/access";
+import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
 
 type Props = {
     selectedCount: number;
@@ -60,6 +62,43 @@ export function LeadsSelectionBar({
     // Number() cannot be cleared — backspacing to empty yields NaN and snaps
     // back to the last value, so the field fights anyone retyping it.
     const [countDraft, setCountDraft] = useState("");
+    // E-296 bulk "Type of Business". "" = nothing picked yet; "__clear" = set
+    // back to Not set.
+    const [typeDraft, setTypeDraft] = useState("");
+    const [settingType, setSettingType] = useState(false);
+
+    async function applyBusinessType() {
+        if (!typeDraft) return;
+        setSettingType(true);
+        try {
+            const res = await fetch("/api/admin/leads/bulk", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "set_business_type",
+                    lead_ids: selectedIds,
+                    business_type: typeDraft === "__clear" ? null : typeDraft,
+                }),
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json?.success) {
+                throw new Error(
+                    json?.error?.message ?? "Could not set the type of business.",
+                );
+            }
+            toast.success(
+                `Type of Business updated on ${json.data.affected} lead${
+                    json.data.affected === 1 ? "" : "s"
+                }${json.data.skipped ? `, ${json.data.skipped} skipped` : ""}.`,
+            );
+            setTypeDraft("");
+            onBulkDone();
+        } catch (e) {
+            toast.error((e as Error).message);
+        } finally {
+            setSettingType(false);
+        }
+    }
 
     if (selectedCount === 0) return null;
 
@@ -157,6 +196,37 @@ export function LeadsSelectionBar({
                         <X className="h-3.5 w-3.5" />
                         Clear
                     </button>
+
+                    {caps.canBulkAct && (
+                        <div className="flex items-center gap-1.5">
+                            <Tag className="h-3.5 w-3.5 text-sky-700" />
+                            <select
+                                value={typeDraft}
+                                onChange={(e) => setTypeDraft(e.target.value)}
+                                aria-label="Set type of business"
+                                className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sky-900 outline-none focus:border-sky-400"
+                            >
+                                <option value="">Set type of business…</option>
+                                {BUSINESS_TYPE_OPTIONS.map((o) => (
+                                    <option key={o.value} value={o.value}>
+                                        {o.label}
+                                    </option>
+                                ))}
+                                <option value="__clear">Clear (Not set)</option>
+                            </select>
+                            <button
+                                type="button"
+                                onClick={applyBusinessType}
+                                disabled={!typeDraft || settingType}
+                                className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+                            >
+                                {settingType && (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                )}
+                                Set
+                            </button>
+                        </div>
+                    )}
 
                     {caps.canBulkAct && (
                         <BulkActionBar

@@ -242,6 +242,8 @@ export async function confirmDispatch(opts: {
           dealer_approved: true,
           dealer_approved_at: now,
           dealer_approved_by: performedBy,
+          // E-298 — funds released; the dealer now owes a "did it arrive?".
+          dealer_payment_status: "pending",
           updated_at: now,
         })
         .where(eq(loanSanctions.id, loan.id));
@@ -312,6 +314,20 @@ export async function confirmDispatch(opts: {
       lenderName: loan.loan_approved_by ?? null,
       loanAmount: loan.loan_amount ?? null,
     }).catch(() => {});
+
+    // E-298 — ask the dealer to confirm the payout reached them (bell + a
+    // WhatsApp prompt with Received / Not received buttons). Not awaited: the
+    // sale is committed and a messaging failure must not surface here.
+    void import("@/lib/leads/dealer-payment-confirmation")
+      .then(({ promptDealerForPayment }) =>
+        promptDealerForPayment({
+          leadId,
+          sanctionId: loan.id,
+          lenderName: loan.external_lender ?? loan.loan_approved_by ?? null,
+          loanAmount: loan.loan_amount ?? null,
+        }),
+      )
+      .catch((err) => console.error("[confirm-dispatch] payment prompt failed:", err));
 
     // E-276 — contact-email copy to the WINNING lender only (+ global monitoring
     // CC). loan.nbfc_id is the tenant uuid (the sanction route writes

@@ -27,6 +27,7 @@ import type {
   DigestDetailRow,
   DigestFigures,
   DigestKindDescriptor,
+  DigestTable,
 } from "@/lib/digests/types";
 import type { DigestDetailLevel, DigestSections } from "@/lib/digests/schedule";
 import { getMailer } from "./mailer";
@@ -140,7 +141,7 @@ export function buildDigestEmail(
           text-transform:uppercase;white-space:nowrap">${esc(l.label)}</td>
         <td style="padding:${l.indent ? "3px 0" : "7px 0"};color:${l.indent ? MUTED : NAVY};
           font-size:${l.indent ? "14px" : "20px"};font-weight:${l.indent ? 600 : 700};
-          text-align:right">${esc(l.value)}</td>
+          text-align:right">${esc(l.display ?? l.value)}</td>
       </tr>`,
     )
     .join("");
@@ -155,6 +156,45 @@ export function buildDigestEmail(
           font-weight:700;text-align:right">${esc(l.display ?? l.value)}</td>
       </tr>`,
     )
+    .join("");
+
+  // B8 — grid blocks. A plain table, no fixed widths, so Gmail on a phone
+  // reflows it instead of forcing a horizontal scroll. Numbers right-aligned,
+  // header row uppercase like the activity labels. Tables are section-gated
+  // like lines, so an admin can drop one period from the mail.
+  const tables: DigestTable[] = (p.figures.tables ?? []).filter((t) => on(t.key));
+  const tableBlocks = tables
+    .map((t) => {
+      const head = t.columns
+        .map(
+          (c, i) => `<th style="padding:6px 6px;color:${MUTED};font-size:10px;letter-spacing:.06em;
+            text-transform:uppercase;text-align:${i < 2 ? "left" : "right"};
+            border-bottom:1px solid #e2e8f0;vertical-align:bottom">${esc(c)}</th>`,
+        )
+        .join("");
+      const body = t.rows
+        .map(
+          (r) =>
+            `<tr>${r
+              .map(
+                (v, i) => `<td style="padding:6px 6px;color:${SLATE};font-size:13px;
+                  text-align:${i < 2 ? "left" : "right"};border-bottom:1px solid #f1f5f9;
+                  ${typeof v === "number" ? "font-variant-numeric:tabular-nums;" : ""}">${esc(v)}</td>`,
+              )
+              .join("")}</tr>`,
+        )
+        .join("");
+      const grid = t.rows.length
+        ? `<table role="presentation" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse;width:100%;margin:0 0 6px;font-family:Arial,sans-serif">
+             <thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+        : `<p style="margin:0 0 6px;color:${MUTED};font-size:13px;font-family:Arial,sans-serif">
+             ${esc(t.empty ?? "Nothing to show.")}</p>`;
+      return `
+      <p style="margin:22px 0 6px;color:${MUTED};font-size:11px;letter-spacing:.14em;
+        text-transform:uppercase;font-family:Arial,sans-serif">${esc(t.title)}</p>
+      ${grid}`;
+    })
     .join("");
 
   // In `detailed`, each non-zero line with a bucket is followed by its rows.
@@ -197,6 +237,7 @@ export function buildDigestEmail(
              font-family:Arial,sans-serif">${activityRows}</table>`
         : ""
     }
+    ${tableBlocks}
     ${detailBlocks}
     ${
       backlog.length
@@ -224,8 +265,8 @@ export function buildDigestEmail(
         : ""
     }
     <p style="color:#94a3b8;font-size:12px;font-family:Arial,sans-serif;margin:0">
-      Sent twice a day by iTarang. Change the times, the recipients or what this
-      email contains at Settings → ${esc(p.kind.label)}.
+      Sent ${p.kind.slots && p.kind.slots.length === 1 ? "every morning" : "twice a day"} by iTarang.
+      Change the times, the recipients or what this email contains at Settings → ${esc(p.kind.label)}.
     </p>
   </div>`;
 
@@ -236,7 +277,16 @@ export function buildDigestEmail(
     `${p.kind.label} — ${copy.period(dayLabel)}`,
   ];
   if (activity.length) {
-    textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.value}`));
+    textParts.push("", ...activity.map((l) => `${l.indent ? "  " : ""}${l.label}: ${l.display ?? l.value}`));
+  }
+  for (const t of tables) {
+    textParts.push("", t.title.toUpperCase());
+    if (!t.rows.length) {
+      textParts.push(`  ${t.empty ?? "Nothing to show."}`);
+      continue;
+    }
+    textParts.push(`  ${t.columns.join(" | ")}`);
+    for (const r of t.rows) textParts.push(`  ${r.map(String).join(" | ")}`);
   }
   if (detailed) {
     for (const l of activity) {
@@ -259,8 +309,10 @@ export function buildDigestEmail(
   if (p.attachment) textParts.push("", `Attached: ${p.attachment.filename}`);
   textParts.push("", `${p.kind.ctaLabel}: ${href}`);
 
-  const subject =
-    p.slot === "evening"
+  const subject = p.kind.subject
+    ? p.kind.subject({ istDay: p.istDay, dayLabel, slot: p.slot }) +
+      (p.slot === "test" ? " (test send)" : "")
+    : p.slot === "evening"
       ? `[iTarang] ${p.kind.label} — today (${dayLabel})`
       : p.slot === "test"
         ? `[iTarang] ${p.kind.label} — test send (${dayLabel})`

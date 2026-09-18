@@ -93,6 +93,15 @@ jobs:
         run: |
           time npm ci --no-audit --no-fund
 
+      # B1 — the safety net next.config.ts still switches off (ignoreBuildErrors).
+      # Fails the job on any TypeScript error in src/ and scripts/ (tsconfig.check.json,
+      # which excludes legacy-vite and .next). next.config.ts is flipped only after
+      # two green weeks here; production's workflow is untouched until then.
+      - name: Type-check (tsc --noEmit, tsconfig.check.json)
+        run: |
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          time npm run type-check
+
       - name: Build (next build --webpack)
         run: |
           export CI=1

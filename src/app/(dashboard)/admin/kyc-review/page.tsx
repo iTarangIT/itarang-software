@@ -29,12 +29,27 @@ type LeadReview = {
     lead_id: string;
     owner_name: string;
     dealer_name: string;
+    dealer_id?: string | null;
+    city?: string | null;
+    submitted_at?: string | null;
+    reviewed_at?: string | null;
     kyc_status: string;
     interest_level: string;
     has_co_borrower: boolean;
     documents: ReviewableDoc[];
     review_count: number;
     pending_count: number;
+    rejection_count?: number;
+    latest_rejection_reason?: string | null;
+    latest_rejection_document_type?: string | null;
+    latest_rejected_at?: string | null;
+};
+
+type KycSummary = {
+    queue: { pending: number; inProgress: number; requestedCorrection: number; rejected: number; approved: number };
+    rejectedLeads: number;
+    latestRejection: { lead_id: string; rejection_reason: string | null; document_type: string | null; reviewed_at: string | null } | null;
+    loans: { sanctioned: number; disbursed: number };
 };
 
 // Lead ids per file-tracker request. Keeps the query string short and stays
@@ -48,6 +63,22 @@ export default function AdminKYCReviewPage() {
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterStatus, setFilterStatus] = useState('pending');
+    // B12 — lead-level filters. The list AND the export take exactly these,
+    // so what downloads is what is on screen.
+    const [filterDealer, setFilterDealer] = useState('');
+    const [filterCity, setFilterCity] = useState('');
+    const [filterFrom, setFilterFrom] = useState('');
+    const [filterTo, setFilterTo] = useState('');
+    const [dealerOptions, setDealerOptions] = useState<{ id: string; name: string }[]>([]);
+    const leadFilterParams = () => {
+        const p: Record<string, string> = {};
+        if (filterDealer) p.dealer_id = filterDealer;
+        if (filterCity.trim()) p.city = filterCity.trim();
+        if (filterFrom) p.from = filterFrom;
+        if (filterTo) p.to = filterTo;
+        return p;
+    };
+    const anyLeadFilter = !!(filterDealer || filterCity.trim() || filterFrom || filterTo);
     const [expandedLead, setExpandedLead] = useState<string | null>(null);
     const [reviewingDoc, setReviewingDoc] = useState<string | null>(null);
     const [reviewAction, setReviewAction] = useState<'verified' | 'rejected' | 'request_additional'>('verified');
@@ -55,6 +86,67 @@ export default function AdminKYCReviewPage() {
     const [rejectionReason, setRejectionReason] = useState('');
     const [additionalDocRequest, setAdditionalDocRequest] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [summary, setSummary] = useState<KycSummary | null>(null);
+
+    // B12 — bulk KYC export, one button: with cases ticked it exports those;
+    // with nothing ticked it exports every case currently listed (tab, dealer,
+    // city, date and search filters all applied). Both paths go
+    // through POST so a long id list never has to fit in a URL. The route is
+    // admin / CEO / sales head only and logs every download to audit_logs.
+    const [selectedLeads, setSelectedLeads] = useState<Set<string>>(() => new Set());
+    const [exporting, setExporting] = useState<'all' | 'selected' | null>(null);
+    const toggleLead = (id: string) =>
+        setSelectedLeads(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    const exportKyc = async (mode: 'all' | 'selected') => {
+        // Always the ids ON SCREEN. The tab filter here ("Rejected" = leads with
+        // a rejected DOCUMENT) is not the export route's status filter ("rejected"
+        // = case outcome), so re-deriving the set server-side can disagree with
+        // the list. Sending the listed ids makes the file exactly the list.
+        const body: Record<string, unknown> =
+            mode === 'selected'
+                ? { lead_ids: Array.from(selectedLeads) }
+                : { lead_ids: leads.map(l => l.lead_id) };
+        setExporting(mode);
+        try {
+            const res = await fetch('/api/admin/exports/kyc.xlsx', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                let detail = '';
+                try { const j = await res.json(); detail = j?.error?.message ?? j?.error ?? ''; } catch { detail = await res.text().catch(() => ''); }
+                throw new Error(res.status === 403 ? 'Only admin, CEO or sales head can export KYC data.' : String(detail).slice(0, 200) || 'Export failed');
+            }
+            const rows = Number(res.headers.get('X-Export-Rows') ?? 0);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'kyc-export.xlsx';
+            a.click();
+            URL.revokeObjectURL(url);
+            toast.success(`Exported ${rows} KYC row${rows === 1 ? '' : 's'}.`);
+        } catch (e) {
+            toast.error((e as Error).message);
+        } finally {
+            setExporting(null);
+        }
+    };
+
+    // Queue-status / rejection / sanction counts — server-side, independent of
+    // the filter tabs (those only change which leads are listed below).
+    const fetchSummary = async () => {
+        try {
+            const res = await fetch('/api/admin/kyc-reviews/summary', { cache: 'no-store' });
+            const json = await res.json();
+            if (res.ok && json.success) setSummary(json.data as KycSummary);
+        } catch { /* silent */ }
+    };
 
     // Lender status for the leads on screen. Failures are silent: the card
     // simply shows no lender chip until the next refresh.
@@ -82,7 +174,7 @@ export default function AdminKYCReviewPage() {
     const fetchReviews = async (silent = false) => {
         try {
             if (!silent) setLoading(true);
-            const params = new URLSearchParams({ status: filterStatus, search: searchQuery });
+            const params = new URLSearchParams({ status: filterStatus, search: searchQuery, ...leadFilterParams() });
             const res = await fetch(`/api/admin/kyc-reviews?${params}`);
             const data = await res.json();
             if (data.success) {
@@ -96,13 +188,35 @@ export default function AdminKYCReviewPage() {
 
     useEffect(() => {
         fetchReviews();
-    }, [filterStatus, searchQuery]);
+    }, [filterStatus, searchQuery, filterDealer, filterCity, filterFrom, filterTo]);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const res = await fetch('/api/admin/dealers?limit=1000', { cache: 'no-store' });
+                const j = await res.json();
+                if (j?.success && Array.isArray(j.data)) {
+                    setDealerOptions(
+                        j.data
+                            .map((d: { id: string; business_entity_name?: string | null }) => ({ id: d.id, name: d.business_entity_name || d.id }))
+                            .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)),
+                    );
+                }
+            } catch { /* dropdown stays empty; typing a city still works */ }
+        })();
+    }, []);
+
+    useEffect(() => {
+        fetchSummary();
+        const interval = setInterval(fetchSummary, 30000);
+        return () => clearInterval(interval);
+    }, []);
 
     // Auto-refresh every 30 seconds
     useEffect(() => {
         const interval = setInterval(() => fetchReviews(true), 30000);
         return () => clearInterval(interval);
-    }, [filterStatus, searchQuery]);
+    }, [filterStatus, searchQuery, filterDealer, filterCity, filterFrom, filterTo]);
 
     const handleReviewSubmit = async (docId: string, leadId: string) => {
         setSubmitting(true);
@@ -127,6 +241,7 @@ export default function AdminKYCReviewPage() {
                 setRejectionReason('');
                 setAdditionalDocRequest('');
                 await fetchReviews(true);
+                void fetchSummary();
             } else {
                 toast.error(data.error?.message || 'Review action failed');
             }
@@ -154,6 +269,31 @@ export default function AdminKYCReviewPage() {
                     <KPICard icon={<AlertTriangle className="w-5 h-5" />} label="Leads Needing Action" value={pendingLeads.length.toString()} color="red" />
                 </div>
 
+                {/* Summary strip — queue status counts, rejections, sanctions */}
+                <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-8">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                        <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Verification queue &amp; loans</p>
+                        {summary?.latestRejection?.rejection_reason && (
+                            <p
+                                className="text-xs text-red-600 truncate max-w-[50%]"
+                                title={summary.latestRejection.rejection_reason}
+                            >
+                                Latest rejection: {summary.latestRejection.rejection_reason}
+                            </p>
+                        )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                        <SummaryStat label="Pending verification" value={summary?.queue.pending} tone="amber" />
+                        <SummaryStat label="In progress" value={summary?.queue.inProgress} tone="blue" />
+                        <SummaryStat label="Correction requested" value={summary?.queue.requestedCorrection} tone="amber" />
+                        <SummaryStat label="Approved" value={summary?.queue.approved} tone="green" />
+                        <SummaryStat label="Rejected (queue)" value={summary?.queue.rejected} tone="red" />
+                        <SummaryStat label="Leads with rejected docs" value={summary?.rejectedLeads} tone="red" />
+                        <SummaryStat label="Sanctioned" value={summary?.loans.sanctioned} tone="green" />
+                        <SummaryStat label="Disbursed" value={summary?.loans.disbursed} tone="green" />
+                    </div>
+                </div>
+
                 {/* Filters */}
                 <div className="flex items-center gap-3 mb-6">
                     {['pending', 'all', 'verified', 'rejected'].map(s => (
@@ -162,10 +302,55 @@ export default function AdminKYCReviewPage() {
                         </button>
                     ))}
                     <div className="flex-1" />
+                    {/* ONE button: ticked cases when any are ticked, otherwise every
+                        case matching the current filter. The label says which. */}
+                    <button
+                        type="button"
+                        onClick={() => exportKyc(selectedLeads.size > 0 ? 'selected' : 'all')}
+                        disabled={exporting !== null}
+                        title={selectedLeads.size > 0
+                            ? `Excel of the ${selectedLeads.size} ticked case${selectedLeads.size === 1 ? '' : 's'}`
+                            : 'Excel of every case matching the current filter — tick cases to export only those'}
+                        className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-bold rounded-xl hover:bg-gray-50 disabled:opacity-50"
+                    >
+                        {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        {selectedLeads.size > 0 ? `Export selected (${selectedLeads.size})` : 'Export'}
+                    </button>
                     <div className="relative">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search lead or dealer..." className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm w-64 outline-none focus:border-[#1D4ED8]" />
                     </div>
+                </div>
+
+                {/* B12 — lead-level filters: dealer, city, case date range. */}
+                <div className="flex flex-wrap items-end gap-3 mb-6 -mt-3">
+                    <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1">Dealer</label>
+                        <select value={filterDealer} onChange={e => setFilterDealer(e.target.value)} className="h-10 min-w-[200px] px-3 border border-gray-200 rounded-xl text-sm bg-white outline-none focus:border-[#1D4ED8]">
+                            <option value="">All dealers</option>
+                            {dealerOptions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1">City</label>
+                        <input value={filterCity} onChange={e => setFilterCity(e.target.value)} placeholder="Any city" className="h-10 w-40 px-3 border border-gray-200 rounded-xl text-sm outline-none focus:border-[#1D4ED8]" />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1">Case date from</label>
+                        <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="h-10 px-3 border border-gray-200 rounded-xl text-sm outline-none focus:border-[#1D4ED8]" />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1">Case date to</label>
+                        <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="h-10 px-3 border border-gray-200 rounded-xl text-sm outline-none focus:border-[#1D4ED8]" />
+                    </div>
+                    {anyLeadFilter && (
+                        <button type="button" onClick={() => { setFilterDealer(''); setFilterCity(''); setFilterFrom(''); setFilterTo(''); }} className="h-10 px-4 text-sm font-bold text-gray-600 border border-gray-200 rounded-xl bg-white hover:bg-gray-50">
+                            Clear filters
+                        </button>
+                    )}
+                    <p className="text-xs text-gray-500 pb-2">
+                        Case date = when the case was reviewed, or submitted while it is still pending. The export follows these filters.
+                    </p>
                 </div>
 
                 {/* Lead Review Cards */}
@@ -183,6 +368,14 @@ export default function AdminKYCReviewPage() {
                                 {/* Lead Header. The delete control is a SIBLING of the
                                     expander, not a child: a <button> cannot nest. */}
                                 <div className="flex items-stretch">
+                                <label className="flex items-center pl-5 pr-1 cursor-pointer" title="Select for export">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedLeads.has(lead.lead_id)}
+                                        onChange={() => toggleLead(lead.lead_id)}
+                                        className="h-4 w-4 rounded border-gray-300 text-[#0047AB] focus:ring-[#1D4ED8]"
+                                    />
+                                </label>
                                 <button
                                     onClick={() => setExpandedLead(expandedLead === lead.lead_id ? null : lead.lead_id)}
                                     className="flex-1 min-w-0 flex items-center justify-between p-6 hover:bg-gray-50/50"
@@ -194,6 +387,15 @@ export default function AdminKYCReviewPage() {
                                         <div className="text-left">
                                             <div className="font-bold text-gray-900">{lead.owner_name}</div>
                                             <div className="text-xs text-gray-500">Lead: {lead.lead_id} · Dealer: {lead.dealer_name}</div>
+                                            {lead.latest_rejection_reason && (
+                                                <div
+                                                    className="text-xs text-red-600 mt-0.5 truncate max-w-[420px]"
+                                                    title={lead.latest_rejection_reason}
+                                                >
+                                                    Rejected{lead.latest_rejection_document_type ? ` (${lead.latest_rejection_document_type.replace(/_/g, ' ')})` : ''}: {lead.latest_rejection_reason}
+                                                    {(lead.rejection_count ?? 0) > 1 ? ` · ${lead.rejection_count} rejections` : ''}
+                                                </div>
+                                            )}
                                         </div>
                                         {lead.has_co_borrower && (
                                             <span className="px-2 py-0.5 bg-purple-50 text-purple-700 text-[10px] font-bold rounded-full">Has Co-Borrower</span>
@@ -362,6 +564,16 @@ export default function AdminKYCReviewPage() {
                     )}
                 </div>
             </div>
+        </div>
+    );
+}
+
+function SummaryStat({ label, value, tone }: { label: string; value: number | undefined; tone: 'amber' | 'blue' | 'green' | 'red' }) {
+    const toneClass: Record<string, string> = { amber: 'text-amber-600', blue: 'text-blue-600', green: 'text-green-600', red: 'text-red-600' };
+    return (
+        <div className="rounded-xl bg-gray-50 px-3 py-2">
+            <p className={`text-lg font-black ${toneClass[tone]}`}>{value ?? '—'}</p>
+            <p className="text-[11px] font-medium text-gray-500 leading-tight">{label}</p>
         </div>
     );
 }

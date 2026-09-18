@@ -18,6 +18,7 @@
  */
 
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { isBusinessTypeFilter } from "@/lib/leads/businessType";
 
 export type QueueFilters = {
   /** `dealer_leads.lead_status`, exact. "" = any. */
@@ -32,6 +33,12 @@ export type QueueFilters = {
   from: string;
   /** End of the date range, YYYY-MM-DD, INCLUSIVE — see queueFilterSql. */
   to: string;
+  /**
+   * E-296 `dealer_leads.business_type` — a BUSINESS_TYPES value, or "unset"
+   * for leads with none recorded. "" = any. Snake-case because the key IS the
+   * URL param name (writeQueueFilters), matching /api/dealer-leads.
+   */
+  business_type: string;
 };
 
 export const EMPTY_QUEUE_FILTERS: QueueFilters = {
@@ -41,6 +48,7 @@ export const EMPTY_QUEUE_FILTERS: QueueFilters = {
   city: "",
   from: "",
   to: "",
+  business_type: "",
 };
 
 export const QUEUE_FILTER_KEYS = Object.keys(
@@ -117,6 +125,9 @@ export function readQueueFilters(sp: URLSearchParams): QueueFilters {
     city: sp.get("city")?.trim() ?? "",
     from: ISO_DATE.test(from) ? from : "",
     to: ISO_DATE.test(to) ? to : "",
+    business_type: isBusinessTypeFilter(sp.get("business_type"))
+      ? (sp.get("business_type") as string)
+      : "",
   };
 }
 

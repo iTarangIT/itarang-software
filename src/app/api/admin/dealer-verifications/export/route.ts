@@ -5,6 +5,7 @@ import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
   dealerAgreementSigners,
+  dealerCorrectionRounds,
 } from "@/lib/db/schema";
 import { and, desc, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
@@ -189,6 +190,8 @@ export async function GET(req: NextRequest) {
     // Distinct document-type counts (excludes superseded / pending_correction),
     // mirroring the on-screen "N uploaded" badge.
     const docCountMap = new Map<string, number>();
+    // Correction rounds requested per application (dealer_correction_rounds).
+    const roundCountMap = new Map<string, number>();
     // Latest signer per role, per application, for the signed/pending columns.
     const dealerSignerMap = new Map<string, { signer_status: string | null; signed_at: Date | null }>();
     const itarangSignerMap = new Map<string, { signer_status: string | null; signed_at: Date | null }>();
@@ -208,6 +211,16 @@ export async function GET(req: NextRequest) {
         )
         .groupBy(dealerOnboardingDocuments.application_id);
       for (const row of docCounts) docCountMap.set(row.applicationId, row.count);
+
+      const rounds = await db
+        .select({
+          applicationId: dealerCorrectionRounds.application_id,
+          count: sql<number>`cast(count(*) as integer)`,
+        })
+        .from(dealerCorrectionRounds)
+        .where(inArray(dealerCorrectionRounds.application_id, ids))
+        .groupBy(dealerCorrectionRounds.application_id);
+      for (const r of rounds) roundCountMap.set(r.applicationId, Number(r.count) || 0);
 
       const signers = await db
         .select({
@@ -273,6 +286,9 @@ export async function GET(req: NextRequest) {
       // Company Type (where it belongs logically) would shift every later
       // column letter and break anything downstream keyed on position.
       { key: "dealerType", label: "Dealer Type", width: 24 },
+      // Appended after Dealer Type for the same positional reason.
+      { key: "reviewStatus", label: "Review / KYC Status", width: 22 },
+      { key: "correctionRounds", label: "Correction Rounds", width: 16 },
     ];
 
     const records = filtered.map((a) => ({
@@ -314,6 +330,8 @@ export async function GET(req: NextRequest) {
       // No data source — manual fill-in column kept for the team's workflow.
       regenerateAgreement: "",
       dealerType: dealerTypeLabel(a.dealer_type, ""),
+      reviewStatus: a.review_status || "",
+      correctionRounds: roundCountMap.get(a.id) ?? 0,
     }));
 
     // ── Build the styled workbook ──────────────────────────────────────────
