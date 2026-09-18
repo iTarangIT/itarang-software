@@ -14,8 +14,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Sparkles,
+  Briefcase,
 } from "lucide-react";
 import Link from "next/link";
+import { BUSINESS_TYPE_OPTIONS } from "@/lib/leads/businessType";
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -63,6 +65,8 @@ export default function NewDealerLeadPage() {
     location: "",
     language: "hinglish",
     current_status: "new",
+    // E-296 "Type of Business". "" = not set.
+    business_type: "",
   });
 
   const update = (field: string, value: string) => {
@@ -100,6 +104,7 @@ export default function NewDealerLeadPage() {
           location: form.location.trim(),
           language: form.language,
           current_status: form.current_status,
+          business_type: form.business_type || null,
         }),
       });
       const data = await res.json();
@@ -243,6 +248,36 @@ export default function NewDealerLeadPage() {
             title="Lead Settings"
           >
             <div className="space-y-6">
+
+              {/* Type of Business (E-296) — optional; tap the active one to clear. */}
+              <div>
+                <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-2.5">
+                  <Briefcase className="w-3.5 h-3.5" /> Type of Business
+                  <span className="font-normal text-gray-400">(optional)</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {BUSINESS_TYPE_OPTIONS.map((t) => {
+                    const active = form.business_type === t.value;
+                    return (
+                      <button
+                        key={t.value}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() =>
+                          update("business_type", active ? "" : t.value)
+                        }
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                          active
+                            ? "bg-gray-900 text-white border-gray-900 shadow-sm"
+                            : "bg-white text-gray-600 border-gray-200 hover:border-gray-400 hover:bg-gray-50"
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               {/* Language */}
               <div>

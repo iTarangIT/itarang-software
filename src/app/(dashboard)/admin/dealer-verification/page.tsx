@@ -4,10 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  Building2,
   Clock3,
   Search,
-  ShieldCheck,
   ArrowRight,
   CheckCircle2,
   CalendarDays,
@@ -17,6 +15,9 @@ import {
   AlertTriangle,
   GitBranch,
   MessageCircle,
+  FileCheck2,
+  XCircle,
+  RotateCcw,
 } from "lucide-react";
 import DealerTypeBadge from "@/components/admin/dealer-verification/DealerTypeBadge";
 import {
@@ -66,6 +67,16 @@ function DuplicateBadge({ flag }: { flag?: DuplicateFlag | null }) {
   );
 }
 
+type DealerVerificationCounts = {
+  submitted: number;
+  approved: number;
+  rejected: number;
+  correctionRequested: number;
+  correctionRounds: number;
+  pendingReview: number;
+  total: number;
+};
+
 type DealerVerificationItem = {
   dealerId: string;
   dealerName: string;
@@ -74,6 +85,11 @@ type DealerVerificationItem = {
   agreement: string;
   agreementStatus?: string | null;
   status: string;
+  // Raw review_status (KYC / document review stage).
+  reviewStatus?: string | null;
+  // Only set on rejected applications (rejection_reason, else rejection_remarks).
+  rejectionReason?: string | null;
+  correctionRounds?: number | null;
   dealerAccountStatus?: string | null;
   submittedAt?: string | null;
   approvedAt?: string | null;
@@ -313,6 +329,32 @@ export default function DealerVerificationPage() {
     loadApplications();
   }, []);
 
+  // Server-side stat cards (/summary) — event counts in the selected submitted-
+  // date range, computed in IST days on the server. Correction Requested comes
+  // from dealer_correction_rounds, which the browser cannot see.
+  const [counts, setCounts] = useState<DealerVerificationCounts | null>(null);
+  const [countsError, setCountsError] = useState(false);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("dateFrom", dateFrom);
+    if (dateTo) params.set("dateTo", dateTo);
+    const qs = params.toString();
+    setCountsError(false);
+    fetch(`/api/admin/dealer-verifications/summary${qs ? `?${qs}` : ""}`, {
+      signal: ctrl.signal,
+    })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data?.success) setCounts(data.counts);
+        else setCountsError(true);
+      })
+      .catch((err) => {
+        if ((err as Error)?.name !== "AbortError") setCountsError(true);
+      });
+    return () => ctrl.abort();
+  }, [dateFrom, dateTo]);
+
   // Parse a "YYYY-MM-DD" input value into a local-midnight Date so day
   // boundaries align with the user's timezone (new Date("YYYY-MM-DD") parses
   // as UTC and shifts off by a day in many timezones).
@@ -444,26 +486,6 @@ export default function DealerVerificationPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [applications]);
 
-  const stats = useMemo(() => {
-    const total = applications.length;
-    const pending = applications.filter((a) =>
-      [
-        "submitted",
-        "pending_admin_review",
-        "pending_sales_head",
-        "under_review",
-        "agreement_in_progress",
-      ].includes(a.status)
-    ).length;
-    const approved = applications.filter((a) =>
-      ["approved", "completed", "succeed"].includes(a.status)
-    ).length;
-    const correction = applications.filter((a) =>
-      ["under_correction", "correction_requested"].includes(a.status)
-    ).length;
-    return { total, pending, approved, correction };
-  }, [applications]);
-
   const formatDisplayDate = (d: string) => {
     const parsed = parseLocalDate(d) ?? new Date(d);
     return parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
@@ -547,13 +569,30 @@ export default function DealerVerificationPage() {
         </div>
       </motion.div>
 
-      {/* ── Stats Row ── */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Total Applications" value={stats.total} subtitle="All onboarding submissions" icon={<Building2 className="h-5 w-5" />} />
-        <StatCard title="Pending Review" value={stats.pending} subtitle="Waiting for admin action" icon={<Clock3 className="h-5 w-5" />} />
-        <StatCard title="Approved" value={stats.approved} subtitle="Dealer accounts activated" icon={<CheckCircle2 className="h-5 w-5" />} />
-        <StatCard title="Correction Cases" value={stats.correction} subtitle="Need dealer clarification" icon={<ShieldCheck className="h-5 w-5" />} />
-      </div>
+      {/* ── Stats Row (server-side counts, honour the submitted-date range) ── */}
+      {(() => {
+        const rangeNote = dateFrom || dateTo ? "in selected range" : "all time";
+        const v = (n: number | undefined) =>
+          counts ? (n ?? 0) : countsError ? "—" : "…";
+        return (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <StatCard title="Submitted" value={v(counts?.submitted)} subtitle={`Applications submitted, ${rangeNote}`} icon={<FileCheck2 className="h-5 w-5" />} />
+            <StatCard title="Pending Review" value={v(counts?.pendingReview)} subtitle={`Waiting for admin action (${rangeNote})`} icon={<Clock3 className="h-5 w-5" />} />
+            <StatCard title="Approved" value={v(counts?.approved)} subtitle={`Approved, ${rangeNote}`} icon={<CheckCircle2 className="h-5 w-5" />} />
+            <StatCard title="Rejected" value={v(counts?.rejected)} subtitle={`Rejected, ${rangeNote}`} icon={<XCircle className="h-5 w-5" />} />
+            <StatCard
+              title="Correction Requested"
+              value={v(counts?.correctionRequested)}
+              subtitle={
+                counts
+                  ? `${counts.correctionRounds} round${counts.correctionRounds === 1 ? "" : "s"} sent, ${rangeNote}`
+                  : `Sent back to dealer, ${rangeNote}`
+              }
+              icon={<RotateCcw className="h-5 w-5" />}
+            />
+          </div>
+        );
+      })()}
 
       {/* ── Applications Table ── */}
       <motion.div
@@ -759,7 +798,7 @@ export default function DealerVerificationPage() {
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80">
-                  {["Dealer", "Company", "Sales Manager", "Documents", "Agreement", "Status", "Actions"].map((h, i, arr) => (
+                  {["Dealer", "Company", "Sales Manager", "Documents", "Agreement", "Status", "Review / KYC", "Rejection Reason", "Actions"].map((h, i, arr) => (
                     <th
                       key={h}
                       className={`px-6 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 ${i === arr.length - 1 ? "text-right" : "text-left"}`}
@@ -863,6 +902,35 @@ export default function DealerVerificationPage() {
                         <StatusBadge status={item.status} />
                         <ApprovedByTag value={item.approvedByTag} />
                       </div>
+                    </td>
+
+                    <td className="px-6 py-5 align-top">
+                      {item.reviewStatus ? (
+                        <StatusBadge status={item.reviewStatus} />
+                      ) : (
+                        <span className="text-sm text-slate-400">—</span>
+                      )}
+                      {!!item.correctionRounds && item.correctionRounds > 0 && (
+                        <p className="mt-1.5 text-xs text-orange-600">
+                          {item.correctionRounds} correction round
+                          {item.correctionRounds !== 1 ? "s" : ""}
+                        </p>
+                      )}
+                    </td>
+
+                    <td className="max-w-[220px] px-6 py-5 align-top">
+                      {item.rejectionReason ? (
+                        <p
+                          title={item.rejectionReason}
+                          className="line-clamp-2 break-words text-sm text-rose-700"
+                        >
+                          {item.rejectionReason.length > 80
+                            ? `${item.rejectionReason.slice(0, 80)}…`
+                            : item.rejectionReason}
+                        </p>
+                      ) : (
+                        <span className="text-sm text-slate-400">—</span>
+                      )}
                     </td>
 
                     <td className="px-6 py-5 text-right align-top">

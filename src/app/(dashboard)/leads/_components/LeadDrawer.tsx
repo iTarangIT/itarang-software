@@ -35,6 +35,7 @@ import {
     isDispositionBucket,
 } from "@/lib/leads/dispositions";
 import type { LeadRow } from "./LeadsTable";
+import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 
 function pretty(value: string | null | undefined): string {
     if (!value) return "—";
@@ -219,6 +220,13 @@ export function LeadDrawer({ lead, caps, onClose, onDone }: Props) {
                                     <span className="ml-1 tabular-nums opacity-70">
                                         {lead.final_intent_score ?? 0}
                                     </span>
+                                </span>
+                                {/* E-296 Type of Business — NULL reads "Not set". */}
+                                <span
+                                    title="Type of business"
+                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(lead.business_type)}`}
+                                >
+                                    {businessTypeLabel(lead.business_type)}
                                 </span>
                             </div>
                         </div>

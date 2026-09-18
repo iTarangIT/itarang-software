@@ -20,6 +20,26 @@ function DealerLeadsContent() {
     const [editTarget, setEditTarget] = useState<any>(null);
     const [editForm, setEditForm] = useState({ interest_level: '', payment_method: '', full_name: '', phone: '' });
     const [saving, setSaving] = useState(false);
+    // E-298 — leads whose disbursed loan still awaits the dealer's "payment received?".
+    const [paymentPending, setPaymentPending] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        fetch('/api/dealer/loans/payment-pending')
+            .then((r) => r.json())
+            .then((j) => setPaymentPending(new Set<string>(j?.data?.leadIds ?? [])))
+            .catch(() => {});
+    }, []);
+
+    const paymentPendingBadge = (leadId: string) =>
+        paymentPending.has(leadId) ? (
+            <Link
+                href={`/dealer-portal/leads/${leadId}/step-5#payment-confirmation`}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 hover:bg-amber-200"
+                title="Confirm whether the loan payment reached your account"
+            >
+                Payment confirmation pending
+            </Link>
+        ) : null;
 
     const fetchLeads = async () => {
         setLoading(true);
@@ -237,9 +257,12 @@ function DealerLeadsContent() {
                                             {(() => {
                                                 const s = resolveLeadStatus(lead);
                                                 return (
-                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${s.cls}`}>
-                                                        {s.label}
-                                                    </span>
+                                                    <div className="flex flex-col items-start gap-1">
+                                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${s.cls}`}>
+                                                            {s.label}
+                                                        </span>
+                                                        {paymentPendingBadge(lead.id)}
+                                                    </div>
                                                 );
                                             })()}
                                         </td>
@@ -327,6 +350,7 @@ function DealerLeadsContent() {
                                     <div className="min-w-0">
                                         <div className="font-medium text-gray-900 truncate">{lead.owner_name}</div>
                                         <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
+                                        <div className="mt-1">{paymentPendingBadge(lead.id)}</div>
                                     </div>
                                     {(() => {
                                         const s = resolveLeadStatus(lead);

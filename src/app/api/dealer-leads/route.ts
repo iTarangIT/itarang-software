@@ -13,6 +13,8 @@ import {
 import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
 import {
   BULK_ID_CAP,
+  fetchBusinessTypeCounts,
+  fetchBusinessTypeForLeads,
   fetchLeadListFacets,
   fetchLeadListIds,
   fetchLeadListRows,
@@ -43,6 +45,10 @@ import {
   loadExistingByPhone,
   normalizePhone,
 } from "@/lib/leads/dedupe";
+import {
+  isBusinessTypeFilter,
+  normalizeBusinessType,
+} from "@/lib/leads/businessType";
 
 export async function POST(req: NextRequest) {
   try {
@@ -59,11 +65,30 @@ export async function POST(req: NextRequest) {
       city,
       area,
       pincode,
+      business_type,
     } = body;
 
     if (!dealer_name || !phone) {
       return NextResponse.json(
         { success: false, error: "dealer_name and phone are required" },
+        { status: 400 },
+      );
+    }
+
+    // E-296 "Type of Business". Optional; tolerant of labels ("Battery Sale")
+    // because the /leads xlsx importer posts spreadsheet cells here. A non-blank
+    // value that is not in the vocabulary is refused rather than silently
+    // dropped — the operator picked something and should know it didn't land.
+    const businessTypeRaw =
+      business_type == null ? "" : String(business_type).trim();
+    const businessType = normalizeBusinessType(businessTypeRaw);
+    if (businessTypeRaw && !businessType) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Type of Business must be one of: Battery Sale, Buyback, Finance, Scrap, Other.",
+        },
         { status: 400 },
       );
     }
@@ -141,6 +166,22 @@ export async function POST(req: NextRequest) {
       created_at: new Date(),
     });
 
+    // E-296 — business_type is not on the Drizzle object (see schema.ts), so it
+    // is written by a raw UPDATE after the insert. Fail-tolerant: on a database
+    // without the migration the lead still exists, and the response says the
+    // type did not save instead of failing a create that already happened.
+    let businessTypeSaved = true;
+    if (businessType) {
+      try {
+        await db.execute(
+          sql`UPDATE dealer_leads SET business_type = ${businessType} WHERE id = ${id}`,
+        );
+      } catch (e) {
+        businessTypeSaved = false;
+        console.warn("[DEALER-LEADS] business_type not saved (E-296 applied?):", e);
+      }
+    }
+
     // E-179 central registry — manually captured dealer prospect.
     await recordLeadCapture({
       leadType: "dealer",
@@ -151,7 +192,11 @@ export async function POST(req: NextRequest) {
       sourceId: id,
     });
 
-    return NextResponse.json({ success: true, id });
+    return NextResponse.json({
+      success: true,
+      id,
+      ...(businessType ? { business_type_saved: businessTypeSaved } : {}),
+    });
   } catch (err: any) {
     // Catch unique constraint violation from DB as a fallback
     if (err.message?.includes("unique") || err.code === "23505") {
@@ -268,6 +313,11 @@ export const GET = withErrorHandler(async (req: Request) => {
       return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
     })(),
     callback: searchParams.get("callback") === "1",
+    // E-296. Closed vocabulary plus the "unset" sentinel; anything else is
+    // dropped rather than queried for, same as the other closed filters.
+    businessType: isBusinessTypeFilter(searchParams.get("business_type"))
+      ? searchParams.get("business_type")
+      : null,
     // Owner / ASM are oversight-only (they were visible solely on the
     // admin+sales_head-gated Leads Info page). The params are IGNORED rather
     // than merely hidden in the UI, so a hand-crafted request can't filter by a
@@ -301,12 +351,15 @@ export const GET = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const [rows, stats, allFacets, campaignFacets] = await Promise.all([
-    fetchLeadListRows(filters, page, limit),
-    fetchLeadListStats(filters),
-    fetchLeadListFacets(),
-    fetchCampaignFacets(),
-  ]);
+  const [rows, stats, allFacets, campaignFacets, businessTypeCounts] =
+    await Promise.all([
+      fetchLeadListRows(filters, page, limit),
+      fetchLeadListStats(filters),
+      fetchLeadListFacets(),
+      fetchCampaignFacets(),
+      // Per-type chips (E-296). null when the column does not exist here.
+      fetchBusinessTypeCounts(filters),
+    ]);
 
   // Same tiering on the way out: the source list is for everyone, the people
   // lists are not. Campaigns go with the source list — which campaign a lead is
@@ -346,6 +399,9 @@ export const GET = withErrorHandler(async (req: Request) => {
   // on the same terms as the Owner / ASM columns — see maskOversight below.
   let assignedBy: Record<string, LeadAssignedBy> = {};
 
+  // E-296 business_type for this page — separate, fail-tolerant statement.
+  let businessTypes: Record<string, string | null> = {};
+
   const neodoveStatus: Record<string, string> = {};
   const dispositions: Record<
     string,
@@ -354,6 +410,7 @@ export const GET = withErrorHandler(async (req: Request) => {
   const pageIds = rows.map((l) => l.id).filter(Boolean) as string[];
   if (pageIds.length) {
     campaigns = await fetchCampaignForLeads(pageIds);
+    businessTypes = await fetchBusinessTypeForLeads(pageIds);
     // Only fetched for roles allowed to see it — a request that cannot render
     // the stamp should not pay for the query either.
     if (caps.canSeeOwnerAsm) {
@@ -426,8 +483,12 @@ export const GET = withErrorHandler(async (req: Request) => {
       last_disposition: dispositions[l.id]?.label ?? null,
       last_disposition_bucket: dispositions[l.id]?.bucket ?? null,
       last_connect_status: dispositions[l.id]?.connectStatus ?? null,
+      business_type: businessTypes[l.id] ?? null,
     })),
     total: stats.total,
+    // { battery_sale: n, …, unset: n } under the current filters minus
+    // business_type; null when E-296 is not applied here.
+    business_type_counts: businessTypeCounts,
     stats: {
       hot: stats.hot,
       warm: stats.warm,

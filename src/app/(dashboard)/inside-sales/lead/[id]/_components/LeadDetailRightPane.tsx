@@ -19,6 +19,7 @@ import {
     fmtDate,
 } from "./CommercialsDetail";
 import { QuotationSendDialog } from "./QuotationSendDialog";
+import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -82,6 +83,17 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                         <div className="grid grid-cols-2 gap-3">
                                             <Field label="Dealer Name" value={lead.dealer_name} />
                                             <Field label="Shop Name" value={lead.shop_name} />
+                                            {/* E-296 — always rendered; NULL reads "Not set". */}
+                                            <Field
+                                                label="Type of Business"
+                                                value={
+                                                    <span
+                                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(lead.business_type)}`}
+                                                    >
+                                                        {businessTypeLabel(lead.business_type)}
+                                                    </span>
+                                                }
+                                            />
                                             <Field label="Phone" value={lead.phone} />
                                             <Field label="Language" value={lead.language} />
                                             <Field label="City" value={lead.city} />

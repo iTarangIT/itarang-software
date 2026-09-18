@@ -295,10 +295,29 @@ export async function runDigest(opts: {
   // ---- Test send: no claim, no due-check, no enabled-check. ----------------
   // A test must work while the digest is switched off — that is when somebody is
   // most likely to be checking the template and the mailbox before turning it on.
+  const allowedSlots = new Set<DigestSlot>(kind.slots ?? ["morning", "evening"]);
+
   if (opts.slot === "test") {
     const recipients =
       opts.toOverride && opts.toOverride.length > 0 ? opts.toOverride : settings.recipients;
-    const digestDate = opts.istDayOverride ?? digestDateForSlot("evening", now);
+    if (recipients.length === 0) {
+      return {
+        ok: false,
+        outcomes: [
+          {
+            kind: kind.id,
+            slot: "test",
+            digestDate: "",
+            sent: false,
+            error: `no recipients — add one at Settings → ${kind.label} or pass an address`,
+          },
+        ],
+      };
+    }
+    // A morning-only kind samples YESTERDAY, the day its real send would cover.
+    const digestDate =
+      opts.istDayOverride ??
+      digestDateForSlot(allowedSlots.has("evening") ? "evening" : "morning", now);
 
     const r = await countAndSend(kind, "test", digestDate, recipients, settings);
     await recordTestRun(
@@ -344,9 +363,46 @@ export async function runDigest(opts: {
     };
   }
 
-  const targets: Array<{ slot: DigestSlot; digestDate: string }> = opts.slot
-    ? [{ slot: opts.slot, digestDate: digestDateForSlot(opts.slot, now) }]
-    : slotsDueAt(now, settings);
+  // No recipients = inert, and the ledger must say so rather than record a
+  // "sent" that went to nobody (see normalizeRecipients / defaultSettings).
+  if (settings.recipients.length === 0) {
+    return {
+      ok: true,
+      outcomes: [
+        {
+          kind: kind.id,
+          slot: opts.slot ?? "morning",
+          digestDate: "",
+          sent: false,
+          skipped: `no recipients configured in Settings → ${kind.label}`,
+        },
+      ],
+    };
+  }
+
+  // A forced slot this kind never sends in is refused by name; a due-check
+  // simply drops it. Either way the evening claim for a morning-only kind is
+  // never taken, so the ledger shows no phantom evening rows.
+  if (opts.slot && !allowedSlots.has(opts.slot)) {
+    return {
+      ok: true,
+      outcomes: [
+        {
+          kind: kind.id,
+          slot: opts.slot,
+          digestDate: "",
+          sent: false,
+          skipped: `${kind.label} only sends in the ${[...allowedSlots].join(" / ")} slot`,
+        },
+      ],
+    };
+  }
+
+  const targets: Array<{ slot: DigestSlot; digestDate: string }> = (
+    opts.slot
+      ? [{ slot: opts.slot, digestDate: digestDateForSlot(opts.slot, now) }]
+      : slotsDueAt(now, settings)
+  ).filter((t) => allowedSlots.has(t.slot));
 
   if (targets.length === 0) return { ok: true, outcomes: [] };
 

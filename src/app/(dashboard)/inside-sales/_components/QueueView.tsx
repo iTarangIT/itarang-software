@@ -284,6 +284,8 @@ export function QueueView({
     const exportHref = useMemo(() => {
         const p = new URLSearchParams(filterKey);
         p.set("tab", tab);
+        // Excel by default (Pile B item 7); the route still serves CSV without it.
+        p.set("format", "xlsx");
         return `/api/inside-sales/queue/export?${p.toString()}`;
     }, [filterKey, tab]);
 
@@ -406,6 +408,7 @@ export function QueueView({
                             href={exportHref}
                             filename={`inside-sales-${tab}`}
                             disabled={rowsQuery.isLoading}
+                            format="xlsx"
                         />
                         {canUpload && (
                             <Link

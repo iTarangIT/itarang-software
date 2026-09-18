@@ -4071,6 +4071,13 @@ export const dealerLeads = pgTable("dealer_leads", {
   //
   // If a future change needs to READ them through Drizzle, add them here AND
   // make E-224 a hard prerequisite in the deploy notes.
+  //
+  // E-296 adds `business_type varchar(30)` ("Type of Business": battery_sale |
+  // buyback | finance | scrap | other, enforced in src/lib/leads/businessType.ts)
+  // and it is DELIBERATELY ABSENT HERE for the same reason. Written by raw `sql`
+  // UPDATEs (create / PATCH / inside-sales create / bulk set_business_type),
+  // read via `to_jsonb(dl) ->> 'business_type'` or fail-tolerant side
+  // statements; the list filter names the column only when it is set.
 });
 
 // Org-wide saved region groups for the AI dialer modal. `regions` is a
@@ -4470,6 +4477,16 @@ export const loanSanctions = pgTable("loan_sanctions", {
   recovery_reason: text("recovery_reason"),
   // E-275 — loan written off-platform (e.g. 'Bajaj Finance'); nbfc_id NULL.
   external_lender: varchar("external_lender", { length: 64 }),
+  // E-298 — dealer confirms the lender's money actually reached them.
+  // NULL (not asked) | 'pending' (set at dispatch/disbursal) | 'received' | 'not_received'.
+  dealer_payment_status: varchar("dealer_payment_status", { length: 20 }),
+  dealer_payment_confirmed_at: timestamp("dealer_payment_confirmed_at", { withTimezone: true }),
+  dealer_payment_confirmed_by: text("dealer_payment_confirmed_by"),
+  dealer_payment_utr: varchar("dealer_payment_utr", { length: 64 }),
+  dealer_payment_amount: numeric("dealer_payment_amount", { precision: 14, scale: 2 }),
+  dealer_payment_remarks: text("dealer_payment_remarks"),
+  /** Stamped by the 48h reminder sweep so it fires exactly once. */
+  dealer_payment_reminded_at: timestamp("dealer_payment_reminded_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -9743,6 +9760,9 @@ export const quotationDispatches = pgTable(
     provider_message_id: text("provider_message_id"),
     error: text("error"),
     sent_by: text("sent_by").notNull(),
+    // E-297 — string[] of CC addresses used on an email send (owner, approver,
+    // admin fixed list, extras). NULL on WhatsApp rows and pre-E-297 rows.
+    cc_recipients: jsonb("cc_recipients"),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

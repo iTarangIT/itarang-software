@@ -16,6 +16,8 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { VKYC_STATES, type VkycState } from "@/lib/nbfc/vkyc";
+import { tenantDisplayName } from "@/lib/notifications/emit";
+import { notifyVkycEvent } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -84,6 +86,18 @@ async function process(body: Record<string, unknown>): Promise<{ code: number; m
         updated_at: now,
       })
       .where(eq(videoKycVerifications.id, track.id));
+    // Pile B item 10 — a provider-reported verdict reaches admin, the NBFC and
+    // the dealer (bell + WhatsApp) like the manual one does. Only on a real
+    // change, so a retried callback doesn't re-notify.
+    if (next !== track.status && (next === "verified" || next === "failed")) {
+      await notifyVkycEvent({
+        leadId: track.lead_id,
+        event: next === "verified" ? "approved" : "rejected",
+        nbfcName: await tenantDisplayName(track.tenant_id),
+        tenantId: track.tenant_id,
+        reason: next === "failed" ? pickStr(body, "failure_reason") : null,
+      });
+    }
     return { code: 200, msg: "Accepted" };
   }
 

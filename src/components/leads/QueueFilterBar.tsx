@@ -35,6 +35,11 @@ import {
     type QueueRegion,
 } from "@/lib/leads/queueFilters";
 import {
+    BUSINESS_TYPE_OPTIONS,
+    BUSINESS_TYPE_UNSET,
+    BUSINESS_TYPE_UNSET_LABEL,
+} from "@/lib/leads/businessType";
+import {
     EMPTY_QUEUE_SORT,
     QUEUE_SORT_ASC_LABEL,
     QUEUE_SORT_OPTIONS,
@@ -173,6 +178,24 @@ export function QueueFilterBar({
                                         {o.label}
                                     </option>
                                 ))}
+                            </select>
+                        </QueueFilterField>
+
+                        <QueueFilterField label="Business type">
+                            <select
+                                value={values.business_type}
+                                onChange={(e) => onChange("business_type", e.target.value)}
+                                className={QUEUE_SELECT_CLASS}
+                            >
+                                <option value="">Any type</option>
+                                {BUSINESS_TYPE_OPTIONS.map((o) => (
+                                    <option key={o.value} value={o.value}>
+                                        {o.label}
+                                    </option>
+                                ))}
+                                <option value={BUSINESS_TYPE_UNSET}>
+                                    {BUSINESS_TYPE_UNSET_LABEL}
+                                </option>
                             </select>
                         </QueueFilterField>
 

@@ -52,6 +52,7 @@ import {
 } from "@/lib/leads/dispositions";
 import type { LeadsCapabilities } from "@/lib/leads/access";
 import type { LeadListRow } from "@/lib/leads/leadListQuery";
+import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 
 // Statuses where calling is pointless or forbidden. Carried over verbatim from
 // the pre-merge Leads tab.
@@ -124,6 +125,9 @@ export type LeadRow = LeadListRow & {
     last_disposition?: string | null;
     last_disposition_bucket?: string | null;
     last_connect_status?: string | null;
+    // E-296 "Type of Business". Decorated by the API in a separate statement;
+    // null = not set (or the migration is not applied here).
+    business_type?: string | null;
 };
 
 type Props = {
@@ -164,11 +168,11 @@ export function LeadsTable({
     const selectable = caps.canBulkAct || caps.canSendToNeodove;
     const allOnPageSelected =
         rows.length > 0 && rows.every((r) => selected.has(r.id));
-    // Fixed columns: Dealer/Shop, Phone, Region, Qualification, Intent,
-    // Visit/Outcome, Last Touch, Idle, Campaign/Created, Actions = 10. Then the
-    // optional checkbox and the optional Owner + ASM pair. Used by the loading
-    // and empty rows.
-    const colSpan = 10 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
+    // Fixed columns: Dealer/Shop, Phone, Region, Qualification, Business Type,
+    // Intent, Visit/Outcome, Last Touch, Idle, Campaign/Created, Actions = 11.
+    // Then the optional checkbox and the optional Owner + ASM pair. Used by the
+    // loading and empty rows.
+    const colSpan = 11 + (selectable ? 1 : 0) + (caps.canSeeOwnerAsm ? 2 : 0);
     // Pinned once per render so every row's idle figure is measured against the
     // same instant — and so the map callback stays pure (react-hooks/purity).
     // eslint-disable-next-line react-hooks/purity
@@ -202,6 +206,9 @@ export function LeadsTable({
                             </th>
                             <th className="min-w-[150px] px-4 py-3 text-left font-semibold">
                                 Qualification
+                            </th>
+                            <th className="min-w-[120px] px-4 py-3 text-left font-semibold">
+                                Business Type
                             </th>
                             <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
                                 Intent
@@ -380,6 +387,14 @@ export function LeadsTable({
                                                 status={row.lead_status as LeadStatus | null}
                                                 size="sm"
                                             />
+                                        </td>
+
+                                        <td className="px-4 py-3 align-middle">
+                                            <span
+                                                className={`${CHIP_BASE} ${businessTypeTone(row.business_type)}`}
+                                            >
+                                                {businessTypeLabel(row.business_type)}
+                                            </span>
                                         </td>
 
                                         <td className="px-4 py-3 align-middle">

@@ -3,7 +3,8 @@
 // One audited touchpoint per affected lead.
 //
 // Actions: reassign · mark_lost · push_to_ai · reactivate · export(CSV) ·
-// export_touchpoints(XLSX) · export_tracking(CSV, E-295 lead journey).
+// export_touchpoints(XLSX) · export_tracking(CSV, E-295 lead journey) ·
+// set_business_type (E-296 "Type of Business").
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -25,6 +26,7 @@ import {
     isOpen,
     type LeadStatus,
 } from "@/lib/lifecycle/transitions";
+import { BusinessTypeSchema } from "@/lib/leads/businessType";
 
 export const dynamic = "force-dynamic";
 // 300, not 60: export_touchpoints may assemble a workbook for up to 5,000 leads
@@ -44,11 +46,14 @@ const BodySchema = z.object({
         "export",
         "export_touchpoints",
         "export_tracking",
+        "set_business_type",
     ]),
     lead_ids: z.array(z.string().min(1)).min(1).max(5000),
     target_user_id: z.string().min(1).optional(),
     lost_reason: z.enum(LOST_REASON).optional(),
     reason: z.string().trim().max(2000).optional(),
+    // set_business_type only. null clears the type ("Not set").
+    business_type: BusinessTypeSchema.nullable().optional(),
 });
 
 function csvEscape(v: unknown): string {
@@ -122,6 +127,45 @@ export const POST = withErrorHandler(async (req: Request) => {
     if (body.action === "export_tracking") {
         const trackings = await buildLeadTracking(ids);
         return trackingCsvResponse([...trackings.values()], "lead-tracking");
+    }
+
+    // ── Set Type of Business (E-296). ──────────────────────────────────────
+    // A profile field, not a lifecycle event — so, like PATCH /api/dealer-leads
+    // /[id], it writes NO touchpoint (it is not an interaction with the dealer
+    // and would inflate the §0.11 touchpoint counts). One raw UPDATE: the column
+    // is not on the Drizzle object (see schema.ts).
+    if (body.action === "set_business_type") {
+        if (body.business_type === undefined) {
+            return errorResponse(
+                "business_type is required (null to clear).",
+                400,
+            );
+        }
+        try {
+            const updated = (await db.execute<{ id: string }>(sql`
+                UPDATE dealer_leads
+                   SET business_type = ${body.business_type},
+                       updated_at = NOW()
+                 WHERE id IN ${ids}
+                   AND is_active IS NOT FALSE
+                RETURNING id
+            `)) as unknown as { id: string }[];
+            return successResponse({
+                ok: true,
+                affected: updated.length,
+                skipped: ids.length - updated.length,
+            });
+        } catch (e) {
+            const err = e as { message?: string; cause?: { message?: string } };
+            const msg = `${err.message ?? ""} ${err.cause?.message ?? ""}`;
+            if (msg.includes("business_type")) {
+                return errorResponse(
+                    "Type of Business is not available on this database yet (migration E-296 not applied).",
+                    409,
+                );
+            }
+            throw e;
+        }
     }
 
     // Load the selected leads' current state.

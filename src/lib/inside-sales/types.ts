@@ -109,6 +109,8 @@ export type LeadDetailLead = QueueRow & {
     dealer_onboarding_application_id: string | null;
     onboarding_status: string | null;
     onboarding_created_at: string | null;
+    /** E-296 "Type of Business" — see src/lib/leads/businessType.ts. NULL = not set. */
+    business_type?: string | null;
 };
 
 export type LeadDetailTouchpoint = {
@@ -311,7 +313,8 @@ export type AsmOption = {
  * QueueView checkbox gate — the UI decides whether the column renders, the
  * routes decide whether it works, and they must agree.
  */
-export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner"] as const;
+// B3: ASMs claim from their territory pool too (Unclaimed tab on /asm).
+export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner", "asm"] as const;
 
 /** Most leads one bulk claim accepts. Zod max on the API, guard in the bar. */
 export const BULK_CLAIM_CAP = 100;
