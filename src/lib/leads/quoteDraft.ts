@@ -116,7 +116,7 @@ async function allocateQuoteNumber(
   return quoteNumberForVersion(root, versionNo);
 }
 
-interface CommercialRow {
+type CommercialRow = {
   commercial_id: string;
   dealer_lead_id: string;
   version_no: number;

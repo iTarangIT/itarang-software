@@ -82,6 +82,7 @@ export async function PATCH(
 
     const result = await confirmPayment({
       dealer_id: actor.dealer_id,
+      actor_user_id: actor.user_id,
       settlement_id: id,
       ...parsed.data,
     });

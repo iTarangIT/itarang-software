@@ -38,7 +38,7 @@ function statusFromError(msg: string): number {
 const Body = z.object({
   provider_type: z.string().min(1).max(24),
   environment: z.enum(["sandbox", "production"]),
-  secrets: z.record(z.string()).optional(),
+  secrets: z.record(z.string(), z.string()).optional(),
 });
 
 export async function GET(req: NextRequest) {

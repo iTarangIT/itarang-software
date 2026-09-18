@@ -28,6 +28,7 @@ import { AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPES } from '@/lib/leads/businessType';
 
 // Mirrors PatchSchema in src/app/api/dealer-leads/[id]/route.ts. The server
 // re-validates and normalises regardless — this is only for fast feedback.
@@ -45,6 +46,8 @@ const leadSchema = z.object({
   area: z.string().trim().optional(),
   pincode: z.string().trim().optional(),
   overall_summary: z.string().trim().optional(),
+  // E-296. '' = Not set.
+  business_type: z.union([z.enum(BUSINESS_TYPES), z.literal('')]).optional(),
 });
 
 type LeadFormData = z.infer<typeof leadSchema>;
@@ -71,6 +74,7 @@ type DealerLeadRow = {
   area: string | null;
   pincode: string | null;
   overall_summary: string | null;
+  business_type?: string | null;
 };
 
 export function EditLeadForm({
@@ -103,6 +107,11 @@ export function EditLeadForm({
       area: initialData.area ?? '',
       pincode: initialData.pincode ?? '',
       overall_summary: initialData.overall_summary ?? '',
+      business_type: ((BUSINESS_TYPES as readonly string[]).includes(
+        initialData.business_type ?? '',
+      )
+        ? initialData.business_type
+        : '') as LeadFormData['business_type'],
     },
   });
 
@@ -110,10 +119,18 @@ export function EditLeadForm({
     setLoading(true);
     setError(null);
     try {
+      // business_type is sent only when it changed: it is written by its own
+      // statement (E-296), and re-sending an untouched value would make every
+      // save on a database without the migration report a failed type write.
+      const { business_type, ...rest } = data;
+      const payload =
+        (business_type ?? '') !== (initialData.business_type ?? '')
+          ? { ...rest, business_type: business_type || null }
+          : rest;
       const res = await fetch(`/api/dealer-leads/${leadId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       const json = await res.json().catch(() => null);
       // The whole point of the rewrite: a failed save must NOT look like a
@@ -123,7 +140,11 @@ export function EditLeadForm({
           json?.error?.message ?? `Could not save the lead (HTTP ${res.status}).`,
         );
       }
-      toast.success('Lead updated.');
+      if (json.business_type_saved === false) {
+        toast.warning('Lead updated, but Type of Business could not be saved on this database.');
+      } else {
+        toast.success('Lead updated.');
+      }
       router.push('/leads');
       router.refresh();
     } catch (e) {
@@ -181,6 +202,21 @@ export function EditLeadForm({
               className="mt-1 w-full rounded-lg border px-3 py-2 focus:ring-2 focus:ring-blue-500"
             >
               {SOURCE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <Label>Type of Business</Label>
+            <select
+              {...register('business_type')}
+              className="mt-1 w-full rounded-lg border px-3 py-2 focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Not set</option>
+              {BUSINESS_TYPE_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>

@@ -351,7 +351,7 @@ async function main() {
     rule();
     cycles.forEach((c, idx) => {
         const gain = (c.end_soc ?? 0) - (c.start_soc ?? 0);
-        const cap = extrapolateCapacity(c.ah_charged ?? 0, gain, c.coverage_pct);
+        const cap = extrapolateCapacity(c.ah_charged ?? 0, gain);
         const plaus = capacityPlausible(cap, c.rated_capacity_ah);
         const f = failures(c);
         const verdict = f.length === 0

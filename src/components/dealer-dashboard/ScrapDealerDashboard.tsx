@@ -27,6 +27,8 @@ import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
 
 export default function ScrapDealerDashboard() {
   const { user, loading: authLoading } = useAuth();
+  // company_type / gst_number ride on the dealer profile snapshot, not on AppUser.
+  const profile = user as (typeof user & { company_type?: string | null; gst_number?: string | null }) | null;
   // Shares the request the portal page already made to route here.
   const { stats, loading } = useDealerStats();
 
@@ -64,8 +66,8 @@ export default function ScrapDealerDashboard() {
         <DealerIdentityCard
           dealerName={dealerName}
           dealerId={dealer?.dealerCode || "Pending Approval"}
-          companyType={user?.company_type || "Not available"}
-          gstNumber={user?.gst_number || "Not available"}
+          companyType={profile?.company_type || "Not available"}
+          gstNumber={profile?.gst_number || "Not available"}
           dealerTypeLabel={dealerTypeLabel(dealer?.dealerType, "")}
         />
 

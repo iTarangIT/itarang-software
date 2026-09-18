@@ -1,6 +1,6 @@
 "use client";
 
-import { MapPinned, CalendarClock, Compass, CheckCheck } from "lucide-react";
+import { MapPinned, CalendarClock, Compass, CheckCheck, UserPlus2 } from "lucide-react";
 import { ASM_QUEUE_TABS, ASM_TAB_LABELS, type AsmQueueCounts, type AsmQueueTab } from "@/lib/asm/types";
 
 type Props = {
@@ -13,6 +13,7 @@ const ICONS: Record<AsmQueueTab, React.ComponentType<{ className?: string }>> = 
     my_visits: MapPinned,
     today: CalendarClock,
     territory: Compass,
+    unclaimed: UserPlus2,
     my_closed: CheckCheck,
 };
 

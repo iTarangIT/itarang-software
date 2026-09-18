@@ -34,6 +34,7 @@ export async function register() {
       startDriveSalesTicker,
       startOpsMonitorTicker,
       startDigestTicker,
+      startDealerPaymentReminderTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -59,5 +60,7 @@ export async function register() {
     // 195s out, behind every collector, because a summary mail is the
     // lowest-priority thing a freshly-booted process could be doing.
     await startDigestTicker();
+    // E-298 — one-shot 48h "confirm loan payment received" reminder.
+    await startDealerPaymentReminderTicker();
   }
 }

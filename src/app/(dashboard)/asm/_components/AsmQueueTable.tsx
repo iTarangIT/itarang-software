@@ -12,6 +12,7 @@ import {
     CalendarCheck2,
     CalendarX2,
     CalendarClock,
+    UserPlus2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChip";
@@ -20,6 +21,7 @@ import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/Interes
 import { OwnerIndicator } from "@/app/(dashboard)/inside-sales/_components/OwnerIndicator";
 import { SentByStamp } from "@/components/leads/sent-by-stamp";
 import { VISIT_OUTCOME_LABELS } from "@/lib/asm/types";
+import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import type {
     AsmQueueRow,
     AsmQueueTab,
@@ -37,6 +39,21 @@ type Props = {
     error: string | null;
     onPageChange: (p: number) => void;
     viewerId: string;
+    /**
+     * B3: opens the claim confirm for an unowned row. Absent when the viewer's
+     * role is not in CLAIM_ROLES, in which case no Claim button renders.
+     */
+    onClaim?: (row: AsmQueueRow) => void;
+    /**
+     * B3: bulk-claim ticking. Supplied on the Unclaimed and Territory Feed
+     * tabs, which adds the checkbox column; every other tab renders as before.
+     */
+    selection?: {
+        selected: Set<string>;
+        onToggle: (id: string) => void;
+        /** Header checkbox: tick every row on this page, or untick them all. */
+        onToggleAll: () => void;
+    };
 };
 
 const VISIT_STATUS_LABEL: Record<VisitStatus, { label: string; bg: string; text: string; border: string }> = {
@@ -96,8 +113,18 @@ export function AsmQueueTable({
     error,
     onPageChange,
     viewerId,
+    onClaim,
+    selection,
 }: Props) {
     const router = useRouter();
+    const colCount = selection ? 10 : 9;
+    // Header checkbox reflects the CLAIMABLE rows only — on Territory Feed an
+    // owned row has no box, so it must not keep the header from reading "all".
+    const claimableRows = rows.filter((r) => !r.current_owner_id);
+    const allOnPageTicked =
+        !!selection &&
+        claimableRows.length > 0 &&
+        claimableRows.every((r) => selection.selected.has(r.id));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
     const end = Math.min(page * pageSize, total);
@@ -115,6 +142,17 @@ export function AsmQueueTable({
                 <table className="w-full text-sm">
                     <thead className="bg-gray-50/50 text-[11px] uppercase tracking-wide text-gray-500">
                         <tr>
+                            {selection && (
+                                <th className="w-10 px-4 py-3">
+                                    <input
+                                        type="checkbox"
+                                        aria-label="Select all on this page"
+                                        checked={allOnPageTicked}
+                                        onChange={selection.onToggleAll}
+                                        className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                </th>
+                            )}
                             <th className="text-left px-4 py-3 font-semibold">Dealer / Shop</th>
                             <th className="text-left px-4 py-3 font-semibold">Phone</th>
                             <th className="text-left px-4 py-3 font-semibold">Region</th>
@@ -129,7 +167,7 @@ export function AsmQueueTable({
                     <tbody className="divide-y divide-gray-100">
                         {loading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                                <td colSpan={colCount} className="px-4 py-12 text-center text-gray-400">
                                     <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
                                     Loading queue…
                                 </td>
@@ -137,26 +175,51 @@ export function AsmQueueTable({
                         )}
                         {!loading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={9} className="px-4 py-16 text-center text-gray-400">
+                                <td colSpan={colCount} className="px-4 py-16 text-center text-gray-400">
                                     <InboxIcon className="h-8 w-8 mx-auto mb-2" />
                                     {tab === "today"
                                         ? "No visits scheduled for today."
                                         : tab === "territory"
                                             ? "No leads in your territory yet."
-                                            : tab === "my_closed"
-                                                ? "No closed leads in the last 90 days."
-                                                : "No active visits yet."}
+                                            : tab === "unclaimed"
+                                                ? "No unclaimed leads in your territory right now."
+                                                : tab === "my_closed"
+                                                    ? "No closed leads in the last 90 days."
+                                                    : "No active visits yet."}
                                 </td>
                             </tr>
                         )}
                         {rows.map((row) => {
                             const href = `/asm/lead/${encodeURIComponent(row.id)}`;
+                            const unowned = !row.current_owner_id;
                             return (
                                 <tr
                                     key={row.id}
                                     onClick={() => router.push(href)}
-                                    className="cursor-pointer hover:bg-emerald-50/40 transition"
+                                    className={`cursor-pointer hover:bg-emerald-50/40 transition ${
+                                        selection?.selected.has(row.id) ? "bg-emerald-50/60" : ""
+                                    }`}
                                 >
+                                    {selection && (
+                                        <td
+                                            className="px-4 py-3 align-top"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            {/* Only an unowned row is claimable; an owned one that
+                                                slipped onto the page (someone claimed it since the
+                                                fetch) gets no box rather than a claim that would
+                                                be reported back as skipped. */}
+                                            {unowned && (
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label={`Select ${row.dealer_name || row.shop_name || "lead"}`}
+                                                    checked={selection.selected.has(row.id)}
+                                                    onChange={() => selection.onToggle(row.id)}
+                                                    className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                                                />
+                                            )}
+                                        </td>
+                                    )}
                                     <td className="px-4 py-3 align-top">
                                         <Link
                                             href={href}
@@ -168,6 +231,12 @@ export function AsmQueueTable({
                                         {row.shop_name && row.dealer_name && (
                                             <div className="text-[11px] text-gray-500 mt-0.5">{row.shop_name}</div>
                                         )}
+                                        {/* E-296 type of business — same chip as the /leads table. */}
+                                        <span
+                                            className={`mt-1 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${businessTypeTone(row.business_type)}`}
+                                        >
+                                            {businessTypeLabel(row.business_type)}
+                                        </span>
                                     </td>
                                     <td className="px-4 py-3 text-gray-700 tabular-nums align-top">
                                         <span className="inline-flex items-center gap-1">
@@ -223,6 +292,25 @@ export function AsmQueueTable({
                                             assignedBy={row.assigned_by}
                                             currentOwnerId={row.current_owner_id}
                                         />
+                                        {/* B3: claim from the pool. Rendered wherever an unowned
+                                            row appears (Unclaimed tab, Territory Feed), and only
+                                            for roles the claim route accepts. Disappears on
+                                            refetch once the viewer is the owner. */}
+                                        {unowned && onClaim && (
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                className="mt-1.5 h-7 gap-1 px-2 text-xs"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onClaim(row);
+                                                }}
+                                            >
+                                                <UserPlus2 className="h-3.5 w-3.5" />
+                                                Claim
+                                            </Button>
+                                        )}
                                     </td>
                                 </tr>
                             );

@@ -24,6 +24,8 @@ import {
   type AgreementMethod,
 } from "@/lib/nbfc/agreement";
 import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
+import { notifyLoanAgreementEvent } from "@/lib/notifications/events";
+import { tenantDisplayName } from "@/lib/notifications/emit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -124,8 +126,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       updated_at: now,
     };
 
+    // B14 — a signature recorded by hand is the same news as one DigiO
+    // reported: admin, the NBFC bell, and the dealer's WhatsApp (via the
+    // emit hook). Best-effort; the row is already written.
+    const announceSigned = async () => {
+      if (d.status !== "signed") return;
+      try {
+        await notifyLoanAgreementEvent({
+          leadId,
+          event: "signed",
+          nbfcName: await tenantDisplayName(actor.tenant_id),
+          tenantId: actor.tenant_id,
+        });
+      } catch (err) {
+        console.error("[agreement/record-manual] signed notification failed:", err);
+      }
+    };
+
     if (latest && latest.status === "in_progress") {
       await db.update(nbfcLoanAgreements).set(fields).where(eq(nbfcLoanAgreements.id, latest.id));
+      await announceSigned();
       return NextResponse.json({ ok: true, agreement_id: latest.id, stored_pdf: !!fields.signed_document_url });
     }
 
@@ -143,6 +163,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         ...fields,
       })
       .returning({ id: nbfcLoanAgreements.id });
+    await announceSigned();
     return NextResponse.json({ ok: true, agreement_id: created.id, stored_pdf: !!fields.signed_document_url });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

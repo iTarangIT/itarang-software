@@ -9,6 +9,8 @@ export const ASM_QUEUE_TABS = [
     "my_visits",
     "today",
     "territory",
+    // B3: unowned leads inside the ASM's territory — the claim pool.
+    "unclaimed",
     "my_closed",
 ] as const;
 export type AsmQueueTab = (typeof ASM_QUEUE_TABS)[number];
@@ -17,6 +19,7 @@ export const ASM_TAB_LABELS: Record<AsmQueueTab, string> = {
     my_visits: "My Active Visits",
     today: "Today's Schedule",
     territory: "Territory Feed",
+    unclaimed: "Unclaimed in my territory",
     my_closed: "My Closed",
 };
 
@@ -91,6 +94,12 @@ export type AsmQueueRow = {
      * page in the route, never selected by fetchAsmQueueRows, hence optional.
      */
     assigned_by?: LeadAssignedBy | null;
+    /**
+     * E-296 "Type of business". Decorated in the route via
+     * fetchBusinessTypeForLeads (fail-tolerant, column is not in schema.ts),
+     * never selected by fetchAsmQueueRows — hence optional. NULL = "Not set".
+     */
+    business_type?: string | null;
 };
 
 export type AsmQueueResponse = {

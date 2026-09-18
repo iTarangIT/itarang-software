@@ -242,6 +242,41 @@ export async function createEmandateOrder(
   };
 }
 
+export interface StandardOrderParams {
+  /** Whole paise. */
+  amountPaise: number;
+  /** ≤ 40 chars per Razorpay; longer values are truncated. */
+  receipt: string;
+  notes?: Record<string, string>;
+}
+
+export interface StandardOrderResponse {
+  order_id: string;
+  amount: number;
+  currency: string;
+}
+
+/**
+ * Create a plain one-off order for Checkout (no mandate, no token). Used by the
+ * auction purchase settlement; the e-mandate order above is for E-NACH only.
+ */
+export async function createStandardOrder(
+  params: StandardOrderParams,
+): Promise<StandardOrderResponse> {
+  const rzp = getRazorpay();
+  const order = await rzp.orders.create({
+    amount: params.amountPaise,
+    currency: "INR",
+    receipt: params.receipt.slice(0, 40),
+    notes: params.notes ?? {},
+  });
+  return {
+    order_id: order.id,
+    amount: Number(order.amount) || 0,
+    currency: order.currency || "INR",
+  };
+}
+
 /** Fetch a registered token (reconciliation fallback when a webhook is missed). */
 export async function fetchEmandateToken(customerId: string, tokenId: string) {
   return getRazorpay().customers.fetchToken(customerId, tokenId);

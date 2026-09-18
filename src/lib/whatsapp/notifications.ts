@@ -344,3 +344,96 @@ export async function sendDealerRejectedWhatsApp(
 
   return delivery;
 }
+
+
+export type DisbursementWhatsAppParams = {
+  leadId: string;
+  loanAmount?: number | string | null;
+  disbursedAt?: Date | null;
+  /** loan_sanctions.id — the last 6 characters become the dealer's reference. */
+  sanctionId?: string | null;
+};
+
+/**
+ * B15 — tell the lead's DEALER on WhatsApp that the loan was disbursed, and
+ * put a `disbursed` line in the dealer's History card.
+ *
+ * Routed through pushToLead (dealer-first: the owning dealer's chat, else the
+ * customer's), so it needs only the lead id — the NBFC sanction route calls it
+ * today and the manual / external-NBFC disbursal flow (A6) can call the same
+ * function. Inside the 24 h window the body below is sent; outside it the
+ * approved `lead_action` template rings and the body is parked. Never throws.
+ *
+ * The amount is included on purpose (the dealer is a party to the sale); no
+ * customer document numbers are.
+ */
+export async function sendDisbursementWhatsApp(
+  p: DisbursementWhatsAppParams,
+): Promise<{ result: "session" | "cold" | "none"; error: string | null }> {
+  try {
+    // Lazy: lead-push imports logOutbound from this module.
+    const { pushToLead } = await import("./lead-push");
+    const { oneLine } = await import("./window");
+    const amount =
+      p.loanAmount != null && p.loanAmount !== ""
+        ? `₹${Number(p.loanAmount).toLocaleString("en-IN")}`
+        : null;
+    const on = (p.disbursedAt ?? new Date()).toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+    const ref = p.sanctionId ? p.sanctionId.slice(-6).toUpperCase() : null;
+
+    const result = await pushToLead(p.leadId, (t) => {
+      const first = (t.customerName || "").split(/\s+/)[0] || t.customerName;
+      const dealerSide = t.audience === "dealer";
+      const body =
+        (dealerSide
+          ? `💸 *Loan disbursed for ${t.customerName}*\n\n${t.greetName}, good news — the loan for ${first} has been disbursed on ${on}.`
+          : `💸 *Your loan has been disbursed*\n\n${t.greetName}, good news — your loan was disbursed on ${on}.`) +
+        (amount ? `\nAmount: ${amount}.` : "") +
+        (ref ? `\nReference: ${ref}.` : "") +
+        `\n\nApplication ${t.referenceId}.` +
+        (dealerSide ? ` Next: battery selection and dispatch.` : "");
+      return {
+        prompt: { kind: "text", body },
+        nudge: {
+          template: "lead_action",
+          params: [
+            oneLine(t.greetName),
+            oneLine(t.referenceId),
+            oneLine(`the loan for ${first} was disbursed${amount ? ` (${amount})` : ""}`),
+          ],
+        },
+      };
+    });
+
+    // History line — recorded whether or not the message landed.
+    try {
+      const [row] = await db.execute<{ dealer_id: string | null }>(
+        (await import("drizzle-orm")).sql`SELECT dealer_id FROM leads WHERE id = ${p.leadId} LIMIT 1`,
+      ) as unknown as { dealer_id: string | null }[];
+      if (row?.dealer_id) {
+        const { recordLeadFlowEvent } = await import("./lead-events");
+        await recordLeadFlowEvent({
+          leadId: p.leadId,
+          dealerCode: row.dealer_id,
+          actorKind: "system",
+          actorLabel: "iTarang",
+          action: "disbursed",
+          note: [amount, ref ? `ref ${ref}` : null].filter(Boolean).join(" · ") || null,
+        });
+      }
+    } catch (err) {
+      console.error("[WhatsApp/notifications] disbursed history line failed:", err);
+    }
+
+    return { result, error: result === "none" ? "no chat or number for this lead" : null };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error("[WhatsApp/notifications] disbursement send threw:", error);
+    return { result: "none", error };
+  }
+}

@@ -1,5 +1,5 @@
 // GET /api/asm/queue/counts?<filters>
-// Badge counts for the 4 ASM tabs in one round trip.
+// Badge counts for the 5 ASM tabs in one round trip.
 
 import type { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth-utils";

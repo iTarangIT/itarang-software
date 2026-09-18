@@ -23,8 +23,8 @@ let failures = 0;
 const check = (c: boolean, m: string) => { ok(c, m); if (!c) failures++; };
 
 async function main() {
-const s3 = await import("../src/lib/storage/s3.ts");
-const nbfc = await import("../src/lib/nbfc/nbfc-storage.ts");
+const s3 = await import("../src/lib/storage/s3");
+const nbfc = await import("../src/lib/nbfc/nbfc-storage");
 
 check(s3.isS3Backend === true, `isS3Backend is true (STORAGE_BACKEND=${process.env.STORAGE_BACKEND})`);
 check(s3.filesProxyPath("documents", "a/b c.pdf") === "/api/files/documents/a/b%20c.pdf",

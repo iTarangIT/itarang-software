@@ -38,10 +38,10 @@ export async function getDigestSettings(
       .from(appSettings)
       .where(eq(appSettings.key, kind.settingsKey))
       .limit(1);
-    return normalizeSettings(row?.value, kind.sections);
+    return normalizeSettings(row?.value, kind.sections, defaultSettings(kind.sections, kind.defaults));
   } catch (err) {
     console.error(`[digest:${kind.id}] failed to read settings:`, err);
-    return defaultSettings(kind.sections);
+    return defaultSettings(kind.sections, kind.defaults);
   }
 }
 

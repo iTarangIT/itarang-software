@@ -34,6 +34,7 @@ import {
   normalizeState,
   inferStateFromCity,
 } from "@/lib/scraper-enrichment";
+import { normalizeBusinessType } from "@/lib/leads/businessType";
 
 // Same ceiling the bulk wizard enforces (MAX_UPLOAD_ROWS). Without it this
 // route will happily accept an unbounded JSON array.
@@ -60,6 +61,8 @@ type IncomingLead = {
   pincode?: unknown;
   language?: unknown;
   current_status?: unknown;
+  /** E-296 optional "Business Type" column — value or label, normalised here. */
+  business_type?: unknown;
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim());
@@ -94,6 +97,12 @@ export const POST = withErrorHandler(async (req: Request) => {
     invalid_phone: 0,
     failed: 0,
   };
+  // E-296. Rows whose "Business Type" cell was non-blank but not recognised —
+  // the lead still imports, with no type. Not part of `skipped`.
+  let businessTypeUnrecognised = 0;
+  // Flipped on the first failed business_type write (E-296 not applied here) so
+  // a 5,000-row sheet does not retry a doomed UPDATE 5,000 times.
+  let businessTypeColumnMissing = false;
   // Row-level detail so the modal can tell the operator WHICH rows were dropped
   // and why, instead of a bare skipped count they can't act on.
   const details: Array<{
@@ -179,9 +188,13 @@ export const POST = withErrorHandler(async (req: Request) => {
           details.push({ row: rowNo, phone, outcome, duplicate_lead_id: duplicateLeadId });
           break;
 
-        case "valid":
+        case "valid": {
+          const newId = `DL-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+          const businessTypeCell = str(lead.business_type);
+          const businessType = normalizeBusinessType(businessTypeCell);
+          if (businessTypeCell && !businessType) businessTypeUnrecognised++;
           await db.insert(dealerLeads).values({
-            id: `DL-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+            id: newId,
             dealer_name: str(lead.dealer_name) || null,
             phone,
             shop_name: str(lead.shop_name) || null,
@@ -195,9 +208,22 @@ export const POST = withErrorHandler(async (req: Request) => {
             source: "manual_upload_lead",
             total_attempts: 0,
           });
+          // Not on the Drizzle object (see schema.ts) — raw UPDATE, and a
+          // failure costs the type, never the row.
+          if (businessType && !businessTypeColumnMissing) {
+            try {
+              await db.execute(
+                sql`UPDATE dealer_leads SET business_type = ${businessType} WHERE id = ${newId}`,
+              );
+            } catch (e) {
+              businessTypeColumnMissing = true;
+              console.warn("[leads/import] business_type not saved (E-296 applied?):", e);
+            }
+          }
           result.inserted++;
           details.push({ row: rowNo, phone, outcome });
           break;
+        }
       }
     } catch (err) {
       // One bad row must not abort the whole sheet.
@@ -214,6 +240,8 @@ export const POST = withErrorHandler(async (req: Request) => {
   return NextResponse.json({
     success: true,
     ...result,
+    business_type_unrecognised: businessTypeUnrecognised,
+    business_type_saved: !businessTypeColumnMissing,
     // Back-compat: the modal reads `skipped`. Everything that didn't insert.
     skipped:
       result.duplicate_skipped +

@@ -48,7 +48,7 @@ export default async function Page() {
                   </span>
                 )}
               </div>
-              {(l.before || l.after) && (
+              {Boolean(l.before || l.after) && (
                 <details className="mt-2">
                   <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-800">before → after</summary>
                   <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">

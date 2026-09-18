@@ -1349,10 +1349,14 @@ export async function updateDeviceMapping(
         "city",
         "status",
     ] as const;
-    type Allowed = (typeof allowed)[number];
-    const patch: Partial<Record<Allowed, unknown>> = {};
+    // Every allowed column is a nullable varchar/text; scalars are stringified
+    // the way the driver would, anything else is not a value for these columns.
+    const patch: Partial<Pick<typeof deviceBatteryMap.$inferInsert, (typeof allowed)[number]>> = {};
     for (const key of allowed) {
-        if (data[key] !== undefined) patch[key] = data[key];
+        const v = data[key];
+        if (v === undefined) continue;
+        if (v === null) patch[key] = null;
+        else if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") patch[key] = String(v);
     }
     if (Object.keys(patch).length === 0) return;
     return db

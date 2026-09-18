@@ -89,8 +89,16 @@ export async function GET(
       if (cat) categoryName = cat.name;
     }
 
-    let subCategoryName: string | null = null;
-    if (selection.sub_category) {
+    // E-103 renamed lead_product_selections.sub_category → model_number, and
+    // this reader kept the old name (so it never ran). The column holds either
+    // a products.id — when Step 1 chose a catalogue product — or a free-text
+    // model such as '51.2V-105AH'; only the former is a key into products, the
+    // latter is the display value itself.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const modelRef = selection.model_number ?? null;
+    const productId = modelRef && UUID_RE.test(modelRef) ? modelRef : null;
+    let subCategoryName: string | null = productId ? null : modelRef;
+    if (productId) {
       const [prod] = await db
         .select({
           name: products.name,
@@ -98,7 +106,7 @@ export async function GET(
           capacity_ah: products.capacity_ah,
         })
         .from(products)
-        .where(eq(products.id, selection.sub_category))
+        .where(eq(products.id, productId))
         .limit(1);
       if (prod) {
         const specs = [

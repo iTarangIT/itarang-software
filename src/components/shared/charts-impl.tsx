@@ -96,7 +96,8 @@ export function MetricsChart({
         colors[Math.max(0, dataKeys.indexOf(key)) % colors.length];
     const labelFor = (key: string) => seriesLabels?.[key] ?? key;
     const tooltipFormatter = valueFormatter
-        ? (value: number | string) => valueFormatter(Number(value))
+        ? // recharts' Formatter hands over `ValueType | undefined`; `unknown` accepts it.
+          (value: unknown) => valueFormatter(Number(value))
         : undefined;
     const yTickFormatter = valueFormatter
         ? (value: number) => valueFormatter(Number(value))

@@ -70,6 +70,16 @@ export async function buildDigestWorkbook(args: {
   workbook.creator = "iTarang";
   workbook.created = new Date();
 
+  // A digest that names sheets on its lines covers flows that must not share a
+  // grid (scrap_buyback_daily: NBFC scrap vs dealer buyback). Each named sheet
+  // gets its own figures block and its own detail block; the shared
+  // Figures/Detail pair below is not written.
+  const sheetNames = namedSheets(args.figures);
+  if (sheetNames.length > 0) {
+    for (const name of sheetNames) writeFlowSheet(workbook, name, args, on);
+    return workbook;
+  }
+
   // ---- Sheet 1: the figures exactly as mailed -------------------------------
   const figuresSheet = workbook.addWorksheet(FIGURES_SHEET_NAME, {
     views: [{ state: "frozen", ySplit: 1 }],
@@ -165,6 +175,93 @@ export async function buildDigestWorkbook(args: {
   };
 
   return workbook;
+}
+
+/** Distinct `sheet` names across a digest's lines, in first-seen order. */
+export function namedSheets(figures: DigestFigures): string[] {
+  const out: string[] = [];
+  for (const l of [...figures.activity, ...figures.backlog]) {
+    if (l.sheet && !out.includes(l.sheet)) out.push(l.sheet);
+  }
+  return out;
+}
+
+/** Excel caps sheet names at 31 chars and forbids : \ / ? * [ ] */
+function safeSheetName(name: string): string {
+  return name.replace(/[:\\/?*[\]]/g, "-").slice(0, 31);
+}
+
+/**
+ * One flow on one worksheet: its figures (day + still outstanding), a blank
+ * row, then the rows behind its bucketed lines under their own header band.
+ */
+function writeFlowSheet(
+  workbook: ExcelJS.Workbook,
+  name: string,
+  args: {
+    kind: DigestKindDescriptor;
+    istDay: string;
+    figures: DigestFigures;
+    detail: DigestDetail;
+  },
+  on: (key: string) => boolean,
+): void {
+  const ws = workbook.addWorksheet(safeSheetName(name), {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+  ws.columns = [
+    { key: "c1", width: 30 },
+    { key: "c2", width: 40 },
+    { key: "c3", width: 30 },
+    { key: "c4", width: 18 },
+    { key: "c5", width: 18 },
+    { key: "c6", width: 16 },
+    { key: "c7", width: 22 },
+    { key: "c8", width: 38 },
+  ];
+
+  styleHeader(ws.addRow([...FIGURES_COLUMNS]));
+
+  let f = 0;
+  const activity = args.figures.activity.filter((l) => l.sheet === name && on(l.key));
+  for (const l of activity) {
+    zebra(
+      ws.addRow([args.istDay, (l.indent ? "    " : "") + l.label, l.display ?? l.value]),
+      ++f,
+    );
+  }
+  for (const l of args.figures.backlog.filter((x) => x.sheet === name && on(x.key))) {
+    zebra(ws.addRow(["Still outstanding", l.label, l.display ?? l.value]), ++f);
+  }
+
+  ws.addRow([]);
+  styleHeader(ws.addRow([...DETAIL_COLUMNS]));
+
+  let i = 0;
+  for (const line of activity) {
+    if (!line.bucket || line.indent) continue;
+    for (const row of args.detail[line.bucket] ?? []) {
+      zebra(
+        ws.addRow([
+          line.label,
+          row.title,
+          row.subtitle ?? "—",
+          row.city ?? "—",
+          row.state ?? "—",
+          row.source ?? "—",
+          fmtIst(row.at),
+          row.id,
+        ]),
+        ++i,
+      );
+    }
+  }
+  if (i === 0) {
+    zebra(
+      ws.addRow(["—", `No ${name} activity on ${args.istDay}`, "—", "—", "—", "—", "—", "—"]),
+      1,
+    );
+  }
 }
 
 /** The bytes, ready for a MailAttachment `content`. */
