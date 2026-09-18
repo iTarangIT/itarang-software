@@ -24,6 +24,7 @@ import {
 } from "@/components/dealer-portal/lead-wizard/product-cart";
 import type { PriorSelection } from "@/components/dealer-portal/lead-wizard/product-cart";
 import { externalLenderName } from "@/lib/leads/bajaj-fallback-text";
+import DealerPaymentConfirmationCard from "@/components/dealer-portal/DealerPaymentConfirmationCard";
 
 // BRD V2 Part F — Step 5 OTP + Dispatch Confirmation (finance only).
 // Scenario A: kyc_status = loan_sanctioned → product cart + OTP send/entry + dispatch.
@@ -66,6 +67,12 @@ interface LoanSanction {
   decided_at: string | null;
   /** E-275 — set when the sanction came from an outside partner (Bajaj Finance). */
   external_lender?: string | null;
+  /** E-298 — dealer payment confirmation (null = not asked). */
+  dealer_payment_status?: string | null;
+  dealer_payment_confirmed_at?: string | null;
+  dealer_payment_utr?: string | null;
+  dealer_payment_amount?: string | null;
+  dealer_payment_remarks?: string | null;
 }
 
 /**
@@ -701,6 +708,11 @@ export default function Step5Page() {
             </div>
           </section>
 
+          {/* E-298 — did the lender's disbursal reach the dealer? */}
+          {loan?.dealer_payment_status && (
+            <DealerPaymentConfirmationCard sanction={loan} />
+          )}
+
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               onClick={handleMarkDelivered}
@@ -875,6 +887,10 @@ export default function Step5Page() {
             <span>{error}</span>
           </div>
         )}
+
+        {/* E-298 — a delivered (sold) finance lead lands here too; keep the
+            payment question answerable after dispatch → sold. */}
+        {loan?.dealer_payment_status && <DealerPaymentConfirmationCard sanction={loan} />}
 
         {/* ─── Loan Details Card ─────────────────────────────────────────── */}
         {loan && (

@@ -176,7 +176,7 @@ function parseSegments(raw: string | undefined): string[] {
     return raw
         .split(",")
         .map((s) => canon.get(s.trim().toLowerCase()))
-        .filter((s): s is string => !!s);
+        .filter((s): s is (typeof UPLOAD_SEGMENTS)[number] => !!s);
 }
 
 // ── Validation + dedupe ────────────────────────────────────────────────────

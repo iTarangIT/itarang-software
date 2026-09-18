@@ -38,6 +38,11 @@ import { resolveEmailChannel } from "@/lib/notifications/catalog";
 import { emailOverrideFor } from "@/lib/notifications/email-access";
 import { getEmailTransport } from "@/lib/notifications/resolve-channel";
 import {
+  buildDealerWhatsAppMessage,
+  dealerWhatsAppDedupeKey,
+  isDealerWhatsAppType,
+} from "@/lib/notifications/whatsapp-dealer";
+import {
   ADMIN_PARTY,
   SYSTEM_PARTY,
   type Party,
@@ -109,6 +114,9 @@ export interface Recipient {
   message?: string;
   /** Force email on/off for this recipient only. */
   email?: boolean;
+  /** B15 — this recipient's own subject line (a dealer reads "Loan disbursed
+   *  for Ravi — ₹1,20,000", the NBFC reads the event title). */
+  emailSubject?: string;
   /** Extra data merged into this recipient's row only. */
   data?: Record<string, unknown>;
 }
@@ -393,7 +401,7 @@ export async function emit(input: EmitInput): Promise<void> {
       );
       if (sendMail) {
         await emailTargets(targets, {
-          subject: input.emailSubject ?? `[iTarang] ${title}`,
+          subject: recipient.emailSubject ?? input.emailSubject ?? `[iTarang] ${title}`,
           title,
           message,
           provenance: provenanceLine(from, recipient.as, input.stage),
@@ -405,6 +413,87 @@ export async function emit(input: EmitInput): Promise<void> {
       // must not stop the others, and none of them may fail the caller.
       console.error(`[notify] emit(${input.type}) failed for an audience:`, error);
     }
+  }
+
+  // Pile B items 9–10 — the dealer also hears about NBFC status changes on
+  // WhatsApp. Fire-and-forget: never awaited, never throws into the caller.
+  void pushDealerWhatsApp(type, input).catch((err) =>
+    console.error(`[notify] WhatsApp dealer push for ${type} failed:`, err),
+  );
+}
+
+/** type|lead|entity → last push time, so a retried callback doesn't re-push. */
+const recentDealerPushes = new Map<string, number>();
+const DEALER_PUSH_DEDUPE_MS = 10 * 60 * 1000;
+
+async function pushDealerWhatsApp(type: string, input: EmitInput): Promise<void> {
+  const leadId = input.leadId;
+  if (!leadId || !isDealerWhatsAppType(type)) return;
+  // Only when the event is addressed to the lead's dealer — WhatsApp mirrors
+  // the bell, it never widens the audience (admin stays the single gate).
+  const toDealer = input.to.some(
+    (r) => r.audience.kind === "lead_dealer" || r.audience.kind === "dealer",
+  );
+  if (!toDealer) return;
+
+  const key = dealerWhatsAppDedupeKey(type, leadId, input.data);
+  const now = Date.now();
+  const last = recentDealerPushes.get(key);
+  if (last && now - last < DEALER_PUSH_DEDUPE_MS) return;
+  recentDealerPushes.set(key, now);
+  if (recentDealerPushes.size > 500) {
+    for (const [k, t] of recentDealerPushes) {
+      if (now - t >= DEALER_PUSH_DEDUPE_MS) recentDealerPushes.delete(k);
+    }
+  }
+
+  // Lazy: the WhatsApp stack is heavy and emit() is imported everywhere.
+  const { pushToLead, resolveLeadTarget } = await import("@/lib/whatsapp/lead-push");
+  const target = await resolveLeadTarget(leadId);
+  // No dealer chat (a self-serve customer lead): the copy is dealer-worded,
+  // so don't send it to the customer instead.
+  if (!target || target.audience !== "dealer") return;
+
+  const result = await pushToLead(leadId, (t) => {
+    const built = buildDealerWhatsAppMessage(type, {
+      greetName: t.greetName,
+      customerName: t.customerName,
+      referenceId: t.referenceId,
+      data: input.data ?? null,
+    })!;
+    return {
+      prompt: { kind: "text", body: built.body },
+      nudge: {
+        template: "lead_action",
+        params: [t.greetName, t.referenceId, built.whatIsNeeded],
+      },
+    };
+  });
+  // "session" means sent OR parked behind a nudge — not proof of delivery.
+  console.log(`[notify] WhatsApp dealer push ${type} lead=${leadId}: ${result}`);
+
+  // B14 — the stage shows up in the dealer's WhatsApp *History* card too.
+  // Recorded even when the push came back "none": the stage happened whether
+  // or not the message landed, and history is about the file, not the phone.
+  try {
+    const [row] = await db
+      .select({ dealer_id: leads.dealer_id })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    if (row?.dealer_id) {
+      const { recordLeadFlowEvent } = await import("@/lib/whatsapp/lead-events");
+      await recordLeadFlowEvent({
+        leadId,
+        dealerCode: row.dealer_id,
+        actorKind: "system",
+        actorLabel: "iTarang",
+        action: "notify",
+        note: `${input.title}${result === "none" ? " (WhatsApp not delivered)" : ""}`.slice(0, 200),
+      });
+    }
+  } catch (err) {
+    console.error(`[notify] flow-event for ${type} lead=${leadId} failed:`, err);
   }
 }
 
@@ -466,7 +555,14 @@ export const toAdmins = (
 
 export const toLeadDealer = (
   leadId: string,
-  opts: { href?: string | null; actions?: NotifAction[]; title?: string; message?: string; email?: boolean } = {},
+  opts: {
+    href?: string | null;
+    actions?: NotifAction[];
+    title?: string;
+    message?: string;
+    email?: boolean;
+    emailSubject?: string;
+  } = {},
 ): Recipient => ({
   audience: { kind: "lead_dealer", leadId },
   as: { party: "dealer", label: "Dealer" },

@@ -431,3 +431,7 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
+
+// Module marker: without a top-level import/export this file is a global script and
+// its `main` collides with every other script's under one tsc program.
+export {};

@@ -455,6 +455,16 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const filter = parseReviewFilter(searchParams.get("status"));
     const search = searchParams.get("search")?.trim().toLowerCase() ?? "";
+    // B12 — lead-level filters shared with the KYC export, so the sheet an
+    // admin downloads is the list they are looking at. Dealer is accounts.id,
+    // city a case-folded match, the dates are IST days on the case date
+    // (reviewed_at, or submitted_at while unreviewed) — the same expression
+    // src/lib/admin/kycExport.ts filters on.
+    const dealerFilter = searchParams.get("dealer_id")?.trim() || null;
+    const cityFilter = searchParams.get("city")?.trim().toLowerCase() || null;
+    const isoDay = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+    const fromFilter = isoDay(searchParams.get("from"));
+    const toFilter = isoDay(searchParams.get("to"));
 
     const [primaryDocumentRows, coBorrowerDocumentRows, pendingConsentRows, videoKycRows, activeVideoKycRows] = await Promise.all([
       fetchPrimaryDocuments(filter),
@@ -513,7 +523,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: [] });
     }
 
-    const [leadRows, coBorrowerRows] = await Promise.all([
+    const [leadRows, coBorrowerRows, rejectionRows] = await Promise.all([
       db
         .select({
           id: leads.id,
@@ -527,6 +537,7 @@ export async function GET(req: NextRequest) {
           dealer_id: leads.dealer_id,
           dealer_name: accounts.business_entity_name,
           kyc_status: leads.kyc_status,
+          city: leads.city,
         })
         .from(leads)
         .leftJoin(accounts, eq(accounts.id, leads.dealer_id))
@@ -537,7 +548,42 @@ export async function GET(req: NextRequest) {
         .select({ lead_id: coBorrowers.lead_id })
         .from(coBorrowers)
         .where(inArray(coBorrowers.lead_id, leadIds)),
+      // Rejected document reviews per lead, newest first — the card shows the
+      // latest reason and how many rejections the lead has had.
+      db
+        .select({
+          lead_id: adminKycReviews.lead_id,
+          rejection_reason: adminKycReviews.rejection_reason,
+          document_type: adminKycReviews.document_type,
+          reviewed_at: adminKycReviews.reviewed_at,
+        })
+        .from(adminKycReviews)
+        .where(
+          and(
+            inArray(adminKycReviews.lead_id, leadIds),
+            eq(adminKycReviews.outcome, "rejected"),
+          ),
+        )
+        .orderBy(desc(adminKycReviews.reviewed_at)),
     ]);
+
+    const rejectionsByLead = new Map<
+      string,
+      { count: number; reason: string | null; documentType: string | null; at: Date | null }
+    >();
+    for (const row of rejectionRows) {
+      const prev = rejectionsByLead.get(row.lead_id);
+      if (prev) {
+        prev.count += 1;
+      } else {
+        rejectionsByLead.set(row.lead_id, {
+          count: 1,
+          reason: row.rejection_reason,
+          documentType: row.document_type,
+          at: row.reviewed_at,
+        });
+      }
+    }
 
     const documentsByLead = new Map<
       string,
@@ -551,6 +597,26 @@ export async function GET(req: NextRequest) {
 
     const coBorrowerLeadIds = new Set(coBorrowerRows.map((row) => row.lead_id));
 
+    // The case's queue dates, latest row per lead, for the date filter and
+    // the card. Fetched for the leads on this list only.
+    const queueDateRows = await db
+      .select({
+        lead_id: adminVerificationQueue.lead_id,
+        submitted_at: adminVerificationQueue.submitted_at,
+        reviewed_at: adminVerificationQueue.reviewed_at,
+        created_at: adminVerificationQueue.created_at,
+      })
+      .from(adminVerificationQueue)
+      .where(inArray(adminVerificationQueue.lead_id, leadIds))
+      .orderBy(desc(adminVerificationQueue.created_at));
+    const queueDates = new Map<string, { submitted_at: Date | null; reviewed_at: Date | null }>();
+    for (const r of queueDateRows) {
+      if (!queueDates.has(r.lead_id)) queueDates.set(r.lead_id, { submitted_at: r.submitted_at, reviewed_at: r.reviewed_at });
+    }
+    // IST calendar day of an instant, for the from/to comparison.
+    const istDay = (d: Date | null | undefined) =>
+      d ? new Date(d.getTime() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10) : null;
+
     const result = leadRows
       .map((lead) => {
         const documents = documentsByLead.get(lead.id) ?? [];
@@ -561,10 +627,16 @@ export async function GET(req: NextRequest) {
         const dealerName =
           lead.dealer_name?.trim() || lead.dealer_id?.trim() || "—";
 
+        const qd = queueDates.get(lead.id);
         return {
           lead_id: lead.id,
           owner_name: ownerName,
           dealer_name: dealerName,
+          dealer_id: lead.dealer_id ?? null,
+          city: lead.city ?? null,
+          submitted_at: qd?.submitted_at ?? null,
+          reviewed_at: qd?.reviewed_at ?? null,
+          case_day: istDay(qd?.reviewed_at ?? qd?.submitted_at ?? null),
           kyc_status: lead.kyc_status || "pending",
           interest_level: deriveInterestLevel(lead.kyc_status),
           has_co_borrower: coBorrowerLeadIds.has(lead.id),
@@ -573,9 +645,18 @@ export async function GET(req: NextRequest) {
           pending_count: documents.filter(
             (document) => document.status === "pending",
           ).length,
+          rejection_count: rejectionsByLead.get(lead.id)?.count ?? 0,
+          latest_rejection_reason: rejectionsByLead.get(lead.id)?.reason ?? null,
+          latest_rejection_document_type:
+            rejectionsByLead.get(lead.id)?.documentType ?? null,
+          latest_rejected_at: rejectionsByLead.get(lead.id)?.at ?? null,
         };
       })
       .filter((lead) => {
+        if (dealerFilter && lead.dealer_id !== dealerFilter) return false;
+        if (cityFilter && (lead.city ?? "").trim().toLowerCase() !== cityFilter) return false;
+        if (fromFilter && (!lead.case_day || lead.case_day < fromFilter)) return false;
+        if (toFilter && (!lead.case_day || lead.case_day > toFilter)) return false;
         if (!search) return true;
 
         return (

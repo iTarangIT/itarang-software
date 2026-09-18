@@ -1,4 +1,10 @@
-import type { BureauKind, CreditBureauProvider } from './types';
+import type {
+  BureauKind,
+  CreditBureauProvider,
+  ProviderInput,
+  ReportResult,
+  ScoreResult,
+} from './types';
 import { CibilProvider } from './cibil';
 import { EquifaxProvider } from './equifax';
 
@@ -11,7 +17,7 @@ class UnimplementedProvider implements CreditBureauProvider {
   constructor(bureau: BureauKind) {
     this.bureau = bureau;
   }
-  async fetchScore() {
+  async fetchScore(_input: ProviderInput): Promise<ScoreResult> {
     return {
       bureau: this.bureau,
       score: null,
@@ -25,7 +31,7 @@ class UnimplementedProvider implements CreditBureauProvider {
       raw: null,
     };
   }
-  async fetchReport() {
+  async fetchReport(_input: ProviderInput): Promise<ReportResult> {
     return {
       bureau: this.bureau,
       score: null,

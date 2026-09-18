@@ -28,7 +28,7 @@ import {
   DealerIdentityCard,
   DealerOnboardingStatusCard,
 } from './shared/DealerProfileCards';
-import { fetchDealerStats } from './useDealerStats';
+import { fetchDealerStats, type LeadItem } from './useDealerStats';
 import { capabilitiesFor } from '@/lib/dealer/dealer-capabilities';
 import { dealerTypeLabel } from '@/lib/dealer/dealer-type';
 import '@/app/auction-theme.css';
@@ -72,18 +72,6 @@ type DealerDashboardData = {
   gstNumber: string;
   financeEnabled: string;
   submittedAt: string;
-};
-
-type LeadItem = {
-  id: string;
-  owner_name?: string | null;
-  owner_contact?: string | null;
-  interest_level?: string | null;
-  lead_status?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  current_address?: string | null;
-  payment_method?: string | null;
 };
 
 type ExtendedAuthUser = {

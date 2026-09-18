@@ -15,9 +15,21 @@ import {
 } from "@/lib/admin/types";
 import { ReportChart } from "./ReportChart";
 import { ReportTable } from "./ReportTable";
+import { FunnelView } from "./FunnelView";
 
-export function ReportsView() {
-    const [type, setType] = useState<ReportType>("daily_activity");
+// B10 — the Funnel tab reads /api/admin/reports/funnel-counts, whose role gate
+// is narrower than this page's, so the tab only renders for roles that would
+// not get a 403 from it. The catalogue reports keep their own (wider) gate.
+const FUNNEL_ROLES = new Set(["admin", "ceo", "business_head", "finance_controller", "sales_head"]);
+const CATALOGUE_ROLES = new Set(["admin", "sales_head", "ceo", "partner"]);
+
+type Tab = ReportType | "funnel";
+
+export function ReportsView({ viewerRole }: { viewerRole: string }) {
+    const canFunnel = FUNNEL_ROLES.has(viewerRole);
+    const canCatalogue = CATALOGUE_ROLES.has(viewerRole);
+    const [tab, setTab] = useState<Tab>(canCatalogue ? "daily_activity" : "funnel");
+    const type: ReportType = tab === "funnel" ? "daily_activity" : tab;
     const [from, setFrom] = useState("");
     const [to, setTo] = useState("");
 
@@ -27,6 +39,7 @@ export function ReportsView() {
     const qs = params.toString();
 
     const query = useQuery<{ success: true; data: ReportResult }>({
+        enabled: tab !== "funnel",
         queryKey: ["admin-report", type, from, to],
         queryFn: async () => {
             const res = await fetch(
@@ -44,13 +57,13 @@ export function ReportsView() {
     return (
         <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
-                {REPORT_TYPES.map((t) => (
+                {canCatalogue && REPORT_TYPES.map((t) => (
                     <button
                         key={t}
                         type="button"
-                        onClick={() => setType(t)}
+                        onClick={() => setTab(t)}
                         className={`px-3 py-1.5 rounded-md text-sm font-medium border transition ${
-                            type === t
+                            tab === t
                                 ? "bg-brand-600 text-white border-brand-600"
                                 : "bg-surface text-ink-muted border-border hover:bg-bg"
                         }`}
@@ -58,8 +71,24 @@ export function ReportsView() {
                         {REPORT_LABELS[t]}
                     </button>
                 ))}
+                {canFunnel && (
+                    <button
+                        type="button"
+                        onClick={() => setTab("funnel")}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium border transition ${
+                            tab === "funnel"
+                                ? "bg-brand-600 text-white border-brand-600"
+                                : "bg-surface text-ink-muted border-border hover:bg-bg"
+                        }`}
+                    >
+                        Funnel
+                    </button>
+                )}
             </div>
 
+            {tab === "funnel" ? (
+                <FunnelView />
+            ) : (
             <div className="rounded-xl border border-border bg-surface shadow-card">
                 <div className="px-4 py-3 border-b border-border flex flex-wrap items-end gap-3">
                     <div>
@@ -120,6 +149,7 @@ export function ReportsView() {
                     )}
                 </div>
             </div>
+            )}
         </div>
     );
 }

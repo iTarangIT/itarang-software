@@ -52,6 +52,15 @@ export interface CreateRefinanceInput {
   settlement_id: string;
   actor_tenant_id: string;
   actor_user_id: string;
+  /**
+   * loan_sanctions.lead_id is NOT NULL on every environment (0035; verified on
+   * database-1, 2026-09-18) and a dealer refinance has no lead, so no caller
+   * can supply one yet and createRefinanceSanction refuses below. Making the
+   * column nullable ripples into the live sanction paths (12 call sites) and
+   * is a product decision, not a type fix — until then this stays optional and
+   * the refusal is explicit instead of a NOT NULL violation mid-transaction.
+   */
+  lead_id?: string | null;
 }
 
 export interface CreateRefinanceResult {
@@ -120,17 +129,24 @@ export async function createRefinanceSanction(
     throw new Error("CONFLICT: the financed portion is zero");
   }
 
+  if (!input.lead_id) {
+    throw new Error(
+      "NOT_SUPPORTED: a dealer refinance has no lead, and loan_sanctions.lead_id is NOT NULL — " +
+        "the loan cannot be recorded until that column accepts NULL (see CreateRefinanceInput.lead_id)",
+    );
+  }
+  const leadId = input.lead_id;
+
   const loanId = `LS-AUC-${randomUUID().slice(0, 8).toUpperCase()}`;
   const now = new Date();
 
   await db.transaction(async (tx) => {
     await tx.insert(loanSanctions).values({
       id: loanId,
-      // No lead: this borrower is a DEALER buying stock, not a retail customer
-      // being sold a vehicle. The origination path that normally fills lead_id
-      // has no row here, and inventing one would put a fake customer into the
-      // leads pipeline.
-      lead_id: null,
+      // This borrower is a DEALER buying stock, not a retail customer being
+      // sold a vehicle; the origination path that normally fills lead_id has
+      // no row here (see the guard above and CreateRefinanceInput.lead_id).
+      lead_id: leadId,
       product_selection_id: null,
       nbfc_id: row.seller_tenant_id,
       loan_amount: String(split.financed),

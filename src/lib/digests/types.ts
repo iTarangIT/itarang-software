@@ -20,7 +20,12 @@
  */
 
 /** Registered digests. Adding one here is the first of two steps; see registry.ts. */
-export type DigestKindId = "dealer_validation" | "kyc_review";
+export type DigestKindId =
+  | "dealer_validation"
+  | "kyc_review"
+  | "scrap_buyback_daily"
+  | "sales_daily"
+  | "buyback_daily";
 
 /** One figure about the covered day. */
 export type ActivityLine = {
@@ -36,6 +41,18 @@ export type ActivityLine = {
   indent?: boolean;
   /** Which detail bucket expands under this line in the `detailed` format. */
   bucket?: string;
+  /**
+   * Shown instead of the number when set — for rupee amounts ("₹1,25,000").
+   * The value still drives the Excel export and the stored `counts` blob.
+   */
+  display?: string;
+  /**
+   * Workbook sheet this line (and its detail bucket) belongs to. When ANY line
+   * of a digest names a sheet, the attachment is written one worksheet per
+   * sheet instead of the shared Figures/Detail pair — so a digest covering two
+   * separate flows (scrap_buyback_daily) never mixes them in one grid.
+   */
+  sheet?: string;
 };
 
 /** One figure about the present moment. */
@@ -49,6 +66,8 @@ export type BacklogLine = {
    * and the stored `counts` blob, so nothing is lost by formatting it.
    */
   display?: string;
+  /** Workbook sheet, as on ActivityLine. */
+  sheet?: string;
 };
 
 /** One row in a detailed list, and one row in the spreadsheet. */
@@ -69,10 +88,26 @@ export type DigestDetailRow = {
 /** Detail rows per bucket. Keys match the `bucket` on an ActivityLine. */
 export type DigestDetail = Record<string, DigestDetailRow[]>;
 
+/**
+ * A grid block (B8). The activity / backlog lists are label→value pairs; a
+ * per-SPOC report needs columns. Rendered as a plain HTML table with no fixed
+ * widths so it reflows on a phone. Governed by the section `key` like a line.
+ */
+export type DigestTable = {
+  key: string;
+  title: string;
+  columns: string[];
+  rows: Array<Array<string | number>>;
+  /** Shown in place of the grid when `rows` is empty. */
+  empty?: string;
+};
+
 /** What a kind reports for one IST day. */
 export type DigestFigures = {
   activity: ActivityLine[];
   backlog: BacklogLine[];
+  /** Optional grid blocks, rendered after the activity lines. Absent = none. */
+  tables?: DigestTable[];
 };
 
 /** A section the admin can tick off on the settings screen. */
@@ -103,6 +138,20 @@ export type DigestKindDescriptor = {
   ctaLabel: string;
   /** The tick-boxes, in render order. */
   sections: DigestSection[];
+  /**
+   * Which daily slots this kind sends in. Absent = both. A morning-only kind
+   * (sales_daily) never takes the evening claim and its settings screen hides
+   * the evening time.
+   */
+  slots?: Array<"morning" | "evening">;
+  /**
+   * Out-of-the-box overrides for this kind's settings. Absent = the shared
+   * defaults in schedule.ts (enabled, the default recipient). A kind that must
+   * not mail anyone until an admin says so sets `{ enabled: false, recipients: [] }`.
+   */
+  defaults?: { enabled?: boolean; recipients?: string[] };
+  /** Custom subject line. Absent = the shared "[iTarang] <label> — yesterday (…)" form. */
+  subject?: (args: { istDay: string; dayLabel: string; slot: "morning" | "evening" | "test" }) => string;
   /** The figures. Must never throw — return ok:false and the send is cancelled. */
   collect(
     istDay: string,

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
-import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
-import { and, desc, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
+import {
+  dealerCorrectionRounds,
+  dealerOnboardingApplications,
+  dealerOnboardingDocuments,
+} from "@/lib/db/schema";
+import { and, desc, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
@@ -35,6 +39,9 @@ export async function GET() {
         submittedAt: dealerOnboardingApplications.submitted_at,
         approvedAt: dealerOnboardingApplications.approved_at,
         approvedBy: dealerOnboardingApplications.approved_by,
+        rejectedAt: dealerOnboardingApplications.rejected_at,
+        rejectionReason: dealerOnboardingApplications.rejection_reason,
+        rejectionRemarks: dealerOnboardingApplications.rejection_remarks,
         updatedAt: dealerOnboardingApplications.updated_at,
         createdAt: dealerOnboardingApplications.created_at,
         city: dealerOnboardingApplications.city,
@@ -125,6 +132,19 @@ export async function GET() {
       typesByApp.set(r.applicationId, set);
     }
 
+    // Correction rounds per application (dealer_correction_rounds is the real
+    // correction event log; correction_requested_at is never written).
+    const roundRows = await db
+      .select({
+        applicationId: dealerCorrectionRounds.application_id,
+        count: sql<number>`cast(count(*) as integer)`,
+      })
+      .from(dealerCorrectionRounds)
+      .where(inArray(dealerCorrectionRounds.application_id, applicationIds))
+      .groupBy(dealerCorrectionRounds.application_id);
+    const roundCountMap = new Map<string, number>();
+    for (const r of roundRows) roundCountMap.set(r.applicationId, Number(r.count) || 0);
+
     // Build a quick lookup map: applicationId → document count
     const docCountMap = new Map<string, number>();
     for (const row of docCounts) {
@@ -204,6 +224,15 @@ export async function GET() {
         // The admin table StatusBadge reads `status` — map from onboardingStatus
         legacyStatus: item.onboardingStatus ?? "draft",
         status,
+        // Raw review_status (KYC/document review stage), shown as its own column
+        // beside the derived `status`.
+        reviewStatus: reviewStatus || null,
+        rejectionReason:
+          onboardingStatus === "rejected"
+            ? item.rejectionReason || item.rejectionRemarks || null
+            : null,
+        rejectedAt: item.rejectedAt,
+        correctionRounds: roundCountMap.get(item.id) ?? 0,
         dealerAccountStatus: (item.dealerAccountStatus || "").toLowerCase(),
         submittedAt: item.submittedAt,
         approvedAt: item.approvedAt,

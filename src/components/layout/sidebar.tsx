@@ -327,6 +327,35 @@ function kycReviewDigestItem(idPrefix: string) {
   };
 }
 
+function scrapBuybackDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-scrap-buyback-digest`,
+    label: "Scrap / Buyback Report",
+    icon: MailCheck,
+    href: "/admin/settings/scrap-buyback",
+  };
+}
+
+// B8 — the per-SPOC morning mail.
+function salesDailyDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-sales-daily-digest`,
+    label: "Sales Daily Report",
+    icon: MailCheck,
+    href: "/admin/settings/sales-daily",
+  };
+}
+
+// B9 — the buyback team's per-SPOC morning mail.
+function buybackDailyDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-buyback-daily-digest`,
+    label: "Buyback Daily Report",
+    icon: MailCheck,
+    href: "/admin/settings/buyback-daily",
+  };
+}
+
 // Settings → WhatsApp. Same shape as nbfcSettingsSubnav: one factory, called
 // once per role that shows the settings group, so both roles stay in step.
 function whatsappSettingsSubnav(idPrefix: string) {
@@ -384,6 +413,9 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         },
         dealerValidationDigestItem("sh"),
         kycReviewDigestItem("sh"),
+        scrapBuybackDigestItem("sh"),
+        salesDailyDigestItem("sh"),
+        buybackDailyDigestItem("sh"),
         loanProductSettingsItem("sh"),
         nbfcSettingsSubnav("sh"),
         whatsappSettingsSubnav("sh"),
@@ -433,6 +465,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Reports",
           icon: BarChart3,
           href: "/admin/reports",
+        },
+        {
+          id: "ceo-sales-dashboard",
+          label: "Sales Dashboard",
+          icon: TrendingUp,
+          href: "/admin/reports/sales-dashboard",
         },
       ],
     },
@@ -636,6 +674,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Reports",
           icon: BarChart3,
           href: "/admin/reports",
+        },
+        {
+          id: "sh-sales-dashboard",
+          label: "Sales Dashboard",
+          icon: TrendingUp,
+          href: "/admin/reports/sales-dashboard",
         },
         // "Notifications" (formerly "Settings") used to sit here, buried in
         // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
@@ -952,6 +996,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: BarChart3,
           href: "/admin/reports",
         },
+        {
+          id: "partner-sales-dashboard",
+          label: "Sales Dashboard",
+          icon: TrendingUp,
+          href: "/admin/reports/sales-dashboard",
+        },
       ],
     },
     NEODOVE_SECTION,
@@ -1103,6 +1153,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports",
         },
         {
+          id: "admin-sales-dashboard",
+          label: "Sales Dashboard",
+          icon: TrendingUp,
+          href: "/admin/reports/sales-dashboard",
+        },
+        {
           id: "admin-settings",
           label: "Notifications",
           icon: Bell,
@@ -1126,6 +1182,9 @@ const roleNavigation: Record<string, any[]> = {
         },
         dealerValidationDigestItem("admin"),
         kycReviewDigestItem("admin"),
+        scrapBuybackDigestItem("admin"),
+        salesDailyDigestItem("admin"),
+        buybackDailyDigestItem("admin"),
         loanProductSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),
@@ -1341,6 +1400,12 @@ const roleNavigation: Record<string, any[]> = {
       section: "ADMIN",
       items: [
         {
+          id: "bh-sales-dashboard",
+          label: "Sales Dashboard",
+          icon: TrendingUp,
+          href: "/admin/reports/sales-dashboard",
+        },
+        {
           id: "kyc-review",
           label: "KYC Review",
           icon: Shield,
@@ -1493,6 +1558,12 @@ const roleNavigation: Record<string, any[]> = {
           // U5 bug documented on NEODOVE_SECTION — the sidebar goes dark as soon
           // as you open a campaign.
         },
+        {
+          id: "is-performance",
+          label: "My Performance",
+          icon: TrendingUp,
+          href: "/inside-sales/performance",
+        },
       ],
     },
   ],
@@ -1513,6 +1584,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: Megaphone,
           href: "/asm/campaigns",
           // Not `exact`, for the same reason as the inside-sales twin above.
+        },
+        {
+          id: "asm-performance",
+          label: "My Performance",
+          icon: TrendingUp,
+          href: "/asm/performance",
         },
       ],
     },

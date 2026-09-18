@@ -40,3 +40,45 @@ export function istDayWindowNaive(column: Col, istDay: string) {
   return sql`(${column} AT TIME ZONE 'UTC') >= (${istDay}::date::timestamp AT TIME ZONE 'Asia/Kolkata')
          AND (${column} AT TIME ZONE 'UTC') <  ((${istDay}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`;
 }
+
+/**
+ * An inclusive IST date RANGE ("YYYY-MM-DD" … "YYYY-MM-DD") for a NAIVE UTC
+ * wall-clock column — the multi-day sibling of `istDayWindowNaive`, for report
+ * screens with a from/to picker. Either bound may be null (open-ended); both
+ * null is always true.
+ */
+export function istRangeNaive(column: Col, fromDay: string | null, toDay: string | null) {
+  const parts = [sql`TRUE`];
+  if (fromDay) {
+    parts.push(
+      sql`(${column} AT TIME ZONE 'UTC') >= (${fromDay}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+    );
+  }
+  if (toDay) {
+    parts.push(
+      sql`(${column} AT TIME ZONE 'UTC') < ((${toDay}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+    );
+  }
+  return sql.join(parts, sql` AND `);
+}
+
+/** `istRangeNaive` for a `timestamptz` column. */
+export function istRangeTz(column: Col, fromDay: string | null, toDay: string | null) {
+  const parts = [sql`TRUE`];
+  if (fromDay) {
+    parts.push(sql`${column} >= (${fromDay}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+  }
+  if (toDay) {
+    parts.push(
+      sql`${column} < ((${toDay}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+    );
+  }
+  return sql.join(parts, sql` AND `);
+}
+
+/** A "YYYY-MM-DD" query param, or null when absent/malformed. */
+export function parseIsoDay(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const v = raw.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v)) ? v : null;
+}

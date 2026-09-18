@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
       .limit(1);
 
     const now = new Date();
-    let session = existing;
+    let session: typeof existing | undefined = existing;
     if (session && session.sendCount >= MAX_SENDS) {
       const cutoff = new Date(session.createdAt.getTime() + COOLDOWN_MS);
       if (now < cutoff) {

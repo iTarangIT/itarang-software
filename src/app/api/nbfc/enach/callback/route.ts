@@ -16,6 +16,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { enachMandates } from "@/lib/db/schema";
 import { ENACH_STATES, type EnachState } from "@/lib/nbfc/enach";
+import { tenantDisplayName } from "@/lib/notifications/emit";
+import { notifyEnachEvent } from "@/lib/notifications/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,6 +87,29 @@ export async function POST(req: NextRequest) {
         updated_at: now,
       })
       .where(eq(enachMandates.id, row.id));
+
+    // Pile B item 10 — tell admin, the NBFC and the dealer (bell + WhatsApp),
+    // the same helper the manual confirm/waive routes use. Only when the status
+    // actually changed, so a retried callback is silent.
+    if (nextStatus !== row.status) {
+      const event =
+        nextStatus === "registered"
+          ? "confirmed"
+          : nextStatus === "failed"
+            ? "failed"
+            : nextStatus === "skipped"
+              ? "waived"
+              : null;
+      if (event) {
+        await notifyEnachEvent({
+          leadId: row.lead_id,
+          event,
+          nbfcName: await tenantDisplayName(row.tenant_id),
+          tenantId: row.tenant_id,
+          reason: event === "failed" ? pickStr(body, "failure_reason") : null,
+        });
+      }
+    }
 
     return new NextResponse("Accepted", { status: 200 });
   } catch (error) {

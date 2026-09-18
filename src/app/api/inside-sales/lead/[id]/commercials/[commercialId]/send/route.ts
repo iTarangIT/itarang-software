@@ -34,6 +34,7 @@ import {
   listDispatches,
   QUOTE_DISPATCH_CHANNELS,
 } from "@/lib/leads/quoteDispatch";
+import { MAX_EXTRA_CC, resolveQuotationCc } from "@/lib/leads/quotationCc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,9 +55,15 @@ const BodySchema = z.object({
   email: z.string().trim().email().max(320).nullable().optional(),
   phone: z.string().trim().max(32).nullable().optional(),
   message: z.string().trim().max(2000).nullable().optional(),
+  // E-297 — one-off CC addresses typed into the dialog, on top of the
+  // server-resolved owner / approver / admin fixed list.
+  extraCc: z
+    .array(z.string().trim().email("Each extra CC must be a valid email.").max(320))
+    .max(MAX_EXTRA_CC, `At most ${MAX_EXTRA_CC} extra CC addresses.`)
+    .optional(),
 });
 
-interface QuoteRow {
+type QuoteRow = {
   commercial_id: string;
   dealer_lead_id: string;
   approval_status: string | null;
@@ -120,6 +127,11 @@ export async function GET(
       );
     }
 
+    // E-297 — who the email will be CC'd to, so the dialog can show it before
+    // sending. Never throws; resolves to an empty list on any failure. The
+    // actor is the viewer: whoever opens the dialog is who will press Send.
+    const cc = await resolveQuotationCc(id, commercialId, { actorId: user.id });
+
     return NextResponse.json({
       success: true,
       data: {
@@ -142,6 +154,12 @@ export async function GET(
         dealer_decision_at: row.dealer_decision_at,
         dealer_decision_via: row.dealer_decision_via,
         dealer_decision_note: row.dealer_decision_note,
+        cc_preview: {
+          cc: cc.cc,
+          owner_email: cc.ownerEmail,
+          actor_email: cc.actorEmail,
+          fixed: cc.fixed,
+        },
         dispatches: await listDispatches(commercialId),
       },
     });
@@ -202,6 +220,19 @@ export async function POST(
     const email = body.email ?? row.dealer_email;
     const phone = body.phone ?? row.dealer_phone;
 
+    // E-297 — resolved server-side, never trusted from the client: owner,
+    // the sender (B4) and the admin fixed list, plus any validated extras.
+    // Only needed when email is one of the channels.
+    const cc = body.channels.includes("email")
+      ? (
+          await resolveQuotationCc(id, commercialId, {
+            dealerEmail: email,
+            extra: body.extraCc ?? [],
+            actorId: user.id,
+          })
+        ).cc
+      : [];
+
     const outcomes = await dispatchQuotation({
       commercialId,
       dealerLeadId: row.dealer_lead_id,
@@ -215,6 +246,7 @@ export async function POST(
       email,
       phone,
       message: body.message,
+      cc,
       sentBy: user.id,
     });
 

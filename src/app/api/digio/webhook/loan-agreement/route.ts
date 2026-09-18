@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
   }
 
   const adapter = new DigioEsignAdapter();
-  const parsed = await adapter.parseWebhookStatus(rawText, {});
+  const parsed = await adapter.parseWebhookStatus(rawText);
   if (!parsed || (!parsed.matchRef && !parsed.providerDocumentId)) {
     return NextResponse.json({ ok: false, error: "VALIDATION" }, { status: 400 });
   }
