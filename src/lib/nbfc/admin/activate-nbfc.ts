@@ -249,6 +249,12 @@ export async function activateNbfc(
         toEmail: row.primary_contact_email,
         password,
         supabaseUserId,
+        // B1 — the job type requires these and the email template reads them;
+        // this caller had been sending them as `undefined`.
+        primaryContactName: row.primary_contact_name,
+        nbfcLegalName: row.legal_name,
+        nbfcCode: row.nbfc_id,
+        loginUrl: `${(process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "")}/login`,
       });
       await db
         .update(nbfcPortalCredentials)

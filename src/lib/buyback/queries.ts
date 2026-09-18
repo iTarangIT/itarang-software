@@ -65,7 +65,7 @@ export interface DealHeader {
 export async function linesForRequest(
   requestId: string,
   runner: BuybackTx | typeof db = db,
-): Promise<AdminLineView[]> {
+): Promise<Array<AdminLineView & { has_provenance: boolean }>> {
   const rows = await runner.execute(sql`
     SELECT
       bl.id,

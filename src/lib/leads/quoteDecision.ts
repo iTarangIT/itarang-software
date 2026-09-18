@@ -65,7 +65,7 @@ export type RecordDealerDecisionResult =
   | { outcome: "not_found" }
   | { outcome: "not_sendable"; reason: string };
 
-interface QuoteRow {
+type QuoteRow = {
   commercial_id: string;
   dealer_lead_id: string;
   version_no: number;

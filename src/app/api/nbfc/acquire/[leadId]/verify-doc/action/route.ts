@@ -96,7 +96,8 @@ export async function POST(
       ? "co_borrower"
       : "primary";
     const docKey = String(form.get("doc_key") ?? "").trim();
-    const verdict = String(form.get("verdict") ?? "") as NbfcVerdict;
+    // "pending" is never accepted here (VALID_VERDICTS below), hence the Exclude.
+    const verdict = String(form.get("verdict") ?? "") as Exclude<NbfcVerdict, "pending">;
     const notes = form.get("notes") ? String(form.get("notes")).trim() : null;
 
     if (!docKey) {

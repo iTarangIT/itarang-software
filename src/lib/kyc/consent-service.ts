@@ -840,7 +840,7 @@ export async function sendConsentOtp(opts: {
     .limit(1);
 
   const now = new Date();
-  let session = existingSession;
+  let session: typeof existingSession | undefined = existingSession;
   if (session && session.sendCount >= OTP_MAX_SENDS) {
     const cutoff = new Date(session.createdAt.getTime() + OTP_COOLDOWN_MS);
     if (now < cutoff) {

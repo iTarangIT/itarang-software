@@ -100,6 +100,16 @@ export async function initializeDraftLead(
     }
   }
 
+  // leads.uploader_id is NOT NULL (verified on database-1); a dealer with no
+  // login user cannot own a draft. This used to fail as a NOT NULL violation
+  // inside the transaction below.
+  const uploaderId = actor.dealerUserId;
+  if (!uploaderId) {
+    throw new Error(
+      `Cannot open a draft lead for dealer ${actor.dealerCode}: no login user (leads.uploader_id) resolved`,
+    );
+  }
+
   const leadId = await generateId("LEAD");
   const referenceId = await nextReference();
 
@@ -108,7 +118,7 @@ export async function initializeDraftLead(
       id: leadId,
       reference_id: referenceId,
       dealer_id: actor.dealerCode,
-      uploader_id: actor.dealerUserId,
+      uploader_id: uploaderId,
       status: "INCOMPLETE",
       workflow_step: 1,
       lead_source: "dealer_referral",

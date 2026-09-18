@@ -299,7 +299,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           .set({
             status: "re_inspection_requested",
             decision: "re_inspection",
-            decision_reason: d.reason.trim(),
+            decision_reason: (d.reason ?? "").trim(),
             decided_by: actor.user_id,
             decided_at: now,
             is_current: false,

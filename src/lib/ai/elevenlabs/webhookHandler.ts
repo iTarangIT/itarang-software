@@ -37,7 +37,9 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
             campaign_id: dialerCampaignLeads.campaign_id,
           })
           .from(dialerCampaignLeads)
-          .where(eq(dialerCampaignLeads.bolna_call_id, data.conversation_id))
+          // No id → no row, same as before (an undefined bind used to throw
+          // into the catch below).
+          .where(eq(dialerCampaignLeads.bolna_call_id, data.conversation_id ?? ""))
           .limit(1);
         if (row[0]) {
           const r = await completeCampaignLead({

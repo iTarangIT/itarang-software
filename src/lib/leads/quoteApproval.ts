@@ -35,7 +35,7 @@ export function initialApprovalStatus(eventType: string): QuoteApprovalStatus {
     return isGatedQuoteEvent(eventType) ? "pending" : "approved";
 }
 
-export interface CommercialVersion {
+export type CommercialVersion = {
     commercial_id: string;
     version_no: number;
     approval_status: string | null;

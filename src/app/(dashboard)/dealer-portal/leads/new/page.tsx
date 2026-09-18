@@ -800,7 +800,7 @@ function NewLeadWizardContent() {
                                             product_name: formData.product_name ?? '',
                                         }}
                                         onChange={v => {
-                                            setFormData((p) => ({
+                                            setFormData((p: typeof formData) => ({
                                                 ...p,
                                                 asset_type: v.asset_type,
                                                 product_category_id: v.category_id,

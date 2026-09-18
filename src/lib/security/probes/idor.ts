@@ -7,7 +7,8 @@
  * ownership-check failure. Non-mutating.
  */
 import type { Probe, ProbeContext } from "../probe-context";
-import type { RawFinding, Severity } from "../types";
+import type { Severity } from "../severity";
+import type { RawFinding } from "../types";
 import { get, looksLikeData, detectPii, harvestId } from "./util";
 import { idScopedRoutes } from "../crawl";
 

@@ -28,6 +28,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { ValidationError } from "./errors";
 import type { BuybackTx } from "./tx";
+import type { ExpectedCount } from "./variance";
 
 // The pure half lives in variance.ts so it can be tested without a database.
 // Re-exported here so callers have one import for "pickup things".

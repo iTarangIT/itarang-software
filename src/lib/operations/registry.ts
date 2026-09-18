@@ -25,18 +25,26 @@ export type OpsModule =
   // from Supabase sign-in recency; this one is observed usage of the CRM.
   | "usage";
 
-export type MetricUnit =
-  | "count"
-  | "percent"
-  | "bytes"
-  | "ms"
-  | "inr_paise"
-  | "credits"
-  | "bool"
-  | "days"
+export const METRIC_UNITS = [
+  "count",
+  "percent",
+  "bytes",
+  "ms",
+  "inr_paise",
+  "credits",
+  "bool",
+  "days",
   // Session lengths. Stored as minutes and rendered through the existing
   // formatDuration(), so "90" reads as "1h 30m" rather than "90".
-  | "minutes";
+  "minutes",
+] as const;
+
+export type MetricUnit = (typeof METRIC_UNITS)[number];
+
+/** For unit strings that come back from the DB as plain text. */
+export function isMetricUnit(value: unknown): value is MetricUnit {
+  return typeof value === "string" && (METRIC_UNITS as readonly string[]).includes(value);
+}
 
 export interface MetricDef {
   /** Stable, dot-namespaced, e.g. "host.disk_used_pct". Never rename. */

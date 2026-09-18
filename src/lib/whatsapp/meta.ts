@@ -11,6 +11,7 @@
 // verification. NEVER set this in sandbox/production.
 
 import crypto from "crypto";
+import { bufferToArrayBuffer } from "@/lib/bytes";
 
 import type {
   DownloadedMedia,
@@ -382,7 +383,7 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
       form.append("messaging_product", "whatsapp");
       form.append("type", mimeType);
       // Buffer is a Uint8Array — wrap in a Blob so fetch sends multipart/form-data.
-      form.append("file", new Blob([bytes], { type: mimeType }), filename);
+      form.append("file", new Blob([bufferToArrayBuffer(bytes)], { type: mimeType }), filename);
       const res = await fetch(`${GRAPH_BASE}/${phoneNumberId()}/media`, {
         method: "POST",
         // Do NOT set Content-Type — fetch adds the multipart boundary itself.

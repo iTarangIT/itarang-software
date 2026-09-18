@@ -60,8 +60,10 @@ interface ParaphernaliaRow {
 }
 
 type AnyRow = BatteryRow | ChargerRow | ParaphernaliaRow;
+/** `keyof (A | B)` is only the shared keys; this is the union of each member's keys. */
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
 
-const TAB_META: Record<Tab, { label: string; endpoint: string; idField: keyof AnyRow }> = {
+const TAB_META: Record<Tab, { label: string; endpoint: string; idField: KeysOfUnion<AnyRow> }> = {
   batteries: { label: "Batteries", endpoint: "/api/admin/product-master/batteries", idField: "model_id" },
   chargers: { label: "Chargers", endpoint: "/api/admin/product-master/chargers", idField: "model_id" },
   paraphernalia: {
@@ -162,7 +164,7 @@ export default function ProductMasterPage() {
 
   const toggleStatus = async (row: AnyRow) => {
     const meta = TAB_META[tab];
-    const code = row[meta.idField] as string;
+    const code = String((row as Partial<Record<KeysOfUnion<AnyRow>, unknown>>)[meta.idField] ?? "");
     const nextActive = row.status !== "active";
     try {
       const res = nextActive
