@@ -626,7 +626,7 @@ export async function buildSalesDashboard(
             city: input.city ?? undefined,
             state: input.state ?? undefined,
             spoc_id: input.spoc_id ?? undefined,
-            business_type: input.business_type ?? undefined,
+            business_type: isBusinessTypeFilter(input.business_type) ? input.business_type : undefined,
             granularity: input.granularity,
         },
         today,

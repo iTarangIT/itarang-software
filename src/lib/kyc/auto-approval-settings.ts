@@ -236,7 +236,9 @@ export async function getKycAutoApprovalSettings(): Promise<KycAutoApprovalSetti
  * `slaHours` key is dropped the first time a row is re-saved.
  */
 export async function setKycAutoApprovalSettings(
-    patch: Partial<KycAutoApprovalSettings>,
+    // Loose on purpose: normalize() validates, and a per-card `null` means
+    // "clear the override" (see normalizeCardSlaMinutes).
+    patch: Partial<KycAutoApprovalSettings> | Record<string, unknown>,
 ): Promise<KycAutoApprovalSettings> {
     const current = await getKycAutoApprovalSettings();
     const next = normalizeKycAutoApprovalSettings(patch, current);

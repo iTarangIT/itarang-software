@@ -8,3 +8,10 @@
  * every existing import site.
  */
 export const BUYBACK_ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head", "partner"] as const;
+
+export type BuybackAdminRole = (typeof BUYBACK_ADMIN_ROLES)[number];
+
+/** Role strings arrive from the session as plain text; this is the typed check. */
+export function isBuybackAdminRole(role: string | null | undefined): role is BuybackAdminRole {
+  return typeof role === "string" && (BUYBACK_ADMIN_ROLES as readonly string[]).includes(role);
+}

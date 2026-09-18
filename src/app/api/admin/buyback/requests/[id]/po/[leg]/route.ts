@@ -35,6 +35,7 @@ import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError, ValidationError } from "@/lib/buyback/errors";
 import { formatBatteryLine } from "@/lib/buyback/format";
 import { renderDealerPoHtml } from "@/lib/buyback/pdf/po-template";
+import { recordVendorPo } from "@/lib/buyback/po";
 import { dealHeader } from "@/lib/buyback/queries";
 import { BUYBACK_BUCKET, poKey } from "@/lib/buyback/storage";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";

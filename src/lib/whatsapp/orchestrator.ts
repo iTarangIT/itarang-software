@@ -713,7 +713,7 @@ async function enterCustomerFlow(session: SessionRow): Promise<void> {
   });
   // Acknowledge, then start the lead capture (asks for the mobile number).
   await reply(session, CUSTOMER_INTRO);
-  return await startNewLead(await loadSession(session.id));
+  return await startNewLead(await loadSession(session.id), houseDealer);
 }
 
 // CHOOSE_FLOW — route the free-text front door. The sender types what they need

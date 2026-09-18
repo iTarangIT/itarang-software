@@ -12,7 +12,7 @@ export type LegacyOutcome =
   | "callback_requested"
   | "unknown";
 
-export interface LegacyMemory {
+export type LegacyMemory = {
   requirement: string | null;
   product_interest: string | null;
   quantity: string | null;

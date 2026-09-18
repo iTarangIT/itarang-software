@@ -191,7 +191,7 @@ describe("dealer payload excludes margin and vendor data — ABSENT, not null", 
     const withNewSecret = {
       ...ADMIN_DEAL,
       lines: [{ ...ADMIN_DEAL.lines[0], secret_vendor_rebate: 4242 }],
-    } as AdminDealView;
+    } as unknown as AdminDealView;
 
     const leaked = allValues(toDealerDeal(withNewSecret));
     expect(leaked).not.toContain(4242);

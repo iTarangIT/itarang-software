@@ -183,7 +183,9 @@ export async function POST(req: NextRequest) {
       .select({ id: nbfcEmiTrackerOverrides.loan_application_id })
       .from(nbfcEmiTrackerOverrides)
       .where(eq(nbfcEmiTrackerOverrides.tenant_id, tenant.id));
-    const overriddenLoanIds = new Set(overrideRows.map((r) => r.id));
+    const overriddenLoanIds = new Set(
+      overrideRows.map((r) => r.id).filter((id): id is string => id != null),
+    );
 
     const report = parsed.map((p) => toReportRow(p, loansBySerial, overriddenLoanIds));
 

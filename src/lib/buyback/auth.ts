@@ -24,7 +24,7 @@ import { buybackRequests } from "@/lib/db/schema";
 import { capabilitiesFor } from "@/lib/dealer/dealer-capabilities";
 import { resolveDealerTypeForUser } from "@/lib/dealer/dealer-type-runtime";
 import { ForbiddenError, NotFoundError } from "./errors";
-import { BUYBACK_ADMIN_ROLES } from "./roles";
+import { BUYBACK_ADMIN_ROLES, isBuybackAdminRole } from "./roles";
 import type { ActorRole } from "./state-machine";
 
 /**
@@ -53,7 +53,7 @@ import type { ActorRole } from "./state-machine";
  * binding, so requireBuybackAdmin's use of it below threw a ReferenceError at
  * runtime and 500'd every admin buyback API call.
  */
-export { BUYBACK_ADMIN_ROLES };
+export { BUYBACK_ADMIN_ROLES, isBuybackAdminRole };
 
 export interface BuybackActor {
   id: string;

@@ -74,6 +74,7 @@ export function FleetOverview() {
         kpis?: Record<string, number>;
         dealerPerformance?: Array<Record<string, unknown>>;
         serviceMetrics?: { fleetUptime: number; avgDailyDistance: number; offlineDevices: number };
+        sohFeed?: { constantFeed?: boolean; constantValue?: number | null; assessed?: number };
     } | undefined;
     const mapData = mapEnvelope?.data;
     const degraded = Boolean(envelope?.degraded || mapEnvelope?.degraded);
@@ -222,7 +223,7 @@ export function FleetOverview() {
                                     <td colSpan={6} className="px-4 py-8 text-center text-gray-400">No devices found</td>
                                 </tr>
                             ) : (
-                                pageDevices.map((d: Record<string, unknown>, i: number) => (
+                                (pageDevices as Array<Record<string, unknown>>).map((d, i) => (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
                                         <td className="px-4 py-3 font-medium text-gray-900">{String(d.device_id || '-')}</td>
                                         <td className="px-4 py-3 text-gray-600">{String(d.vehicle_number || '-')}</td>

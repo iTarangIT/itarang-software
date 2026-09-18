@@ -10,6 +10,8 @@
  * clients: the builders take the postgres.js tagged template as an argument
  * rather than reaching for getIotSql() themselves.
  */
+import type postgres from "postgres";
+
 import type { getIotSql } from "@/lib/db/iot";
 import {
     COVERAGE_TRUST_GAP_S,
@@ -21,7 +23,13 @@ import {
 } from "./charging-math";
 
 export type IotSql = ReturnType<typeof getIotSql>;
-export type SqlFragment = ReturnType<IotSql>;
+/**
+ * A tagged-template fragment (`iot\`…\``). `ReturnType<IotSql>` resolves to the
+ * LAST call signature of postgres.js's `Sql`, whose row type is
+ * `readonly (object | undefined)[]`, and a plain `iot\`…\`` (PendingQuery<Row[]>)
+ * is not assignable to that — hence the union.
+ */
+export type SqlFragment = ReturnType<IotSql> | postgres.PendingQuery<postgres.Row[]>;
 
 /** The period selector shared by every charging query and the export. */
 export interface ChargingWindowOpts {

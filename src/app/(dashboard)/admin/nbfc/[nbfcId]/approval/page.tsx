@@ -262,16 +262,18 @@ export default async function NbfcApprovalPage({
     party: (s.party === "nbfc" ? "nbfc" : "itarang") as "nbfc" | "itarang",
   }));
 
+/** `date` columns arrive as strings; a Date is tolerated for hydrated callers. */
+function dateOnly(v: unknown): string | null {
+  return v instanceof Date ? v.toISOString().slice(0, 10) : ((v as string | null | undefined) ?? null);
+}
+
   const docRowsForSection = docs.map((d) => ({
     id: d.id,
     document_type: d.document_type,
     file_url: d.file_url,
     status: d.status,
     rejection_reason: d.rejection_reason ?? null,
-    expiry_date:
-      d.expiry_date instanceof Date
-        ? d.expiry_date.toISOString().slice(0, 10)
-        : d.expiry_date ?? null,
+    expiry_date: dateOnly(d.expiry_date),
     created_at:
       d.created_at instanceof Date ? d.created_at.toISOString() : d.created_at,
   }));

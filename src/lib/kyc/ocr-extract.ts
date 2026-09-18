@@ -1,4 +1,5 @@
 import { readStoredDocument, StoredDocumentError } from '@/lib/storage/readStoredDocument';
+import { bufferToArrayBuffer } from "@/lib/bytes";
 import { db } from '@/lib/db';
 import { kycDocuments, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -270,7 +271,7 @@ export async function runKycOcr(
                     const decentroOcrType = DECENTRO_OCR_MAP[doc_type];
                     if (decentroOcrType) {
                         try {
-                            const blob = new Blob([buf], { type: ct });
+                            const blob = new Blob([bufferToArrayBuffer(buf)], { type: ct });
                             const side: 'FRONT' | 'BACK' | undefined =
                                 doc_type === 'aadhaar_front' ? 'FRONT'
                                 : doc_type === 'aadhaar_back' ? 'BACK'
@@ -458,7 +459,7 @@ export async function runKycOcr(
 
         if (decentroType) {
             // Use Decentro OCR for supported types
-            const blob = new Blob([ocrBuffer], { type: ocrContentType });
+            const blob = new Blob([bufferToArrayBuffer(ocrBuffer)], { type: ocrContentType });
             const side: 'FRONT' | 'BACK' | undefined =
                 doc_type === 'aadhaar_front' ? 'FRONT'
                 : doc_type === 'aadhaar_back' ? 'BACK'

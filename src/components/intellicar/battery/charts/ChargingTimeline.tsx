@@ -198,7 +198,7 @@ export function ChargingTimeline({
                                 />
                                 <Tooltip
                                     labelFormatter={(ts) => timeFmt(Number(ts))}
-                                    formatter={(v: number) => [`${v}%`, 'SOC']}
+                                    formatter={(v) => [`${v}%`, 'SOC']}
                                     cursor={{ stroke: '#cbd5e1', strokeDasharray: '3 3' }}
                                 />
                                 {segments.map((s) => (

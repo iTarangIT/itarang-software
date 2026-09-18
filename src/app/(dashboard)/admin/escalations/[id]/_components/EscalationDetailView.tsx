@@ -119,6 +119,7 @@ export function EscalationDetailView({
                     </div>
                     <div className="h-[70vh] overflow-y-auto">
                         <TouchpointHistoryPane
+                            leadId={lead.id}
                             touchpoints={touchpoints}
                             statusHistory={status_history}
                         />
