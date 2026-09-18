@@ -17,6 +17,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { QueueFilters } from "./queueFilters";
 import type { QueueSort } from "./queueSort";
 import { LEAD_STATUS } from "@/lib/lifecycle/transitions";
+import { BUSINESS_TYPE_UNSET, isBusinessTypeFilter } from "@/lib/leads/businessType";
 
 /** Every field optional and nullable — routes pass whatever the request carried. */
 export type QueueFilterInput = Partial<Record<keyof QueueFilters, string | null>>;
@@ -74,6 +75,18 @@ export function queueFilterClauses(f: QueueFilterInput, dateColumn: SQL): SQL[] 
     const to = clean(f.to);
     if (to && ISO_DATE.test(to)) {
         parts.push(sql` AND ${dateColumn} < (${to}::date + INTERVAL '1 day')`);
+    }
+
+    // E-296. Emitted ONLY when set: the column is not in schema.ts, and naming
+    // it unconditionally would fail every queue read on a database without the
+    // migration. Validated again here because routes may pass raw params.
+    const businessType = clean(f.business_type);
+    if (businessType && isBusinessTypeFilter(businessType)) {
+        parts.push(
+            businessType === BUSINESS_TYPE_UNSET
+                ? sql` AND dl.business_type IS NULL`
+                : sql` AND dl.business_type = ${businessType}`,
+        );
     }
 
     return parts;

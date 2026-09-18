@@ -796,7 +796,16 @@ export async function notifyFiEvent(p: {
   } else {
     to.push(toLeadNbfcs(p.leadId, { href: nbfcLead(p.leadId, "#fi") }));
   }
-  if (p.event === "reinspection") {
+  // Pile B item 9 — the dealer also hears when a visit is booked (their
+  // customer must be home) and when the lender decides it (passed / failed),
+  // not only on a re-inspection. B14 added `submitted` (the visit happened,
+  // report under review). `requested` stays NBFC ⇄ admin.
+  if (
+    p.event === "reinspection" ||
+    p.event === "assigned" ||
+    p.event === "submitted" ||
+    p.event === "reviewed"
+  ) {
     to.push(toLeadDealer(p.leadId, { href: dealerLead(p.leadId) }));
   }
 
@@ -807,7 +816,7 @@ export async function notifyFiEvent(p: {
     leadId: p.leadId,
     stage: "Field Investigation",
     from: c.from,
-    data: { agent_name: p.agentName ?? null, outcome: p.outcome ?? null },
+    data: { agent_name: p.agentName ?? null, outcome: p.outcome ?? null, notes: p.notes ?? null },
     to,
   });
 }
@@ -1374,14 +1383,34 @@ export async function notifyLoanSanctionedEvent(p: {
   });
 }
 
-/** The loan was disbursed — the end of origination. */
+/**
+ * The loan was disbursed — the end of origination.
+ *
+ * B15 — the DEALER's copy is worded for them and carries its own subject
+ * ("Loan disbursed for Ravi — ₹1,20,000"), with the date and the sanction
+ * reference. The amount is fine here: the dealer is a party to the sale. The
+ * admin and NBFC copies keep the event title. Email is forced ON for the
+ * dealer so a muted type never silences this one.
+ */
 export async function notifyLoanDisbursed(p: {
   leadId: string;
   lenderName?: string | null;
   tenantId?: string | null;
   loanAmount?: number | string | null;
+  /** loan_sanctions.id — the last 6 characters are the dealer's reference. */
+  sanctionId?: string | null;
+  disbursedAt?: Date | null;
 }) {
   const who = await leadLabel(p.leadId);
+  const first = who.split(/\s+/)[0] || who;
+  const amount = p.loanAmount ? `₹${Number(p.loanAmount).toLocaleString("en-IN")}` : null;
+  const on = (p.disbursedAt ?? new Date()).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const ref = p.sanctionId ? p.sanctionId.slice(-6).toUpperCase() : null;
   await emit({
     type: "loan.disbursed",
     title: "Loan disbursed",
@@ -1389,14 +1418,106 @@ export async function notifyLoanDisbursed(p: {
     leadId: p.leadId,
     stage: "Disbursal",
     from: p.lenderName ? nbfcParty(p.lenderName) : await actingParty(),
-    data: { lender_name: p.lenderName ?? null, loan_amount: p.loanAmount ?? null },
+    data: {
+      lender_name: p.lenderName ?? null,
+      loan_amount: p.loanAmount ?? null,
+      sanction_id: p.sanctionId ?? null,
+      disbursed_at: (p.disbursedAt ?? new Date()).toISOString(),
+    },
     to: [
       toAdmins({ href: adminLead(p.leadId, "#sanction") }),
       p.tenantId
         ? toNbfc(p.tenantId, p.lenderName ?? "NBFC partner", { href: nbfcLead(p.leadId) })
         : toLeadNbfcs(p.leadId, { href: nbfcLead(p.leadId) }),
-      toLeadDealer(p.leadId, { href: dealerLead(p.leadId) }),
+      toLeadDealer(p.leadId, {
+        href: dealerLead(p.leadId),
+        title: `Loan disbursed for ${first}${amount ? ` — ${amount}` : ""}`,
+        message:
+          `Good news — the loan for ${first} has been disbursed on ${on}.` +
+          (amount ? ` Amount: ${amount}.` : "") +
+          (ref ? ` Reference: ${ref}.` : "") +
+          ` The customer now proceeds to battery selection and dispatch.`,
+        emailSubject: `Loan disbursed for ${first}${amount ? ` — ${amount}` : ""}`,
+        email: true,
+      }),
     ],
+  });
+}
+
+/**
+ * E-298 — the loan is disbursed; ask the DEALER to confirm the money reached
+ * them. In-app only here (the WhatsApp prompt with the pay_ok / pay_no buttons
+ * is pushed by payment-confirm-flow, which owns the ids). `reminder` is the
+ * one-shot 48h nudge.
+ */
+export async function notifyLoanPaymentPending(p: {
+  leadId: string;
+  sanctionId: string;
+  lenderName?: string | null;
+  loanAmount?: number | string | null;
+  reminder?: boolean;
+}) {
+  const who = await leadLabel(p.leadId);
+  const lender = p.lenderName ?? "the lender";
+  await emit({
+    type: "loan.payment_pending",
+    title: p.reminder ? "Reminder: confirm loan payment received" : "Confirm loan payment received",
+    message: `${lender} has disbursed${p.loanAmount ? ` ₹${p.loanAmount}` : ""} for ${who}. Please confirm whether the payment reached your account.`,
+    leadId: p.leadId,
+    stage: "Disbursal",
+    from: SYSTEM_PARTY,
+    data: { sanctionId: p.sanctionId, entityId: p.sanctionId, reminder: !!p.reminder },
+    to: [toLeadDealer(p.leadId, { href: dealerLead(p.leadId, "/step-5#payment-confirmation") })],
+  });
+}
+
+/**
+ * E-298 — the dealer answered. `not_received` is an escalation (admin + the
+ * lender tenant, email locked on); `received` is an FYI in the bell.
+ */
+export async function notifyLoanPaymentConfirmation(p: {
+  leadId: string;
+  sanctionId: string;
+  received: boolean;
+  tenantId?: string | null;
+  lenderName?: string | null;
+  dealerName?: string | null;
+  utr?: string | null;
+  amount?: number | string | null;
+  remarks?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const dealer = p.dealerName ?? "The dealer";
+  const extras = [
+    p.utr ? `UTR ${p.utr}` : null,
+    p.amount ? `₹${p.amount}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const remarks = (p.remarks ?? "").trim();
+  const nbfcLabel = p.tenantId ? await tenantDisplayName(p.tenantId) : null;
+  const to: Recipient[] = [toAdmins({ href: adminLead(p.leadId, "#sanction") })];
+  if (p.tenantId) {
+    to.push(toNbfc(p.tenantId, nbfcLabel ?? "NBFC partner", { href: nbfcLead(p.leadId) }));
+  }
+  await emit({
+    type: p.received ? "loan.payment_received" : "loan.payment_not_received",
+    title: p.received ? "Dealer confirmed loan payment received" : "Dealer reports loan payment NOT received",
+    message: p.received
+      ? `${dealer} confirmed the disbursal for ${who} reached their account${extras ? ` (${extras})` : ""}.`
+      : `${dealer} says the disbursal for ${who}${p.lenderName ? ` from ${p.lenderName}` : ""} has NOT reached their account.${
+          remarks ? ` "${remarks}"` : ""
+        } Please check the payout.`,
+    leadId: p.leadId,
+    stage: "Disbursal",
+    from: p.dealerName ? dealerParty(p.dealerName) : SYSTEM_PARTY,
+    data: {
+      sanctionId: p.sanctionId,
+      utr: p.utr ?? null,
+      amount: p.amount ?? null,
+      remarks: remarks || null,
+    },
+    to,
   });
 }
 

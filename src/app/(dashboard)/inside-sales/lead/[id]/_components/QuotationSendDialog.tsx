@@ -32,6 +32,11 @@ import {
   AlertTriangle,
   Loader2,
 } from "lucide-react";
+import {
+  MAX_EXTRA_CC,
+  buildCcList,
+  isPlausibleEmail,
+} from "@/lib/leads/quotationCcRules";
 
 type Channel = "email" | "whatsapp";
 
@@ -43,6 +48,8 @@ interface DispatchRow {
   error: string | null;
   sent_by_name: string | null;
   created_at: string;
+  /** E-297 — CC list used on an email send. */
+  cc_recipients?: string[];
 }
 
 interface SendState {
@@ -61,6 +68,13 @@ interface SendState {
   dealer_decision_at: string | null;
   dealer_decision_via: string | null;
   dealer_decision_note: string | null;
+  /** E-297 — server-resolved CC list (owner, sender, admin fixed list). */
+  cc_preview?: {
+    cc: string[];
+    owner_email: string | null;
+    actor_email: string | null;
+    fixed: string[];
+  };
   dispatches: DispatchRow[];
 }
 
@@ -125,6 +139,7 @@ export function QuotationSendDialog({
   const [email, setEmail] = React.useState("");
   const [phone, setPhone] = React.useState("");
   const [message, setMessage] = React.useState("");
+  const [extraCc, setExtraCc] = React.useState("");
 
   const [sending, setSending] = React.useState(false);
   const [regenerating, setRegenerating] = React.useState(false);
@@ -157,6 +172,17 @@ export function QuotationSendDialog({
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  // E-297 — extra CC typed as a comma/space separated list.
+  const extraTokens = extraCc.split(/[\s,;]+/).filter(Boolean);
+  const invalidExtra = extraTokens.filter((t) => !isPlausibleEmail(t));
+  const extraList = buildCcList({ extra: extraTokens });
+  const tooManyExtra = extraList.length > MAX_EXTRA_CC;
+  const ccList = buildCcList({
+    fixed: state?.cc_preview?.cc ?? [],
+    extra: extraList,
+    dealerEmail: email,
+  });
 
   const toggle = (c: Channel) =>
     setChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
@@ -193,6 +219,7 @@ export function QuotationSendDialog({
           email: email.trim() || null,
           phone: phone.trim() || null,
           message: message.trim() || null,
+          extraCc: channels.includes("email") && extraList.length ? extraList : undefined,
         }),
       });
       const j = await r.json();
@@ -211,6 +238,7 @@ export function QuotationSendDialog({
     channels.length > 0 &&
     !sending &&
     (!channels.includes("email") || !!email.trim()) &&
+    (!channels.includes("email") || (!invalidExtra.length && !tooManyExtra)) &&
     (!channels.includes("whatsapp") || !!phone.trim());
 
   return (
@@ -414,6 +442,42 @@ export function QuotationSendDialog({
                   </label>
                 )}
 
+                {channels.includes("email") && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
+                      CC
+                    </div>
+                    <div className="mt-0.5 break-words text-xs text-gray-700">
+                      {ccList.length ? ccList.join(", ") : "No one"}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-gray-500">
+                      Lead owner, you (the sender) and the admin CC list are added automatically.
+                    </div>
+                    <label className="mt-2 block">
+                      <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">
+                        Extra CC (optional)
+                      </span>
+                      <input
+                        type="text"
+                        value={extraCc}
+                        onChange={(e) => setExtraCc(e.target.value)}
+                        placeholder="name@itarang.com, other@example.com"
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
+                      />
+                      {invalidExtra.length > 0 && (
+                        <span className="mt-1 block text-[10px] text-rose-600">
+                          Not a valid email: {invalidExtra.join(", ")}
+                        </span>
+                      )}
+                      {tooManyExtra && (
+                        <span className="mt-1 block text-[10px] text-rose-600">
+                          At most {MAX_EXTRA_CC} extra CC addresses.
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                )}
+
                 {channels.includes("whatsapp") && (
                   <label className="block">
                     <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">
@@ -495,7 +559,17 @@ export function QuotationSendDialog({
                             }`}
                           />
                           <span className="capitalize text-gray-700">{d.channel}</span>
-                          <span className="truncate text-gray-500">{d.recipient}</span>
+                          <span
+                            className="truncate text-gray-500"
+                            title={
+                              d.cc_recipients?.length
+                                ? `CC: ${d.cc_recipients.join(", ")}`
+                                : undefined
+                            }
+                          >
+                            {d.recipient}
+                            {d.cc_recipients?.length ? ` (+${d.cc_recipients.length} CC)` : ""}
+                          </span>
                         </span>
                         <span className="shrink-0 tabular-nums text-gray-400">
                           {fmt(d.created_at)}

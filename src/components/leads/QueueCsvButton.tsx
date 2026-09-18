@@ -25,9 +25,23 @@ type Props = {
     /** Base name; the route appends its own timestamp. */
     filename: string;
     disabled?: boolean;
+    /**
+     * Which file the route returns — only picks the fallback extension. The
+     * caller puts `format=xlsx` on `href` itself. Defaults to CSV so existing
+     * callers are unchanged.
+     */
+    format?: "csv" | "xlsx";
+    /** Button text. Defaults to "Download CSV" / "Export to Excel" by format. */
+    label?: string;
 };
 
-export function QueueCsvButton({ href, filename, disabled }: Props) {
+export function QueueCsvButton({
+    href,
+    filename,
+    disabled,
+    format = "csv",
+    label,
+}: Props) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [note, setNote] = useState<string | null>(null);
@@ -51,7 +65,7 @@ export function QueueCsvButton({ href, filename, disabled }: Props) {
                 a.href = url;
                 // The server also sets a filename in Content-Disposition; this is
                 // what a browser that ignores it falls back to.
-                a.download = `${filename}.csv`;
+                a.download = `${filename}.${format}`;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
@@ -88,7 +102,7 @@ export function QueueCsvButton({ href, filename, disabled }: Props) {
                 ) : (
                     <Download className="h-4 w-4" />
                 )}
-                Download CSV
+                {label ?? (format === "xlsx" ? "Export to Excel" : "Download CSV")}
             </button>
             {(error || note) && (
                 <p

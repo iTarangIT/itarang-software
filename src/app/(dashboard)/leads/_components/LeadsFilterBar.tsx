@@ -38,6 +38,11 @@ import {
 } from "@/lib/leads/campaign";
 import { IDLE_RANGES, IDLE_RANGE_KEYS } from "@/lib/leads/idle";
 import {
+    BUSINESS_TYPE_OPTIONS,
+    BUSINESS_TYPE_UNSET,
+    BUSINESS_TYPE_UNSET_LABEL,
+} from "@/lib/leads/businessType";
+import {
     ASSIGNED_PRESETS,
     assignedPresetRange,
     isAssignedPresetKey,
@@ -229,6 +234,23 @@ export function LeadsFilterBar({
                             {INTENT_BUCKET_LABEL[b]} ({INTENT_BUCKET_RANGE[b]})
                         </option>
                     ))}
+                </select>
+
+                {/* E-296 Type of Business. In the primary row, mirrored by the
+                    count chips above the table — both set the same filter. */}
+                <select
+                    aria-label="Type of business"
+                    className={`${SELECT_CLASS} min-w-[150px] flex-1`}
+                    value={draft.businessType}
+                    onChange={(e) => onChange("businessType", e.target.value)}
+                >
+                    <option value="">All business types</option>
+                    {BUSINESS_TYPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                            {o.label}
+                        </option>
+                    ))}
+                    <option value={BUSINESS_TYPE_UNSET}>{BUSINESS_TYPE_UNSET_LABEL}</option>
                 </select>
 
                 {/* Exact score range — the same axis as the bucket above, which

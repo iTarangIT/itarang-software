@@ -19,6 +19,7 @@ import type { CampaignFacet } from "@/lib/leads/leadCampaign";
 // Value import, so it must come from the dependency-free module — this file
 // pulls in `db` and can never be reachable from a client component.
 import { CAMPAIGN_NONE } from "@/lib/leads/campaign";
+import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
 
 // Shared with the API route. Both ends of a created-at range must look like a
 // calendar date before it goes near SQL.
@@ -53,6 +54,8 @@ export type LeadListRow = {
     total_attempts: number | null;
     follow_up_history: unknown;
     // neodove_sync_status is NOT here on purpose — see the note in the API route.
+    // Neither is business_type (E-296): the route decorates it in a separate,
+    // fail-tolerant statement — see fetchBusinessTypeForLeads().
 };
 
 export type LeadListFilters = {
@@ -140,6 +143,12 @@ export type LeadListFilters = {
      * asking "who wants a callback" does not care who recorded it.
      */
     callback?: boolean;
+    // ── Type of Business (E-296) ─────────────────────────────────────────
+    /**
+     * battery_sale | buyback | finance | scrap | other, or BUSINESS_TYPE_UNSET
+     * ("unset") for leads with no type recorded. Validated by the route.
+     */
+    businessType?: string | null;
 };
 
 export type LeadListFacets = {
@@ -338,6 +347,15 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     if (f.source) conds.push(sql`dl.source = ${f.source}`);
     if (f.neodoveOnly) {
         conds.push(sql`${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
+    }
+    // E-296. Emitted ONLY when the filter is set — the column is not in
+    // schema.ts, and naming it unconditionally would take the whole list down on
+    // a database without the migration. Named directly (not via to_jsonb) so the
+    // index can serve it.
+    if (f.businessType === BUSINESS_TYPE_UNSET) {
+        conds.push(sql`dl.business_type IS NULL`);
+    } else if (f.businessType) {
+        conds.push(sql`dl.business_type = ${f.businessType}`);
     }
     if (f.state) conds.push(sql`dl.state ILIKE ${`%${f.state}%`}`);
     if (f.city) conds.push(sql`dl.city ILIKE ${`%${f.city}%`}`);
@@ -587,6 +605,68 @@ export async function fetchLeadListStats(
         unassigned: Number(r?.unassigned ?? 0),
         scheduled: Number(r?.scheduled ?? 0),
     };
+}
+
+/**
+ * business_type for one page of leads (E-296).
+ *
+ * A SEPARATE statement that is allowed to fail, exactly like the NeoDove /
+ * disposition decoration in the list route: the column is not in schema.ts and
+ * a database without E-296 must lose this one badge, not the list. to_jsonb so
+ * even the projection cannot fail at parse time.
+ */
+export async function fetchBusinessTypeForLeads(
+    ids: string[],
+): Promise<Record<string, string | null>> {
+    const out: Record<string, string | null> = {};
+    if (!ids.length) return out;
+    try {
+        const rows = await db.execute<{ id: string; business_type: string | null }>(sql`
+            SELECT dl.id, to_jsonb(dl) ->> 'business_type' AS business_type
+              FROM dealer_leads dl
+             WHERE dl.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+        `);
+        for (const r of rows as unknown as { id: string; business_type: string | null }[]) {
+            out[r.id] = r.business_type ?? null;
+        }
+    } catch {
+        // E-296 not applied / transient failure — every lead reads "Not set".
+    }
+    return out;
+}
+
+/**
+ * Per-type counts for the bifurcation chips above the table (E-296).
+ *
+ * Same filters as the list MINUS business_type itself — otherwise clicking a
+ * chip would zero every other chip, the same self-destruct the intent cards
+ * avoid with ignoreIntent. The NULL group is keyed BUSINESS_TYPE_UNSET.
+ *
+ * Returns null when the column does not exist here, so the UI hides the chips
+ * instead of showing a row of zeros.
+ */
+export async function fetchBusinessTypeCounts(
+    f: LeadListFilters,
+): Promise<Record<string, number> | null> {
+    const unfiltered = { ...f, businessType: null };
+    const where = buildWhere(unfiltered);
+    try {
+        const rows = await db.execute<{ business_type: string | null; n: string }>(sql`
+            SELECT dl.business_type, COUNT(*)::text AS n
+              FROM dealer_leads dl
+              ${aiSignalsJoin(unfiltered)}
+             WHERE ${where}
+             GROUP BY dl.business_type
+        `);
+        const out: Record<string, number> = {};
+        for (const r of rows as unknown as { business_type: string | null; n: string }[]) {
+            const key = r.business_type ?? BUSINESS_TYPE_UNSET;
+            out[key] = (out[key] ?? 0) + Number(r.n ?? 0);
+        }
+        return out;
+    } catch {
+        return null;
+    }
 }
 
 // Distinct owners / ASMs / sources present on active leads — populates the

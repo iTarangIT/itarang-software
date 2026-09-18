@@ -84,6 +84,8 @@ export const GET = withErrorHandler(
                 ctaHref: kind.ctaHref,
                 ctaLabel: kind.ctaLabel,
                 sections: kind.sections,
+                // B8 — a morning-only kind hides its evening time on the form.
+                slots: kind.slots ?? ["morning", "evening"],
             },
         });
     },

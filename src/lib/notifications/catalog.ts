@@ -234,6 +234,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "loan.sanctioned": "Loan & Sanction",
   "loan.rejected": "Loan & Sanction",
   "loan.disbursed": "Loan & Sanction",
+  // E-298 — dealer confirms the disbursal actually reached their account.
+  "loan.payment_pending": "Loan & Sanction",
+  "loan.payment_received": "Loan & Sanction",
+  "loan.payment_not_received": "Loan & Sanction",
   loan_sanctioned: "Loan & Sanction",
   loan_rejected: "Loan & Sanction",
 
@@ -361,6 +365,8 @@ const CRITICAL = new Set([
   "nbfc.doc_rejected",
   "vkyc.rejected",
   "enach.failed",
+  // E-298 — money the dealer was promised is missing; admin + lender act today.
+  "loan.payment_not_received",
   "escalation_raised",
   "escalation.raised",
 ]);
@@ -388,6 +394,8 @@ const WARNING = new Set([
   "consent.sent",
   "product.submitted",
   "loan.offer_submitted",
+  // E-298 — the dealer owes a yes/no on whether the payout arrived.
+  "loan.payment_pending",
   // E-238 — a countered offer is a lead sitting still until the NBFC answers,
   // which is the definition of amber here. `loan.offer_fixed` is deliberately
   // NOT amber: it closes an action rather than opening one.
@@ -483,6 +491,8 @@ const NO_EMAIL = new Set([
   "auction.lot_published",
   "auction.ending_soon",
   "auction.won",
+  // E-298 — good news that closes a loop; the bell is enough.
+  "loan.payment_received",
 ]);
 
 /**
@@ -508,6 +518,9 @@ const EMAIL_LOCKED = new Set([
   "consent.signed",
   "loan.sanctioned",
   "loan.disbursed",
+  // E-298 — a dealer saying the lender's money never arrived must reach the
+  // lender and iTarang even if someone muted the type's email.
+  "loan.payment_not_received",
 ]);
 
 /** Whether the admin email screen may govern `type` at all. Locked = always emailed. */

@@ -267,6 +267,9 @@ export const TYPE_LABELS: Record<string, string> = {
   "loan.sanctioned": "Loan sanctioned",
   "loan.rejected": "Loan rejected",
   "loan.disbursed": "Loan disbursed",
+  "loan.payment_pending": "Dealer asked to confirm the loan payment arrived",
+  "loan.payment_received": "Dealer confirmed the loan payment arrived",
+  "loan.payment_not_received": "Dealer reports the loan payment did NOT arrive",
   loan_sanctioned: "Loan sanctioned (legacy)",
   loan_rejected: "Loan rejected (legacy)",
 

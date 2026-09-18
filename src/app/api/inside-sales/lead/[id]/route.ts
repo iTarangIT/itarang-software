@@ -87,7 +87,10 @@ export const GET = withErrorHandler(
                 -- E-224's column, read through to_jsonb so a database without
                 -- the migration returns null rather than failing this whole
                 -- statement at parse time. See queryBuilder.ts.
-                to_jsonb(dl) ->> 'neodove_sync_status' AS neodove_sync_status
+                to_jsonb(dl) ->> 'neodove_sync_status' AS neodove_sync_status,
+                -- E-296 "Type of Business", same to_jsonb guard: NULL on a
+                -- database without the migration, which renders "Not set".
+                to_jsonb(dl) ->> 'business_type' AS business_type
             FROM dealer_leads dl
             LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
             LEFT JOIN users originator ON originator.id::text = dl.originator_id

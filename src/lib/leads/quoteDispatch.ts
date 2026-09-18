@@ -69,6 +69,8 @@ export interface DispatchOutcome {
   status: "sent" | "failed";
   providerMessageId?: string | null;
   error?: string;
+  /** E-297 — CC list used on an email send; absent for WhatsApp. */
+  cc?: string[];
 }
 
 export interface DispatchQuotationInput {
@@ -85,6 +87,11 @@ export interface DispatchQuotationInput {
   phone?: string | null;
   /** Optional covering note from the sales manager. */
   message?: string | null;
+  /**
+   * E-297 — CC addresses for the EMAIL channel, already resolved and deduped by
+   * resolveQuotationCc(). Ignored by WhatsApp.
+   */
+  cc?: string[] | null;
   sentBy: string;
 }
 
@@ -113,17 +120,38 @@ async function logDispatch(
   input: DispatchQuotationInput,
   outcome: DispatchOutcome,
 ): Promise<void> {
+  const cc = outcome.channel === "email" && outcome.cc?.length ? outcome.cc : null;
   try {
-    await db.execute(sql`
-      INSERT INTO quotation_dispatches
-        (commercial_id, dealer_lead_id, channel, recipient, status,
-         provider_message_id, error, sent_by)
-      VALUES
-        (${input.commercialId}::uuid, ${input.dealerLeadId}, ${outcome.channel},
-         ${outcome.recipient}, ${outcome.status},
-         ${outcome.providerMessageId ?? null}, ${outcome.error ?? null},
-         ${input.sentBy})
-    `);
+    try {
+      await db.execute(sql`
+        INSERT INTO quotation_dispatches
+          (commercial_id, dealer_lead_id, channel, recipient, status,
+           provider_message_id, error, sent_by, cc_recipients)
+        VALUES
+          (${input.commercialId}::uuid, ${input.dealerLeadId}, ${outcome.channel},
+           ${outcome.recipient}, ${outcome.status},
+           ${outcome.providerMessageId ?? null}, ${outcome.error ?? null},
+           ${input.sentBy}, ${cc ? JSON.stringify(cc) : null}::jsonb)
+      `);
+    } catch (e) {
+      // E-297 not applied on this host: record the send without the CC
+      // snapshot rather than losing the row. 42703 = undefined_column.
+      const code =
+        (e as { code?: string })?.code ??
+        ((e as { cause?: { code?: string } })?.cause?.code);
+      if (code !== "42703") throw e;
+      console.warn("[quoteDispatch] cc_recipients missing (E-297 unapplied) — logging without CC");
+      await db.execute(sql`
+        INSERT INTO quotation_dispatches
+          (commercial_id, dealer_lead_id, channel, recipient, status,
+           provider_message_id, error, sent_by)
+        VALUES
+          (${input.commercialId}::uuid, ${input.dealerLeadId}, ${outcome.channel},
+           ${outcome.recipient}, ${outcome.status},
+           ${outcome.providerMessageId ?? null}, ${outcome.error ?? null},
+           ${input.sentBy})
+      `);
+    }
   } catch (e) {
     console.error("[quoteDispatch] could not log dispatch", {
       commercialId: input.commercialId,
@@ -180,9 +208,14 @@ async function dispatchEmail(
        </p>`
     : "";
 
+  // E-297 — defensively drop the TO address again: the route resolves CC
+  // before a possibly-corrected email is final.
+  const cc = (input.cc ?? []).filter((a) => a.trim().toLowerCase() !== to.toLowerCase());
+
   try {
     const res = await sendEmail({
       to,
+      ...(cc.length ? { cc } : {}),
       subject: `Quotation ${input.quoteNumber} from iTarang Technologies LLP`,
       text: body + linkText,
       html: `<p>${body.replace(/\n/g, "<br/>")}</p>${linkHtml}`,
@@ -199,6 +232,7 @@ async function dispatchEmail(
       recipient: to,
       status: "sent",
       providerMessageId: res.messageId ?? null,
+      cc,
     };
   } catch (e) {
     return {
@@ -206,6 +240,7 @@ async function dispatchEmail(
       recipient: to,
       status: "failed",
       error: e instanceof Error ? e.message : String(e),
+      cc,
     };
   }
 }
@@ -331,6 +366,8 @@ export interface DispatchHistoryRow {
   error: string | null;
   sent_by_name: string | null;
   created_at: string;
+  /** E-297 — CC list on an email send; [] when none / column not yet applied. */
+  cc_recipients: string[];
 }
 
 /** Every send attempt for one quotation, newest first. */
@@ -339,7 +376,10 @@ export async function listDispatches(
 ): Promise<DispatchHistoryRow[]> {
   const rows = await db.execute<Record<string, unknown>>(sql`
     SELECT d.dispatch_id::text AS dispatch_id, d.channel, d.recipient, d.status,
-           d.error, d.created_at, u.name AS sent_by_name
+           d.error, d.created_at, u.name AS sent_by_name,
+           -- E-297: read through to_jsonb so a host without the column yields
+           -- NULL instead of failing the whole history panel.
+           to_jsonb(d) -> 'cc_recipients' AS cc_recipients
       FROM quotation_dispatches d
       -- sent_by is text and users.id is uuid: cast the uuid, never the text, so
       -- a non-uuid sent_by cannot take the whole panel down.
@@ -356,5 +396,18 @@ export async function listDispatches(
     error: r.error == null ? null : String(r.error),
     sent_by_name: r.sent_by_name == null ? null : String(r.sent_by_name),
     created_at: new Date(r.created_at as string).toISOString(),
+    cc_recipients: parseCcRecipients(r.cc_recipients),
   }));
+}
+
+function parseCcRecipients(raw: unknown): string[] {
+  let v = raw;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(v) ? v.map(String) : [];
 }

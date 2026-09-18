@@ -10,6 +10,7 @@ import {
 } from "@/lib/leads/dispositions";
 import type { IntentBucket } from "@/lib/leads/intentBucket";
 import { isIdleRangeKey } from "@/lib/leads/idle";
+import { isBusinessTypeFilter } from "@/lib/leads/businessType";
 
 export type LeadFilters = {
     search: string;
@@ -75,6 +76,11 @@ export type LeadFilters = {
     signalsMin: string;
     /** "1" = the dealer asked to be called back, per either system. */
     callback: "" | "1";
+    /**
+     * E-296 "Type of Business" — a BUSINESS_TYPES value, or "unset" for leads
+     * with none recorded. "" = any.
+     */
+    businessType: string;
 };
 
 export const EMPTY_FILTERS: LeadFilters = {
@@ -102,6 +108,7 @@ export const EMPTY_FILTERS: LeadFilters = {
     aiBand: "",
     signalsMin: "",
     callback: "",
+    businessType: "",
 };
 
 // Filters tucked behind the "More filters" disclosure. Counted for the badge so
@@ -179,6 +186,7 @@ export function toSearchParams(
     if (f.aiBand) p.set("ai_band", f.aiBand);
     if (f.signalsMin) p.set("signals_min", f.signalsMin);
     if (f.callback) p.set("callback", f.callback);
+    if (f.businessType) p.set("business_type", f.businessType);
     return p;
 }
 
@@ -237,5 +245,10 @@ export function fromSearchParams(sp: URLSearchParams): LeadFilters {
             ? (sp.get("signals_min") as string)
             : "",
         callback: sp.get("callback") === "1" ? "1" : "",
+        // Closed vocabulary (+ "unset"), validated for the same blank-<select>
+        // reason as the fields above.
+        businessType: isBusinessTypeFilter(sp.get("business_type"))
+            ? (sp.get("business_type") as string)
+            : "",
     };
 }

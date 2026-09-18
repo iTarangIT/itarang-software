@@ -12,13 +12,19 @@
  * settings screen nobody can reach.
  */
 
+import { buybackDailyDigest } from "./kinds/buyback-daily";
 import { dealerValidationDigest } from "./kinds/dealer-validation";
 import { kycReviewDigest } from "./kinds/kyc-review";
+import { salesDailyDigest } from "./kinds/sales-daily";
+import { scrapBuybackDigest } from "./kinds/scrap-buyback";
 import type { DigestKindDescriptor, DigestKindId } from "./types";
 
 export const DIGEST_KINDS: DigestKindDescriptor[] = [
   dealerValidationDigest,
   kycReviewDigest,
+  scrapBuybackDigest,
+  salesDailyDigest,
+  buybackDailyDigest,
 ];
 
 export function digestKind(id: string): DigestKindDescriptor | null {

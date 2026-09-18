@@ -94,10 +94,19 @@ export function allSectionsOn(sections: DigestSection[]): DigestSections {
  * screen. Format defaults reproduce the plainest possible mail: summary, every
  * section, no attachment.
  */
-export function defaultSettings(sections: DigestSection[]): DigestSettings {
+export type DigestDefaults = { enabled?: boolean; recipients?: string[] };
+
+export function defaultSettings(
+  sections: DigestSection[],
+  overrides: DigestDefaults = {},
+): DigestSettings {
   return {
-    enabled: true,
-    recipients: [DEFAULT_DIGEST_RECIPIENT],
+    // A kind may override both (B8 sales_daily ships OFF with NO recipients,
+    // because a per-SPOC performance mail landing in an inbox nobody chose is
+    // not the same as a queue summary). The engine skips a real send whose
+    // recipient list is empty, so that combination is inert, not a silent send.
+    enabled: overrides.enabled ?? true,
+    recipients: overrides.recipients ?? [DEFAULT_DIGEST_RECIPIENT],
     morningHour: 9,
     morningMinute: 0,
     eveningHour: 19,
@@ -142,6 +151,8 @@ export function normalizeRecipients(raw: unknown, base: string[]): string[] {
     if (seen.size >= MAX_RECIPIENTS) break;
   }
   const out = Array.from(seen);
+  // When the kind's own default is "nobody" (base = []), an emptied list stays
+  // empty rather than resurrecting a recipient the admin just removed.
   return out.length > 0 ? out : [...base];
 }
 

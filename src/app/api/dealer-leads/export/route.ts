@@ -1,4 +1,6 @@
-// GET /api/dealer-leads/export — the Leads list, as a CSV, for the CURRENT FILTERS.
+// GET /api/dealer-leads/export — the Leads list, as a CSV or (format=xlsx) an
+// Excel workbook, for the CURRENT FILTERS. The /leads "Export to Excel" button
+// sends format=xlsx; without it the route still serves the CSV it always did.
 //
 // WHY THIS EXISTS ALONGSIDE /api/admin/leads/bulk?action=export. That one takes
 // an explicit `lead_ids` array, so it can only export what is selected — and a
@@ -19,15 +21,11 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, capabilitiesFor } from "@/lib/leads/access";
-import {
-    isIntentBucket,
-    normalizeScoreRange,
-    parseScoreBound,
-} from "@/lib/leads/intentBucket";
-import { isConnectStatus, isDispositionBucket } from "@/lib/leads/dispositions";
-import { buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
-import { IDLE_RANGES, isIdleRangeKey } from "@/lib/leads/idle";
-import { neodoveTablesPresent } from "@/lib/leads/leadCampaign";
+import { buildExportWhere } from "@/lib/leads/leadListQuery";
+import { parseLeadListFilters } from "@/lib/leads/leadListParams";
+import { businessTypeLabel } from "@/lib/leads/businessType";
+import { styleHeader, zebra } from "@/lib/excel/sheetStyle";
+import ExcelJS from "exceljs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +81,9 @@ const COLUMNS: { header: string; key: string; date?: boolean }[] = [
     { header: "City", key: "city" },
     { header: "State", key: "state" },
     { header: "Status", key: "lead_status" },
+    // E-296. Rendered through businessTypeLabel so NULL reads "Not set",
+    // exactly as the chip on screen does.
+    { header: "Business Type", key: "business_type" },
     { header: "Follow-up Owner", key: "owner_name" },
     { header: "ASM", key: "asm_name" },
     { header: "Last Call At", key: "last_call_at", date: true },
@@ -114,73 +115,10 @@ export const GET = withErrorHandler(async (req: Request) => {
     const caps = capabilitiesFor(user.role);
 
     const searchParams = new URL(req.url).searchParams;
-    const intentParam = searchParams.get("intent");
-    const connectStatusParam = searchParams.get("connect_status");
-    const bucketParam = searchParams.get("disposition_bucket");
-    const idleParam = searchParams.get("idle");
-    const idleRange = isIdleRangeKey(idleParam) ? IDLE_RANGES[idleParam] : null;
-    const campaignParam = searchParams.get("campaign")?.trim() || null;
-    const scoreRange = normalizeScoreRange(
-        parseScoreBound(searchParams.get("score_min")),
-        parseScoreBound(searchParams.get("score_max")),
-    );
-    const hasNeodoveTables = campaignParam ? await neodoveTablesPresent() : false;
-
-    // Parsed EXACTLY as GET /api/dealer-leads parses it — including the
-    // owner/ASM tiering, so a role that cannot see who owns a lead on screen
-    // cannot filter by it here either and get the answer by inference.
-    const filters: LeadListFilters = {
-        status: searchParams.get("status") || null,
-        intent: isIntentBucket(intentParam) ? intentParam : null,
-        scoreMin: scoreRange.min,
-        scoreMax: scoreRange.max,
-        source: searchParams.get("source") || null,
-        neodoveOnly: searchParams.get("neodove") === "1",
-        // Same idle band and campaign filter as the list — this route exists so
-        // the CSV and the screen can never disagree about which leads matched.
-        idleMinDays: idleRange?.min ?? null,
-        idleMaxDays: idleRange?.max ?? null,
-        idleNeverTouched: searchParams.get("idle") === "never",
-        campaign: campaignParam,
-        hasNeodoveTables,
-        state: searchParams.get("state")?.trim() || null,
-        city: searchParams.get("city")?.trim() || null,
-        search: searchParams.get("search")?.trim() || null,
-        from: searchParams.get("from")?.trim() || null,
-        to: searchParams.get("to")?.trim() || null,
-        connectStatus: isConnectStatus(connectStatusParam) ? connectStatusParam : null,
-        dispositionBucket: isDispositionBucket(bucketParam) ? bucketParam : null,
-        // The AI filters too — this route exists so the CSV and the screen can
-        // never disagree about which leads matched. The `ai` lateral below is
-        // unconditional here (the columns are always exported), so the
-        // predicates referencing it always resolve.
-        aiCalled: ["connected", "attempted", "never"].includes(
-            searchParams.get("ai_called") ?? "",
-        )
-            ? searchParams.get("ai_called")
-            : null,
-        aiBand: ["Qualified", "Warm", "Cold", "Disqualified"].includes(
-            searchParams.get("ai_band") ?? "",
-        )
-            ? searchParams.get("ai_band")
-            : null,
-        signalsMin: (() => {
-            const n = Number(searchParams.get("signals_min"));
-            return Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
-        })(),
-        callback: searchParams.get("callback") === "1",
-        disposition: searchParams.get("disposition")?.trim() || null,
-        ownerId: caps.canSeeOwnerAsm ? searchParams.get("owner_id") || null : null,
-        asmId: caps.canSeeOwnerAsm ? searchParams.get("asm_id") || null : null,
-        // Assigned-date range rides on the same gate: it is only meaningful
-        // beside the Owner column, and the UI only offers it to those roles.
-        assignedFrom: caps.canSeeOwnerAsm
-          ? searchParams.get("assigned_from")?.trim() || null
-          : null,
-        assignedTo: caps.canSeeOwnerAsm
-          ? searchParams.get("assigned_to")?.trim() || null
-          : null,
-    };
+    // Parsed EXACTLY as GET /api/dealer-leads parses it — one shared reader
+    // (src/lib/leads/leadListParams.ts) for the list, this export and the
+    // full-leads export (B11), so no two of them can disagree about a match.
+    const filters = await parseLeadListFilters(searchParams, caps);
 
     const where = buildExportWhere(filters);
 
@@ -227,6 +165,8 @@ export const GET = withErrorHandler(async (req: Request) => {
             to_jsonb(dl) ->> 'last_disposition'        AS disposition,
             to_jsonb(dl) ->> 'last_disposition_bucket' AS disposition_bucket,
             to_jsonb(dl) ->> 'last_disposition_source' AS disposition_source,
+            -- E-296, same to_jsonb guard.
+            to_jsonb(dl) ->> 'business_type'           AS business_type,
             ai.called_at        AS ai_last_called_at,
             ai.band             AS ai_band,
             -- BLANK, not 0, when nothing was extracted. "0/5" means the dealer
@@ -298,17 +238,71 @@ export const GET = withErrorHandler(async (req: Request) => {
         (c) => caps.canSeeOwnerAsm || (c.key !== "owner_name" && c.key !== "asm_name"),
     );
 
-    const lines = [
-        visible.map((c) => csvEscape(c.header)).join(","),
-        ...rows.map((r) =>
-            visible
-                .map((c) => csvEscape(c.date ? fmtDateTime(r[c.key]) : r[c.key]))
-                .join(","),
-        ),
-    ];
+    // One cell renderer for both formats, so the sheet and the CSV cannot
+    // disagree about a value.
+    const cell = (c: (typeof COLUMNS)[number], r: Row): unknown =>
+        c.date
+            ? fmtDateTime(r[c.key])
+            : c.key === "business_type"
+              ? businessTypeLabel(r[c.key] as string | null)
+              : r[c.key];
 
     const stamp = fmtDateTime(new Date()).replace(/[: ]/g, "-");
     const truncated = total > rows.length;
+    const exportHeaders = {
+        // Read by the client so a truncated export announces itself
+        // instead of looking like the filter simply matched fewer.
+        "X-Export-Rows": String(rows.length),
+        "X-Export-Total": String(total),
+        "X-Export-Truncated": truncated ? "1" : "0",
+    };
+
+    if (searchParams.get("format") === "xlsx") {
+        const wb = new ExcelJS.Workbook();
+        wb.creator = "iTarang CRM";
+        wb.created = new Date();
+        const ws = wb.addWorksheet("Leads", {
+            views: [{ state: "frozen", ySplit: 1 }],
+        });
+        ws.columns = visible.map((c) => ({
+            header: c.header,
+            width:
+                c.key === "last_call_remarks"
+                    ? 60
+                    : Math.min(40, Math.max(14, c.header.length + 4)),
+        }));
+        styleHeader(ws.getRow(1));
+        rows.forEach((r, i) => {
+            const row = ws.addRow(
+                visible.map((c) => {
+                    const v = cell(c, r);
+                    return v == null || v === "" ? null : (v as ExcelJS.CellValue);
+                }),
+            );
+            zebra(row, i);
+        });
+        if (rows.length > 0) {
+            ws.autoFilter = {
+                from: { row: 1, column: 1 },
+                to: { row: 1, column: visible.length },
+            };
+        }
+        const buffer = await wb.xlsx.writeBuffer();
+        return new Response(new Uint8Array(buffer as ArrayBuffer), {
+            headers: {
+                "Content-Type":
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "Content-Disposition": `attachment; filename="leads-${stamp}.xlsx"`,
+                "Cache-Control": "no-store",
+                ...exportHeaders,
+            },
+        });
+    }
+
+    const lines = [
+        visible.map((c) => csvEscape(c.header)).join(","),
+        ...rows.map((r) => visible.map((c) => csvEscape(cell(c, r))).join(",")),
+    ];
 
     return new Response(
         // BOM so Excel opens it as UTF-8. Without it a dealer name with any
@@ -319,11 +313,7 @@ export const GET = withErrorHandler(async (req: Request) => {
             headers: {
                 "Content-Type": "text/csv; charset=utf-8",
                 "Content-Disposition": `attachment; filename="leads-${stamp}.csv"`,
-                // Read by the client so a truncated export announces itself
-                // instead of looking like the filter simply matched fewer.
-                "X-Export-Rows": String(rows.length),
-                "X-Export-Total": String(total),
-                "X-Export-Truncated": truncated ? "1" : "0",
+                ...exportHeaders,
             },
         },
     );

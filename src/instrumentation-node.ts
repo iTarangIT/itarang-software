@@ -1459,3 +1459,48 @@ export async function startDriveSalesTicker() {
     )}m) started in-process`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// E-298 — dealer payment-confirmation reminder.
+// ---------------------------------------------------------------------------
+// confirm-dispatch stamps loan_sanctions.dealer_payment_status = 'pending' and
+// asks the dealer once. If they still haven't answered 48h later (compared
+// against Postgres now(), never this process's clock) the dealer is re-pushed
+// ONCE and dealer_payment_reminded_at is stamped — a claim-first UPDATE, so
+// several app instances ticking together still send one reminder.
+export async function startDealerPaymentReminderTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 15 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDealerPaymentReminderTick } = await import(
+        "@/lib/leads/dealer-payment-confirmation"
+      );
+      const n = await runDealerPaymentReminderTick();
+      if (n > 0) console.log(`[instrumentation:dealer-payment-reminder] reminded ${n}`);
+    } catch (err) {
+      // Likeliest cause: a database without E-298 ("column dealer_payment_status
+      // does not exist"). Nothing else depends on this tick.
+      console.error(
+        "[instrumentation:dealer-payment-reminder] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Low priority: behind the digest kickoff in the staggered start.
+  const kickoff = setTimeout(tick, 210_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] dealer payment reminder sweep (15m) started in-process");
+}
