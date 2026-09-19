@@ -92,6 +92,9 @@ interface Outcome {
   recipient: string;
   status: "sent" | "failed";
   error?: string;
+  /** WhatsApp-only sends: whether the team's internal notice email went. */
+  ccNotice?: "sent" | "failed";
+  cc?: string[];
 }
 
 function fmt(iso: string): string {
@@ -184,6 +187,10 @@ export function QuotationSendDialog({
     dealerEmail: email,
   });
 
+  // WhatsApp has no CC: on a WhatsApp-only send the same list gets a separate
+  // internal notice email with the PDF instead.
+  const whatsappOnly = channels.includes("whatsapp") && !channels.includes("email");
+
   const toggle = (c: Channel) =>
     setChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
 
@@ -219,7 +226,7 @@ export function QuotationSendDialog({
           email: email.trim() || null,
           phone: phone.trim() || null,
           message: message.trim() || null,
-          extraCc: channels.includes("email") && extraList.length ? extraList : undefined,
+          extraCc: extraList.length ? extraList : undefined,
         }),
       });
       const j = await r.json();
@@ -238,7 +245,8 @@ export function QuotationSendDialog({
     channels.length > 0 &&
     !sending &&
     (!channels.includes("email") || !!email.trim()) &&
-    (!channels.includes("email") || (!invalidExtra.length && !tooManyExtra)) &&
+    !invalidExtra.length &&
+    !tooManyExtra &&
     (!channels.includes("whatsapp") || !!phone.trim());
 
   return (
@@ -442,15 +450,18 @@ export function QuotationSendDialog({
                   </label>
                 )}
 
-                {channels.includes("email") && (
+                {channels.length > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
                     <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
-                      CC
+                      {whatsappOnly ? "Internal notification (email)" : "CC"}
                     </div>
                     <div className="mt-0.5 break-words text-xs text-gray-700">
                       {ccList.length ? ccList.join(", ") : "No one"}
                     </div>
                     <div className="mt-0.5 text-[10px] text-gray-500">
+                      {whatsappOnly
+                        ? "WhatsApp has no CC — these people get a separate email with the PDF. "
+                        : ""}
                       Lead owner, you (the sender) and the admin CC list are added automatically.
                     </div>
                     <label className="mt-2 block">
@@ -534,6 +545,13 @@ export function QuotationSendDialog({
                         <b className="capitalize">{o.channel}</b>{" "}
                         {o.status === "sent" ? `sent to ${o.recipient}` : "failed"}
                         {o.error ? <div className="opacity-80">{o.error}</div> : null}
+                        {o.ccNotice === "sent" ? (
+                          <div className="opacity-80">
+                            Team notified by email ({o.cc?.length ?? 0})
+                          </div>
+                        ) : o.ccNotice === "failed" ? (
+                          <div className="text-amber-700">Team notice email failed</div>
+                        ) : null}
                       </div>
                     </div>
                   ))}

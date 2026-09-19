@@ -74,6 +74,8 @@ type QuoteRow = {
   dealer_name: string | null;
   dealer_phone: string | null;
   dealer_email: string | null;
+  /** Grand total of the rendered quotation (snapshot), else the row's price. */
+  quote_total: string | null;
   // E-243 — what the dealer said back, if anything yet.
   dealer_decision: string | null;
   dealer_decision_at: string | null;
@@ -91,6 +93,8 @@ async function loadQuote(
            c.quote_pdf_url, c.quote_pdf_error, c.version_no,
            c.dealer_decision, c.dealer_decision_at, c.dealer_decision_via,
            c.dealer_decision_note,
+           COALESCE((c.quote_snapshot->>'total')::numeric,
+                    c.final_price, c.price_quoted)::text AS quote_total,
            l.dealer_name, l.phone AS dealer_phone, l.contact_email AS dealer_email
       FROM dealer_lead_commercials c
       LEFT JOIN dealer_leads l ON l.id = c.dealer_lead_id
@@ -222,16 +226,16 @@ export async function POST(
 
     // E-297 — resolved server-side, never trusted from the client: owner,
     // the sender (B4) and the admin fixed list, plus any validated extras.
-    // Only needed when email is one of the channels.
-    const cc = body.channels.includes("email")
-      ? (
-          await resolveQuotationCc(id, commercialId, {
-            dealerEmail: email,
-            extra: body.extraCc ?? [],
-            actorId: user.id,
-          })
-        ).cc
-      : [];
+    // Resolved for every send: CC'd on the email, or — WhatsApp having no CC —
+    // sent a separate internal notice on a WhatsApp-only send.
+    const cc = (
+      await resolveQuotationCc(id, commercialId, {
+        dealerEmail: email,
+        extra: body.extraCc ?? [],
+        actorId: user.id,
+      })
+    ).cc;
+    const quoteTotal = row.quote_total == null ? null : Number(row.quote_total);
 
     const outcomes = await dispatchQuotation({
       commercialId,
@@ -247,11 +251,14 @@ export async function POST(
       phone,
       message: body.message,
       cc,
+      quoteTotal: Number.isFinite(quoteTotal) ? quoteTotal : null,
+      senderName: user.name ?? null,
       sentBy: user.id,
     });
 
     const sent = outcomes.filter((o) => o.status === "sent");
     const failed = outcomes.filter((o) => o.status === "failed");
+    const notice = outcomes.find((o) => o.ccNotice);
 
     // Remember a corrected address so the next revision does not need it typed
     // again — but only when the email actually went, so a typo that bounced at
@@ -286,7 +293,12 @@ export async function POST(
           sent.map((o) => `${o.channel} (${o.recipient})`).join(", ") +
           (failed.length
             ? ` — failed on ${failed.map((o) => o.channel).join(", ")}`
-            : ""),
+            : "") +
+          (notice?.ccNotice === "sent"
+            ? ` — internal team notified by email (${notice.cc?.length ?? 0})`
+            : notice?.ccNotice === "failed"
+              ? " — internal team notice email failed"
+              : ""),
         attachments: [{ url: row.quote_pdf_url, type: "quote" }],
       });
     }
