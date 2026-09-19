@@ -31,6 +31,7 @@ import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 import { sendEmail } from "@/lib/email/mailer";
 import { normalizePhone } from "@/lib/leads/dedupe-rules";
 import { quotationFileName } from "@/lib/leads/quote-pdf/numbering";
+import { buildQuoteInternalNotice } from "@/lib/leads/quoteInternalNotice";
 import { quoteApprovalUrl } from "@/lib/leads/quoteToken";
 import {
   QUOTE_APPROVE_PREFIX,
@@ -69,8 +70,13 @@ export interface DispatchOutcome {
   status: "sent" | "failed";
   providerMessageId?: string | null;
   error?: string;
-  /** E-297 — CC list used on an email send; absent for WhatsApp. */
+  /**
+   * E-297 — CC list used on an email send. On a WhatsApp-only send, the
+   * addresses the internal notice email went to (see sendWhatsAppCcNotice).
+   */
   cc?: string[];
+  /** WhatsApp-only sends: whether the internal notice email went out. */
+  ccNotice?: "sent" | "failed";
 }
 
 export interface DispatchQuotationInput {
@@ -88,10 +94,15 @@ export interface DispatchQuotationInput {
   /** Optional covering note from the sales manager. */
   message?: string | null;
   /**
-   * E-297 — CC addresses for the EMAIL channel, already resolved and deduped by
-   * resolveQuotationCc(). Ignored by WhatsApp.
+   * E-297 — CC addresses, already resolved and deduped by resolveQuotationCc().
+   * CC'd on the email channel; on a WhatsApp-only send they get the internal
+   * notice email instead, because WhatsApp has no CC.
    */
   cc?: string[] | null;
+  /** Grand total of the rendered quotation, for the internal notice subject. */
+  quoteTotal?: number | null;
+  /** Display name of the sender, for the internal notice. */
+  senderName?: string | null;
   sentBy: string;
 }
 
@@ -120,7 +131,12 @@ async function logDispatch(
   input: DispatchQuotationInput,
   outcome: DispatchOutcome,
 ): Promise<void> {
-  const cc = outcome.channel === "email" && outcome.cc?.length ? outcome.cc : null;
+  // Email: the CC list. WhatsApp: who received the internal notice, recorded
+  // only when it actually went.
+  const cc =
+    outcome.cc?.length && (outcome.channel === "email" || outcome.ccNotice === "sent")
+      ? outcome.cc
+      : null;
   try {
     try {
       await db.execute(sql`
@@ -332,6 +348,49 @@ async function dispatchWhatsApp(
 }
 
 /**
+ * WhatsApp has no CC, so a WhatsApp-only send tells the internal CC list by a
+ * plain email with the PDF attached. Never throws, and never touches the
+ * WhatsApp outcome: the dealer has their quotation whether or not the team's
+ * copy went.
+ */
+async function sendWhatsAppCcNotice(
+  input: DispatchQuotationInput,
+  whatsapp: DispatchOutcome,
+  pdf: Buffer,
+): Promise<"sent" | "failed"> {
+  const notice = buildQuoteInternalNotice({
+    quoteNumber: input.quoteNumber,
+    dealerName: input.dealerName,
+    total: input.quoteTotal ?? null,
+    phone: whatsapp.recipient,
+    senderName: input.senderName ?? null,
+    note: input.message ?? null,
+  });
+  try {
+    await sendEmail({
+      to: input.cc ?? [],
+      subject: notice.subject,
+      text: notice.text,
+      html: notice.html,
+      attachments: [
+        {
+          filename: quotationFileName(input.quoteNumber),
+          content: pdf,
+          contentType: "application/pdf",
+        },
+      ],
+    });
+    return "sent";
+  } catch (e) {
+    console.error("[quoteDispatch] internal WhatsApp notice not sent", {
+      commercialId: input.commercialId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return "failed";
+  }
+}
+
+/**
  * Send the quotation over every requested channel and record each result.
  *
  * Never throws. The caller reports per-channel outcomes to the sales manager,
@@ -350,6 +409,15 @@ export async function dispatchQuotation(
       channel === "email" ? dispatchEmail(input, pdf) : dispatchWhatsApp(input, pdf),
     ),
   );
+
+  // WhatsApp without email: the team would otherwise hear nothing. When email
+  // is one of the channels the team is already CC'd on it, so no second copy.
+  const whatsapp = outcomes.find((o) => o.channel === "whatsapp");
+  const cc = input.cc ?? [];
+  if (!wanted.includes("email") && whatsapp?.status === "sent" && cc.length && pdf) {
+    whatsapp.ccNotice = await sendWhatsAppCcNotice(input, whatsapp, pdf);
+    whatsapp.cc = cc;
+  }
 
   // Logged after both have been attempted, so one channel's slow provider does
   // not delay the other's send.
