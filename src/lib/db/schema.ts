@@ -286,14 +286,15 @@ export const inventory = pgTable(
     oem_name: text("oem_name"),
     product_catalog_id: varchar("product_catalog_id", { length: 255 }),
     hsn_code: varchar("hsn_code", { length: 8 }),
-    // BRD canonical inventory type.
-    inventory_type: varchar("inventory_type", { length: 30 }),
+    // BRD canonical inventory type. inventory_type / material_code are text on
+    // both DBs (were declared varchar; E-299 audit).
+    inventory_type: text("inventory_type"),
     asset_category: varchar("asset_category", { length: 20 }).notNull(),
     asset_type: varchar("asset_type", { length: 50 }).notNull(),
     sub_category: varchar("sub_category", { length: 100 }),
     model_type: text("model_type").notNull(),
     serial_number: varchar("serial_number", { length: 255 }),
-    material_code: varchar("material_code", { length: 100 }),
+    material_code: text("material_code"),
     is_serialized: boolean("is_serialized").default(true).notNull(),
     warranty_months: integer("warranty_months").default(0).notNull(),
     status: varchar({ length: 30 }).default("available").notNull(),
@@ -1149,16 +1150,11 @@ export const aiCallLogs = pgTable(
     human_band: varchar("human_band", { length: 20 }),
     human_reviewed_by: uuid("human_reviewed_by"),
     human_reviewed_at: timestamp("human_reviewed_at", { withTimezone: true }),
-    // E-267 — `transcript_turns jsonb` is DELIBERATELY ABSENT from this object,
-    // the same rule E-250/E-242/E-224/E-236 follow. Drizzle names every column
-    // of a mirrored table in its generated SQL, so declaring it here would make
-    // all 21 aiCallLogs call sites — including three bare `db.insert()` on the
-    // call-finalize path — hard-fail with `column "transcript_turns" does not
-    // exist` on any database where E-267 has not been applied. Since there is
-    // no auto-runner and the per-environment ticks drift, that would trade one
-    // dark metric for the entire AI call-logging pipeline. It is written
-    // instead by a guarded raw UPDATE in elevenlabs/finalizeCall.ts, which
-    // confines an unapplied E-267 to the feature that needs it.
+    // E-267. Was deliberately kept off this object until both DBs had it; the
+    // E-299 audit confirmed they do, and E-299 guarantees it, so it is mirrored
+    // now. Still written by the guarded raw UPDATE in elevenlabs/finalizeCall.ts.
+    // ⚠ E-299 must be applied on any DB this schema.ts runs against.
+    transcript_turns: jsonb("transcript_turns"),
   },
   (table) => {
     return {
@@ -3322,7 +3318,9 @@ export const dealerOnboardingApplications = pgTable(
     wa_session_id: uuid("wa_session_id"),
     verification_warnings: jsonb("verification_warnings").default([]).notNull(),
     extraction_summary: jsonb("extraction_summary").default({}).notNull(),
-    dealer_confirmed_at: timestamp("dealer_confirmed_at"),
+    // timestamptz on both DBs (E-299 audit). Declaring it without tz made
+    // Drizzle append "+0000" to an already-offset value → Invalid Date.
+    dealer_confirmed_at: timestamp("dealer_confirmed_at", { withTimezone: true }),
     // ---- E-175 owner Aadhaar (for dealer-agreement signer verification) ----
     // The owner's Aadhaar number, extracted from the Aadhaar uploaded during
     // onboarding. At dealer-agreement signing (Aadhaar eSign) the signer's
@@ -3788,28 +3786,12 @@ export const scrapeRuns = pgTable("scraper_runs", {
   new_leads_skipped_invalid_phone: integer(
     "new_leads_skipped_invalid_phone",
   ).default(0),
-  // ⚠ `last_progress_at` WAS DECLARED HERE AND HAS BEEN REMOVED. Do not add it
-  // back without first writing the migration that creates it.
-  //
-  // It was added for a liveness heartbeat — executeChunk() would bump it and
-  // reapStuckRuns() would reap on silence rather than on total run age, so a
-  // legitimately long multi-query run isn't force-failed at minute 11. That is
-  // still a good idea, but NONE of it was built: no code writes the column, no
-  // code reads it, reapStuckRuns() still compares `started_at`, and the E-227
-  // migration the old comment here credited does not exist in drizzle/.
-  //
-  // So the column existed in exactly one place — this object — and drizzle
-  // names EVERY column of a table object in its INSERT. The result was that
-  // starting any scrape died with
-  //   column "last_progress_at" of relation "scraper_runs" does not exist
-  // on every database, because no database has ever had it. Same failure mode
-  // E-224 / E-226 / E-236 each call out at length: a column that is not
-  // guaranteed present must not be named on the drizzle object.
-  //
-  // To build the heartbeat: write the migration (column + a partial
-  // idx_scraper_runs_running WHERE status = 'running'), apply it everywhere,
-  // THEN add the column back here — or write it by raw sql`` and leave this
-  // object alone, which is what the three migrations above chose.
+  // Liveness heartbeat for a future reapStuckRuns() that reaps on silence
+  // rather than total run age. NOTHING writes or reads it yet. It arrived on
+  // both DBs without an E-file (hand-run / db:push); it was once declared here
+  // before any DB had it and broke every scrape INSERT. E-299 now guarantees
+  // it, so it is mirrored. ⚠ E-299 must be applied on any DB this runs against.
+  last_progress_at: timestamp("last_progress_at", { withTimezone: true }),
 });
 
 export const scraperRunChunks = pgTable(
@@ -3947,17 +3929,7 @@ export const dealerLeads = pgTable("dealer_leads", {
   // to conflict on. The constraint already exists in the DB (migration
   // 0002_cute_devos.sql); mirror it here so future `db:push` runs preserve it.
   phone: text().unique("dealer_leads_phone_unique"),
-  // E-242 adds `contact_email` and `gstin` to this table and they are
-  // DELIBERATELY ABSENT HERE, exactly as E-224's and E-236's columns are.
-  //
-  // Drizzle names every column of a table object in a bare
-  // `db.select().from(dealerLeads)`, and there are ~20 of those across the
-  // leads list, the AI dialer, the CEO overview and the dashboards. Listing a
-  // column here therefore hard-fails all of them at PARSE time on any database
-  // without the migration — the whole leads screen goes down to add an email
-  // field. The quotation code reads both columns by name in raw `sql``
-  // projections instead (quoteDraft.ts, the send route), so an unapplied E-242
-  // costs the quotation feature and nothing else.
+  // E-242 contact_email / gstin are declared at the end of this object (E-299).
   language: text(),
   follow_up_history: jsonb("follow_up_history").default([]),
   current_status: text("current_status"),
@@ -4005,19 +3977,7 @@ export const dealerLeads = pgTable("dealer_leads", {
   intent_band: varchar("intent_band", { length: 20 }),
   call_status: varchar("call_status", { length: 20 }),
   info_signals_count: integer("info_signals_count"),
-  // E-250 adds `intent_band_source`, `intent_overridden_by` and
-  // `intent_overridden_at` to this table, and they are DELIBERATELY ABSENT
-  // HERE — same reason as E-242's and E-224's columns above.
-  //
-  // The human override writes THROUGH to intent_band / final_intent_score
-  // (that is the whole design: every existing reader picks up the corrected
-  // value with no change). These three columns only record PROVENANCE, and are
-  // read by one panel and one API route. Listing them here would hard-fail
-  // every bare `db.select().from(dealerLeads)` at parse time on any database
-  // without E-250 applied — taking the leads screen, the AI dialer and the CEO
-  // overview down to add a label. Written and read via raw `sql` projections in
-  // src/lib/leads/intentOverride.ts instead, so an unapplied E-250 costs the
-  // intent-review feature and nothing else.
+  // E-250 intent-override provenance columns are declared at the end of this object.
   preliminary_payment_intent: text("preliminary_payment_intent"),
   pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
   brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
@@ -4047,37 +4007,36 @@ export const dealerLeads = pgTable("dealer_leads", {
   // Soft delete (BRD §0.13)
   is_active: boolean("is_active").default(true),
   deleted_at: timestamp("deleted_at", { withTimezone: true }),
-  // E-224 adds two more columns here — `neodove_synced_at` and
-  // `neodove_sync_status` — that are DELIBERATELY NOT MIRRORED in this object.
-  //
-  // The usual rule is to mirror every migration here so types match the DB.
-  // These two are the exception, because of how this table is read: ~20 call
-  // sites do a bare `db.select().from(dealerLeads)` (the /leads list, the edit
-  // page, both call schedulers, the CEO and role dashboards, the DigiLocker
-  // callback, sales-insight, the converted-leads download). Drizzle expands a
-  // bare select into an explicit column list, so naming a column here makes
-  // EVERY one of those queries hard-fail with "column does not exist" until the
-  // migration is hand-applied — and this repo has no migration runner, applies
-  // by hand per environment, and has a documented history of migrations
-  // silently not landing (the E-145 drift). Mirroring them traded a
-  // write-only convenience column for a whole-app outage on any environment
-  // that hadn't run E-224 yet. That is exactly what happened on database-1.
-  //
-  // They are written exclusively through raw `sql` UPDATEs in
-  // src/lib/neodove/* and the NeoDove routes, all of which are unreachable
-  // unless NEODOVE_ENABLED is set — so the coupling stays contained to the
-  // feature that needs it. Same treatment as `duplicate_merge_requests`, which
-  // is likewise absent here and written via raw SQL.
-  //
-  // If a future change needs to READ them through Drizzle, add them here AND
-  // make E-224 a hard prerequisite in the deploy notes.
-  //
-  // E-296 adds `business_type varchar(30)` ("Type of Business": battery_sale |
-  // buyback | finance | scrap | other, enforced in src/lib/leads/businessType.ts)
-  // and it is DELIBERATELY ABSENT HERE for the same reason. Written by raw `sql`
-  // UPDATEs (create / PATCH / inside-sales create / bulk set_business_type),
-  // read via `to_jsonb(dl) ->> 'business_type'` or fail-tolerant side
-  // statements; the list filter names the column only when it is set.
+  // Columns below were DELIBERATELY kept off this object while one of the two
+  // shared DBs lacked them: ~20 call sites do a bare `db.select().from(dealerLeads)`,
+  // which Drizzle expands to an explicit column list, so an unapplied migration
+  // took the whole leads screen down. The E-299 audit (2026-09-19) confirmed
+  // database-1 and database-2 both carry every one of them, and E-299 re-declares
+  // them IF NOT EXISTS, so they are mirrored now.
+  // ⚠ E-299 must be applied on any DB this schema.ts runs against — run
+  // scripts/audit-schema.ts first on a DB you have not checked.
+  // Existing writers (raw `sql` UPDATEs in src/lib/neodove/*, quoteDraft.ts,
+  // intentOverride.ts, businessType.ts) are unchanged.
+  // E-224 — NeoDove CRM sync.
+  neodove_synced_at: timestamp("neodove_synced_at", { withTimezone: true }),
+  neodove_sync_status: varchar("neodove_sync_status", { length: 20 }),
+  // E-236 — latest NeoDove call outcome.
+  last_disposition: text("last_disposition"),
+  last_disposition_bucket: varchar("last_disposition_bucket", { length: 20 }),
+  last_connect_status: varchar("last_connect_status", { length: 20 }),
+  last_disposition_at: timestamp("last_disposition_at", { withTimezone: true }),
+  last_disposition_source: varchar("last_disposition_source", { length: 20 }),
+  // E-242 — quotation contact details.
+  gstin: varchar("gstin", { length: 15 }),
+  contact_email: text("contact_email"),
+  // E-250 — provenance of a human intent override (the override itself writes
+  // through to intent_band / final_intent_score).
+  intent_band_source: varchar("intent_band_source", { length: 10 }).default("ai").notNull(),
+  intent_overridden_by: uuid("intent_overridden_by"),
+  intent_overridden_at: timestamp("intent_overridden_at", { withTimezone: true }),
+  // E-296 — "Type of Business": battery_sale | buyback | finance | scrap | other,
+  // enforced in src/lib/leads/businessType.ts (no CHECK).
+  business_type: varchar("business_type", { length: 30 }),
 });
 
 // Org-wide saved region groups for the AI dialer modal. `regions` is a
@@ -9549,16 +9508,22 @@ export const leadTouchpoints = pgTable(
     external_system: varchar("external_system", { length: 50 }),
     external_event_id: text("external_event_id"),
     sync_method: varchar("sync_method", { length: 30 }).default("manual"),
-    // E-226 added lead_touchpoints.recording_url and .external_agent_name and
-    // they are DELIBERATELY ABSENT HERE. This is the one table in the family
-    // written through Drizzle (db.insert below in touchpoints/write.ts), and
-    // Drizzle names every column of the table object in its INSERT — so listing
-    // them would break every touchpoint write (calls, status changes,
-    // escalations, reactivations) on any DB without E-226 applied, which today
-    // includes prod. They are written by a best-effort raw UPDATE in
-    // src/lib/neodove/inbound.ts after the transaction commits, and read via
-    // `to_jsonb(t) ->> '...'`. Same treatment, same reason, as E-224's two
-    // dealer_leads columns.
+    // E-226 / E-236 (NeoDove call outcome) and E-295 (ownership recipient).
+    // Kept off this object until both DBs had them — Drizzle names every
+    // column in its INSERT, and touchpoints/write.ts inserts through it. The
+    // E-299 audit confirmed both DBs carry them and E-299 guarantees them, so
+    // they are mirrored now. Writers still use the raw UPDATEs in
+    // src/lib/neodove/inbound.ts and touchpoints/write.ts.
+    // ⚠ E-299 must be applied on any DB this schema.ts runs against.
+    recording_url: text("recording_url"),
+    external_agent_name: text("external_agent_name"),
+    disposition: text(),
+    disposition_bucket: varchar("disposition_bucket", { length: 20 }),
+    connect_status: varchar("connect_status", { length: 20 }),
+    external_stage: text("external_stage"),
+    external_tag: text("external_tag"),
+    from_owner_id: text("from_owner_id"),
+    to_owner_id: text("to_owner_id"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -12665,3 +12630,49 @@ export const moduleVisitKeys = pgTable(
     dayIdx: index("module_visit_keys_day_idx").on(table.day),
   }),
 );
+
+// --- DB-ONLY TABLES DECLARED BY THE E-299 AUDIT ---
+// Both exist on database-1 and database-2 with no originating E-file (the
+// 0034_sync_with_rds era) and nothing in src/ reads or writes either. Declared
+// so scripts/audit-schema.ts reports zero drift; E-299 creates them IF NOT
+// EXISTS. Shapes copied from information_schema on database-2.
+
+export const adminAuditLogExports = pgTable(
+  "admin_audit_log_exports",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    requested_by: uuid("requested_by").notNull(),
+    tenant_id: uuid("tenant_id"),
+    purpose: text().notNull(),
+    filters: jsonb(),
+    row_count: integer("row_count").notNull(),
+    storage_key: text("storage_key").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+  },
+  (table) => ({
+    createdAtIdx: index("admin_audit_log_exports_created_at_idx").on(table.created_at),
+    requestedByIdx: index("admin_audit_log_exports_requested_by_idx").on(table.requested_by),
+    tenantIdx: index("admin_audit_log_exports_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+export const scrapeBatches = pgTable("scrape_batches", {
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  query: text().notNull(),
+  city: varchar({ length: 100 }),
+  state: varchar({ length: 100 }),
+  radius_meters: integer("radius_meters"),
+  latitude: numeric(),
+  longitude: numeric(),
+  total_results: integer("total_results").default(0),
+  new_leads_created: integer("new_leads_created").default(0),
+  duplicates_found: integer("duplicates_found").default(0),
+  enriched_existing: integer("enriched_existing").default(0),
+  no_phone_count: integer("no_phone_count").default(0),
+  status: varchar({ length: 20 }).default("pending").notNull(),
+  error_message: text("error_message"),
+  initiated_by: uuid("initiated_by").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  completed_at: timestamp("completed_at", { withTimezone: true }),
+});
