@@ -1,14 +1,24 @@
-// GET /api/ai-dialer/campaigns/[id]/leads?bucket=all|pending|calling|completed|failed&page=N
+// GET /api/ai-dialer/campaigns/[id]/leads?bucket=all|<any campaign lead status>&page=N
 //
 // Drives both:
-//   1. The expanded AI dialer banner (bucket=all → returns three columns)
+//   1. The expanded AI dialer banner (bucket=all → returns four columns)
 //   2. The Campaign Detail page lead table (specific bucket, paginated)
+//
+// Buckets are the campaign lead statuses (campaignLeadStatus.ts). On
+// bucket=all the `failed` column carries EVERY terminal non-conversation row —
+// busy, no response, rejected, voicemail, no conversation, failed, skipped —
+// each with its own status, so the banner keeps its shape while the badge on
+// each row says what actually happened.
 //
 // All leads in a campaign are JOIN'd back to dealer_leads for display fields
 // (shop_name, dealer_name, phone, score). Soft FK — no DB constraint, so a
 // LEFT JOIN handles the case where a lead row was deleted post-campaign.
 
 import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
+import {
+  CAMPAIGN_LEAD_STATUSES,
+  NON_CONVERSATION_STATUSES,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 import { db } from "@/lib/db";
 import { dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -23,14 +33,10 @@ import { resolveDurationBucketConfig } from "@/lib/ai-dialer/call-duration/confi
 const PAGE_SIZE = 50;
 const BANNER_LIMIT = 100; // per bucket on bucket=all
 
-const VALID_BUCKETS = new Set([
-  "all",
-  "pending",
-  "calling",
-  "completed",
-  "failed",
-  "skipped",
-]);
+const VALID_BUCKETS = new Set<string>(["all", ...CAMPAIGN_LEAD_STATUSES]);
+
+// The banner's right-hand column: everything that ended without a conversation.
+const NOT_CONNECTED_STATUSES = [...NON_CONVERSATION_STATUSES, "skipped"];
 
 // Call duration now lives in @/lib/ai-dialer/call-duration/derive, alongside
 // its SQL twin. It used to be a local copy here and a byte-identical second
@@ -267,7 +273,7 @@ export const GET = withErrorHandler(
           .where(
             and(
               eq(dialerCampaignLeads.campaign_id, campaignId),
-              eq(dialerCampaignLeads.status, "failed"),
+              inArray(dialerCampaignLeads.status, NOT_CONNECTED_STATUSES),
             ),
           )
           .orderBy(desc(dialerCampaignLeads.completed_at))

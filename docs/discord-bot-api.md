@@ -111,12 +111,20 @@ Resumes only a `stopped` campaign with pending leads (never re-dials completed/f
 ```
 
 ### `GET /api/bot/campaigns/{id}/progress` — counts + percent
+`counts` carries every campaign lead status, zero-filled. Since E-300 (2026-09-21)
+`completed` means **the dealer actually spoke**; every other way a dialled call ends
+has its own key. `pending` = not dialled yet (UI label "Queued"); `no_conversation` =
+the line connected but only the AI spoke (UI label "Pending"); `skipped` = never
+dialled (no phone / ineligible). `callsMade` counts attempts (everything except
+`pending`, `calling`, `skipped`). `percentComplete` = share no longer queued or on a call.
 ```jsonc
 { "success": true, "data": {
   "campaignId": "camp_...", "status": "running", "provider": "elevenlabs",
   "total": 117,
-  "counts": { "pending": 77, "calling": 1, "completed": 38, "failed": 1 },
-  "callsMade": 38, "percentComplete": 33
+  "counts": { "pending": 60, "calling": 1, "completed": 21, "no_response": 14,
+              "busy": 9, "rejected": 2, "voicemail": 1, "no_conversation": 6,
+              "failed": 2, "skipped": 1 },
+  "callsMade": 55, "percentComplete": 48
 }}
 ```
 
@@ -141,8 +149,10 @@ Completed calls scoring ≥ the CRM's qualified threshold, highest first.
 ```
 
 ### `POST /api/bot/campaigns/{id}/retry-failed` — re-dial failures
-Bundles retryable failed leads into a **new** campaign and starts it (source untouched).
-Excludes `no_phone` / `ineligible_active_lead`. `400` if the source is still running or has
+Bundles the leads the campaign did not reach — `no_response`, `busy`, `rejected`,
+`voicemail`, `no_conversation`, `failed` — into a **new** campaign and starts it
+(source untouched). Excludes `no_phone` / `ineligible_active_lead` / `invalid_number`,
+and any lead the AI has since spoken to. `400` if the source is still running or has
 no retryable failures.
 → `{ campaignId: "<new>", retryCount, status: "running", firstCallPlaced, firstCallError }`.
 
@@ -164,7 +174,7 @@ Query: `page` (default 1), `limit` (default 20, max 100), `provider`, `source=bo
 2. `/start-campaign` → dialing begins on ElevenLabs.
 3. Poll `/progress` (or `/status`) for the embed; `/live-calls` for who's on a call now.
 4. `/qualified` when done → the leads worth a human follow-up.
-5. `/retry-failed` to re-dial no-answers/busy as a fresh campaign.
+5. `/retry-failed` to re-dial no-response / busy / rejected / voicemail / no-conversation leads as a fresh campaign.
 
 ## 7. Notes & limits
 

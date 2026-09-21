@@ -4,15 +4,16 @@
 // Kept apart from exclusionFilter.ts, which is deliberately db-free so its guard
 // tests need no mocks. That file owns the PREDICATES; this one owns the QUERIES.
 //
-// CONNECTED := ai_call_logs.transcript IS NOT NULL. See the long note in
-// exclusionFilter.ts for why that is the definition and why it is evaluated live
-// rather than denormalised onto dealer_leads.
+// CONNECTED := the dealer spoke on an AI call (AI_CONNECTED_CALL_SQL). See the
+// long note in exclusionFilter.ts for why that is the definition and why it is
+// evaluated live rather than denormalised onto dealer_leads.
 //
 // ⚠ Nothing here may be wired into the NeoDove push paths. An AI-connected lead
 // is exactly the one the human calling team should receive.
 
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { AI_CONNECTED_CALL_SQL } from "./exclusionFilter";
 
 /** Everything the "already contacted by AI" notice renders. */
 export type AiConnectionPayload = {
@@ -75,7 +76,7 @@ export async function aiConnectedSet(leadIds: string[]): Promise<Set<string>> {
     const result = await db.execute(sql`
         SELECT DISTINCT acl.lead_id
           FROM ai_call_logs acl
-         WHERE acl.transcript IS NOT NULL
+         WHERE ${AI_CONNECTED_CALL_SQL}
            AND acl.lead_id IN (
                  SELECT value FROM jsonb_array_elements_text(${JSON.stringify(leadIds)}::jsonb)
                )
@@ -159,8 +160,8 @@ export async function fetchAiConnection(
                acl.recording_url,
                acl.call_duration,
                COALESCE(acl.ended_at, acl.created_at) AS called_at,
-               (SELECT COUNT(*)::int FROM ai_call_logs x
-                 WHERE x.lead_id = ${leadId} AND x.transcript IS NOT NULL) AS total_connected,
+               (SELECT COUNT(*)::int FROM ai_call_logs acl
+                 WHERE acl.lead_id = ${leadId} AND ${AI_CONNECTED_CALL_SQL}) AS total_connected,
                dcl.campaign_id,
                dc.name AS campaign_name
           FROM ai_call_logs acl
@@ -171,7 +172,7 @@ export async function fetchAiConnection(
           ) dcl ON true
           LEFT JOIN dialer_campaigns dc ON dc.id = dcl.campaign_id
          WHERE acl.lead_id = ${leadId}
-           AND acl.transcript IS NOT NULL
+           AND ${AI_CONNECTED_CALL_SQL}
          ORDER BY COALESCE(acl.ended_at, acl.created_at) DESC
          LIMIT 1
     `);

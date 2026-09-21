@@ -23,6 +23,8 @@ export type NormalizedElevenLabsStatus = {
   duration: number | null;
   phone: string | null;
   rawTranscriptTurns?: unknown[];
+  /** metadata.termination_reason — see normalizePostCall. */
+  terminationReason?: string | null;
   error?: string;
 };
 
@@ -129,6 +131,11 @@ export async function getElevenLabsCallStatus(
       rawTranscriptTurns: Array.isArray(data?.transcript)
         ? data.transcript
         : undefined,
+      terminationReason:
+        typeof data?.metadata?.termination_reason === "string" &&
+        data.metadata.termination_reason.trim()
+          ? data.metadata.termination_reason.trim()
+          : null,
     };
   } catch (err) {
     return {

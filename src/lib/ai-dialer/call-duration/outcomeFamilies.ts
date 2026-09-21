@@ -18,8 +18,9 @@
  * slices per bucket, so the legend can name "Dialer misconfigured" exactly while
  * the bar itself stays readable. This module only decides the colour grouping.
  *
- * SILENT AND NO-RESPONSE ARE NOT FAILURES TO DIAL. Both mean the dealer was
- * REACHED (failureReason marks them retryable: false for that reason). In a
+ * SILENT AND NO-RESPONSE ARE NOT FAILURES TO DIAL. Both mean the line was
+ * ANSWERED (no_response: the dealer spoke; silent: only the AI did — which is
+ * why failureReason marks silent retryable since 2026-09-21). In a
  * sub-20-second bucket they are the interesting cases — a dealer who picked up
  * and hung up is a script problem, not a telephony problem — which is why they
  * get their own families instead of being folded into "dropped".
@@ -96,6 +97,8 @@ export function classifyOutcomeFamily(code: FailureReasonCode | null | undefined
         case "silent_call":
             return "silent";
         case "disconnected":
+        case "rejected":
+        case "invalid_number":
         case "technical":
         case "not_answered":
         case "busy":
