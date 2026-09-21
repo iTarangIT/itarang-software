@@ -29,6 +29,7 @@ import {
     DURATION_SECONDS_SQL,
 } from "../src/lib/ai-dialer/call-duration/derive";
 import { deriveBuckets, DEFAULT_DURATION_BUCKET_CONFIG } from "../src/lib/ai-dialer/call-duration/config";
+import { ATTEMPTED_STATUSES, sqlStatusList } from "../src/lib/ai-dialer/campaignLeadStatus";
 import {
     BUCKET_MATCH_PREDICATE,
     bucketDefsJson,
@@ -451,26 +452,32 @@ async function counterSection() {
           JOIN (
             SELECT campaign_id,
                    count(*) FILTER (WHERE status = 'completed')::int AS comp,
-                   count(*) FILTER (WHERE status = 'failed')::int    AS fail
+                   count(*) FILTER (WHERE status = 'failed')::int    AS fail,
+                   count(*) FILTER (
+                     WHERE status IN (${sql.raw(sqlStatusList(ATTEMPTED_STATUSES))})
+                   )::int AS attempted
               FROM dialer_campaign_leads
              GROUP BY campaign_id
           ) t ON t.campaign_id = c.id
-         WHERE c.calls_made      IS DISTINCT FROM t.comp + t.fail
+         WHERE c.calls_made      IS DISTINCT FROM t.attempted
             OR c.completed_leads IS DISTINCT FROM t.comp
             OR c.failed_leads    IS DISTINCT FROM t.fail
          LIMIT 5
     `),
     ) as Array<Record<string, unknown>>;
 
+    // E-300: calls_made counts every ATTEMPTED status (completed, no_response,
+    // busy, rejected, voicemail, no_conversation, failed) — which equalled
+    // completed + failed while those were the only two statuses written.
     if (drift.length === 0) {
-        ok("calls_made = completed + failed on every campaign");
+        ok("calls_made = attempted rows, completed/failed match on every campaign");
     } else {
-        // Not a code failure if E-266 has not been applied to this database —
-        // say which, so the reader does not go hunting in campaignTracker.ts.
+        // Not a code failure if the E-300 backfill has not run on this database
+        // — say which, so the reader does not go hunting in campaignTracker.ts.
         bad(
-            "calls_made = completed + failed on every campaign",
+            "calls_made = attempted rows, completed/failed match on every campaign",
             `${drift.length}+ campaign(s) drift, e.g. ${JSON.stringify(drift[0])}` +
-                " — apply drizzle/E-266_recompute_campaign_calls_made.sql to this database",
+                " — run scripts/backfill-campaign-lead-status.ts --apply against this database",
         );
     }
 }

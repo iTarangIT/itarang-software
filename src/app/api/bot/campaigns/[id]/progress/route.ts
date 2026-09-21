@@ -10,6 +10,10 @@ import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { withBotAuth } from "@/lib/bot/auth";
 import { eq, sql } from "drizzle-orm";
+import {
+  CAMPAIGN_LEAD_STATUSES,
+  type CampaignLeadStatus,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 
 export const GET = withBotAuth(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -42,15 +46,22 @@ export const GET = withBotAuth(
       .where(eq(dialerCampaignLeads.campaign_id, campaignId))
       .groupBy(dialerCampaignLeads.status);
 
-    const counts = { pending: 0, calling: 0, completed: 0, failed: 0 };
+    // Every status, zero-filled. `completed` means the dealer actually spoke;
+    // busy / no_response / rejected / voicemail / no_conversation / skipped are
+    // their own buckets since 2026-09-21 (campaignLeadStatus.ts), so reading
+    // only the old four keys would silently lose most of a campaign.
+    const counts = Object.fromEntries(
+      CAMPAIGN_LEAD_STATUSES.map((s) => [s, 0]),
+    ) as Record<CampaignLeadStatus, number>;
     for (const b of buckets) {
       if (b.status && b.status in counts) {
-        counts[b.status as keyof typeof counts] = Number(b.n);
+        counts[b.status as CampaignLeadStatus] = Number(b.n);
       }
     }
 
+    // Done = anything no longer waiting to be dialled or on a call.
     const total = header[0].totalLeads ?? 0;
-    const done = counts.completed + counts.failed;
+    const done = Math.max(0, total - counts.pending - counts.calling);
     const percentComplete =
       total > 0 ? Math.round((done / total) * 100) : 0;
 

@@ -139,7 +139,9 @@ describe("foldDurationHistogram", () => {
                     bucket_count: 4,
                     bucket_total_seconds: 40,
                     bucket_median_seconds: 10,
-                    status: "completed",
+                    // A silent call is its own status since 2026-09-21 —
+                    // 'completed' now means the dealer spoke.
+                    status: "no_conversation",
                     call_outcome: "dropped_empty",
                     has_transcript: true,
                     n: 3,
@@ -150,7 +152,7 @@ describe("foldDurationHistogram", () => {
                     bucket_count: 4,
                     bucket_total_seconds: 40,
                     bucket_median_seconds: 10,
-                    status: "completed",
+                    status: "no_conversation",
                     call_outcome: null,
                     has_transcript: true,
                     band_call_status: "dropped_empty",
@@ -179,7 +181,7 @@ describe("foldDurationHistogram", () => {
             [
                 row({
                     ...common,
-                    status: "completed",
+                    status: "no_conversation",
                     call_outcome: "dropped_empty",
                     has_transcript: true,
                     n: 2,

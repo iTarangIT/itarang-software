@@ -34,7 +34,11 @@ import {
 } from "./campaignTracker";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
-import { isAiDialable } from "@/lib/ai-dialer/exclusionFilter";
+import {
+  AI_CONNECTED_CALL_SQL,
+  isAiDialable,
+} from "@/lib/ai-dialer/exclusionFilter";
+import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import {
   nextWindowOpenSql,
   pauseForWindow,
@@ -258,7 +262,7 @@ export async function advanceCampaign(
           // and dials are 5s apart.
           ai_connected: sql<boolean>`EXISTS (
             SELECT 1 FROM ai_call_logs acl
-             WHERE acl.lead_id = ${dealerLeads.id} AND acl.transcript IS NOT NULL
+             WHERE acl.lead_id = ${dealerLeads.id} AND ${AI_CONNECTED_CALL_SQL}
           )`,
         })
         .from(dealerLeads)
@@ -266,10 +270,13 @@ export async function advanceCampaign(
         .limit(1);
 
       if (lead.length === 0 || !lead[0].phone) {
-        // Mark the claimed row failed with a clear outcome and continue
+        // Mark the claimed row skipped with a clear outcome and continue
         // to the next pending row. Bump counters so the campaign card
         // reflects the progress. Log per-row so operators can audit
         // which leads were skipped in a bad batch.
+        //
+        // 'skipped', not 'failed': no call was attempted, so this lead must
+        // not count as a failed call or towards "Calls attempted".
         console.warn("[advanceCampaign] skipping no-phone lead", {
           campaignId,
           leadId: claimed.leadId,
@@ -278,7 +285,7 @@ export async function advanceCampaign(
         await db
           .update(dialerCampaignLeads)
           .set({
-            status: "failed",
+            status: "skipped",
             completed_at: new Date(),
             call_outcome: "no_phone",
           })
@@ -301,7 +308,7 @@ export async function advanceCampaign(
         await db
           .update(dialerCampaignLeads)
           .set({
-            status: "failed",
+            status: "skipped",
             completed_at: new Date(),
             call_outcome: "ineligible_active_lead",
           })
@@ -328,7 +335,7 @@ export async function advanceCampaign(
         await db
           .update(dialerCampaignLeads)
           .set({
-            status: "failed",
+            status: "skipped",
             completed_at: new Date(),
             call_outcome: "ineligible_ai_connected",
           })
@@ -373,7 +380,7 @@ export async function advanceCampaign(
         await db
           .update(dialerCampaignLeads)
           .set({
-            status: "failed",
+            status: classifyCallEnd({ triggerError: exReason }).status,
             completed_at: new Date(),
             call_outcome: `trigger_exception: ${exReason}`,
           })
@@ -398,10 +405,14 @@ export async function advanceCampaign(
           provider,
           error: trigResult.error,
         });
+        // Over a SIP trunk the provider reports a busy / unanswered / declined
+        // line HERE, synchronously, as the INVITE's SIP status (486 / 480 /
+        // 603) — so this is where most "the dealer didn't pick up" outcomes
+        // are born. Classify it instead of filing every one as failed.
         await db
           .update(dialerCampaignLeads)
           .set({
-            status: "failed",
+            status: classifyCallEnd({ triggerError: reason }).status,
             completed_at: new Date(),
             call_outcome: `trigger_failed: ${reason}`,
           })

@@ -7,6 +7,10 @@ import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
+import {
+  classifyCallEnd,
+  type CallEndClassification,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
 import {
@@ -46,6 +50,11 @@ export type ElevenLabsFinalizePayload = {
   endedAt?: Date | null;
   /** ElevenLabs agent that handled the call. Present on the payload, never stored until now. */
   agentId?: string | null;
+  /**
+   * metadata.termination_reason — why ElevenLabs ended the conversation. Read
+   * for one thing: a voicemail-detection hang-up, which is not a conversation.
+   */
+  terminationReason?: string | null;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
@@ -85,6 +94,7 @@ export async function finalizeElevenLabsCall(
     startedAt,
     endedAt,
     agentId,
+    terminationReason,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -98,6 +108,17 @@ export async function finalizeElevenLabsCall(
       return;
     }
   }
+
+  // What this attempt ENDED as. Decided once, from the whole payload, before
+  // any branch below: the branches decide what to STORE about the call, and
+  // they used to decide the campaign status too — "transcript present" was
+  // taken to mean "conversation happened", which the AI's own greeting to an
+  // empty line satisfies. See campaignLeadStatus.ts.
+  const callEnd = classifyCallEnd({
+    providerStatus: status,
+    transcript,
+    terminationReason,
+  });
 
   if (!transcript) {
     console.log(
@@ -172,7 +193,7 @@ export async function finalizeElevenLabsCall(
 
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
-        success: false,
+        status: callEnd.status,
         bolnaCallId: conversationId || null,
         outcome: status || "no_transcript",
         intentScore: null,
@@ -308,6 +329,7 @@ export async function finalizeElevenLabsCall(
       startedAt,
       endedAt,
       agentId,
+      callEnd,
     });
     if (r.campaignId) {
       await advanceCampaign(r.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
@@ -388,17 +410,17 @@ export async function finalizeElevenLabsCall(
     });
 
     // dropped_empty connected and produced a transcript — the line just dropped
-    // before any qualifying info was captured. It is NOT a telephony failure, so
-    // the campaign row is marked completed ("Done"), not failed. The Outcome
-    // column still carries "dropped_empty" to preserve the call-quality nuance.
-    // Mirrors the Bolna path (bolna_ai/finalizeCall.ts) — this branch was missed
-    // when that one was fixed, so every ElevenLabs campaign kept producing red
-    // "Failed" rows for calls that actually connected. See E-169 / E-239.
+    // before any qualifying info was captured. It is NOT a telephony failure
+    // (E-169 / E-239 stopped marking it failed), but it is not automatically a
+    // conversation either: most dropped_empty calls are the AI greeting a line
+    // where the dealer never spoke. classifyCallEnd tells the two apart —
+    // completed if the dealer said something, no_conversation / busy / … if
+    // not. The Outcome column still carries "dropped_empty".
     const dr = await completeCampaignLead({
       leadId: lead.id,
-      success: true,
+      status: callEnd.status,
       bolnaCallId: conversationId || null,
-      outcome: "dropped_empty",
+      outcome: callEnd.outcome ?? "dropped_empty",
       intentScore: null,
     });
     if (dr.campaignId) {
@@ -512,9 +534,9 @@ export async function finalizeElevenLabsCall(
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
-    success: true,
+    status: callEnd.status,
     bolnaCallId: conversationId || null,
-    outcome: analysis.outcome,
+    outcome: callEnd.outcome ?? analysis.outcome,
     intentScore: analysis.intent_score,
   });
 
@@ -785,6 +807,7 @@ async function markLeadNeedsReview(opts: {
   startedAt?: Date | null;
   endedAt?: Date | null;
   agentId?: string | null;
+  callEnd: CallEndClassification;
 }): Promise<{ campaignId: string | null }> {
   const history = opts.followUpHistory || [];
   const newEntry = {
@@ -849,9 +872,9 @@ async function markLeadNeedsReview(opts: {
 
   const r = await completeCampaignLead({
     leadId: opts.leadId,
-    success: true,
+    status: opts.callEnd.status,
     bolnaCallId: opts.callId || null,
-    outcome: "needs_review",
+    outcome: opts.callEnd.outcome ?? "needs_review",
     intentScore: null,
   });
   return { campaignId: r.campaignId };

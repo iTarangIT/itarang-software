@@ -18,6 +18,7 @@
 
 import { and, eq, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { dealerLeads } from "@/lib/db/schema";
+import { dealerSpokeSql } from "./campaignLeadStatus";
 
 // ⚠⚠ THE THREE EXPORTS BELOW ARE SHARED WITH THE NEODOVE **HUMAN** CALLING PUSH.
 //
@@ -87,11 +88,16 @@ export function isAiDialable(row: {
 // so a second robot call to the same dealer is pure downside. It is NOT excluded
 // from the human calling team; that is the whole point (see the header above).
 //
-// CONNECTED := ai_call_logs.transcript IS NOT NULL.
-// This is not a new judgement: finalizeCall.ts already branches on `if
-// (!transcript)` to decide success vs telephony failure, and that branch stores
-// transcript = NULL. So call_status complete / dropped_partial / dropped_empty
-// all count as connected, and no_answer / busy / failed do not.
+// CONNECTED := the dealer SPOKE on an AI call (2026-09-21).
+// It used to be `ai_call_logs.transcript IS NOT NULL`, but a transcript exists
+// whenever the AI spoke — into a ringback, a carrier announcement, voicemail or
+// a line hung up before the dealer said a word — and on prod most transcripts
+// were exactly that. Every one of those leads was retired from AI redial for
+// good without the dealer ever having been reached. The rule is now the same
+// one that decides a campaign row is 'completed': at least one real `user:`
+// turn that is not a carrier recording (campaignLeadStatus.dealerSpoke; this
+// is its SQL twin). The transcript IS NOT NULL test stays in front as a cheap
+// filter, so the partial index below still applies.
 //
 // Evaluated live rather than denormalised onto dealer_leads: ai_call_logs is
 // small and already carries ai_call_logs_lead_id_idx, whereas a column would
@@ -101,10 +107,19 @@ export function isAiDialable(row: {
 //   CREATE INDEX CONCURRENTLY ai_call_logs_connected_lead_idx
 //       ON ai_call_logs (lead_id) WHERE transcript IS NOT NULL;
 
+/**
+ * One ai_call_logs row (aliased `acl`) on which the dealer spoke. Shared by
+ * every AI-connected check so they cannot disagree about what "connected" is.
+ */
+export const AI_CONNECTED_CALL_PREDICATE =
+    "acl.transcript IS NOT NULL AND " + dealerSpokeSql("acl");
+
+export const AI_CONNECTED_CALL_SQL = sql.raw(AI_CONNECTED_CALL_PREDICATE);
+
 /** Raw predicate — dealer_leads MUST be aliased `dl`. */
 export const AI_CONNECTED_PREDICATE =
     "EXISTS (SELECT 1 FROM ai_call_logs acl" +
-    " WHERE acl.lead_id = dl.id AND acl.transcript IS NOT NULL)";
+    ` WHERE acl.lead_id = dl.id AND ${AI_CONNECTED_CALL_PREDICATE})`;
 
 export const AI_CONNECTED_SQL = sql.raw(AI_CONNECTED_PREDICATE);
 export const AI_NOT_YET_CONNECTED_SQL = sql.raw(`NOT ${AI_CONNECTED_PREDICATE}`);
@@ -142,7 +157,7 @@ export const NOT_IN_LIVE_DIALER_QUEUE_SQL = sql.raw(
 export function notYetAiConnectedCondition(): SQL {
     return sql`NOT EXISTS (
         SELECT 1 FROM ai_call_logs acl
-         WHERE acl.lead_id = ${dealerLeads.id} AND acl.transcript IS NOT NULL
+         WHERE acl.lead_id = ${dealerLeads.id} AND ${AI_CONNECTED_CALL_SQL}
     )`;
 }
 
