@@ -9,11 +9,13 @@
 // screen legitimately disagree:
 //
 //   · the Completed card counts dialer_campaign_leads rows with status
-//     'completed', and treats a dropped_empty silent call as a success;
-//   · this panel counts calls that reached a dealer AND have a usable duration;
-//   · a call can carry a transcript while its row still reads failed — see the
-//     evidence-order note in lib/ai-dialer/failureReason.ts — so "connected" can
-//     legitimately EXCEED "completed".
+//     'completed' — since 2026-09-21 only calls where the dealer actually
+//     SPOKE (lib/ai-dialer/campaignLeadStatus.ts);
+//   · this panel counts calls that CONNECTED and have a usable duration —
+//     including silent calls (status no_conversation, shown as "Pending"),
+//     where the line was answered but only the AI spoke;
+//   · so "connected" can legitimately EXCEED "completed", and by exactly the
+//     silent and announcement-answered calls.
 //
 // Left unexplained, that reads as a bug and the whole panel loses credibility.
 // So the numbers are spelled out in words, and the reader is never asked to
@@ -187,8 +189,8 @@ export function DurationSummaryStrip({
             {" "}
             This is more than the{" "}
             <strong className="text-gray-600">{completedLeads}</strong> shown on the Completed
-            card because a call can produce a real conversation while its row is still marked
-            failed.
+            card because Completed only counts calls where the dealer actually spoke — a call
+            that connected but heard nothing back from the dealer is counted here, not there.
           </>
         )}
       </p>

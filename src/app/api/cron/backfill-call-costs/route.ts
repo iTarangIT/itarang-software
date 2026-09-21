@@ -21,6 +21,10 @@ import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
+import {
+  ATTEMPTED_STATUSES,
+  sqlStatusList,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 
 export const maxDuration = 60;
 
@@ -71,7 +75,7 @@ export async function GET(req: Request) {
           FROM dialer_campaign_leads dcl
           INNER JOIN dialer_campaigns dc ON dc.id = dcl.campaign_id
           WHERE dcl.bolna_call_id IS NOT NULL
-            AND dcl.status IN ('completed', 'failed')
+            AND dcl.status IN (${sql.raw(sqlStatusList(ATTEMPTED_STATUSES))})
             AND dcl.completed_at IS NOT NULL
             AND dcl.completed_at > now() - interval '30 days'
             AND NOT EXISTS (
@@ -90,7 +94,9 @@ export async function GET(req: Request) {
             c.call_id,
             c.lead_id,
             c.provider,
-            CASE WHEN c.status = 'completed' THEN 'completed' ELSE c.outcome END,
+            -- no_conversation rows were 'completed' before 2026-09-21; keep
+            -- the placeholder they always got.
+            CASE WHEN c.status IN ('completed', 'no_conversation') THEN 'completed' ELSE c.outcome END,
             NULL,
             c.started_at,
             c.completed_at

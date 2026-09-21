@@ -37,6 +37,14 @@ export async function handleBolnaWebhook(body: any) {
       phone: phone ?? null,
       conversation: body.messages ?? undefined,
       executionId: body.execution_id ?? body.call_id ?? callId,
+      answeredByVoicemail:
+        typeof body.telephony_data?.answered_by_voice_mail === "boolean"
+          ? body.telephony_data.answered_by_voice_mail
+          : null,
+      hangupReason:
+        typeof body.telephony_data?.hangup_reason === "string"
+          ? body.telephony_data.hangup_reason
+          : null,
     });
   } catch (err) {
     console.error("[bolna:webhook] handler error:", err);

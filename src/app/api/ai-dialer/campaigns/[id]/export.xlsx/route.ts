@@ -5,6 +5,10 @@
 // the user gets a consistent file format across the two history views.
 
 import { deriveFailureReason } from "@/lib/ai-dialer/failureReason";
+import {
+  NON_CONVERSATION_STATUSES,
+  campaignLeadStatusLabel,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 import { db } from "@/lib/db";
 import {
   dialerCampaigns,
@@ -167,17 +171,28 @@ export const GET = withErrorHandler(
         { header: "Value", key: "v", width: 60 },
       ];
       styleHeader(meta.getRow(1));
+      // Per-status breakdown, counted off the rows already loaded for the
+      // Leads sheet — so the two sheets cannot disagree. "Completed" means
+      // the dealer actually spoke; see campaignLeadStatus.ts.
+      const byStatus = new Map<string, number>();
+      for (const r of leadRows) {
+        byStatus.set(r.status, (byStatus.get(r.status) ?? 0) + 1);
+      }
       const entries: [string, any][] = [
         ["Name", campaignRow.name],
         ["Status", campaignRow.status],
         ["Provider", campaignRow.provider],
         ["Segment", campaignRow.category ?? "—"],
         ["Total leads", campaignRow.total_leads],
-        ["Calls made", campaignRow.calls_made],
-        ["Completed", campaignRow.completed_leads],
-        ["Failed", campaignRow.failed_leads],
+        ["Calls attempted", campaignRow.calls_made],
+        ["Completed (conversations)", campaignRow.completed_leads],
+        ...NON_CONVERSATION_STATUSES.map(
+          (st): [string, number] => [campaignLeadStatusLabel(st), byStatus.get(st) ?? 0],
+        ),
+        ["Skipped", byStatus.get("skipped") ?? 0],
+        ["Queued", byStatus.get("pending") ?? 0],
         ["Started", fmt(campaignRow.started_at)],
-        ["Completed", fmt(campaignRow.completed_at)],
+        ["Ended", fmt(campaignRow.completed_at)],
         [
           "Region filter",
           campaignRow.region_filter
@@ -226,7 +241,7 @@ export const GET = withErrorHandler(
         phone: r.phone ?? "—",
         city: r.city ?? "—",
         state: r.state ?? "—",
-        status: r.status,
+        status: campaignLeadStatusLabel(r.status),
         outcome: r.call_outcome ?? "—",
         failure_reason: failureReasonOf(r)?.label ?? "—",
         // Blank rather than "No" for a successful call — "No" would read as

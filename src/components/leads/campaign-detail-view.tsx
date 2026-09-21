@@ -26,7 +26,17 @@ import {
   RotateCcw,
   ChevronDown,
   X,
+  PhoneMissed,
+  PhoneOff,
+  Voicemail,
+  Hourglass,
+  MicOff,
 } from "lucide-react";
+import {
+  CAMPAIGN_LEAD_STATUS_LABELS,
+  RETRYABLE_STATUSES,
+  type CampaignLeadStatus,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 import { CampaignLeadTranscriptDrawer } from "./CampaignLeadTranscriptDrawer";
 import { CallDurationPanel } from "./campaign-duration/CallDurationPanel";
 import {
@@ -50,6 +60,8 @@ type Campaign = {
   callsMade: number;
   completedLeads: number;
   failedLeads: number;
+  /** Rows per campaign lead status — see /api/ai-dialer/campaigns/[id]. */
+  statusCounts?: Partial<Record<CampaignLeadStatus, number>>;
   startedAt: string | null;
   completedAt: string | null;
   triggeredBy: string | null;
@@ -94,15 +106,30 @@ type Lead = {
   convertedOnAttempt: number | null;
 };
 
-type Bucket = "all" | "pending" | "calling" | "completed" | "failed";
+type Bucket = "all" | CampaignLeadStatus;
 
-const BUCKET_LABELS: Record<Bucket, string> = {
-  all: "All",
-  pending: "Pending",
-  calling: "Calling",
-  completed: "Completed",
-  failed: "Failed",
-};
+// Tab order. Labels come from the shared vocabulary, so "Pending" here is the
+// attempted-but-no-conversation status and a not-yet-dialled lead is "Queued".
+const BUCKET_ORDER: Bucket[] = [
+  "all",
+  "pending",
+  "calling",
+  "completed",
+  "no_response",
+  "busy",
+  "rejected",
+  "voicemail",
+  "no_conversation",
+  "failed",
+  "skipped",
+];
+
+// Always shown, even at zero, so the tab strip has a stable left edge. The
+// rest appear once a row lands in them — eleven empty tabs is noise.
+const ALWAYS_SHOWN = new Set<Bucket>(["all", "pending", "calling", "completed"]);
+
+const bucketLabel = (b: Bucket): string =>
+  b === "all" ? "All" : CAMPAIGN_LEAD_STATUS_LABELS[b];
 
 // Ties the Completed card's aria-controls to the panel it opens.
 const DURATION_PANEL_ID = "campaign-duration-panel";
@@ -143,7 +170,16 @@ function StatCard({
   label: string;
   value: number | string;
   Icon: any;
-  tone: "neutral" | "emerald" | "amber" | "rose" | "blue";
+  tone:
+    | "neutral"
+    | "emerald"
+    | "amber"
+    | "rose"
+    | "blue"
+    | "orange"
+    | "fuchsia"
+    | "violet"
+    | "indigo";
   onClick?: () => void;
   expanded?: boolean;
   controls?: string;
@@ -154,6 +190,10 @@ function StatCard({
     amber: "bg-amber-50 text-amber-700 border-amber-200",
     rose: "bg-rose-50 text-rose-700 border-rose-200",
     blue: "bg-blue-50 text-blue-700 border-blue-200",
+    orange: "bg-orange-50 text-orange-700 border-orange-200",
+    fuchsia: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200",
+    violet: "bg-violet-50 text-violet-700 border-violet-200",
+    indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
   }[tone];
 
   const body = (
@@ -470,11 +510,22 @@ export function CampaignDetailView({
   });
 
   const isRunning = campaign?.status === "running";
-  // Leads never reached yet = total minus the two terminal buckets. (calls_made
-  // == completed_leads by the counter logic, so completed is the right term.)
+  // Per-status row counts. `counts.pending` is the not-yet-dialled queue; the
+  // old "total − completed − failed" arithmetic would now also count every
+  // busy / no-response / … row as still to call.
+  const counts = campaign?.statusCounts ?? {};
+  const count = (s: CampaignLeadStatus) => counts[s] ?? 0;
   const pendingLeads = campaign
-    ? campaign.totalLeads - campaign.completedLeads - campaign.failedLeads
+    ? (campaign.statusCounts?.pending ??
+      campaign.totalLeads - campaign.completedLeads - campaign.failedLeads)
     : 0;
+  // Candidates for "Retry" — every non-conversation status. The server narrows
+  // further (an invalid number or a dealer who spoke is not retried) and says
+  // how many it actually queued.
+  const retryCandidates = RETRYABLE_STATUSES.reduce((n, s) => n + count(s), 0);
+  const visibleBuckets = BUCKET_ORDER.filter(
+    (b) => ALWAYS_SHOWN.has(b) || b === bucket || (b !== "all" && count(b) > 0),
+  );
   // E-254 — 'paused' is a single-run campaign that reached its window end time,
   // which is precisely what this button is for. 'scheduled' is excluded on
   // purpose: it already has a resume armed and the ticker owns it, so a manual
@@ -531,7 +582,8 @@ export function CampaignDetailView({
     );
   }
 
-  // bucket=all returns { pending, calling, completed, failed } maps; the
+  // bucket=all returns { pending, calling, completed, failed } maps — `failed`
+  // holding every non-conversation row, each with its own status — and the
   // detail page flattens them into one combined list for the All view.
   const rawLeads = leadsData?.data ?? leadsData ?? null;
   const flatLeads: Lead[] = (() => {
@@ -657,16 +709,16 @@ export function CampaignDetailView({
               Resume calling ({pendingLeads})
             </button>
           )}
-          {!isRunning && campaign.failedLeads > 0 && (
+          {!isRunning && retryCandidates > 0 && (
             <button
               type="button"
               onClick={async () => {
                 const ok = await confirmDialog({
-                  title: `Retry ${campaign.failedLeads} failed lead${
-                    campaign.failedLeads === 1 ? "" : "s"
+                  title: `Retry up to ${retryCandidates} unreached lead${
+                    retryCandidates === 1 ? "" : "s"
                   }?`,
                   message:
-                    "This starts a new campaign and begins calling them.",
+                    "Busy, no response, rejected, voicemail, no-conversation and failed calls. This starts a new campaign and begins calling them.",
                   confirmText: "Retry",
                 });
                 if (ok) {
@@ -675,14 +727,14 @@ export function CampaignDetailView({
               }}
               disabled={retryMutation.isPending}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white"
-              title="Create a new campaign from this campaign's failed leads and start dialing"
+              title="Create a new campaign from the leads this campaign did not reach and start dialing"
             >
               {retryMutation.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <RotateCcw className="w-4 h-4" />
               )}
-              Retry failed leads ({campaign.failedLeads})
+              Retry unreached ({retryCandidates})
             </button>
           )}
           <a
@@ -774,7 +826,10 @@ export function CampaignDetailView({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* "Completed" counts conversations only — calls where the dealer
+          actually spoke (lib/ai-dialer/campaignLeadStatus.ts). Every other
+          way a dialled call can end has its own card. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatCard
           label="Total leads"
           value={campaign.totalLeads}
@@ -782,7 +837,7 @@ export function CampaignDetailView({
           tone="neutral"
         />
         <StatCard
-          label="Calls made"
+          label="Calls attempted"
           value={campaign.callsMade}
           Icon={PhoneCall}
           tone="blue"
@@ -795,6 +850,36 @@ export function CampaignDetailView({
           onClick={toggleDuration}
           expanded={durationOpen}
           controls={DURATION_PANEL_ID}
+        />
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.no_response}
+          value={count("no_response")}
+          Icon={PhoneMissed}
+          tone="amber"
+        />
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.busy}
+          value={count("busy")}
+          Icon={Hourglass}
+          tone="orange"
+        />
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.rejected}
+          value={count("rejected")}
+          Icon={PhoneOff}
+          tone="fuchsia"
+        />
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.voicemail}
+          value={count("voicemail")}
+          Icon={Voicemail}
+          tone="violet"
+        />
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.no_conversation}
+          value={count("no_conversation")}
+          Icon={MicOff}
+          tone="indigo"
         />
         <StatCard
           label="Failed"
@@ -819,8 +904,8 @@ export function CampaignDetailView({
 
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
         <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 pt-3">
-          <div className="flex items-center gap-1">
-            {(Object.keys(BUCKET_LABELS) as Bucket[]).map((b) => {
+          <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+            {visibleBuckets.map((b) => {
               const isActive = bucket === b;
               return (
                 <button
@@ -833,13 +918,18 @@ export function CampaignDetailView({
                     // intersecting two filters the user chose separately.
                     setDurationBucket(null);
                   }}
-                  className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  className={`shrink-0 whitespace-nowrap px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                     isActive
                       ? "border-emerald-600 text-emerald-700"
                       : "border-transparent text-gray-500 hover:text-gray-800"
                   }`}
                 >
-                  {BUCKET_LABELS[b]}
+                  {bucketLabel(b)}
+                  {b !== "all" && campaign.statusCounts && (
+                    <span className="ml-1 text-xs tabular-nums text-gray-400">
+                      {count(b)}
+                    </span>
+                  )}
                 </button>
               );
             })}

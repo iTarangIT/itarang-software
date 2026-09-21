@@ -4103,8 +4103,9 @@ export const cityAliases = pgTable("city_aliases", {
 // E-109 — persisted AI dialer campaigns. region_filter is the RegionSelection
 // JSON emitted by DialerStartModal, stored verbatim so a historical campaign's
 // scope is reproducible. Counters (calls_made / completed_leads / failed_leads)
-// are bumped by the webhook handler as each call ends; status flips to
-// 'completed' when the queue exhausts or 'stopped' when the user hits Stop.
+// are re-derived from the rows by syncCampaignCounters as each call ends
+// (E-300: completed_leads = conversations, calls_made = attempts); status flips
+// to 'completed' when the queue exhausts or 'stopped' when the user hits Stop.
 export const dialerCampaigns = pgTable(
   "dialer_campaigns",
   {
@@ -4177,6 +4178,8 @@ export const dialerCampaignLeads = pgTable(
       .references(() => dialerCampaigns.id, { onDelete: "cascade" }),
     lead_id: text("lead_id").notNull(),
     queue_position: integer("queue_position").notNull(),
+    // E-300 — free text; vocabulary in src/lib/ai-dialer/campaignLeadStatus.ts
+    // ('completed' = the dealer actually spoke).
     status: text().notNull().default("pending"),
     bolna_call_id: text("bolna_call_id"),
     call_outcome: text("call_outcome"),

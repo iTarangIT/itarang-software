@@ -117,7 +117,7 @@ export interface DurationHistogramTotals {
     campaignLeads: number;
     /** status = 'completed' — what the Completed stat card counts. */
     completedLeads: number;
-    /** status <> 'pending' — every lead we actually tried to dial. */
+    /** Not pending and not skipped — every lead we actually tried to dial. */
     attemptedLeads: number;
     /** Reached a dealer: a transcript, or measurable talk time. */
     connectedLeads: number;
@@ -299,7 +299,7 @@ totals AS (
   SELECT
     count(*)::int                                                              AS campaign_leads,
     count(*) FILTER (WHERE status = 'completed')::int                          AS completed_leads,
-    count(*) FILTER (WHERE status <> 'pending')::int                           AS attempted_leads,
+    count(*) FILTER (WHERE status NOT IN ('pending', 'skipped'))::int          AS attempted_leads,
     count(*) FILTER (WHERE is_connected)::int                                  AS connected_leads,
     count(*) FILTER (WHERE is_connected AND duration_seconds IS NULL)::int     AS connected_without_duration,
     COALESCE(sum(duration_seconds) FILTER (WHERE is_connected), 0)::int        AS connected_total_seconds,
