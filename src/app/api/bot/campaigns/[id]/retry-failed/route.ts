@@ -4,15 +4,19 @@
 // campaign (owned by the Discord Bot service user) and start dialing it. The
 // source campaign is left untouched so each run stays a clean audit record.
 //
-// Retryable = dialer_campaign_leads.status='failed' EXCEPT no_phone /
-// ineligible_active_lead. The new campaign carries recall:true in region_filter
-// so advanceCampaign bypasses the once-per-day idempotency guard.
+// Retryable = a non-conversation status (busy, no_response, rejected,
+// voicemail, no_conversation, failed — campaignLeadStatus.RETRYABLE_STATUSES)
+// EXCEPT no_phone / ineligible_active_lead / invalid_number. The new campaign
+// carries recall:true in region_filter so advanceCampaign bypasses the
+// once-per-day idempotency guard. Leads the AI has since SPOKEN to are dropped
+// again by createCampaign's AI-connected partition.
 //
 // Mirrors /api/ai-dialer/campaigns/[id]/recall-failed.
 
 import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
-import { and, asc, eq, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, notInArray, or } from "drizzle-orm";
+import { RETRYABLE_STATUSES } from "@/lib/ai-dialer/campaignLeadStatus";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { withBotAuth } from "@/lib/bot/auth";
 import { DISCORD_BOT_USER_ID, BOT_CAMPAIGN_SOURCE } from "@/lib/bot/constants";
@@ -20,7 +24,7 @@ import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 
-const NON_RETRYABLE_OUTCOMES = ["no_phone", "ineligible_active_lead"];
+const NON_RETRYABLE_OUTCOMES = ["no_phone", "ineligible_active_lead", "invalid_number"];
 
 export const POST = withBotAuth(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -54,7 +58,7 @@ export const POST = withBotAuth(
       .where(
         and(
           eq(dialerCampaignLeads.campaign_id, campaignId),
-          eq(dialerCampaignLeads.status, "failed"),
+          inArray(dialerCampaignLeads.status, [...RETRYABLE_STATUSES]),
           or(
             isNull(dialerCampaignLeads.call_outcome),
             notInArray(dialerCampaignLeads.call_outcome, NON_RETRYABLE_OUTCOMES),

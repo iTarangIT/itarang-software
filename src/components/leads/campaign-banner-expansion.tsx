@@ -18,7 +18,10 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import Link from "next/link";
-import { CampaignOutcomeBadge } from "./campaign-status-badge";
+import {
+  CampaignLeadStatusBadge,
+  CampaignOutcomeBadge,
+} from "./campaign-status-badge";
 
 type LeadRow = {
   id: string;
@@ -42,6 +45,8 @@ type AllBuckets = {
   pending: LeadRow[];
   calling: LeadRow[];
   completed: LeadRow[];
+  // Every row that ended without a conversation — busy, no response, rejected,
+  // voicemail, no conversation, failed, skipped. Each keeps its own status.
   failed: LeadRow[];
 };
 
@@ -104,6 +109,8 @@ function LeadCard({
           </p>
           {(isCompleted || isFailed) && (
             <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+              {/* The column holds several statuses; say which one. */}
+              {isFailed && <CampaignLeadStatusBadge status={row.status} />}
               <CampaignOutcomeBadge outcome={row.callOutcome} />
               {row.intentScore != null && (
                 <span className="inline-flex items-center gap-0.5 text-[11px] text-emerald-400 font-medium">
@@ -248,7 +255,7 @@ export function CampaignBannerExpansion({
 
         <div className="min-w-0">
           <ColumnHeader
-            label={failed.length > 0 ? "Completed / Failed" : "Completed"}
+            label={failed.length > 0 ? "Completed / Not connected" : "Completed"}
             count={completed.length + failed.length}
             Icon={CheckCircle2}
             color="text-blue-400"
