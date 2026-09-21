@@ -162,6 +162,8 @@ const REACHED_NETWORK: ReadonlySet<FailureReasonCode> = new Set<FailureReasonCod
     "not_answered",
     "voicemail",
     "disconnected",
+    "rejected",
+    "invalid_number",
 ]);
 
 /** Failure codes that mean we never placed the call, whatever the wording. */
