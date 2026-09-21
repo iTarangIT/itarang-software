@@ -203,6 +203,17 @@ describe("normalizePostCall — the whole payload", () => {
   it("returns a null transcript for a call with no turns", () => {
     expect(normalizePostCall(failedCall()).transcript).toBeNull();
   });
+
+  it("carries the termination reason, and null rather than a blank one", () => {
+    const d = connectedCall();
+    (d.metadata as Record<string, unknown>).termination_reason = " Voicemail detected ";
+    expect(normalizePostCall(d).terminationReason).toBe("Voicemail detected");
+
+    const blank = connectedCall();
+    (blank.metadata as Record<string, unknown>).termination_reason = "";
+    expect(normalizePostCall(blank).terminationReason).toBeNull();
+    expect(normalizePostCall(failedCall()).terminationReason).toBeNull();
+  });
 });
 
 describe("transcriptArrayToString", () => {

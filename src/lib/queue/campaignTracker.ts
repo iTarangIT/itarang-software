@@ -10,6 +10,11 @@ import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { dialerSession, type DialerProvider } from "./dialerSession";
 import { summarizeRegion } from "@/lib/leads/regionSummary";
 import { partitionAiConnected } from "@/lib/ai-dialer/aiConnection";
+import {
+  ATTEMPTED_STATUSES,
+  sqlStatusList,
+  type CallEndStatus,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 import { scheduleColumns, type ValidatedSchedule } from "./campaignWindow";
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
@@ -263,8 +268,18 @@ export async function markCampaignLeadCalling(opts: {
 // the next event and manual SQL repairs are picked up automatically. Cost is
 // one indexed aggregate per campaign event (idx_dialer_campaign_leads_campaign_status).
 //
-// calls_made COUNTS ATTEMPTS — completed plus failed — and used to be defined
-// as an alias of completed_leads, which had two visible consequences.
+// WHAT EACH COUNTER MEANS (2026-09-21, see campaignLeadStatus.ts):
+//   completed_leads  conversations — the dealer actually spoke
+//   failed_leads     status 'failed' only: technical, config, no_webhook,
+//                    stopped mid-call, invalid number. Busy / no response /
+//                    rejected / voicemail / no conversation are their own
+//                    statuses now and are NOT failures.
+//   calls_made       every ATTEMPTED status. Skipped leads were never dialled.
+// The per-status breakdown is not denormalised — the detail API groups the
+// rows on read, off the same (campaign_id, status) index.
+//
+// calls_made COUNTS ATTEMPTS and used to be defined as an alias of
+// completed_leads, which had two visible consequences.
 //
 //   · The campaign detail header showed "Calls made 71" beside "Completed 71"
 //     on a 146-lead campaign where 75 had in fact been dialled and failed. Two
@@ -294,11 +309,14 @@ export async function syncCampaignCounters(
       UPDATE dialer_campaigns c
       SET completed_leads = t.comp,
           failed_leads    = t.fail,
-          calls_made      = t.comp + t.fail
+          calls_made      = t.attempted
       FROM (
         SELECT
           count(*) FILTER (WHERE status = 'completed')::int AS comp,
-          count(*) FILTER (WHERE status = 'failed')::int    AS fail
+          count(*) FILTER (WHERE status = 'failed')::int    AS fail,
+          count(*) FILTER (
+            WHERE status IN (${sql.raw(sqlStatusList(ATTEMPTED_STATUSES))})
+          )::int AS attempted
         FROM dialer_campaign_leads
         WHERE campaign_id = ${campaignId}
       ) t
@@ -311,7 +329,8 @@ export async function syncCampaignCounters(
 
 export async function completeCampaignLead(opts: {
   leadId: string;
-  success: boolean;
+  /** Where the attempt landed — from campaignLeadStatus.classifyCallEnd. */
+  status: CallEndStatus;
   bolnaCallId?: string | null;
   outcome?: string | null;
   intentScore?: number | null;
@@ -360,12 +379,10 @@ export async function completeCampaignLead(opts: {
 
     if (!targetRowId || !campaignId) return { campaignId: null };
 
-    const newStatus = opts.success ? "completed" : "failed";
-
     await db
       .update(dialerCampaignLeads)
       .set({
-        status: newStatus,
+        status: opts.status,
         completed_at: new Date(),
         bolna_call_id: opts.bolnaCallId ?? null,
         call_outcome: opts.outcome ?? null,
