@@ -43,6 +43,8 @@ export type LeadListRow = {
     asm_id: string | null;
     asm_name: string | null;
     last_touchpoint_at: string | null;
+    /** E-300 — last call / visit / status change; the Idle column's basis. */
+    last_worked_at: string | null;
     assigned_at: string | null;
     created_at: string | null;
     visit_status: string | null;
@@ -110,13 +112,14 @@ export type LeadListFilters = {
     disposition?: string | null;
     // ── Idle age ─────────────────────────────────────────────────────────
     // Inclusive day bounds over the SAME basis the Idle column displays —
-    // COALESCE(last_touchpoint_at, created_at). Matching that basis is not
-    // cosmetic: filtering on last_touchpoint_at alone would exclude the 2,440
-    // never-touched leads that the column shows as 85d, and a filter that
-    // disagrees with the number on screen is indistinguishable from a bug.
+    // COALESCE(last_worked_at, created_at) (E-300, review R-04: only a call,
+    // visit or status change counts as work). Matching that basis is not
+    // cosmetic: filtering on last_worked_at alone would exclude the
+    // never-worked leads that the column shows as their full age, and a filter
+    // that disagrees with the number on screen is indistinguishable from a bug.
     idleMinDays?: number | null;
     idleMaxDays?: number | null;
-    /** Only leads with no touchpoint at all. */
+    /** Only leads never worked (no call, visit or status change). */
     idleNeverTouched?: boolean;
     // ── Campaign ─────────────────────────────────────────────────────────
     /** A campaign id from either system, or CAMPAIGN_NONE for "not in one". */
@@ -213,7 +216,7 @@ const NEODOVE_LINKED_LIST = sql.raw(
 );
 
 // The age basis, identical to the Idle column's (see idleDays()).
-const IDLE_BASIS = sql`COALESCE(dl.last_touchpoint_at, dl.created_at)`;
+const IDLE_BASIS = sql`COALESCE(dl.last_worked_at, dl.created_at)`;
 
 /**
  * Membership predicates for the campaign filter.
@@ -377,7 +380,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
     // bound uses max+1 with a strict > so the band is inclusive at both ends:
     // 30–59 must admit exactly 59 days and exclude exactly 60.
     if (f.idleNeverTouched) {
-        conds.push(sql`dl.last_touchpoint_at IS NULL`);
+        conds.push(sql`dl.last_worked_at IS NULL`);
     }
     if (typeof f.idleMinDays === "number") {
         conds.push(
@@ -508,6 +511,7 @@ export async function fetchLeadListRows(
             dl.asm_id,
             asm.name AS asm_name,
             dl.last_touchpoint_at,
+            dl.last_worked_at,
             dl.assigned_at,
             dl.created_at,
             lv.visit_status,

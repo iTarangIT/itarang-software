@@ -30,6 +30,7 @@ import {
     touchpointTypeFor,
 } from "./mapper";
 import type { NeodoveInboundEvent } from "./types";
+import { resolveAgentUserId } from "./agentMap";
 
 export type InboundOutcome = {
     handled: boolean;
@@ -227,10 +228,12 @@ async function handleDisposition(
     const { touchpointId } = await writeTouchpoint({
         dealerLeadId,
         touchpointType: touchpointTypeFor(event.eventType),
-        // null = system-generated. The NeoDove agent has no users row here, and
-        // inventing one would pollute ownership attribution (BRD §0.3) — their
-        // name goes to external_agent_name instead (E-226).
-        performedBy: null,
+        // The CRM user an admin has confirmed this NeoDove agent is (review
+        // R-03, agentMap.ts), so CC calls count on the rep's own numbers. An
+        // unmapped agent stays null — never guessed, never the lead's owner —
+        // and is re-pointed when the mapping is saved. The agent's name goes to
+        // external_agent_name either way (E-226).
+        performedBy: await resolveAgentUserId(event.agentName),
         performedAt: event.occurredAt ?? new Date(),
         callStatus,
         callDurationSec: event.callDurationSec,

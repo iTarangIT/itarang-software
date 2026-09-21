@@ -40,6 +40,9 @@ export const PATCH = withErrorHandler(
 
         const now = new Date();
         await db.transaction(async (tx) => {
+            // E-304 — the audit trigger records this change in the interest
+            // history; this names who made it (local to the transaction).
+            await tx.execute(sql`SELECT set_config('app.actor_id', ${user.id}, true)`);
             await tx
                 .update(dealerLeads)
                 .set({ interest_level: body.interest_level, updated_at: now })

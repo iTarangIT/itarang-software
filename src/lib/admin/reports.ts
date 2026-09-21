@@ -74,7 +74,28 @@ async function dailyActivity(f: DashboardFilters): Promise<ReportResult> {
     };
 }
 
-// Report 2 — Lead Funnel. dealer_leads.created_at; current count per status.
+/*
+ * Report 2 — Lead Funnel. Cohort = active leads CREATED in the date range.
+ *
+ * Two views per stage (review R-07):
+ *   Currently at   — where the cohort's leads sit NOW (the old, only view).
+ *   Ever reached   — how many of the cohort were at that stage at any point:
+ *                    the current status, plus every from/to status in
+ *                    dealer_lead_status_history. A lead that reached
+ *                    Commercials_Explained and was then Lost counts under both
+ *                    — under "Currently at" it showed only as Lost, which
+ *                    understated every middle stage.
+ *   % reached      — Ever reached ÷ all cohort leads. The funnel percentage;
+ *                    never computed from "Currently at".
+ * from_status is included because a lead INSERTED with a status (bulk upload,
+ * claim-at-create) has no history row for it until it moves on.
+ *
+ * R-06: leads with lead_status NULL — the AI-dialable pool, the largest bucket
+ * in the business — were dropped because STATUS_ORDER had no row for them.
+ * They now have their own row, "Not in sales lifecycle (AI pool)".
+ */
+const AI_POOL_STAGE = "Not in sales lifecycle (AI pool)";
+
 async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
     const rows = await db.execute<{ lead_status: string | null; c: string }>(sql`
         SELECT dl.lead_status, COUNT(*)::text AS c
@@ -82,12 +103,37 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
         WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f)}
         GROUP BY dl.lead_status
     `);
+    const reachedRows = await db.execute<{ stage: string; c: string }>(sql`
+        WITH cohort AS (
+            SELECT dl.id, dl.lead_status
+            FROM dealer_leads dl
+            WHERE dl.is_active IS NOT FALSE ${dateRange("dl.created_at", f)}
+        ),
+        reached AS (
+            SELECT c.id, c.lead_status AS stage FROM cohort c
+             WHERE c.lead_status IS NOT NULL
+            UNION
+            SELECT h.dealer_lead_id, h.to_status
+              FROM dealer_lead_status_history h JOIN cohort c ON c.id = h.dealer_lead_id
+            UNION
+            SELECT h.dealer_lead_id, h.from_status
+              FROM dealer_lead_status_history h JOIN cohort c ON c.id = h.dealer_lead_id
+             WHERE h.from_status IS NOT NULL
+        )
+        SELECT stage, COUNT(DISTINCT id)::text AS c FROM reached GROUP BY stage
+    `);
     const neverAssigned = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl
         WHERE dl.is_active IS NOT FALSE AND dl.lead_status = 'New_Unassigned'
           AND dl.assigned_at IS NULL ${dateRange("dl.created_at", f)}
     `);
     const byStatus = new Map(rows.map((r) => [r.lead_status ?? "(null)", num(r.c)]));
+    const reached = new Map(reachedRows.map((r) => [r.stage, num(r.c)]));
+    const total = rows.reduce((s, r) => s + num(r.c), 0);
+    const pctOf = (n: number): number | null => {
+        const r = ratio(n, total);
+        return r != null ? Math.round(r * 100) : null;
+    };
     const STATUS_ORDER = [
         "New_Unassigned",
         "Assigned_Not_Contacted",
@@ -99,16 +145,27 @@ async function leadFunnel(f: DashboardFilters): Promise<ReportResult> {
         "Converted",
         "Lost",
     ];
-    const out: ReportRow[] = STATUS_ORDER.map((s) => ({
-        stage: s,
-        count: byStatus.get(s) ?? 0,
-    }));
-    out.push({ stage: "Never Assigned", count: num(neverAssigned[0]?.c) });
+    const out: ReportRow[] = [
+        { stage: "All leads created", count: total, ever_reached: total, pct_reached: pctOf(total) },
+        // R-06 — never in the sales lifecycle. "Ever reached" does not apply:
+        // it is the absence of a stage, not a stage.
+        { stage: AI_POOL_STAGE, count: byStatus.get("(null)") ?? 0, ever_reached: null, pct_reached: null },
+        ...STATUS_ORDER.map((s) => {
+            const ever = reached.get(s) ?? 0;
+            return { stage: s, count: byStatus.get(s) ?? 0, ever_reached: ever, pct_reached: pctOf(ever) };
+        }),
+        // A subset of New_Unassigned (never had an owner), kept as before.
+        { stage: "Never Assigned", count: num(neverAssigned[0]?.c), ever_reached: null, pct_reached: null },
+    ];
     return {
         type: "lead_funnel",
         columns: [
             { key: "stage", label: "Stage" },
-            { key: "count", label: "Leads", numeric: true },
+            // `count` keeps its key — ReportChart plots it — but is now named
+            // for what it is: a snapshot, not a funnel.
+            { key: "count", label: "Currently at", numeric: true },
+            { key: "ever_reached", label: "Ever reached", numeric: true },
+            { key: "pct_reached", label: "% of leads reached", numeric: true },
         ],
         rows: out,
     };
@@ -368,7 +425,8 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
             FROM lead_visits v
         )
         SELECT COALESCE(u.name, '(unknown)')                       AS manager,
-               COALESCE(NULLIF(TRIM(dl.city), ''), '(not captured)') AS city,
+               -- R-20: a missing city is its own row, named the same in every report.
+               COALESCE(NULLIF(TRIM(dl.city), ''), 'Unknown city') AS city,
                COUNT(*)::text                                       AS meetings,
                COUNT(*) FILTER (WHERE r.visit_status = 'visited')::text AS done,
                COUNT(*) FILTER (WHERE r.meeting_seq = 1)::text      AS fresh,
@@ -440,11 +498,30 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
  * on every row on db-1 — grouping by it would produce one "(unassigned)" line
  * containing everything.
  *
- * A lead is counted once per person, at its CURRENT status, so the temperature
+ * A lead is counted once per person, at its CURRENT rating, so the temperature
  * columns partition the person's leads instead of double-counting a lead that
  * moved cold → warm → hot.
+ *
+ * Two ratings live on a lead and must never share a label (review R-02):
+ *   Hot / Warm / Cold  — dealer_leads.interest_level, the salesperson's rating,
+ *                        open leads only (not Converted / Lost / inactive).
+ *                        Same rule as the Sales dashboard and the daily email
+ *                        (metric M11).
+ *   AI band: …         — dealer_leads.current_status, the AI dialer's intent
+ *                        result (metric M13). It used to be shown as plain
+ *                        "Hot / Warm / Cold", so this report disagreed with the
+ *                        Sales dashboard for the same people and period.
+ *
+ * "Converted" is lead_status = 'Converted' — the one definition every other
+ * report, the Sales dashboard and both daily emails use (metric M15, review
+ * R-01). The AI's `qualified` rating is "AI band: Qualified", never converted.
  */
 async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
+    // Matches queryInterest in salesDashboard.ts — a closed lead has no
+    // temperature worth chasing.
+    const openLead = sql.raw(`dl.is_active IS NOT FALSE
+                   AND dl.lead_status IS DISTINCT FROM 'Converted'
+                   AND dl.lead_status IS DISTINCT FROM 'Lost'`);
     const rows = await db.execute<{
         person: string | null;
         role: string | null;
@@ -453,6 +530,9 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
         hot: string;
         warm: string;
         cold: string;
+        ai_qualified: string;
+        ai_warm: string;
+        ai_cold: string;
         converted: string;
     }>(sql`
         WITH worked AS (
@@ -488,12 +568,15 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
                                   WHERE c.performed_by = w.performed_by
                                     AND c.dealer_lead_id = w.dealer_lead_id)
                )::text AS connected,
-               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'hot')::text  AS hot,
-               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'warm')::text AS warm,
-               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'cold')::text AS cold,
+               COUNT(*) FILTER (WHERE dl.interest_level = 'hot'  AND ${openLead})::text AS hot,
+               COUNT(*) FILTER (WHERE dl.interest_level = 'warm' AND ${openLead})::text AS warm,
+               COUNT(*) FILTER (WHERE dl.interest_level = 'cold' AND ${openLead})::text AS cold,
                COUNT(*) FILTER (
-                   WHERE lower(dl.current_status) IN ('qualified','ai_qualified','converted')
-               )::text AS converted
+                   WHERE lower(dl.current_status) IN ('qualified','ai_qualified')
+               )::text AS ai_qualified,
+               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'warm')::text AS ai_warm,
+               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'cold')::text AS ai_cold,
+               COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS converted
         FROM worked w
         LEFT JOIN dealer_leads dl ON dl.id = w.dealer_lead_id
         LEFT JOIN users u ON u.id::text = w.performed_by
@@ -511,6 +594,9 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             { key: "hot", label: "Hot", numeric: true },
             { key: "warm", label: "Warm", numeric: true },
             { key: "cold", label: "Cold", numeric: true },
+            { key: "ai_qualified", label: "AI band: Qualified", numeric: true },
+            { key: "ai_warm", label: "AI band: Warm", numeric: true },
+            { key: "ai_cold", label: "AI band: Cold", numeric: true },
             { key: "converted", label: "Converted", numeric: true },
             { key: "conversion_rate", label: "Conversion %", numeric: true },
         ],
@@ -528,6 +614,9 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
                 hot: num(r.hot),
                 warm: num(r.warm),
                 cold: num(r.cold),
+                ai_qualified: num(r.ai_qualified),
+                ai_warm: num(r.ai_warm),
+                ai_cold: num(r.ai_cold),
                 converted: conv,
                 conversion_rate: rate != null ? Math.round(rate * 100) : null,
             };

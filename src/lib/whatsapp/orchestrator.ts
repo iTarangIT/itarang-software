@@ -40,6 +40,7 @@ import {
 } from "@/lib/onboarding/correction-catalog";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
+import { usablePhone } from "@/lib/onboarding/owner-phone";
 import { catalogDocToWhatsapp } from "./correction-map";
 import { getAdapter } from "./index";
 import {
@@ -3124,7 +3125,9 @@ async function fillFromDoc(
       // owner info. Only set fields actually present so we never null out a
       // value already filled from another document.
       if (str(fields.owner_name)) patch.owner_name = str(fields.owner_name);
-      if (str(fields.owner_mobile)) patch.owner_phone = str(fields.owner_mobile);
+      // Udyam prints the mobile masked ("98*****366") — never store that over
+      // a real number; it breaks the agreement's signer-phone check.
+      if (usablePhone(str(fields.owner_mobile))) patch.owner_phone = str(fields.owner_mobile);
       if (str(fields.owner_email)) patch.owner_email = str(fields.owner_email);
       // Udyam enterprise name → company name FALLBACK. Only fills when we don't
       // already have a real business name (placeholder, empty, or identical to

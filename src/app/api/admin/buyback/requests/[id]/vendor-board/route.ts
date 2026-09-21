@@ -69,7 +69,19 @@ export const GET = withErrorHandler(
     // Vendors already on the board cannot be routed to again (UNIQUE(deal,vendor)).
     const routed = new Set(threads.map((t) => t.vendor_id));
 
+    // R-13 — the collect dialog asks for kg only where a line has none.
+    const weightRows = (await db.execute(sql`
+      SELECT l.id::text AS line_id, l.unit_weight_kg::text AS unit_weight_kg
+        FROM buyback_lines l
+        JOIN buyback_batches b ON b.id = l.batch_id
+       WHERE b.request_id = ${request.id}
+    `)) as unknown as Array<{ line_id: string; unit_weight_kg: string | null }>;
+    const line_weights = Object.fromEntries(
+      weightRows.map((w) => [w.line_id, w.unit_weight_kg]),
+    );
+
     return successResponse({
+      line_weights,
       request_id: request.id,
       request_no: request.request_no,
       deal_id: header.deal_id,

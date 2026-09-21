@@ -25,7 +25,9 @@ export type DigestKindId =
   | "kyc_review"
   | "scrap_buyback_daily"
   | "sales_daily"
-  | "buyback_daily";
+  | "buyback_daily"
+  | "idle_weekly"
+  | "targets_pending";
 
 /** One figure about the covered day. */
 export type ActivityLine = {
@@ -144,6 +146,12 @@ export type DigestKindDescriptor = {
    * the evening time.
    */
   slots?: Array<"morning" | "evening">;
+  /**
+   * IST weekdays this kind sends on (0 = Sunday … 6 = Saturday). Absent = every
+   * day. A weekly kind (idle_weekly, R-15) sets one day; on the others the
+   * ticker simply finds nothing due. A test send ignores it.
+   */
+  weekdays?: number[];
   /**
    * Out-of-the-box overrides for this kind's settings. Absent = the shared
    * defaults in schedule.ts (enabled, the default recipient). A kind that must

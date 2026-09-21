@@ -12,6 +12,8 @@
  *   D  interest   hot / warm / cold counts with ageing buckets
  *   T  totals     the whole range in one row: visits, unique, new, calls,
  *                 converted (B7 — feeds the per-rep table and the CSV)
+ *   O  outcome    what the effort produced: quotes issued, revenue, batteries
+ *                 to dealers, KYC submitted (review R-10 — queryOutcome)
  *   E  per_spoc   A–D + T again, once per rep, when no spoc_id was asked for
  *
  * "Unique" and "new" are DIFFERENT columns and must stay so: unique = how many
@@ -36,11 +38,12 @@
  * src/lib/lifecycle/touchpointTypes.ts for why a priority-dial request is NOT
  * a call and must not inflate call volume.
  *
- * AGEING IS A PROXY. Buckets are days since `dealer_leads.updated_at`, which
- * moves on ANY edit, not only on an interest change.
- * TODO(B6): add `dealer_leads.interest_changed_at`, set by a trigger when
- * interest_level changes, and switch `AGEING_BASIS` to it. Until then the
- * response says so in `interest.ageing_basis`.
+ * AGEING = HOW LONG THE LEAD HAS HELD ITS CURRENT RATING. Buckets are days
+ * since `dealer_leads.interest_changed_at` (E-301, review R-05, metric M12),
+ * stamped by a database trigger whenever interest_level changes. It used to be
+ * `updated_at`, which moves on ANY edit or touchpoint, so a lead rated Hot a
+ * month ago showed as 0–7 days the moment anyone touched it. Rows from before
+ * E-301 carry a best-evidence backfill (see the migration header).
  *
  * Every count comes back from Postgres as text (bigint) and is Number()'d here.
  */
@@ -54,6 +57,8 @@ import {
     BusinessTypeSchema,
     isBusinessTypeFilter,
 } from "@/lib/leads/businessType";
+import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
+import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import {
     INTEREST_LEVELS,
     SALES_DASHBOARD_GRANULARITIES,
@@ -68,6 +73,7 @@ import {
     type SalesDashboardInput,
     type SalesDashboardSections,
     type SalesSeriesRow,
+    type SalesOutcome,
     type SalesSnapshot,
     type SalesSpocBlock,
     type SalesTotals,
@@ -123,7 +129,7 @@ const CALL_TYPES = sql`('inside_sales_call', 'ai_call')`;
 /** A scheduled visit that has not happened yet and was not called off. */
 const OPEN_VISIT = sql`v.visit_status NOT IN ('visited', 'cancelled', 'no_show')`;
 const IST = "Asia/Kolkata";
-const AGEING_BASIS = "dealer_leads.updated_at";
+const AGEING_BASIS = "dealer_leads.interest_changed_at";
 
 const num = (v: unknown): number => Number(v ?? 0);
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -377,6 +383,8 @@ type InterestDbRow = {
  * Section D. Active, open leads only: a Converted or Lost lead's temperature is
  * history, and counting it would make "hot" read as a backlog that is not
  * there. Ageing = days since AGEING_BASIS, measured in IST calendar days.
+ * COALESCE to created_at is defensive only — the trigger stamps every rating
+ * and E-301 backfilled every existing one.
  */
 async function queryInterest(
     f: SalesDashboardFilters,
@@ -387,7 +395,8 @@ async function queryInterest(
         WITH l AS (
             SELECT ${spocKey(sql`dl.current_owner_id`, bySpoc)} AS spoc,
                    dl.interest_level,
-                   (${today}::date - (dl.updated_at AT TIME ZONE ${IST})::date) AS age
+                   (${today}::date
+                    - (COALESCE(dl.interest_changed_at, dl.created_at) AT TIME ZONE ${IST})::date) AS age
               FROM dealer_leads dl
              WHERE dl.interest_level IN ('hot', 'warm', 'cold')
                AND dl.is_active IS NOT FALSE
@@ -428,6 +437,8 @@ type TotalsRow = {
     calls: string;
     dealers_called: string;
     converted: string;
+    new_hot: string;
+    hot_converted: string;
 };
 
 /**
@@ -435,6 +446,18 @@ type TotalsRow = {
  * conversions) each grouped on their own rep column, unioned, then summed.
  * `unique_visits` is COUNT(DISTINCT) over the whole range, which is why it is
  * not derived from the series.
+ *
+ * MOVEMENT (review R-09). Hot / warm / cold in `interest` are a snapshot of
+ * open leads as of now — the same number for any range. These two respond to
+ * the range:
+ *   new_hot        leads whose rating became Hot in the range
+ *                  (interest_changed_at, E-301) and are still Hot, keyed on
+ *                  current_owner_id. A lead that turned Hot and then cooled
+ *                  again in the range is not counted: there is no rating
+ *                  history, only the latest change.
+ *   hot_converted  conversions in the range (same rule as `converted`) whose
+ *                  rating was Hot when they closed — interest_level is not
+ *                  cleared on conversion, so it is the rating they closed at.
  */
 async function queryTotals(
     f: SalesDashboardFilters,
@@ -470,7 +493,8 @@ async function queryTotals(
                ${leadScope(f)} ${spocClause(sql`t.performed_by`, f)}
         ),
         conv AS (
-            SELECT ${spocKey(sql`dl.closing_owner_id`, bySpoc)} AS spoc
+            SELECT ${spocKey(sql`dl.closing_owner_id`, bySpoc)} AS spoc,
+                   (lower(dl.interest_level) = 'hot') AS was_hot
               FROM dealer_leads dl
              WHERE dl.lead_status = 'Converted'
                AND dl.closed_at IS NOT NULL
@@ -478,17 +502,30 @@ async function queryTotals(
                AND (dl.closed_at AT TIME ZONE ${IST})::date <= ${f.to}::date
                ${leadScope(f)} ${spocClause(sql`dl.closing_owner_id`, f)}
         ),
+        newhot AS (
+            SELECT ${spocKey(sql`dl.current_owner_id`, bySpoc)} AS spoc
+              FROM dealer_leads dl
+             WHERE lower(dl.interest_level) = 'hot'
+               AND dl.is_active IS NOT FALSE
+               AND dl.interest_changed_at IS NOT NULL
+               AND (dl.interest_changed_at AT TIME ZONE ${IST})::date >= ${f.from}::date
+               AND (dl.interest_changed_at AT TIME ZONE ${IST})::date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(sql`dl.current_owner_id`, f)}
+        ),
         parts AS (
             SELECT spoc,
                    COUNT(*)                                             AS visits,
                    COUNT(DISTINCT dealer_lead_id)                       AS unique_visits,
                    COUNT(DISTINCT dealer_lead_id) FILTER (WHERE is_new) AS new_visits,
-                   0::bigint AS calls, 0::bigint AS dealers_called, 0::bigint AS converted
+                   0::bigint AS calls, 0::bigint AS dealers_called, 0::bigint AS converted,
+                   0::bigint AS new_hot, 0::bigint AS hot_converted
               FROM vis GROUP BY spoc
             UNION ALL
-            SELECT spoc, 0, 0, 0, COUNT(*), COUNT(DISTINCT dealer_lead_id), 0 FROM calls GROUP BY spoc
+            SELECT spoc, 0, 0, 0, COUNT(*), COUNT(DISTINCT dealer_lead_id), 0, 0, 0 FROM calls GROUP BY spoc
             UNION ALL
-            SELECT spoc, 0, 0, 0, 0, 0, COUNT(*) FROM conv GROUP BY spoc
+            SELECT spoc, 0, 0, 0, 0, 0, COUNT(*), 0, COUNT(*) FILTER (WHERE was_hot) FROM conv GROUP BY spoc
+            UNION ALL
+            SELECT spoc, 0, 0, 0, 0, 0, 0, COUNT(*), 0 FROM newhot GROUP BY spoc
         )
         SELECT spoc,
                SUM(visits)::text         AS visits,
@@ -496,7 +533,9 @@ async function queryTotals(
                SUM(new_visits)::text     AS new_visits,
                SUM(calls)::text          AS calls,
                SUM(dealers_called)::text AS dealers_called,
-               SUM(converted)::text      AS converted
+               SUM(converted)::text      AS converted,
+               SUM(new_hot)::text        AS new_hot,
+               SUM(hot_converted)::text  AS hot_converted
           FROM parts
          GROUP BY spoc
     `);
@@ -509,6 +548,8 @@ async function queryTotals(
             calls: num(r.calls),
             dealers_called: num(r.dealers_called),
             converted: num(r.converted),
+            new_hot: num(r.new_hot),
+            hot_converted: num(r.hot_converted),
         });
     }
     return out;
@@ -521,6 +562,114 @@ const EMPTY_TOTALS: SalesTotals = {
     calls: 0,
     dealers_called: 0,
     converted: 0,
+    new_hot: 0,
+    hot_converted: 0,
+};
+
+type OutcomeRow = {
+    spoc: string | null;
+    quotes_issued: string;
+    revenue: string;
+    batteries_to_dealers: string;
+    kyc_submitted: string;
+};
+
+/**
+ * Section O (review R-10) — see SalesOutcome for definitions. Kept out of
+ * queryTotals' positional UNION: four more columns there would be four more
+ * chances to shift a value into the wrong slot.
+ *
+ * Revenue, batteries and KYC key on dealer_leads.current_owner_id of the lead
+ * whose GSTIN matches (gstinMatch.ts), and the lead scope (city / state /
+ * business type) applies to THAT lead. Quotes key on who created them.
+ */
+async function queryOutcome(
+    f: SalesDashboardFilters,
+    bySpoc: boolean,
+): Promise<Map<string | null, SalesOutcome>> {
+    const invoices = await matchedUnion();
+    const owner = sql`dl.current_owner_id`;
+    const rows = await db.execute<OutcomeRow>(sql`
+        WITH quotes AS (
+            SELECT ${spocKey(sql`c.created_by`, bySpoc)} AS spoc, COUNT(*) AS n
+              FROM dealer_lead_commercials c
+              JOIN dealer_leads dl ON dl.id = c.dealer_lead_id
+             WHERE c.event_type IN ('quote_issue', 'quote_revision')
+               AND (c.created_at AT TIME ZONE ${IST})::date >= ${f.from}::date
+               AND (c.created_at AT TIME ZONE ${IST})::date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(sql`c.created_by`, f)}
+             GROUP BY 1
+        ),
+        revenue AS (
+            SELECT ${spocKey(owner, bySpoc)} AS spoc, COALESCE(SUM(r.total), 0) AS n
+              FROM ${invoices} AS r
+              JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+             WHERE ${REVENUE_NOT_VOID}
+               AND r.invoice_date >= ${f.from}::date
+               AND r.invoice_date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(owner, f)}
+             GROUP BY 1
+        ),
+        batteries AS (
+            SELECT ${spocKey(owner, bySpoc)} AS spoc, COUNT(*) AS n
+              FROM inventory i
+              JOIN accounts a ON a.id = i.dealer_id
+              JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
+              JOIN dealer_leads dl ON dl.id = m.dealer_lead_id
+             WHERE i.asset_type = 'battery'
+               AND i.allocated_to_dealer_at IS NOT NULL
+               AND (i.allocated_to_dealer_at AT TIME ZONE ${IST})::date >= ${f.from}::date
+               AND (i.allocated_to_dealer_at AT TIME ZONE ${IST})::date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(owner, f)}
+             GROUP BY 1
+        ),
+        kyc AS (
+            -- One lead, one file, however many queue rows — the funnel report's
+            -- rule (funnelCounts.ts kycSharedQuery).
+            SELECT ${spocKey(owner, bySpoc)} AS spoc, COUNT(*) AS n
+              FROM (SELECT lead_id, MIN(created_at) AS first_at
+                      FROM admin_verification_queue GROUP BY lead_id) q
+              JOIN leads l ON l.id::text = q.lead_id
+              JOIN accounts a ON a.id = l.dealer_id
+              JOIN ${dealerLeadByGstin(GSTIN_KEY(sql`a.gstin`))} m ON TRUE
+              JOIN dealer_leads dl ON dl.id = m.dealer_lead_id
+             WHERE (q.first_at AT TIME ZONE ${IST})::date >= ${f.from}::date
+               AND (q.first_at AT TIME ZONE ${IST})::date <= ${f.to}::date
+               ${leadScope(f)} ${spocClause(owner, f)}
+             GROUP BY 1
+        ),
+        spocs AS (
+            SELECT spoc FROM quotes UNION SELECT spoc FROM revenue
+            UNION SELECT spoc FROM batteries UNION SELECT spoc FROM kyc
+        )
+        SELECT s.spoc,
+               COALESCE(qu.n, 0)::text AS quotes_issued,
+               COALESCE(rv.n, 0)::text AS revenue,
+               COALESCE(ba.n, 0)::text AS batteries_to_dealers,
+               COALESCE(ky.n, 0)::text AS kyc_submitted
+          FROM spocs s
+          LEFT JOIN quotes    qu ON qu.spoc IS NOT DISTINCT FROM s.spoc
+          LEFT JOIN revenue   rv ON rv.spoc IS NOT DISTINCT FROM s.spoc
+          LEFT JOIN batteries ba ON ba.spoc IS NOT DISTINCT FROM s.spoc
+          LEFT JOIN kyc       ky ON ky.spoc IS NOT DISTINCT FROM s.spoc
+    `);
+    const out = new Map<string | null, SalesOutcome>();
+    for (const r of rows as unknown as OutcomeRow[]) {
+        out.set(r.spoc, {
+            quotes_issued: num(r.quotes_issued),
+            revenue: round2(num(r.revenue)),
+            batteries_to_dealers: num(r.batteries_to_dealers),
+            kyc_submitted: num(r.kyc_submitted),
+        });
+    }
+    return out;
+}
+
+const EMPTY_OUTCOME: SalesOutcome = {
+    quotes_issued: 0,
+    revenue: 0,
+    batteries_to_dealers: 0,
+    kyc_submitted: 0,
 };
 
 /** Always hot, warm, cold in that order, zero-filled. */
@@ -637,11 +786,12 @@ export async function buildSalesDashboard(
     // Whole-scope pass (A–D). The daily series doubles as the source of C; when
     // the caller asked for days it IS the series, otherwise the requested
     // granularity is a second, cheap query.
-    const [snapshotAll, dailyAll, interestAll, totalsAll] = await Promise.all([
+    const [snapshotAll, dailyAll, interestAll, totalsAll, outcomeAll] = await Promise.all([
         querySnapshot(f, today, false),
         querySeries(f, "day", false),
         queryInterest(f, today, false),
         queryTotals(f, false),
+        queryOutcome(f, false),
     ]);
     const seriesAll =
         f.granularity === "day" ? dailyAll : await querySeries(f, f.granularity, false);
@@ -652,21 +802,23 @@ export async function buildSalesDashboard(
         averages: averagesFromDaily(dailyAll.get(null) ?? [], daysInRange),
         interest: completeInterest(interestAll.get(null)),
         totals: totalsAll.get(null) ?? EMPTY_TOTALS,
+        outcome: outcomeAll.get(null) ?? EMPTY_OUTCOME,
     };
 
     let perSpoc: SalesSpocBlock[] | null = null;
     if (bySpoc) {
-        const [snapshotBy, dailyBy, interestBy, totalsBy] = await Promise.all([
+        const [snapshotBy, dailyBy, interestBy, totalsBy, outcomeBy] = await Promise.all([
             querySnapshot(f, today, true),
             querySeries(f, "day", true),
             queryInterest(f, today, true),
             queryTotals(f, true),
+            queryOutcome(f, true),
         ]);
         const seriesBy =
             f.granularity === "day" ? dailyBy : await querySeries(f, f.granularity, true);
 
         const ids = new Set<string>();
-        for (const m of [snapshotBy, dailyBy, interestBy, seriesBy, totalsBy]) {
+        for (const m of [snapshotBy, dailyBy, interestBy, seriesBy, totalsBy, outcomeBy]) {
             for (const k of m.keys()) if (k) ids.add(k);
         }
         const names = await userNames([...ids]);
@@ -681,6 +833,7 @@ export async function buildSalesDashboard(
                 averages: averagesFromDaily(dailyBy.get(id) ?? [], daysInRange),
                 interest: completeInterest(interestBy.get(id)),
                 totals: totalsBy.get(id) ?? EMPTY_TOTALS,
+                outcome: outcomeBy.get(id) ?? EMPTY_OUTCOME,
             }))
             // Busiest first, then by name so ties are stable.
             .sort(
@@ -733,6 +886,10 @@ export function salesDashboardCsv(d: SalesDashboard): SalesCsvSheet {
             warm: level(b, "warm"),
             cold: level(b, "cold"),
             converted: b.totals.converted,
+            quotes_issued: b.outcome.quotes_issued,
+            batteries_to_dealers: b.outcome.batteries_to_dealers,
+            revenue: b.outcome.revenue,
+            kyc_submitted: b.outcome.kyc_submitted,
         }));
         return {
             filename: `sales-dashboard-by-rep-${range}`,
@@ -747,6 +904,10 @@ export function salesDashboardCsv(d: SalesDashboard): SalesCsvSheet {
                 { header: "Warm", value: (r) => s(r.warm) },
                 { header: "Cold", value: (r) => s(r.cold) },
                 { header: "Converted", value: (r) => s(r.converted) },
+                { header: "Quotes Issued", value: (r) => s(r.quotes_issued) },
+                { header: "Batteries to Dealers", value: (r) => s(r.batteries_to_dealers) },
+                { header: "Revenue (INR)", value: (r) => s(r.revenue) },
+                { header: "KYC Submitted", value: (r) => s(r.kyc_submitted) },
             ],
             rows,
         };

@@ -1,5 +1,6 @@
 import { requireRole } from "@/lib/auth-utils";
 import { SalesDashboardView } from "@/components/dashboard/sales/SalesDashboardView";
+import { MyTargetsCard } from "@/components/targets/MyTargetsCard";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ export default async function AsmPerformancePage() {
                     leads. Yesterday, today, this week, and the trend over the range you pick.
                 </p>
             </header>
+            {/* R-17 — accept pushed targets; actual vs target this month. */}
+            <MyTargetsCard />
             <SalesDashboardView mode="asm" />
         </div>
     );

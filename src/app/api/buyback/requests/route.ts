@@ -30,6 +30,7 @@ import { dealerPayoutSourcesForEntity } from "@/lib/buyback/money";
 import { dealerPickupSourcesForEntity } from "@/lib/buyback/pickup";
 import { draftBlockersFor, draftBlockersForEntity } from "@/lib/buyback/queries";
 import { nextRequestNo } from "@/lib/buyback/request-no";
+import { defaultOwnerForEntity } from "@/lib/buyback/owner";
 import { toDealerPayout, toDealerPickup } from "@/lib/buyback/serialize";
 import type { GateIssue } from "@/lib/buyback/submit-gate";
 
@@ -44,6 +45,12 @@ export const POST = withErrorHandler(async (req: Request) => {
   const actor = await requireDealer();
   const body = createSchema.parse(await req.json().catch(() => ({})));
 
+  // E-302 (review R-12) — the request starts owned by the dealer's CRM owner
+  // (GSTIN match), so the Buyback Daily credits it to a real person rather
+  // than whichever admin happens to act on it. Looked up before the
+  // transaction; null (no match) leaves it for an admin to claim.
+  const ownerId = await defaultOwnerForEntity(actor.entityId!);
+
   const created = await db.transaction(async (tx) => {
     const requestNo = await nextRequestNo(tx);
 
@@ -54,6 +61,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         dealer_entity_id: actor.entityId!,
         source_channel: body.source_channel,
         created_by: actor.id,
+        owner_id: ownerId,
+        owner_assigned_at: ownerId ? new Date() : null,
       })
       .returning();
 
