@@ -16,7 +16,7 @@ type SortKey =
     | "touchpoints_week"
     | "avg_touchpoints_per_lead"
     | "avg_time_to_first_touch_hours"
-    | "conversion_rate_30d"
+    | "closed_win_rate_30d"
     | "stale_leads"
     | "critical_stale";
 
@@ -27,7 +27,8 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
     { key: "touchpoints_week", label: "TP Week", numeric: true },
     { key: "avg_touchpoints_per_lead", label: "Avg TP/Lead", numeric: true },
     { key: "avg_time_to_first_touch_hours", label: "Avg 1st Touch", numeric: true },
-    { key: "conversion_rate_30d", label: "Conv % (30d)", numeric: true },
+    // Converted ÷ (Converted + Lost) they closed — not lead-base conversion (R-08).
+    { key: "closed_win_rate_30d", label: "Closed-win % (30d)", numeric: true },
     { key: "stale_leads", label: "Stale >5d", numeric: true },
     { key: "critical_stale", label: "Critical >10d", numeric: true },
 ];
@@ -35,7 +36,7 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
 function cell(key: SortKey, row: TeamPerfRow): string {
     const v = row[key];
     if (v == null) return "—";
-    if (key === "conversion_rate_30d") return `${Math.round(Number(v) * 100)}%`;
+    if (key === "closed_win_rate_30d") return `${Math.round(Number(v) * 100)}%`;
     if (key === "avg_time_to_first_touch_hours") return `${Number(v).toFixed(1)}h`;
     return String(v);
 }

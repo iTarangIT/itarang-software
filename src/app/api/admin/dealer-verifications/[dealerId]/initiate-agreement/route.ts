@@ -18,6 +18,7 @@ import {
   resolveScheduleThreeDefaults,
 } from "@/lib/onboarding/agreement-defaults";
 import { resolveAccountType } from "@/lib/onboarding/account-type";
+import { isMaskedPhone, resolveOwnerPhone } from "@/lib/onboarding/owner-phone";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
@@ -419,10 +420,13 @@ export async function POST(
         dealerExisting?.signer_email ||
         cleanString(application.owner_email) ||
         "",
+      // owner_phone may hold a MASKED value read off the Udyam certificate
+      // ("98*****366" → "98366" after stripping) — resolveOwnerPhone rejects
+      // that and recovers the real number from wa_phone when it matches.
       dealerSignerPhone:
         normalizePhone(agreement.dealerSignerPhone) ||
         dealerExisting?.signer_mobile ||
-        normalizePhone(application.owner_phone) ||
+        resolveOwnerPhone(application.owner_phone, application.wa_phone) ||
         "",
       dealerSigningMethod:
         cleanString(agreement.dealerSigningMethod) ||
@@ -465,11 +469,18 @@ export async function POST(
     });
 
     if (!dealerSigner || !itarangSigner1) {
+      const maskedOwnerPhone =
+        !dealerSigner &&
+        !hydratedAgreement.dealerSignerPhone &&
+        isMaskedPhone(application.owner_phone);
       return NextResponse.json(
         {
           success: false,
-          message:
-            "Dealer and iTarang Signer 1 must have valid name, email, and phone.",
+          message: maskedOwnerPhone
+            ? `The dealer owner's phone on file is masked (${application.owner_phone}) — ` +
+              "it was read from a document that hides the number. Use Edit on " +
+              "Section 1 to enter the owner's full 10-digit mobile, then initiate again."
+            : "Dealer and iTarang Signer 1 must have valid name, email, and phone.",
           debug: {
             dealerSigner,
             itarangSigner1,

@@ -20,6 +20,8 @@ import {
   type CeoOverviewData,
 } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { GreenKmCard } from "@/components/dashboard/ceo/GreenKmCard";
+import { DataHealthPanel } from "@/components/dashboard/ceo/DataHealthPanel";
+import { CeoControlTower } from "@/components/dashboard/ceo/CeoControlTower";
 import { RealizationDrillDown } from "@/components/dashboard/ceo/RealizationDrillDown";
 import {
   DrillDownModal,
@@ -195,6 +197,12 @@ export default function CEODashboard() {
           </span>
         )}
       </div>
+
+      {/* Reporting Review sheet 6 — the one-screen view, exceptions first,
+          then money, engine, base, people; row 6 (trust) is Data health. Same
+          window as every card below. */}
+      <CeoControlTower windowQs={windowParams.toString()} />
+      <DataHealthPanel />
 
       {/* KPI Section */}
       {overviewError ? (

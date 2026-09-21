@@ -98,12 +98,41 @@ export interface SalesTotals {
     calls: number;
     /**
      * Distinct dealers with at least one call in the range (B8 "count of
-     * dealers called"). CC-team calls will be included once the call-centre
-     * role exists (ticket A2).
+     * dealers called"). NeoDove (CC) calls count once the agent is linked to
+     * a CRM user on /leads/neodove-campaigns/agents (review R-03).
      */
     dealers_called: number;
     /** Leads that reached Converted in the range (closed_at, IST). */
     converted: number;
+    /**
+     * Leads whose rating BECAME Hot in the range and are still Hot
+     * (interest_changed_at, E-301), keyed on current owner. Review R-09.
+     */
+    new_hot: number;
+    /** Of `converted`, those rated Hot when they closed. Review R-09. */
+    hot_converted: number;
+}
+
+/**
+ * Section O — what the effort produced, over the range (review R-10). Without
+ * it a busy rep and a productive rep look identical. Conversions stay in
+ * `totals.converted`.
+ *
+ * Money and stock carry a GSTIN, not a lead id, so revenue, batteries and KYC
+ * reach a SPOC only through a CRM lead with the same GSTIN
+ * (src/lib/leads/gstinMatch.ts), credited to that lead's CURRENT owner. What
+ * matches no lead is on nobody's row, and the whole-team figure is the sum of
+ * what did match — not company revenue, which lives on the CEO page.
+ */
+export interface SalesOutcome {
+    /** Quote versions (quote_issue / quote_revision) created in the range, by their creator. */
+    quotes_issued: number;
+    /** Non-void invoices dated in the range, linked to a lead on GSTIN. ₹. */
+    revenue: number;
+    /** Batteries allocated to a dealer account in the range (inventory.allocated_to_dealer_at). */
+    batteries_to_dealers: number;
+    /** Customer KYC files first queued in the range, from dealers linked on GSTIN. */
+    kyc_submitted: number;
 }
 
 export interface SalesDashboardSections {
@@ -112,6 +141,7 @@ export interface SalesDashboardSections {
     averages: SalesAverages;
     interest: InterestSection;
     totals: SalesTotals;
+    outcome: SalesOutcome;
 }
 
 export interface SalesSpocBlock extends SalesDashboardSections {

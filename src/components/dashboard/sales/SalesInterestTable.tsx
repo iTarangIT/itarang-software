@@ -17,9 +17,13 @@ export function SalesInterestTable({ d }: { d: InterestSection }) {
         <div className="rounded-xl border border-border bg-surface shadow-card">
             <div className="px-4 py-3">
                 <h3 className="text-sm font-semibold text-ink">Hot / warm / cold, by age</h3>
-                <p className="text-[11px] text-ink-muted">
-                    Open leads by interest level and days since last update. Ageing is measured on{" "}
-                    <code>{d.ageing_basis}</code> until an interest-change timestamp exists.
+                <p
+                    className="text-[11px] text-ink-muted"
+                    title={`Measured on ${d.ageing_basis}`}
+                >
+                    Open leads by interest level and how many days they have held that
+                    rating. Calls, visits and edits do not reset it — only a change of
+                    rating does.
                 </p>
             </div>
             <div className="overflow-x-auto border-t border-border">

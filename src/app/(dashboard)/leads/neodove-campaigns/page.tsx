@@ -27,6 +27,7 @@ import {
     Plus,
     Upload,
     UserPlus2,
+    UsersRound,
 } from "lucide-react";
 import { NeodoveCampaignModal } from "@/components/leads/neodove-campaign-modal";
 
@@ -128,6 +129,12 @@ export default function NeodoveCampaignsPage() {
                         className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                     >
                         <History className="w-4 h-4" /> Sync activity
+                    </Link>
+                    <Link
+                        href="/leads/neodove-campaigns/agents"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                        <UsersRound className="w-4 h-4" /> Agents
                     </Link>
                     <Link
                         href="/leads/neodove-campaigns/reconcile"

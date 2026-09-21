@@ -10,7 +10,8 @@
 //   2. If statusChange is provided: INSERT into dealer_lead_status_history
 //      AND UPDATE dealer_leads (lead_status, closed_at on terminal, closing_*
 //      on terminal).
-//   3. UPDATE dealer_leads.last_touchpoint_at + updated_at.
+//   3. UPDATE dealer_leads.last_touchpoint_at + updated_at, and last_worked_at
+//      when the touchpoint is real work (E-300, isWorkedTouchpoint).
 //
 // Returns the inserted touchpoint row. Throws on transaction failure; the
 // transaction is rolled back so no partial writes land.
@@ -22,10 +23,11 @@ import {
   leadTouchpoints,
 } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
-import type {
-  CallStatus,
-  NextAction,
-  TouchpointType,
+import {
+  isWorkedTouchpoint,
+  type CallStatus,
+  type NextAction,
+  type TouchpointType,
 } from "@/lib/lifecycle/touchpointTypes";
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import { isTerminal } from "@/lib/lifecycle/transitions";
@@ -119,6 +121,15 @@ export async function writeTouchpoint(
   opts?: { tx?: Tx },
 ): Promise<WriteTouchpointResult> {
   const performedAt = input.performedAt ?? new Date();
+
+  // E-300 — the idle clock moves only for work (isWorkedTouchpoint), and only
+  // forward: a visit logged today for last week must not rewind a call made
+  // yesterday. GREATEST ignores the NULL of a never-worked lead.
+  const workedStamp = isWorkedTouchpoint(input.touchpointType, !!input.statusChange)
+    ? {
+        last_worked_at: sql`GREATEST(${dealerLeads.last_worked_at}, ${performedAt.toISOString()}::timestamptz)`,
+      }
+    : {};
 
   const run = async (tx: Tx): Promise<WriteTouchpointResult> => {
     // 1. Touchpoint row — single source of audit truth.
@@ -215,6 +226,7 @@ export async function writeTouchpoint(
       const updatePayload: Record<string, unknown> = {
         lead_status: sc.to,
         last_touchpoint_at: performedAt,
+        ...workedStamp,
         updated_at: performedAt,
       };
 
@@ -242,12 +254,13 @@ export async function writeTouchpoint(
         .set(updatePayload)
         .where(eq(dealerLeads.id, input.dealerLeadId));
     } else {
-      // 3. No status change — still bump last_touchpoint_at so stale-lead
-      //    visual cues (BRD §0.5) reset.
+      // 3. No status change — still bump last_touchpoint_at ("last activity");
+      //    the idle clock (last_worked_at) moves only for real work.
       await tx
         .update(dealerLeads)
         .set({
           last_touchpoint_at: performedAt,
+          ...workedStamp,
           updated_at: performedAt,
         })
         .where(eq(dealerLeads.id, input.dealerLeadId));

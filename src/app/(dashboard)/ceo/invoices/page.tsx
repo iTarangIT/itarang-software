@@ -48,12 +48,24 @@ interface InvoiceRow {
   document_url: string | null;
   needs_attention: boolean;
   attention_reason: string | null;
+  /** R-11 — customer GSTIN (normalised) and the CRM dealer it links to. */
+  gstin_key: string | null;
+  dealer_lead_id: string | null;
+  dealer_name: string | null;
 }
+
+type DealerMatch = "" | "linked" | "unlinked";
 
 interface ApiResponse {
   success: boolean;
   data: InvoiceRow[];
-  summary: { count: number; total: number; balance: number };
+  summary: {
+    count: number;
+    total: number;
+    balance: number;
+    unlinked_count: number;
+    unlinked_total: number;
+  };
   filters: { from: string; to: string };
   sources: { zoho: boolean; drive: boolean };
 }
@@ -115,6 +127,7 @@ export default function CEOInvoicesPage() {
   const [to, setTo] = useState(todayISO());
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
   const [customer, setCustomer] = useState("");
+  const [dealerMatch, setDealerMatch] = useState<DealerMatch>("");
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
@@ -124,10 +137,11 @@ export default function CEOInvoicesPage() {
     p.set("to", to);
     if (selectedStatuses.length > 0) p.set("status", selectedStatuses.join(","));
     if (customer.trim()) p.set("customer", customer.trim());
+    if (dealerMatch) p.set("dealer_match", dealerMatch);
     p.set("limit", String(PAGE_SIZE));
     p.set("offset", String(page * PAGE_SIZE));
     return p.toString();
-  }, [from, to, selectedStatuses, customer, page]);
+  }, [from, to, selectedStatuses, customer, dealerMatch, page]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["ceo-invoices", queryString],
@@ -490,6 +504,45 @@ export default function CEOInvoicesPage() {
         </div>
       </div>
 
+      {/* R-11 reconciliation. An invoice links to a salesperson only through a
+          CRM dealer with the same GSTIN; anything else is company revenue that
+          no SPOC gets credit for. Said out loud so it gets fixed, not hidden. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-white px-5 py-3 shadow-sm">
+        <p className="text-sm text-gray-700">
+          {summary && summary.unlinked_count > 0 ? (
+            <>
+              <span className="font-semibold text-amber-800">
+                {summary.unlinked_count.toLocaleString("en-IN")} invoice
+                {summary.unlinked_count === 1 ? "" : "s"} ({formatINR(summary.unlinked_total)})
+              </span>{" "}
+              in this view aren&apos;t linked to a CRM dealer, so no salesperson gets credit for them.
+              Linking needs the same GSTIN on the invoice and on the dealer&apos;s lead.
+            </>
+          ) : summary ? (
+            <span className="text-emerald-700">Every invoice in this view is linked to a CRM dealer.</span>
+          ) : null}
+        </p>
+        <div className="flex items-center gap-2">
+          <label htmlFor="dealer-match" className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+            Dealer link
+          </label>
+          <select
+            id="dealer-match"
+            data-testid="filter-dealer-match"
+            value={dealerMatch}
+            onChange={(e) => {
+              setDealerMatch(e.target.value as DealerMatch);
+              setPage(0);
+            }}
+            className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm"
+          >
+            <option value="">All invoices</option>
+            <option value="unlinked">Not linked (to reconcile)</option>
+            <option value="linked">Linked to a dealer</option>
+          </select>
+        </div>
+      </div>
+
       {/* Table */}
       <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
         {isLoading ? (
@@ -562,8 +615,19 @@ export default function CEOInvoicesPage() {
                         <td className="py-3 text-xs text-gray-600">
                           {r.invoice_date || "—"}
                         </td>
-                        <td className="py-3 text-xs text-gray-900 max-w-xs truncate">
-                          {r.customer_name || "—"}
+                        <td className="py-3 text-xs text-gray-900 max-w-xs">
+                          <div className="truncate">{r.customer_name || "—"}</div>
+                          <div
+                            data-testid="invoice-dealer-link"
+                            className={`truncate text-[10px] ${r.dealer_lead_id ? "text-emerald-700" : "text-amber-700"}`}
+                            title={r.gstin_key ?? undefined}
+                          >
+                            {r.dealer_lead_id
+                              ? `→ ${r.dealer_name || r.dealer_lead_id}`
+                              : r.gstin_key
+                                ? `Not linked · GSTIN ${r.gstin_key} not on any CRM lead`
+                                : "Not linked · no GSTIN on this invoice"}
+                          </div>
                         </td>
                         <td className="py-3">
                           <StatusBadge status={r.status} />

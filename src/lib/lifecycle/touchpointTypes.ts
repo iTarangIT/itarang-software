@@ -64,6 +64,38 @@ export const TOUCHPOINT_TYPE = [
 ] as const;
 export type TouchpointType = (typeof TOUCHPOINT_TYPE)[number];
 
+/**
+ * Whether a touchpoint counts as WORK on a lead and resets its idle clock
+ * (dealer_leads.last_worked_at, E-300). Requirement #6 point 7: "Only a logged
+ * call, visit or status change — never just opening the lead, or people will
+ * open leads and change nothing to reset the clock." Review R-04 / metric M18.
+ *
+ *   inside_sales_call   any outcome, including NeoDove calls (performed_by null)
+ *   visit               logged ASM visit
+ *   status_change_note  ONLY when it carries a real status change (mark
+ *                       converted / lost, bulk status, the call form). The same
+ *                       type is also written as a plain NOTE — bulk-upload call
+ *                       notes, reactivation, NeoDove "deleted remotely" flags,
+ *                       merge resolutions — and a note is not work.
+ *
+ * A status change on any OTHER type does not count: claiming, assigning and
+ * transferring to an ASM all move lead_status, and counting them would let a
+ * hand-off make a neglected lead look fresh — the exact bug R-04 is.
+ *
+ * NOT counted: ai_call — the robot dialling a rep's lead is not the holder
+ * working it, and would hide neglect the same way. Nor dial requests,
+ * WhatsApp, quotes, escalations or reactivation.
+ *
+ * The E-300 backfill encodes the same rule in SQL; keep them in step.
+ */
+export function isWorkedTouchpoint(
+  type: TouchpointType,
+  hasStatusChange: boolean,
+): boolean {
+  if (type === "inside_sales_call" || type === "visit") return true;
+  return type === "status_change_note" && hasStatusChange;
+}
+
 export const CALL_STATUS = [
   "connected",
   "not_reachable",

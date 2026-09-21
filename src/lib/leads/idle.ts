@@ -18,19 +18,23 @@ const DAY_MS = 86_400_000;
 const DAYS_PER_MONTH = 30.44;
 
 /**
- * Calendar days since the last touch, falling back to creation.
+ * Calendar days since the lead was last WORKED, falling back to creation.
  *
- * The fallback is the point: a lead nobody has EVER touched is not idle for
- * zero days, it is idle for its entire life. Reading a null last_touchpoint_at
- * as "no idle time" is what lets a three-month-old untouched lead look fresher
+ * "Worked" is dealer_leads.last_worked_at (E-300, review R-04): a call, visit
+ * or status change only. Assignment, claims, dial requests and comments do not
+ * count — otherwise handing a lead around would make it look fresh.
+ *
+ * The fallback is the point: a lead nobody has EVER worked is not idle for
+ * zero days, it is idle for its entire life. Reading a null last_worked_at as
+ * "no idle time" is what lets a three-month-old untouched lead look fresher
  * than one called yesterday.
  */
 export function idleDays(
-    lastTouchpointAt: string | null,
+    lastWorkedAt: string | null,
     createdAt: string | null,
     now: number = Date.now(),
 ): number | null {
-    const basis = lastTouchpointAt ?? createdAt;
+    const basis = lastWorkedAt ?? createdAt;
     if (!basis) return null;
     const t = new Date(basis).getTime();
     if (Number.isNaN(t)) return null;
@@ -50,7 +54,7 @@ export const IDLE_RANGES = {
     "30-59": { label: "30 – 59 days", min: 30, max: 59 },
     "60-89": { label: "60 – 89 days", min: 60, max: 89 },
     "90+": { label: "90+ days", min: 90, max: null },
-    never: { label: "Never touched", min: null, max: null },
+    never: { label: "Never worked", min: null, max: null },
 } as const;
 
 export type IdleRangeKey = keyof typeof IDLE_RANGES;

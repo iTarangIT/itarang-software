@@ -398,11 +398,17 @@ export async function runDigest(opts: {
     };
   }
 
+  // R-15 — a weekly kind is due only on its weekday(s), judged in IST like
+  // everything else here. Computed from `now` (the ticker's clock) so a forced
+  // `slot` on the wrong day is refused the same way as a scheduled one.
+  const istWeekday = new Date(now.getTime() + 330 * 60_000).getUTCDay();
+  const onSendDay = !kind.weekdays || kind.weekdays.includes(istWeekday);
+
   const targets: Array<{ slot: DigestSlot; digestDate: string }> = (
     opts.slot
       ? [{ slot: opts.slot, digestDate: digestDateForSlot(opts.slot, now) }]
       : slotsDueAt(now, settings)
-  ).filter((t) => allowedSlots.has(t.slot));
+  ).filter((t) => allowedSlots.has(t.slot) && onSendDay);
 
   if (targets.length === 0) return { ok: true, outcomes: [] };
 

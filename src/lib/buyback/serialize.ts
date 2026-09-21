@@ -540,6 +540,8 @@ export function toDealerPayout(source: DealerPayoutSource): DealerPayoutView | n
 const DEALER_HIDDEN_ACTIONS = new Set([
   "set_margin",
   "start_review",
+  // E-302 — which of our people owns the request is internal bookkeeping.
+  "assign_owner",
   // The whole vendor leg (Sprint 2A). A dealer learning that we routed their
   // batteries to three scrap vendors — and what those vendors offered — hands
   // them both our margin and our buyer list. `exchange_pos`, `schedule_pickup`

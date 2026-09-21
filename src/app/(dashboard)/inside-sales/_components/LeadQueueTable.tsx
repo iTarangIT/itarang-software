@@ -158,7 +158,9 @@ export function LeadQueueTable({
                             </tr>
                         )}
                         {rows.map((row) => {
-                            const days = workingDaysSince(row.last_touchpoint_at ?? row.assigned_at, holidaySet);
+                            // Stale cue runs on the work clock (E-300, R-04):
+                            // a claim, dial request or comment is not work.
+                            const days = workingDaysSince(row.last_worked_at ?? row.assigned_at, holidaySet);
                             const sev = staleSeverity(days);
                             const followUpOverdue =
                                 row.next_follow_up_at && new Date(row.next_follow_up_at).getTime() < nowMs;
