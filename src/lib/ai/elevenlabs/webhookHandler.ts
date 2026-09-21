@@ -9,8 +9,39 @@ import { dialerCampaignLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
+import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import type { ElevenLabsWebhookEvent } from "./types";
 import { normalizePostCall } from "./normalizePostCall";
+
+/**
+ * The telephony detail on a call_initiation_failure.
+ *
+ * The metadata shape depends on the phone provider — SIP carries
+ * sip_status_code / error_reason, Twilio its StatusCallback body (CallStatus,
+ * SipResponseCode) — and may sit at the top level or under `body`. Read
+ * defensively and return nothing rather than guess.
+ */
+function initiationTelephony(metadata: unknown): {
+  sipStatusCode: string | null;
+  detail: string | null;
+} {
+  const layers = [metadata, (metadata as { body?: unknown } | null)?.body].filter(
+    (l): l is Record<string, unknown> => l !== null && typeof l === "object",
+  );
+  const pick = (...keys: string[]): string | null => {
+    for (const layer of layers) {
+      for (const k of keys) {
+        const v = layer[k];
+        if ((typeof v === "string" && v.trim()) || typeof v === "number") return `${v}`.trim();
+      }
+    }
+    return null;
+  };
+  return {
+    sipStatusCode: pick("sip_status_code", "SipResponseCode"),
+    detail: pick("error_reason", "sip_status", "CallStatus"),
+  };
+}
 
 export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
   try {
@@ -42,9 +73,17 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
           .where(eq(dialerCampaignLeads.bolna_call_id, data.conversation_id ?? ""))
           .limit(1);
         if (row[0]) {
+          const telephony = initiationTelephony(data.metadata);
           const r = await completeCampaignLead({
             leadId: row[0].lead_id,
-            success: false,
+            // busy / no-answer / unknown, sharpened by the SIP code or Twilio
+            // CallStatus when the reason alone says "unknown".
+            status: classifyCallEnd({
+              initiationFailureReason: [data.failure_reason, telephony.detail]
+                .filter(Boolean)
+                .join(" "),
+              sipStatusCode: telephony.sipStatusCode,
+            }).status,
             bolnaCallId: data.conversation_id,
             outcome: data.failure_reason ?? "initiation_failed",
             intentScore: null,

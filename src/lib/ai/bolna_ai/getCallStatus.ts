@@ -13,11 +13,20 @@ export type NormalizedBolnaStatus = {
   recordingUrl: string | null;
   duration: number | null;
   phone: string | null;
+  /** telephony_data.answered_by_voice_mail; null when AMD is off. */
+  answeredByVoicemail?: boolean | null;
+  /** telephony_data.hangup_reason. */
+  hangupReason?: string | null;
   error?: string;
 };
 
-// Bolna terminal statuses observed in webhook payloads. "completed" is the
+// Bolna terminal statuses (docs: list-phone-call-status). "completed" is the
 // happy path; the others are no-conversation-but-call-ended states.
+//
+// NOT call-disconnected: it fires the instant the line drops, before Bolna has
+// the duration, recording or transcript, and `completed` follows seconds later.
+// Treating it as terminal finalized the call on empty data and let the real
+// `completed` be dropped as already-processed.
 const TERMINAL = new Set([
   "completed",
   "failed",
@@ -26,7 +35,9 @@ const TERMINAL = new Set([
   "no-answer",
   "canceled",
   "rejected",
-  "call-disconnected",
+  "stopped",
+  "error",
+  "balance-low",
 ]);
 
 export async function getBolnaCallStatus(
@@ -97,5 +108,13 @@ export async function getBolnaCallStatus(
     recordingUrl,
     duration,
     phone,
+    answeredByVoicemail:
+      typeof r?.telephony_data?.answered_by_voice_mail === "boolean"
+        ? r.telephony_data.answered_by_voice_mail
+        : null,
+    hangupReason:
+      typeof r?.telephony_data?.hangup_reason === "string"
+        ? r.telephony_data.hangup_reason
+        : null,
   };
 }
