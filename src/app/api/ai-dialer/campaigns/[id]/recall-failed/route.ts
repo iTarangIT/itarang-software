@@ -10,10 +10,16 @@
 // something the table calls non-retryable. It excludes:
 //   - no_phone / ineligible_*  → there is nothing to call, or the lead is now
 //                                owned by Inside Sales / ASM
-//   - silent_call / no_response → the dealer WAS reached. The AI-connected hard
-//                                block would refuse these anyway, so retrying
-//                                them is offering an action that silently does
-//                                nothing. They need a person.
+//   - no_response (reason)      → the dealer SPOKE. The AI-connected hard block
+//                                would refuse these anyway, so retrying them is
+//                                offering an action that silently does nothing.
+//                                They need a person.
+//   - invalid_number            → the network says the number does not exist.
+//
+// Candidates are every non-conversation status (busy, no_response, rejected,
+// voicemail, no_conversation, failed). A silent call (no_conversation) IS
+// retryable since 2026-09-21: the hard block now requires the dealer to have
+// spoken, which a silent call did not.
 //
 // The new campaign carries recall:true in its region_filter, which makes
 // advanceCampaign bypass the once-per-day idempotency guard so the second dial
@@ -21,13 +27,14 @@
 
 import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import { isRetryableFailure } from "@/lib/ai-dialer/failureReason";
+import { RETRYABLE_STATUSES } from "@/lib/ai-dialer/campaignLeadStatus";
 
 
 
@@ -71,10 +78,12 @@ export const POST = withErrorHandler(
       );
     }
 
-    // Failed rows for the source campaign, in original queue order, with the
-    // evidence deriveFailureReason needs. Filtered in JS rather than SQL because
-    // the retryable rule lives in one shared function — duplicating it as a
-    // NOT IN list is how the button and the table would start disagreeing.
+    // Non-conversation rows for the source campaign (busy, no response,
+    // rejected, voicemail, no conversation, failed), in original queue order,
+    // with the evidence deriveFailureReason needs. Filtered in JS rather than
+    // SQL because the retryable rule lives in one shared function — duplicating
+    // it as a NOT IN list is how the button and the table would start
+    // disagreeing.
     const failed = await db
       .select({
         lead_id: dialerCampaignLeads.lead_id,
@@ -100,7 +109,7 @@ export const POST = withErrorHandler(
       .where(
         and(
           eq(dialerCampaignLeads.campaign_id, campaignId),
-          eq(dialerCampaignLeads.status, "failed"),
+          inArray(dialerCampaignLeads.status, [...RETRYABLE_STATUSES]),
         ),
       )
       .orderBy(asc(dialerCampaignLeads.queue_position));
