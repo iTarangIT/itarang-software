@@ -22,9 +22,12 @@
 // ── EVIDENCE ORDER ─────────────────────────────────────────────────────────
 // A TRANSCRIPT BEATS THE OUTCOME STRING. If the provider gave us a transcript
 // the call happened, whatever dialer_campaign_leads.call_outcome says — which is
-// how a row that plainly connected could still read "Trigger failed". That also
-// keeps this module consistent with the AI-connected hard block, which already
-// treats transcript presence as proof of contact.
+// how a row that plainly connected could still read "Trigger failed".
+//
+// Since 2026-09-21 the status column carries the classification itself (busy,
+// no_response, rejected, voicemail, no_conversation — campaignLeadStatus.ts),
+// and a status that already names the reason wins over everything below. The
+// evidence-order rules remain for legacy rows and for 'failed' / 'skipped'.
 //
 // This is a DISPLAY vocabulary, deliberately separate from the CC sheet's
 // L1/L2/L3 in aiDisposition.ts. The sheet answers "what is the sales state of
@@ -37,6 +40,8 @@ export const FAILURE_REASON_CODES = [
     "busy",
     "voicemail",
     "disconnected",
+    "rejected",
+    "invalid_number",
     "silent_call",
     "no_response",
     "technical",
@@ -59,9 +64,9 @@ export type FailureReason = {
     /**
      * Is dialling this lead again worth doing?
      *
-     * FALSE for the two CONNECTED outcomes — the dealer was reached, so the
-     * AI-connected hard block will refuse them anyway and the honest next step
-     * is a human. Also false for rows that were never eligible.
+     * FALSE for `no_response` — the dealer spoke, so the AI-connected hard
+     * block will refuse them anyway and the honest next step is a human. Also
+     * false for an invalid number and for rows that were never eligible.
      */
     retryable: boolean;
     /**
@@ -102,11 +107,29 @@ const SPECS: Record<FailureReasonCode, Spec> = {
         retryable: true,
         ourFault: false,
     },
+    rejected: {
+        code: "rejected",
+        label: "Rejected",
+        hint: "The dealer declined the call. Worth trying again at a different time.",
+        retryable: true,
+        ourFault: false,
+    },
+    invalid_number: {
+        code: "invalid_number",
+        label: "Invalid number",
+        hint: "The network says this number does not exist or is not in service. Fix the number before trying again.",
+        retryable: false,
+        ourFault: false,
+    },
+    // Retryable since 2026-09-21. It used to be false because the AI-connected
+    // hard block treated ANY transcript as contact, so a retry would have been
+    // refused. The block now requires the dealer to have spoken
+    // (campaignLeadStatus.dealerSpoke), which a silent call by definition fails.
     silent_call: {
         code: "silent_call",
         label: "Silent call",
-        hint: "The dealer answered but never spoke. They HAVE been reached — the AI will not call again.",
-        retryable: false,
+        hint: "The call connected but the dealer never spoke — the AI talked to silence, a recording or a line that was hung up. Worth trying again.",
+        retryable: true,
         ourFault: false,
     },
     no_response: {
@@ -153,6 +176,19 @@ const SPECS: Record<FailureReasonCode, Spec> = {
     },
 };
 
+/**
+ * dialer_campaign_leads.status values that already ARE the reason. Keyed by
+ * string, not CampaignLeadStatus, so this module does not import the one that
+ * imports it.
+ */
+const STATUS_REASON = new Map<string, FailureReasonCode>([
+    ["busy", "busy"],
+    ["no_response", "not_answered"],
+    ["rejected", "rejected"],
+    ["voicemail", "voicemail"],
+    ["no_conversation", "silent_call"],
+]);
+
 export type FailureReasonInput = {
     /** dialer_campaign_leads.status */
     status: string | null;
@@ -175,13 +211,22 @@ function triggerDetail(outcome: string): string | null {
 }
 
 /**
+ * A SIP response code as a whole number, not as digits inside a longer one —
+ * trigger errors can carry phone numbers and ids, and "+9198760348…" contains
+ * "603". The older `includes("486")`-style checks predate this.
+ */
+function sipCode(d: string, code: number): boolean {
+    return new RegExp(`(^|[^0-9])${code}([^0-9]|$)`).test(d);
+}
+
+/**
  * Classify a provider's free-text trigger error.
  *
  * These strings come straight from Bolna / ElevenLabs and are not a vocabulary
  * we control, so this matches on substrings and falls back to `unknown` rather
  * than guessing. Every pattern here was taken from a real row.
  */
-function classifyTriggerDetail(detail: string): FailureReasonCode {
+export function classifyTriggerDetail(detail: string): FailureReasonCode {
     const d = detail.toLowerCase();
 
     // OURS, not the dealer's. Checked first: a misconfigured from_number also
@@ -198,10 +243,34 @@ function classifyTriggerDetail(detail: string): FailureReasonCode {
         return "config_error";
     }
 
-    // SIP 486 Busy Here.
-    if (d.includes("486") || d.includes("busy")) return "busy";
-    // SIP 480 Temporarily Unavailable / 503 Service Unavailable.
-    if (d.includes("480") || d.includes("temporarily unavailable")) return "not_answered";
+    // SIP 486 Busy Here / 600 Busy Everywhere.
+    if (sipCode(d, 486) || sipCode(d, 600) || d.includes("busy")) return "busy";
+    // SIP 603 Decline — the dealer pressed reject. Checked before the generic
+    // "sip" → technical rule below, which would otherwise swallow it.
+    if (sipCode(d, 603) || d.includes("decline") || d.includes("rejected")) {
+        return "rejected";
+    }
+    // SIP 480 Temporarily Unavailable. SIP 487 Request Terminated is the ring
+    // timer expiring with nobody picking up.
+    if (
+        sipCode(d, 480) ||
+        d.includes("temporarily unavailable") ||
+        sipCode(d, 487) ||
+        d.includes("request terminated") ||
+        d.includes("no answer") ||
+        d.includes("noanswer")
+    ) {
+        return "not_answered";
+    }
+    // SIP 484 Address Incomplete / 604 Does Not Exist Anywhere.
+    if (
+        sipCode(d, 484) ||
+        sipCode(d, 604) ||
+        d.includes("address incomplete") ||
+        d.includes("does not exist anywhere")
+    ) {
+        return "invalid_number";
+    }
     if (d.includes("voicemail") || d.includes("machine")) return "voicemail";
     if (d.includes("408") || d.includes("timed out") || d.includes("timeout")) {
         return "technical";
@@ -215,24 +284,29 @@ function classifyTriggerDetail(detail: string): FailureReasonCode {
     ) {
         return "technical";
     }
-    if (d.includes("no answer") || d.includes("noanswer")) return "not_answered";
-    if (d.includes("rejected") || d.includes("declined") || d.includes("disconnect")) {
-        return "disconnected";
-    }
+    if (d.includes("disconnect")) return "disconnected";
     return "unknown";
 }
 
 /** Provider status strings, normalised the same way aiDisposition does. */
-function classifyProviderStatus(raw: string): FailureReasonCode {
+export function classifyProviderStatus(raw: string): FailureReasonCode {
     const s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
     if (["no_answer", "noanswer", "not_answered"].includes(s)) return "not_answered";
     if (["voicemail", "machine_detected", "answering_machine"].includes(s)) {
         return "voicemail";
     }
     if (["busy", "user_busy"].includes(s)) return "busy";
-    if (["call_disconnected", "rejected", "declined", "canceled", "cancelled"].includes(s)) {
+    if (["rejected", "declined", "call_rejected"].includes(s)) return "rejected";
+    if (
+        ["invalid_number", "wrong_number", "unallocated_number", "number_invalid"].includes(s)
+    ) {
+        return "invalid_number";
+    }
+    if (["call_disconnected", "canceled", "cancelled"].includes(s)) {
         return "disconnected";
     }
+    // Bolna refuses to dial on an empty wallet — nothing to do with the dealer.
+    if (s === "balance_low") return "config_error";
     if (["failed", "error", "initiation_failure"].includes(s)) return "technical";
     return "unknown";
 }
@@ -249,13 +323,31 @@ export function deriveFailureReason(
     const outcome = (input.callOutcome ?? "").trim();
     const lower = outcome.toLowerCase();
 
+    // ── The row's own classification ──────────────────────────────────────
+    // Since 2026-09-21 the finalizers write WHY a call produced no conversation
+    // into the status itself (campaignLeadStatus.classifyCallEnd). When they
+    // have, that is the answer; the evidence-order rules below exist for rows
+    // written before they did, and for the two statuses that still need them.
+    const byStatus = STATUS_REASON.get(input.status ?? "");
+    if (byStatus) {
+        return { ...SPECS[byStatus], detail: triggerDetail(outcome) };
+    }
+    if (input.status === "failed" && lower === "invalid_number") {
+        return { ...SPECS.invalid_number, detail: null };
+    }
+
     // ── Connected outcomes ────────────────────────────────────────────────
     // A transcript is proof the call happened, and it OUTRANKS the outcome
     // string — which is exactly how a row that plainly connected could still
     // read "Trigger failed".
     if (input.hasTranscript) {
         if (input.bandCallStatus === "dropped_empty" || lower === "dropped_empty") {
-            return { ...SPECS.silent_call, detail: null };
+            // A 'completed' row is one where the dealer SPOKE (see
+            // campaignLeadStatus.dealerSpoke) — so a dropped call there is a
+            // dealer who said something and gave nothing back, not silence.
+            return input.status === "completed"
+                ? { ...SPECS.no_response, detail: null }
+                : { ...SPECS.silent_call, detail: null };
         }
         // Answered, heard something, gave nothing usable back. Distinct from a
         // silent call: there WAS speech, it just carried no signal.
@@ -275,10 +367,10 @@ export function deriveFailureReason(
             : null;
     }
 
-    if (input.status !== "failed") {
+    if (input.status !== "failed" && input.status !== "skipped") {
         // completed / pending / calling with no transcript yet. Only a
         // 'completed' row with no transcript is a failure worth naming, and the
-        // no-transcript finalize path marks those failed — so nothing to say.
+        // no-transcript finalize path never writes one — so nothing to say.
         return null;
     }
 
