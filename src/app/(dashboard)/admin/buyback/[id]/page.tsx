@@ -132,6 +132,84 @@ interface Detail {
   }>;
   allowed_actions: string[];
   review_actions: ReviewAction[];
+  /** E-302 (review R-12) — the SPOC this request is credited to. */
+  owner?: { owner_id: string | null; owner_name: string | null; owner_assigned_at: string | null };
+  owner_options?: Array<{ user_id: string; name: string | null; role: string | null }>;
+}
+
+/**
+ * E-302 (review R-12) — who owns this request. The Buyback Daily mail credits
+ * its kg, quotes and pickups to this person; before, it guessed "the last admin
+ * to act", which was the Sales Head almost every time.
+ */
+function OwnerControl({
+  requestId,
+  owner,
+  options,
+  onChanged,
+}: {
+  requestId: string;
+  owner: NonNullable<Detail["owner"]>;
+  options: NonNullable<Detail["owner_options"]>;
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save(ownerId: string | null) {
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/admin/buyback/requests/${requestId}/owner`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner_id: ownerId }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) throw new Error(json?.error?.message ?? "Could not change the owner.");
+      onChanged();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px]">
+      <span className="font-semibold text-slate-600">Owner</span>
+      <span className={owner.owner_id ? "text-slate-900" : "text-amber-700"}>
+        {owner.owner_id ? (owner.owner_name ?? "Unknown user") : "Unassigned — credited to no one"}
+      </span>
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => save("me")}
+        className="rounded-md border border-slate-300 px-2 py-0.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+      >
+        Claim
+      </button>
+      <select
+        aria-label="Assign owner"
+        disabled={saving}
+        value=""
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v) save(v === "__none" ? null : v);
+        }}
+        className="rounded-md border border-slate-300 px-2 py-0.5 text-[12px] text-slate-700 disabled:opacity-50"
+      >
+        <option value="">Assign to…</option>
+        {options.map((o) => (
+          <option key={o.user_id} value={o.user_id}>
+            {o.name ?? "(no name)"} · {(o.role ?? "").replace(/_/g, " ")}
+          </option>
+        ))}
+        {owner.owner_id && <option value="__none">— Unassign —</option>}
+      </select>
+      {err && <span className="text-[12px] text-red-600">{err}</span>}
+    </div>
+  );
 }
 
 const CHECKLIST = [
@@ -509,6 +587,15 @@ function AdminBuybackDetail() {
         {d.dealer_name ?? "—"} · {d.dealer_city ?? "—"} · {dateLabel} · Dealer quote{" "}
         {inr(dealerQuote)}
       </div>
+
+      {d.owner && (
+        <OwnerControl
+          requestId={d.request_id}
+          owner={d.owner}
+          options={d.owner_options ?? []}
+          onChanged={reload}
+        />
+      )}
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

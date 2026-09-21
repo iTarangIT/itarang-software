@@ -18,6 +18,7 @@ import { SalesDashboardSkeleton } from "./SalesDashboardSkeleton";
 import { SalesFilterBar } from "./SalesFilterBar";
 import { SalesInterestTable } from "./SalesInterestTable";
 import { SalesKpiRow } from "./SalesKpiRow";
+import { SalesOutcomeStrip } from "./SalesOutcomeStrip";
 import { SalesPerRepTable } from "./SalesPerRepTable";
 import { useSalesDashboardFilters } from "./useSalesDashboardFilters";
 
@@ -38,6 +39,8 @@ function hasNoData(d: SalesDashboard): boolean {
         !s.visits_yesterday && !s.calls_yesterday &&
         !s.planned_visits_today && !s.planned_visits_next_7_days &&
         !d.totals.converted &&
+        !d.outcome.quotes_issued && !d.outcome.revenue &&
+        !d.outcome.batteries_to_dealers && !d.outcome.kyc_submitted &&
         (d.per_spoc?.length ?? 0) === 0
     );
 }
@@ -102,6 +105,7 @@ export function SalesDashboardView({ mode }: { mode: SalesDashboardMode }) {
                         </div>
                     ) : (
                         <>
+                            <SalesOutcomeStrip d={d} />
                             <SalesCharts series={d.series} averages={d.averages} granularity={granularity} />
                             <SalesInterestTable d={d.interest} />
                             {isAdmin && d.per_spoc && (

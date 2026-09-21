@@ -231,7 +231,7 @@ export function LeadsTable({
                             </th>
                             <th
                                 className="min-w-[90px] px-4 py-3 text-left font-semibold"
-                                title="Calendar days since the last touchpoint — or since the lead was created, if it has never been touched"
+                                title="Calendar days since the lead was last worked (a call, visit or status change) — or since it was created, if it has never been worked. Assigning, claiming or commenting does not reset it."
                             >
                                 Idle
                             </th>
@@ -281,8 +281,11 @@ export function LeadsTable({
                                 const isUpNext =
                                     dialerPhase === "countdown" && dialerLeadId === row.id;
                                 const nextCall = formatNextCall(row.next_call_at);
+                                // Idle reads the work clock (E-300), not
+                                // Last Touch: assigning or commenting on a
+                                // lead must not make it look worked.
                                 const idle = idleDays(
-                                    row.last_touchpoint_at,
+                                    row.last_worked_at,
                                     row.created_at,
                                     nowMs,
                                 );
@@ -534,9 +537,9 @@ export function LeadsTable({
                                                 title={
                                                     idle === null
                                                         ? "No touchpoint and no creation date"
-                                                        : row.last_touchpoint_at
-                                                          ? `${idle} days since the last touchpoint`
-                                                          : `Never touched — ${idle} days since the lead was created`
+                                                        : row.last_worked_at
+                                                          ? `${idle} days since the last call, visit or status change`
+                                                          : `Never worked — no call, visit or status change in ${idle} days since the lead was created`
                                                 }
                                             >
                                                 {idleText.primary}
@@ -546,9 +549,9 @@ export function LeadsTable({
                                                     {idleText.months}
                                                 </div>
                                             )}
-                                            {!row.last_touchpoint_at && idle !== null && (
+                                            {!row.last_worked_at && idle !== null && (
                                                 <div className="text-[10px] uppercase tracking-wide text-gray-400">
-                                                    never touched
+                                                    never worked
                                                 </div>
                                             )}
                                         </td>

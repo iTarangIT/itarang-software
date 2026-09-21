@@ -33,6 +33,7 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 
 export type RevenueInvoiceSource = "zoho" | "drive";
 
@@ -56,6 +57,15 @@ export interface RevenueInvoiceRow {
   payment_reference: string | null;
   needs_attention: boolean;
   attention_reason: string | null;
+  /** Customer GSTIN, upper-cased with spaces removed. NULL when the invoice has none. */
+  gstin_key: string | null;
+  /**
+   * The CRM dealer this invoice was matched to on GSTIN (review R-11), on the
+   * list / export / summary rows only — see matchedUnion(). NULL = not linked.
+   */
+  dealer_lead_id?: string | null;
+  dealer_name?: string | null;
+  dealer_owner_id?: string | null;
 }
 
 /**
@@ -126,7 +136,10 @@ async function revenueUnion(): Promise<SQL> {
       ('/api/admin/zoho/invoices/' || zi.zoho_invoice_id || '/pdf')  AS document_url,
       zi.payment_reference                                           AS payment_reference,
       false                                                          AS needs_attention,
-      NULL::text                                                     AS attention_reason
+      NULL::text                                                     AS attention_reason,
+      -- Zoho's invoice LIST payload (what the sync stores) carries no GSTIN
+      -- today; read gst_no anyway so a richer sync starts matching unaided.
+      ${GSTIN_KEY(sql`zi.raw_json->>'gst_no'`)}                      AS gstin_key
     FROM zoho_invoices zi
   `;
 
@@ -149,12 +162,44 @@ async function revenueUnion(): Promise<SQL> {
       si.document_url                                                AS document_url,
       si.payment_reference                                           AS payment_reference,
       si.needs_attention                                             AS needs_attention,
-      si.attention_reason                                            AS attention_reason
+      si.attention_reason                                            AS attention_reason,
+      ${GSTIN_KEY(sql`si.customer_gstin`)}                           AS gstin_key
     FROM sales_invoices si
   `;
 
   return sql`(${zoho} UNION ALL ${drive})`;
 }
+
+/**
+ * The union with each invoice linked to a CRM dealer on GSTIN (review R-11).
+ *
+ * An invoice carries only a typed customer name, which cannot be joined to
+ * anything reliably; the GSTIN can. The matching rule lives in
+ * src/lib/leads/gstinMatch.ts, shared with the Sales dashboard's battery and
+ * KYC attribution, so one dealer can never credit two salespeople.
+ *
+ * The SPOC an invoice counts for is that lead's CURRENT owner — the metric
+ * dictionary's "owner at invoice date" needs ownership history per day, which
+ * E-295's episodes could supply later.
+ *
+ * Kept separate from revenueUnion(): company totals and the chart never need
+ * the match, and must not move because of it. Exported for the Sales
+ * dashboard, which joins it to dealer_leads so its city / state /
+ * business-type filters apply to revenue too.
+ */
+export async function matchedUnion(): Promise<SQL> {
+  const src = await revenueUnion();
+  return sql`(
+    SELECT u.*,
+           m.dealer_lead_id,
+           m.dealer_name,
+           m.dealer_owner_id
+      FROM ${src} AS u
+      LEFT JOIN ${dealerLeadByGstin(sql`u.gstin_key`)} m ON TRUE
+  )`;
+}
+
+export type InvoiceDealerMatch = "linked" | "unlinked";
 
 /**
  * Revenue rule: void excluded, drafts counted.
@@ -303,6 +348,8 @@ export interface RevenueListFilters {
   statuses?: string[] | null;
   customer?: string | null;
   source?: RevenueInvoiceSource | null;
+  /** R-11 reconciliation: only invoices linked / not linked to a CRM dealer. */
+  dealerMatch?: InvoiceDealerMatch | null;
   limit?: number;
   offset?: number;
 }
@@ -324,6 +371,8 @@ function listWhere(f: RevenueListFilters): SQL {
     parts.push(sql`r.customer_name ILIKE ${"%" + f.customer.trim() + "%"}`);
   }
   if (f.source) parts.push(sql`r.source = ${f.source}`);
+  if (f.dealerMatch === "linked") parts.push(sql`r.dealer_lead_id IS NOT NULL`);
+  if (f.dealerMatch === "unlinked") parts.push(sql`r.dealer_lead_id IS NULL`);
 
   if (parts.length === 0) return sql`TRUE`;
   return sql.join(parts, sql` AND `);
@@ -333,7 +382,7 @@ function listWhere(f: RevenueListFilters): SQL {
 export async function listRevenueInvoices(
   f: RevenueListFilters,
 ): Promise<RevenueInvoiceRow[]> {
-  const src = await revenueUnion();
+  const src = await matchedUnion();
   const limit = Math.min(Math.max(f.limit ?? 50, 1), 500);
   const offset = Math.max(f.offset ?? 0, 0);
   const res = await db.execute(sql`
@@ -350,21 +399,35 @@ export async function revenueSummary(f: RevenueListFilters): Promise<{
   count: number;
   total: number;
   balance: number;
+  /** Of `count` / `total`, invoices NOT linked to a CRM dealer (R-11). */
+  unlinked_count: number;
+  unlinked_total: number;
 }> {
-  const src = await revenueUnion();
-  const res = await db.execute<{ count: string; total: string; balance: string }>(sql`
+  const src = await matchedUnion();
+  type Row = {
+    count: string;
+    total: string;
+    balance: string;
+    unlinked_count: string;
+    unlinked_total: string;
+  };
+  const res = await db.execute<Row>(sql`
     SELECT
       COUNT(*)                    AS count,
       COALESCE(SUM(r.total), 0)   AS total,
-      COALESCE(SUM(r.balance), 0) AS balance
+      COALESCE(SUM(r.balance), 0) AS balance,
+      COUNT(*) FILTER (WHERE r.dealer_lead_id IS NULL)                  AS unlinked_count,
+      COALESCE(SUM(r.total) FILTER (WHERE r.dealer_lead_id IS NULL), 0) AS unlinked_total
     FROM ${src} AS r
     WHERE ${listWhere(f)}
   `);
-  const row = rowsOf<{ count: string; total: string; balance: string }>(res)[0];
+  const row = rowsOf<Row>(res)[0];
   return {
     count: Number(row?.count ?? 0),
     total: Number(row?.total ?? 0),
     balance: Number(row?.balance ?? 0),
+    unlinked_count: Number(row?.unlinked_count ?? 0),
+    unlinked_total: Number(row?.unlinked_total ?? 0),
   };
 }
 
@@ -373,7 +436,7 @@ export async function listRevenueInvoicesForExport(
   f: RevenueListFilters,
   cap = 10_000,
 ): Promise<RevenueInvoiceRow[]> {
-  const src = await revenueUnion();
+  const src = await matchedUnion();
   const res = await db.execute(sql`
     SELECT * FROM ${src} AS r
     WHERE ${listWhere(f)}
@@ -409,3 +472,4 @@ export async function drillDownRows(
   `);
   return rowsOf<RevenueInvoiceRow>(res);
 }
+

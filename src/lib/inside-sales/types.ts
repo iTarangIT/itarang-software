@@ -41,6 +41,8 @@ export type QueueRow = {
     current_owner_id: string | null;
     current_owner_name: string | null;
     last_touchpoint_at: string | null;
+    /** E-300 — last call / visit / status change; drives the stale cue. */
+    last_worked_at: string | null;
     next_follow_up_at: string | null;
     total_attempts: number | null;
     assigned_at: string | null;

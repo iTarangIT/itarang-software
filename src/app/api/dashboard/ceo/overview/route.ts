@@ -6,7 +6,8 @@
  * describe:
  *
  *   realization — revenue, expense, outstanding and revenue − expense
- *   leads       — leads created in the window and how many qualified
+ *   leads       — leads created in the window, how many of those the AI rated
+ *                 qualified, and deals converted (closed) in the window
  *   buyback     — buyback requests submitted vs completed
  *   chart       — the same revenue/expense/realization, bucketed over time
  *
@@ -139,16 +140,35 @@ export async function GET(req: NextRequest) {
       .where(expenseWhere);
 
     // ── Leads ────────────────────────────────────────────────────────────────
-    const leadWindow = [];
-    if (startStr) leadWindow.push(gte(dealerLeads.created_at, sql`${startStr}::date`));
-    if (endStr) leadWindow.push(lt(dealerLeads.created_at, sql`${endStr}::date`));
+    // Two different clocks, on purpose (review R-01, metric M15):
+    //   total / aiQualified — leads CREATED in the window, and how many of those
+    //                         the AI dialer rated `qualified` (an intent rating)
+    //   converted           — leads marked lead_status='Converted' whose
+    //                         closed_at falls in the window, the same rule as the
+    //                         Sales dashboard and both daily emails, so the CEO
+    //                         and Sales Head see one number for one period.
+    // The card used to report the AI rating under the name `converted`.
+    const createdWindow = [];
+    if (startStr) createdWindow.push(gte(dealerLeads.created_at, sql`${startStr}::date`));
+    if (endStr) createdWindow.push(lt(dealerLeads.created_at, sql`${endStr}::date`));
+    const closedWindow = [];
+    if (startStr) closedWindow.push(gte(dealerLeads.closed_at, sql`${startStr}::date`));
+    if (endStr) closedWindow.push(lt(dealerLeads.closed_at, sql`${endStr}::date`));
+    const createdInWindow = createdWindow.length ? and(...createdWindow)! : sql`TRUE`;
+    const convertedInWindow = and(
+      sql`${dealerLeads.lead_status} = 'Converted'`,
+      ...closedWindow,
+    )!;
     const leadsQ = db
       .select({
-        total: sql<number>`COUNT(*)`,
-        converted: sql<number>`COUNT(*) FILTER (WHERE ${dealerLeads.current_status} = 'qualified')`,
+        total: sql<number>`COUNT(*) FILTER (WHERE ${createdInWindow})`,
+        aiQualified: sql<number>`COUNT(*) FILTER (WHERE ${createdInWindow} AND ${dealerLeads.current_status} = 'qualified')`,
+        converted: sql<number>`COUNT(*) FILTER (WHERE ${convertedInWindow})`,
       })
       .from(dealerLeads)
-      .where(leadWindow.length ? and(...leadWindow) : undefined);
+      .where(
+        createdWindow.length ? sql`(${createdInWindow}) OR (${convertedInWindow})` : undefined,
+      );
 
     // ── Chart series ─────────────────────────────────────────────────────────
     // The bucket expression is inlined with sql.raw so the SAME text appears in
@@ -285,6 +305,7 @@ export async function GET(req: NextRequest) {
         leads: {
           total: Number(leadsAgg?.total || 0),
           converted: Number(leadsAgg?.converted || 0),
+          aiQualified: Number(leadsAgg?.aiQualified || 0),
         },
         buyback,
         chart,

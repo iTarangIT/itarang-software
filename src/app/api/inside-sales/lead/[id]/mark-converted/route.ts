@@ -16,6 +16,7 @@ import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
 import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
+import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -31,8 +32,17 @@ function deriveClosingRole(
     return asmId ? "is_post_handoff" : "is_phone";
 }
 
+// GSTIN is REQUIRED here (review R-11): it is the only reliable key from a
+// dealer's invoices back to this lead, and so to the SPOC who closed it. The
+// customer name typed on an invoice cannot be joined to anything. Other paths
+// to Converted (admin bulk status, NeoDove) cannot ask for it; those leads show
+// up as unlinked on the Sales Invoices reconciliation filter.
 const BodySchema = z.object({
     notes: z.string().max(5000).nullable().optional(),
+    gstin: z
+        .string()
+        .transform(normalizeGstin)
+        .refine(isValidGstin, "Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1Z5)."),
 });
 
 export const POST = withErrorHandler(
@@ -69,6 +79,10 @@ export const POST = withErrorHandler(
         // application. writeTouchpoint + the onboarding creator both run on the
         // same `tx`.
         const onboardingApplicationId = await db.transaction(async (tx) => {
+            await tx.execute(sql`
+                UPDATE dealer_leads SET gstin = ${body.gstin} WHERE id = ${id}
+            `);
+
             await writeTouchpoint(
                 {
                     dealerLeadId: id,
@@ -90,6 +104,16 @@ export const POST = withErrorHandler(
             if (!applicationId) {
                 throw new Error("Failed to create dealer onboarding application");
             }
+
+            // Pre-fill the onboarding form's GST number so the dealer is not
+            // asked again — and so the two stay the same. Never overwrites a
+            // number the application already carries (a re-conversion).
+            await tx.execute(sql`
+                UPDATE dealer_onboarding_applications
+                   SET gst_number = ${body.gstin}
+                 WHERE id = ${applicationId}::uuid
+                   AND NULLIF(btrim(gst_number), '') IS NULL
+            `);
 
             // BRD §0.13 audit — record the onboarding initiation event.
             await tx.insert(auditLogs).values({

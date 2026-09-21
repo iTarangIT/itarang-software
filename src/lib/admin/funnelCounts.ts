@@ -132,12 +132,12 @@ function groupExprs(
         case "city":
             return {
                 key: sql`COALESCE(lower(trim(${src.city})), '')`,
-                label: sql`COALESCE(NULLIF(trim(${src.city}), ''), '(not captured)')`,
+                label: sql`COALESCE(NULLIF(trim(${src.city}), ''), 'Unknown city')`,
             };
         case "state":
             return {
                 key: sql`COALESCE(lower(trim(${src.state})), '')`,
-                label: sql`COALESCE(NULLIF(trim(${src.state}), ''), '(not captured)')`,
+                label: sql`COALESCE(NULLIF(trim(${src.state}), ''), 'Unknown state')`,
             };
         case "month":
             return {

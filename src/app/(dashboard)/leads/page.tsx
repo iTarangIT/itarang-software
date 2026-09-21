@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { EventLogExportButton } from "@/components/leads/EventLogExportButton";
 import {
   Plus,
   Phone,
@@ -2020,6 +2021,8 @@ export default function LeadsUnifiedPage() {
               Export all leads
             </button>
           )}
+          {/* R-21 — every event on these leads, by the date it happened. */}
+          {tab === "leads" && <EventLogExportButton selectedIds={[...selectedLeadIds]} />}
           {/* "Add Lead" stood here — single-lead entry into the PROSPECT pool
               (dealer_leads), as distinct from "New Lead" on the right, which
               opens the 5-step loan-application wizard against `leads`. Removed

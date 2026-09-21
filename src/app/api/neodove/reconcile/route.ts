@@ -32,6 +32,7 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { parseInboundEvent, callStatusFor, remarksFor } from "@/lib/neodove/mapper";
 import { attachCallEvidence, recordLeadDisposition } from "@/lib/neodove/inbound";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
+import { resolveAgentUserId } from "@/lib/neodove/agentMap";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -127,7 +128,9 @@ export const POST = withErrorHandler(async (req: Request) => {
             const { touchpointId } = await writeTouchpoint({
                 dealerLeadId,
                 touchpointType: "inside_sales_call",
-                performedBy: null,
+                // Same attribution as the live webhook (review R-03): the
+                // mapped CRM user for the CSV's agent column, else null.
+                performedBy: await resolveAgentUserId(event.agentName),
                 performedAt: event.occurredAt ?? new Date(),
                 callStatus,
                 callDurationSec: event.callDurationSec,

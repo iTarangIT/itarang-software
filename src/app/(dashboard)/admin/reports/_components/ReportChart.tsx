@@ -92,10 +92,13 @@ function renderChart(result: ReportResult): React.ReactElement {
         }
 
         case "lead_funnel":
+            // The "All leads created" total row would dwarf every bar, so it
+            // stays in the table only. Two bars per stage (review R-07): where
+            // leads sit now, and how many ever got there.
             return (
                 <BarChart
                     layout="vertical"
-                    data={rows}
+                    data={rows.filter((r) => r.stage !== "All leads created")}
                     margin={{ top: 4, right: 24, bottom: 4, left: 40 }}
                 >
                     <CartesianGrid stroke={GRID} horizontal={false} />
@@ -108,7 +111,9 @@ function renderChart(result: ReportResult): React.ReactElement {
                         width={150}
                     />
                     <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "#f4f7fa" }} />
-                    <Bar dataKey="count" name="Leads" fill={ROYAL} radius={[0, 4, 4, 0]} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Bar dataKey="ever_reached" name="Ever reached" fill={SKY} radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="count" name="Currently at" fill={ROYAL} radius={[0, 4, 4, 0]} />
                 </BarChart>
             );
 
