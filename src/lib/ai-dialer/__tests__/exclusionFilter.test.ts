@@ -22,6 +22,7 @@ import {
     IN_LIVE_DIALER_QUEUE_PREDICATE,
     isAiDialable,
 } from "@/lib/ai-dialer/exclusionFilter";
+import { dealerSpokeSql } from "@/lib/ai-dialer/campaignLeadStatus";
 
 describe("AI_DIALABLE_PREDICATE — shared with the NeoDove human push", () => {
     it("tests only the Part-0 lifecycle columns", () => {
@@ -114,9 +115,12 @@ describe("the AI-only predicates", () => {
     // The mirror of the assertion above: these SHOULD talk about call history,
     // and should NOT restate the Part-0 lifecycle rule (which is ANDed in
     // separately, and would silently diverge if duplicated here).
-    it("AI_CONNECTED_PREDICATE keys on a transcript existing", () => {
+    // A transcript alone is not contact — the AI's greeting to an empty line
+    // produces one. The dealer has to have SPOKEN (campaignLeadStatus).
+    it("AI_CONNECTED_PREDICATE keys on the dealer having spoken", () => {
         expect(AI_CONNECTED_PREDICATE).toMatch(/ai_call_logs/);
         expect(AI_CONNECTED_PREDICATE).toMatch(/transcript IS NOT NULL/);
+        expect(AI_CONNECTED_PREDICATE).toContain(dealerSpokeSql("acl"));
         expect(AI_CONNECTED_PREDICATE).not.toMatch(/lead_status/);
     });
 

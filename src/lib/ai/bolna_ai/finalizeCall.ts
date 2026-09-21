@@ -17,6 +17,10 @@ import { eq, sql } from "drizzle-orm";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
+import {
+  classifyCallEnd,
+  type CallEndClassification,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleCall } from "@/lib/queue/scheduler";
 import {
@@ -45,12 +49,31 @@ export type BolnaFinalizePayload = {
   conversation?: unknown[];
   // raw provider event id for sheet logging (Bolna calls it execution_id).
   executionId?: string;
+  // telephony_data.answered_by_voice_mail — Bolna's answering-machine
+  // detection. null when AMD is off for the agent.
+  answeredByVoicemail?: boolean | null;
+  // telephony_data.hangup_reason — Bolna's normalised reason the call ended.
+  hangupReason?: string | null;
 };
 
 // Statuses where the call is still in progress — these arrive on Bolna
 // webhooks but should be ignored. Poll loop sees these as not-yet-terminal
 // and waits for the next tick.
-const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
+//
+// `call-disconnected` belongs here. Bolna sends it the instant the line drops —
+// conversation_duration 0, no recording, no summary — and sends `completed` a
+// few seconds later with the finalized data. Finalizing on the first one took
+// the claim (callClaim.ts), so the real `completed` was then dropped as
+// "already processed". queued / scheduled / rescheduled are pre-dial states.
+const IN_PROGRESS = new Set([
+  "queued",
+  "scheduled",
+  "rescheduled",
+  "initiated",
+  "ringing",
+  "in-progress",
+  "call-disconnected",
+]);
 
 // Delay between completing one call and placing the next. Was 5s in the
 // pre-DB-driven design; kept here so the campaign card has time to refresh
@@ -70,6 +93,8 @@ export async function finalizeBolnaCall(
     leadId: leadIdHint,
     conversation,
     executionId,
+    answeredByVoicemail,
+    hangupReason,
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -83,6 +108,16 @@ export async function finalizeBolnaCall(
       return;
     }
   }
+
+  // What this attempt ENDED as — decided once, from the whole payload. Bolna's
+  // own docs: "status: 'completed' does not mean a conversation happened".
+  // See campaignLeadStatus.ts.
+  const callEnd = classifyCallEnd({
+    providerStatus: status,
+    transcript,
+    answeredByVoicemail,
+    terminationReason: hangupReason,
+  });
 
   // ── No-transcript path: busy / failed / no-answer ──
   if (!transcript) {
@@ -146,7 +181,7 @@ export async function finalizeBolnaCall(
 
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
-        success: false,
+        status: callEnd.status,
         bolnaCallId: callId || null,
         outcome: status || "no_answer",
         intentScore: null,
@@ -255,6 +290,7 @@ export async function finalizeBolnaCall(
       phone: phone ?? lead.phone,
       conversation: conversation ?? [],
       reason: result.reason,
+      callEnd,
     });
     if (r.campaignId) {
       await advanceCampaign(r.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
@@ -336,14 +372,15 @@ export async function finalizeBolnaCall(
     });
 
     // dropped_empty connected and produced a transcript — the line just dropped
-    // before any qualifying info was captured. It is NOT a telephony failure, so
-    // the campaign row is marked completed ("Done"), not failed. The Outcome
-    // column still carries "dropped_empty" to preserve the call-quality nuance.
+    // before any qualifying info was captured. It is NOT a telephony failure,
+    // but not automatically a conversation either: classifyCallEnd marks it
+    // completed only if the dealer spoke. The Outcome column still carries
+    // "dropped_empty" to preserve the call-quality nuance.
     const dr = await completeCampaignLead({
       leadId: lead.id,
-      success: true,
+      status: callEnd.status,
       bolnaCallId: callId || null,
-      outcome: "dropped_empty",
+      outcome: callEnd.outcome ?? "dropped_empty",
       intentScore: null,
     });
     if (dr.campaignId) {
@@ -467,9 +504,9 @@ export async function finalizeBolnaCall(
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
-    success: true,
+    status: callEnd.status,
     bolnaCallId: callId || null,
-    outcome: analysis.outcome,
+    outcome: callEnd.outcome ?? analysis.outcome,
     intentScore: analysis.intent_score,
   });
 
@@ -703,6 +740,7 @@ async function markLeadNeedsReview(opts: {
   phone: string | null;
   conversation: unknown[];
   reason: string;
+  callEnd: CallEndClassification;
 }): Promise<{ campaignId: string | null }> {
   const history = opts.followUpHistory || [];
   const newEntry = {
@@ -767,9 +805,9 @@ async function markLeadNeedsReview(opts: {
 
   const r = await completeCampaignLead({
     leadId: opts.leadId,
-    success: true,
+    status: opts.callEnd.status,
     bolnaCallId: opts.callId || null,
-    outcome: "needs_review",
+    outcome: opts.callEnd.outcome ?? "needs_review",
     intentScore: null,
   });
   return { campaignId: r.campaignId };

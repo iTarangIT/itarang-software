@@ -120,17 +120,29 @@ describe("a transcript outranks the outcome string", () => {
         expect(r?.label).not.toMatch(/trigger/i);
     });
 
-    it("dropped_empty is a silent call, and is NOT retryable", () => {
+    it("dropped_empty on a legacy failed row is a silent call, and IS retryable", () => {
+        const r = deriveFailureReason({
+            status: "failed",
+            callOutcome: "dropped_empty",
+            hasTranscript: true,
+            bandCallStatus: "dropped_empty",
+        });
+        expect(r?.code).toBe("silent_call");
+        // The AI-connected hard block now requires the dealer to have SPOKEN,
+        // which a silent call did not — so a retry is no longer refused.
+        expect(r?.retryable).toBe(true);
+    });
+
+    // 'completed' now means the dealer spoke (campaignLeadStatus.dealerSpoke),
+    // so a dropped call there said something and gave nothing back.
+    it("dropped_empty on a completed row is 'no response', and is NOT retryable", () => {
         const r = deriveFailureReason({
             status: "completed",
             callOutcome: "dropped_empty",
             hasTranscript: true,
             bandCallStatus: "dropped_empty",
         });
-        expect(r?.code).toBe("silent_call");
-        // The dealer WAS reached, so the AI-connected hard block refuses them
-        // anyway — offering a retry would be offering an action that gets
-        // refused.
+        expect(r?.code).toBe("no_response");
         expect(r?.retryable).toBe(false);
     });
 
@@ -229,11 +241,11 @@ describe("invariants", () => {
         }
     });
 
-    // The two CONNECTED reasons are the only non-retryable dealer outcomes, and
-    // that is not a style choice — the AI-connected hard block will refuse them,
-    // so a retry would silently do nothing.
-    it("marks exactly the connected outcomes as non-retryable", () => {
-        expect(isRetryableFailure(failed({ callOutcome: "dropped_empty", hasTranscript: true }))).toBe(false);
+    // A dealer who SPOKE is the only non-retryable dealer outcome, and that is
+    // not a style choice — the AI-connected hard block will refuse them, so a
+    // retry would silently do nothing. A silent call is retryable.
+    it("marks exactly the spoken-to outcomes as non-retryable", () => {
+        expect(isRetryableFailure(failed({ callOutcome: "dropped_empty", hasTranscript: true }))).toBe(true);
         expect(isRetryableFailure({ status: "completed", callOutcome: "needs_review", hasTranscript: true })).toBe(false);
         expect(isRetryableFailure(failed({ callOutcome: "trigger_failed" }))).toBe(true);
         expect(isRetryableFailure(failed({ callOutcome: "trigger_failed: 486 Busy Here" }))).toBe(true);
@@ -243,5 +255,54 @@ describe("invariants", () => {
         // `detail` must be provider text or null — never a label we made up.
         const r = deriveFailureReason(failed({ callOutcome: "trigger_failed" }));
         expect(r?.detail).toBeNull();
+    });
+});
+
+describe("a status that already names the reason (2026-09-21)", () => {
+    it("reads the reason straight off the status", () => {
+        const cases: [string, string][] = [
+            ["busy", "busy"],
+            ["no_response", "not_answered"],
+            ["rejected", "rejected"],
+            ["voicemail", "voicemail"],
+            ["no_conversation", "silent_call"],
+        ];
+        for (const [status, code] of cases) {
+            const r = deriveFailureReason({ status, callOutcome: "dropped_empty", hasTranscript: true });
+            expect(r?.code, status).toBe(code);
+            expect(r?.retryable, status).toBe(true);
+        }
+    });
+
+    it("keeps the provider text as the detail", () => {
+        const r = deriveFailureReason({
+            status: "busy",
+            callOutcome: "trigger_failed: INVITE failed: sip status: 486: Busy Here",
+        });
+        expect(r?.detail).toContain("486");
+    });
+
+    it("a skipped row explains itself as ineligible", () => {
+        expect(deriveFailureReason({ status: "skipped", callOutcome: "no_phone" })?.code).toBe(
+            "ineligible",
+        );
+    });
+
+    it("an invalid number is not worth redialling", () => {
+        const r = deriveFailureReason({
+            status: "failed",
+            callOutcome: "invalid_number",
+            hasTranscript: true,
+        });
+        expect(r?.code).toBe("invalid_number");
+        expect(r?.retryable).toBe(false);
+    });
+
+    it("SIP 603 is a rejection, not a network fault", () => {
+        expect(
+            deriveFailureReason(
+                failed({ callOutcome: "trigger_failed: INVITE failed: sip status: 603: Decline" }),
+            )?.code,
+        ).toBe("rejected");
     });
 });

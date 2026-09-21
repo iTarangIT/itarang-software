@@ -1,11 +1,21 @@
 // GET /api/ai-dialer/campaigns/[id]
 // Single-campaign detail. Used by the Campaign Detail page header for stats
 // cards + region/segment chips + triggered-by name.
+//
+// statusCounts is the per-status breakdown behind the stat tiles (Completed /
+// No Response / Busy / Rejected / Voicemail / Pending / Failed …). Grouped on
+// read off idx_dialer_campaign_leads_campaign_status rather than stored as
+// counter columns: a new column mirrored in schema.ts would break every reader
+// of dialer_campaigns on any database the migration had not reached yet.
 
 import { db } from "@/lib/db";
-import { dialerCampaigns, users } from "@/lib/db/schema";
+import { dialerCampaignLeads, dialerCampaigns, users } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import {
+  CAMPAIGN_LEAD_STATUSES,
+  type CampaignLeadStatus,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 
 export const GET = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
@@ -46,6 +56,24 @@ export const GET = withErrorHandler(
     const campaign = rows[0];
     if (!campaign) return errorResponse("Campaign not found", 404);
 
-    return successResponse(campaign);
+    const grouped = await db
+      .select({
+        status: dialerCampaignLeads.status,
+        n: sql<number>`count(*)::int`,
+      })
+      .from(dialerCampaignLeads)
+      .where(eq(dialerCampaignLeads.campaign_id, id))
+      .groupBy(dialerCampaignLeads.status);
+
+    const statusCounts = Object.fromEntries(
+      CAMPAIGN_LEAD_STATUSES.map((s) => [s, 0]),
+    ) as Record<CampaignLeadStatus, number>;
+    for (const g of grouped) {
+      if (g.status in statusCounts) {
+        statusCounts[g.status as CampaignLeadStatus] = Number(g.n);
+      }
+    }
+
+    return successResponse({ ...campaign, statusCounts });
   },
 );

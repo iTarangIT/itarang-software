@@ -118,6 +118,7 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
             // the difference was invisible until someone asked why timings
             // existed for only some calls.
             conversation: s.rawTranscriptTurns,
+            terminationReason: s.terminationReason ?? null,
           });
           result.finalized += 1;
           result.perRow.push({
@@ -160,6 +161,8 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
             phone: s.phone ?? row.phone ?? null,
             leadId: row.leadId,
             executionId: callId,
+            answeredByVoicemail: s.answeredByVoicemail ?? null,
+            hangupReason: s.hangupReason ?? null,
           });
           result.finalized += 1;
           result.perRow.push({

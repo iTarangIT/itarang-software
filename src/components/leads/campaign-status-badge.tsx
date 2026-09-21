@@ -1,7 +1,14 @@
 // Status pills for dialer campaigns. CampaignStatusBadge is for the parent
 // (running / scheduled / paused / completed / stopped / failed);
-// CampaignLeadStatusBadge is for per-lead status (pending / calling /
-// completed / failed / skipped).
+// CampaignLeadStatusBadge is for per-lead status — the vocabulary and labels
+// in lib/ai-dialer/campaignLeadStatus.ts (Queued / Calling / Completed /
+// No Response / Busy / Rejected / Voicemail / Pending / Failed / Skipped).
+//
+// "Pending" is the attempted-but-no-conversation status (no_conversation) and
+// a not-yet-dialled lead reads "Queued" — a product decision, see the labels
+// in campaignLeadStatus.ts. An unknown lead status renders as a neutral pill
+// carrying its raw value, never as "Pending": that fallback used to make any
+// status this file had not heard of look like it was still waiting to dial.
 //
 // KEEP ParentStatus IN STEP WITH WHAT THE BACKEND WRITES. The unknown-status
 // fallback below is PARENT_STYLES.running, so a status missing from this map
@@ -19,9 +26,19 @@ import {
   Ban,
   Clock,
   PhoneCall,
+  PhoneMissed,
+  PhoneOff,
+  Voicemail,
+  Hourglass,
+  MicOff,
   CalendarClock,
   PauseCircle,
+  CircleSlash,
 } from "lucide-react";
+import {
+  CAMPAIGN_LEAD_STATUS_LABELS as LABELS,
+  type CampaignLeadStatus,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 
 type ParentStatus =
   | "draft"
@@ -31,7 +48,6 @@ type ParentStatus =
   | "completed"
   | "stopped"
   | "failed";
-type LeadStatus = "pending" | "calling" | "completed" | "failed" | "skipped";
 
 const PARENT_STYLES: Record<
   ParentStatus,
@@ -87,38 +103,68 @@ const PARENT_STYLES: Record<
 };
 
 const LEAD_STYLES: Record<
-  LeadStatus,
+  CampaignLeadStatus,
   { bg: string; text: string; label: string; Icon?: any; animate?: boolean }
 > = {
   pending: {
     bg: "bg-gray-100",
     text: "text-gray-600",
-    label: "Pending",
+    label: LABELS.pending,
     Icon: Clock,
   },
   calling: {
     bg: "bg-emerald-100",
     text: "text-emerald-700",
-    label: "Calling",
+    label: LABELS.calling,
     Icon: PhoneCall,
     animate: true,
   },
   completed: {
     bg: "bg-blue-100",
     text: "text-blue-700",
-    label: "Done",
+    label: LABELS.completed,
     Icon: CheckCircle2,
+  },
+  no_response: {
+    bg: "bg-amber-100",
+    text: "text-amber-800",
+    label: LABELS.no_response,
+    Icon: PhoneMissed,
+  },
+  busy: {
+    bg: "bg-orange-100",
+    text: "text-orange-800",
+    label: LABELS.busy,
+    Icon: Hourglass,
+  },
+  rejected: {
+    bg: "bg-fuchsia-100",
+    text: "text-fuchsia-800",
+    label: LABELS.rejected,
+    Icon: PhoneOff,
+  },
+  voicemail: {
+    bg: "bg-violet-100",
+    text: "text-violet-800",
+    label: LABELS.voicemail,
+    Icon: Voicemail,
+  },
+  no_conversation: {
+    bg: "bg-indigo-100",
+    text: "text-indigo-700",
+    label: LABELS.no_conversation,
+    Icon: MicOff,
   },
   failed: {
     bg: "bg-rose-100",
     text: "text-rose-700",
-    label: "Failed",
+    label: LABELS.failed,
     Icon: XCircle,
   },
   skipped: {
     bg: "bg-zinc-100",
     text: "text-zinc-500",
-    label: "Skipped",
+    label: LABELS.skipped,
     Icon: Ban,
   },
 };
@@ -142,8 +188,12 @@ export function CampaignStatusBadge({ status }: { status: string }) {
 }
 
 export function CampaignLeadStatusBadge({ status }: { status: string }) {
-  const cfg =
-    LEAD_STYLES[(status as LeadStatus) ?? "pending"] ?? LEAD_STYLES.pending;
+  const cfg = LEAD_STYLES[status as CampaignLeadStatus] ?? {
+    bg: "bg-zinc-100",
+    text: "text-zinc-600",
+    label: status || "—",
+    Icon: CircleSlash,
+  };
   const Icon = cfg.Icon;
   return (
     <span

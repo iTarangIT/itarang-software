@@ -57,6 +57,8 @@ export interface NormalizedPostCall {
   agentId: string | null;
   startedAt: Date | null;
   endedAt: Date | null;
+  /** metadata.termination_reason, or null when absent or blank. */
+  terminationReason: string | null;
 }
 
 type Meta = {
@@ -64,6 +66,7 @@ type Meta = {
   call_duration_secs?: number;
   recording_url?: string | null;
   phone_call?: { external_number?: string };
+  termination_reason?: string | null;
 };
 
 /**
@@ -142,5 +145,11 @@ export function normalizePostCall(
     agentId: data.agent_id ?? null,
     startedAt: callStartedAt(meta),
     endedAt: callEndedAt(meta),
+    // Free text from ElevenLabs ("Call ended by remote party", "Voicemail
+    // detected", …). Only its voicemail case changes anything downstream.
+    terminationReason:
+      typeof meta?.termination_reason === "string" && meta.termination_reason.trim()
+        ? meta.termination_reason.trim()
+        : null,
   };
 }

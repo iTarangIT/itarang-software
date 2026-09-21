@@ -32,6 +32,12 @@ import {
 // bundle doesn't pull in zod / the scoring engine.
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { CorrectIntentForm } from "@/components/leads/intent-review/CorrectIntentForm";
+// Pure (no db, no zod) — safe for the client bundle.
+import {
+  campaignLeadStatusLabel,
+  isCampaignLeadStatus,
+  type CampaignLeadStatus,
+} from "@/lib/ai-dialer/campaignLeadStatus";
 
 // Legacy 6-dimension analysis (pre-band rows). Kept only so old
 // follow_up_history rows still render their bars.
@@ -384,14 +390,24 @@ function BandSignalRow({ item }: { item: BandSignalLine }) {
   );
 }
 
+// Labels from the shared vocabulary (lib/ai-dialer/campaignLeadStatus.ts), so
+// the drawer, the table badge and the export all name a status the same way.
+const STATUS_PILL_CLS: Partial<Record<CampaignLeadStatus, string>> = {
+  pending: "bg-gray-100 text-gray-700",
+  calling: "bg-blue-100 text-blue-700",
+  completed: "bg-emerald-100 text-emerald-700",
+  no_response: "bg-amber-100 text-amber-800",
+  busy: "bg-orange-100 text-orange-800",
+  rejected: "bg-fuchsia-100 text-fuchsia-800",
+  voicemail: "bg-violet-100 text-violet-800",
+  no_conversation: "bg-indigo-100 text-indigo-700",
+  failed: "bg-rose-100 text-rose-700",
+};
+
 function StatusPill({ status }: { status: string }) {
-  const m: Record<string, { label: string; cls: string }> = {
-    pending: { label: "Pending", cls: "bg-gray-100 text-gray-700" },
-    calling: { label: "Calling", cls: "bg-blue-100 text-blue-700" },
-    completed: { label: "Completed", cls: "bg-emerald-100 text-emerald-700" },
-    failed: { label: "Failed", cls: "bg-rose-100 text-rose-700" },
-  };
-  const { label, cls } = m[status] ?? { label: status, cls: "bg-gray-100 text-gray-700" };
+  const label = campaignLeadStatusLabel(status);
+  const cls =
+    (isCampaignLeadStatus(status) && STATUS_PILL_CLS[status]) || "bg-gray-100 text-gray-700";
   return (
     <span
       className={`inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full ${cls}`}
