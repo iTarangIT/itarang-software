@@ -83,7 +83,9 @@ export const GET = withErrorHandler(async (req: Request) => {
         { header: "Phone", width: 16, value: (r) => (fullPhone ? r.phone : r.phone ? maskPhone(r.phone) : null) },
         { header: "City", width: 16, value: (r) => r.city ?? null },
         { header: "State", width: 16, value: (r) => r.state ?? null },
-        { header: "Type of business", width: 16, value: (r) => (r.business_type ? businessTypeLabel(r.business_type) : null) },
+        // R-19 — "Not set" rather than a blank: every lead before 17-Sep has no
+        // type, and a blank cell reads as missing data, not as a bucket.
+        { header: "Type of business", width: 16, value: (r) => businessTypeLabel(r.business_type) },
         { header: "Status", width: 22, value: (r) => r.lead_status ?? null },
         { header: "Interest", width: 10, value: (r) => r.interest_level ?? null },
         { header: "Sales POC", width: 22, value: (r) => r.owner_name ?? null },

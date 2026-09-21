@@ -52,6 +52,7 @@ export const GET = withErrorHandler(
                 dl.current_owner_id,
                 owner.name AS current_owner_name,
                 dl.last_touchpoint_at,
+                dl.last_worked_at,
                 dl.next_follow_up_at,
                 dl.total_attempts,
                 dl.assigned_at,

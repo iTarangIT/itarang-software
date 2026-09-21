@@ -8,6 +8,7 @@ import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { whatsappOnboardingChatUrl } from "@/lib/whatsapp/chat-link";
+import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 
 type Props = {
     open: boolean;
@@ -19,6 +20,10 @@ type Props = {
 export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) {
     const router = useRouter();
     const [notes, setNotes] = useState("");
+    // Required (review R-11): the GSTIN is what links this dealer's invoices —
+    // and so their revenue — back to the lead and to whoever closed it.
+    const [gstin, setGstin] = useState("");
+    const [gstinTouched, setGstinTouched] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     // After a successful conversion we keep the modal open on a "choose channel"
     // step so the rep can pick web wizard vs WhatsApp onboarding.
@@ -29,8 +34,12 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
     // on a stray click).
     const [channel, setChannel] = useState<"web" | "whatsapp" | null>(null);
 
+    const gstinOk = isValidGstin(gstin);
+
     const reset = () => {
         setNotes("");
+        setGstin("");
+        setGstinTouched(false);
         setAppId(null);
         setChannel(null);
     };
@@ -46,12 +55,16 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
     };
 
     const submit = async () => {
+        if (!gstinOk) {
+            setGstinTouched(true);
+            return;
+        }
         setSubmitting(true);
         try {
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/mark-converted`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ notes: notes.trim() || null }),
+                body: JSON.stringify({ notes: notes.trim() || null, gstin: normalizeGstin(gstin) }),
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to mark converted");
@@ -148,7 +161,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
                         <Button
                             type="button"
                             onClick={submit}
-                            disabled={submitting}
+                            disabled={submitting || !gstinOk}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white"
                         >
                             {submitting ? "Saving…" : "Mark Converted"}
@@ -217,6 +230,30 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
                                 A draft dealer onboarding application is created automatically and linked to this lead. If it cannot be created, the conversion is rolled back.
                             </p>
                         </div>
+                    </div>
+                    <div>
+                        <Label htmlFor="convert-gstin">Dealer GSTIN</Label>
+                        <input
+                            id="convert-gstin"
+                            className={`mt-1 w-full rounded-md border px-3 py-2 text-sm font-mono uppercase tracking-wide ${
+                                gstinTouched && !gstinOk ? "border-red-400" : "border-gray-200"
+                            }`}
+                            placeholder="07AAACB1234C1Z5"
+                            maxLength={20}
+                            autoComplete="off"
+                            value={gstin}
+                            onChange={(e) => setGstin(e.target.value)}
+                            onBlur={() => setGstinTouched(true)}
+                        />
+                        {gstinTouched && !gstinOk ? (
+                            <p className="mt-1 text-xs text-red-600">
+                                Enter the dealer&apos;s 15-character GSTIN.
+                            </p>
+                        ) : (
+                            <p className="mt-1 text-xs text-gray-500">
+                                Required. It links this dealer&apos;s invoices — and their revenue — to this lead.
+                            </p>
+                        )}
                     </div>
                     <div>
                         <Label>Conversion notes (optional)</Label>

@@ -3,7 +3,7 @@
 // BRD §0.11 — admin bulk actions on selected leads. Surfaces when leads are
 // checked in the alert panels. Desktop-only (mobile is read-only in V1).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -29,12 +29,21 @@ export function BulkActionBar({
     selectedIds,
     onClear,
     onActionDone,
+    reassignSignal,
 }: {
     selectedIds: string[];
     onClear: () => void;
     onActionDone: () => void;
+    /**
+     * R-15 — bump to open the reassign dialog straight away (the needs-attention
+     * list's per-row Reassign button). Undefined / 0 = never auto-open.
+     */
+    reassignSignal?: number;
 }) {
     const [mode, setMode] = useState<Mode>(null);
+    useEffect(() => {
+        if (reassignSignal) setMode("reassign");
+    }, [reassignSignal]);
     const [targetUserId, setTargetUserId] = useState("");
     const [lostReason, setLostReason] = useState<string>(LOST_REASON[0]);
     const [reason, setReason] = useState("");

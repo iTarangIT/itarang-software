@@ -20,6 +20,7 @@ import { NotFoundError } from "@/lib/buyback/errors";
 import { formatBatteryLine } from "@/lib/buyback/format";
 import { dealHeader, linesForRequest } from "@/lib/buyback/queries";
 import { allowedActions, whyBlocked, REVIEW_ACTIONS } from "@/lib/buyback/state-machine";
+import { listBuybackOwnerOptions } from "@/lib/buyback/owner";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,21 @@ export const GET = withErrorHandler(
 
     const header = await dealHeader(requestId);
     if (!header) throw new NotFoundError("Request not found.");
+
+    // E-302 (review R-12) — the SPOC who owns the request. Read here, NOT in
+    // dealHeader(), which the dealer's own route shares: who owns a request
+    // is internal and never crosses the redaction boundary.
+    const [ownerRow] = (await db.execute(sql`
+      SELECT br.owner_id, br.owner_assigned_at, u.name AS owner_name
+        FROM buyback_requests br
+        LEFT JOIN users u ON u.id::text = br.owner_id
+       WHERE br.id = ${requestId}
+    `)) as unknown as Array<{
+      owner_id: string | null;
+      owner_assigned_at: string | null;
+      owner_name: string | null;
+    }>;
+    const ownerOptions = await listBuybackOwnerOptions();
 
     const lines = await linesForRequest(requestId);
     const units = await unitsFor(requestId);
@@ -95,6 +111,12 @@ export const GET = withErrorHandler(
       activity,
       allowed_actions: allowedActions(header.status, "admin"),
       review_actions: reviewActionState,
+      owner: {
+        owner_id: ownerRow?.owner_id ?? null,
+        owner_name: ownerRow?.owner_name ?? null,
+        owner_assigned_at: ownerRow?.owner_assigned_at ?? null,
+      },
+      owner_options: ownerOptions,
     });
   },
 );
