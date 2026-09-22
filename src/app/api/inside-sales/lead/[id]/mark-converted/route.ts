@@ -17,6 +17,7 @@ import { assertOwner } from "@/lib/leads/ownership";
 import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
 import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
 import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
+import { withLeadActor } from "@/lib/leads/actorContext";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -78,7 +79,9 @@ export const POST = withErrorHandler(
         // status change is undone, so a lead is never left Converted without an
         // application. writeTouchpoint + the onboarding creator both run on the
         // same `tx`.
-        const onboardingApplicationId = await db.transaction(async (tx) => {
+        // withLeadActor: the E-304 audit trigger records the GSTIN edit (and
+        // any other field this transaction touches) against this user.
+        const onboardingApplicationId = await withLeadActor(user.id, async (tx) => {
             await tx.execute(sql`
                 UPDATE dealer_leads SET gstin = ${body.gstin} WHERE id = ${id}
             `);
