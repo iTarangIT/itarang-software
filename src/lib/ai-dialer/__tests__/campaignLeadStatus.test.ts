@@ -419,3 +419,152 @@ describe("calibration — announcements seen in stored transcripts", () => {
         );
     });
 });
+
+// Prod, camp_msr9dbh0_gwn04wcq (Bhopal retry, 2026-08-13): 12 of its 21
+// "Completed" calls were a machine answering — an auto-reply, a call-screening
+// assistant or an IVR menu — and the Voicemail card read 0. None of these
+// carries the carrier "number you have dialled" frame, so they were all read as
+// the dealer speaking. Every dealer-side text below is verbatim from that
+// campaign.
+describe("calibration — a machine answered, not the dealer", () => {
+    const machineOnly: [string, string[]][] = [
+        ["auto-reply", ["Your call went unanswered. We have noted your number. You will receive a call back shortly."]],
+        ["auto-reply after silence", ["...", "Your call went unanswered. We have noted your number. You will receive a call back shortly."]],
+        ["call screening", ["Thanks, please stay on the line."]],
+        ["call screening, then silence", ["Thanks, please stay on the line.", "...", "..."]],
+        ["call screening after silence", ["...", "Please stay on the line."]],
+        ["call screening (sandbox)", ["See if the person is available.", "Please stay on the line.", "..."]],
+        ["IVR no-input prompt", ["क्षमा करें, हमें कोई input प्राप्त नहीं हुआ। कृपया फिर से try करें।फिर से try क"]],
+        ["IVR language menu", ["Select any option, press 1 for English. हिंदी के लिए 2 दबाइए।", "You didn't select any option."]],
+        [
+            "IVR sales/service menu",
+            [
+                "You didn't select any option. Welcome to Tata Motors. For sales, press 1. For service, press 2. Tata Motors में आपका स्वागत है। Sales के लिए 1 दबाएँ। Service के लिए 2 दबाएँ।",
+                "You didn't select any option. This call may be recorded for call training and quality purposes.",
+            ],
+        ],
+        [
+            "IVR voice menu",
+            [
+                "Please confirm the language, press 1 for English. हिंदी के लिए 2 दबाएँ।",
+                "नई गाड़ी खरीदने के लिए कहें, sales, नई गाड़ी खरीदें। गाड़ी की service करवाने के लिए कहें, service, गाड़ी की service करवाएँ।",
+            ],
+        ],
+        [
+            "IVR hold message",
+            ["Your call is important to us. Our sales executive will attend to you shortly. This call... हैलो?"],
+        ],
+        // The rest are from other prod campaigns, same review (2026-09-22).
+        [
+            "call assistant",
+            ["Hi, I am a call assistant recording this call for the person you are trying to reach. Please say who you are and why you are calling."],
+        ],
+        ["screening, 'reason for calling'", ["Hi, if you record your name and reason for calling, I'll see if this person is available."]],
+        [
+            "store hold message",
+            ["Thanks for calling Aditya Visions. This call will be recorded for quality and marketing purposes. Please wait while we are connecting your call with the store manager."],
+        ],
+        ["recording notice alone", ["This call is now being recorded."]],
+        [
+            "Hindi IVR, keys as words",
+            ["यह call quality और marketing purposes के लिए record की जा सकती है। Sales से जुड़ी जानकारी के लिए एक दबाएँ। Service से जुड़ी जानकारी के लिए दो दबाएँ।"],
+        ],
+        ["English IVR, key as a word", ["Press one.", "हिंदी के लिए दो दबाइए।", "You didn't select any option."]],
+        [
+            "IVR, then transfer in Latin-script Hindi",
+            [
+                "Please confirm the language, press 1 for English. हिंदी के लिए 2 दबाएँ।",
+                "नई गाड़ी खरीदने के लिए कहें। सिर्फ़ एक बार। Sales, गाड़ी की service करवाने के लिए कहें। Service, कोई और सहायता के लिए कहें। अन्य।",
+                "कृपया line पर बने रहें।हम आपकी call customer executive को transfer कर रहे हैं।",
+            ],
+        ],
+        [
+            "dealership transfer message",
+            ["Hello, thank you for calling to Maruti Suzuki authorized dealership. We are transferring your call to our team of experienced agents. Someone will be with you shortly."],
+        ],
+    ];
+
+    for (const [name, userTurns] of machineOnly) {
+        it(`${name} → voicemail`, () => {
+            const transcript = [agent, ...userTurns.map((t) => `user: ${t}`)].join("\n");
+            expect(dealerSpoke(transcript)).toBe(false);
+            expect(classifyCallEnd({ providerStatus: "done", transcript }).status).toBe("voicemail");
+        });
+    }
+
+    // Same campaign: a person picked up after the machine. That IS a
+    // conversation, and must stay Completed.
+    const humanAfterMachine: [string, string[]][] = [
+        ["screening, then the dealer", ["Thanks. Please stay on the line.", "...", "Hello?"]],
+        ["screening, then a real exchange", ["Thanks. Please stay on the line.", "...", "Hello?", "क्या बात करनी है?"]],
+        [
+            "transfer message, then a person",
+            [
+                "Call is being transferred to a customer care executive and may be recorded for quality and training purposes. Your call is being... नमस्ते sir, आप कैसे हो? How can I help you?",
+                "Hello?",
+            ],
+        ],
+        [
+            "hold message, then a person",
+            [
+                "Your call is important to us. Our sales executive will attend to you shortly. नमस्कार, मेरा नाम प्रभात है।",
+                "कौन सी भाई?",
+            ],
+        ],
+        ["store greeting, then a person", ["Thank you for calling Awadh Battery & Electronics Centre. Your call will be answered shortly.", "Hello?"]],
+        ["screening, then 'haan'", ["Hi, if you record your reason for this person is available.", "हाँ।"]],
+    ];
+
+    for (const [name, userTurns] of humanAfterMachine) {
+        it(`${name} → completed`, () => {
+            const transcript = [agent, ...userTurns.map((t) => `user: ${t}`)].join("\n");
+            expect(dealerSpoke(transcript)).toBe(true);
+            expect(classifyCallEnd({ providerStatus: "done", transcript }).status).toBe("completed");
+        });
+    }
+
+    // The machine phrases must not swallow a dealer. Each of these is a person.
+    it("does not mistake a dealer for a machine", () => {
+        for (const said of [
+            "एक minute, line पे रहिए",
+            "ruko, hold karo",
+            "main aapko call back karunga",
+            "haan, press karke dekho",
+            "Express battery ka dealer hoon, 1 saal se",
+            "sales ke liye mere bhai se baat karo",
+            "option kya hai EMI ka?",
+            "मैं बाद में बात करूँगा",
+            "दो battery चाहिए, दाम बताओ",
+            "haan, recording chal rahi hai kya?",
+            "wo person abhi available nahi hai",
+        ]) {
+            const transcript = `${agent}\nuser: ${said}`;
+            expect(dealerSpoke(transcript), said).toBe(true);
+            expect(classifyCarrierAnnouncement(said), said).toBeNull();
+        }
+    });
+
+    // A machine that says "busy" is still a machine. Only the carrier frame
+    // decides busy / no-response / invalid.
+    it("an IVR hold saying 'busy' is a machine, not a busy line", () => {
+        expect(
+            classifyCarrierAnnouncement(
+                "All our executives are busy. Your call is important to us, please stay on the line.",
+            ),
+        ).toBe("voicemail");
+    });
+
+    it("a carrier call-waiting message stays busy", () => {
+        expect(
+            classifyCarrierAnnouncement(
+                "The number you are calling is busy on another call, please stay on the line or call later.",
+            ),
+        ).toBe("busy");
+    });
+
+    it("the machine phrases reach the SQL twin", () => {
+        const s = dealerSpokeSql("acl");
+        expect(s).toContain("your call went unanswered");
+        expect(s).toContain("press ([0-9]|one|");
+    });
+});
