@@ -208,6 +208,67 @@ const VOICEMAIL_PHRASES = [
     "संदेश छोड़",
 ] as const;
 
+// A machine that is NOT the carrier picked up: a missed-call auto-reply, a
+// call-screening assistant ("Thanks, please stay on the line"), or a business's
+// IVR menu / hold message. The AI talks to it, the transcriber writes it down
+// as `user:`, and — lacking the carrier frame above — it used to count as the
+// dealer speaking. On camp_msr9dbh0_gwn04wcq (prod, 2026-08-13) that was 12 of
+// 21 "Completed" calls, with the Voicemail card reading 0. All of these land in
+// Voicemail: the call reached a machine, not the dealer.
+//
+// Same bar as the frame list: phrases a dealer would not say to a sales call.
+// Seeded from that campaign, then widened against every prod transcript
+// (926, 2026-09-22); the calibration tests pin each family.
+const MACHINE_PHRASES = [
+    // Missed-call auto-reply
+    "your call went unanswered",
+    "we have noted your number",
+    "receive a call back shortly",
+    // Call-screening assistant (Google / Samsung / carrier)
+    "please stay on the line",
+    "person is available",
+    "screening service",
+    "call assistant",
+    "person you are trying to reach",
+    "reason for calling",
+    // IVR menus, hold and transfer messages
+    "select any option",
+    "please confirm the language",
+    "please confirm language",
+    "your call is important to us",
+    "will attend to you shortly",
+    "your call will be answered",
+    "will be with you shortly",
+    "please wait while we",
+    "call is being transferred",
+    "transferring your call",
+    "thank you for calling",
+    "thanks for calling",
+    "be recorded for",
+    "call is now being recorded",
+    "did not receive any input",
+    "didn't receive any input",
+    // Hindi IVR. The transcriber writes "line" in Latin script as often as
+    // "लाइन", and drops the anusvara (रहे / रहें), so both are the stem.
+    "line पर बने रह",
+    "लाइन पर बने रह",
+    "input प्राप्त नहीं",
+    "इनपुट प्राप्त नहीं",
+    "record की जा सकती है",
+    "के लिए कहें",
+    "अन्य कोई सहायता",
+    "कोई और सहायता",
+] as const;
+
+// IVR key prompts — "press 1", "press one", "2 दबाएँ", "दो दबाइए". Raw
+// fragments, NOT escaped, so each must mean the same in a JS RegExp and a
+// Postgres ARE: no \b (a backspace in ARE), no lookaround. `(^|[^a-z])` stands
+// in for the word boundary so "Express 1 battery" is not a keypress.
+const MACHINE_PATTERNS = [
+    "(^|[^a-z])press ([0-9]|one|two|three|four|five|six|seven|eight|nine|zero)",
+    "([0-9०-९]|एक|दो|तीन|चार|पांच|पाँच|छह|सात|आठ|नौ|शून्य) ?दबा",
+] as const;
+
 const BUSY_WORDS = ["busy", "another call", "व्यस्त", "बिज़ी", "बिजी", "दूसरी कॉल", "vyast", "dusri call"];
 const INVALID_WORDS = [
     "does not exist",
@@ -231,13 +292,16 @@ function alternation(phrases: readonly string[]): string {
     return phrases.map(escapeRegex).join("|");
 }
 
+const MACHINE_PATTERN = [alternation(MACHINE_PHRASES), ...MACHINE_PATTERNS].join("|");
+
 /** The one pattern both twins test a dealer turn against. */
-export const ANNOUNCEMENT_PATTERN = alternation([
-    ...ANNOUNCEMENT_FRAME_PHRASES,
-    ...VOICEMAIL_PHRASES,
-]);
+export const ANNOUNCEMENT_PATTERN = [
+    alternation([...ANNOUNCEMENT_FRAME_PHRASES, ...VOICEMAIL_PHRASES]),
+    MACHINE_PATTERN,
+].join("|");
 
 const ANNOUNCEMENT_RE = new RegExp(ANNOUNCEMENT_PATTERN, "i");
+const FRAME_RE = new RegExp(alternation(ANNOUNCEMENT_FRAME_PHRASES), "i");
 const VOICEMAIL_RE = new RegExp(alternation(VOICEMAIL_PHRASES), "i");
 const BUSY_RE = new RegExp(alternation(BUSY_WORDS), "i");
 const INVALID_RE = new RegExp(alternation(INVALID_WORDS), "i");
@@ -255,17 +319,24 @@ const CONTENT_SQL_CLASS = "[^[:space:][:punct:]…।]";
 
 export type AnnouncementKind = "busy" | "no_response" | "voicemail" | "invalid";
 
-/** Is this dealer turn really a carrier recording, and if so which one? */
+/** Is this dealer turn really a recording or a machine, and if so which kind? */
 export function classifyCarrierAnnouncement(
     text: string | null | undefined,
 ): AnnouncementKind | null {
     if (!text || !ANNOUNCEMENT_RE.test(text)) return null;
     if (VOICEMAIL_RE.test(text)) return "voicemail";
-    if (BUSY_RE.test(text)) return "busy";
-    if (INVALID_RE.test(text)) return "invalid";
-    // Not answering / switched off / unreachable / out of coverage: in every
-    // case the dealer was not reached, which is what No Response means.
-    return "no_response";
+    // Only the carrier frame decides busy / invalid / no-response. An IVR hold
+    // saying "all our executives are busy" is a machine, not a busy line.
+    if (FRAME_RE.test(text)) {
+        if (BUSY_RE.test(text)) return "busy";
+        if (INVALID_RE.test(text)) return "invalid";
+        // Not answering / switched off / unreachable / out of coverage: in every
+        // case the dealer was not reached, which is what No Response means.
+        return "no_response";
+    }
+    // No frame, so a MACHINE_PHRASES / MACHINE_PATTERNS match: an auto-reply,
+    // screening assistant or IVR answered instead of the dealer.
+    return "voicemail";
 }
 
 type TranscriptReading = {
