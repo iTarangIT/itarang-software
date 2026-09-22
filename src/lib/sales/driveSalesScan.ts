@@ -24,7 +24,7 @@
  * own outcome row, and the loop moves on; only an unrecoverable failure (Drive
  * unreachable, DB down) marks the run itself failed.
  */
-import { and, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -43,7 +43,10 @@ import {
   listFolderFiles,
   type DriveFile,
 } from "@/lib/google/drive";
-import { extractSalesInvoice } from "@/lib/ai/invoices/extractSalesInvoice";
+import {
+  extractSalesInvoice,
+  type ExtractedSalesInvoice,
+} from "@/lib/ai/invoices/extractSalesInvoice";
 import { customerKey } from "@/lib/sales/customerKey";
 import { isTerminalModelFailure } from "@/lib/ai/invoices/terminalModelFailure";
 import { normalizeInvoiceNumber } from "@/lib/sales/normalizeInvoiceNumber";
@@ -51,6 +54,7 @@ import { resolveSalesOrg } from "@/lib/sales/resolveSalesOrg";
 import {
   formatSalesAttention,
   validateSalesInvoice,
+  type ValidatedSalesInvoice,
 } from "@/lib/sales/validateSalesInvoice";
 import { filesProxyPath, isS3Backend, putObject } from "@/lib/storage/s3";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -80,7 +84,8 @@ const DEFAULT_MAX_FILES = 25;
 /**
  * Stop cleanly after this long, whatever the file budget says.
  *
- * A file costs ~5s (download + one vision call). Without a deadline a large
+ * A file costs ~10-12s (download, render, one vision call carrying each page
+ * and its strips — see extractSalesInvoice). Without a deadline a large
  * batch outlives the 300s maxDuration on the "Scan now" route, the handler is
  * killed, the run row is stranded at 'running', and it then blocks the next
  * scan for 30 minutes. Finishing early costs nothing: "already processed" is a
@@ -535,16 +540,14 @@ async function processFile(
     ? null
     : await storeOriginal(storageKey, buffer, file.mimeType);
 
-  const extracted = await extractSalesInvoice(buffer, file.mimeType, file.name);
-
-  const result = validateSalesInvoice(extracted, { folderPath: file.folderPath });
-  if (!result.ok) {
+  const read = await readSalesFile(buffer, file);
+  if (!read.ok) {
     // No usable total. Cannot become a row — a zero would silently understate
     // revenue, which is worse than a gap somebody can see.
     return {
       outcome: {
         status: "needs_attention",
-        reason: result.reason,
+        reason: read.reason,
         invoiceIds: [],
         storageKey,
       },
@@ -552,25 +555,9 @@ async function processFile(
     };
   }
 
-  const { value } = result;
-  const attention = [...result.attention];
-
-  const org = resolveSalesOrg({
-    sellerGstin: value.seller_gstin,
-    invoiceNumber: value.invoice_number,
-    fileName: file.name,
-    folderPath: file.folderPath,
-  });
-  if (org.conflict) {
-    attention.push(
-      `Entity signals disagree (${org.signals.join(", ")}) — recorded as ${org.label}.`,
-    );
-  } else if (!org.organizationId) {
-    attention.push("Could not tell which iTarang entity issued this invoice.");
-  }
+  const { extracted, value, attention, org, numberKey } = read;
 
   // --- dedup ---------------------------------------------------------------
-  const numberKey = normalizeInvoiceNumber(value.invoice_number);
 
   const proposal: SalesProposal = {
     invoice_number: value.invoice_number,
@@ -722,6 +709,264 @@ async function processFile(
   }
 }
 
+type SalesFileRead =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      extracted: ExtractedSalesInvoice;
+      value: ValidatedSalesInvoice;
+      attention: string[];
+      org: ReturnType<typeof resolveSalesOrg>;
+      numberKey: string | null;
+    };
+
+/**
+ * Read one file and decide everything about it that does not depend on the
+ * rows already in the database: the figures, the validation flags, the entity.
+ * Shared by the scanner and by rereadSalesInvoice, so a re-read reaches the
+ * same answer a first read would.
+ */
+async function readSalesFile(buffer: Buffer, file: DriveFile): Promise<SalesFileRead> {
+  const extracted = await extractSalesInvoice(buffer, file.mimeType, file.name);
+
+  const result = validateSalesInvoice(extracted, { folderPath: file.folderPath });
+  if (!result.ok) return { ok: false, reason: result.reason };
+
+  const { value } = result;
+  const attention = [...result.attention];
+
+  const org = resolveSalesOrg({
+    sellerGstin: value.seller_gstin,
+    invoiceNumber: value.invoice_number,
+    fileName: file.name,
+    folderPath: file.folderPath,
+  });
+  if (org.conflict) {
+    attention.push(
+      `Entity signals disagree (${org.signals.join(", ")}) — recorded as ${org.label}.`,
+    );
+  } else if (!org.organizationId) {
+    attention.push("Could not tell which iTarang entity issued this invoice.");
+  }
+
+  return {
+    ok: true,
+    extracted,
+    value,
+    attention,
+    org,
+    numberKey: normalizeInvoiceNumber(value.invoice_number),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Re-reading rows already imported
+// ---------------------------------------------------------------------------
+
+/** One row's re-read, for the repair script's report. */
+export interface SalesReread {
+  id: string;
+  file_name: string | null;
+  folder_path: string | null;
+  /** changed = figures differ and the row was (or, dry, would be) rewritten. */
+  status: "unchanged" | "changed" | "unreadable" | "conflict" | "failed";
+  /** Why a row was left alone — set for everything but unchanged/changed. */
+  reason: string | null;
+  before: RereadFields;
+  after: RereadFields | null;
+}
+
+export interface RereadFields {
+  invoice_number: string | null;
+  invoice_date: string | null;
+  customer_name: string | null;
+  seller_gstin: string | null;
+  organization_id: string | null;
+  sub_total: string | null;
+  tax_total: string | null;
+  total: string | null;
+  attention_reason: string | null;
+}
+
+/**
+ * Re-read an imported Drive invoice from its file and, unless `dryRun`, rewrite
+ * the row with what the file actually says.
+ *
+ * Exists because the extractor used to send PDFs to the model raw, and on the
+ * text-less Vyapar PDFs the model invented the figures (see the header of
+ * extractSalesInvoice.ts). Those rows are settled — a scan never reads an
+ * imported file again — so nothing else will ever correct them.
+ *
+ * Only what comes off the document is rewritten: number, date, parties,
+ * amounts, entity, the model output and the attention flags. Payment fields,
+ * status and the row's id are left alone. A row whose figures do not change is
+ * not touched at all, so a human's "looks right" on it survives; one that does
+ * change gets its flag recomputed, because what that human looked at is gone.
+ *
+ * Refuses, and reports, rather than write when the new reading would collide
+ * with another invoice: a number another Drive row already holds (the unique
+ * index would reject it anyway), or one already synced from Zoho (the row
+ * would be double-counted revenue).
+ */
+export async function rereadSalesInvoice(
+  row: typeof salesInvoices.$inferSelect,
+  opts: { dryRun: boolean; zohoKeys: Set<string> },
+): Promise<SalesReread> {
+  const before: RereadFields = {
+    invoice_number: row.invoice_number,
+    invoice_date: row.invoice_date,
+    customer_name: row.customer_name,
+    seller_gstin: row.seller_gstin,
+    organization_id: row.organization_id,
+    sub_total: row.sub_total,
+    tax_total: row.tax_total,
+    total: row.total,
+    attention_reason: row.attention_reason,
+  };
+  const base = { id: row.id, file_name: row.file_name, folder_path: row.folder_path, before };
+
+  if (!row.drive_file_id) {
+    return { ...base, status: "failed", reason: "Row has no Drive file id.", after: null };
+  }
+
+  let read: SalesFileRead;
+  try {
+    const buffer = await downloadFile(row.drive_file_id);
+    read = await readSalesFile(buffer, {
+      id: row.drive_file_id,
+      name: row.file_name ?? "",
+      mimeType: sniffMime(buffer),
+      md5Checksum: null,
+      modifiedTime: null,
+      size: null,
+      parentFolderId: "",
+      folderPath: row.folder_path ?? "",
+    });
+  } catch (err) {
+    return { ...base, status: "failed", reason: errText(err), after: null };
+  }
+  if (!read.ok) {
+    // The old figures are not trustworthy either, but replacing them with
+    // nothing would drop the invoice from revenue. A person decides.
+    return { ...base, status: "unreadable", reason: read.reason, after: null };
+  }
+
+  const { extracted, value, org, numberKey } = read;
+  const attention = [...read.attention];
+
+  const after: RereadFields = {
+    invoice_number: value.invoice_number,
+    invoice_date: value.invoice_date,
+    customer_name: value.customer_name,
+    seller_gstin: value.seller_gstin,
+    organization_id: org.organizationId,
+    sub_total: value.sub_total == null ? null : value.sub_total.toFixed(2),
+    tax_total: value.tax_total == null ? null : value.tax_total.toFixed(2),
+    total: value.total.toFixed(2),
+    attention_reason: null,
+  };
+
+  // Only a NEW number can collide. A row that already overlapped Zoho did so
+  // before this re-read; the repair script reports those separately.
+  if (numberKey && numberKey !== row.invoice_number_key) {
+    const [other] = await db
+      .select({ id: salesInvoices.id, file_name: salesInvoices.file_name })
+      .from(salesInvoices)
+      .where(eq(salesInvoices.invoice_number_key, numberKey))
+      .limit(1);
+    if (other && other.id !== row.id) {
+      return {
+        ...base,
+        status: "conflict",
+        reason: `Re-reads as ${value.invoice_number}, which ${other.file_name ?? "another row"} already holds.`,
+        after,
+      };
+    }
+    if (opts.zohoKeys.has(numberKey)) {
+      return {
+        ...base,
+        status: "conflict",
+        reason: `Re-reads as ${value.invoice_number}, which is already synced from Zoho — this row would count it twice.`,
+        after,
+      };
+    }
+  }
+
+  const twin = await findFingerprintTwin(
+    org.organizationId,
+    value.invoice_date,
+    value.total,
+    value.customer_name,
+    row.id,
+  );
+  if (twin) {
+    attention.push(
+      `Possible duplicate of ${twin.source} invoice ${twin.invoice_number ?? "(no number)"} — ` +
+        `same customer (${twin.customer_name ?? "?"}), same date and the same ₹${value.total.toFixed(2)}. ` +
+        `Confirm before trusting this row.`,
+    );
+  }
+  after.attention_reason = formatSalesAttention(attention);
+
+  // Attention wording is derived, not read — only the figures decide whether
+  // the document said something different.
+  const figuresChanged = (Object.keys(after) as (keyof RereadFields)[]).some(
+    (k) => k !== "attention_reason" && !sameField(k, before[k], after[k]),
+  );
+  if (!figuresChanged) return { ...base, status: "unchanged", reason: null, after };
+
+  if (!opts.dryRun) {
+    await db
+      .update(salesInvoices)
+      .set({
+        invoice_number: value.invoice_number,
+        invoice_number_key: numberKey,
+        invoice_date: value.invoice_date,
+        due_date: value.due_date,
+        customer_name: value.customer_name,
+        customer_gstin: value.customer_gstin,
+        place_of_supply: value.place_of_supply,
+        organization_id: org.organizationId,
+        seller_gstin: value.seller_gstin,
+        sub_total: after.sub_total,
+        tax_total: after.tax_total,
+        total: after.total,
+        ai_raw: extracted as never,
+        needs_attention: attention.length > 0,
+        attention_reason: after.attention_reason,
+        updated_at: new Date(),
+      })
+      .where(eq(salesInvoices.id, row.id));
+  }
+  return { ...base, status: "changed", reason: null, after };
+}
+
+/** numeric columns come back as "435302.00"; compare them as numbers. */
+function sameField(key: keyof RereadFields, a: string | null, b: string | null): boolean {
+  if (a == null || b == null) return a == b;
+  if (key === "sub_total" || key === "tax_total" || key === "total") {
+    return Math.abs(Number(a) - Number(b)) < 0.005;
+  }
+  return a === b;
+}
+
+/**
+ * The row does not store a MIME type and some Drive names carry no extension
+ * ("ITG/202526/13"), so go by the bytes. Anything unrecognised is tried as a
+ * PDF, which fails loudly in the renderer if it is not one.
+ */
+function sniffMime(buffer: Buffer): string {
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return "image/jpeg";
+  if (buffer.subarray(0, 4).toString("latin1") === "RIFF" && buffer.subarray(8, 12).toString("latin1") === "WEBP") {
+    return "image/webp";
+  }
+  if (buffer.subarray(0, 3).toString("latin1") === "GIF") return "image/gif";
+  return "application/pdf";
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -745,7 +990,7 @@ async function loadFolders(folderRowId?: string) {
  * thousand short strings is nothing; re-deriving it per file would be thousands
  * of round trips.
  */
-async function loadZohoNumberKeys(): Promise<Set<string>> {
+export async function loadZohoNumberKeys(): Promise<Set<string>> {
   const keys = new Set<string>();
   try {
     const rows = await db
@@ -780,6 +1025,8 @@ async function findFingerprintTwin(
   invoiceDate: string | null,
   total: number,
   customerName: string | null,
+  /** The row being re-read, which must not count as its own twin. */
+  excludeId?: string,
 ): Promise<{ source: string; invoice_number: string | null; customer_name: string | null } | null> {
   if (!invoiceDate) return null;
   // With no customer to compare, the remaining signals are too weak to call a
@@ -796,6 +1043,7 @@ async function findFingerprintTwin(
   if (organizationId) {
     salesConds.push(eq(salesInvoices.organization_id, organizationId));
   }
+  if (excludeId) salesConds.push(ne(salesInvoices.id, excludeId));
   const fromSales = await db
     .select({
       invoice_number: salesInvoices.invoice_number,
