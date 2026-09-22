@@ -1,11 +1,17 @@
 "use client";
 
-// Generic report table — renders any ReportResult (columns + rows).
+// Generic report table — renders any ReportResult (columns + rows). When the
+// result declares `drill`, non-zero cells in the drill columns open the list of
+// leads behind the number.
 
+import { useState } from "react";
 import { Inbox } from "lucide-react";
 import type { ReportResult } from "@/lib/admin/types";
+import { DrillLeadsModal, type DrillTarget } from "./DrillLeadsModal";
 
-export function ReportTable({ result }: { result: ReportResult }) {
+export function ReportTable({ result, qs = "" }: { result: ReportResult; qs?: string }) {
+    const [drill, setDrill] = useState<DrillTarget | null>(null);
+
     if (result.rows.length === 0) {
         return (
             <div className="py-12 text-center text-ink-muted">
@@ -14,6 +20,8 @@ export function ReportTable({ result }: { result: ReportResult }) {
             </div>
         );
     }
+
+    const drillMetrics = new Set(result.drill?.metrics ?? []);
 
     return (
         <div className="overflow-x-auto">
@@ -37,6 +45,12 @@ export function ReportTable({ result }: { result: ReportResult }) {
                         <tr key={i} className="hover:bg-bg/60">
                             {result.columns.map((c) => {
                                 const v = row[c.key];
+                                const drillId = result.drill ? row[result.drill.idKey] : null;
+                                const canDrill =
+                                    drillMetrics.has(c.key) &&
+                                    drillId != null &&
+                                    typeof v === "number" &&
+                                    v > 0;
                                 return (
                                     <td
                                         key={c.key}
@@ -46,7 +60,28 @@ export function ReportTable({ result }: { result: ReportResult }) {
                                                 : "text-left text-ink"
                                         }`}
                                     >
-                                        {v == null || v === "" ? "—" : String(v)}
+                                        {canDrill ? (
+                                            <button
+                                                type="button"
+                                                title={`View ${v} lead${v === 1 ? "" : "s"}`}
+                                                onClick={() =>
+                                                    setDrill({
+                                                        personId: String(drillId),
+                                                        personName: String(row.person ?? ""),
+                                                        metric: c.key,
+                                                        metricLabel: c.label,
+                                                        count: v,
+                                                    })
+                                                }
+                                                className="font-semibold text-brand-600 underline decoration-dotted underline-offset-4 hover:decoration-solid"
+                                            >
+                                                {v}
+                                            </button>
+                                        ) : v == null || v === "" ? (
+                                            "—"
+                                        ) : (
+                                            String(v)
+                                        )}
                                     </td>
                                 );
                             })}
@@ -54,6 +89,9 @@ export function ReportTable({ result }: { result: ReportResult }) {
                     ))}
                 </tbody>
             </table>
+            {drill && (
+                <DrillLeadsModal target={drill} qs={qs} onClose={() => setDrill(null)} />
+            )}
         </div>
     );
 }
