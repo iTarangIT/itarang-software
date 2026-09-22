@@ -13,19 +13,26 @@
  * So the schema here names the parties explicitly (`customer_*` vs `seller_*`)
  * and the prompt says which part of the page each one is read from.
  *
- * WHY PDFs GO STRAIGHT TO THE MODEL
- *   The Vyapar invoices have no usable text layer — extraction returns four
- *   lines of boilerplate and garbles even those ("ITARANO TECHNOLOGIES LLP"),
- *   which is a broken ToUnicode map. OpenAI rasterises PDF input server-side
- *   and reads the rendered page, so the broken text layer never matters. This
- *   was verified against three live Vyapar invoices before the module was
- *   written; a local rasterize step (src/lib/ocr/pdfToImage.ts) is available
- *   but proved unnecessary.
+ * WHY PDFs ARE RENDERED HERE, NOT SENT AS FILES
+ *   The Vyapar invoices are "Microsoft: Print To PDF" output with no text
+ *   layer at all. This module used to hand the raw PDF to OpenAI and trust its
+ *   server-side rendering. That rendering is not good enough to read them: the
+ *   model picked out the large bold text (customer, invoice number) and
+ *   INVENTED the rest — amounts, GSTINs and the date. It was consistent per
+ *   file, so it looked like a real reading. ITG/202627/034 is ₹4,35,302 dated
+ *   08-08-2026; production stored ₹4,14,770 and the sandbox ₹4,87,930, both
+ *   dated 2026-07-02. ITG/202627/037 is ₹6,24,089; production stored ₹96,524.
+ *
+ *   The same pages rendered locally at 200 DPI and sent as images read exactly,
+ *   run after run. So every PDF is rasterised first, every page is sent, and a
+ *   PDF that cannot be rendered fails the file instead of falling back to the
+ *   raw-file path that produced the fabrications.
  *
  * No classification fields. Unlike the expense side there is no department or
  * bucket to assign: revenue is revenue.
  */
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
+import { rasterizePdfPages } from "@/lib/ocr/rasterizePdfPages";
 import { getOpenAI, INVOICE_MODEL } from "./client";
 
 export interface ExtractedSalesInvoice {
@@ -41,6 +48,17 @@ export interface ExtractedSalesInvoice {
   total: number | null;
   currency: string | null;
 }
+
+/** Pages sent per PDF. A sales invoice is one or two; this bounds a stray scan. */
+const MAX_PDF_PAGES = 4;
+
+/**
+ * Horizontal strips each page is also sent in, at full resolution. The model
+ * downscales the whole page until small print blurs: the letterhead GSTIN was
+ * misread on every invoice tried, and ITG/202627/047's taxable ₹67,100 came
+ * back as ₹67,333. A quarter-page strip reaches the model at 200 DPI.
+ */
+const PDF_STRIPS = 4;
 
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/png",
@@ -126,8 +144,15 @@ const SYSTEM_PROMPT = [
   "The ISSUER is the company whose name and GSTIN appear in the letterhead at the top, and near a 'For <company>' signature block at the bottom. Its GSTIN is seller_gstin.",
   "The CUSTOMER is the party under 'Bill To'. Its name is customer_name and its GSTIN is customer_gstin.",
   "Never put the issuer's name in customer_name. Both parties may share a similar name; go by position on the page, not by which name you recognise.",
-  "Dates are printed dd-mm-yyyy on these invoices. '02-07-2026' is 2 July 2026, so invoice_date is 2026-07-02. Read the year digits carefully and copy them exactly.",
+  // No worked example with a real date: when the model could not read the
+  // page it returned the example itself — every misread invoice on production
+  // was dated 2026-07-02, straight out of the old "'02-07-2026' is 2 July 2026".
+  "Dates are printed day first, then month, then year (dd-mm-yyyy) on these invoices. Convert to yyyy-mm-dd by reordering the parts, never by swapping day and month. Read every digit — day, month and year — from the document itself and copy them exactly. If you cannot read the date, return null.",
   "total is the grand total payable including GST — the figure labelled 'Total'. Do not return 'Balance Due', which may differ, and do not compute anything from the amount in words.",
+  // Vyapar labels two figures 'Total' when it rounds: the line-items table
+  // (6,24,089.20) and the Amounts box after 'Round off' (6,24,089.00). The
+  // page-image reads picked the first; the payable figure is the second.
+  "When the invoice has a 'Round off' line, total is the rounded figure that follows it in the Amounts summary, not the line-items table total above it.",
   "tax_total is the whole GST charged: use IGST when present, otherwise add CGST and SGST together.",
   // Vyapar prints the payable amount largest and repeats it in several places,
   // and the model reached for it: sub_total came back equal to total with the
@@ -145,22 +170,46 @@ export async function extractSalesInvoice(
   mimeType: string,
   fileName: string,
 ): Promise<ExtractedSalesInvoice> {
-  const base64 = buffer.toString("base64");
+  const imagePart = (bytes: Buffer, type: string): ChatCompletionContentPart => ({
+    type: "image_url",
+    image_url: { url: `data:${type};base64,${bytes.toString("base64")}`, detail: "high" },
+  });
 
-  let mediaPart: ChatCompletionContentPart;
+  let mediaParts: ChatCompletionContentPart[];
   if (mimeType === "application/pdf") {
-    mediaPart = {
-      type: "file",
-      file: {
-        filename: fileName || "invoice.pdf",
-        file_data: `data:application/pdf;base64,${base64}`,
-      },
-    } as ChatCompletionContentPart;
+    // See the header: never the raw PDF. A render failure throws, which the
+    // scanner records as a failed file and retries — not a guessed invoice.
+    let rendered: Awaited<ReturnType<typeof rasterizePdfPages>>;
+    try {
+      rendered = await rasterizePdfPages(buffer, {
+        dpi: 200,
+        maxPages: MAX_PDF_PAGES,
+        strips: PDF_STRIPS,
+      });
+    } catch (err) {
+      throw new Error(
+        `Could not render ${fileName || "the PDF"} for reading: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    mediaParts = [];
+    rendered.forEach(({ page, strips }, i) => {
+      mediaParts.push(
+        { type: "text", text: `Page ${i + 1} of the invoice:` },
+        imagePart(page, "image/png"),
+        {
+          type: "text",
+          text:
+            `The next ${strips.length} images are enlarged, overlapping strips of page ${i + 1}, ` +
+            "top to bottom. Read every figure, date, GSTIN and invoice number from these strips; " +
+            "use the whole page only to see where each strip sits.",
+        },
+        ...strips.map((png) => imagePart(png, "image/png")),
+      );
+    });
   } else if (SUPPORTED_IMAGE_TYPES.has(mimeType)) {
-    mediaPart = {
-      type: "image_url",
-      image_url: { url: `data:${mimeType};base64,${base64}`, detail: "high" },
-    };
+    mediaParts = [imagePart(buffer, mimeType)];
   } else {
     throw new Error(`Unsupported file type for extraction: ${mimeType}`);
   }
@@ -176,7 +225,7 @@ export async function extractSalesInvoice(
         role: "user",
         content: [
           { type: "text", text: "Extract the sales invoice details from this document." },
-          mediaPart,
+          ...mediaParts,
         ],
       },
     ],
