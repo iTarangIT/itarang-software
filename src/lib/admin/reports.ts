@@ -4,11 +4,13 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { LOST_REASON } from "@/lib/lifecycle/transitions";
-import { ONBOARDING_DROPOUT_REASONS } from "./types";
+import { LOST_REASON, OPEN_STATUSES } from "@/lib/lifecycle/transitions";
+import { ONBOARDING_DROPOUT_REASONS, OWNER_DRILL_METRICS } from "./types";
 import { isUndefinedColumn, roleLabel } from "./reportHelpers";
 import type {
     DashboardFilters,
+    OwnerDrillLead,
+    OwnerDrillMetric,
     ReportResult,
     ReportRow,
     ReportType,
@@ -25,6 +27,10 @@ function dateRange(col: string, f: DashboardFilters): SQL {
     if (f.date_to) return sql` AND ${c} < (${f.date_to}::date + INTERVAL '1 day')`;
     return sql` AND ${c} >= NOW() - INTERVAL '30 days'`;
 }
+
+// The inside-sales "My Open Leads" status list (queryBuilder.ts), inlined the
+// same way so the Funnel-by-Owner backlog column matches that tab exactly.
+const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
 
 const num = (v: unknown): number => Number(v ?? 0);
 const ratio = (a: number, b: number): number | null =>
@@ -515,26 +521,41 @@ async function meetingsMtd(f: DashboardFilters): Promise<ReportResult> {
  * "Converted" is lead_status = 'Converted' — the one definition every other
  * report, the Sales dashboard and both daily emails use (metric M15, review
  * R-01). The AI's `qualified` rating is "AI band: Qualified", never converted.
+ *
+ * "Leads Touched" is ACTIVITY (what the person worked in the period); the rep's
+ * own "My Open Leads" tab is BACKLOG (what they own right now). The two never
+ * reconcile on their own, so the backlog is shown beside the activity:
+ *   Open Leads Owned    — the exact "My Open Leads" rule from
+ *                         inside-sales/queryBuilder.ts (owner + OPEN_STATUSES +
+ *                         active). Not date-ranged: it is a snapshot.
+ *   Not Worked (Period) — of those, the ones this person logged nothing on in
+ *                         the period — the neglected part of the queue.
+ * A person who owns open leads but did no work in the period still gets a row
+ * (all activity columns 0) — that row is the one a manager most needs to see.
  */
-async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
-    // Matches queryInterest in salesDashboard.ts — a closed lead has no
-    // temperature worth chasing.
-    const openLead = sql.raw(`dl.is_active IS NOT FALSE
+// Matches queryInterest in salesDashboard.ts — a closed lead has no
+// temperature worth chasing.
+const OWNER_OPEN_LEAD = sql.raw(`dl.is_active IS NOT FALSE
                    AND dl.lead_status IS DISTINCT FROM 'Converted'
                    AND dl.lead_status IS DISTINCT FROM 'Lost'`);
-    const rows = await db.execute<{
-        person: string | null;
-        role: string | null;
-        touched: string;
-        connected: string;
-        hot: string;
-        warm: string;
-        cold: string;
-        ai_qualified: string;
-        ai_warm: string;
-        ai_cold: string;
-        converted: string;
-    }>(sql`
+
+// Per-lead rating predicates over a worked lead (`dl`). Shared by the report's
+// counts and the drill-down list, so a number and the list behind it cannot
+// disagree.
+const OWNER_RATING_FILTERS = {
+    hot: sql`dl.interest_level = 'hot'  AND ${OWNER_OPEN_LEAD}`,
+    warm: sql`dl.interest_level = 'warm' AND ${OWNER_OPEN_LEAD}`,
+    cold: sql`dl.interest_level = 'cold' AND ${OWNER_OPEN_LEAD}`,
+    ai_qualified: sql`lower(dl.current_status) IN ('qualified','ai_qualified')`,
+    ai_warm: sql`lower(dl.current_status) = 'warm'`,
+    ai_cold: sql`lower(dl.current_status) = 'cold'`,
+    converted: sql`dl.lead_status = 'Converted'`,
+} satisfies Partial<Record<OwnerDrillMetric, SQL>>;
+
+// worked / connected / owned — the three lead sets every Funnel-by-Owner
+// number is counted from.
+function ownerCtes(f: DashboardFilters): SQL {
+    return sql`
         WITH worked AS (
             -- One row per (person, lead): the lead's status is a property of
             -- the lead, so it must not be counted once per touchpoint.
@@ -559,29 +580,91 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             WHERE (t.call_status = 'connected' OR t.is_engaged IS TRUE)
               AND t.performed_by IS NOT NULL
               ${dateRange("t.performed_at", f)}
-        )
-        SELECT COALESCE(u.name, '(unknown)') AS person,
-               u.role                        AS role,
-               COUNT(*)::text                AS touched,
+        ),
+        owned AS (
+            -- Same predicate as the "My Open Leads" tab, so the numbers match
+            -- what the rep sees in their own queue.
+            SELECT dl.current_owner_id::text AS person_id, dl.id AS dealer_lead_id
+            FROM dealer_leads dl
+            WHERE dl.current_owner_id IS NOT NULL
+              AND dl.lead_status IN (${OPEN_LIST})
+              AND dl.is_active IS NOT FALSE
+        )`;
+}
+
+async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
+    const rf = OWNER_RATING_FILTERS;
+    const rows = await db.execute<{
+        person_id: string;
+        person: string | null;
+        role: string | null;
+        owned_open: string;
+        not_worked: string;
+        touched: string;
+        connected: string;
+        hot: string;
+        warm: string;
+        cold: string;
+        ai_qualified: string;
+        ai_warm: string;
+        ai_cold: string;
+        converted: string;
+    }>(sql`
+        ${ownerCtes(f)},
+        backlog AS (
+            SELECT o.person_id,
+                   COUNT(*) AS owned_open,
+                   COUNT(*) FILTER (
+                       WHERE NOT EXISTS (SELECT 1 FROM worked w
+                                          WHERE w.performed_by::text = o.person_id
+                                            AND w.dealer_lead_id = o.dealer_lead_id)
+                   ) AS not_worked
+            FROM owned o
+            GROUP BY o.person_id
+        ),
+        activity AS (
+            SELECT w.performed_by::text AS person_id,
+               COUNT(*)                      AS touched,
                COUNT(*) FILTER (
                    WHERE EXISTS (SELECT 1 FROM connected c
                                   WHERE c.performed_by = w.performed_by
                                     AND c.dealer_lead_id = w.dealer_lead_id)
-               )::text AS connected,
-               COUNT(*) FILTER (WHERE dl.interest_level = 'hot'  AND ${openLead})::text AS hot,
-               COUNT(*) FILTER (WHERE dl.interest_level = 'warm' AND ${openLead})::text AS warm,
-               COUNT(*) FILTER (WHERE dl.interest_level = 'cold' AND ${openLead})::text AS cold,
-               COUNT(*) FILTER (
-                   WHERE lower(dl.current_status) IN ('qualified','ai_qualified')
-               )::text AS ai_qualified,
-               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'warm')::text AS ai_warm,
-               COUNT(*) FILTER (WHERE lower(dl.current_status) = 'cold')::text AS ai_cold,
-               COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS converted
-        FROM worked w
-        LEFT JOIN dealer_leads dl ON dl.id = w.dealer_lead_id
-        LEFT JOIN users u ON u.id::text = w.performed_by
-        GROUP BY u.name, u.role
-        ORDER BY touched DESC, person
+               ) AS connected,
+               COUNT(*) FILTER (WHERE ${rf.hot})          AS hot,
+               COUNT(*) FILTER (WHERE ${rf.warm})         AS warm,
+               COUNT(*) FILTER (WHERE ${rf.cold})         AS cold,
+               COUNT(*) FILTER (WHERE ${rf.ai_qualified}) AS ai_qualified,
+               COUNT(*) FILTER (WHERE ${rf.ai_warm})      AS ai_warm,
+               COUNT(*) FILTER (WHERE ${rf.ai_cold})      AS ai_cold,
+               COUNT(*) FILTER (WHERE ${rf.converted})    AS converted
+            FROM worked w
+            LEFT JOIN dealer_leads dl ON dl.id = w.dealer_lead_id
+            GROUP BY w.performed_by
+        ),
+        people AS (
+            SELECT person_id FROM activity
+            UNION
+            SELECT person_id FROM backlog
+        )
+        SELECT p.person_id                             AS person_id,
+               COALESCE(u.name, '(unknown)')          AS person,
+               u.role                                  AS role,
+               COALESCE(b.owned_open, 0)::text         AS owned_open,
+               COALESCE(b.not_worked, 0)::text         AS not_worked,
+               COALESCE(a.touched, 0)::text            AS touched,
+               COALESCE(a.connected, 0)::text          AS connected,
+               COALESCE(a.hot, 0)::text                AS hot,
+               COALESCE(a.warm, 0)::text               AS warm,
+               COALESCE(a.cold, 0)::text               AS cold,
+               COALESCE(a.ai_qualified, 0)::text       AS ai_qualified,
+               COALESCE(a.ai_warm, 0)::text            AS ai_warm,
+               COALESCE(a.ai_cold, 0)::text            AS ai_cold,
+               COALESCE(a.converted, 0)::text          AS converted
+        FROM people p
+        LEFT JOIN activity a ON a.person_id = p.person_id
+        LEFT JOIN backlog  b ON b.person_id = p.person_id
+        LEFT JOIN users    u ON u.id::text  = p.person_id
+        ORDER BY COALESCE(a.touched, 0) DESC, COALESCE(b.owned_open, 0) DESC, person
     `);
 
     return {
@@ -589,6 +672,8 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
         columns: [
             { key: "person", label: "Person" },
             { key: "role", label: "Role" },
+            { key: "owned_open", label: "Open Leads Owned", numeric: true },
+            { key: "not_worked", label: "Not Worked (Period)", numeric: true },
             { key: "touched", label: "Leads Touched", numeric: true },
             { key: "connected", label: "Connected", numeric: true },
             { key: "hot", label: "Hot", numeric: true },
@@ -600,6 +685,7 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             { key: "converted", label: "Converted", numeric: true },
             { key: "conversion_rate", label: "Conversion %", numeric: true },
         ],
+        drill: { idKey: "person_id", metrics: OWNER_DRILL_METRICS },
         rows: rows.map((r) => {
             const touched = num(r.touched);
             const conv = num(r.converted);
@@ -607,8 +693,11 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             // what share of the work turned into a dealer.
             const rate = ratio(conv, touched);
             return {
+                person_id: r.person_id,
                 person: r.person ?? "(unknown)",
                 role: roleLabel(r.role),
+                owned_open: num(r.owned_open),
+                not_worked: num(r.not_worked),
                 touched,
                 connected: num(r.connected),
                 hot: num(r.hot),
@@ -622,6 +711,56 @@ async function funnelByOwner(f: DashboardFilters): Promise<ReportResult> {
             };
         }),
     };
+}
+
+/**
+ * The leads behind one Funnel-by-Owner cell — same CTEs and predicates as the
+ * report, so the list length equals the number that was clicked. A worked lead
+ * whose dealer_leads row is gone is counted by the report (LEFT JOIN) but has
+ * nothing to list; that is the only way the two can differ.
+ */
+export async function funnelByOwnerLeads(
+    personId: string,
+    metric: OwnerDrillMetric,
+    f: DashboardFilters,
+): Promise<OwnerDrillLead[]> {
+    const inOwned = sql`EXISTS (SELECT 1 FROM owned o
+                                 WHERE o.person_id = ${personId}
+                                   AND o.dealer_lead_id = dl.id)`;
+    const inWorked = sql`EXISTS (SELECT 1 FROM worked w
+                                  WHERE w.performed_by::text = ${personId}
+                                    AND w.dealer_lead_id = dl.id)`;
+    let where: SQL;
+    switch (metric) {
+        case "owned_open":
+            where = inOwned;
+            break;
+        case "not_worked":
+            where = sql`${inOwned} AND NOT ${inWorked}`;
+            break;
+        case "touched":
+            where = inWorked;
+            break;
+        case "connected":
+            where = sql`EXISTS (SELECT 1 FROM connected c
+                                 WHERE c.performed_by::text = ${personId}
+                                   AND c.dealer_lead_id = dl.id)`;
+            break;
+        default:
+            where = sql`${inWorked} AND ${OWNER_RATING_FILTERS[metric]}`;
+    }
+
+    const rows = await db.execute<OwnerDrillLead>(sql`
+        ${ownerCtes(f)}
+        SELECT dl.id, dl.dealer_name, dl.shop_name, dl.phone, dl.city, dl.state,
+               dl.lead_status, dl.interest_level, dl.current_status,
+               dl.last_touchpoint_at::text AS last_touchpoint_at
+        FROM dealer_leads dl
+        WHERE ${where}
+        ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.id
+        LIMIT 500
+    `);
+    return [...rows];
 }
 
 export async function runReport(
