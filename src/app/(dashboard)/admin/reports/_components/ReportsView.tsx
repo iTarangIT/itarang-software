@@ -143,7 +143,7 @@ export function ReportsView({ viewerRole }: { viewerRole: string }) {
                         <>
                             <ReportChart result={data} />
                             <div className="mt-3 border-t border-border">
-                                <ReportTable result={data} />
+                                <ReportTable result={data} qs={qs} />
                             </div>
                         </>
                     )}

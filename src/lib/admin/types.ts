@@ -331,6 +331,42 @@ export type ReportResult = {
     type: ReportType;
     columns: ReportColumn[];
     rows: ReportRow[];
+    /**
+     * Cells that open a lead list when clicked. `idKey` names the row field
+     * holding the drill id (never itself a column, so it is neither rendered
+     * nor exported); `metrics` are the column keys that drill.
+     */
+    drill?: { idKey: string; metrics: readonly string[] };
+};
+
+// Funnel-by-Owner drill-down: the columns whose number is a count of leads,
+// each of which can be opened into the list of those leads.
+export const OWNER_DRILL_METRICS = [
+    "owned_open",
+    "not_worked",
+    "touched",
+    "connected",
+    "hot",
+    "warm",
+    "cold",
+    "ai_qualified",
+    "ai_warm",
+    "ai_cold",
+    "converted",
+] as const;
+export type OwnerDrillMetric = (typeof OWNER_DRILL_METRICS)[number];
+
+export type OwnerDrillLead = {
+    id: string;
+    dealer_name: string | null;
+    shop_name: string | null;
+    phone: string | null;
+    city: string | null;
+    state: string | null;
+    lead_status: string | null;
+    interest_level: string | null;
+    current_status: string | null;
+    last_touchpoint_at: string | null;
 };
 
 // ──────────────────────────── Bulk upload ─────────────────────────────────
