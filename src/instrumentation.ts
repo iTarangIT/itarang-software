@@ -35,6 +35,7 @@ export async function register() {
       startOpsMonitorTicker,
       startDigestTicker,
       startDealerPaymentReminderTicker,
+      startMonitorMorningTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -62,5 +63,9 @@ export async function register() {
     await startDigestTicker();
     // E-298 — one-shot 48h "confirm loan payment received" reminder.
     await startDealerPaymentReminderTicker();
+    // The 08:00 IST Fleet Monitor card to Telegram. Kickoff 225s out, behind
+    // the digests — it launches Chromium, the most expensive thing any ticker
+    // here does, and its send window is hours wide.
+    await startMonitorMorningTicker();
   }
 }
