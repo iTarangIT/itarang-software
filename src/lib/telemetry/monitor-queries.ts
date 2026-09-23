@@ -231,3 +231,107 @@ export async function fetchMonitorOverview(now: Date = new Date()): Promise<Moni
         },
     };
 }
+
+/** One column of the period grid on the morning card. */
+export type PeriodStats = {
+    /** Vehicles counted in this period. */
+    vehicles: number;
+    /** Vehicles with NO telemetry at all in this period. */
+    silent: number;
+    /** Kilometres per vehicle that actually recorded distance. */
+    avgKmPerVehicle: number | null;
+    totalKm: number;
+};
+
+export type MonitorPeriods = {
+    /** Human label for the start of the "total" column, e.g. "23 Apr 2026". */
+    sinceLabel: string | null;
+    total: PeriodStats;
+    last30d: PeriodStats;
+};
+
+/**
+ * The Total / Last-30-days grid on the morning Telegram card.
+ *
+ * Kept OUT of fetchMonitorOverview() on purpose: /monitor polls that every 60
+ * seconds and does not render this grid, so there is no reason to make the
+ * dashboard pay for an all-history scan of distance_rollup once a minute. The
+ * card calls this once a day.
+ *
+ * "Total" means since telemetry began, which is whatever distance_rollup
+ * actually holds — about five months as of writing, NOT the fleet's lifetime.
+ * The card labels the column with `sinceLabel` for exactly that reason: an
+ * unlabelled "total" invites someone to compare five months of distance against
+ * a figure that covers longer and conclude the fleet has been idle.
+ *
+ * "Silent" is vehicles with NO signal in the window, so the 30-day figure is
+ * normally LARGER than the all-time one — a longer window is a stricter test of
+ * total silence. That reads oddly in a table until you see the labels, which is
+ * why the card spells out "no data at all".
+ */
+export async function fetchMonitorPeriods(now: Date = new Date()): Promise<MonitorPeriods> {
+    const iot = getIotSql();
+    // ISO string, not the Date: a JS Date interpolated into a raw sql template is
+    // a runtime error waiting to happen in this codebase.
+    const at = now.toISOString();
+
+    // vehicle_state is 500-odd rows; both counts come from one pass.
+    const [state] = await iot`
+        SELECT count(*)::int AS fleet,
+               count(*) FILTER (
+                   WHERE last_battery_at IS NULL AND last_gps_at IS NULL
+               )::int AS never_any,
+               count(*) FILTER (
+                   WHERE greatest(
+                       coalesce(last_battery_at, '-infinity'::timestamptz),
+                       coalesce(last_gps_at,     '-infinity'::timestamptz)
+                   ) < ${at}::timestamptz - interval '30 days'
+               )::int AS silent_30d
+        FROM vehicle_state
+    `;
+
+    // bucket_size='day' pinned on both, as everywhere else that reads this table.
+    const [all] = await iot`
+        SELECT coalesce(sum(distance_km), 0)::float  AS km,
+               count(DISTINCT vehicleno)::int        AS vehicles,
+               to_char(min(time), 'DD Mon YYYY')     AS since
+        FROM distance_rollup
+        WHERE bucket_size = 'day'
+    `;
+
+    const [recent] = await iot`
+        SELECT coalesce(sum(distance_km), 0)::float  AS km,
+               count(DISTINCT vehicleno)::int        AS vehicles
+        FROM distance_rollup
+        WHERE bucket_size = 'day'
+          AND time >= ${at}::timestamptz - interval '30 days'
+    `;
+
+    const per = (km: number, vehicles: number) =>
+        vehicles === 0 ? null : Math.round(km / vehicles);
+
+    const allKm = Number(all?.km) || 0;
+    const allVeh = Number(all?.vehicles) || 0;
+    const recentKm = Number(recent?.km) || 0;
+    const recentVeh = Number(recent?.vehicles) || 0;
+
+    return {
+        sinceLabel: (all?.since as string | null) ?? null,
+        total: {
+            // The whole fleet, not just the ones that moved — "how many vehicles
+            // do we have" is the question this row answers.
+            vehicles: Number(state?.fleet) || 0,
+            silent: Number(state?.never_any) || 0,
+            avgKmPerVehicle: per(allKm, allVeh),
+            totalKm: Math.round(allKm),
+        },
+        last30d: {
+            // Vehicles that actually recorded distance in the window — the
+            // fleet that moved, against the fleet that exists.
+            vehicles: recentVeh,
+            silent: Number(state?.silent_30d) || 0,
+            avgKmPerVehicle: per(recentKm, recentVeh),
+            totalKm: Math.round(recentKm),
+        },
+    };
+}
