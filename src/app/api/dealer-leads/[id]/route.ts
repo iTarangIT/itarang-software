@@ -32,6 +32,7 @@ import { eq, and, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { withLeadActor } from "@/lib/leads/actorContext";
 import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { normalizePhone } from "@/lib/leads/dedupe";
@@ -68,7 +69,7 @@ const PatchSchema = z.object({
 
 export const PATCH = withErrorHandler(
   async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    await requireRole([...LEADS_PAGE_ROLES]);
+    const user = await requireRole([...LEADS_PAGE_ROLES]);
     const { id } = await params;
 
     const parsed = PatchSchema.safeParse(await req.json());
@@ -185,7 +186,10 @@ export const PATCH = withErrorHandler(
 
     if (Object.keys(updates).length > 0) {
       updates.updated_at = new Date();
-      await db.update(dealerLeads).set(updates).where(eq(dealerLeads.id, id));
+      // E-304 — inside withLeadActor so the field-change audit names the editor.
+      await withLeadActor(user.id, (tx) =>
+        tx.update(dealerLeads).set(updates).where(eq(dealerLeads.id, id)),
+      );
     }
 
     // E-296. Its own raw statement, allowed to fail: on a database without the
@@ -194,11 +198,13 @@ export const PATCH = withErrorHandler(
     let businessTypeSaved: boolean | undefined;
     if (businessTypeTouched) {
       try {
-        await db.execute(
-          sql`UPDATE dealer_leads
-                 SET business_type = ${body.business_type || null},
-                     updated_at = NOW()
-               WHERE id = ${id}`,
+        await withLeadActor(user.id, (tx) =>
+          tx.execute(
+            sql`UPDATE dealer_leads
+                   SET business_type = ${body.business_type || null},
+                       updated_at = NOW()
+                 WHERE id = ${id}`,
+          ),
         );
         businessTypeSaved = true;
       } catch (e) {

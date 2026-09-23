@@ -64,10 +64,22 @@ export async function GET() {
     // (one query, not two) and fall back to the application, which is the only
     // source for a dealer who has not been approved yet.
     let dealerTypeLive: string | null = null;
+    // The canonical row itself, for dealers with no onboarding application
+    // (seeded/legacy dealers) — see the `dealer` fallback in the response.
+    let canonicalDealer: {
+      id: number;
+      companyName: string;
+      onboardingStatus: string;
+      createdAt: Date;
+    } | null = null;
     if (dealerId) {
       try {
         const [dealerRow] = await db
           .select({
+            id: dealers.id,
+            companyName: dealers.company_name,
+            onboardingStatus: dealers.onboarding_status,
+            createdAt: dealers.created_at,
             financeEnabled: dealers.finance_enabled,
             dealerType: dealers.dealer_type,
           })
@@ -76,6 +88,7 @@ export async function GET() {
           .limit(1);
         financeLive = Boolean(dealerRow?.financeEnabled);
         dealerTypeLive = dealerRow?.dealerType ?? null;
+        canonicalDealer = dealerRow ?? null;
       } catch {
         financeLive = false;
       }
@@ -181,7 +194,30 @@ export async function GET() {
                 dealerApp.review_status === "approved" ||
                 dealerApp.dealer_account_status === "active",
             }
-          : null,
+          : canonicalDealer
+            ? {
+                // No onboarding application, but a real `dealers` row — a
+                // dealer created outside the onboarding flow (seed scripts,
+                // legacy imports). Returning null here made the sidebar and
+                // /dealer-portal treat them as an unapproved 'new' dealer,
+                // hiding buyback even though requireDealer() would allow it.
+                id: String(canonicalDealer.id),
+                companyName: canonicalDealer.companyName,
+                dealerCode: dealerId,
+                onboardingStatus: canonicalDealer.onboardingStatus,
+                reviewStatus: null,
+                dealerAccountStatus: null,
+                approvedAt: canonicalDealer.createdAt,
+                submittedAt: null,
+                financeEnabled: financeLive,
+                dealerType,
+                // A `dealers` row is only written at approval (approve route
+                // sets onboarding_status 'active').
+                isApproved:
+                  canonicalDealer.onboardingStatus === "active" ||
+                  canonicalDealer.onboardingStatus === "approved",
+              }
+            : null,
         metrics: {
           totalLeads,
           convertedLeads,

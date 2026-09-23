@@ -30,6 +30,7 @@ const ROLE_PATH_PREFIXES: Array<[string, string]> = [
   ["/asm", "asm"],
   ["/ceo", "ceo"],
   ["/it", "it"],
+  ["/monitor", "monitor"],
   ["/admin", "admin"],
 ];
 

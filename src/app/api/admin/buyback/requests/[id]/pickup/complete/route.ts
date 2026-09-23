@@ -16,13 +16,20 @@
  * already left the building. That conversation has no good ending, so the gate is
  * before the money, not after.
  *
+ * WEIGHT IS REQUIRED HERE (review R-13). Kg sourced is Σ quantity × unit weight,
+ * and a line with no unit weight used to count as 0 kg — silently. The Buyback
+ * Daily mail under-stated kg with nothing to say so. Every line with batteries
+ * actually on the truck must now carry `unit_weight_kg` before the pickup can
+ * be completed; the admin supplies any that are missing in `line_weights`.
+ * A weight already on the line (the dealer's declaration) is never overwritten.
+ *
  * BWM 2022 fields — the e-way bill number and the weighbridge slip — are captured
  * here because this is the one moment the batteries are physically in front of
  * someone who can read them off. An EPR-registered handler of end-of-life
  * batteries has to be able to show the chain of custody by weight.
  */
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
@@ -45,6 +52,10 @@ const bodySchema = z.object({
   eway_bill_s3: z.string().max(500).optional(),
   weighbridge_slip_s3: z.string().max(500).optional(),
   note: z.string().max(1000).optional(),
+  /** R-13 — kg per battery for lines that have none yet. */
+  line_weights: z
+    .array(z.object({ line_id: z.string().uuid(), unit_weight_kg: z.number().positive().max(5000) }))
+    .optional(),
 });
 
 export const POST = withErrorHandler(
@@ -79,6 +90,36 @@ export const POST = withErrorHandler(
       }));
 
       const variance = computeVariance(expected, actual);
+
+      // R-13 — fill missing weights, then refuse if any collected line still
+      // has none. Scoped to this request's lines; existing weights untouched.
+      for (const w of body.line_weights ?? []) {
+        await tx.execute(sql`
+          UPDATE buyback_lines l
+             SET unit_weight_kg = ${w.unit_weight_kg}
+            FROM buyback_batches b
+           WHERE l.batch_id = b.id
+             AND b.request_id = ${request.id}
+             AND l.id = ${w.line_id}::uuid
+             AND l.unit_weight_kg IS NULL
+        `);
+      }
+      const collectedIds = actual.filter((a) => a.quantity > 0).map((a) => a.line_id);
+      if (collectedIds.length > 0) {
+        const missing = (await tx.execute(sql`
+          SELECT l.id
+            FROM buyback_lines l
+            JOIN buyback_batches b ON b.id = l.batch_id
+           WHERE b.request_id = ${request.id}
+             AND l.id IN (${sql.join(collectedIds.map((i) => sql`${i}::uuid`), sql`, `)})
+             AND (l.unit_weight_kg IS NULL OR l.unit_weight_kg <= 0)
+        `)) as unknown as Array<{ id: string }>;
+        if (missing.length > 0) {
+          throw new ValidationError(
+            `Enter the weight (kg per battery) for ${missing.length} battery line${missing.length === 1 ? "" : "s"} before completing the pickup — kg sourced cannot be counted without it.`,
+          );
+        }
+      }
 
       await tx
         .update(pickups)

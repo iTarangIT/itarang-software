@@ -15,24 +15,42 @@
  * send day); Tomorrow = istDay + 2. This kind is morning-only (see `slots`), so
  * there is no "today so far" variant to get wrong.
  *
- * SHAPE. The three period tables share one column set, exactly as the CRM sheet
- * lists it: Period | Name of SPOC | Unique visit count | Count of dealers called |
- * New visit count | Hot | Cold | Warm | Converted | Count of scheduled visits
- * tomorrow. Hot / Cold / Warm are open-lead counts as of now, so they repeat
- * across periods by design. A fourth, smaller table lists today's scheduled
- * visits per SPOC.
+ * SHAPE. The three period tables share one column set: Period | Name of SPOC |
+ * Unique visit count | Count of dealers called | New visit count | New Hot |
+ * Hot → Converted | Converted | Quotes | Batteries | Revenue | KYC. Every
+ * number in them responds to the period. Visits scheduled for tomorrow used to
+ * be a column too, repeated identically in all three periods (review R-23 — a
+ * forward-looking number has no period); it lives only in the "Scheduled
+ * today" table now, beside today's.
+ *
+ * Hot / Warm / Cold used to sit in those rows too — but they are open-lead
+ * counts as of NOW, so Yesterday, MTD and Last 7 days showed identical numbers
+ * and read as though nothing had moved (review R-09). They now have their own
+ * table, "Open pipeline — as of this morning", shown once, one row per SPOC,
+ * with how many of the Hot leads have held that rating for more than a week.
+ * The period rows show MOVEMENT instead: leads that became Hot in the period,
+ * and Hot leads that converted in it (definitions in salesDashboard.ts,
+ * queryTotals). A final small table lists today's scheduled visits per SPOC.
  *
  * DEFINITIONS (all from the builder; see its header for the rep columns):
  *   unique visits    distinct dealers with a visit in the period (lead_visits.asm_id)
  *   dealers called   distinct dealer_lead_id on inside_sales_call / ai_call
  *                    touchpoints performed by the SPOC in the period.
- *                    CC-team calls will be included once the call-centre role
- *                    exists (ticket A2).
+ *                    NeoDove (CC) calls count for the rep once an admin maps
+ *                    the NeoDove agent to their CRM user (review R-03,
+ *                    /leads/neodove-campaigns/agents); unmapped agents' calls
+ *                    carry no performer and appear on nobody's row.
  *   new visits       dealers whose first-ever visit fell in the period
  *   converted        leads that reached Converted in the period, keyed on
- *                    closing_owner_id — the same rule as the dashboard, NOT the
- *                    legacy CONVERTED_STATUSES list in src/lib/admin/types.ts
- *                    (those are pre-lifecycle status names and would count nothing)
+ *                    closing_owner_id — the same rule as the dashboard and every
+ *                    report (M15). The AI dialer's 'qualified' current_status
+ *                    is an intent rating, never counted as converted.
+ *   new hot          leads whose rating became Hot in the period and are still
+ *                    Hot (interest_changed_at, E-301), keyed on current owner
+ *   hot → converted  of `converted`, those rated Hot when they closed
+ *   quotes / batteries / revenue / KYC   the builder's Section O (review
+ *                    R-10). Batteries, revenue and KYC reach a SPOC only via
+ *                    the dealer's GSTIN on a CRM lead (gstinMatch.ts).
  *
  * `db` is imported inside the query, never at module scope — the registry lists
  * every kind, and listing must not require DATABASE_URL (see kyc-review.ts).
@@ -53,13 +71,13 @@ const SECTIONS: DigestSection[] = [
   {
     key: "summary",
     label: "Headline",
-    hint: "Total visits yesterday and total open hot leads, one line at the top.",
+    hint: "Total visits yesterday, new hot leads yesterday and total open hot leads, at the top.",
     group: "activity",
   },
   {
     key: "yesterday",
     label: "Yesterday",
-    hint: "Per SPOC: unique visits, dealers called, new visits, hot / cold / warm, converted.",
+    hint: "Per SPOC: unique visits, dealers called, new visits, new hot, hot → converted, converted, quotes, batteries, revenue, KYC.",
     group: "activity",
   },
   {
@@ -75,6 +93,12 @@ const SECTIONS: DigestSection[] = [
     group: "activity",
   },
   {
+    key: "pipeline",
+    label: "Open pipeline",
+    hint: "Per SPOC, once: open hot / warm / cold leads as of this morning, and hot leads rated more than 7 days ago.",
+    group: "backlog",
+  },
+  {
     key: "today",
     label: "Scheduled today",
     hint: "Visits each SPOC has on the calendar for today, and for tomorrow.",
@@ -88,11 +112,13 @@ const COLUMNS = [
   "Unique visit count",
   "Count of dealers called",
   "New visit count",
-  "Hot",
-  "Cold",
-  "Warm",
+  "New Hot",
+  "Hot → Converted",
   "Converted",
-  "Count of scheduled visits tomorrow",
+  "Quotes issued",
+  "Batteries to dealers",
+  "Revenue ₹",
+  "KYC submitted",
 ];
 
 // ─────────────────────────────── dates ──────────────────────────────────────
@@ -140,11 +166,34 @@ function level(b: SalesSpocBlock, l: "hot" | "warm" | "cold"): number {
   return b.interest.rows.find((r) => r.interest_level === l)?.total ?? 0;
 }
 
+/** Hot leads whose rating is more than 7 days old (interest_changed_at, E-301). */
+function hotOverAWeek(b: SalesSpocBlock): number {
+  const r = b.interest.rows.find((x) => x.interest_level === "hot");
+  return r ? r.age_8_14 + r.age_15_30 + r.age_30_plus : 0;
+}
+
+/**
+ * The as-of-now position, one row per SPOC holding any open rated lead. Built
+ * from ONE builder run: the interest section ignores the date range, so which
+ * period's run it comes from does not matter.
+ */
+function pipelineRows(d: SalesDashboard): DigestTable["rows"] {
+  return (d.per_spoc ?? [])
+    .filter((b) => level(b, "hot") + level(b, "warm") + level(b, "cold") > 0)
+    .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+    .map((b) => [
+      b.name ?? "(unknown user)",
+      level(b, "hot"),
+      level(b, "warm"),
+      level(b, "cold"),
+      hotOverAWeek(b),
+    ]);
+}
+
 /** One table row per SPOC for one period. Sorted by name so the mail is scannable. */
 function periodRows(
   period: string,
   d: SalesDashboard,
-  scheduled: Map<string, Scheduled>,
 ): DigestTable["rows"] {
   return (d.per_spoc ?? [])
     .slice()
@@ -155,11 +204,13 @@ function periodRows(
       b.totals.unique_visits,
       b.totals.dealers_called,
       b.totals.new_visits,
-      level(b, "hot"),
-      level(b, "cold"),
-      level(b, "warm"),
+      b.totals.new_hot,
+      b.totals.hot_converted,
       b.totals.converted,
-      scheduled.get(b.spoc_id)?.tomorrow ?? 0,
+      b.outcome.quotes_issued,
+      b.outcome.batteries_to_dealers,
+      Math.round(b.outcome.revenue),
+      b.outcome.kyc_submitted,
     ]);
 }
 
@@ -209,6 +260,7 @@ async function collect(
         // ledger's `counts` blob and the Excel Figures sheet carry them too.
         activity: [
           { key: "summary", label: "Visits yesterday", value: yesterday.totals.visits },
+          { key: "summary", label: "New hot leads yesterday", value: yesterday.totals.new_hot },
           { key: "summary", label: "Hot leads open", value: hotTotal },
         ],
         backlog: [],
@@ -217,22 +269,29 @@ async function collect(
             key: "yesterday",
             title: "Yesterday",
             columns: COLUMNS,
-            rows: periodRows("Yesterday", yesterday, scheduled),
+            rows: periodRows("Yesterday", yesterday),
             empty: "No visits, calls or conversions yesterday.",
           },
           {
             key: "mtd",
             title: "Month to date",
             columns: COLUMNS,
-            rows: periodRows("MTD", mtd, scheduled),
+            rows: periodRows("MTD", mtd),
             empty: "Nothing recorded so far this month.",
           },
           {
             key: "last7",
             title: "Last 7 days",
             columns: COLUMNS,
-            rows: periodRows("Last 7 days", last7, scheduled),
+            rows: periodRows("Last 7 days", last7),
             empty: "Nothing recorded in the last seven days.",
+          },
+          {
+            key: "pipeline",
+            title: "Open pipeline — as of this morning",
+            columns: ["Name of SPOC", "Hot", "Warm", "Cold", "Hot, rated 8+ days ago"],
+            rows: pipelineRows(yesterday),
+            empty: "No open hot, warm or cold leads.",
           },
           {
             key: "today",
@@ -261,8 +320,9 @@ export const salesDailyDigest: DigestKindDescriptor = {
   label: "Sales Daily",
   description:
     "One mail every morning, per SPOC: what happened yesterday, month to date and over " +
-    "the last seven days — unique visits, dealers called, new visits, hot / cold / warm " +
-    "and conversions — plus the visits scheduled for today and tomorrow. Nothing is " +
+    "the last seven days — unique visits, dealers called, new visits, new hot leads, hot " +
+    "leads converted and conversions — then the open hot / warm / cold pipeline as of " +
+    "this morning, and the visits scheduled for today and tomorrow. Nothing is " +
     "sent until recipients are added here.",
   settingsKey: "sales_daily_digest",
   settingsHref: "/admin/settings/sales-daily",

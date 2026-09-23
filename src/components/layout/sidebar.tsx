@@ -346,6 +346,26 @@ function salesDailyDigestItem(idPrefix: string) {
   };
 }
 
+// R-17 — daily list of sales targets not accepted within 48 hours.
+function targetsPendingDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-targets-pending-digest`,
+    label: "Targets Pending Report",
+    icon: MailCheck,
+    href: "/admin/settings/targets-pending",
+  };
+}
+
+// R-15 — Monday's count of leads idle over 7 working days, per holder.
+function idleWeeklyDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-idle-weekly-digest`,
+    label: "Weekly Idle Leads Report",
+    icon: MailCheck,
+    href: "/admin/settings/idle-weekly",
+  };
+}
+
 // B9 — the buyback team's per-SPOC morning mail.
 function buybackDailyDigestItem(idPrefix: string) {
   return {
@@ -415,6 +435,8 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         kycReviewDigestItem("sh"),
         scrapBuybackDigestItem("sh"),
         salesDailyDigestItem("sh"),
+        idleWeeklyDigestItem("sh"),
+        targetsPendingDigestItem("sh"),
         buybackDailyDigestItem("sh"),
         loanProductSettingsItem("sh"),
         nbfcSettingsSubnav("sh"),
@@ -471,6 +493,27 @@ const roleNavigation: Record<string, any[]> = {
           label: "Sales Dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
+        },
+        {
+          // R-17 — monthly targets: set, approve, push, track.
+          id: "ceo-targets",
+          label: "Targets",
+          icon: TrendingUp,
+          href: "/admin/targets",
+        },
+        {
+          // R-15 — idle leads, oldest first, reassign from the row.
+          id: "ceo-needs-attention",
+          label: "Needs Attention",
+          icon: AlertTriangle,
+          href: "/admin/reports/needs-attention",
+        },
+        {
+          // R-18 — converted dealers' re-order health.
+          id: "ceo-dealer-health",
+          label: "Dealer Health",
+          icon: TrendingUp,
+          href: "/admin/reports/dealer-health",
         },
       ],
     },
@@ -680,6 +723,27 @@ const roleNavigation: Record<string, any[]> = {
           label: "Sales Dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
+        },
+        {
+          // R-17 — monthly targets: set, approve, push, track.
+          id: "sh-targets",
+          label: "Targets",
+          icon: TrendingUp,
+          href: "/admin/targets",
+        },
+        {
+          // R-15 — idle leads, oldest first, reassign from the row.
+          id: "sh-needs-attention",
+          label: "Needs Attention",
+          icon: AlertTriangle,
+          href: "/admin/reports/needs-attention",
+        },
+        {
+          // R-18 — converted dealers' re-order health.
+          id: "sh-dealer-health",
+          label: "Dealer Health",
+          icon: TrendingUp,
+          href: "/admin/reports/dealer-health",
         },
         // "Notifications" (formerly "Settings") used to sit here, buried in
         // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
@@ -1002,6 +1066,20 @@ const roleNavigation: Record<string, any[]> = {
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
         },
+        {
+          // R-15 — idle leads, oldest first, reassign from the row.
+          id: "partner-needs-attention",
+          label: "Needs Attention",
+          icon: AlertTriangle,
+          href: "/admin/reports/needs-attention",
+        },
+        {
+          // R-18 — converted dealers' re-order health.
+          id: "partner-dealer-health",
+          label: "Dealer Health",
+          icon: TrendingUp,
+          href: "/admin/reports/dealer-health",
+        },
       ],
     },
     NEODOVE_SECTION,
@@ -1159,6 +1237,27 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/reports/sales-dashboard",
         },
         {
+          // R-17 — monthly targets: set, approve, push, track.
+          id: "admin-targets",
+          label: "Targets",
+          icon: TrendingUp,
+          href: "/admin/targets",
+        },
+        {
+          // R-15 — idle leads, oldest first, reassign from the row.
+          id: "admin-needs-attention",
+          label: "Needs Attention",
+          icon: AlertTriangle,
+          href: "/admin/reports/needs-attention",
+        },
+        {
+          // R-18 — converted dealers' re-order health.
+          id: "admin-dealer-health",
+          label: "Dealer Health",
+          icon: TrendingUp,
+          href: "/admin/reports/dealer-health",
+        },
+        {
           id: "admin-settings",
           label: "Notifications",
           icon: Bell,
@@ -1184,6 +1283,8 @@ const roleNavigation: Record<string, any[]> = {
         kycReviewDigestItem("admin"),
         scrapBuybackDigestItem("admin"),
         salesDailyDigestItem("admin"),
+        idleWeeklyDigestItem("admin"),
+        targetsPendingDigestItem("admin"),
         buybackDailyDigestItem("admin"),
         loanProductSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
@@ -1404,6 +1505,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Sales Dashboard",
           icon: TrendingUp,
           href: "/admin/reports/sales-dashboard",
+        },
+        {
+          // R-17 — monthly targets: set, approve, push, track.
+          id: "bh-targets",
+          label: "Targets",
+          icon: TrendingUp,
+          href: "/admin/targets",
         },
         {
           id: "kyc-review",

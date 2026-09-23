@@ -105,6 +105,10 @@ export async function login(formData: FormData) {
     redirect("/partner");
   }
 
+  if (appUser.role === "monitor") {
+    redirect("/monitor");
+  }
+
   redirect("/");
 }
 

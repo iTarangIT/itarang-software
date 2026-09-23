@@ -49,6 +49,7 @@
     "test:e2e:auction": "playwright test tests/e2e/nbfc/E-234_battery-auction-e2e.spec.ts --project=chromium --no-deps",
     "security:scan": "node --import tsx --env-file=.env.local scripts/security-scan.ts",
     "seed:it-user": "node --import tsx --env-file=.env.local scripts/create-it-user.ts",
+    "seed:monitor-user": "node --import tsx --env-file=.env.local scripts/create-monitor-user.ts",
     "db:catalog": "tsx scripts/db-catalog.ts",
     "db:drift": "tsx scripts/db-drift.ts",
     "db:sandbox-excel": "tsx scripts/db-sandbox-excel.ts",

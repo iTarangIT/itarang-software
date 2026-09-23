@@ -25,6 +25,7 @@ import type {
 } from "./types";
 import { ALERT_PANELS } from "./types";
 import { countOnboardingDropouts } from "./listQueries";
+import { nonResponsiveSql } from "@/lib/leads/nonResponsive";
 
 const OPEN_LIST = sql.raw(OPEN_STATUSES.map((s) => `'${s}'`).join(", "));
 
@@ -37,7 +38,17 @@ function workingDaysSince(expr: string): SQL {
     )`);
 }
 
-const LAST_TOUCH = "COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at)";
+// The idle clock (E-300, review R-04): last call / visit / status change only.
+// last_touchpoint_at also moves on assignment, claims, dial requests and
+// comments, so reading it here let a hand-off hide a neglected lead. A lead
+// never worked falls back to when its holder got it, then to creation.
+const LAST_TOUCH = "COALESCE(dl.last_worked_at, dl.assigned_at, dl.created_at)";
+
+// R-16 — a lead whose number never answers (6 unanswered call days in 45) is not
+// "idle": nobody can work it. It is counted in its own panel and kept OUT of
+// every stale / no-touch count, which it would otherwise inflate forever.
+const NON_RESPONSIVE = nonResponsiveSql(sql`dl.id`);
+const NOT_NON_RESPONSIVE = sql`NOT ${NON_RESPONSIVE}`;
 
 // Lead-scoped filter fragment (Zone 4). AND-prefixed; empty when no filters.
 function leadFilter(f: DashboardFilters): SQL {
@@ -63,7 +74,7 @@ function leadFilter(f: DashboardFilters): SQL {
 export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
     const lf = leadFilter(f);
 
-    const [counts, firstTouch, conv7, conv30, staleConv, compliance, dropouts] =
+    const [counts, firstTouch, conv7, conv30, staleConv, compliance, dropouts, cohort] =
         await Promise.all([
             db.execute<{
                 unassigned_queue: string;
@@ -99,8 +110,8 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                 WHERE dl.assigned_at >= NOW() - INTERVAL '7 days'
                   AND ft.first_touch IS NOT NULL ${lf}
             `),
-            convRate(7, lf),
-            convRate(30, lf),
+            closedWinRate(7, lf),
+            closedWinRate(30, lf),
             db.execute<{ c: string }>(sql`
                 SELECT COUNT(*)::text AS c
                 FROM dealer_leads dl
@@ -128,6 +139,7 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                   )
             `),
             countOnboardingDropouts(),
+            conversionMeasures(lf),
         ]);
 
     return {
@@ -135,8 +147,9 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
         avg_time_to_first_touch_hours:
             firstTouch[0]?.hrs != null ? Number(firstTouch[0].hrs) : null,
         leads_worked_today: Number(counts[0]?.leads_worked_today ?? 0),
-        conversion_rate_7d: conv7,
-        conversion_rate_30d: conv30,
+        ...cohort,
+        closed_win_rate_7d: conv7,
+        closed_win_rate_30d: conv30,
         pending_escalations: Number(counts[0]?.pending_escalations ?? 0),
         onboarding_dropouts_pending: dropouts,
         stale_converted: Number(staleConv[0]?.c ?? 0),
@@ -144,7 +157,13 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
     };
 }
 
-async function convRate(days: number, lf: SQL): Promise<number | null> {
+/**
+ * Closed-win rate: Converted ÷ (Converted + Lost) among leads CLOSED in the
+ * window. It says how often a decided lead goes our way — not how much of the
+ * lead base converts, which is a small fraction of this. It used to be called
+ * conversion_rate_7d / _30d and read as the latter (review R-08).
+ */
+async function closedWinRate(days: number, lf: SQL): Promise<number | null> {
     const rows = await db.execute<{ conv: string; closed: string }>(sql`
         SELECT
             COUNT(*) FILTER (WHERE dl.lead_status = 'Converted')::text AS conv,
@@ -155,6 +174,68 @@ async function convRate(days: number, lf: SQL): Promise<number | null> {
     const conv = Number(rows[0]?.conv ?? 0);
     const closed = Number(rows[0]?.closed ?? 0);
     return closed > 0 ? conv / closed : null;
+}
+
+/**
+ * The three cohort conversion measures (review R-08, metric M27, Change Spec
+ * v2.1 §4.3 / §5.6). A cohort is active leads CREATED in a window; every lead
+ * counts, including the AI-dialable pool nobody has worked yet — that is the
+ * "lead base" the closed-win rate was being mistaken for.
+ *
+ *   cohort_conversion_to_date   created in the last 30 days, converted so far.
+ *                               Always shown as "to date": a young cohort has
+ *                               had less time to convert.
+ *   conversion_30d_rate         created 31–60 days ago, converted within 30
+ *                               days of creation — a full, fixed observation
+ *                               window, so months compare fairly.
+ *   engaged_to_conversion_rate  created in the last 30 days AND had at least
+ *                               one engaged touchpoint (connected call /
+ *                               productive visit), converted so far — sales
+ *                               effectiveness on leads we actually worked.
+ */
+async function conversionMeasures(lf: SQL): Promise<{
+    cohort_conversion_to_date: number | null;
+    conversion_30d_rate: number | null;
+    engaged_to_conversion_rate: number | null;
+}> {
+    const rows = await db.execute<{
+        td_cohort: string;
+        td_conv: string;
+        c30_cohort: string;
+        c30_conv: string;
+        eng_cohort: string;
+        eng_conv: string;
+    }>(sql`
+        WITH l AS (
+            SELECT dl.created_at >= NOW() - INTERVAL '30 days' AS recent,
+                   dl.created_at <  NOW() - INTERVAL '30 days' AS mature,
+                   dl.lead_status = 'Converted' AS converted,
+                   dl.lead_status = 'Converted'
+                       AND dl.closed_at <= dl.created_at + INTERVAL '30 days' AS converted_in_30d,
+                   EXISTS (SELECT 1 FROM lead_touchpoints t
+                            WHERE t.dealer_lead_id = dl.id
+                              AND t.is_engaged IS TRUE) AS engaged
+            FROM dealer_leads dl
+            WHERE dl.is_active IS NOT FALSE
+              AND dl.created_at >= NOW() - INTERVAL '60 days' ${lf}
+        )
+        SELECT
+            COUNT(*) FILTER (WHERE recent)::text                          AS td_cohort,
+            COUNT(*) FILTER (WHERE recent AND converted)::text            AS td_conv,
+            COUNT(*) FILTER (WHERE mature)::text                          AS c30_cohort,
+            COUNT(*) FILTER (WHERE mature AND converted_in_30d)::text     AS c30_conv,
+            COUNT(*) FILTER (WHERE recent AND engaged)::text              AS eng_cohort,
+            COUNT(*) FILTER (WHERE recent AND engaged AND converted)::text AS eng_conv
+        FROM l
+    `);
+    const r = rows[0];
+    const rate = (a: unknown, b: unknown): number | null =>
+        Number(b ?? 0) > 0 ? Number(a ?? 0) / Number(b) : null;
+    return {
+        cohort_conversion_to_date: rate(r?.td_conv, r?.td_cohort),
+        conversion_30d_rate: rate(r?.c30_conv, r?.c30_cohort),
+        engaged_to_conversion_rate: rate(r?.eng_conv, r?.eng_cohort),
+    };
 }
 
 // ──────────────────────────── Zone 2 — Team perf ──────────────────────────
@@ -209,17 +290,19 @@ export async function fetchTeamPerformance(
                 / NULLIF(COUNT(*) FILTER (WHERE dl.lead_status IN ('Converted','Lost')), 0), 3)
                FROM dealer_leads dl
                WHERE dl.closing_owner_id = u.id::text
-                 AND dl.closed_at >= NOW() - INTERVAL '30 days') AS conversion_rate_30d,
+                 AND dl.closed_at >= NOW() - INTERVAL '30 days') AS closed_win_rate_30d,
             (SELECT COUNT(*) FROM dealer_leads dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${OPEN_LIST})
                  AND dl.is_active IS NOT FALSE
-                 AND ${workingDaysSince(LAST_TOUCH)} > 5) AS stale_leads,
+                 AND ${workingDaysSince(LAST_TOUCH)} > 5
+                 AND ${NOT_NON_RESPONSIVE}) AS stale_leads,
             (SELECT COUNT(*) FROM dealer_leads dl
                WHERE dl.current_owner_id = u.id::text
                  AND dl.lead_status IN (${OPEN_LIST})
                  AND dl.is_active IS NOT FALSE
-                 AND ${workingDaysSince(LAST_TOUCH)} > 10) AS critical_stale,
+                 AND ${workingDaysSince(LAST_TOUCH)} > 10
+                 AND ${NOT_NON_RESPONSIVE}) AS critical_stale,
             (SELECT up.pref_value->>'status' FROM user_preferences up
                WHERE up.user_id = u.id::text
                  AND up.pref_key = 'ooo_status') AS ooo_status
@@ -242,8 +325,8 @@ export async function fetchTeamPerformance(
             r.avg_time_to_first_touch_hours != null
                 ? Number(r.avg_time_to_first_touch_hours)
                 : null,
-        conversion_rate_30d:
-            r.conversion_rate_30d != null ? Number(r.conversion_rate_30d) : null,
+        closed_win_rate_30d:
+            r.closed_win_rate_30d != null ? Number(r.closed_win_rate_30d) : null,
         stale_leads: Number(r.stale_leads ?? 0),
         critical_stale: Number(r.critical_stale ?? 0),
     }));
@@ -258,11 +341,15 @@ function panelCountSql(key: AlertPanelKey, lf: SQL): SQL {
         case "no_touch_5d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > 5 ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > 5 AND ${NOT_NON_RESPONSIVE} ${lf}`;
         case "no_touch_10d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
-                  AND ${workingDaysSince(LAST_TOUCH)} > 10 ${lf}`;
+                  AND ${workingDaysSince(LAST_TOUCH)} > 10 AND ${NOT_NON_RESPONSIVE} ${lf}`;
+        case "non_responsive":
+            return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
+                WHERE dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+                  AND ${NON_RESPONSIVE} ${lf}`;
         case "awaiting_decision_14d":
             return sql`SELECT COUNT(*)::text AS c FROM dealer_leads dl
                 WHERE dl.lead_status = 'Awaiting_Customer_Decision'
@@ -363,8 +450,18 @@ export async function fetchAlertPanel(
                     : sql`dl.lead_status IN (${OPEN_LIST})`;
             const rows = await leadPanel(
                 sql`${statusFilter} AND dl.is_active IS NOT FALSE
-                    AND ${workingDaysSince(LAST_TOUCH)} > ${sql.raw(String(threshold))} ${lf}`,
+                    AND ${workingDaysSince(LAST_TOUCH)} > ${sql.raw(String(threshold))}
+                    ${key === "awaiting_decision_14d" ? sql`` : sql`AND ${NOT_NON_RESPONSIVE}`} ${lf}`,
                 sql`CONCAT(${workingDaysSince(LAST_TOUCH)}, ' working days idle')`,
+                sql`${workingDaysSince(LAST_TOUCH)} DESC`,
+            );
+            return rows as unknown as AlertPanelRow[];
+        }
+        case "non_responsive": {
+            const rows = await leadPanel(
+                sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE
+                    AND ${NON_RESPONSIVE} ${lf}`,
+                sql`CONCAT(${workingDaysSince(LAST_TOUCH)}, ' working days since last worked · no call answered in 45 days')`,
                 sql`${workingDaysSince(LAST_TOUCH)} DESC`,
             );
             return rows as unknown as AlertPanelRow[];

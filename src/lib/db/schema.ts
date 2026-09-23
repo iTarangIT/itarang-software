@@ -3970,6 +3970,10 @@ export const dealerLeads = pgTable("dealer_leads", {
   onboarding_dropout_reason: varchar("onboarding_dropout_reason", { length: 50 }),
   onboarding_dropout_notes: text("onboarding_dropout_notes"),
   interest_level: varchar("interest_level", { length: 20 }),
+  // E-301 — when interest_level took its current value (review R-05, M12).
+  // Stamped by the dealer_leads_interest_changed_at TRIGGER, not app code:
+  // never write it from TypeScript.
+  interest_changed_at: timestamp("interest_changed_at", { withTimezone: true }),
   // E-168: intent-qualification band model. `intent_band` is the latest call's
   // band, `call_status` its complete|dropped_partial|dropped_empty status, and
   // `info_signals_count` (0–5) the disclosed-facts count used to order the
@@ -3991,6 +3995,9 @@ export const dealerLeads = pgTable("dealer_leads", {
   assigned_at: timestamp("assigned_at", { withTimezone: true }),
   closed_at: timestamp("closed_at", { withTimezone: true }),
   last_touchpoint_at: timestamp("last_touchpoint_at", { withTimezone: true }),
+  // E-300 — the idle clock (review R-04, M18). Only calls, visits and status
+  // changes set it; last_touchpoint_at stays "last activity of any kind".
+  last_worked_at: timestamp("last_worked_at", { withTimezone: true }),
   next_follow_up_at: timestamp("next_follow_up_at", { withTimezone: true }),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   // Escalation (BRD §0.6)
@@ -10467,6 +10474,11 @@ export const buybackRequests = pgTable(
     submitted_at: timestamp("submitted_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // E-302 — the SPOC who owns this request (review R-12). NULL = unassigned.
+    // Set at creation from the dealer's CRM owner (GSTIN match) and by
+    // Claim / Assign on the admin request page — src/lib/buyback/owner.ts.
+    owner_id: text("owner_id"),
+    owner_assigned_at: timestamp("owner_assigned_at", { withTimezone: true }),
   },
   (t) => ({
     requestNoUnique: uniqueIndex("buyback_requests_request_no_unique").on(t.request_no),
@@ -12679,3 +12691,73 @@ export const scrapeBatches = pgTable("scrape_batches", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   completed_at: timestamp("completed_at", { withTimezone: true }),
 });
+
+// E-303 — Sales targets register (review R-17, Requirement #15). One row per
+// (month, person, metric). Final target = ceo_target + admin_addon, computed —
+// never stored. Workflow and metric vocabulary: src/lib/targets/.
+export const salesTargets = pgTable(
+  "sales_targets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    month: date("month").notNull(),
+    user_id: text("user_id").notNull(),
+    metric: varchar("metric", { length: 40 }).notNull(),
+    ceo_target: numeric("ceo_target", { precision: 14, scale: 2 }).default("0").notNull(),
+    admin_addon: numeric("admin_addon", { precision: 14, scale: 2 }).default("0").notNull(),
+    status: varchar("status", { length: 20 }).default("draft").notNull(),
+    approved_by: text("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    pushed_at: timestamp("pushed_at", { withTimezone: true }),
+    accepted_at: timestamp("accepted_at", { withTimezone: true }),
+    reminded_at: timestamp("reminded_at", { withTimezone: true }),
+    created_by: text("created_by"),
+    updated_by: text("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    monthUserMetricUniq: uniqueIndex("sales_targets_month_user_metric_uniq").on(
+      t.month,
+      t.user_id,
+      t.metric,
+    ),
+    userMonthIdx: index("sales_targets_user_month_idx").on(t.user_id, t.month),
+  }),
+);
+
+// E-304 — written ONLY by the dealer_leads_audit trigger; read by the lead
+// event log (src/lib/leads/eventLog.ts). changed_by comes from the
+// transaction-local app.actor_id (src/lib/leads/actorContext.ts); NULL = not
+// recorded.
+export const dealerLeadInterestHistory = pgTable(
+  "dealer_lead_interest_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    from_level: varchar("from_level", { length: 20 }),
+    to_level: varchar("to_level", { length: 20 }),
+    changed_by: text("changed_by"),
+    changed_at: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("dealer_lead_interest_history_lead_idx").on(t.dealer_lead_id, t.changed_at),
+    atIdx: index("dealer_lead_interest_history_at_idx").on(t.changed_at),
+  }),
+);
+
+export const dealerLeadFieldChanges = pgTable(
+  "dealer_lead_field_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    field: varchar("field", { length: 60 }).notNull(),
+    old_value: text("old_value"),
+    new_value: text("new_value"),
+    changed_by: text("changed_by"),
+    changed_at: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("dealer_lead_field_changes_lead_idx").on(t.dealer_lead_id, t.changed_at),
+    atIdx: index("dealer_lead_field_changes_at_idx").on(t.changed_at),
+  }),
+);

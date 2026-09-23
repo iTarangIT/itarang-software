@@ -178,6 +178,8 @@ export default function LoginPage() {
                 navigateTo('/operations');
             } else if (appUser.role === 'partner') {
                 navigateTo('/partner');
+            } else if (appUser.role === 'monitor') {
+                navigateTo('/monitor');
             } else {
                 navigateTo('/');
             }
