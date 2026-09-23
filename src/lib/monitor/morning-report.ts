@@ -26,7 +26,7 @@ import { buildMorningCaption, buildUnreachableMessage } from "@/lib/monitor/morn
 import { renderMorningCard } from "@/lib/monitor/morning-card";
 import { istSlotState, type Slot } from "@/lib/monitor/schedule";
 import { sendMessage, sendPhoto, telegramConfig } from "@/lib/telegram/client";
-import { fetchMonitorOverview } from "@/lib/telemetry/monitor-queries";
+import { fetchMonitorOverview, fetchMonitorPeriods } from "@/lib/telemetry/monitor-queries";
 import { isVpsUnreachable, vpsDegradedReason } from "@/lib/telemetry/vps-status";
 
 const KIND = "monitor_morning";
@@ -139,7 +139,20 @@ export async function runMonitorMorningReport(opts: {
             return { sent: true, kind: "unreachable_notice", istDate: state.istDate, messageId };
         }
 
-        const png = await renderPngFromHtml(renderMorningCard(data, now), { width: 720 });
+        // The Total / 30-day grid is an addition to the card, not its point. If
+        // its queries fail the morning card still goes out without it, rather
+        // than the day's report being lost to a secondary figure.
+        const periods = await fetchMonitorPeriods(now).catch((e: unknown) => {
+            console.error(
+                "[monitor:morning] period grid unavailable:",
+                e instanceof Error ? e.message : e,
+            );
+            return null;
+        });
+
+        const png = await renderPngFromHtml(renderMorningCard(data, now, periods), {
+            width: 720,
+        });
         const { messageId } = await sendPhoto(cfg, png, buildMorningCaption(data, now));
 
         await finish(runId, "sent", messageId);
