@@ -8,9 +8,19 @@
 /** True when the error is "can't reach / isn't configured", not a real query bug. */
 export function isVpsUnreachable(error: unknown): boolean {
     const code = (error as { code?: string } | null)?.code;
-    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT') return true;
+    // ECONNRESET is the shape a dropped SSH tunnel takes: the socket is accepted
+    // and then torn down, so it arrives as a reset rather than a refusal. Without
+    // it every telemetry route answers a dead tunnel with a 500 and the raw text
+    // 'read ECONNRESET', instead of the amber banner that tells the operator what
+    // to restart.
+    if (
+        code === 'ECONNREFUSED' ||
+        code === 'ENOTFOUND' ||
+        code === 'ETIMEDOUT' ||
+        code === 'ECONNRESET'
+    ) return true;
     const message = error instanceof Error ? error.message : String(error);
-    return /ECONNREFUSED|getaddrinfo|connection terminated|IOT_DATABASE_URL is not set/i.test(message);
+    return /ECONNREFUSED|ECONNRESET|getaddrinfo|connection terminated|IOT_DATABASE_URL is not set/i.test(message);
 }
 
 /**
@@ -30,6 +40,9 @@ export function vpsDegradedReason(error: unknown): string {
     }
     if (code === 'ETIMEDOUT' || /ETIMEDOUT|connection terminated/i.test(message)) {
         return 'IoT VPS unreachable — connection timed out. Check the SSH tunnel and the VPS firewall (port 5433).';
+    }
+    if (code === 'ECONNRESET' || /ECONNRESET/i.test(message)) {
+        return 'IoT VPS unreachable — the connection was reset, which usually means the SSH tunnel dropped mid-request. Restart the tunnel (or rds-tunnel.service on the server) and refresh.';
     }
     if (code === 'ENOTFOUND' || /getaddrinfo|ENOTFOUND/i.test(message)) {
         return 'IoT VPS unreachable — host not found. Check the host in IOT_DATABASE_URL.';

@@ -23,7 +23,12 @@ export interface CeoOverviewData {
     outstanding: number;
     realization: number;
   };
-  leads: { total: number; converted: number };
+  /**
+   * total/aiQualified are leads CREATED in the window; converted is deals
+   * marked Converted whose closed_at is in the window (same rule as the Sales
+   * dashboard). aiQualified is the dialer's intent rating — never a conversion.
+   */
+  leads: { total: number; converted: number; aiQualified: number };
   buyback: { available: boolean; submitted: number; completed: number };
   chart: {
     name: string;
@@ -66,8 +71,8 @@ export function LeadsCard({
       title="Leads"
       value={data.total.toLocaleString("en-IN")}
       subtitle={
-        data.total > 0
-          ? `${data.converted.toLocaleString("en-IN")} qualified · ${windowLabel}`
+        data.total > 0 || data.converted > 0
+          ? `${data.converted.toLocaleString("en-IN")} converted · ${data.aiQualified.toLocaleString("en-IN")} AI qualified · ${windowLabel}`
           : `No leads in ${windowLabel}`
       }
       icon={Users}

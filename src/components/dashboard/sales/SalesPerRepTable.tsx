@@ -9,6 +9,7 @@ import { SortableTh, sortRows, useTableSort, type SortSpec } from "@/components/
 import type { InterestLevel, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 
 const fmt = (n: number) => n.toLocaleString("en-IN");
+const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 
 type Row = {
     spoc_id: string;
@@ -22,6 +23,10 @@ type Row = {
     warm: number;
     cold: number;
     converted: number;
+    quotes_issued: number;
+    batteries_to_dealers: number;
+    revenue: number;
+    kyc_submitted: number;
 };
 
 const SPECS: SortSpec<Row>[] = [
@@ -34,6 +39,10 @@ const SPECS: SortSpec<Row>[] = [
     { key: "warm", type: "number" },
     { key: "cold", type: "number" },
     { key: "converted", type: "number" },
+    { key: "quotes_issued", type: "number" },
+    { key: "batteries_to_dealers", type: "number" },
+    { key: "revenue", type: "number" },
+    { key: "kyc_submitted", type: "number" },
 ];
 
 function toRow(b: SalesSpocBlock): Row {
@@ -50,6 +59,10 @@ function toRow(b: SalesSpocBlock): Row {
         warm: level("warm"),
         cold: level("cold"),
         converted: b.totals.converted,
+        quotes_issued: b.outcome.quotes_issued,
+        batteries_to_dealers: b.outcome.batteries_to_dealers,
+        revenue: b.outcome.revenue,
+        kyc_submitted: b.outcome.kyc_submitted,
     };
 }
 
@@ -72,13 +85,13 @@ export function SalesPerRepTable({
             <div className="px-4 py-3">
                 <h3 className="text-sm font-semibold text-ink">Per SPOC</h3>
                 <p className="text-[11px] text-ink-muted">
-                    Everyone with a visit, call, open lead or conversion in this range. Click a
+                    Everyone with a visit, call, open lead, conversion or outcome in this range. Click a
                     row to see that person alone. Calls with no performer (the AI dialer) are in
                     the totals above but under no rep here.
                 </p>
             </div>
             <div className="overflow-x-auto border-t border-border">
-                <table className="w-full min-w-[820px] text-sm">
+                <table className="w-full min-w-[1180px] text-sm">
                     <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
                         <tr>
                             <SortableTh label="Name" sortKey="name" sort={sort} onToggle={toggle} className="px-4 text-left" />
@@ -90,12 +103,16 @@ export function SalesPerRepTable({
                             {num("warm", "Warm")}
                             {num("cold", "Cold")}
                             {num("converted", "Converted")}
+                            {num("quotes_issued", "Quotes")}
+                            {num("batteries_to_dealers", "Batteries")}
+                            {num("revenue", "Revenue")}
+                            {num("kyc_submitted", "KYC")}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={9} className="px-4 py-8 text-center text-ink-muted">
+                                <td colSpan={13} className="px-4 py-8 text-center text-ink-muted">
                                     No rep activity in this range.
                                 </td>
                             </tr>
@@ -126,6 +143,10 @@ export function SalesPerRepTable({
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.warm)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.cold)}</td>
                                 <td className="px-4 py-2 text-right tabular-nums">{fmt(r.converted)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(r.quotes_issued)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(r.batteries_to_dealers)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{inr(r.revenue)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums">{fmt(r.kyc_submitted)}</td>
                             </tr>
                         ))}
                     </tbody>

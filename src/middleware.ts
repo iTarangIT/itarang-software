@@ -424,6 +424,13 @@ export async function middleware(request: NextRequest) {
     // raising, full Battery Buyback admin. Own prefix so the bounce below and
     // the sidebar identify it as `partner`, not as any of the roles it borrows.
     partner: "/partner",
+    // Fleet Monitor — a single read-only page of IoT telemetry health, own
+    // login monitor@itarang.com. Listing it here is what PROTECTS the path:
+    // isProtectedRoute is derived from these values, so without this entry
+    // /monitor renders for every signed-in user AND for signed-out visitors
+    // (the no-user branch above only redirects protected paths). It fails
+    // open, not closed.
+    monitor: "/monitor",
   };
 
   // E-212 — /reset-password is reached from an emailed token link by a user who

@@ -24,6 +24,7 @@ import {
     Map,
     MapPin,
     PauseCircle,
+    PhoneOff,
     ShieldAlert,
     UserMinus,
     UserX,
@@ -45,6 +46,8 @@ const SELECTABLE: Set<AlertPanelKey> = new Set([
     "awaiting_decision_14d",
     "asm_no_activity",
     "out_of_territory_handoffs",
+    // R-16 — bulk mark-lost / reassign is exactly what a dead number needs.
+    "non_responsive",
 ]);
 
 type Severity = "warning" | "critical";
@@ -64,6 +67,7 @@ const PANEL_META: Record<
     address_mismatch: { icon: MapPin, severity: "warning" },
     duplicate_merge_requests: { icon: Copy, severity: "warning" },
     out_of_territory_handoffs: { icon: Map, severity: "warning" },
+    non_responsive: { icon: PhoneOff, severity: "warning" },
 };
 
 // Tailwind classes per severity, applied only when count > 0.

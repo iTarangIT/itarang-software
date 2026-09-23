@@ -120,6 +120,8 @@ interface Board {
   request_id: string;
   request_no: string;
   status: string;
+  /** R-13 — buyback_lines.unit_weight_kg per line; null = no weight yet. */
+  line_weights?: Record<string, string | null>;
   floor_total: number;
   allowed_actions: string[];
   threads: Thread[];
@@ -190,6 +192,8 @@ export default function VendorBoard({
   // Mark-collected modal state (M05).
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectCounts, setCollectCounts] = useState<Record<string, string>>({});
+  // R-13 — kg per battery typed for lines that have no weight yet.
+  const [collectWeights, setCollectWeights] = useState<Record<string, string>>({});
   const [ewayBill, setEwayBill] = useState("");
   const [ewayBillProof, setEwayBillProof] = useState<{ key: string; name: string } | null>(null);
   const [weighbridgeProof, setWeighbridgeProof] = useState<{ key: string; name: string } | null>(
@@ -292,6 +296,19 @@ export default function VendorBoard({
   const collectLines =
     (board.threads.find((t) => t.status === "AGREED") ?? board.threads[0])?.lines ?? [];
 
+  // R-13 — lines with batteries on the truck and no unit weight yet. The
+  // server refuses to complete the pickup without one: kg sourced is
+  // quantity × weight, and a missing weight used to count silently as 0.
+  const needsWeight = collectLines.filter(
+    (l) =>
+      !(board.line_weights?.[l.line_id] && Number(board.line_weights[l.line_id]) > 0) &&
+      Number(collectCounts[l.line_id] || 0) > 0,
+  );
+  const weightsValid = needsWeight.every((l) => {
+    const n = Number(collectWeights[l.line_id]);
+    return Number.isFinite(n) && n > 0 && n <= 5000;
+  });
+
   const collectValid = collectLines.every((l) => {
     // Number("") is 0 — a cleared input must NOT silently read as "0 collected"
     // (that would record a false count variance and hold the dealer's payout).
@@ -306,6 +323,7 @@ export default function VendorBoard({
     setCollectCounts(
       Object.fromEntries(collectLines.map((l) => [l.line_id, String(l.quantity)])),
     );
+    setCollectWeights({});
     setEwayBill("");
     setEwayBillProof(null);
     setWeighbridgeProof(null);
@@ -326,7 +344,14 @@ export default function VendorBoard({
       eway_bill_no?: string;
       eway_bill_s3?: string;
       weighbridge_slip_s3?: string;
+      line_weights?: Array<{ line_id: string; unit_weight_kg: number }>;
     } = {};
+    if (needsWeight.length > 0) {
+      body.line_weights = needsWeight.map((l) => ({
+        line_id: l.line_id,
+        unit_weight_kg: Number(collectWeights[l.line_id]),
+      }));
+    }
     if (collectLines.length > 0) {
       body.actual_counts = collectLines.map((l) => ({
         line_id: l.line_id,
@@ -1040,19 +1065,36 @@ export default function VendorBoard({
                       declared {l.quantity}
                     </div>
                   </div>
-                  <label className="flex items-center gap-2 text-[11px] text-slate-500">
-                    actually collected
-                    <input
-                      type="number"
-                      min={0}
-                      max={l.quantity}
-                      value={collectCounts[l.line_id] ?? ""}
-                      onChange={(e) =>
-                        setCollectCounts((c) => ({ ...c, [l.line_id]: e.target.value }))
-                      }
-                      className="w-20 rounded-lg border border-slate-200 px-2.5 py-1.5 text-right text-sm tabular-nums"
-                    />
-                  </label>
+                  <div className="flex flex-col items-end gap-1">
+                    <label className="flex items-center gap-2 text-[11px] text-slate-500">
+                      actually collected
+                      <input
+                        type="number"
+                        min={0}
+                        max={l.quantity}
+                        value={collectCounts[l.line_id] ?? ""}
+                        onChange={(e) =>
+                          setCollectCounts((c) => ({ ...c, [l.line_id]: e.target.value }))
+                        }
+                        className="w-20 rounded-lg border border-slate-200 px-2.5 py-1.5 text-right text-sm tabular-nums"
+                      />
+                    </label>
+                    {needsWeight.some((n) => n.line_id === l.line_id) && (
+                      <label className="flex items-center gap-2 text-[11px] font-semibold text-amber-700">
+                        kg per battery
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.1"
+                          value={collectWeights[l.line_id] ?? ""}
+                          onChange={(e) =>
+                            setCollectWeights((w) => ({ ...w, [l.line_id]: e.target.value }))
+                          }
+                          className="w-20 rounded-lg border border-amber-300 px-2.5 py-1.5 text-right text-sm tabular-nums"
+                        />
+                      </label>
+                    )}
+                  </div>
                 </div>
               ))}
 
@@ -1063,6 +1105,12 @@ export default function VendorBoard({
                 </p>
               )}
             </div>
+
+            {needsWeight.length > 0 && (
+              <p className="mt-2 text-xs text-amber-700">
+                Weight is required for every collected line — kg sourced is counted from it.
+              </p>
+            )}
 
             {!collectValid && (
               <p className="mt-2 text-xs text-amber-700">
@@ -1132,7 +1180,7 @@ export default function VendorBoard({
                 Cancel
               </button>
               <button
-                disabled={busy || !collectValid}
+                disabled={busy || !collectValid || !weightsValid}
                 onClick={() => void submitCollected()}
                 className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
               >

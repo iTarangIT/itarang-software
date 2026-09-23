@@ -167,7 +167,26 @@ async function run() {
         VALUES (${DEALER_COMPANY.id}, 'BATTERY_DEALER', 'ACTIVE')
         ON CONFLICT (entity_id, role) DO UPDATE SET status = 'ACTIVE', updated_at = NOW()
     `;
-    console.log('  BATTERY_DEALER role active\n');
+    console.log('  BATTERY_DEALER role active');
+
+    // The canonical `dealers` row (normally written at approval). E-202 gates the
+    // whole buyback module on dealers.dealer_type: with no row the dealer resolves
+    // to 'new', the sidebar hides "Battery Buyback" and every buyback API returns
+    // 403 "only available to scrap and new+scrap dealers". 'both' keeps the full
+    // new-battery portal AND adds buyback.
+    await sql`
+        INSERT INTO dealers (dealer_id, company_name, company_type, dealer_type,
+                             gst_number, pan_number, owner_name, owner_phone,
+                             owner_email, onboarding_status, created_at, updated_at)
+        VALUES (${DEALER_COMPANY.id}, ${DEALER_COMPANY.name}, 'proprietorship', 'both',
+                ${DEALER_COMPANY.gstin}, ${DEALER_COMPANY.pan}, 'Test Dealer',
+                ${DEALER_COMPANY.phone}, ${DEALER_COMPANY.email}, 'active', NOW(), NOW())
+        ON CONFLICT (dealer_id) DO UPDATE SET
+            dealer_type       = 'both',
+            onboarding_status = 'active',
+            updated_at        = NOW()
+    `;
+    console.log('  dealers row ready (dealer_type = both)\n');
 
     // 2. The logins.
     for (const user of USERS) {

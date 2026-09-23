@@ -1,9 +1,11 @@
 "use client";
 
-// BRD §0.11 Zone 1 — the KPI strip. Split into two visually grouped tiers:
-//   • Activity: 5 primary throughput/conversion metrics (5-col grid)
+// BRD §0.11 Zone 1 — the KPI strip. Three visually grouped tiers:
+//   • Activity: 3 throughput metrics
+//   • Conversion: the four conversion measures (review R-08) — five tiles,
+//     closed-win has 7d and 30d. Each tile's hint says exactly what it divides
+//     by; "Conversion Rate" with no qualifier is what R-08 was about.
 //   • Exceptions: 4 alert metrics that tint when non-zero (4-col grid)
-// Two clean rows beat a ragged 5+4 single grid on wide screens.
 
 import {
     Activity,
@@ -64,17 +66,43 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             icon: Activity,
             tone: "neutral",
         },
+    ];
+
+    const conversion: Tile[] = [
         {
-            label: "Conversion Rate · 7d",
-            value: fmtPct(kpis.conversion_rate_7d),
+            label: "Lead Conversion · to date",
+            value: fmtPct(kpis.cohort_conversion_to_date),
             icon: TrendingUp,
             tone: "neutral",
+            hint: "leads created last 30 days · converted so far",
         },
         {
-            label: "Conversion Rate · 30d",
-            value: fmtPct(kpis.conversion_rate_30d),
+            label: "30-Day Lead Conversion",
+            value: fmtPct(kpis.conversion_30d_rate),
             icon: TrendingUp,
             tone: "neutral",
+            hint: "leads created 31–60 days ago · converted within 30 days",
+        },
+        {
+            label: "Engaged → Converted",
+            value: fmtPct(kpis.engaged_to_conversion_rate),
+            icon: TrendingUp,
+            tone: "neutral",
+            hint: "leads created last 30 days with a connected call or productive visit",
+        },
+        {
+            label: "Closed-Win · 7d",
+            value: fmtPct(kpis.closed_win_rate_7d),
+            icon: TrendingUp,
+            tone: "neutral",
+            hint: "converted ÷ (converted + lost) · closed last 7 days",
+        },
+        {
+            label: "Closed-Win · 30d",
+            value: fmtPct(kpis.closed_win_rate_30d),
+            icon: TrendingUp,
+            tone: "neutral",
+            hint: "converted ÷ (converted + lost) · closed last 30 days",
         },
     ];
 
@@ -111,14 +139,20 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             <KpiSection
                 title="Activity"
                 tiles={activity}
-                cols="lg:grid-cols-3 xl:grid-cols-5"
+                cols="lg:grid-cols-3"
                 offset={0}
+            />
+            <KpiSection
+                title="Conversion"
+                tiles={conversion}
+                cols="lg:grid-cols-3 xl:grid-cols-5"
+                offset={activity.length}
             />
             <KpiSection
                 title="Exceptions"
                 tiles={exceptions}
                 cols="lg:grid-cols-2 xl:grid-cols-4"
-                offset={activity.length}
+                offset={activity.length + conversion.length}
             />
         </div>
     );

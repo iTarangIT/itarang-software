@@ -89,9 +89,15 @@ export async function GET(req: NextRequest) {
     const source =
       sourceParam === "zoho" || sourceParam === "drive" ? sourceParam : null;
 
+    // R-11 reconciliation: invoices linked / not linked to a CRM dealer on GSTIN.
+    const matchParam = (sp.get("dealer_match") || "").toLowerCase();
+    const dealerMatch =
+      matchParam === "linked" || matchParam === "unlinked" ? matchParam : null;
+
     const filters: RevenueListFilters = {
       from,
       to,
+      dealerMatch,
       statuses: statuses && statuses.length > 0 ? statuses : null,
       customer: sp.get("customer"),
       source,
@@ -109,6 +115,8 @@ export async function GET(req: NextRequest) {
         "Balance",
         "Transaction ID",
         "Needs Attention",
+        "Customer GSTIN",
+        "Linked CRM Dealer",
       ];
       const body = rows.map((r) =>
         [
@@ -121,6 +129,8 @@ export async function GET(req: NextRequest) {
           r.balance,
           r.payment_reference,
           r.needs_attention ? r.attention_reason || "yes" : "",
+          r.gstin_key,
+          r.dealer_name ?? (r.dealer_lead_id ? r.dealer_lead_id : "Not linked"),
         ]
           .map(csvCell)
           .join(","),

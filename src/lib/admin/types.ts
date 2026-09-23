@@ -16,8 +16,19 @@ export type AdminKpis = {
     unassigned_queue: number;
     avg_time_to_first_touch_hours: number | null;
     leads_worked_today: number;
-    conversion_rate_7d: number | null; // 0..1
-    conversion_rate_30d: number | null; // 0..1
+    /*
+     * Four conversion measures, four names — never one ambiguous "conversion
+     * rate" (review R-08, metric M27, Change Spec v2.1 §5.6). All 0..1.
+     */
+    /** Converted ÷ active leads created in the last 30 days, so far. "To date". */
+    cohort_conversion_to_date: number | null;
+    /** Of active leads created 31–60 days ago, share converted within 30 days of creation. */
+    conversion_30d_rate: number | null;
+    /** Converted ÷ active leads created in the last 30 days with ≥1 engaged touchpoint. */
+    engaged_to_conversion_rate: number | null;
+    /** Converted ÷ (Converted + Lost), closed in the last 7 / 30 days. Was conversion_rate_*. */
+    closed_win_rate_7d: number | null;
+    closed_win_rate_30d: number | null;
     pending_escalations: number;
     onboarding_dropouts_pending: number;
     stale_converted: number;
@@ -35,7 +46,8 @@ export type TeamPerfRow = {
     touchpoints_week: number;
     avg_touchpoints_per_lead: number | null;
     avg_time_to_first_touch_hours: number | null;
-    conversion_rate_30d: number | null;
+    /** Converted ÷ (Converted + Lost) closed by this person, last 30 days (R-08). */
+    closed_win_rate_30d: number | null;
     stale_leads: number; // open, no touch > 5 days
     critical_stale: number; // open, no touch > 10 days
     ooo_status: string | null;
@@ -54,6 +66,9 @@ export const ALERT_PANELS = [
     "address_mismatch",
     "duplicate_merge_requests",
     "out_of_territory_handoffs",
+    // R-16 — 6 unanswered calls on 6 days in 45 days. Its own bucket, and
+    // excluded from the no-touch panels above.
+    "non_responsive",
 ] as const;
 export type AlertPanelKey = (typeof ALERT_PANELS)[number];
 
@@ -69,6 +84,7 @@ export const ALERT_PANEL_LABELS: Record<AlertPanelKey, string> = {
     address_mismatch: "Address Mismatch Review",
     duplicate_merge_requests: "Duplicate Merge Requests",
     out_of_territory_handoffs: "Out-of-Territory Handoffs",
+    non_responsive: "Non-responsive (6 unanswered call days in 45)",
 };
 
 // Generic drill-down row used by every alert panel.
@@ -301,8 +317,12 @@ export const MEETING_MODE_LABELS: Record<MeetingMode, string> = {
  */
 export const FUNNEL_TEMPERATURES = ["hot", "warm", "cold"] as const;
 
-/** Statuses that count as converted. `ai_qualified` is the dialer's own label. */
-export const CONVERTED_STATUSES = ["qualified", "ai_qualified", "converted"] as const;
+/*
+ * There is deliberately no "converted statuses" list here. Converted means
+ * dealer_leads.lead_status = 'Converted' and nothing else (review R-01, metric
+ * M15). The AI dialer's current_status 'qualified' / 'ai_qualified' is an
+ * intent rating, reported as "AI Qualified" — never as converted.
+ */
 
 export type ReportColumn = { key: string; label: string; numeric?: boolean };
 export type ReportRow = Record<string, string | number | null>;
@@ -311,6 +331,42 @@ export type ReportResult = {
     type: ReportType;
     columns: ReportColumn[];
     rows: ReportRow[];
+    /**
+     * Cells that open a lead list when clicked. `idKey` names the row field
+     * holding the drill id (never itself a column, so it is neither rendered
+     * nor exported); `metrics` are the column keys that drill.
+     */
+    drill?: { idKey: string; metrics: readonly string[] };
+};
+
+// Funnel-by-Owner drill-down: the columns whose number is a count of leads,
+// each of which can be opened into the list of those leads.
+export const OWNER_DRILL_METRICS = [
+    "owned_open",
+    "not_worked",
+    "touched",
+    "connected",
+    "hot",
+    "warm",
+    "cold",
+    "ai_qualified",
+    "ai_warm",
+    "ai_cold",
+    "converted",
+] as const;
+export type OwnerDrillMetric = (typeof OWNER_DRILL_METRICS)[number];
+
+export type OwnerDrillLead = {
+    id: string;
+    dealer_name: string | null;
+    shop_name: string | null;
+    phone: string | null;
+    city: string | null;
+    state: string | null;
+    lead_status: string | null;
+    interest_level: string | null;
+    current_status: string | null;
+    last_touchpoint_at: string | null;
 };
 
 // ──────────────────────────── Bulk upload ─────────────────────────────────
