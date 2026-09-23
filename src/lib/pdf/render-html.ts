@@ -49,3 +49,54 @@ export async function renderPdfFromHtml(
     await page.close().catch(() => {});
   }
 }
+
+export interface RenderPngOptions {
+  /** Card width in CSS pixels. Default suits a phone-shaped share image. */
+  width?: number;
+  /** Floor for the capture height; the content normally exceeds it. */
+  minHeight?: number;
+  /**
+   * Retina factor. 2 doubles the pixel count for the same layout — worth it for
+   * a card that will be pinch-zoomed in a chat app, where 1x text looks soft.
+   */
+  deviceScaleFactor?: number;
+}
+
+/**
+ * HTML → PNG, on the same pooled browser as renderPdfFromHtml.
+ *
+ * `fullPage` so the card is never cropped by the viewport: the height below is
+ * only a starting box, and the real height comes from the content. The page is
+ * closed; the browser is NOT, deliberately — it is shared with the PDF
+ * pipelines, and re-launching Chromium per call on a box that also runs
+ * production would be the expensive way to do this.
+ */
+export async function renderPngFromHtml(
+  html: string,
+  options: RenderPngOptions = {},
+): Promise<Buffer> {
+  const browser = await launchBrowser();
+  const page = await browser.newPage();
+
+  try {
+    // A deliberately SHORT viewport. `fullPage` captures max(viewport, content),
+    // so a tall viewport pads a shorter card with dead space at the bottom —
+    // which in a chat app is a thumbnail that looks half-empty. Starting small
+    // lets the content decide the height.
+    await page.setViewport({
+      width: options.width ?? 720,
+      height: options.minHeight ?? 200,
+      deviceScaleFactor: options.deviceScaleFactor ?? 2,
+    });
+
+    // Self-contained markup (inline styles, no external fonts or images), so
+    // there is never anything on the network to wait for.
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
+
+    const png = await page.screenshot({ type: "png", fullPage: true });
+
+    return Buffer.from(png);
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
