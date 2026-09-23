@@ -1504,3 +1504,101 @@ export async function startDealerPaymentReminderTicker() {
 
   console.log("[instrumentation] dealer payment reminder sweep (15m) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Fleet Monitor — the 08:00 IST card to Telegram.
+//
+// Same runtime argument as every ticker above: vercel.json's crons do not fire
+// on the Hostinger PM2 boxes (docs/DEPLOY_RUNBOOK.md), so an in-process ticker
+// is the only mechanism that demonstrably runs. /api/cron/monitor-morning is
+// the crontab backstop and the manual handle; the two are safe to run together
+// because the send is CLAIMED by a (kind, digest_date, slot) row in
+// digest_runs, so they can only split work, never duplicate it.
+//
+// WHY EVERY FIVE MINUTES FOR A ONCE-DAILY JOB. The tick is a cheap env read
+// plus one claim attempt that returns nothing 287 times out of 288. A slot
+// stays due from 08:00 until the end of its IST day, so five minutes is simply
+// the worst-case lateness of a card whose box was restarting when the clock
+// struck — and the claim is what stops the other 287 ticks resending it.
+//
+// DARK OUTSIDE PRODUCTION, for the same reason startDigestTicker is: this
+// sends to a fixed external chat and records that it did, so a developer
+// running the app with a copy of the production env would both post to the
+// real group and make the day's slot terminal, stopping the deployed app from
+// sending the card anyone was waiting for. Force it with
+// ENABLE_MONITOR_MORNING=1, or use `?force=1` on the cron route.
+// ---------------------------------------------------------------------------
+export async function startMonitorMorningTicker() {
+  // Skip on Vercel — a cron entry would own it there.
+  if (process.env.VERCEL === "1") return;
+
+  if (process.env.ENABLE_MONITOR_MORNING === "0") {
+    console.log("[instrumentation:monitor-morning] disabled via ENABLE_MONITOR_MORNING=0");
+    return;
+  }
+
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.ENABLE_MONITOR_MORNING !== "1"
+  ) {
+    console.log(
+      "[instrumentation:monitor-morning] not production — ticker dark. " +
+        "Set ENABLE_MONITOR_MORNING=1 to run it here (it posts to the REAL Telegram " +
+        "chat and consumes the day's slot).",
+    );
+    return;
+  }
+
+  // No bot token is the ordinary state on a box that is not meant to send.
+  // Say so once at boot rather than failing quietly every five minutes.
+  if (!process.env.TELEGRAM_BOT_TOKEN?.trim() || !process.env.TELEGRAM_CHAT_ID?.trim()) {
+    console.log(
+      "[instrumentation:monitor-morning] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — ticker dark.",
+    );
+    return;
+  }
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return; // Chromium is slow; ticks must not stack
+    inFlight = true;
+    try {
+      // Imported inside the tick so the boot path stays light and the Drizzle
+      // graph is never pulled into the Edge compile.
+      const { runMonitorMorningReport } = await import("@/lib/monitor/morning-report");
+      const r = await runMonitorMorningReport({ triggeredBy: "ticker" });
+
+      // Log only when something happened. "not_due" is the normal case ~287
+      // times a day and must not write a line.
+      if (r.sent) {
+        console.log(
+          `[instrumentation:monitor-morning] sent ${r.kind} for ${r.istDate} (message ${r.messageId})`,
+        );
+      } else if (r.reason === "failed") {
+        console.error(`[instrumentation:monitor-morning] FAILED: ${r.error}`);
+      }
+    } catch (err) {
+      // Never let a bad tick kill the ticker: the slot is still unclaimed (or
+      // reclaimable), so the next tick retries it.
+      console.error(
+        "[instrumentation:monitor-morning] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Behind the digests kickoff at 210s. Launching Chromium is the most
+  // expensive thing any ticker in this file does, and 08:00 is a window hours
+  // wide — there is nothing to gain by competing with the app's boot for it.
+  const kickoff = setTimeout(tick, 225_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] monitor-morning (5m, 08:00 IST slot) started in-process");
+}
