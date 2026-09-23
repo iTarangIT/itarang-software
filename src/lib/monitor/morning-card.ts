@@ -25,7 +25,7 @@ import {
     freshnessPill,
     relativeAge,
 } from "@/lib/telemetry/monitor-math";
-import type { MonitorOverview } from "@/lib/telemetry/monitor-queries";
+import type { MonitorPeriods, MonitorOverview } from "@/lib/telemetry/monitor-queries";
 
 const NAVY = "#02314e";
 const INK = "#0f172a";
@@ -85,7 +85,56 @@ function bar(label: string, count: number, pct: number, colour: string): string 
     </div>`;
 }
 
-export function renderMorningCard(data: MonitorOverview, now: Date): string {
+/**
+ * The Total / Last-30-days grid.
+ *
+ * Two columns rather than one number each, because every figure here only means
+ * something against a period: 1,388 km per vehicle is unremarkable until you
+ * see it beside 5,539 since April, and 24 vehicles silent for a month is a
+ * different problem from the 11 that have never reported at all.
+ *
+ * The "total" column is labelled with its start date. An unlabelled total
+ * invites someone to read five months of distance as the fleet's whole history.
+ */
+function periodGrid(p: MonitorPeriods): string {
+    const th = `font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:${FAINT};padding:0 0 10px;`;
+    const td = `font-size:20px;font-weight:600;color:${INK};font-variant-numeric:tabular-nums;padding:7px 0;`;
+    const rowLabel = `font-size:14px;color:${MUTED};padding:7px 0;`;
+
+    const row = (label: string, a: string, b: string) => `
+      <tr>
+        <td style="${rowLabel}">${esc(label)}</td>
+        <td style="${td}text-align:right;">${esc(a)}</td>
+        <td style="${td}text-align:right;">${esc(b)}</td>
+      </tr>`;
+
+    const km = (v: number | null) => (v === null ? "—" : n(v));
+
+    return `
+    <div style="background:#fff;border:1px solid ${LINE};border-radius:14px;padding:18px 20px;margin-bottom:12px;">
+      <table style="width:100%;border-collapse:collapse;">
+        <tr>
+          <th style="${th}text-align:left;"></th>
+          <th style="${th}text-align:right;">${esc(p.sinceLabel ? `Since ${p.sinceLabel}` : "Total")}</th>
+          <th style="${th}text-align:right;">Last 30 days</th>
+        </tr>
+        ${row("Vehicles", n(p.total.vehicles), n(p.last30d.vehicles))}
+        ${row("Silent", n(p.total.silent), n(p.last30d.silent))}
+        ${row("Avg km / vehicle", km(p.total.avgKmPerVehicle), km(p.last30d.avgKmPerVehicle))}
+      </table>
+      <div style="font-size:12px;color:${FAINT};margin-top:10px;line-height:1.6;">
+        Vehicles: the whole fleet, against those that recorded distance in the window.
+        Silent: no data at all in the period &mdash; a longer window is a stricter test,
+        so the 30-day count is normally the larger one.
+      </div>
+    </div>`;
+}
+
+export function renderMorningCard(
+    data: MonitorOverview,
+    now: Date,
+    periods?: MonitorPeriods | null,
+): string {
     const { fleet, alerts, distance, mapping } = data;
     const pill = freshnessPill(fleet.newestSignalAgeMs);
     const max = Math.max(1, fleet.fleetSize);
@@ -138,6 +187,8 @@ export function renderMorningCard(data: MonitorOverview, now: Date): string {
         ${tile("Never reported", n(fleet.neverReported), "no signal on record", fleet.neverReported === 0 ? "#059669" : "#94a3b8")}
         ${tile("Alerts", n(alerts.open), "open · connectivity", alerts.open === 0 ? "#059669" : "#d97706")}
       </div>
+
+      ${periods ? periodGrid(periods) : ""}
 
       <div style="background:#fff;border:1px solid ${LINE};border-radius:14px;padding:18px 20px;margin-bottom:12px;">
         <div style="font-size:16px;font-weight:600;color:${INK};">Time since last signal</div>
