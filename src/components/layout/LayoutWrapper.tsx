@@ -18,7 +18,16 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
     // are the ones that skip the sidebar and header — so mounting the heartbeat
     // anywhere else would leave exactly the modules we most want measured
     // unmeasured. It renders null, so it cannot affect either layout.
-    if (pathname.startsWith("/nbfc") || pathname.startsWith("/risk-head")) {
+    //
+    // /monitor is here for a different reason: it is not avoiding double
+    // chrome, it IS the chrome. A single-page NOC dashboard that may sit on a
+    // wall display has no use for a 256px sidebar holding one link, so it
+    // renders its own compact title bar and takes the full viewport.
+    if (
+        pathname.startsWith("/nbfc") ||
+        pathname.startsWith("/risk-head") ||
+        pathname.startsWith("/monitor")
+    ) {
         return (
             <>
                 <UsageHeartbeat />
