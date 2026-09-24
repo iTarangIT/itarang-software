@@ -14,7 +14,7 @@ const GOOD_ENV = {
     WA_ASSIST_ACCESS_TOKEN: "EAAG-test-token-abcdefghij",
     WA_ASSIST_APP_SECRET: SECRET,
     WA_ASSIST_VERIFY_TOKEN: "verify-me-please",
-} as NodeJS.ProcessEnv;
+} as unknown as NodeJS.ProcessEnv;
 
 describe("env", () => {
     it("parses and defaults the Graph version", () => {
@@ -23,7 +23,7 @@ describe("env", () => {
     });
 
     it("names what is missing, never the values, and never reads META_WA_*", () => {
-        const r = readWaAssistEnv({ META_WA_ACCESS_TOKEN: "x".repeat(40) } as NodeJS.ProcessEnv);
+        const r = readWaAssistEnv({ META_WA_ACCESS_TOKEN: "x".repeat(40) } as unknown as NodeJS.ProcessEnv);
         expect(r.ok).toBe(false);
         const problems = r.ok ? [] : r.problems;
         expect(problems.join()).toContain("WA_ASSIST_ACCESS_TOKEN");
