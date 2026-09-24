@@ -60,6 +60,7 @@ import {
   Database,
   Activity,
   AudioLines,
+  Sun,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -667,6 +668,15 @@ const roleNavigation: Record<string, any[]> = {
           label: "Leads",
           icon: Users,
           href: "/leads",
+        },
+        {
+          // E-305 — leads pushed from Ecofy (docs/ECOFY_INTEGRATION.md).
+          // Not `exact` — the detail route /sales-head/ecofy-leads/[id] keeps
+          // this item lit.
+          id: "sh-ecofy-leads",
+          label: "Ecofy Leads",
+          icon: Sun,
+          href: "/sales-head/ecofy-leads",
         },
         {
           id: "sh-ai-intent",
