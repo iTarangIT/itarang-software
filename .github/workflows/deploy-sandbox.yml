@@ -741,7 +741,10 @@ jobs:
             # actually bring sandbox-web online. Saves us 60s of curl=000
             # polling and surfaces the crash logs in this step's output
             # (instead of relying on the failure-collector at the very end).
-            STATUS=$(pm2 jlist | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='sandbox-web'); console.log(w?w.pm2_env.status:'missing')")
+            # `pm2 jlist` can print a ">>>> In-memory PM2 is out-of-date" banner
+            # on stdout (daemon/CLI version mismatch) — parse from the first line
+            # that starts the JSON array, not from byte 0.
+            STATUS=$(pm2 jlist | node -e "const s=require('fs').readFileSync(0,'utf8'); const i=s.search(/^\[/m); const j=i<0?[]:JSON.parse(s.slice(i, s.lastIndexOf(']')+1)); const w=j.find(p=>p.name==='sandbox-web'); console.log(w?w.pm2_env.status:'missing')")
             echo "sandbox-web pm2 status: $STATUS"
             if [ "$STATUS" != "online" ]; then
               echo "❌ sandbox-web is '$STATUS' — dumping recent stderr and aborting"
