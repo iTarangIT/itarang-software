@@ -1,8 +1,7 @@
 // POST /api/asm/lead/[id]/visit
-// BRD §0.8 — ASM logs a visit. Writes lead_visits + a parallel
-// lead_touchpoints row (type='visit') in one transaction so the unified
-// history pane shows visits inline. is_engaged auto-set when outcome ∈
-// {productive, commercials_progressed} per BRD §0.1 Glossary.
+// BRD §0.8 — ASM logs a visit. The write itself (lead_visits row + parallel
+// `visit` touchpoint, one transaction) lives in recordVisit() so the WhatsApp
+// Assistant logs a visit exactly the same way.
 //
 // next_action is stored on lead_visits for audit; the client reads it from
 // the response to chain into Mark Converted / Mark Lost / Escalate. Status
@@ -10,14 +9,11 @@
 // routes so the canTransition validator stays the single source of truth.
 
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { leadVisits } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { recordVisit } from "@/lib/asm/recordVisit";
 import { assertOwner } from "@/lib/leads/ownership";
 import {
-    ENGAGED_OUTCOMES,
     VISIT_NEXT_ACTION,
     VISIT_OUTCOME,
     VISIT_STATUS,
@@ -70,59 +66,7 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const isEngaged = body.visit_outcome
-            ? ENGAGED_OUTCOMES.includes(body.visit_outcome)
-            : false;
-
-        const visitId = await db.transaction(async (tx) => {
-            const inserted = await tx
-                .insert(leadVisits)
-                .values({
-                    dealer_lead_id: id,
-                    asm_id: user.id,
-                    scheduled_date: body.scheduled_date ?? null,
-                    actual_visit_date:
-                        body.actual_visit_date ??
-                        (body.visit_status === "visited" ? new Date().toISOString().slice(0, 10) : null),
-                    visit_status: body.visit_status,
-                    visit_outcome: body.visit_outcome ?? null,
-                    visit_remarks: body.visit_remarks,
-                    photos: (body.photos ?? []) as never,
-                    gps_check_in_lat:
-                        body.gps_check_in_lat != null ? String(body.gps_check_in_lat) : null,
-                    gps_check_in_lng:
-                        body.gps_check_in_lng != null ? String(body.gps_check_in_lng) : null,
-                    next_action: body.next_action,
-                    next_visit_date: body.next_visit_date ?? null,
-                })
-                .returning({ visit_id: leadVisits.visit_id });
-            return inserted[0]?.visit_id ?? null;
-        });
-
-        // Parallel touchpoint row keeps the unified history pane current.
-        await writeTouchpoint({
-            dealerLeadId: id,
-            touchpointType: "visit",
-            performedBy: user.id,
-            isEngaged,
-            remarks:
-                `${body.visit_status}` +
-                (body.visit_outcome ? ` · ${body.visit_outcome}` : "") +
-                `\n\n${body.visit_remarks}` +
-                (body.next_action === "next_visit" && body.next_visit_date
-                    ? `\n\nNext visit: ${body.next_visit_date}`
-                    : ""),
-            attachments: body.photos?.map((url) => ({ url, type: "photo" })) ?? null,
-            nextAction:
-                body.next_action === "next_visit"
-                    ? "follow_up"
-                    : body.next_action === "convert"
-                        ? "mark_converted"
-                        : body.next_action === "lost"
-                            ? "mark_lost"
-                            : null,
-            nextActionAt: body.next_visit_date ? new Date(body.next_visit_date) : null,
-        });
+        const { visitId } = await recordVisit({ ...body, leadId: id, asmId: user.id });
 
         return successResponse({
             visit_id: visitId,
