@@ -1602,3 +1602,67 @@ export async function startMonitorMorningTicker() {
 
   console.log("[instrumentation] monitor-morning (5m, 08:00 IST slot) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// Green Energy News (E-306) — the CEO dashboard's news aggregator.
+//
+// Every 30 minutes this ASKS for a refresh; runGreenNewsRefresh itself refuses
+// to run again within 2 h of the last successful run, so the effective cadence
+// is 2-hourly and a second process (or the /api/cron/green-news backstop) only
+// ever splits work. The morning brief is written by the first run after
+// 06:00 IST and is unique per IST day.
+//
+// Dark outside production unless ENABLE_GREEN_NEWS=1: a dev box pointed at the
+// shared DB would otherwise spend Gemini quota and fill the shared table.
+// ---------------------------------------------------------------------------
+export async function startGreenNewsTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  if (process.env.ENABLE_GREEN_NEWS === "0") {
+    console.log("[instrumentation:green-news] disabled via ENABLE_GREEN_NEWS=0");
+    return;
+  }
+
+  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_GREEN_NEWS !== "1") {
+    console.log(
+      "[instrumentation:green-news] not production — ticker dark. " +
+        "Set ENABLE_GREEN_NEWS=1 to run it here (it writes to the shared news tables and calls Gemini).",
+    );
+    return;
+  }
+
+  const TICK_INTERVAL_MS = 30 * 60_000;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runGreenNewsRefresh } = await import("@/lib/news/run");
+      const r = await runGreenNewsRefresh({ triggeredBy: "ticker" });
+      if (r.ran) {
+        console.log(
+          `[instrumentation:green-news] run ${r.runId}: fetched ${r.fetched}, inserted ${r.inserted}, ` +
+            `classified ${r.classified}, brief ${r.briefWritten ? "written" : "not due"}` +
+            (r.failedSources.length ? `, ${r.failedSources.length} source(s) failed` : ""),
+        );
+      } else if (r.reason === "failed") {
+        console.error(`[instrumentation:green-news] FAILED: ${r.error}`);
+      }
+    } catch (err) {
+      console.error("[instrumentation:green-news] tick failed:", err instanceof Error ? err.message : err);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // 240s out — behind every other kickoff; a news fetch is the least urgent
+  // thing a freshly-booted process could be doing.
+  const kickoff = setTimeout(tick, 240_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] green-news (30m ask, 2h effective) started in-process");
+}
