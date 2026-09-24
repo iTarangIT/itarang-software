@@ -32,7 +32,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     };
 
     for (const id of ids) {
-        const outcome = await claimLead(id, user.id);
+        const outcome = await claimLead(id, user.id, { actorRole: user.role });
         if (outcome.ok) {
             result.claimed++;
             continue;
