@@ -542,7 +542,9 @@ jobs:
               fi
             }
 
-            web_status() { pm2 jlist 2>/dev/null | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='itarang-crm-web'); console.log(w?w.pm2_env.status:'missing')" 2>/dev/null || echo "missing"; }
+            # `pm2 jlist` can print a ">>>> In-memory PM2 is out-of-date" banner on
+            # stdout (daemon/CLI version mismatch) — parse from the JSON array start.
+            web_status() { pm2 jlist 2>/dev/null | node -e "const s=require('fs').readFileSync(0,'utf8'); const i=s.search(/^\[/m); const j=i<0?[]:JSON.parse(s.slice(i, s.lastIndexOf(']')+1)); const w=j.find(p=>p.name==='itarang-crm-web'); console.log(w?w.pm2_env.status:'missing')" 2>/dev/null || echo "missing"; }
 
             DESIRED_HASH=$(node -e "const c=require('./ecosystem.prod.config.js'); const w=c.apps.find(a=>a.name==='itarang-crm-web'); console.log(JSON.stringify({script:w.script,args:w.args,env:w.env,cwd:w.cwd}))" | sha256sum | cut -d' ' -f1)
             RUNNING_HASH=$(cat shared/.pm2-web-config-hash 2>/dev/null || echo "")
