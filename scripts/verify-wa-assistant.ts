@@ -28,6 +28,17 @@ import { applyStatus, insertInbound, markHandled, recordOutbound } from "../src/
 import { routeMessage, type RouterDeps } from "../src/lib/wa-assistant/router";
 import { REPLY } from "../src/lib/wa-assistant/replies";
 import type { InboundMessage } from "../src/lib/wa-assistant/parse";
+import { withUserLease } from "../src/lib/wa-assistant/lock";
+import { fetchQueueRows } from "../src/lib/inside-sales/queryBuilder";
+import { QUEUE_TABS } from "../src/lib/inside-sales/types";
+import { ASM_QUEUE_TABS } from "../src/lib/asm/types";
+import { findLeadInScope } from "../src/lib/assistant/scope";
+import { toolsFor } from "../src/lib/assistant/registry";
+import { agentTurn } from "../src/lib/assistant/turn";
+import { loadHistory, saveHistory } from "../src/lib/assistant/memory";
+import type { ToolCallingModel } from "../src/lib/assistant/agent";
+import type { AssistantUser } from "../src/lib/assistant/types";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 
 // ── Safety ──────────────────────────────────────────────────────────────────
 
@@ -134,7 +145,10 @@ function inbound(over: Partial<InboundMessage>): InboundMessage {
     };
 }
 
-function routerDeps(replies: { to: string; text: string }[]): RouterDeps {
+function routerDeps(
+    replies: { to: string; text: string }[],
+    runTextTurn: RouterDeps["runTextTurn"] = async () => ({ kind: "not_configured" }),
+): RouterDeps {
     return {
         verifyLink: (a) => verifyLinkCode({ ...a, secret: SECRET }),
         resolveSender,
@@ -142,7 +156,23 @@ function routerDeps(replies: { to: string; text: string }[]): RouterDeps {
         replyText: async (to, text) => {
             replies.push({ to, text });
         },
+        isDisabled: () => false,
+        hasPendingAction: async () => false,
+        runTextTurn,
         log: () => {},
+    };
+}
+
+/** A model that calls get_lead_details once, then answers — slowly, to widen races. */
+function scriptedModel(leadId: string, delayMs = 0): ToolCallingModel {
+    let n = 0;
+    return {
+        invoke: async () => {
+            if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+            return n++ === 0
+                ? new AIMessage({ content: "", tool_calls: [{ id: `c${n}`, name: "get_lead_details", args: { lead_id: leadId } }] })
+                : new AIMessage("scripted reply");
+        },
     };
 }
 
@@ -174,6 +204,10 @@ async function cleanup() {
         await db.execute(sql`DELETE FROM assistant_wa_messages WHERE provider_message_id LIKE ${`wamid.WA-TEST-${RUN}-%`}
                               OR user_id IN (SELECT id FROM users WHERE email LIKE ${`${EMAIL_PREFIX}%`})`);
         await db.execute(sql`DELETE FROM assistant_wa_bindings WHERE user_id IN (SELECT id FROM users WHERE email LIKE ${`${EMAIL_PREFIX}%`})`);
+    }
+    if (await hasTable("assistant_conversations")) {
+        await db.execute(sql`DELETE FROM assistant_tool_calls WHERE user_id IN (SELECT id FROM users WHERE email LIKE ${`${EMAIL_PREFIX}%`})`);
+        await db.execute(sql`DELETE FROM assistant_conversations WHERE user_id IN (SELECT id FROM users WHERE email LIKE ${`${EMAIL_PREFIX}%`})`);
     }
     await db.execute(sql`DELETE FROM users WHERE email LIKE ${`${EMAIL_PREFIX}%`}`);
 }
@@ -371,6 +405,140 @@ async function gate1() {
     });
 }
 
+// ── Gate 2 ──────────────────────────────────────────────────────────────────
+
+async function gate2() {
+    if (!(await hasTable("assistant_conversations"))) {
+        await check("G2.* agent + guards", async () => {
+            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+        });
+        return;
+    }
+    const isr: AssistantUser = { id: await makeUser("inside_sales_rep"), name: "WA Test inside_sales_rep", role: "inside_sales_rep" };
+    const isr2 = await makeUser("inside_sales_rep");
+    const asm: AssistantUser = { id: await makeUser("asm"), name: "WA Test asm", role: "asm" };
+
+    await check("G2.1 lease: two parallel turns for ONE user never overlap", async () => {
+        const spans: [number, number][] = [];
+        const turn = async () => {
+            const s = Date.now();
+            await new Promise((r) => setTimeout(r, 1500));
+            spans.push([s, Date.now()]);
+        };
+        const [a, b] = await Promise.all([withUserLease(isr.id, turn), withUserLease(isr.id, turn)]);
+        assert(a.ok && b.ok, "both should eventually run");
+        spans.sort((x, y) => x[0] - y[0]);
+        assert(spans[1][0] >= spans[0][1], `overlap: ${JSON.stringify(spans)}`);
+        return `second started ${spans[1][0] - spans[0][1]} ms after the first ended`;
+    });
+
+    await check("G2.2 lease: a held lease → busy after the wait; an expired one is reclaimable", async () => {
+        let release!: () => void;
+        const held = withUserLease(isr.id, () => new Promise<void>((r) => (release = r)));
+        await new Promise((r) => setTimeout(r, 400));
+        const busy = await withUserLease(isr.id, async () => "x", { waitMs: 800 });
+        assert(!busy.ok, "expected busy while held");
+        release();
+        await held;
+        await db.execute(sql`UPDATE assistant_conversations SET lease_token = gen_random_uuid(), lease_until = now() - interval '1 second'
+                              WHERE user_id = ${isr.id}::uuid`);
+        const again = await withUserLease(isr.id, async () => "ran", { waitMs: 1000 });
+        assert(again.ok && again.value === "ran", "expired lease not reclaimed");
+    });
+
+    await check("G2.3 two concurrent messages from one user through the router run in sequence", async () => {
+        const lead = await makeLead("seq", { owner: isr.id, status: "Under_Discussion" });
+        await db.execute(sql`INSERT INTO assistant_wa_bindings (user_id, wa_phone, status, verified_at)
+                             VALUES (${isr.id}::uuid, ${phone(20)}, 'active', now())`);
+        const spans: [number, number][] = [];
+        const replies: { to: string; text: string }[] = [];
+        const deps = routerDeps(replies, async (user, text, rowId) => {
+            const r = await withUserLease(user.id, async () => {
+                const s = Date.now();
+                const out = await agentTurn(user, text, { messageId: rowId, model: () => scriptedModel(lead, 700) });
+                spans.push([s, Date.now()]);
+                return out;
+            });
+            if (!r.ok) return { kind: "busy" };
+            return r.value.kind === "ok"
+                ? { kind: "ok", text: r.value.text, modelCalls: r.value.modelCalls, toolCalls: r.value.results.length }
+                : { kind: "not_configured" };
+        });
+        const m1 = inbound({ waPhone: phone(20), text: `details of ${lead}` });
+        const m2 = inbound({ waPhone: phone(20), text: "and what next?" });
+        const r1 = await insertInbound(m1);
+        const r2 = await insertInbound(m2);
+        await Promise.all([routeMessage(m1, r1!, deps), routeMessage(m2, r2!, deps)]);
+        spans.sort((x, y) => x[0] - y[0]);
+        assert(spans.length === 2 && spans[1][0] >= spans[0][1], `overlap: ${JSON.stringify(spans)}`);
+        assert(replies.filter((r) => r.text === "scripted reply").length === 2, JSON.stringify(replies));
+        for (const m of [m1, m2]) {
+            assert((await handlingOf(m.providerMessageId))?.handling === "text_agent", "handling");
+        }
+        const calls = await db.execute<{ n: number }>(sql`
+            SELECT count(*)::int AS n FROM assistant_tool_calls WHERE user_id = ${isr.id}::uuid AND tool = 'get_lead_details'`);
+        assert(calls[0]!.n === 2, `INV9: expected 2 logged tool calls, got ${calls[0]!.n}`);
+        return `turns ${spans[0][1] - spans[0][0]} ms and ${spans[1][1] - spans[1][0]} ms, no overlap; 2 tool calls logged`;
+    });
+
+    await check("G2.4 INV1: out-of-scope and nonexistent leads are indistinguishable (real DB)", async () => {
+        // Closed by ANOTHER rep: not open (so not on Team), not theirs, not unowned.
+        const hidden = await makeLead("hidden", { owner: isr2, status: "Lost" });
+        await db.execute(sql`UPDATE dealer_leads SET closed_at = now(), closing_owner_id = ${isr2} WHERE id = ${hidden}`);
+        const visible = await makeLead("visible", { owner: isr2, status: "Under_Discussion" });
+        const mine = await makeLead("mine", { owner: isr.id, status: "Under_Discussion" });
+
+        assert((await findLeadInScope(isr, hidden)) === null, "hidden lead is visible");
+        assert((await findLeadInScope(isr, `${LEAD_PREFIX}nope`)) === null, "nonexistent lead found");
+        const v = await findLeadInScope(isr, visible);
+        assert(v && !v.owned, "Team-tab lead should be visible and read-only");
+        const m = await findLeadInScope(isr, mine);
+        assert(m && m.owned, "own lead should be visible and owned");
+
+        const details = toolsFor("inside_sales_rep", true).find((t) => t.name === "get_lead_details")!;
+        const ctx = { user: isr, messageId: null, now: new Date(), writesEnabled: true };
+        const a = await details.run(ctx, { lead_id: hidden });
+        const b = await details.run(ctx, { lead_id: `${LEAD_PREFIX}nope` });
+        assert(JSON.stringify(a) === JSON.stringify(b) && a.kind === "not_found", `${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+
+        // ASM: an ISR-owned lead outside any territory is out of scope.
+        assert((await findLeadInScope(asm, visible)) === null, "ASM sees an ISR lead outside territory");
+    });
+
+    await check("G2.5 scope ⊇ every row of every real queue tab (all 10 tabs, real reps)", async () => {
+        let checked = 0;
+        const reps = await db.execute<{ id: string; role: string }>(sql`
+            SELECT id::text AS id, role FROM users
+             WHERE is_active AND role IN ('inside_sales_rep', 'asm') AND email NOT LIKE 'wa-test+%'
+             ORDER BY role, created_at LIMIT 6`);
+        if (reps.length === 0) throw new Skip("no active ISR/ASM users on this database");
+        for (const r of reps) {
+            const user = { id: r.id, role: r.role };
+            const tabs = r.role === "asm" ? ASM_QUEUE_TABS : QUEUE_TABS;
+            for (const tab of tabs) {
+                const rows =
+                    r.role === "asm"
+                        ? await fetchAsmQueueRows({ tab: tab as (typeof ASM_QUEUE_TABS)[number], asmId: r.id, page: 1, limit: 25 })
+                        : await fetchQueueRows({ tab: tab as (typeof QUEUE_TABS)[number], userId: r.id, page: 1, limit: 25 });
+                for (const row of rows) {
+                    const hit = await findLeadInScope(user, row.id);
+                    assert(hit, `${r.role} ${r.id.slice(0, 8)} tab ${tab}: ${row.id} missing from scope`);
+                    checked++;
+                }
+            }
+        }
+        return `${checked} rows across ${reps.length} reps' tabs all in scope`;
+    });
+
+    await check("G2.6 memory: saved turns load back; 24 h idle resets", async () => {
+        await saveHistory(asm.id, [new HumanMessage("hi"), new AIMessage("hello")]);
+        const back = await loadHistory(asm.id);
+        assert(back.length === 2 && back[1].content === "hello", JSON.stringify(back.map((m) => m.content)));
+        const later = new Date(Date.now() + 25 * 60 * 60 * 1000);
+        assert((await loadHistory(asm.id, "whatsapp", later)).length === 0, "not reset after 24 h idle");
+    });
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -378,6 +546,7 @@ async function main() {
     const gate = Number(process.argv[process.argv.indexOf("--gate") + 1] || "1");
     try {
         if (gate >= 1) await gate1();
+        if (gate >= 2) await gate2();
     } finally {
         await cleanup().catch((e) => {
             console.error("CLEANUP FAILED — remove rows with prefix", LEAD_PREFIX, EMAIL_PREFIX, e);
