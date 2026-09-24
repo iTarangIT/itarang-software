@@ -61,6 +61,7 @@ import {
   Activity,
   AudioLines,
   Sun,
+  Newspaper,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -561,6 +562,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "IoT Dashboard",
           icon: Battery,
           href: "/ceo/intellicar",
+        },
+        {
+          id: "ceo-news",
+          label: "Green Energy News",
+          icon: Newspaper,
+          href: "/ceo/news",
         },
       ],
     },
