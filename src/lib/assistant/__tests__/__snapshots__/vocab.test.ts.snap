@@ -1,0 +1,272 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`INV6_closed_vocabulary: §9.3 map is a subset of the existing enums > matches the frozen snapshot (any change is a deliberate spec change) 1`] = `
+{
+  "CALL_VOCAB": [
+    {
+      "askBucket": false,
+      "buckets": null,
+      "connect": "not_connected",
+      "extra": "Follow-up if a time was given",
+      "id": "not_connected",
+      "interest": null,
+      "labels": [
+        "Did not pick",
+        "Busy in another call",
+        "User disconnected the call",
+        "Switch off",
+        "Out of Coverage area / Network issue",
+        "Call not connected / can not be completed",
+        "Other reason",
+        "Incorrect / Invalid number",
+        "Incoming calls not available",
+        "Number not in use / does not exist / out of service",
+      ],
+      "lostReasonByLabel": {},
+      "said": "didn't pick, switched off, busy, wrong number",
+      "status": {
+        "options": [
+          "no_change",
+        ],
+        "question": "",
+        "whenUnstated": "no_change",
+      },
+    },
+    {
+      "askBucket": false,
+      "buckets": [
+        "Cold",
+        "Warm",
+      ],
+      "connect": "connected",
+      "extra": "Follow-up date",
+      "id": "call_back",
+      "interest": null,
+      "labels": [
+        "As to Call Back",
+        "Need Some Time",
+        "Details Shared",
+        "Information Collected",
+        "Meeting Scheduled",
+      ],
+      "lostReasonByLabel": {},
+      "said": "call back later, needs time, shared details, meeting fixed",
+      "status": {
+        "options": [
+          "Under_Discussion",
+        ],
+        "question": "",
+        "whenUnstated": "no_change",
+      },
+    },
+    {
+      "askBucket": true,
+      "buckets": [
+        "Warm",
+        "Hot",
+      ],
+      "connect": "connected",
+      "extra": "Ask temperature (warm or hot) if not stated",
+      "id": "commercials_explained",
+      "interest": null,
+      "labels": [
+        "Commercials Explained",
+      ],
+      "lostReasonByLabel": {},
+      "said": "explained commercials, gave the price",
+      "status": {
+        "options": [
+          "Commercials_Explained",
+        ],
+        "question": "",
+        "whenUnstated": "no_change",
+      },
+    },
+    {
+      "askBucket": false,
+      "buckets": [
+        "Warm",
+      ],
+      "connect": "connected",
+      "extra": "Follow-up / Mark Lost preview",
+      "id": "price_high",
+      "interest": null,
+      "labels": [
+        "Price High",
+      ],
+      "lostReasonByLabel": {
+        "Price High": [
+          "price_high",
+        ],
+      },
+      "said": "price too high (still talking / not interested)",
+      "status": {
+        "options": [
+          "Awaiting_Customer_Decision",
+          "Lost",
+        ],
+        "question": "Is the dealer still considering it, or not interested at all (mark Lost — price too high)?",
+        "whenUnstated": "ask",
+      },
+    },
+    {
+      "askBucket": false,
+      "buckets": [
+        "Hot",
+      ],
+      "connect": "connected",
+      "extra": "Interest hot; link to Transfer or Mark Converted",
+      "id": "quote_negotiation",
+      "interest": "hot",
+      "labels": [
+        "Quotation Sent",
+        "Under Negotiation",
+        "Commercials Finalised",
+      ],
+      "lostReasonByLabel": {},
+      "said": "quote sent, negotiating, deal final",
+      "status": {
+        "options": [
+          "Awaiting_Customer_Decision",
+          "Commercials_Finalised",
+        ],
+        "question": "",
+        "whenUnstated": "no_change",
+      },
+    },
+    {
+      "askBucket": false,
+      "buckets": [
+        "Lost",
+      ],
+      "connect": "connected",
+      "extra": "Mark Lost preview; high-impact confirm for closed",
+      "id": "lost",
+      "interest": null,
+      "labels": [
+        "Not Interested",
+        "Lost to Competition",
+        "Business Closed",
+      ],
+      "lostReasonByLabel": {
+        "Business Closed": [
+          "business_closed",
+        ],
+        "Lost to Competition": [
+          "other",
+        ],
+        "Not Interested": [
+          "not_interested",
+        ],
+      },
+      "said": "not interested; went elsewhere; shop closed",
+      "status": {
+        "options": [
+          "Lost",
+        ],
+        "question": "Should I mark this lead Lost?",
+        "whenUnstated": "ask",
+      },
+    },
+  ],
+  "HINGLISH_CALL_ALIASES": {
+    "baad me call karna": "As to Call Back",
+    "baad mein call karo": "As to Call Back",
+    "busy tha": "Busy in another call",
+    "call back karna": "As to Call Back",
+    "competitor se le liya": "Lost to Competition",
+    "deal final": "Commercials Finalised",
+    "details bhej di": "Details Shared",
+    "details share kar di": "Details Shared",
+    "dhandha band": "Business Closed",
+    "dukaan band": "Business Closed",
+    "dusri company se le liya": "Lost to Competition",
+    "galat number": "Incorrect / Invalid number",
+    "interest nahi hai": "Not Interested",
+    "mana kar diya": "Not Interested",
+    "meeting fix": "Meeting Scheduled",
+    "mehenga hai": "Price High",
+    "nahi chahiye": "Not Interested",
+    "nahi uthaya": "Did not pick",
+    "negotiation chal raha hai": "Under Negotiation",
+    "phone band tha": "Switch off",
+    "phone nahi uthaya": "Did not pick",
+    "price bata diya": "Commercials Explained",
+    "price zyada hai": "Price High",
+    "quotation bhej diya": "Quotation Sent",
+    "rate bata diya": "Commercials Explained",
+    "rate zyada hai": "Price High",
+    "soch ke batayenge": "Need Some Time",
+    "switch off tha": "Switch off",
+    "time chahiye": "Need Some Time",
+    "uthaya nahi": "Did not pick",
+  },
+  "HINGLISH_VISIT_ALIASES": {
+    "achhi meeting": "productive",
+    "dealer ko interest nahi": "dealer_uninterested",
+    "dealer nahi mila": "dealer_not_present",
+    "dukaan pe nahi tha": "dealer_not_present",
+    "mil ke aaya": "productive",
+    "rate pe baat hui": "commercials_progressed",
+  },
+  "VISIT_VOCAB": [
+    {
+      "extra": "Interest as stated; next visit date",
+      "id": "visit_progress",
+      "lostReasons": [],
+      "outcomes": [
+        "productive",
+        "commercials_progressed",
+      ],
+      "said": "ASM: productive visit; commercials progressed",
+      "statusByOutcome": {
+        "commercials_progressed": {
+          "options": [
+            "Commercials_Explained",
+            "Commercials_Finalised",
+          ],
+          "question": "Were the commercials explained, or finalised?",
+          "whenUnstated": "ask",
+        },
+        "productive": {
+          "options": [
+            "no_change",
+          ],
+          "question": "",
+          "whenUnstated": "no_change",
+        },
+      },
+    },
+    {
+      "extra": "Reschedule: next visit date",
+      "id": "visit_no_progress",
+      "lostReasons": [
+        "not_interested",
+        "other",
+      ],
+      "outcomes": [
+        "dealer_not_present",
+        "dealer_uninterested",
+      ],
+      "said": "ASM: dealer not there; dealer not interested",
+      "statusByOutcome": {
+        "dealer_not_present": {
+          "options": [
+            "no_change",
+          ],
+          "question": "",
+          "whenUnstated": "no_change",
+        },
+        "dealer_uninterested": {
+          "options": [
+            "no_change",
+            "Lost",
+          ],
+          "question": "Keep the lead open, or mark it Lost?",
+          "whenUnstated": "ask",
+        },
+      },
+    },
+  ],
+}
+`;
