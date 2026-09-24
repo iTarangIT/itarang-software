@@ -75,7 +75,7 @@ function deepFreeze<T>(o: T): T {
 
 // ── Calls (BRD §9.3 rows 1–6) ───────────────────────────────────────────────
 
-export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze([
+export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze<CallVocabRow[]>([
     {
         id: "not_connected",
         said: "didn't pick, switched off, busy, wrong number",
@@ -168,7 +168,7 @@ export const CALL_VOCAB: readonly CallVocabRow[] = deepFreeze([
 
 // ── Visits (BRD §9.3 rows 7–8, ASM only) ────────────────────────────────────
 
-export const VISIT_VOCAB: readonly VisitVocabRow[] = deepFreeze([
+export const VISIT_VOCAB: readonly VisitVocabRow[] = deepFreeze<VisitVocabRow[]>([
     {
         id: "visit_progress",
         said: "ASM: productive visit; commercials progressed",
