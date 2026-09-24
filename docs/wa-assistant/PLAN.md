@@ -2,7 +2,7 @@
 
 > On approval, this file is copied verbatim to `docs/wa-assistant/PLAN.md`. That copy is the first commit, then Gate 0 starts.
 > Spec: `docs/ai-assistant-whatsapp/CRM_AI_Assistant_Phase1_WhatsApp_BRD.pdf`. The prompt names `docs/brd/…`, which does not exist. Read end to end, 24 Sep 2026.
-> Branch base: `Aditya` == `origin/main` @ c28ace75. Highest migration: E-304, so **E-305 is free**. I will re-check this before the Gate 1 migration commit, because parallel agents take numbers.
+> Branch base: `Aditya` == `origin/main` @ c28ace75. Highest migration was E-304 when planned; main then took E-305 (`E-305_ecofy_leads`), so this is **E-306**. I will re-check this before the Gate 1 migration commit, because parallel agents take numbers.
 
 ## Context
 
@@ -19,7 +19,7 @@ It is a new, separate flow: its own number, route, module and tables. The only c
 |---|---|---|
 | D1 | Router order: BRD vs prompt | **Hybrid**: signature → `phone_number_id` → insert inbound *messages* (dedupe) → 200 → `after()`. Status events skip dedupe and update the outbound row. |
 | D2 | Per-user serialisation | **Lease row** on `assistant_conversations`, not `pg_advisory_xact_lock`. The pool is `max: 5` (`src/lib/db/index.ts`), so an xact lock held across an LLM turn would pin a pooled connection. |
-| D3 | Integration-test DB | **Sandbox**, after you apply E-305. Scripts create prefixed fixtures and delete them. A hard guard refuses to run against the prod host. |
+| D3 | Integration-test DB | **Sandbox**, after you apply E-306. Scripts create prefixed fixtures and delete them. A hard guard refuses to run against the prod host. |
 | D4 | ASM-claimed leads missing from Today's Schedule | **Fix in `claimLead`**: set `asm_id` when the claimer is an ASM. |
 
 ---
@@ -42,7 +42,7 @@ The file list below is shaped by BRD §2.3, §8.3 and §10.
 - M `src/app/api/inside-sales/lead/[id]/interest-level/route.ts`: calls it, plus `assertOwner()` (**CRM fix 2**, separate commit).
 - M `src/lib/inside-sales/claimLead.ts`: optional `{ tx, actorRole }`. The UPDATE and the touchpoint run in one tx, and `asm_id = COALESCE(asm_id, actor)` when `actorRole === 'asm'` (**CRM fix 3**, D4).
 - M `src/app/api/inside-sales/lead/[id]/claim/route.ts` and `src/app/api/inside-sales/lead/bulk-claim/route.ts`: pass `actorRole`.
-- A `drizzle/E-305_wa_assistant.sql`; M `src/lib/db/schema.ts` (mirror, new tables only); M `drizzle/MIGRATION_CHECKLIST.md` (one row).
+- A `drizzle/E-306_wa_assistant.sql`; M `src/lib/db/schema.ts` (mirror, new tables only); M `drizzle/MIGRATION_CHECKLIST.md` (one row).
 - A `src/lib/wa-assistant/env.ts`: Zod-validated, memoised `waAssistEnv()` (see (c)17).
 - A `src/lib/wa-assistant/verify.ts`: timing-safe HMAC and the GET handshake.
 - A `src/lib/wa-assistant/parse.ts`: Zod-validated Meta payload → `InboundEvent[]`, including `phoneNumberId`.
@@ -245,7 +245,7 @@ Each item says what I'll do. Items 1–4 are decided (D1–D4).
     - Fixtures use id prefix `WA-TEST-` and synthetic users with `wa-test+…@itarang.test`.
     - Cleanup runs in `finally`.
     - The script exits if the DB host is the prod host (db-2) or `NODE_ENV=production`.
-    - The assistant tables must exist: **you apply E-305 to sandbox** before Gate 1's integration checks.
+    - The assistant tables must exist: **you apply E-306 to sandbox** before Gate 1's integration checks.
 
 ### Executor (Invariant 3), exact sequence
 1. `UPDATE assistant_actions SET status='executing', updated_at=now() WHERE id=$1 AND user_id=$tapper AND status='pending' AND expires_at > now() RETURNING *`.
@@ -260,7 +260,7 @@ Each item says what I'll do. Items 1–4 are decided (D1–D4).
    5. `UPDATE assistant_actions SET status='confirmed', after=…, executed_at=now() WHERE id AND status='executing'`.
 4. On any error: `status='failed', error=…`, reply "Something went wrong, nothing was changed". A `finally` guarantees nothing is left `executing`.
 
-### E-305 tables (all `IF NOT EXISTS`, additive; `user_id uuid REFERENCES users(id)`)
+### E-306 tables (all `IF NOT EXISTS`, additive; `user_id uuid REFERENCES users(id)`)
 
 - **`assistant_wa_bindings`**
   - Columns: `id`, `user_id`, `wa_phone` (E.164 with '+', NULL while pending), `status` CHECK ∈ {pending, active, revoked}, `code_hash`, `code_expires_at`, `verified_at`, `revoked_at`, `revoked_reason`, `created_at`, `updated_at`.
@@ -287,7 +287,7 @@ These are all new tables, so mirroring them in `schema.ts` cannot break existing
 
 **Harness:**
 - **Unit tests** (vitest): pure, or with `@/lib/db`, fetch and the LLM mocked. They live under `src/lib/assistant/__tests__/` and `src/lib/wa-assistant/__tests__/`.
-- **Integration** (`scripts/verify-wa-assistant.ts --gate N`): runs on **sandbox**, after you apply E-305. Uses real builders, prefixed fixtures and cleanup, with the prod-host refusal guard.
+- **Integration** (`scripts/verify-wa-assistant.ts --gate N`): runs on **sandbox**, after you apply E-306. Uses real builders, prefixed fixtures and cleanup, with the prod-host refusal guard.
 - **Invariant tests are named `INV1_…` to `INV9_…`.**
 
 Every gate runs:
@@ -349,7 +349,7 @@ Those baselines are already red: about 116 existing type errors, and 2 storage t
   - Anything I can't automate will be listed in PROGRESS.md.
 - **Gate 7.** RUNBOOK only:
   - env vars per environment;
-  - E-305 apply steps;
+  - E-306 apply steps;
   - adding pilot users;
   - revoking a number;
   - both kill switches;

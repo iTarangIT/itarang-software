@@ -46,21 +46,21 @@ Test-first: the new test file failed 4/4 before the implementation, passes 4/4 a
 | f7981fb3 | `setInterestLevel()` extracted from the interest-level route |
 | 7bf26899 | **CRM fix 2** (BRD §2.3-3): interest-level route calls `assertOwner()`; non-owner → 403 |
 | a6b33bef | **CRM fix 3** (D4): `claimLead()` atomic (UPDATE + touchpoint in one tx, optional tx handle); an ASM claim sets `asm_id` |
-| b0983185 | `drizzle/E-305_wa_assistant.sql` (5 new tables), `schema.ts` mirror (+150 lines, new tables only), checklist row |
+| b0983185 | `drizzle/E-306_wa_assistant.sql` (committed as E-305, renumbered — see Gate 2) (5 new tables), `schema.ts` mirror (+150 lines, new tables only), checklist row |
 | fafdcdf7 | `src/lib/wa-assistant/{env,verify,parse,client}.ts` |
 | 154a435f | webhook route, router, identity, link, message log, fixed replies, runtime wiring, INV7 isolation contract test |
 | dcae603c | Link WhatsApp page + `/api/assistant/link`, `/settings` protected in middleware, sidebar item (asm/ISR only), `.env.example` + `.gitignore` exception |
 | 080e4d1c | `scripts/verify-wa-assistant.ts` (sandbox, prod-refusing) + interest-route ownership contract test |
 | 030429bf | type-check fixes in my own Gate 1 code (no runtime change) |
 
-**E-305 applied to sandbox (database-1) on 2026-09-24**, on your instruction: applied twice (second pass a no-op), objects verified on a fresh connection. **Not applied to prod.** Checklist row ticked for db-1/sandbox only.
+**E-306 (then named E-305) applied to sandbox (database-1) on 2026-09-24**, on your instruction: applied twice (second pass a no-op), objects verified on a fresh connection. **Not applied to prod.** Checklist row ticked for db-1/sandbox only.
 
 ### Test evidence
 | Command | Result |
 |---|---|
 | `npx vitest run src/lib/assistant src/lib/wa-assistant src/lib/asm src/lib/inside-sales src/lib/leads/__tests__/interestLevelRoute.contract.test.ts` | all pass (vocab 21, channel 17, router/link/identity 18, isolation 4, recordVisit 8, claimLead 4, contract 2) |
 | `npx vitest run` | 4826 passed, 3 skipped (+70 new); only the 2 known `src/lib/storage` baseline files fail |
-| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 1` (sandbox, after E-305) | **13/13 PASS** — next visit in Today's Schedule; recordVisit and claimLead roll back fully; ASM claim sets asm_id, ISR's doesn't; dedupe; LINK binds and names user + role; codes single-use; re-link revokes the old binding; 5 wrong codes then locked; unlinked / other-role / inactive → UC-13 only (binding revoked); voice note → UC-14; receipts never move backwards. Fixtures verified gone afterwards (0 rows). |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 1` (sandbox, after E-306) | **13/13 PASS** — next visit in Today's Schedule; recordVisit and claimLead roll back fully; ASM claim sets asm_id, ISR's doesn't; dedupe; LINK binds and names user + role; codes single-use; re-link revokes the old binding; 5 wrong codes then locked; unlinked / other-role / inactive → UC-13 only (binding revoked); voice note → UC-14; receipts never move backwards. Fixtures verified gone afterwards (0 rows). |
 | `npx tsc --noEmit` (8 GB) | 6 errors = the Gate 0 baseline (stale `.next/types` + one e2e spec); 0 in `src/` |
 | `npx eslint` on every file this branch touched | 0 errors; `sidebar.tsx` 21 pre-existing (identical on HEAD), `schema.ts` 2 pre-existing warnings |
 

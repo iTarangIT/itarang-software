@@ -11,7 +11,7 @@
  *   users          email wa-test+<run>…@itarang.test
  *   dealer_leads   id WA-TEST-<run>-…, phone NULL (nothing can dial them)
  *   and every row those produce (touchpoints, visits, history, bindings, logs).
- * Checks that need E-305 report SKIP (naming the migration) until it is applied.
+ * Checks that need E-306 report SKIP (naming the migration) until it is applied.
  * Exit code 1 if anything FAILs.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -260,10 +260,10 @@ async function gate1() {
         assert(r[0]!.o === null && r[0]!.tp === "0", JSON.stringify(r[0]));
     });
 
-    // ── Needs E-305 ──
-    const e305 = await hasTable("assistant_wa_bindings");
+    // ── Needs E-306 ──
+    const e306 = await hasTable("assistant_wa_bindings");
     const needE305 = () => {
-        if (!e305) throw new Skip("needs E-305 (drizzle/E-305_wa_assistant.sql) on this database");
+        if (!e306) throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
     };
 
     await check("G1.6 dedupe: the same provider_message_id is recorded once", async () => {

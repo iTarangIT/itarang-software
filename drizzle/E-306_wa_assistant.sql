@@ -1,5 +1,5 @@
 -- =============================================================================
--- E-305 — WHATSAPP SALES ASSISTANT: binding, conversation, actions, logs (2026-09-24)
+-- E-306 — WHATSAPP SALES ASSISTANT: binding, conversation, actions, logs (2026-09-24)
 -- =============================================================================
 -- WHY. CRM AI Assistant Phase 1 (docs/ai-assistant-whatsapp BRD, 24 Sep 2026):
 -- ASMs and ISRs message a dedicated WhatsApp number; the Assistant reads their
@@ -35,6 +35,10 @@
 -- No backfill. Required before the Assistant code deploys; nothing else reads
 -- these tables, so old code on a new DB is unaffected and the order of this
 -- migration vs. any other is irrelevant.
+--
+-- Numbered E-306: E-305 was taken on main by E-305_ecofy_leads.sql while this
+-- was in review. Already applied to sandbox (database-1) under its old name,
+-- 2026-09-24; the SQL is unchanged, so re-running it there is a no-op.
 --
 -- Idempotent: re-running is a no-op.
 -- =============================================================================
