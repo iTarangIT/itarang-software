@@ -36,7 +36,13 @@ type BuildArgs = {
     sort?: QueueSort;
 };
 
-function tabFilter(tab: AsmQueueTab, asmId: string) {
+/**
+ * The WHERE clause that defines a tab. Exported for the WhatsApp Assistant's
+ * scope predicate (src/lib/assistant/scope.ts). `today` reads `lv`, so every
+ * caller must also join LATEST_VISIT_JOIN. Guarded by
+ * assistant/__tests__/tabFilter-golden.test.ts.
+ */
+export function tabFilter(tab: AsmQueueTab, asmId: string) {
     switch (tab) {
         case "my_visits":
             // Any open lead the ASM owns — not just Transferred_to_ASM. The
@@ -102,7 +108,7 @@ function tabOrder(tab: AsmQueueTab) {
 // Latest lead_visits row per dealer_lead — drives the visit_status column shown
 // in the queue table. LATERAL join keeps it to one row even when a lead has
 // multiple visits.
-const LATEST_VISIT_JOIN = sql`
+export const LATEST_VISIT_JOIN = sql`
     LEFT JOIN LATERAL (
         SELECT visit_status, visit_outcome, scheduled_date, actual_visit_date
         FROM lead_visits
