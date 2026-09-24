@@ -22,6 +22,7 @@ import {
   unique,
   customType,
   doublePrecision,
+  smallint,
 } from "drizzle-orm/pg-core";
 
 import { relations, sql } from "drizzle-orm";
@@ -12838,5 +12839,87 @@ export const ecofySyncEvents = pgTable(
       t.event_id,
     ),
     caseIdx: index("ecofy_sync_events_case_idx").on(t.ecofy_case_id, t.created_at),
+  }),
+);
+
+// --- GREEN ENERGY NEWS FEED (E-306) ---
+// CEO dashboard news aggregator: RSS + Google News RSS → Gemini tagging and a
+// daily 5-bullet brief. See src/lib/news/*. Source of truth: drizzle/E-306.
+
+export const greenNewsItems = pgTable(
+  "green_news_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** sha256 of the canonical URL — the insert-time dedupe key. */
+    url_hash: varchar("url_hash", { length: 64 }).notNull(),
+    url: text("url").notNull(),
+    source_key: varchar("source_key", { length: 40 }).notNull(),
+    source_name: text("source_name"),
+    title: text("title").notNull(),
+    /** Normalised-title key: same story from two feeds. */
+    title_hash: varchar("title_hash", { length: 64 }).notNull(),
+    snippet: text("snippet"),
+    /** Gemini one-liner; NULL until classified. */
+    summary: text("summary"),
+    image_url: text("image_url"),
+    published_at: timestamp("published_at", { withTimezone: true }).notNull(),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+    /** 'india' | 'world'; NULL until classified. */
+    region: varchar("region", { length: 10 }),
+    /** Vocabulary in src/lib/news/categories.ts. */
+    category: varchar("category", { length: 30 }),
+    /** 0-100 from Gemini. */
+    relevance: smallint("relevance"),
+    hidden: boolean("hidden").default(false).notNull(),
+    classified_at: timestamp("classified_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    urlHashUniq: uniqueIndex("green_news_items_url_hash_uniq").on(t.url_hash),
+    publishedIdx: index("green_news_items_published_idx").on(t.published_at),
+    regionCategoryIdx: index("green_news_items_region_category_idx").on(
+      t.region,
+      t.category,
+      t.published_at,
+    ),
+    titleHashIdx: index("green_news_items_title_hash_idx").on(t.title_hash),
+  }),
+);
+
+export const greenNewsBriefs = pgTable(
+  "green_news_briefs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The IST calendar day the brief covers. */
+    brief_date: date("brief_date").notNull(),
+    /** [{ text, item_ids: uuid[] }] */
+    bullets: jsonb("bullets").default([]).notNull(),
+    model: text("model"),
+    item_count: integer("item_count").default(0).notNull(),
+    generated_at: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dateUniq: uniqueIndex("green_news_briefs_date_uniq").on(t.brief_date),
+  }),
+);
+
+export const greenNewsRuns = pgTable(
+  "green_news_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey().notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    /** 'running' | 'ok' | 'failed' */
+    status: varchar("status", { length: 16 }).default("running").notNull(),
+    /** 'ticker' | 'cron' | 'manual' */
+    triggered_by: varchar("triggered_by", { length: 16 }).notNull(),
+    fetched: integer("fetched").default(0).notNull(),
+    inserted: integer("inserted").default(0).notNull(),
+    classified: integer("classified").default(0).notNull(),
+    brief_written: boolean("brief_written").default(false).notNull(),
+    error: text("error"),
+  },
+  (t) => ({
+    startedIdx: index("green_news_runs_started_idx").on(t.started_at),
   }),
 );
