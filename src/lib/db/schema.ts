@@ -12761,3 +12761,82 @@ export const dealerLeadFieldChanges = pgTable(
     atIdx: index("dealer_lead_field_changes_at_idx").on(t.changed_at),
   }),
 );
+
+// E-305 — leads pushed from Ecofy (docs/ECOFY_INTEGRATION.md). Written only by
+// POST /api/integrations/ecofy/events (src/lib/ecofy/inbound.ts); id is the
+// crmLeadId Ecofy links to its case.
+export const ecofyLeads = pgTable(
+  "ecofy_leads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_case_id: text("ecofy_case_id").notNull(),
+    case_no: text("case_no"),
+    version: integer("version").default(0).notNull(),
+    stage: varchar("stage", { length: 20 }),
+    sub_status: text("sub_status"),
+    segment: varchar("segment", { length: 40 }),
+    temperature: varchar("temperature", { length: 10 }),
+    lead_source: varchar("lead_source", { length: 60 }),
+    owner: varchar("owner", { length: 40 }),
+    qualified_by_name: text("qualified_by_name"),
+    queue_entered_at: timestamp("queue_entered_at", { withTimezone: true }),
+    product_interest: varchar("product_interest", { length: 60 }),
+    avg_monthly_bill_inr: numeric("avg_monthly_bill_inr", { precision: 14, scale: 2 }),
+    sanctioned_load_kw: numeric("sanctioned_load_kw", { precision: 10, scale: 2 }),
+    existing_backup: text("existing_backup"),
+    preferred_call_time: text("preferred_call_time"),
+    closure_reason: text("closure_reason"),
+    customer_name: text("customer_name"),
+    customer_mobile: varchar("customer_mobile", { length: 20 }),
+    customer_alt_mobile: varchar("customer_alt_mobile", { length: 20 }),
+    customer_email: text("customer_email"),
+    customer_type: varchar("customer_type", { length: 40 }),
+    business_name: text("business_name"),
+    address: text("address"),
+    city: text("city"),
+    state: varchar("state", { length: 40 }),
+    pincode: varchar("pincode", { length: 12 }),
+    preferred_language: varchar("preferred_language", { length: 20 }),
+    property_type: varchar("property_type", { length: 40 }),
+    ecofy_url: text("ecofy_url"),
+    snapshot: jsonb("snapshot").default({}).notNull(),
+    last_change: jsonb("last_change"),
+    last_event_id: text("last_event_id"),
+    last_event_type: varchar("last_event_type", { length: 60 }),
+    last_event_at: timestamp("last_event_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    caseIdUniq: uniqueIndex("ecofy_leads_case_id_uniq").on(t.ecofy_case_id),
+    queueIdx: index("ecofy_leads_queue_idx").on(t.temperature, t.queue_entered_at),
+  }),
+);
+
+// E-305 — Ecofy sync ledger, both directions. UNIQUE (direction, event_id) is
+// the inbound dedupe and the outbound retry key.
+export const ecofySyncEvents = pgTable(
+  "ecofy_sync_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    direction: varchar("direction", { length: 10 }).notNull(),
+    event_id: text("event_id").notNull(),
+    event_type: varchar("event_type", { length: 60 }).notNull(),
+    ecofy_case_id: text("ecofy_case_id"),
+    ecofy_lead_id: uuid("ecofy_lead_id"),
+    payload: jsonb("payload").notNull(),
+    response: jsonb("response"),
+    http_status: integer("http_status"),
+    attempts: integer("attempts").default(1).notNull(),
+    error: text("error"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    directionEventUniq: uniqueIndex("ecofy_sync_events_direction_event_uniq").on(
+      t.direction,
+      t.event_id,
+    ),
+    caseIdx: index("ecofy_sync_events_case_idx").on(t.ecofy_case_id, t.created_at),
+  }),
+);
