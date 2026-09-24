@@ -85,3 +85,60 @@ Test-first: the new test file failed 4/4 before the implementation, passes 4/4 a
 ### Open questions
 - **Sandbox env for the real LINK test.** Per team memory, sandbox reads `shared/.env` on the box, and deploys never overwrite it. Someone needs to add `WA_ASSIST_*` (Meta test number id, token, app secret, verify token) there and `pm2 reload sandbox-web`. Then set the test number's webhook override to `https://sandbox.itarang.com/api/assistant/wa/webhook`. I can't do either (no SSH, no Meta access).
 - When to push `Aditya`: any merge to `main` redeploys sandbox. Gate 0's guard must be live in production before the new number receives a message.
+
+## Gate 2 — agent + guards
+
+6 commits on `Aditya`, not pushed.
+
+### What shipped
+| Commit | Concern |
+|---|---|
+| 59e9daf0 | **Migration renumbered E-305 → E-306.** `main` merged `E-305_ecofy_leads.sql` (2466653f) mid-gate. SQL unchanged; sandbox already has the objects, so nothing to re-apply |
+| d5402073 | Golden-SQL snapshot of all 10 queue tabs (list + count, SQL + params), committed **before** the export |
+| e8518606 | `export` on ISR/ASM `tabFilter` and `LATEST_VISIT_JOIN`; snapshot byte-identical |
+| 2319f62d | Core, `src/lib/assistant/`: `scope`, `registry`, `tools/` (9 Zod schemas, stub bodies), `agent`, `memory`, `audit`, `prompt`, `config`, `redact`, `turn`, `actions` (pending lookup only) |
+| 6f15ad00 | Channel: `wa-assistant/lock.ts` (lease, D2); router step 6 → lease → agent; `ASSISTANT_DISABLED` kill switch; typed-confirm guard |
+| d5d87801 | `verify-wa-assistant.ts --gate 2` |
+
+How the pieces behave:
+- **Scope** is the union of the user's own five tab clauses, imported rather than restated. ASM queries join the latest-visit lateral. Any other role gets `FALSE`. `findLeadInScope` returns `null` for out-of-scope and nonexistent alike.
+- **Registry**: unknown role → `[]`. Write tools are listed only for `ASSISTANT_WRITES_ENABLED_USER_IDS`.
+- **Tools**: every lead-id tool enforces scope. Every write tool enforces the pilot flag, scope and ownership, then returns "arrives in the next release". **Nothing writes.**
+- **Agent**: a bounded `ChatOpenAI.bindTools` loop.
+  - Zod re-validates the model's arguments; unknown keys are stripped, never acted on. The user comes from the server-side closure.
+  - At most 1 write call per turn, 4 model calls, and a 45 s deadline.
+  - Results are capped at 10 rows and redacted before the model sees them. Every call is logged to `assistant_tool_calls`, and a failed audit write fails the turn.
+
+### Test evidence
+| Command | Result |
+|---|---|
+| `npx vitest run src/lib/assistant src/lib/wa-assistant` | 6 files, **98 passed** |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 2` (sandbox) | **19/19 PASS** (G1 ×13 still green + G2 ×6); fixtures verified gone (all counts 0) |
+| `npx vitest run` | 4868 passed, 3 skipped; only the 2 known `src/lib/storage` baseline files fail |
+| `npx tsc --noEmit` (8 GB) | 6 = baseline; 0 in `src/` |
+| `npx eslint src/lib/assistant src/lib/wa-assistant scripts/verify-wa-assistant.ts` | clean |
+
+### "Done when" status
+| Criterion | Evidence |
+|---|---|
+| Unknown role → zero tools | `core.test.ts` "unknown role → zero tools": admin, ceo, dealer, sales_head, empty, null and `ASM` (wrong case) all → `[]` |
+| Out-of-scope lead id → not-found (unit test) | `core.test.ts` INV1: out-of-scope and nonexistent give an identical `{kind:"not_found"}` from `get_lead_details` and from write tools. **Also on real data** (G2.4): a lead closed by another rep is invisible to an ISR, with a tool result identical to a nonexistent id |
+| Two concurrent messages for one user run in sequence | G2.3: two messages through the **real router → lease → agent** path at once, with a scripted 700 ms-per-call model. Turns of 2.3 s and 2.2 s, no overlap, both answered, 2 tool calls logged. G2.1: the lease on its own |
+| Every message and tool call is logged | G2.3 (`handling = text_agent` on both rows; 2 `assistant_tool_calls` rows); unit INV9: a failed audit write fails the turn |
+
+Also proven:
+- **G2.5:** 259 rows from all 10 queue tabs of 5 real sandbox reps are all inside the scope predicate. "Same access as the screens" is checked against live data, not just SQL shape.
+- **INV5:** taps, LINK codes, media and unlinked or revoked senders never reach the agent (router test).
+- **INV2:** a bare yes / haan / ok 👍 / theek hai / kar do while a preview waits → fixed "tap Confirm", no model.
+- **INV8:** Aadhaar (4-4-4 and bare 12-digit), PAN, IFSC, 9–18-digit account numbers and DOB-tagged dates are scrubbed. IDs, links, the `phone` field and plain dates are kept.
+
+### Deviations from the plan
+1. The migration is **E-306**, not E-305 (see above).
+2. The model is not given tools through LangChain's `tool()` object. `bindTools` receives OpenAI-format function definitions built with `z.toJSONSchema(schema)`, and we dispatch calls ourselves. It's still `ChatOpenAI.bindTools`, but validation and dispatch stay in our loop, where the invariants are enforced and tested.
+3. Tool inputs **strip** unknown keys rather than reject them. A model that hallucinates `user_id: "someone-else"` gets the call run as the real user with that key dropped (tested).
+4. `lock.ts` lives in `wa-assistant/` as planned, although the lease is on a core table.
+
+### Open questions / risks for Gate 3
+- **Latency of the scoped lookup.** G2.5 ran ~0.4 s per `findLeadInScope` from this laptop, which is mostly network to RDS. The ISR union includes the Team tab (every open lead), which is broad. Gate 3's `my_queue` and `search_lead` run one scoped query each, but I'll time them on the box and add an index only if the plan shows a sequential scan.
+- **Real model not exercised yet.** The OpenAI tool-schema conversion (`$schema` key, `format: date-time`) has only been tested offline. Gate 3's scripted real-model run is the first time OpenAI sees it. `ASSISTANT_MODEL` must be set for that run.
+- **Merge conflicts with `main`.** `main` has since touched `schema.ts`, `sidebar.tsx` and `MIGRATION_CHECKLIST.md` (all appends), so merging will conflict there. Resolve by keeping both sides; the checklist row is additive, per the team's merge-hotspot note.
