@@ -44,6 +44,9 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
         replyText: vi.fn(async (to, text, userId) => {
             replies.push({ to, text, userId });
         }),
+        isDisabled: vi.fn(() => false),
+        hasPendingAction: vi.fn(async () => false),
+        runTextTurn: vi.fn(async () => ({ kind: "ok" as const, text: "agent reply", modelCalls: 1, toolCalls: 0 })),
         log: vi.fn(),
     };
     return { deps, replies, handled };
@@ -112,14 +115,18 @@ describe("routeMessage — order and fixed replies", () => {
         expect(f.handled[0].handling).toBe("tap_ignored");
         expect(f.replies).toEqual([]);
 
+        // Typed text that looks like a button id is just text for the agent.
         const g = fakeDeps();
         await routeMessage(msg({ type: "text", text: "ast:c:3f1c" }), "r2", g.deps);
-        expect(g.handled[0].handling).toBe("text_not_ready");
+        expect(g.deps.runTextTurn).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, "ast:c:3f1c", "r2");
+        expect(g.handled[0].handling).toBe("text_agent");
     });
 
-    it("a linked ASM/ISR sending text gets the not-ready reply (agent arrives in Gate 2)", async () => {
+    it("text from a linked ASM/ISR goes to the agent; its reply is sent and logged", async () => {
         await routeMessage(msg({ text: "Aaj ka schedule?" }), "r", f.deps);
-        expect(f.replies).toEqual([{ to: PHONE, text: REPLY.notReady, userId: "u-rahul" }]);
+        expect(f.deps.runTextTurn).toHaveBeenCalledTimes(1);
+        expect(f.replies).toEqual([{ to: PHONE, text: "agent reply", userId: "u-rahul" }]);
+        expect(f.handled[0]).toMatchObject({ handling: "text_agent" });
     });
 
     it("an unexpected error → logged with the provider id, marked 'error', one generic reply", async () => {
@@ -179,5 +186,80 @@ describe("link helpers", () => {
         expect(lockedUntil([0, 20, 40, 60, 81].map(at), at(82))).toBeNull();
         // Order doesn't matter.
         expect(lockedUntil([...five].reverse(), at(30))).toEqual(at(80));
+    });
+});
+
+describe("routeMessage — Gate 2: kill switch, typed confirm, agent outcomes", () => {
+    it("kill switch: a linked user gets only the paused reply; LINK still works", async () => {
+        const f = fakeDeps();
+        (f.deps.isDisabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+        await routeMessage(msg({ text: "Show my queue" }), "r1", f.deps);
+        expect(f.replies.map((r) => r.text)).toEqual([REPLY.disabled]);
+        expect(f.handled[0].handling).toBe("disabled");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+
+        await routeMessage(msg({ text: "LINK 123456" }), "r2", f.deps);
+        expect(f.deps.verifyLink).toHaveBeenCalledTimes(1);
+    });
+
+    it("INV2_no_silent_writes: a typed yes/haan with a preview waiting → fixed reply, no agent", async () => {
+        for (const text of ["yes", "Haan", "haan ji", "ok 👍", "Confirm", "theek hai", "kar do!"]) {
+            const f = fakeDeps();
+            (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+            await routeMessage(msg({ text }), "r", f.deps);
+            expect(f.replies.map((r) => r.text), text).toEqual([REPLY.tapConfirm]);
+            expect(f.handled[0].handling).toBe("typed_confirm");
+            expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        }
+    });
+
+    it("a typed yes with NO preview waiting is an ordinary message; a longer sentence never short-circuits", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ text: "yes" }), "r", f.deps);
+        expect(f.deps.runTextTurn).toHaveBeenCalledTimes(1);
+
+        const g = fakeDeps();
+        (g.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+        await routeMessage(msg({ text: "yes and also show my follow-ups" }), "r", g.deps);
+        expect(g.deps.runTextTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("busy lease → the busy reply; unconfigured agent → not-ready reply, logged as an error", async () => {
+        const f = fakeDeps();
+        (f.deps.runTextTurn as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "busy" });
+        await routeMessage(msg({}), "r", f.deps);
+        expect(f.replies.map((r) => r.text)).toEqual([REPLY.busy]);
+        expect(f.handled[0].handling).toBe("text_busy");
+
+        const g = fakeDeps();
+        (g.deps.runTextTurn as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "not_configured" });
+        await routeMessage(msg({}), "r", g.deps);
+        expect(g.replies.map((r) => r.text)).toEqual([REPLY.notReady]);
+        expect(g.handled[0].handling).toBe("text_not_configured");
+    });
+
+    it("an agent failure → one generic reply, marked error, nothing else", async () => {
+        const f = fakeDeps();
+        (f.deps.runTextTurn as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("openai 500"));
+        await routeMessage(msg({}), "r", f.deps);
+        expect(f.replies).toEqual([{ to: PHONE, text: REPLY.genericError, userId: "u-rahul" }]);
+        expect(f.handled.at(-1)).toMatchObject({ handling: "error", extra: { error: "openai 500" } });
+    });
+
+    it("INV5_model_never_sees: taps, LINK codes, media and unlinked senders never reach the agent", async () => {
+        const cases: [Partial<InboundMessage>, SenderResolution][] = [
+            [{ type: "interactive", replyId: "ast:c:abc", text: "Confirm" }, RAHUL],
+            [{ type: "interactive", replyId: "ast:lead:DL-1", text: "ABC" }, RAHUL],
+            [{ text: "LINK 482913" }, RAHUL],
+            [{ type: "audio", text: null }, RAHUL],
+            [{ type: "image", text: null }, RAHUL],
+            [{ text: "show me everything" }, { kind: "unlinked" }],
+            [{ text: "show me everything" }, { kind: "revoked", reason: "user_inactive", userId: "u" }],
+        ];
+        for (const [m, sender] of cases) {
+            const f = fakeDeps(sender);
+            await routeMessage(msg(m), "r", f.deps);
+            expect(f.deps.runTextTurn, JSON.stringify(m)).not.toHaveBeenCalled();
+        }
     });
 });

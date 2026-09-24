@@ -31,6 +31,8 @@ export const HANDLING = [
     "media",
     "text_not_ready",
     "text_agent",
+    "text_busy",
+    "text_not_configured",
     "typed_confirm",
     "error",
 ] as const;

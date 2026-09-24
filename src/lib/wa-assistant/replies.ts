@@ -12,6 +12,12 @@ export const REPLY = {
         "That code is not valid or has expired. Get a new code from CRM → Settings → Link WhatsApp and send LINK followed by the 6 digits.",
     notReady: "The assistant is being set up. For now you can only link your number.",
     genericError: "Something went wrong, nothing was changed. Please try again.",
+    /** ASSISTANT_DISABLED=true — the global kill switch. */
+    disabled: "The iTarang Sales Assistant is paused right now. Please use the CRM for now.",
+    /** A typed "yes" / "haan" while a preview is waiting: typing never saves. */
+    tapConfirm: "Please tap *Confirm* on the preview to save it. Typing yes doesn't save anything.",
+    /** The previous message from this user is still being worked on. */
+    busy: "I'm still working on your last message. Please wait a moment and send this again.",
 } as const;
 
 export function linkedReply(name: string, role: AssistantRole): string {
