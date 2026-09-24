@@ -36,6 +36,7 @@ export async function register() {
       startDigestTicker,
       startDealerPaymentReminderTicker,
       startMonitorMorningTicker,
+      startGreenNewsTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -67,5 +68,8 @@ export async function register() {
     // the digests — it launches Chromium, the most expensive thing any ticker
     // here does, and its send window is hours wide.
     await startMonitorMorningTicker();
+    // E-306 — Green Energy News refresh for the CEO dashboard. Kickoff 240s
+    // out, last of all: a news fetch is the least urgent work on boot.
+    await startGreenNewsTicker();
   }
 }
