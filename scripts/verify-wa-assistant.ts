@@ -39,6 +39,18 @@ import { loadHistory, saveHistory } from "../src/lib/assistant/memory";
 import type { ToolCallingModel } from "../src/lib/assistant/agent";
 import type { AssistantUser } from "../src/lib/assistant/types";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { countQueueRows } from "../src/lib/inside-sales/queryBuilder";
+import { countAsmQueueRows } from "../src/lib/asm/queryBuilder";
+import { readQueueFilters } from "../src/lib/leads/queueFilters";
+import { readQueueSort } from "../src/lib/leads/queueSort";
+import { readAsmQueueFilters } from "../src/lib/asm/queueFilterParams";
+import { buildSalesDashboard } from "../src/lib/admin/salesDashboard";
+import { listTargets } from "../src/lib/targets/service";
+import { numbersInputs, shapeNumbers } from "../src/lib/assistant/tools/read/myNumbers";
+import { sanitizeResult } from "../src/lib/assistant/agent";
+import { runToolDirect } from "../src/lib/assistant/turn";
+import { writeTouchpoint } from "../src/lib/touchpoints/write";
+import { renderLeadCard } from "../src/lib/wa-assistant/render";
 
 // ── Safety ──────────────────────────────────────────────────────────────────
 
@@ -543,6 +555,145 @@ async function gate2() {
     });
 }
 
+// ── Gate 3 ──────────────────────────────────────────────────────────────────
+
+/** Run a tool's body exactly as the agent does (cap + redact), without auditing real reps. */
+async function runTool(user: AssistantUser, name: string, input: Record<string, unknown>) {
+    const spec = toolsFor(user.role, false).find((t) => t.name === name)!;
+    return sanitizeResult(await spec.run({ user, messageId: null, now: new Date(), writesEnabled: false }, spec.schema.parse(input)));
+}
+
+async function gate3() {
+    if (!(await hasTable("assistant_tool_calls"))) {
+        await check("G3.* read tools", async () => {
+            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+        });
+        return;
+    }
+    const reps = await db.execute<{ id: string; name: string; role: string }>(sql`
+        SELECT id::text AS id, name, role FROM users
+         WHERE is_active AND role IN ('inside_sales_rep', 'asm') AND email NOT LIKE 'wa-test+%'
+         ORDER BY role, created_at LIMIT 6`);
+
+    await check("G3.1 my_queue = the screen, row for row, on all 10 tabs (real reps)", async () => {
+        if (reps.length === 0) throw new Skip("no active ISR/ASM users on this database");
+        const empty = new URLSearchParams();
+        let compared = 0;
+        const roles = new Set<string>();
+        for (const r of reps) {
+            const user = { id: r.id, name: r.name, role: r.role } as AssistantUser;
+            roles.add(r.role);
+            const tabs = r.role === "asm" ? ASM_QUEUE_TABS : QUEUE_TABS;
+            for (const tab of tabs) {
+                // What the queue route runs for page 1 with no query params (PAGE_SIZE 25).
+                let screen: { id: string }[];
+                let total: number;
+                if (r.role === "asm") {
+                    const { filters, sort, visitStatus, visitOutcome } = readAsmQueueFilters(empty);
+                    const a = { tab: tab as (typeof ASM_QUEUE_TABS)[number], asmId: r.id, q: null, filters, visitStatus, visitOutcome };
+                    [screen, total] = await Promise.all([fetchAsmQueueRows({ ...a, page: 1, limit: 25, sort }), countAsmQueueRows(a)]);
+                } else {
+                    const a = { tab: tab as (typeof QUEUE_TABS)[number], userId: r.id, q: null, neodoveOnly: false, callbackOnly: false, filters: readQueueFilters(empty) };
+                    [screen, total] = await Promise.all([fetchQueueRows({ ...a, page: 1, limit: 25, sort: readQueueSort(empty) }), countQueueRows(a)]);
+                }
+                const tool = await runTool(user, "my_queue", { tab });
+                assert(tool.kind === "leads", `${tab}: ${tool.kind}`);
+                const want = screen.slice(0, 10).map((x) => x.id);
+                const got = tool.rows.map((x) => x.id);
+                assert(JSON.stringify(got) === JSON.stringify(want), `${r.role} ${tab}: tool ${got.length} rows ≠ screen's first ${want.length}`);
+                assert(tool.total === total, `${r.role} ${tab}: total ${tool.total} ≠ screen ${total}`);
+                compared += got.length;
+            }
+        }
+        return `${compared} rows identical and in order across ${reps.length} reps (${[...roles].join(", ")}), all 5 tabs each`;
+    });
+
+    await check("G3.2 my_numbers = buildSalesDashboard + listTargets (real reps, this and last month)", async () => {
+        if (reps.length === 0) throw new Skip("no active ISR/ASM users on this database");
+        for (const r of reps.slice(0, 4)) {
+            const user = { id: r.id, name: r.name, role: r.role } as AssistantUser;
+            for (const period of ["this_month", "last_month"] as const) {
+                const now = new Date();
+                const { from, to, month, dashboardInput } = numbersInputs(user, period, now);
+                const [dash, targets] = await Promise.all([buildSalesDashboard(dashboardInput), listTargets({ month, userId: r.id })]);
+                const tool = await runTool(user, "my_numbers", { period });
+                assert(tool.kind === "numbers", tool.kind);
+                const want = shapeNumbers(user, period, { from, to }, dash, targets);
+                assert(JSON.stringify(tool.data) === JSON.stringify(want), `${r.role} ${period}: tool output ≠ builders`);
+                const a = tool.data.activity as Record<string, number>;
+                assert(a.visits === dash.totals.visits && a.calls === dash.totals.calls, "activity totals differ");
+            }
+        }
+        return "identical for 4 reps × 2 periods";
+    });
+
+    const isr: AssistantUser = { id: await makeUser("inside_sales_rep"), name: "WA Test isr", role: "inside_sales_rep" };
+    const other = await makeUser("inside_sales_rep");
+
+    await check("G3.3 search_lead: by name and spaced phone; hidden leads never; two same names → candidates", async () => {
+        const a = await makeLead("abc1", { owner: isr.id, status: "Under_Discussion" });
+        const b = await makeLead("abc2", { owner: other, status: "Under_Discussion" });
+        await db.execute(sql`UPDATE dealer_leads SET shop_name = ${`ABC Traders ${RUN}`} WHERE id IN (${a}, ${b})`);
+        await db.execute(sql`UPDATE dealer_leads SET phone = ${`+91700000${RUN.slice(0, 2).replace(/\D/g, "0").padEnd(2, "0")}12`} WHERE id = ${a}`);
+        const hidden = await makeLead("abc3", { owner: other, status: "Lost" });
+        await db.execute(sql`UPDATE dealer_leads SET shop_name = ${`ABC Traders ${RUN}`}, closed_at = now(), closing_owner_id = ${other} WHERE id = ${hidden}`);
+
+        const both = await runTool(isr, "search_lead", { query: `ABC Traders ${RUN}` });
+        assert(both.kind === "candidates", `expected candidates, got ${both.kind}`);
+        const ids = both.rows.map((r) => r.id).sort();
+        assert(JSON.stringify(ids) === JSON.stringify([a, b].sort()), `got ${ids.join(",")} — hidden lead must not appear`);
+        assert(both.rows.find((r) => r.id === b)?.owned_by_you === false, "other rep's lead must be read-only");
+
+        const phone = (await db.execute<{ phone: string }>(sql`SELECT phone FROM dealer_leads WHERE id = ${a}`))[0]!.phone;
+        const spaced = `${phone.slice(0, 3)} ${phone.slice(3, 8)} ${phone.slice(8)}`;
+        const one = await runTool(isr, "search_lead", { query: spaced });
+        assert(one.kind === "leads" && one.rows.length === 1 && one.rows[0].id === a, `phone search: ${JSON.stringify(one)}`);
+        await db.execute(sql`UPDATE dealer_leads SET phone = NULL WHERE id = ${a}`);
+    });
+
+    await check("G3.4 get_lead_details: allowlist + redaction; a tapped row runs through the audited path", async () => {
+        const lead = await makeLead("detail", { owner: isr.id, status: "Under_Discussion" });
+        await writeTouchpoint({
+            dealerLeadId: lead, touchpointType: "inside_sales_call", performedBy: isr.id,
+            remarks: "PAN ABCDE1234F, Aadhaar 2345 6789 0123, a/c 123456789012; wants 10 units",
+        });
+        const r = await runTool(isr, "get_lead_details", { lead_id: lead });
+        assert(r.kind === "lead", r.kind);
+        const s = JSON.stringify(r);
+        for (const leak of ["ABCDE1234F", "2345 6789 0123", "123456789012"]) assert(!s.includes(leak), `leaked ${leak}`);
+        assert(s.includes("wants 10 units"), "remarks lost");
+        for (const forbidden of ["commercials", "onboarding", "address_history", "gstin", "overall_summary"]) {
+            assert(!s.includes(forbidden), `non-allowlisted field ${forbidden}`);
+        }
+        assert(r.lead.owned_by_you === true && typeof r.lead.crm_url === "string", "owned/crm_url");
+
+        const direct = await runToolDirect(isr, "get_lead_details", { lead_id: lead }, { messageId: null });
+        assert(direct.kind === "lead", direct.kind);
+        const audited = await db.execute<{ n: number }>(sql`
+            SELECT count(*)::int AS n FROM assistant_tool_calls WHERE user_id = ${isr.id}::uuid AND tool = 'get_lead_details' AND ok`);
+        assert(audited[0]!.n === 1, `expected 1 audited call, got ${audited[0]!.n}`);
+        const card = renderLeadCard(direct.lead);
+        assert(card.length <= 1000 && !card.includes("ABCDE1234F"), "card");
+    });
+
+    await check("G3.5 read-tool latency (from this machine; includes network to RDS)", async () => {
+        if (reps.length === 0) throw new Skip("no reps");
+        const r = reps.find((x) => x.role === "inside_sales_rep") ?? reps[0];
+        const user = { id: r.id, name: r.name, role: r.role } as AssistantUser;
+        const timings: string[] = [];
+        for (const [name, input] of [
+            ["my_queue", { tab: r.role === "asm" ? "today" : "my_open" }],
+            ["search_lead", { query: "traders" }],
+            ["my_numbers", { period: "this_month" }],
+        ] as const) {
+            const t0 = Date.now();
+            await runTool(user, name, input);
+            timings.push(`${name} ${Date.now() - t0} ms`);
+        }
+        return timings.join(", ");
+    });
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -551,6 +702,7 @@ async function main() {
     try {
         if (gate >= 1) await gate1();
         if (gate >= 2) await gate2();
+        if (gate >= 3) await gate3();
     } finally {
         await cleanup().catch((e) => {
             console.error("CLEANUP FAILED — remove rows with prefix", LEAD_PREFIX, EMAIL_PREFIX, e);
