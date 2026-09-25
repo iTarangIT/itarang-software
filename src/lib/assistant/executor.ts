@@ -21,6 +21,7 @@ import { assertNotStale, assertOwner, ForbiddenLeadAccessError, StaleLeadError }
 import { writesEnabledFor } from "./config";
 import { createPending } from "./actions";
 import { APPLIERS } from "./appliers";
+import { ActionRejected, type RejectReason } from "./applierSpec";
 import type { AssistantUser, Preview, WriteToolName } from "./types";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -48,7 +49,7 @@ export type ExecOutcome =
     | { kind: "failed_before" }
     | { kind: "awaiting_second_confirm" }
     | { kind: "not_found" }
-    | { kind: "rejected"; reason: "stale" | "not_owner" | "writes_disabled" | "lead_missing" | "not_claimable" }
+    | { kind: "rejected"; reason: RejectReason }
     | { kind: "error"; message: string };
 
 /** Why a tap could not claim a pending action. */
@@ -59,12 +60,7 @@ type Unclaimable = Extract<
 
 export type CancelOutcome = { kind: "cancelled" } | Unclaimable;
 
-/** A rejection the executor maps to a reply; the action is marked failed with it. */
-export class ActionRejected extends Error {
-    constructor(readonly reason: Extract<ExecOutcome, { kind: "rejected" }>["reason"]) {
-        super(`rejected: ${reason}`);
-    }
-}
+export { ActionRejected };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
