@@ -84,7 +84,9 @@ describe("registry", () => {
         expect(logCall.schema.safeParse({ ...base, follow_up_at: "Friday 11am" }).success).toBe(false);
         expect(logCall.schema.safeParse({ ...base, follow_up_at: "2026-09-25T11:00:00+05:30" }).success).toBe(true);
         const markLost = toolsFor("inside_sales_rep", true).find((t) => t.name === "mark_lost")!;
-        expect(markLost.schema.safeParse({ lead_id: "DL-1", lost_reason: "other" }).success).toBe(false);
+        // "other" without notes is a question from the tool (writes-gate5.test.ts), not a schema error.
+        expect(markLost.schema.safeParse({ lead_id: "DL-1", lost_reason: "too_far" }).success).toBe(false);
+        expect(markLost.schema.safeParse({ lead_id: "DL-1", lost_reason: "onboarding_dropout" }).success).toBe(false);
         expect(markLost.schema.safeParse({ lead_id: "DL-1", lost_reason: "other", notes: "moved city" }).success).toBe(true);
     });
 });

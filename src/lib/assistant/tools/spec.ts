@@ -80,9 +80,3 @@ export async function ownedLeadOr(
     }
     return scoped;
 }
-
-/** Gate 2 stub answer for a write that passed its checks. Nothing is written. */
-export const NOT_YET: ToolResult = {
-    kind: "unavailable",
-    message: "Saving this from WhatsApp arrives in the next release. Nothing was changed.",
-};
