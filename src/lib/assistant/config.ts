@@ -3,7 +3,7 @@
 // message after the env is reloaded.
 
 export type AssistantConfig = {
-    /** Gemini model id. ASSISTANT_MODEL, default gemini-2.5-flash. */
+    /** Gemini model id. ASSISTANT_MODEL, default DEFAULT_MODEL (gemini-3.6-flash). */
     model: string;
     /** Google AI Studio key for the agent — WA_ASSIST_GEMINI_API_KEY, shared with nothing else. null = agent off. */
     apiKey: string | null;
