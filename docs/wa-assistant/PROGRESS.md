@@ -277,3 +277,62 @@ Also proven:
 - **Gemini quota.** It is still the free tier. Gate 4's UC checks use a scripted model; a real-model pass of UC-01/02/03/05/07 needs billing.
 - **UC-01 rollback test** (a forced failure after the visit row). The appliers and the executor transaction already make this structural (G4.9 is the same mechanism); Gate 5 adds `log_visit` and its explicit test.
 - **`claim_lead`** is the only write whose lead has no owner. Its applier uses `ownership: "claim"`: the pool predicate is re-checked on the **locked** row, then `claimLead(..., { tx })`.
+
+## Gate 5 — field writes: `log_visit`, `mark_lost`, `claim_lead`
+
+4 commits on `Aditya`, not pushed. No migration, no schema change, no env change.
+
+### What shipped
+| Commit | Concern |
+|---|---|
+| 79dfbe80 | `ActionRejected` moves from `executor.ts` to `applierSpec.ts` (re-exported), so an applier can throw `not_claimable` without an import cycle |
+| 67a57b21 | `log_visit`, `mark_lost`, `claim_lead`: proposals + appliers, all five write tools registered in `APPLIERS`, the Gate 2 `NOT_YET` stub removed; `writes-gate5.test.ts` (25) |
+| 4162ad6b | `verify --gate 5` (10 checks) |
+
+How each tool works:
+- **`log_visit`** (ASM only). Resolves the visit against the frozen §9.3 visit rows (7–8) via `checkVisitProposal`. On Confirm, **one transaction**: `recordVisit` (visit row + visit touchpoint + scheduled next visit) → `setInterestLevel` → a non-Lost status on its own `status_change_note` (commercials explained / finalised) → or `markLeadLost`. Mirrors the visit screen: outcome and date only for a completed visit, next-visit date only with `next_visit`.
+- **`mark_lost`**. Preview "from → Lost (reason)"; `other` needs notes; the four high-impact reasons get the step-2 warning preview, and only a step-2 action passes `confirmedHighImpact` to `markLeadLost` — the same mechanism G4.10 proved for `log_call`.
+- **`claim_lead`**. Takes a lead id **or a name**; a name is searched in the **claim pool only** (ISR: unassigned; ASM: unclaimed in territory), with the queue's own search clause. Two matches → candidates, never a pick. At the tap, the executor locks the row and re-runs the pool predicate on it (`assertClaimable`), then `claimLead(..., { tx, actorRole })`.
+
+### Test evidence
+| Command | Result |
+|---|---|
+| `npx vitest run src/lib/assistant src/lib/wa-assistant` | 10 files, **171 passed** (new `writes-gate5.test.ts` 25: UC-01 plan + BRD preview, §9.3 rows 7–8, 15 question cases that create nothing, convert declined, schedule warnings, 4 high-impact reasons, `onboarding_dropout` refused, pool-only SQL for both roles, candidates, out-of-territory, appliers on the executor's tx, step-2-only confirmation, tampered plans refused) |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 5` (sandbox) | **47/47 PASS** (G1 13, G2 6, G3 5, G4 13, G5 10); sandbox verified clean afterwards (every fixture counter 0) |
+| `npx vitest run` | 4951 passed, 3 skipped; only the 2 known `src/lib/storage` baseline files fail |
+| `npx tsc --noEmit` (8 GB) | 6 = baseline (stale `.next/types` + one e2e spec); 0 in `src/` or `scripts/` |
+| `npx eslint src/lib/assistant scripts/verify-wa-assistant.ts` | clean |
+
+### "Done when" status
+| Criterion | Evidence (sandbox, real router → lease → agent → executor → DB; model scripted) |
+|---|---|
+| **UC-01 saves all parts atomically** | G5.1: one preview (`Visit: visited · productive`, `Interest: none → hot`, `Next visit: … (goes to Today's Schedule)`, `Resets idle clock: yes`), nothing written before the tap; after Confirm: visited row dated as said, a `scheduled` row, one `visit` touchpoint, one interest override, interest `hot`, action `confirmed` — and the lead **is in Today's Schedule** (visit logged for yesterday, next visit today, as in G1.1) |
+| **…and rolls back on a forced failure** | G5.2: a stored plan whose last step throws (`markLeadLost`: "lost_reason_notes is required") after `recordVisit` and `setInterestLevel` ran → visits, scheduled rows, touchpoints, overrides, status history all **0 before and 0 after**, interest untouched, action `failed` with that message |
+| **Mark Lost with the reasons and the high-impact second confirm** | G5.5 (`loan_procedure_issue` + notes); G5.6 (`duplicate_lead`: step 1 escalates and writes nothing, a repeated step-1 tap doesn't count, step 2 saves). Unit: all 4 high-impact reasons flagged; `other` without notes is a question |
+| **UC-05 passes** | G5.7 (ISR, by name → owner, `Assigned_Not_Contacted`, one `lead_claimed`, `asm_id` untouched); G5.9 (ASM in territory → owner **and** field ASM; an unowned lead outside the territory — readable in the Territory Feed — is refused "outside your territory", no action created) |
+
+Also proven:
+- **G5.3 / G5.4:** §9.3 row 7 (commercials progressed → `Commercials_Explained` on its own history row) and row 8 (dealer uninterested → visit + Lost `not_interested`) in one action each.
+- **G5.8:** two pool leads with one name → list of candidates, no action row.
+- **G5.10:** claim re-checked at the tap — a lead claimed by someone else in between, or an ASM whose territory ended in between → `rejected: not_claimable`, nothing written by the Assistant.
+
+### Deviations from the plan / BRD
+1. **`mark_lost` offers 10 reasons, not 11.** `onboarding_dropout` is admin-only on the screen (`MarkLostModal`, BRD §0.11) and admin is not an Assistant role. BRD §10 says "the 11 reasons" — raising it rather than silently widening what a rep can do.
+2. **`mark_lost` declines a Converted lead** (and an already-Lost one) with the CRM link. The screen allows Lost from Converted for the onboarding-dropout loopback; undoing a conversion from WhatsApp is not a Phase 1 use case.
+3. **`other` without notes is a question from the tool, not a schema rejection.** Same as `log_call`; the Gate 2 core test was updated to assert the schema still refuses unknown reasons and `onboarding_dropout`.
+4. **`log_visit` takes `visited` / `postponed` / `cancelled` / `no_show` only** — scheduling a visit is `set_follow_up`'s job. For a visit that didn't happen, status changes are refused (a question) and any outcome is dropped, as the screen never sends one.
+5. **Next step `convert` is declined with the link** (BRD §9.2, UC-11); **`escalate` is logged** with a warning that the escalation itself is raised on the screen (escalation is out of Phase 1 scope; the visit route likewise only stores it).
+6. **Visit dates are IST, passed explicitly** to `recordVisit` (its own default is the UTC date — reported in Gate 1). A completed visit may be dated up to 90 days back, never in the future.
+7. **A next visit must be strictly after the visit day** (after today for a visit that didn't happen), otherwise a question. This is `recordVisit`'s own rule; asking keeps the preview from promising a scheduled row that would not be written.
+8. **`claim_lead` input is a lead id or a name** (BRD "Lead ID or a name resolved in the pool"). An id outside the pool gets a reason only if the user can already see the lead; anything unseen stays `not_found` (INV1).
+
+### Pre-existing issues found (reported, not changed)
+- **`POST /api/inside-sales/lead/[id]/mark-lost` accepts `onboarding_dropout` from any role.** Only the modal blocks it (client-side). A hand-made request from an ISR or ASM succeeds.
+- The visit form's default date is `new Date().toISOString().slice(0, 10)` in the browser (`VisitFields.tsx`), so a visit logged 00:00–05:30 IST defaults to yesterday on the screen too.
+
+### Not done in this gate
+- **Real-model pass** of UC-01/02/03/05/07: still blocked by the Gemini free-tier quota (unchanged since Gate 3).
+- **Manual run on the Meta test number**: still needs the Day 0 Meta setup and `WA_ASSIST_*` in sandbox's `shared/.env` (Gate 1 open question).
+
+### Next: Gate 6 (break it)
+The automated attack suite (`verify-wa-assistant-attacks.ts` + `attacks.test.ts`) over every case in BRD §10 Day 6, each asserting both **blocked** and a **log row**, plus the Hinglish mapping check against 30 real call notes.
