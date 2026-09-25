@@ -17,7 +17,7 @@ vi.mock("@/lib/leads/markLost", async (orig) => ({ ...(await orig<typeof import(
 const setInterestLevel = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ changed: true }));
 vi.mock("@/lib/leads/interestLevel", () => ({ setInterestLevel }));
 const scheduleVisit = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ visitId: "v-1" }));
-vi.mock("@/lib/asm/recordVisit", () => ({ scheduleVisit }));
+vi.mock("@/lib/asm/recordVisit", () => ({ scheduleVisit, recordVisit: vi.fn() }));
 
 const { toolsFor } = await import("../registry");
 const { APPLIERS } = await import("../appliers");
