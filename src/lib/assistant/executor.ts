@@ -14,6 +14,11 @@
 //      CRM it creates the step-2 confirmation and marks step 1 `escalated`.
 //   5. On any failure the action ends `failed` with the reason — never left
 //      `executing` (a finally-guard, and the sweep for a dead process).
+//   6. After COMMIT, the applier's afterCommit (notifications, the dealer
+//      invite send) runs best-effort: it can neither undo nor fail the write.
+//
+// An applier with ownership "none" (create_lead) has no lead yet: no lock, no
+// ownership or staleness check, no snapshot; it guards its own invariants.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -21,7 +26,7 @@ import { assertNotStale, assertOwner, ForbiddenLeadAccessError, StaleLeadError }
 import { writesEnabledFor } from "./config";
 import { createPending } from "./actions";
 import { APPLIERS } from "./appliers";
-import { ActionRejected, type RejectReason } from "./applierSpec";
+import { ActionRejected, type ApplyOutput, type RejectReason } from "./applierSpec";
 import type { AssistantUser, Preview, WriteToolName } from "./types";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -30,7 +35,7 @@ type ActionRow = {
     id: string;
     user_id: string;
     tool: WriteToolName;
-    lead_id: string;
+    lead_id: string | null;
     lead_version: string | Date | null;
     input: Record<string, unknown>;
     preview: Preview;
@@ -40,7 +45,18 @@ type ActionRow = {
 };
 
 export type ExecOutcome =
-    | { kind: "confirmed"; actionId: string; title: string; after: Record<string, unknown>; crmUrl: string }
+    | {
+          kind: "confirmed";
+          actionId: string;
+          tool: WriteToolName;
+          /** The lead the action wrote — for create_lead, the new one. */
+          leadId: string | null;
+          title: string;
+          after: Record<string, unknown>;
+          crmUrl: string;
+          /** What the applier's afterCommit resolved to (e.g. an invite's delivery). */
+          extra: Record<string, unknown> | null;
+      }
     | { kind: "second_confirm"; actionId: string; preview: Preview }
     | { kind: "expired" }
     | { kind: "already_done" }
@@ -139,23 +155,29 @@ export async function executeAction(
         if (!applier) throw new Error(`no executor for tool ${action.tool}`);
         const plan = applier.schema.parse(action.input);
         const needsSecond = action.step === 1 && applier.needsSecondConfirm(plan);
+        const leadBound = applier.ownership !== "none";
+        let afterCommit: ApplyOutput["afterCommit"];
 
         // 3. One transaction.
         const outcome = await db.transaction(async (tx): Promise<ExecOutcome> => {
             await tx.execute(sql`SELECT set_config('app.actor_id', ${user.id}, true)`);
-            const locked = await tx.execute<{ id: string }>(sql`
-                SELECT id FROM dealer_leads WHERE id = ${action.lead_id} FOR UPDATE
-            `);
-            if (locked.length === 0) throw new ActionRejected("lead_missing");
+            const leadId = action.lead_id;
+            if (leadBound) {
+                if (!leadId) throw new ActionRejected("lead_missing");
+                const locked = await tx.execute<{ id: string }>(sql`
+                    SELECT id FROM dealer_leads WHERE id = ${leadId} FOR UPDATE
+                `);
+                if (locked.length === 0) throw new ActionRejected("lead_missing");
 
-            if (applier.ownership === "owner") {
-                await assertOwner(action.lead_id, user.id, { tx });
-            } else {
-                const ok = await applier.assertClaimable(tx, action.lead_id, user);
-                if (!ok) throw new ActionRejected("not_claimable");
-            }
-            if (action.lead_version) {
-                await assertNotStale(action.lead_id, new Date(action.lead_version), { tx });
+                if (applier.ownership === "owner") {
+                    await assertOwner(leadId, user.id, { tx });
+                } else {
+                    const ok = await applier.assertClaimable(tx, leadId, user);
+                    if (!ok) throw new ActionRejected("not_claimable");
+                }
+                if (action.lead_version) {
+                    await assertNotStale(leadId, new Date(action.lead_version), { tx });
+                }
             }
 
             // 4. High-impact: a second confirmation instead of the write.
@@ -173,7 +195,7 @@ export async function executeAction(
                         leadVersion: action.lead_version ? new Date(action.lead_version) : null,
                         plan: plan as Record<string, unknown>,
                         preview,
-                        before: await leadSnapshot(tx, action.lead_id),
+                        before: leadId ? await leadSnapshot(tx, leadId) : {},
                         sourceMessageId: opts.messageId,
                         step: 2,
                         parentActionId: action.id,
@@ -189,11 +211,18 @@ export async function executeAction(
                 return { kind: "second_confirm", actionId: next.id, preview };
             }
 
-            const written = await applier.apply({ tx, user, step: action.step as 1 | 2 }, plan);
-            const after = { ...(await leadSnapshot(tx, action.lead_id)), ...written };
+            const { afterCommit: post, ...written } = await applier.apply(
+                { tx, user, step: action.step as 1 | 2 },
+                plan,
+            );
+            afterCommit = post;
+            // create_lead reports the lead it made; everything else wrote action.lead_id.
+            const writtenLeadId = leadId ?? (typeof written.lead_id === "string" ? written.lead_id : null);
+            const after = { ...(writtenLeadId ? await leadSnapshot(tx, writtenLeadId) : {}), ...written };
             const done = await tx.execute<{ id: string }>(sql`
                 UPDATE assistant_actions
                    SET status = 'confirmed', executed_at = now(), updated_at = now(),
+                       lead_id = COALESCE(lead_id, ${writtenLeadId}),
                        after = ${JSON.stringify(after)}::jsonb
                  WHERE id = ${action.id}::uuid AND status = 'executing'
                 RETURNING id
@@ -203,12 +232,25 @@ export async function executeAction(
             return {
                 kind: "confirmed",
                 actionId: action.id,
+                tool: action.tool,
+                leadId: writtenLeadId,
                 title: action.preview.title,
                 after,
-                crmUrl: action.preview.crm_url,
+                crmUrl: typeof written.crm_url === "string" ? written.crm_url : action.preview.crm_url,
+                extra: null,
             };
         });
         settled = true;
+
+        // 6. After commit — best-effort, never changes the outcome.
+        if (outcome.kind === "confirmed" && afterCommit) {
+            try {
+                const extra = await afterCommit();
+                if (extra) outcome.extra = extra;
+            } catch (err) {
+                console.error(`[assistant] afterCommit failed for ${action.tool} ${action.id}:`, err);
+            }
+        }
         return outcome;
     } catch (err) {
         const reason =

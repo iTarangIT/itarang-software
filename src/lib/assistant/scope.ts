@@ -69,6 +69,11 @@ export type ScopedLead = {
     id: string;
     shop_name: string | null;
     dealer_name: string | null;
+    /** 10 digits as stored — the dealer invite needs it. */
+    phone: string | null;
+    city: string | null;
+    /** Territory match for the Transfer-to-ASM picker. */
+    state: string | null;
     current_owner_id: string | null;
     /** The lead's field ASM — Today's Schedule keys on it. */
     asm_id: string | null;
@@ -91,6 +96,9 @@ export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<
         id: string;
         shop_name: string | null;
         dealer_name: string | null;
+        phone: string | null;
+        city: string | null;
+        state: string | null;
         current_owner_id: string | null;
         asm_id: string | null;
         lead_status: string | null;
@@ -98,7 +106,7 @@ export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<
         next_follow_up_at: string | Date | null;
         updated_at: string | Date | null;
     }>(sql`
-        SELECT dl.id, dl.shop_name, dl.dealer_name, dl.current_owner_id, dl.asm_id, dl.lead_status,
+        SELECT dl.id, dl.shop_name, dl.dealer_name, dl.phone, dl.city, dl.state, dl.current_owner_id, dl.asm_id, dl.lead_status,
                dl.interest_level, dl.next_follow_up_at, dl.updated_at
           FROM dealer_leads dl
           ${scopeJoin(user)}
@@ -111,6 +119,9 @@ export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<
         id: r.id,
         shop_name: r.shop_name,
         dealer_name: r.dealer_name,
+        phone: r.phone,
+        city: r.city,
+        state: r.state,
         current_owner_id: r.current_owner_id,
         asm_id: r.asm_id,
         lead_status: r.lead_status,

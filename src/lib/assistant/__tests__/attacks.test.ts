@@ -275,7 +275,7 @@ describe("B. prompt injection at the tool boundary", () => {
     it("tools the role doesn't have, made-up tools and raw SQL are refused before running", async () => {
         await turn(obedient([[
             { name: "log_visit", args: { lead_id: "DL-1" } }, // ASM-only
-            { name: "reassign_lead", args: { lead_id: "DL-1", to: "isr-2" } },
+            { name: "update_commercials", args: { lead_id: "DL-1", price: 1 } }, // commercials stay on the CRM
             { name: "run_sql", args: { q: "UPDATE dealer_leads SET lead_status='Lost'" } },
         ]]));
         expect(records.map((r) => r.error)).toEqual(["unknown_tool", "unknown_tool", "unknown_tool"]);

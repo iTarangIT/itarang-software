@@ -54,9 +54,9 @@ describe("registry", () => {
         expect(toolNamesFor("inside_sales_rep", true)).toEqual([...ROLE_TOOLS.inside_sales_rep]);
     });
 
-    it("all nine tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
+    it("all fifteen tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
         const all = [...toolsFor("asm", true), ...toolsFor("inside_sales_rep", true)];
-        expect(new Set(all.map((t) => t.name)).size).toBe(9);
+        expect(new Set(all.map((t) => t.name)).size).toBe(15);
         for (const t of all.filter((x) => x.name !== "my_numbers")) {
             expect(t.schema.safeParse({ lead_id: "", evil: 1 }).success, t.name).toBe(false);
         }
@@ -135,11 +135,16 @@ describe("scope predicate (INV1)", () => {
 
     it("in scope but not owned is read-only for every write tool", async () => {
         findLeadInScope.mockResolvedValue({ id: "DL-1", current_owner_id: "isr-2", lead_status: "Under_Discussion", updated_at: new Date(), owned: false });
-        for (const t of toolsFor("asm", true).filter((x) => x.kind === "write" && x.name !== "claim_lead")) {
+        // claim_lead acts on UNOWNED leads and create_lead on none: both have their own gates.
+        for (const t of toolsFor("asm", true).filter((x) => x.kind === "write" && x.name !== "claim_lead" && x.name !== "create_lead")) {
             const input =
                 t.name === "log_visit" ? { lead_id: "DL-1", visit_status: "visited", outcome: "productive", remarks: "x", next_action: "escalate" }
                 : t.name === "mark_lost" ? { lead_id: "DL-1", lost_reason: "not_interested" }
                 : t.name === "set_follow_up" ? { lead_id: "DL-1", visit_date: "2026-09-26", note: "x" }
+                : t.name === "reassign_lead" ? { lead_id: "DL-1", to: "Priya", reason: "x" }
+                : t.name === "escalate_lead" ? { lead_id: "DL-1", reason: "Other", urgency: "normal", notes: "x" }
+                : t.name === "mark_converted" ? { lead_id: "DL-1", gstin: "x" }
+                : t.name === "invite_dealer_onboarding" ? { lead_id: "DL-1" }
                 : { lead_id: "DL-1", channel: "note" };
             const r = await t.run(ctx(ASM), t.schema.parse(input));
             expect(r.kind, t.name).toBe("declined");

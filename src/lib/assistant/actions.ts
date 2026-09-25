@@ -17,7 +17,8 @@ export const PENDING_TTL_MINUTES = 10;
 export type NewPendingAction = {
     userId: string;
     tool: WriteToolName;
-    leadId: string;
+    /** null only for an action that creates its lead (create_lead). */
+    leadId: string | null;
     /** dealer_leads.updated_at when the preview was built (assertNotStale). */
     leadVersion: Date | null;
     /** The fully resolved plan the executor will apply — validated again at execute. */

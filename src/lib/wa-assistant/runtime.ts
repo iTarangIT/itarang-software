@@ -13,10 +13,19 @@ import { resolveSender } from "./identity";
 import { verifyLinkCode } from "./link";
 import { withUserLease } from "./lock";
 import { markHandled, recordOutbound } from "./messages";
-import { renderLeadCard, renderTapOutcome, renderTurn, type WaPayload } from "./render";
+import { renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
 import type { RouterDeps } from "./router";
+import type { AssistantUser } from "@/lib/assistant/types";
 
 const LEAD_NOT_FOUND = "I couldn't find that lead.";
+
+/** A "Send invite" tap: run invite_dealer_onboarding directly (no model) → its preview, or why not. */
+export async function proposeInvitePayload(user: AssistantUser, leadId: string, messageRowId: string): Promise<WaPayload> {
+    const r = await runToolDirect(user, "invite_dealer_onboarding", { lead_id: leadId }, { messageId: messageRowId });
+    if (r.kind === "preview") return renderPreview(r.preview, r.action_id);
+    if (r.kind === "declined") return { kind: "text", body: r.reason };
+    return { kind: "text", body: LEAD_NOT_FOUND };
+}
 
 export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
     const client = new WaAssistClient(env);
@@ -35,7 +44,7 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                     : payload.kind === "buttons"
                       ? await client.sendButtons(waPhone, payload.body, payload.buttons)
                       : await client.sendText(waPhone, payload.body);
-            const actionId = payload.kind === "buttons" ? payload.actionId : null;
+            const actionId = payload.kind === "buttons" ? (payload.actionId ?? null) : null;
             await recordOutbound({
                 waPhone,
                 userId,
@@ -74,6 +83,7 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                 body: result.kind === "lead" ? renderLeadCard(result.lead) : LEAD_NOT_FOUND,
             };
         },
+        proposeInvite: proposeInvitePayload,
         confirmAction: async (user, actionId, messageRowId) =>
             renderTapOutcome(await executeAction(actionId, user, { messageId: messageRowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),

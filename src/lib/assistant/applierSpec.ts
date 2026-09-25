@@ -13,7 +13,14 @@ export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type ApplyContext = { tx: Tx; user: AssistantUser; step: 1 | 2 };
 
-export type RejectReason = "stale" | "not_owner" | "writes_disabled" | "lead_missing" | "not_claimable";
+export type RejectReason =
+    | "stale"
+    | "not_owner"
+    | "writes_disabled"
+    | "lead_missing"
+    | "not_claimable"
+    | "duplicate_phone"
+    | "target_unavailable";
 
 /** A rejection the executor maps to a reply; the action is marked failed with it. Appliers may throw it too. */
 export class ActionRejected extends Error {
@@ -22,18 +29,32 @@ export class ActionRejected extends Error {
     }
 }
 
+/**
+ * What `apply` returns: ids/values for the audit's `after`, plus optionally a
+ * step to run AFTER the transaction commits (notifications, an outbound
+ * WhatsApp send) — best-effort, it can never undo or fail the write. What it
+ * resolves to is handed back on the confirmed outcome as `extra`.
+ */
+export type ApplyOutput = Record<string, unknown> & {
+    afterCommit?: () => Promise<Record<string, unknown> | void>;
+};
+
 export type Applier<P> = {
     /** The stored plan's shape — parsed again at execute time. */
     schema: z.ZodType<P>;
-    /** "owner": assertOwner. "claim": the lead must be in the user's claim pool. */
-    ownership: "owner" | "claim";
+    /**
+     * "owner": assertOwner. "claim": the lead must be in the user's claim pool.
+     * "none": the action has no existing lead (create_lead) — no lock, no
+     * ownership or staleness check; the applier guards its own invariants.
+     */
+    ownership: "owner" | "claim" | "none";
     /** Only for ownership "claim": is the (locked) lead still claimable by this user? */
     assertClaimable: (tx: Tx, leadId: string, user: AssistantUser) => Promise<boolean>;
     /** true → Confirm at step 1 creates a second confirmation instead of writing. */
     needsSecondConfirm: (plan: P) => boolean;
     secondConfirmWarning: (plan: P) => string;
-    /** Every CRM write for this action. Returns ids/values for the audit's `after`. */
-    apply: (ctx: ApplyContext, plan: P) => Promise<Record<string, unknown>>;
+    /** Every CRM write for this action. */
+    apply: (ctx: ApplyContext, plan: P) => Promise<ApplyOutput>;
 };
 
 type ApplierInput<P> = Pick<Applier<P>, "schema" | "apply"> & Partial<Omit<Applier<P>, "schema" | "apply">>;

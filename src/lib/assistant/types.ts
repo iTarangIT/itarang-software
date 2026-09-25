@@ -29,7 +29,19 @@ export const ROLE_LABEL: Record<AssistantRole, string> = {
 // ── Tools ───────────────────────────────────────────────────────────────────
 
 export const READ_TOOL_NAMES = ["my_queue", "search_lead", "get_lead_details", "my_numbers"] as const;
-export const WRITE_TOOL_NAMES = ["log_call", "log_visit", "mark_lost", "claim_lead", "set_follow_up"] as const;
+export const WRITE_TOOL_NAMES = [
+    "log_call",
+    "log_visit",
+    "mark_lost",
+    "claim_lead",
+    "set_follow_up",
+    "transfer_to_asm",
+    "reassign_lead",
+    "escalate_lead",
+    "mark_converted",
+    "invite_dealer_onboarding",
+    "create_lead",
+] as const;
 export type ReadToolName = (typeof READ_TOOL_NAMES)[number];
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
 export type ToolName = ReadToolName | WriteToolName;

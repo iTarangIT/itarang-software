@@ -55,6 +55,11 @@ export type RouterDeps = {
     openLead: (user: AssistantUser, leadId: string, messageRowId: string) => Promise<WaPayload>;
     /** Confirm tap (ast:c:<id>) → the executor. The ONLY way anything is written. */
     confirmAction: (user: AssistantUser, actionId: string, messageRowId: string) => Promise<WaPayload>;
+    /**
+     * "Send invite" tap (ast:inv:<leadId>, offered after a conversion) → a
+     * PREVIEW of the dealer invite. Proposes only; its own Confirm sends.
+     */
+    proposeInvite: (user: AssistantUser, leadId: string, messageRowId: string) => Promise<WaPayload>;
     /** Cancel tap (ast:x:<id>). */
     cancelAction: (user: AssistantUser, actionId: string) => Promise<WaPayload>;
     /** ASSISTANT_DISABLED, read per message. */
@@ -65,7 +70,7 @@ export type RouterDeps = {
     log: (level: "info" | "warn" | "error", msg: string, meta: Record<string, unknown>) => void;
 };
 
-const TAP_RE = /^ast:(c|x|lead):(.+)$/;
+const TAP_RE = /^ast:(c|x|lead|inv):(.+)$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -143,6 +148,12 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
                 await deps.markHandled(rowId, tap[1] === "c" ? "tap_confirm" : "tap_cancel", { userId, actionId });
                 await deps.sendPayload(msg.waPhone, payload, userId);
                 deps.log("info", "[wa-assist] action tap", { ...meta, userId, actionId, tap: tap[1], latencyMs: Date.now() - started });
+                return;
+            }
+            if (tap?.[1] === "inv") {
+                const payload = await deps.proposeInvite(user, tap[2], rowId);
+                await deps.markHandled(rowId, "tap_invite", { userId });
+                await deps.sendPayload(msg.waPhone, payload, userId);
                 return;
             }
             if (tap?.[1] === "lead") {
