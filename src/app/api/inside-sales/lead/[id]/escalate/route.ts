@@ -1,46 +1,27 @@
 // POST /api/inside-sales/lead/[id]/escalate
 // BRD §0.6 — raise an escalation. Owner remains unchanged; admin resolves
-// (Module 3). escalation_status flips to 'pending_review' on dealer_leads.
+// (Module 3). The write lives in lib/leads/escalate.ts, shared with the
+// WhatsApp Assistant.
 
-import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { leadEscalations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
-import { OPEN_STATUSES, type LeadStatus } from "@/lib/lifecycle/transitions";
-import { notifyRoles } from "@/lib/notifications/notify";
+import {
+    ALL_ESCALATION_REASONS,
+    ESCALATION_NOTES_MIN,
+    ESCALATION_URGENCIES,
+    EscalateError,
+    escalateLead,
+} from "@/lib/leads/escalate";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
-// BRD §0.6 reason picker — IS Rep options. ASM options will land in Module 2.
-const IS_REP_REASONS = [
-    "Commercial_Decision_Needed",
-    "Customer_Complaint",
-    "Compliance_Concern",
-    "Internal_Dispute",
-    "Other",
-] as const;
-
-const ASM_REASONS = [
-    "Not_Ready_for_Visit",
-    "Dealer_Stalling",
-    "Territory_Mismatch",
-    "Customer_Complaint",
-    "Internal_Dispute",
-    "Compliance_Concern",
-    "Other",
-] as const;
-
-const ALL_REASONS = [...new Set([...IS_REP_REASONS, ...ASM_REASONS])];
-
 const BodySchema = z.object({
-    escalation_reason: z.enum(ALL_REASONS as [string, ...string[]]),
-    escalation_notes: z.string().min(30).max(5000),
+    escalation_reason: z.enum(ALL_ESCALATION_REASONS),
+    escalation_notes: z.string().min(ESCALATION_NOTES_MIN).max(5000),
     suggested_action: z.string().max(1000).nullable().optional(),
-    urgency: z.enum(["normal", "high", "urgent"]),
+    urgency: z.enum(ESCALATION_URGENCIES),
 });
 
 export const POST = withErrorHandler(
@@ -52,73 +33,20 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const stateRows = await db.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
-        `);
-        const status = stateRows[0]?.lead_status as LeadStatus | null;
-        if (!status) return errorResponse("Lead not found", 404);
-        if (!OPEN_STATUSES.includes(status)) {
-            return errorResponse("Escalation requires an open lead status.", 400);
-        }
-
-        const inserted = await db
-            .insert(leadEscalations)
-            .values({
-                dealer_lead_id: id,
-                raised_by: user.id,
-                raised_at: new Date(),
-                escalation_reason: body.escalation_reason,
-                escalation_notes: body.escalation_notes,
-                suggested_action: body.suggested_action ?? null,
-                urgency: body.urgency,
-                status: "pending_review",
-            })
-            .returning({ escalation_id: leadEscalations.escalation_id });
-
-        const escalationId = inserted[0]?.escalation_id ?? null;
-
-        await db.execute(sql`
-            UPDATE dealer_leads
-            SET escalation_status = 'pending_review',
-                escalation_count = COALESCE(escalation_count, 0) + 1,
-                last_escalation_id = ${escalationId},
-                updated_at = NOW()
-            WHERE id = ${id}
-        `);
-
-        await writeTouchpoint({
-            dealerLeadId: id,
-            touchpointType: "escalation_raised",
-            performedBy: user.id,
-            remarks: `[${body.urgency.toUpperCase()}] ${body.escalation_reason}\n\n${body.escalation_notes}${
-                body.suggested_action ? `\n\nSuggested: ${body.suggested_action}` : ""
-            }`,
-        });
-
-        // BRD §0.6 — in-app escalation alerts. Admin + sales_head on every
-        // escalation; CEO additionally on Urgent. Wrapped — a notification
-        // failure must never break escalation creation.
         try {
-            // `partner` runs the lead desk at sales_head scope and can open
-            // /admin/escalations, so it is notified on the same terms.
-            const roles =
-                body.urgency === "urgent"
-                    ? ["admin", "sales_head", "ceo", "partner"]
-                    : ["admin", "sales_head", "partner"];
-            await notifyRoles(roles, {
-                type: "escalation_raised",
-                title:
-                    body.urgency === "urgent"
-                        ? "Urgent escalation raised"
-                        : "Escalation raised",
-                message: `${body.escalation_reason.replace(/_/g, " ")} — raised by ${user.name}`,
-                data: { escalation_id: escalationId, lead_id: id },
+            const { escalationId, notify } = await escalateLead({
                 leadId: id,
+                actor: { id: user.id, name: user.name },
+                reason: body.escalation_reason,
+                notes: body.escalation_notes,
+                suggestedAction: body.suggested_action,
+                urgency: body.urgency,
             });
+            await notify();
+            return successResponse({ escalation_id: escalationId });
         } catch (err) {
-            console.error("[escalate] notification failed:", err);
+            if (err instanceof EscalateError) return errorResponse(err.message, err.status);
+            throw err;
         }
-
-        return successResponse({ escalation_id: escalationId });
     },
 );

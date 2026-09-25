@@ -1,30 +1,25 @@
 // POST /api/inside-sales/lead/[id]/transfer-asm
 // BRD §0.8 — hand off to an ASM. ASM picker may be territory-filtered; out-of-
-// territory requires a reason. Writes asm_transfer touchpoint + status history,
-// updates current_owner_id/asm_id/pre_transfer_status, creates a lead_visits row.
+// territory requires a reason. The write itself lives in
+// lib/leads/transferToAsm.ts, shared with the WhatsApp Assistant.
 
-import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { leadVisits } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
+import {
+    TRANSFER_REASONS,
+    TransferLeadNotFoundError,
+    VISIT_TYPES,
+    transferLeadToAsm,
+} from "@/lib/leads/transferToAsm";
 
 const MUTATE_ROLES = ["inside_sales_rep", "admin", "partner"];
 
 const BodySchema = z.object({
     asm_id: z.string().min(1),
-    reason: z.enum([
-        "Commercials_Finalised",
-        "Site_Visit_Needed",
-        "Negotiation_Beyond_IS_Authority",
-        "Demo_Requested",
-        "Other",
-    ]),
-    visit_type: z.enum(["Initial_Visit", "Demo", "Negotiation", "Closing"]),
+    reason: z.enum(TRANSFER_REASONS),
+    visit_type: z.enum(VISIT_TYPES),
     suggested_visit_date: z.string().date().nullable().optional(),
     dealer_preferred_time: z.string().max(200).nullable().optional(),
     handoff_notes: z.string().max(5000).optional().default(""),
@@ -41,53 +36,23 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const stateRows = await db.execute<{ lead_status: string | null }>(sql`
-            SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
-        `);
-        const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
-        if (!fromStatus) return errorResponse("Lead not found", 404);
-
-        // Lifecycle transition gate intentionally removed: a transfer to a chosen
-        // ASM is always allowed regardless of current lead_status. writeTouchpoint
-        // below still flips lead_status to Transferred_to_ASM + records history.
-
-        await db.transaction(async (tx) => {
-            await tx.execute(sql`
-                UPDATE dealer_leads
-                SET pre_transfer_status = lead_status,
-                    current_owner_id = ${body.asm_id},
-                    asm_id = ${body.asm_id},
-                    assigned_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = ${id}
-            `);
-            await tx.insert(leadVisits).values({
-                dealer_lead_id: id,
-                asm_id: body.asm_id,
-                scheduled_date: body.suggested_visit_date ?? null,
-                visit_status: body.suggested_visit_date ? "scheduled" : "pending_scheduling",
+        try {
+            await transferLeadToAsm({
+                leadId: id,
+                actorId: user.id,
+                asmId: body.asm_id,
+                reason: body.reason,
+                visitType: body.visit_type,
+                suggestedVisitDate: body.suggested_visit_date,
+                dealerPreferredTime: body.dealer_preferred_time,
+                handoffNotes: body.handoff_notes,
+                pendingItems: body.pending_items,
+                outOfTerritoryReason: body.out_of_territory_reason,
             });
-        });
-
-        await writeTouchpoint({
-            dealerLeadId: id,
-            touchpointType: "asm_transfer",
-            performedBy: user.id,
-            remarks: `Reason: ${body.reason}; Visit: ${body.visit_type}${
-                body.suggested_visit_date ? `; Date: ${body.suggested_visit_date}` : ""
-            }${body.dealer_preferred_time ? ` (${body.dealer_preferred_time})` : ""}\n\n${body.handoff_notes}${
-                body.pending_items?.length
-                    ? `\n\nPending: ${body.pending_items.join(", ")}`
-                    : ""
-            }${body.out_of_territory_reason ? `\n\nOut-of-territory: ${body.out_of_territory_reason}` : ""}`,
-            // E-295: assertOwner above proved the caller held the lead.
-            fromOwnerId: user.id,
-            toOwnerId: body.asm_id,
-            statusChange: {
-                from: fromStatus,
-                to: "Transferred_to_ASM",
-            },
-        });
+        } catch (err) {
+            if (err instanceof TransferLeadNotFoundError) return errorResponse("Lead not found", 404);
+            throw err;
+        }
 
         return successResponse({ ok: true });
     },
