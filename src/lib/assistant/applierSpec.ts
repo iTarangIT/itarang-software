@@ -13,6 +13,15 @@ export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type ApplyContext = { tx: Tx; user: AssistantUser; step: 1 | 2 };
 
+export type RejectReason = "stale" | "not_owner" | "writes_disabled" | "lead_missing" | "not_claimable";
+
+/** A rejection the executor maps to a reply; the action is marked failed with it. Appliers may throw it too. */
+export class ActionRejected extends Error {
+    constructor(readonly reason: RejectReason) {
+        super(`rejected: ${reason}`);
+    }
+}
+
 export type Applier<P> = {
     /** The stored plan's shape — parsed again at execute time. */
     schema: z.ZodType<P>;
