@@ -24,7 +24,7 @@ describe("/api/assistant/link on an unconfigured host", () => {
     });
 
     it("GET answers configured:false without reading the (possibly missing) tables", async () => {
-        const res = await GET();
+        const res = await GET(new Request("https://crm.test/api/assistant/link"));
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.data ?? body).toMatchObject({ configured: false, linked: null });
@@ -32,7 +32,7 @@ describe("/api/assistant/link on an unconfigured host", () => {
     });
 
     it("POST refuses with 503 and issues no code", async () => {
-        const res = await POST();
+        const res = await POST(new Request("https://crm.test/api/assistant/link", { method: "POST" }));
         expect(res.status).toBe(503);
         expect(issueLinkCode).not.toHaveBeenCalled();
     });
