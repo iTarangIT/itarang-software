@@ -26,6 +26,7 @@ import type { ToolCallingModel } from "../src/lib/assistant/agent";
 import { renderTapOutcome, renderTurn, type WaPayload } from "../src/lib/wa-assistant/render";
 import { cancelAction, executeAction } from "../src/lib/assistant/executor";
 import { hasOpenPendingAction } from "../src/lib/assistant/actions";
+import { proposeInvitePayload } from "../src/lib/wa-assistant/runtime";
 
 
 // ── Safety ──────────────────────────────────────────────────────────────────
@@ -154,6 +155,7 @@ export function routerDeps(
             replies.push({ to, text: payload.body });
         },
         openLead: async () => ({ kind: "text", body: "lead card" }),
+        proposeInvite: async () => ({ kind: "text", body: "invite preview" }),
         confirmAction: async (user, actionId, rowId) =>
             renderTapOutcome(await executeAction(actionId, user, { messageId: rowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
@@ -188,6 +190,20 @@ export async function handlingOf(providerMessageId: string) {
 
 export async function cleanup() {
     const like = `${LEAD_PREFIX}%`;
+    // Phase 2 (gate 6): escalations, the converted lead's onboarding application,
+    // its audit row and the in-app notifications both raised — unhook the lead's
+    // pointers to them first.
+    if (await hasColumn("dealer_leads", "last_escalation_id")) {
+        await db.execute(sql`UPDATE dealer_leads SET last_escalation_id = NULL, dealer_onboarding_application_id = NULL WHERE id LIKE ${like}`);
+    }
+    if (await hasTable("lead_escalations")) await db.execute(sql`DELETE FROM lead_escalations WHERE dealer_lead_id LIKE ${like}`);
+    if (await hasTable("dealer_onboarding_applications")) {
+        await db.execute(sql`DELETE FROM dealer_onboarding_applications WHERE originating_dealer_lead_id LIKE ${like}`);
+    }
+    if (await hasTable("notifications")) await db.execute(sql`DELETE FROM notifications WHERE lead_id LIKE ${like}`);
+    if (await hasTable("audit_logs")) {
+        await db.execute(sql`DELETE FROM audit_logs WHERE entity_type = 'dealer_lead' AND entity_id LIKE ${like}`);
+    }
     for (const table of [
         "lead_touchpoints",
         "dealer_lead_status_history",
@@ -244,6 +260,7 @@ export function g4Deps(sent: Sent[], model: () => ToolCallingModel): RouterDeps 
             sent.push({ to, text: payload.body, payload });
         },
         hasPendingAction: hasOpenPendingAction,
+        proposeInvite: proposeInvitePayload,
         runTextTurn: async (user, text, rowId) => {
             const r = await withUserLease(user.id, () => agentTurn(user, text, { messageId: rowId, model: () => model() }));
             if (!r.ok) return { kind: "busy" };
@@ -267,8 +284,8 @@ export async function tap(deps: RouterDeps, waPhone: string, replyId: string) {
 }
 
 export function lastActionId(sent: Sent[]): string {
-    const p = [...sent].reverse().find((s) => s.payload?.kind === "buttons")?.payload;
-    assert(p?.kind === "buttons", `no preview sent: ${JSON.stringify(sent.map((s) => s.text))}`);
+    const p = [...sent].reverse().find((s) => s.payload?.kind === "buttons" && s.payload.actionId)?.payload;
+    assert(p?.kind === "buttons" && p.actionId, `no preview sent: ${JSON.stringify(sent.map((s) => s.text))}`);
     return p.actionId;
 }
 

@@ -30,8 +30,12 @@ export const RENDER_LIMITS = {
 export type WaPayload =
     | { kind: "text"; body: string }
     | { kind: "list"; body: string; button: string; header?: string; rows: ListRow[] }
-    /** A write preview: exactly Confirm / Cancel, ids ast:c:<id> / ast:x:<id>. */
-    | { kind: "buttons"; body: string; buttons: { id: string; title: string }[]; actionId: string };
+    /**
+     * Reply buttons. A write preview: exactly Confirm / Cancel, ids ast:c:<id> /
+     * ast:x:<id>, with its actionId. After a conversion: "Send invite"
+     * (ast:inv:<leadId>), no actionId.
+     */
+    | { kind: "buttons"; body: string; buttons: { id: string; title: string }[]; actionId?: string };
 
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 
@@ -116,14 +120,41 @@ const REJECTED: Record<Extract<ExecOutcome, { kind: "rejected" }>["reason"], str
     writes_disabled: "Saving from WhatsApp is switched off for you. Nothing was saved.",
     lead_missing: "That lead no longer exists. Nothing was saved.",
     not_claimable: "That lead can no longer be claimed. Nothing was saved.",
+    duplicate_phone: "A lead with this phone number already exists. Nothing was saved.",
+    target_unavailable: "That person is no longer active, so nothing was saved. Pick someone else.",
 };
+
+/**
+ * A confirmed write. After a conversion the reply OFFERS the dealer invite as a
+ * button — it only proposes; the invite has its own preview and Confirm. The
+ * invite itself reports whether WhatsApp accepted the send.
+ */
+function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayload {
+    const saved = fit(`✅ Saved: ${o.title.replace(/^\*|\*$/g, "")}\n${o.crmUrl}`, RENDER_LIMITS.text);
+    if (o.tool === "invite_dealer_onboarding") {
+        if (o.extra?.delivered === true) return { kind: "text", body: `✅ Onboarding invite sent to the dealer.\n${o.crmUrl}` };
+        const why = String(o.extra?.error ?? "WhatsApp send failed");
+        return {
+            kind: "text",
+            body: fit(`⚠️ The invite could not be sent (${why}). Try again, or use Invite on WhatsApp in the CRM.\n${o.crmUrl}`, RENDER_LIMITS.text),
+        };
+    }
+    if (o.tool === "mark_converted" && o.leadId) {
+        return {
+            kind: "buttons",
+            body: fit(`${saved}\n\nSend the dealer the WhatsApp onboarding invite?`, RENDER_LIMITS.previewBody),
+            buttons: [{ id: `ast:inv:${o.leadId}`, title: "Send invite" }],
+        };
+    }
+    return { kind: "text", body: saved };
+}
 
 /** The reply to a Confirm / Cancel tap (UC-15 wording for expired and repeated taps). */
 export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
     const text = (body: string): WaPayload => ({ kind: "text", body });
     switch (o.kind) {
         case "confirmed":
-            return text(fit(`✅ Saved: ${o.title.replace(/^\*|\*$/g, "")}\n${o.crmUrl}`, RENDER_LIMITS.text));
+            return renderConfirmed(o);
         case "second_confirm":
             return renderPreview(o.preview, o.actionId);
         case "cancelled":

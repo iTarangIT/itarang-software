@@ -48,6 +48,7 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
             replies.push({ to, text: payload.body, userId, kind: payload.kind });
         }),
         openLead: vi.fn(async () => ({ kind: "text" as const, body: "lead card" })),
+        proposeInvite: vi.fn(async () => ({ kind: "text" as const, body: "invite preview" })),
         confirmAction: vi.fn(async () => ({ kind: "text" as const, body: "✅ Saved" })),
         cancelAction: vi.fn(async () => ({ kind: "text" as const, body: "Cancelled. Nothing was saved." })),
         isDisabled: vi.fn(() => false),
@@ -282,11 +283,22 @@ describe("routeMessage — Gate 3: list-row taps", () => {
         expect(f.replies).toEqual([{ to: PHONE, text: "lead card", userId: "u-rahul", kind: "text" }]);
     });
 
+    it("ast:inv:<leadId> proposes the dealer invite (a preview, not a send), with no model", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:inv:DL-1", text: "Send invite" }), "r", f.deps);
+        expect(f.deps.proposeInvite).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, "DL-1", "r");
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.handled[0].handling).toBe("tap_invite");
+        expect(f.replies).toEqual([{ to: PHONE, text: "invite preview", userId: "u-rahul", kind: "text" }]);
+    });
+
     it("a malformed or foreign tap id is ignored, never opened", async () => {
-        for (const replyId of ["ast:lead:", "lead:DL-1", "ast:zzz:1", ""]) {
+        for (const replyId of ["ast:lead:", "ast:inv:", "lead:DL-1", "ast:zzz:1", ""]) {
             const f = fakeDeps();
             await routeMessage(msg({ type: "interactive", replyId }), "r", f.deps);
             expect(f.deps.openLead, replyId).not.toHaveBeenCalled();
+            expect(f.deps.proposeInvite, replyId).not.toHaveBeenCalled();
             expect(f.handled[0].handling).toBe("tap_ignored");
         }
     });

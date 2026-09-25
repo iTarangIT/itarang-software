@@ -1034,9 +1034,165 @@ async function gate5() {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
+async function gate6() {
+    if (!(await hasTable("assistant_actions"))) {
+        await check("G6.* Phase 2 lead actions", async () => {
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
+        });
+        return;
+    }
+    const isr: AssistantUser = { id: await makeUser("inside_sales_rep"), name: "WA Test inside_sales_rep", role: "inside_sales_rep" };
+    const asm: AssistantUser = { id: await makeUser("asm"), name: "WA Test asm", role: "asm" };
+    const isrPhone = phone(60);
+    const asmPhone = phone(61);
+    for (const [u, p] of [[isr, isrPhone], [asm, asmPhone]] as const) {
+        await db.execute(sql`INSERT INTO assistant_wa_bindings (user_id, wa_phone, status, verified_at) VALUES (${u.id}::uuid, ${p}, 'active', now())`);
+    }
+    process.env.ASSISTANT_WRITES_ENABLED_USER_IDS = [isr.id, asm.id].join(",");
+    // The fixture ASM covers a state of its own, so it is the in-territory ASM for the fixture leads.
+    const myState = `WA-T6-${RUN}`;
+    await db.execute(sql`INSERT INTO asm_territories (asm_id, state) VALUES (${asm.id}, ${myState})`);
+    const lastText = (sent: Sent[]) => sent.at(-1)!.text;
+    const owner = async (id: string) =>
+        (await db.execute<{ current_owner_id: string | null; asm_id: string | null; lead_status: string | null }>(sql`
+            SELECT current_owner_id, asm_id, lead_status FROM dealer_leads WHERE id = ${id}`))[0]!;
+
+    await check("G6.1 transfer_to_asm end to end: preview writes nothing; Confirm → ASM owns it, Transferred_to_ASM, a visit row, one asm_transfer touchpoint", async () => {
+        const lead = await makeLead("t6-transfer", { owner: isr.id, status: "Under_Discussion", state: myState });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "transfer_to_asm",
+            args: { lead_id: lead, asm: asm.id, reason: "Site_Visit_Needed", visit_type: "Initial_Visit", handoff_notes: "wants a demo at the shop" },
+        }]));
+        await say(deps, isrPhone, "Transfer this lead to the ASM, site visit needed");
+        const id = lastActionId(sent);
+        assert(/^\*Transfer WA Test Shop t6-transfer → WA Test asm\*/.test(lastText(sent)), lastText(sent));
+        assert(/Under Discussion → Transferred to ASM/.test(lastText(sent)) && /read-only for you/.test(lastText(sent)), lastText(sent));
+        const before = await counts(lead);
+        assert(before.visits === 0 && before.touchpoints === 0 && before.history === 0, `the preview wrote: ${JSON.stringify(before)}`);
+
+        await tap(deps, isrPhone, `ast:c:${id}`);
+        assert(lastText(sent).startsWith("✅ Saved"), lastText(sent));
+        const o = await owner(lead);
+        assert(o.current_owner_id === asm.id && o.asm_id === asm.id && o.lead_status === "Transferred_to_ASM", JSON.stringify(o));
+        const c = await counts(lead);
+        assert(c.visits === 1 && c.touchpoints === 1 && c.history === 1, `rows ${JSON.stringify(c)}`);
+        const tp = await db.execute<{ touchpoint_type: string }>(sql`SELECT touchpoint_type FROM lead_touchpoints WHERE dealer_lead_id = ${lead}`);
+        assert(tp[0]!.touchpoint_type === "asm_transfer", JSON.stringify(tp));
+        return "owner + asm_id → ASM, status + history, visit pending_scheduling, asm_transfer touchpoint";
+    });
+
+    await check("G6.2 a lead changed after the transfer preview → stale, nothing written", async () => {
+        const lead = await makeLead("t6-stale", { owner: isr.id, status: "Under_Discussion", state: myState });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "transfer_to_asm",
+            args: { lead_id: lead, asm: asm.id, reason: "Demo_Requested", visit_type: "Demo" },
+        }]));
+        await say(deps, isrPhone, "transfer to asm");
+        const id = lastActionId(sent);
+        await db.execute(sql`UPDATE dealer_leads SET updated_at = now() + interval '1 second' WHERE id = ${lead}`);
+        await tap(deps, isrPhone, `ast:c:${id}`);
+        assert(/changed after the preview/.test(lastText(sent)), lastText(sent));
+        const o = await owner(lead);
+        const c = await counts(lead);
+        assert(o.current_owner_id === isr.id && c.visits === 0 && c.touchpoints === 0, `${JSON.stringify(o)} ${JSON.stringify(c)}`);
+    });
+
+    await check("G6.3 reassign_lead ASM → ISR: owner moves back, asm_id kept, one ownership_transfer touchpoint", async () => {
+        const lead = await makeLead("t6-reassign", { owner: asm.id, asm: asm.id, status: "Under_Discussion", state: myState });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "reassign_lead",
+            args: { lead_id: lead, to: isr.id, reason: "dealer only wants phone follow-ups for now" },
+        }]));
+        await say(deps, asmPhone, "give this back to inside sales");
+        const id = lastActionId(sent);
+        assert(/Owner: you → WA Test inside_sales_rep \(ISR\)/.test(lastText(sent)), lastText(sent));
+        await tap(deps, asmPhone, `ast:c:${id}`);
+        assert(lastText(sent).startsWith("✅ Saved"), lastText(sent));
+        const o = await owner(lead);
+        assert(o.current_owner_id === isr.id && o.asm_id === asm.id, JSON.stringify(o));
+        const tp = await db.execute<{ touchpoint_type: string }>(sql`SELECT touchpoint_type FROM lead_touchpoints WHERE dealer_lead_id = ${lead}`);
+        assert(tp.length === 1 && tp[0]!.touchpoint_type === "ownership_transfer", JSON.stringify(tp));
+    });
+
+    await check("G6.4 escalate_lead: escalation row + pending_review; the owner does not change", async () => {
+        const lead = await makeLead("t6-escalate", { owner: isr.id, status: "Under_Discussion", state: myState });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "escalate_lead",
+            args: { lead_id: lead, reason: "Commercial_Decision_Needed", urgency: "normal", notes: "dealer wants a price only the sales head can approve" },
+        }]));
+        await say(deps, isrPhone, "escalate this, price approval needed");
+        const id = lastActionId(sent);
+        await tap(deps, isrPhone, `ast:c:${id}`);
+        assert(lastText(sent).startsWith("✅ Saved"), lastText(sent));
+        const e = await db.execute<{ n: number; status: string | null }>(sql`
+            SELECT (SELECT count(*) FROM lead_escalations WHERE dealer_lead_id = ${lead})::int AS n,
+                   (SELECT escalation_status FROM dealer_leads WHERE id = ${lead}) AS status`);
+        assert(e[0]!.n === 1 && e[0]!.status === "pending_review", JSON.stringify(e[0]));
+        assert((await owner(lead)).current_owner_id === isr.id, "owner changed");
+    });
+
+    await check("G6.5 mark_converted: Converted + GSTIN + onboarding application in one commit; reply offers Send invite; the invite tap only proposes (declined: no phone)", async () => {
+        const lead = await makeLead("t6-convert", { owner: isr.id, status: "Under_Discussion", state: myState });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{ name: "mark_converted", args: { lead_id: lead, gstin: "27aaacb1234c1z5" } }]));
+        await say(deps, isrPhone, "deal done, GST 27aaacb1234c1z5");
+        const id = lastActionId(sent);
+        assert(/GSTIN: 27AAACB1234C1Z5/.test(lastText(sent)), lastText(sent));
+        await tap(deps, isrPhone, `ast:c:${id}`);
+        const reply = sent.at(-1)!.payload;
+        assert(reply?.kind === "buttons" && reply.buttons[0]?.id === `ast:inv:${lead}` && !reply.actionId, JSON.stringify(reply));
+        const l = await db.execute<{ lead_status: string | null; gstin: string | null; app: string | null }>(sql`
+            SELECT lead_status, gstin, dealer_onboarding_application_id::text AS app FROM dealer_leads WHERE id = ${lead}`);
+        assert(l[0]!.lead_status === "Converted" && l[0]!.gstin === "27AAACB1234C1Z5" && l[0]!.app, JSON.stringify(l[0]));
+
+        // The fixture lead has no phone, so the invite is refused at the proposal — nothing is sent.
+        await tap(deps, isrPhone, `ast:inv:${lead}`);
+        assert(/no valid phone number/.test(lastText(sent)), lastText(sent));
+        const pendingInvites = await db.execute<{ n: number }>(sql`
+            SELECT count(*)::int AS n FROM assistant_actions WHERE lead_id = ${lead} AND tool = 'invite_dealer_onboarding'`);
+        assert(pendingInvites[0]!.n === 0, "an invite action was created");
+    });
+
+    await check("G6.6 create_lead: ISR's lead lands unowned in the claim pool; the same phone again is refused", async () => {
+        let created: string | null = null;
+        const digits = `9${String(Date.now()).slice(-9)}`;
+        try {
+            const sent: Sent[] = [];
+            const deps = g4Deps(sent, () => scriptedCalls([{ name: "create_lead", args: { dealer_name: `WA Test ${RUN}`, phone: digits, city: "Pune" } }]));
+            await say(deps, isrPhone, `new lead WA Test ${RUN} ${digits} Pune`);
+            const id = lastActionId(sent);
+            assert(/Goes to: the unassigned claim pool/.test(lastText(sent)), lastText(sent));
+            await tap(deps, isrPhone, `ast:c:${id}`);
+            assert(lastText(sent).startsWith("✅ Saved"), lastText(sent));
+            const a = await actionRow(id);
+            created = (a?.after?.lead_id as string) ?? null;
+            assert(created, JSON.stringify(a));
+            const l = await db.execute<{ current_owner_id: string | null; lead_status: string | null; originator_id: string | null }>(sql`
+                SELECT current_owner_id, lead_status, originator_id FROM dealer_leads WHERE id = ${created}`);
+            assert(l[0]!.current_owner_id === null && l[0]!.lead_status === "New_Unassigned" && l[0]!.originator_id === isr.id, JSON.stringify(l[0]));
+
+            const again = g4Deps(sent, () => scriptedCalls([{ name: "create_lead", args: { dealer_name: "WA Test dup", phone: digits } }]));
+            const n = sent.length;
+            await say(again, isrPhone, `new lead ${digits}`);
+            assert(sent.length > n && sent.at(-1)!.payload?.kind !== "buttons", `a preview was offered for a duplicate: ${lastText(sent)}`);
+            return `created ${created}; duplicate refused`;
+        } finally {
+            if (created) {
+                await db.execute(sql`DELETE FROM lead_registry WHERE source_table = 'dealer_leads' AND source_id = ${created}`).catch(() => {});
+                await db.execute(sql`UPDATE assistant_actions SET lead_id = NULL WHERE lead_id = ${created}`);
+                await db.execute(sql`DELETE FROM dealer_leads WHERE id = ${created}`);
+            }
+        }
+    });
+}
+
 async function main() {
     const gate = Number(process.argv[process.argv.indexOf("--gate") + 1] || "1");
-    await runSuites([gate1, gate2, gate3, gate4, gate5].slice(0, gate));
+    await runSuites([gate1, gate2, gate3, gate4, gate5, gate6].slice(0, gate));
 }
 
 void main();

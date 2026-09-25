@@ -17,6 +17,12 @@ import { logVisit } from "./tools/write/logVisit";
 import { markLost } from "./tools/write/markLost";
 import { claimLead } from "./tools/write/claimLead";
 import { setFollowUp } from "./tools/write/setFollowUp";
+import { transferToAsm } from "./tools/write/transferToAsm";
+import { reassignLead } from "./tools/write/reassignLead";
+import { escalateLead } from "./tools/write/escalateLead";
+import { markConverted } from "./tools/write/markConverted";
+import { inviteDealerOnboarding } from "./tools/write/inviteDealerOnboarding";
+import { createLead } from "./tools/write/createLead";
 
 const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     my_queue: myQueue,
@@ -28,17 +34,30 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     mark_lost: markLost,
     claim_lead: claimLead,
     set_follow_up: setFollowUp,
+    transfer_to_asm: transferToAsm,
+    reassign_lead: reassignLead,
+    escalate_lead: escalateLead,
+    mark_converted: markConverted,
+    invite_dealer_onboarding: inviteDealerOnboarding,
+    create_lead: createLead,
 });
 
-/** BRD §5: log_visit is ASM-only; everything else is both roles. */
+/**
+ * BRD §5: log_visit is ASM-only; transfer_to_asm is ISR-only (the screen's
+ * Transfer button is not offered to an ASM — an ASM hands back with
+ * reassign_lead). Everything else is both roles.
+ */
 export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = Object.freeze({
     inside_sales_rep: Object.freeze([
         "my_queue", "search_lead", "get_lead_details", "my_numbers",
         "log_call", "mark_lost", "claim_lead", "set_follow_up",
+        "transfer_to_asm", "reassign_lead", "escalate_lead", "mark_converted",
+        "invite_dealer_onboarding", "create_lead",
     ] as const),
     asm: Object.freeze([
         "my_queue", "search_lead", "get_lead_details", "my_numbers",
         "log_call", "log_visit", "mark_lost", "claim_lead", "set_follow_up",
+        "reassign_lead", "escalate_lead", "mark_converted", "invite_dealer_onboarding", "create_lead",
     ] as const),
 });
 

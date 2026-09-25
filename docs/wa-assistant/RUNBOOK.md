@@ -133,7 +133,9 @@ Do these in order. Each step says what proves it worked.
    - typing "yes" never saves;
    - previews expire in 10 min;
    - text only (no voice notes);
-   - convert/transfer stay on the CRM.
+   - it can transfer to an ASM, reassign, escalate, mark Converted (GSTIN required) and create a lead — each a preview + Confirm (Phase 2, docs/superpowers/specs/2026-09-25-wa-assistant-phase2-lead-actions-design.md);
+   - after a conversion, **Send invite** messages the dealer only after its own Confirm;
+   - commercials/quotes, undoing a conversion and deleting leads stay on the CRM.
 10. **Start the daily review** (§7) the same evening.
 
 Go/no-go (BRD §10.1), end of the following week:
@@ -224,7 +226,7 @@ Messages from a revoked number are logged `handling = unlinked` **without** a `u
 | "Too many wrong codes…" | 5 wrong LINK codes in an hour from that number | Wait the hour; the code still works from the rep's own phone |
 | "This lead changed since the preview…" | Someone (or the AI dialer / NeoDove) touched the lead between preview and tap | By design: send the message again |
 | "This action expired…" | Tapped after 10 minutes | By design |
-| Next visit not in Today's Schedule | Lead's field ASM (`asm_id`) isn't the rep; the preview warns | Transfer / claim on the CRM sets it |
+| Next visit not in Today's Schedule | Lead's field ASM (`asm_id`) isn't the rep; the preview warns | Transfer / claim (CRM or WhatsApp) sets it |
 | A call can't be logged, the Assistant keeps asking | Disposition outside the frozen §9.3 map (37% of real calls, §12) | Log it on the screen |
 | Sweep log `assistant_actions missing` | E-309 not applied on this DB | §3 |
 
