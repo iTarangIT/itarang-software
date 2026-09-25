@@ -11,7 +11,9 @@
 // BOTH the UTF-16 length and the code-point count within the limit, so the
 // result is valid however WhatsApp counts.
 
-import type { LeadSummary, ToolResult } from "@/lib/assistant/types";
+import type { LeadSummary, Preview, ToolResult } from "@/lib/assistant/types";
+import type { CancelOutcome, ExecOutcome } from "@/lib/assistant/executor";
+import { PENDING_TTL_MINUTES } from "@/lib/assistant/actions";
 import type { ListRow } from "./client";
 
 export const RENDER_LIMITS = {
@@ -27,7 +29,9 @@ export const RENDER_LIMITS = {
 
 export type WaPayload =
     | { kind: "text"; body: string }
-    | { kind: "list"; body: string; button: string; header?: string; rows: ListRow[] };
+    | { kind: "list"; body: string; button: string; header?: string; rows: ListRow[] }
+    /** A write preview: exactly Confirm / Cancel, ids ast:c:<id> / ast:x:<id>. */
+    | { kind: "buttons"; body: string; buttons: { id: string; title: string }[]; actionId: string };
 
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 
@@ -44,38 +48,9 @@ export function fit(s: string, max: number): string {
     return out.trimEnd() + "…";
 }
 
-// Names are fixed here rather than taken from the locale: ICU builds differ
-// between machines ("Sep" vs "Sept"), and a reply must read the same everywhere.
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const IST_PARTS = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    hourCycle: "h23",
-});
-
-function istParts(d: Date) {
-    const p = Object.fromEntries(IST_PARTS.formatToParts(d).map((x) => [x.type, x.value]));
-    const y = Number(p.year);
-    const m = Number(p.month);
-    const day = Number(p.day);
-    const weekday = new Date(Date.UTC(y, m - 1, day)).getUTCDay();
-    return { label: `${DAYS[weekday]} ${day} ${MONTHS[m - 1]}`, time: `${p.hour.padStart(2, "0")}:${p.minute.padStart(2, "0")}` };
-}
-
-/** "2026-09-26" → "Sat 26 Sep"; a timestamp → "Sat 26 Sep, 11:00" (IST). */
-export function fmtDate(v: string | null | undefined): string | null {
-    if (!v) return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return istParts(new Date(`${v}T12:00:00+05:30`)).label;
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return v;
-    const { label, time } = istParts(d);
-    return `${label}, ${time}`;
-}
+// IST dates with fixed names — shared with the core's previews.
+export { fmtDate } from "@/lib/assistant/format";
+import { fmtDate } from "@/lib/assistant/format";
 
 function statusLabel(s: string | null): string | null {
     return s ? s.replace(/_/g, " ") : null;
@@ -105,11 +80,84 @@ export function whatsappText(s: string): string {
 
 const LIST_BUTTON = "View leads";
 
+const PREVIEW_VALUE_MAX = 200;
+
 /**
- * The reply for one agent turn. The last list-shaped result (candidates, or a
- * queue/search with 2+ rows) becomes a tappable list; everything else is text.
+ * A write preview with its Confirm / Cancel buttons (BRD §8.4). Built only from
+ * the stored Preview — what the executor will write — never from model text.
+ * Body ≤ 900: long values are cut first, then the lines; the title, warning and
+ * footer always survive.
+ */
+export function renderPreview(preview: Preview, actionId: string): WaPayload {
+    const head = `*${fit(preview.title, RENDER_LIMITS.header)}*`;
+    const footer =
+        `Resets idle clock: ${preview.resets_idle_clock ? "yes" : "no"} · Expires in ${PENDING_TTL_MINUTES} min` +
+        (preview.needs_second_confirm ? "\nYou'll be asked to confirm once more." : "");
+    const warning = preview.warning ? `\n${fit(preview.warning, 300)}` : "";
+    const room = RENDER_LIMITS.previewBody - head.length - footer.length - warning.length - 2;
+    const lines = fit(
+        preview.lines.map((l) => `${l.label}: ${fit(l.value.replace(/\s+/g, " "), PREVIEW_VALUE_MAX)}`).join("\n"),
+        Math.max(room, 0),
+    );
+    return {
+        kind: "buttons",
+        body: `${head}\n${lines}${warning}\n${footer}`,
+        buttons: [
+            { id: `ast:c:${actionId}`, title: "Confirm" },
+            { id: `ast:x:${actionId}`, title: "Cancel" },
+        ],
+        actionId,
+    };
+}
+
+const REJECTED: Record<Extract<ExecOutcome, { kind: "rejected" }>["reason"], string> = {
+    stale: "This lead changed after the preview, so nothing was saved. Send it again for a fresh preview.",
+    not_owner: "You no longer own this lead, so nothing was saved.",
+    writes_disabled: "Saving from WhatsApp is switched off for you. Nothing was saved.",
+    lead_missing: "That lead no longer exists. Nothing was saved.",
+    not_claimable: "That lead can no longer be claimed. Nothing was saved.",
+};
+
+/** The reply to a Confirm / Cancel tap (UC-15 wording for expired and repeated taps). */
+export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
+    const text = (body: string): WaPayload => ({ kind: "text", body });
+    switch (o.kind) {
+        case "confirmed":
+            return text(fit(`✅ Saved: ${o.title.replace(/^\*|\*$/g, "")}\n${o.crmUrl}`, RENDER_LIMITS.text));
+        case "second_confirm":
+            return renderPreview(o.preview, o.actionId);
+        case "cancelled":
+            return text("Cancelled. Nothing was saved.");
+        case "expired":
+            return text("This action expired. Nothing was saved. Send it again if you still want it.");
+        case "already_done":
+            return text("Already saved.");
+        case "already_cancelled":
+            return text("That was cancelled. Nothing was saved.");
+        case "in_progress":
+            return text("Already saving that…");
+        case "failed_before":
+            return text("That one didn't save earlier. Nothing was changed. Send it again.");
+        case "awaiting_second_confirm":
+            return text("Tap Confirm on the high-impact warning to finish, or Cancel.");
+        case "not_found":
+            return text("I couldn't find that action.");
+        case "rejected":
+            return text(REJECTED[o.reason]);
+        case "error":
+            return text("Something went wrong, nothing was changed. Please try again.");
+    }
+}
+
+/**
+ * The reply for one agent turn. A write preview (if any) wins and is sent with
+ * its buttons, the model's wording dropped. Otherwise the last list-shaped
+ * result (candidates, or a queue/search with 2+ rows) becomes a tappable list;
+ * everything else is text.
  */
 export function renderTurn(turn: { text: string; results: { tool: string; result: ToolResult }[] }): WaPayload {
+    const preview = [...turn.results].reverse().map((r) => r.result).find((r) => r.kind === "preview");
+    if (preview?.kind === "preview") return renderPreview(preview.preview, preview.action_id);
     const text = whatsappText(turn.text);
     const listy = [...turn.results]
         .reverse()

@@ -36,6 +36,7 @@ export async function register() {
       startDigestTicker,
       startDealerPaymentReminderTicker,
       startMonitorMorningTicker,
+      startWaAssistantSweepTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -67,5 +68,8 @@ export async function register() {
     // the digests — it launches Chromium, the most expensive thing any ticker
     // here does, and its send window is hours wide.
     await startMonitorMorningTicker();
+    // WhatsApp Sales Assistant — expire 10-minute previews, recover actions a
+    // dead process left `executing`; reports a WA_ASSIST_* misconfiguration once.
+    await startWaAssistantSweepTicker();
   }
 }

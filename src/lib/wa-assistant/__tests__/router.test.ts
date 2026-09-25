@@ -48,6 +48,8 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
             replies.push({ to, text: payload.body, userId, kind: payload.kind });
         }),
         openLead: vi.fn(async () => ({ kind: "text" as const, body: "lead card" })),
+        confirmAction: vi.fn(async () => ({ kind: "text" as const, body: "✅ Saved" })),
+        cancelAction: vi.fn(async () => ({ kind: "text" as const, body: "Cancelled. Nothing was saved." })),
         isDisabled: vi.fn(() => false),
         hasPendingAction: vi.fn(async () => false),
         runTextTurn: vi.fn(async () => ({
@@ -119,11 +121,7 @@ describe("routeMessage — order and fixed replies", () => {
         }
     });
 
-    it("INV2 (Gate 1): a tap is logged and does nothing; typed 'ast:c:…' is just text", async () => {
-        await routeMessage(msg({ type: "interactive", replyId: "ast:c:3f1c", text: "Confirm" }), "r1", f.deps);
-        expect(f.handled[0].handling).toBe("tap_ignored");
-        expect(f.replies).toEqual([]);
-        expect(f.deps.openLead).not.toHaveBeenCalled();
+    it("INV2: typed 'ast:c:…' is just text for the agent — it never reaches the executor", async () => {
 
         // Typed text that looks like a button id is just text for the agent.
         const g = fakeDeps();
@@ -291,5 +289,49 @@ describe("routeMessage — Gate 3: list-row taps", () => {
             expect(f.deps.openLead, replyId).not.toHaveBeenCalled();
             expect(f.handled[0].handling).toBe("tap_ignored");
         }
+    });
+});
+
+describe("routeMessage — Gate 4: Confirm / Cancel taps", () => {
+    const ID = "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+
+    it("INV2/INV3: a Confirm tap goes to the executor for the RESOLVED user, never the agent", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: `ast:c:${ID}`, text: "Confirm" }), "r1", f.deps);
+        expect(f.deps.confirmAction).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, ID, "r1");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.handled[0]).toMatchObject({ handling: "tap_confirm", extra: { userId: "u-rahul", actionId: ID } });
+        expect(f.replies.map((r) => r.text)).toEqual(["✅ Saved"]);
+    });
+
+    it("a Cancel tap goes to cancel, not the executor", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: `ast:x:${ID}`, text: "Cancel" }), "r1", f.deps);
+        expect(f.deps.cancelAction).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, ID);
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        expect(f.handled[0]).toMatchObject({ handling: "tap_cancel", extra: { actionId: ID } });
+    });
+
+    it("INV2: typed confirmations, pasted ids and look-alike text NEVER reach the executor", async () => {
+        for (const text of ["yes", "haan", "confirm", `ast:c:${ID}`, `Confirm ast:c:${ID}`, "✅"]) {
+            const f = fakeDeps();
+            (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+            await routeMessage(msg({ type: "text", text }), "r", f.deps);
+            expect(f.deps.confirmAction, text).not.toHaveBeenCalled();
+        }
+    });
+
+    it("a malformed action id is still answered by the executor (as not found), and logged without an action id", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:c:not-a-uuid" }), "r", f.deps);
+        expect(f.deps.confirmAction).toHaveBeenCalledWith(expect.anything(), "not-a-uuid", "r");
+        expect(f.handled[0]).toMatchObject({ handling: "tap_confirm", extra: { actionId: null } });
+    });
+
+    it("an unlinked number's Confirm tap gets UC-13 and never reaches the executor", async () => {
+        const f = fakeDeps({ kind: "unlinked" });
+        await routeMessage(msg({ type: "interactive", replyId: `ast:c:${ID}` }), "r", f.deps);
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        expect(f.replies.map((r) => r.text)).toEqual([REPLY.unlinked]);
     });
 });
