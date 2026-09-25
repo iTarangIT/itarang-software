@@ -40,11 +40,18 @@ export class StaleLeadError extends Error {
   }
 }
 
+// A live transaction handle. Pass it to run the check INSIDE a write
+// transaction (after locking the lead row), so nothing can change ownership
+// between the check and the write. Omit it and the check runs on its own, as
+// every existing caller does.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function assertOwner(
   leadId: string,
   userId: string,
+  opts?: { tx?: Tx },
 ): Promise<void> {
-  const [row] = await db
+  const [row] = await (opts?.tx ?? db)
     .select({ current_owner_id: dealerLeads.current_owner_id })
     .from(dealerLeads)
     .where(eq(dealerLeads.id, leadId))
@@ -58,8 +65,9 @@ export async function assertOwner(
 export async function assertNotStale(
   leadId: string,
   updatedAtSeen: Date,
+  opts?: { tx?: Tx },
 ): Promise<void> {
-  const [row] = await db
+  const [row] = await (opts?.tx ?? db)
     .select({
       current_owner_id: dealerLeads.current_owner_id,
       updated_at: dealerLeads.updated_at,
