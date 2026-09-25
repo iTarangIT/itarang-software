@@ -67,8 +67,14 @@ export function claimPoolPredicate(user: ScopeUser): SQL {
 
 export type ScopedLead = {
     id: string;
+    shop_name: string | null;
+    dealer_name: string | null;
     current_owner_id: string | null;
+    /** The lead's field ASM — Today's Schedule keys on it. */
+    asm_id: string | null;
     lead_status: string | null;
+    interest_level: string | null;
+    next_follow_up_at: Date | null;
     /** dealer_leads.updated_at — the version assertNotStale compares against. */
     updated_at: Date | null;
     owned: boolean;
@@ -83,11 +89,17 @@ export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<
     if (!id) return null;
     const rows = await db.execute<{
         id: string;
+        shop_name: string | null;
+        dealer_name: string | null;
         current_owner_id: string | null;
+        asm_id: string | null;
         lead_status: string | null;
+        interest_level: string | null;
+        next_follow_up_at: string | Date | null;
         updated_at: string | Date | null;
     }>(sql`
-        SELECT dl.id, dl.current_owner_id, dl.lead_status, dl.updated_at
+        SELECT dl.id, dl.shop_name, dl.dealer_name, dl.current_owner_id, dl.asm_id, dl.lead_status,
+               dl.interest_level, dl.next_follow_up_at, dl.updated_at
           FROM dealer_leads dl
           ${scopeJoin(user)}
          WHERE dl.id = ${id} AND ${scopePredicate(user)}
@@ -97,8 +109,13 @@ export async function findLeadInScope(user: ScopeUser, leadId: string): Promise<
     if (!r) return null;
     return {
         id: r.id,
+        shop_name: r.shop_name,
+        dealer_name: r.dealer_name,
         current_owner_id: r.current_owner_id,
+        asm_id: r.asm_id,
         lead_status: r.lead_status,
+        interest_level: r.interest_level,
+        next_follow_up_at: r.next_follow_up_at ? new Date(r.next_follow_up_at) : null,
         updated_at: r.updated_at ? new Date(r.updated_at) : null,
         owned: r.current_owner_id === user.id,
     };
