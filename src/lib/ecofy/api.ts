@@ -12,6 +12,7 @@
 //
 // Server-only. Never import this from a client component.
 
+import { ECOFY_OUTBOUND_ACTOR } from "./access";
 import { EcofyNotConfiguredError, getEcofyConfig } from "./config";
 import { ecofyApiSigningString, signEcofyPayload } from "./signature";
 
@@ -27,7 +28,11 @@ export interface EcofyApiRequest {
     idempotencyKey?: string;
     /** Email of an ACTIVE iTarang Admin/Caller in Ecofy. */
     actAs?: string;
-    /** The CRM person; lands in Ecofy's audit row as `itarang-crm (<name>)`. */
+    /**
+     * CRM-side label only (kept in ecofy_sync_events.payload by the caller).
+     * It is NOT sent to Ecofy: the X-Itarang-Actor-Name header is always the
+     * fixed ECOFY_OUTBOUND_ACTOR, so Ecofy's audit never carries a person's name.
+     */
     actorName?: string;
     timeoutMs?: number;
 }
@@ -69,7 +74,9 @@ export async function callEcofyApi<T = unknown>(req: EcofyApiRequest): Promise<E
     if (req.ifMatch !== undefined) headers["if-match"] = String(req.ifMatch);
     if (req.idempotencyKey) headers["idempotency-key"] = req.idempotencyKey;
     if (req.actAs) headers["x-itarang-act-as"] = req.actAs;
-    if (req.actorName) headers["x-itarang-actor-name"] = req.actorName;
+    // Fixed label on purpose — see ECOFY_OUTBOUND_ACTOR. Ecofy stores it as
+    // `itarang-crm (iTarang CRM)` in audit_log.user_agent.
+    headers["x-itarang-actor-name"] = ECOFY_OUTBOUND_ACTOR;
 
     const res = await fetch(url, {
         method: req.method,

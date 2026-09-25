@@ -922,6 +922,46 @@ export async function startKycAutoApprovalTicker() {
 // runNbfcRequestSlaTick() returns immediately when the feature is disabled,
 // which is the shipped default — inert until an admin turns it on at
 // /admin/settings/nbfc-request-sla.
+/**
+ * E-307 — Ecofy follow-up / meeting reminders. Every 5 minutes; each reminder
+ * is claimed with UPDATE … RETURNING so it fires exactly once even with two
+ * app instances. A database without E-307 throws on every tick ("column
+ * next_follow_up_at does not exist") — logged, nothing else breaks.
+ */
+export async function startEcofyReminderTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runEcofyReminderTick } = await import("@/lib/ecofy/reminders");
+      const r = await runEcofyReminderTick();
+      if (r.followUps || r.appointments || r.synced) {
+        console.log(`[instrumentation:ecofy-reminders] sent ${r.followUps} follow-up, ${r.appointments} meeting reminder(s); synced ${r.synced} CRM-kept entr(ies) to Ecofy`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:ecofy-reminders] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 170_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] Ecofy reminder sweep (5m) started in-process");
+}
+
 export async function startNbfcRequestSlaTicker() {
   // Skip on Vercel — /api/cron/nbfc-request-sla owns it there.
   if (process.env.VERCEL === "1") return;

@@ -29,6 +29,7 @@ export async function register() {
       startScraperQueueTicker,
       startKycAutoApprovalTicker,
       startNbfcRequestSlaTicker,
+      startEcofyReminderTicker,
       startRecordingTranscriptionTicker,
       startDriveMirrorTicker,
       startDriveSalesTicker,
@@ -49,6 +50,8 @@ export async function register() {
     await startScraperQueueTicker();
     await startKycAutoApprovalTicker();
     await startNbfcRequestSlaTicker();
+    // E-307 — Ecofy follow-up / meeting reminders (kickoff 170s out).
+    await startEcofyReminderTicker();
     await startRecordingTranscriptionTicker();
     await startDriveMirrorTicker();
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last
