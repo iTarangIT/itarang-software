@@ -426,3 +426,55 @@ Every recorded disposition *is* in the CC sheet (0 unknown). So the gap is the m
 - revoking a number;
 - both kill switches;
 - the daily log-review SQL (leaks, unconfirmed writes, stuck `executing`, unhandled inbound, voice-note counts, lockouts, revoked-number attempts).
+
+## Gate 7 — release runbook
+
+6 commits on `Aditya`, not pushed. Nothing was deployed, no env was changed, and no migration was applied: prod still needs your explicit go-ahead (RUNBOOK §3–§4).
+
+### What shipped
+| Commit | Concern |
+|---|---|
+| fc3add0c | **Fix, found while writing the release order.** `GET /api/assistant/link` read `assistant_wa_bindings` *before* checking whether `WA_ASSIST_*` is set. The "Link WhatsApp" sidebar item ships with the merge, so on prod (E-306 not applied) every ASM/ISR opening it would get a **500** instead of "not available yet". Now an unconfigured host answers `configured: false` without touching the tables. Contract test reproduced the 500 first. Also a stale doc comment in `config.ts` |
+| f82a8bfe | `scripts/apply-e306.mjs`. `--target sandbox\|prod` must match the host. It applies twice, then verifies 5 tables + 12 index definitions (partial-index predicates included) on a fresh connection. `--verify-only` is read-only |
+| 55b3aece | `docs/wa-assistant/review.sql` (14 named queries, 5 of them go/no-go "must be empty") + `scripts/wa-assistant-daily-review.ts` (READ ONLY transactions; exit 1 on an incident) + attack check **A13** proving them |
+| a3c5b757 | Type-check fix in the new contract test |
+| (this commit) | `docs/wa-assistant/RUNBOOK.md` + this section |
+
+### RUNBOOK contents
+1. What runs where.
+2. Env vars per environment, plus how to change them on each box. Prod `shared/.env` is rewritten from the GitHub secret every deploy, so a change needs the secret **and** the box.
+3. Applying E-306.
+4. The Day 7 release, in 10 ordered steps, each with its proof. The Gate 0 guard goes live in prod *before* the number receives a message.
+5. Kill switches, lightest first: writes off → Assistant off → channel off. Includes what happens to previews already on phones.
+6. Pilot users.
+7. Daily log review.
+8. Unlink, revoke, lost phone, leaver (with the admin revoke SQL).
+9. Troubleshooting table, keyed on the exact replies reps see.
+10. Rollback.
+11. Verification commands.
+12. Known limits and the open decisions.
+
+### Test evidence
+| Command | Result |
+|---|---|
+| `node --env-file=.env.local scripts/apply-e306.mjs --target sandbox --verify-only` | 5/5 tables, 12/12 indexes, `OK` |
+| `node --env-file=.env.production scripts/apply-e306.mjs --target prod --verify-only` (read-only) | 0/5 tables. **E-306 is not on prod**, as expected |
+| same script, `.env.local` with `--target prod` | `ABORT: --target prod but the host is sandbox` |
+| `scripts/wa-assistant-daily-review.ts --since '30 days'` (sandbox) | all 14 queries run; no incidents |
+| `scripts/verify-wa-assistant-attacks.ts` (sandbox) | **20/20 PASS**. A13 shows the review surfaces the attack traces (LINK lockout on the brute-forced number, the revoked number's rep, 4 media types, `not_owner` + `write_limit`, usage, adoption, latency). **6/6 planted incidents** are caught, one per must-be-empty query plus the unhandled-inbound check |
+| runbook SQL (admin revoke, pilot lookup) | `EXPLAIN` on sandbox: both plan |
+| `npx vitest run` | 4968 passed, 3 skipped; only the 2 known `src/lib/storage` baseline files fail |
+| `npx tsc --noEmit` (8 GB) | 6 = baseline; 0 in `src/` or `scripts/` |
+| sandbox after all runs | 0 fixture leads, users, territories, actions, messages, bindings, tool calls |
+
+### Phase 1 build status
+Gates 0–7 are done on `Aditya`. What stands between this and the Day 7 release (RUNBOOK §4, §12):
+1. **Your go-ahead** to merge `Aditya` → `main` → `production`, and to apply E-306 to prod.
+2. **Meta setup (Day 0):** the Assistant number, display name, and a number-level webhook override. I can't do this; it needs the Meta business account.
+3. **`WA_ASSIST_*` on the boxes:** sandbox `shared/.env`; prod secret + box. I can't SSH.
+4. **Billing on the Gemini key.** The free tier (20 req/min + a daily cap) can't carry a pilot, and it blocked the real-model smoke run and the model half of the mapping check.
+5. **Product decisions still open:**
+   - map rows for the 8 dispositions outside §9.3 (37% of real calls);
+   - shorthand aliases ("cb", "not rq");
+   - `mark_lost` with 10 or 11 reasons;
+   - forged webhooks: log-only, or a counter table.
