@@ -142,3 +142,72 @@ Also proven:
 - **Latency of the scoped lookup.** G2.5 ran ~0.4 s per `findLeadInScope` from this laptop, which is mostly network to RDS. The ISR union includes the Team tab (every open lead), which is broad. Gate 3's `my_queue` and `search_lead` run one scoped query each, but I'll time them on the box and add an index only if the plan shows a sequential scan.
 - **Real model not exercised yet.** The OpenAI tool-schema conversion (`$schema` key, `format: date-time`) has only been tested offline. Gate 3's scripted real-model run is the first time OpenAI sees it. `ASSISTANT_MODEL` must be set for that run.
 - **Merge conflicts with `main`.** `main` has since touched `schema.ts`, `sidebar.tsx` and `MIGRATION_CHECKLIST.md` (all appends), so merging will conflict there. Resolve by keeping both sides; the checklist row is additive, per the team's merge-hotspot note.
+
+## Gate 3 — read tools + renderers
+
+5 commits on `Aditya`, not pushed.
+
+### What shipped
+| Commit | Concern |
+|---|---|
+| 36d79781 | **Agent on Google Gemini** (your instruction, 2026-09-24), via LangChain `ChatGoogleGenerativeAI`. Adds `@langchain/google-genai` 2.3.2; transitive `@langchain/core` 1.1.26 → 1.2.12. Key: `WA_ASSIST_GEMINI_API_KEY`. Model: `ASSISTANT_MODEL`, default **`gemini-3.6-flash`**, with `thinkingLevel: LOW` |
+| da514733 | `leadSearchClause()`: the queue search text, previously duplicated in the ISR and ASM builders, now defined once. Golden SQL byte-identical |
+| 46c60739 | `fetchLeadDetailBundle()` extracted from `GET /api/inside-sales/lead/[id]`. Whitespace-insensitive diff = only `id`→`leadId` and 404→`null` |
+| cb49f819 | The 4 read tools, `callTool()` (the single path every tool call takes), `render.ts`, and the `ast:lead:<id>` tap → lead card (no model) |
+| 20fd4420 | `my_queue` fetches at the screen page size; smoke set + fixture test; `verify --gate 3`; `wa-assistant-smoke.ts` |
+
+How each read tool works:
+- **`my_queue`** calls the queue routes' own builders, with the defaults they derive from an empty query string and the screens' page size (25), and shows the first 10 plus the total.
+- **`search_lead`** runs the queue's search clause under the scope predicate. Two or more matches return candidates, never a pick. A phone typed with spaces or `+91` is reduced to its last 10 digits.
+- **`get_lead_details`**: scope check → the screen's bundle → allowlisted projection (last 5 touchpoints and visits) → redaction.
+- **`my_numbers`**: `buildSalesDashboard` pinned to the user, plus `listTargets` (pushed/accepted rows only, as `MyTargetsCard` shows). Month-to-date per UC-09, with every figure's definition.
+
+### Test evidence
+| Command | Result |
+|---|---|
+| `npx vitest run src/lib/assistant src/lib/wa-assistant` | all pass (render 20 incl. 24/72/900/1000 boundaries with emoji, Devanagari, flags and ZWJ; smoke-fixture validation 4; core, router, channel, vocab, isolation, golden) |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 3` (sandbox) | **24/24 PASS**; fixtures verified gone |
+| `npx vitest run` | 4894 passed; only the 2 known `src/lib/storage` baseline files fail |
+| `npx tsc --noEmit` (8 GB) | 6 = baseline; 0 in `src/` or `scripts/` |
+
+### "Done when" status
+| Criterion | Status |
+|---|---|
+| `my_queue` equals the screen row for row on all 10 tabs | **Met.** G3.1: 124 rows identical and in order, across 5 real sandbox reps (ASM + ISR), all 5 tabs each, totals equal |
+| `my_numbers` equals `buildSalesDashboard` | **Met.** G3.2: byte-identical for 4 real reps × this month and last month |
+| 20-question EN + Hinglish smoke set per role passes | **Fixtures written and validated; the real-model run is BLOCKED by the Gemini key's free-tier quota** — details below |
+
+**The real-model smoke run.**
+- The key is on Google's **free tier**: `generate_content_free_tier_requests, limit: 20` for `gemini-3.6-flash`.
+- The run exhausted the per-minute window, then the daily one. Even after waiting ~4 minutes per question, every call returned 429.
+- Every model call that did get through chose correctly:
+
+| Calls | Result |
+|---|---|
+| 3 probes | `my_queue{tab:today}` for "Aaj ka schedule?"; `search_lead` first for "Called Shree Motors, not interested, price too high." and for the Hinglish UC-03 message (it resolved the lead before writing, as the prompt requires) |
+| 6-call benchmark | `my_queue` 6/6; median 2.0 s, max 3.7 s |
+| 2 smoke questions | "Show my follow-ups due today" and "Aaj ke follow ups dikhao" → `my_queue{tab:follow_ups}`, PASS |
+
+That is 11/11 correct, but it is not the full 40-question run, so this criterion stays **open**.
+- **To close it:** enable billing on the Google AI Studio project behind `WA_ASSIST_GEMINI_API_KEY`, then run `node --import tsx --env-file=.env.local scripts/wa-assistant-smoke.ts`.
+- The script paces itself to the quota and cleans up after itself.
+
+### Deviations from the plan
+1. **Gemini, not OpenAI** (BRD §7 said OpenAI GPT). Your instruction. Consequences:
+   - The key is `WA_ASSIST_GEMINI_API_KEY` (your name for it).
+   - `ASSISTANT_MODEL` is optional.
+   - `gemini-2.5-flash` (the first pick) is refused to new API users ("no longer available to new users"), so the default is `gemini-3.6-flash`, which Google's error names.
+2. **New dependency** `@langchain/google-genai` (you approved). It moves `@langchain/core` to 1.2.12; no other package changed, and the suite and type-check are unchanged.
+3. `my_queue` fetches **25 and shows 10**, rather than fetching 10 (see the screen bug below).
+4. `search_lead` normalises phone-shaped queries to their last 10 digits before the queue's ILIKE. That is input cleanup, not a new search rule.
+
+### Pre-existing issues found (reported, not changed)
+- **Queue pagination is not deterministic** on Unassigned, Territory and Unclaimed.
+  - Their `ORDER BY final_intent_score, created_at` is not a total order. Sandbox has **188 groups of unowned leads identical on both, up to 100 leads per group**.
+  - Postgres breaks those ties differently per LIMIT and plan, so **page 1 and page 2 of the screen can repeat or skip leads**. G3.1 caught it because LIMIT 10 ≠ the first 10 of LIMIT 25.
+  - Fix: add `dl.id` as a final tiebreaker in `tabOrder()` (both builders). It changes the screen order, so it is not done here. Say if you want it.
+- **`WA_ASSIST_APP_SECRET` is not in `.env.local`.** Until it is set, the webhook answers 503, because signatures can't be verified.
+
+### Open questions / risks for Gate 4
+- **Gemini quota.** 20 requests/minute (and a daily cap) is roughly 7–10 turns per minute *for everyone*. The pilot needs billing on that key.
+- Gate 4's end-to-end UC checks will drive the agent with a **scripted model**: deterministic, free, and exercising the real tools, executor and DB. One real-model pass follows once quota allows.
