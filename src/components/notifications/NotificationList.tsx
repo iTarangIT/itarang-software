@@ -35,6 +35,7 @@ import {
   Gavel,
   Handshake,
   Landmark,
+  Leaf,
   Loader2,
   MapPin,
   Megaphone,
@@ -84,6 +85,10 @@ const CATEGORY_META: Record<NotificationCategory, { icon: LucideIcon; tint: stri
   // broke Record<NotificationCategory, …> exhaustiveness (tsc) and sent every
   // recovery notification to the default icon.
   Recovery: { icon: Truck, tint: "bg-orange-50", fg: "text-orange-700" },
+  // E-307 — Ecofy leads worked from the CRM (lead received, assigned, stage
+  // changes, reminders, sync failures). Every catalogue category must appear
+  // here or tsc fails on Record<NotificationCategory, …> exhaustiveness.
+  Ecofy: { icon: Leaf, tint: "bg-green-50", fg: "text-green-700" },
   // Buyback's own eight, unchanged
   Negotiation: { icon: Handshake, tint: "bg-violet-50", fg: "text-violet-600" },
   "Buyback Requests": { icon: Recycle, tint: "bg-emerald-50", fg: "text-emerald-600" },
