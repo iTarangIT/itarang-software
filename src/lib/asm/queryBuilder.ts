@@ -8,6 +8,7 @@ import type { AsmQueueRow, AsmQueueTab } from "./types";
 import { TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 import {
     foldRegionFacets,
+    leadSearchClause,
     queueFilterClauses,
     queueSortOrder,
     regionFacetQuery,
@@ -150,12 +151,7 @@ function extraFilters({
     visitOutcome,
 }: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome">): SQL {
     const parts: SQL[] = [];
-    if (q) {
-        const like = `%${q}%`;
-        parts.push(
-            sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`,
-        );
-    }
+    if (q) parts.push(leadSearchClause(q));
     if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
     // The LATEST visit's state, which is what the row's Visit column shows. A
     // lead whose most recent visit was cancelled is a cancelled row here even if
