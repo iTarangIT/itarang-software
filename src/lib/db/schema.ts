@@ -12763,10 +12763,10 @@ export const dealerLeadFieldChanges = pgTable(
   }),
 );
 
-// E-306 — WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md). Five NEW tables;
-// nothing else reads them, so an unapplied E-306 breaks only the Assistant.
+// E-309 — WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md). Five NEW tables;
+// nothing else reads them, so an unapplied E-309 breaks only the Assistant.
 // Status vocabularies are CHECK constraints in the migration; the source of
-// truth for every column is drizzle/E-306_wa_assistant.sql.
+// truth for every column is drizzle/E-309_wa_assistant.sql.
 
 /** User ↔ WhatsApp number. Pending LINK codes are status='pending' rows. */
 export const assistantWaBindings = pgTable(

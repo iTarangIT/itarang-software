@@ -11,7 +11,7 @@
  *   users          email wa-test+<run>…@itarang.test
  *   dealer_leads   id WA-TEST-<run>-…, phone NULL (nothing can dial them)
  *   and every row those produce (touchpoints, visits, history, bindings, logs).
- * Checks that need E-306 report SKIP (naming the migration) until it is applied.
+ * Checks that need E-309 report SKIP (naming the migration) until it is applied.
  * Exit code 1 if anything FAILs.
  */
 import { sql } from "drizzle-orm";
@@ -138,10 +138,10 @@ async function gate1() {
         assert(r[0]!.o === null && r[0]!.tp === "0", JSON.stringify(r[0]));
     });
 
-    // ── Needs E-306 ──
-    const e306 = await hasTable("assistant_wa_bindings");
+    // ── Needs E-309 ──
+    const e309 = await hasTable("assistant_wa_bindings");
     const needE305 = () => {
-        if (!e306) throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+        if (!e309) throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
     };
 
     await check("G1.6 dedupe: the same provider_message_id is recorded once", async () => {
@@ -254,7 +254,7 @@ async function gate1() {
 async function gate2() {
     if (!(await hasTable("assistant_conversations"))) {
         await check("G2.* agent + guards", async () => {
-            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
         });
         return;
     }
@@ -394,7 +394,7 @@ async function runTool(user: AssistantUser, name: string, input: Record<string, 
 async function gate3() {
     if (!(await hasTable("assistant_tool_calls"))) {
         await check("G3.* read tools", async () => {
-            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
         });
         return;
     }
@@ -527,7 +527,7 @@ async function gate3() {
 async function gate4() {
     if (!(await hasTable("assistant_actions"))) {
         await check("G4.* executor", async () => {
-            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
         });
         return;
     }
@@ -798,7 +798,7 @@ async function gate4() {
 async function gate5() {
     if (!(await hasTable("assistant_actions"))) {
         await check("G5.* field writes", async () => {
-            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
         });
         return;
     }

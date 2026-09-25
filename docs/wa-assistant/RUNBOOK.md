@@ -7,14 +7,14 @@ Operating the CRM AI Assistant Phase 1 (ASM + ISR on WhatsApp).
 
 **Status on 25 Sep 2026:**
 - All work is on the `Aditya` branch, not merged.
-- E-306 is on sandbox (database-1) and **not on prod** (database-2). Checked read-only with `scripts/apply-e306.mjs --target prod --verify-only`: 0/5 tables.
+- E-309 is on sandbox (database-1) and **not on prod** (database-2). Checked read-only with `scripts/apply-e309.mjs --target prod --verify-only`: 0/5 tables.
 - Nothing is configured on either box yet (`WA_ASSIST_*`).
 
 | Section | For |
 |---|---|
 | [1. What runs where](#1-what-runs-where) | orientation |
 | [2. Environment variables](#2-environment-variables) | every environment |
-| [3. Apply E-306](#3-apply-e-306) | before the first deploy that turns it on |
+| [3. Apply E-309](#3-apply-e-309) | before the first deploy that turns it on |
 | [4. Release (Day 7)](#4-release-day-7) | go-live, in order |
 | [5. Kill switches](#5-kill-switches) | incidents |
 | [6. Pilot users (writes)](#6-pilot-users-writes) | adding / removing |
@@ -36,7 +36,7 @@ Operating the CRM AI Assistant Phase 1 (ASM + ISR on WhatsApp).
 | Router, identity, lease, client | `src/lib/wa-assistant/*` | WhatsApp only |
 | Agent, tools, executor | `src/lib/assistant/*` | Channel-agnostic |
 | Action sweep | in-process ticker, every 60 s (`instrumentation-node.ts`) | Expires previews; fails actions stuck in `executing` > 5 min |
-| Tables | `assistant_wa_bindings`, `assistant_conversations`, `assistant_actions`, `assistant_wa_messages`, `assistant_tool_calls` | E-306; nothing else reads them |
+| Tables | `assistant_wa_bindings`, `assistant_conversations`, `assistant_actions`, `assistant_wa_messages`, `assistant_tool_calls` | E-309; nothing else reads them |
 | Model | Google Gemini (`gemini-3.6-flash`, thinking LOW) via LangChain | Key `WA_ASSIST_GEMINI_API_KEY` |
 
 The dealer bot (`/api/whatsapp/webhook`, `META_WA_*`, `whatsapp_messages`) is a separate flow. It shares **nothing** with the Assistant except the Meta app and WABA. Its Gate 0 guard drops events for any other `phone_number_id`, and that guard ships in the same merge.
@@ -76,23 +76,23 @@ All of these are read **per message** from `process.env`. A change takes effect 
 
 `.env.example` documents every variable (names only). Never put a value there.
 
-## 3. Apply E-306
+## 3. Apply E-309
 
 Five new tables, additive and idempotent; no existing table is touched. Apply it **before** `WA_ASSIST_*` is set on that host. With the env set and no tables, the webhook answers 500 on every inbound.
 
 ```bash
 # read-only check (safe any time)
-node --env-file=.env.production scripts/apply-e306.mjs --target prod --verify-only
+node --env-file=.env.production scripts/apply-e309.mjs --target prod --verify-only
 # apply — only with an explicit go-ahead for production
-node --env-file=.env.production scripts/apply-e306.mjs --target prod
+node --env-file=.env.production scripts/apply-e309.mjs --target prod
 ```
 - `--target` must match the host (database-1 = sandbox, database-2 = prod), or the script aborts.
 - It applies the file twice (the second pass must be a no-op).
 - It then verifies all 5 tables and 12 index definitions, including the four partial unique indexes' `WHERE` predicates, on a **fresh connection**. DDL through `postgres.js` `unsafe()` escapes a rollback, so a same-session "rolled back" check proves nothing.
-- Then tick the prod column of the `E-306_wa_assistant` row in `drizzle/MIGRATION_CHECKLIST.md`.
+- Then tick the prod column of the `E-309_wa_assistant` row in `drizzle/MIGRATION_CHECKLIST.md`.
 
-`schema.ts` mirrors only these new tables, so on a host without E-306 nothing outside the Assistant breaks:
-- the sweep logs `assistant_actions missing (apply E-306) — sweep idle`;
+`schema.ts` mirrors only these new tables, so on a host without E-309 nothing outside the Assistant breaks:
+- the sweep logs `assistant_actions missing (apply E-309) — sweep idle`;
 - the link page shows "not available yet" (Gate 7 fix `fc3add0c`).
 
 ## 4. Release (Day 7)
@@ -113,7 +113,7 @@ Do these in order. Each step says what proves it worked.
    *Proof:* `scripts/wa-assistant-daily-review.ts` (on sandbox) shows no incidents.
 4. **Gate 0 guard live in production.** Push `main` → `production`. The dealer webhook now drops events whose `phone_number_id` isn't `META_WA_PHONE_NUMBER_ID`. This must be live **before** the Assistant number receives any message.
    *Proof:* the dealer bot still answers a dealer.
-5. **Apply E-306 to prod** (§3), with an explicit go-ahead.
+5. **Apply E-309 to prod** (§3), with an explicit go-ahead.
    *Proof:* `--verify-only` prints `OK`.
 6. **Prod env** (§2: GitHub secret **and** box). Set:
    - `WA_ASSIST_*` for the **real** number;
@@ -226,13 +226,13 @@ Messages from a revoked number are logged `handling = unlinked` **without** a `u
 | "This action expired…" | Tapped after 10 minutes | By design |
 | Next visit not in Today's Schedule | Lead's field ASM (`asm_id`) isn't the rep; the preview warns | Transfer / claim on the CRM sets it |
 | A call can't be logged, the Assistant keeps asking | Disposition outside the frozen §9.3 map (37% of real calls, §12) | Log it on the screen |
-| Sweep log `assistant_actions missing` | E-306 not applied on this DB | §3 |
+| Sweep log `assistant_actions missing` | E-309 not applied on this DB | §3 |
 
 ## 10. Rollback
 
 - **Fast:** kill switch (§5). No deploy needed.
 - **Code:** revert the merge on `main` / `production` and redeploy. The sidebar item and the routes disappear; the dealer bot's Gate 0 guard goes with it. Only do that after the Assistant number's override is removed in Meta, so no Assistant event can reach the dealer route unfiltered.
-- **Data:** E-306 is additive and is **not** rolled back. The tables are inert without the code; dropping them is a separate, deliberate decision (it deletes the audit trail).
+- **Data:** E-309 is additive and is **not** rolled back. The tables are inert without the code; dropping them is a separate, deliberate decision (it deletes the audit trail).
 - CRM writes the Assistant made are ordinary touchpoints, visits and status history, written by the same functions the screens use, and audited the same way (E-304 triggers record the rep as the actor). Correct them on the CRM like any other entry. `assistant_actions.before/after` shows what changed.
 
 ## 11. Verification commands

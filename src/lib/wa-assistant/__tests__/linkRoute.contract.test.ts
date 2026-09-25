@@ -1,6 +1,6 @@
 // /api/assistant/link before the Assistant is switched on. The "Link WhatsApp"
 // sidebar item ships with the code, but on a host without WA_ASSIST_* — and
-// possibly without E-306 — the page must say "not available yet", never 500.
+// possibly without E-309 — the page must say "not available yet", never 500.
 // So nothing may touch the assistant tables until the channel is configured.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
