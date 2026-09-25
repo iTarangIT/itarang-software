@@ -109,54 +109,19 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
         }
 
         for (const call of calls) {
-            const started = clock();
             const spec = byName.get(call.name);
-            let result: ToolResult;
-            let ok = false;
-            let error: string | null = null;
-            let loggedInput: unknown = call.args;
-
-            if (!spec) {
-                result = { kind: "error", message: `There is no tool called ${call.name}.` };
-                error = "unknown_tool";
-            } else {
-                const parsed = spec.schema.safeParse(call.args);
-                if (!parsed.success) {
-                    result = {
-                        kind: "error",
-                        message: `Invalid arguments: ${z.prettifyError(parsed.error).slice(0, 400)}`,
-                    };
-                    error = "invalid_arguments";
-                } else if (spec.kind === "write" && writes >= AGENT_LIMITS.maxWritesPerTurn) {
-                    result = {
-                        kind: "error",
-                        message: "Only one change per message. Ask the user to confirm the first one, then continue.",
-                    };
-                    error = "write_limit";
-                } else {
-                    loggedInput = parsed.data;
-                    if (spec.kind === "write") writes++;
-                    try {
-                        result = sanitizeResult(await spec.run(deps.ctx, parsed.data));
-                        ok = result.kind !== "error";
-                    } catch (err) {
-                        error = err instanceof Error ? err.message : String(err);
-                        result = { kind: "error", message: "That lookup failed. Nothing was changed." };
-                    }
-                }
-            }
-
-            // Invariant 9: logged before the model sees it; a failed log fails the turn.
-            await deps.logToolCall({
-                userId: deps.ctx.user.id,
-                messageId: deps.ctx.messageId,
-                tool: call.name,
-                input: loggedInput,
-                output: result,
-                ok,
-                error,
-                latencyMs: clock() - started,
-                actionId: result.kind === "preview" ? result.action_id : null,
+            const writeBlocked = spec?.kind === "write" && writes >= AGENT_LIMITS.maxWritesPerTurn;
+            if (spec?.kind === "write" && !writeBlocked) writes++;
+            const { result, ok } = await callTool({
+                spec,
+                name: call.name,
+                args: call.args,
+                ctx: deps.ctx,
+                logToolCall: deps.logToolCall,
+                clock,
+                blocked: writeBlocked
+                    ? { error: "write_limit", message: "Only one change per message. Ask the user to confirm the first one, then continue." }
+                    : null,
             });
             if (ok) results.push({ tool: call.name, result });
             turn.push(new ToolMessage({ tool_call_id: call.id ?? call.name, content: JSON.stringify(result) }));
@@ -164,6 +129,67 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
     }
 
     return { text: FALLBACK, results, turnMessages: turn, modelCalls };
+}
+
+/**
+ * One tool call, the only way any tool runs — from the agent loop or directly
+ * (a tapped list row). Unknown tool / invalid args never reach the tool; the
+ * tool gets the SERVER's context and the parsed input only; the result is
+ * capped and redacted; and the call is audited before anyone sees the result
+ * (a failed audit write throws — Invariant 9).
+ */
+export async function callTool(args: {
+    spec: ToolSpec | undefined;
+    name: string;
+    args: unknown;
+    ctx: ToolContext;
+    logToolCall: (r: ToolCallRecord) => Promise<void>;
+    clock?: () => number;
+    /** Refuse before running (e.g. the per-turn write limit). */
+    blocked?: { error: string; message: string } | null;
+}): Promise<{ result: ToolResult; ok: boolean }> {
+    const clock = args.clock ?? Date.now;
+    const started = clock();
+    let result: ToolResult;
+    let ok = false;
+    let error: string | null = null;
+    let loggedInput: unknown = args.args;
+
+    if (!args.spec) {
+        result = { kind: "error", message: `There is no tool called ${args.name}.` };
+        error = "unknown_tool";
+    } else {
+        const parsed = args.spec.schema.safeParse(args.args);
+        if (!parsed.success) {
+            result = { kind: "error", message: `Invalid arguments: ${z.prettifyError(parsed.error).slice(0, 400)}` };
+            error = "invalid_arguments";
+        } else if (args.blocked) {
+            result = { kind: "error", message: args.blocked.message };
+            error = args.blocked.error;
+        } else {
+            loggedInput = parsed.data;
+            try {
+                result = sanitizeResult(await args.spec.run(args.ctx, parsed.data));
+                ok = result.kind !== "error";
+            } catch (err) {
+                error = err instanceof Error ? err.message : String(err);
+                result = { kind: "error", message: "That lookup failed. Nothing was changed." };
+            }
+        }
+    }
+
+    await args.logToolCall({
+        userId: args.ctx.user.id,
+        messageId: args.ctx.messageId,
+        tool: args.name,
+        input: loggedInput,
+        output: result,
+        ok,
+        error,
+        latencyMs: clock() - started,
+        actionId: result.kind === "preview" ? result.action_id : null,
+    });
+    return { result, ok };
 }
 
 /**

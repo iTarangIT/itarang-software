@@ -2,13 +2,13 @@
 // memory. The WhatsApp router calls this inside the user's lease; a future
 // in-CRM panel would call it the same way.
 
-import type { AssistantUser, ToolResult } from "./types";
+import type { AssistantUser, ToolName, ToolResult } from "./types";
 import { assistantConfig, writesEnabledFor, type AssistantConfig } from "./config";
 import { toolsFor } from "./registry";
 import { buildSystemPrompt } from "./prompt";
 import { loadHistory, saveHistory } from "./memory";
 import { logToolCall } from "./audit";
-import { createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
+import { callTool, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
 import type { ToolSpec } from "./tools/spec";
 
 export type AgentTurnResult =
@@ -50,4 +50,29 @@ export async function agentTurn(
     );
     await saveHistory(user.id, [...history, ...out.turnMessages]);
     return { kind: "ok", text: out.text, results: out.results, modelCalls: out.modelCalls };
+}
+
+/**
+ * Run ONE tool without the model — e.g. a tapped list row opens that lead.
+ * Same path as an agent call (registry for the user's role, Zod, scope inside
+ * the tool, cap + redact, audit). A tool the user doesn't have → not_found.
+ */
+export async function runToolDirect(
+    user: AssistantUser,
+    name: ToolName,
+    args: unknown,
+    opts: { messageId: string | null; now?: Date; config?: AssistantConfig },
+): Promise<ToolResult> {
+    const cfg = opts.config ?? assistantConfig();
+    const writesEnabled = writesEnabledFor(user.id, cfg);
+    const spec = toolsFor(user.role, writesEnabled).find((t) => t.name === name);
+    if (!spec) return { kind: "not_found" };
+    const { result } = await callTool({
+        spec,
+        name,
+        args,
+        ctx: { user, messageId: opts.messageId, now: opts.now ?? new Date(), writesEnabled },
+        logToolCall,
+    });
+    return result;
 }

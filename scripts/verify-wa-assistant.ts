@@ -156,6 +156,10 @@ function routerDeps(
         replyText: async (to, text) => {
             replies.push({ to, text });
         },
+        sendPayload: async (to, payload) => {
+            replies.push({ to, text: payload.body });
+        },
+        openLead: async () => ({ kind: "text", body: "lead card" }),
         isDisabled: () => false,
         hasPendingAction: async () => false,
         runTextTurn,
@@ -461,7 +465,7 @@ async function gate2() {
             });
             if (!r.ok) return { kind: "busy" };
             return r.value.kind === "ok"
-                ? { kind: "ok", text: r.value.text, modelCalls: r.value.modelCalls, toolCalls: r.value.results.length }
+                ? { kind: "ok", payload: { kind: "text", body: r.value.text }, modelCalls: r.value.modelCalls, toolCalls: r.value.results.length }
                 : { kind: "not_configured" };
         });
         const m1 = inbound({ waPhone: phone(20), text: `details of ${lead}` });
