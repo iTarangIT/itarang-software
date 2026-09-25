@@ -9,6 +9,7 @@ import { OPEN_STATUSES, TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
 import {
     foldRegionFacets,
+    leadSearchClause,
     queueFilterClauses,
     queueSortOrder,
     regionFacetQuery,
@@ -108,12 +109,7 @@ function extraFilters({
     filters,
 }: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters">) {
     const parts: SQL[] = [];
-    if (q) {
-        const like = `%${q}%`;
-        parts.push(
-            sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`,
-        );
-    }
+    if (q) parts.push(leadSearchClause(q));
     if (neodoveOnly) {
         parts.push(sql` AND ${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
     }
