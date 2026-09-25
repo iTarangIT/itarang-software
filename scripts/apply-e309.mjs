@@ -1,10 +1,10 @@
-// Applies drizzle/E-306_wa_assistant.sql (WhatsApp Sales Assistant, five NEW
+// Applies drizzle/E-309_wa_assistant.sql (WhatsApp Sales Assistant, five NEW
 // tables) and then PROVES it landed, on a FRESH connection.
 //
-//   node --env-file=.env.local      scripts/apply-e306.mjs --target sandbox --verify-only
-//   node --env-file=.env.local      scripts/apply-e306.mjs --target sandbox
-//   node --env-file=.env.production scripts/apply-e306.mjs --target prod --verify-only
-//   node --env-file=.env.production scripts/apply-e306.mjs --target prod      # needs an explicit go-ahead
+//   node --env-file=.env.local      scripts/apply-e309.mjs --target sandbox --verify-only
+//   node --env-file=.env.local      scripts/apply-e309.mjs --target sandbox
+//   node --env-file=.env.production scripts/apply-e309.mjs --target prod --verify-only
+//   node --env-file=.env.production scripts/apply-e309.mjs --target prod      # needs an explicit go-ahead
 //
 // --target is REQUIRED and must match the host (database-1 = sandbox,
 // database-2 = prod), so the wrong .env file cannot apply to the wrong DB.
@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 
-const FILE = "drizzle/E-306_wa_assistant.sql";
+const FILE = "drizzle/E-309_wa_assistant.sql";
 const TABLES = ["assistant_wa_bindings", "assistant_conversations", "assistant_actions", "assistant_wa_messages", "assistant_tool_calls"];
 /** index → a fragment its definition must contain (partial indexes carry their predicate). */
 const INDEXES = {
@@ -94,7 +94,7 @@ async function main() {
         console.error(`${verifyOnly ? "NOT APPLIED / INCOMPLETE" : "FAILED"}:\n  ${problems.join("\n  ")}`);
         process.exit(1);
     }
-    console.log("OK — E-306 is fully present.");
+    console.log("OK — E-309 is fully present.");
 }
 
 main().catch((e) => {

@@ -26,7 +26,7 @@ export const GET = withErrorHandler(async () => {
     if (!user) return errorResponse("Your account is inactive.", 403);
     const cfg = readWaAssistEnv();
     // Not switched on here: say so without touching the assistant tables, which
-    // may not exist yet on this host (E-306 is applied before WA_ASSIST_* is set).
+    // may not exist yet on this host (E-309 is applied before WA_ASSIST_* is set).
     if (!cfg.ok) {
         return successResponse({ linked: null, pendingExpiresAt: null, assistant_number: null, configured: false });
     }

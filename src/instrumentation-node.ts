@@ -1613,7 +1613,7 @@ export async function startMonitorMorningTicker() {
  * Also reports a WA_ASSIST_* misconfiguration ONCE at boot instead of throwing
  * at module load, which would break `next build` (plan (c)17). The rest of the
  * CRM is unaffected by a missing WA config — the webhook just answers 503.
- * Dark until E-306 is applied (the first tick finds no table and says so).
+ * Dark until E-309 is applied (the first tick finds no table and says so).
  */
 export async function startWaAssistantSweepTicker() {
   if (process.env.VERCEL === "1") return;
@@ -1642,9 +1642,9 @@ export async function startWaAssistantSweepTicker() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // 42P01 = undefined_table: E-306 not applied on this database yet.
+      // 42P01 = undefined_table: E-309 not applied on this database yet.
       if (/assistant_actions/.test(msg) && /does not exist/.test(msg)) {
-        if (!tableMissingLogged) console.log("[instrumentation:wa-assist] assistant_actions missing (apply E-306) — sweep idle");
+        if (!tableMissingLogged) console.log("[instrumentation:wa-assist] assistant_actions missing (apply E-309) — sweep idle");
         tableMissingLogged = true;
       } else {
         console.error("[instrumentation:wa-assist] sweep failed:", msg);

@@ -478,3 +478,6 @@ Gates 0–7 are done on `Aditya`. What stands between this and the Day 7 release
    - shorthand aliases ("cb", "not rq");
    - `mark_lost` with 10 or 11 reasons;
    - forged webhooks: log-only, or a counter table.
+
+### Renumbered E-306 → E-309 (2026-09-25, before merging to `main`)
+While Gates 2–7 were in progress, `main` took E-306 (`E-306_green_news.sql`), E-307 and E-308. The Assistant migration is now **`drizzle/E-309_wa_assistant.sql`**, and the apply script is `scripts/apply-e309.mjs`. The SQL is unchanged, so sandbox, which already has the tables, needs nothing. Read "E-306" in the gate sections above as E-309.

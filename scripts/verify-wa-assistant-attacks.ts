@@ -80,7 +80,7 @@ const lostCall = (leadId: string, reason = "not_interested") => ({ name: "mark_l
 async function attacks() {
     if (!(await hasTable("assistant_actions"))) {
         await check("A.* attack suite", async () => {
-            throw new Skip("needs E-306 (drizzle/E-306_wa_assistant.sql) on this database");
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
         });
         return;
     }
