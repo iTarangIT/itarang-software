@@ -18,10 +18,13 @@
 //   500 DB failure — nothing recorded, so the retry reprocesses it
 //   503 ECOFY_SYNC_SECRET not set
 
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { sql } from "drizzle-orm";
+import { db } from "@/lib/db";
 import { errorMessage } from "@/lib/api-utils";
 import { getEcofyConfig } from "@/lib/ecofy/config";
 import { ecofyEventSchema, handleEcofyEvent } from "@/lib/ecofy/inbound";
+import { notifyEcofyInbound, notifyEcofySyncFailed } from "@/lib/ecofy/notify";
 import { ECOFY_SIGNATURE_HEADER, verifyEcofySignature } from "@/lib/ecofy/signature";
 
 // Node runtime: node:crypto + the postgres pool.
@@ -64,13 +67,45 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     try {
-        const { duplicate, reply } = await handleEcofyEvent(parsed.data, rawBody);
+        const { duplicate, reply, lead } = await handleEcofyEvent(parsed.data, rawBody);
+        if (!duplicate && lead) {
+            const event = parsed.data;
+            // After the 200: a notification must never delay or fail Ecofy's delivery.
+            after(async () => {
+                const reason = typeof event.change?.reason === "string" ? event.change.reason : null;
+                await notifyEcofyInbound({
+                    leadId: lead.id,
+                    eventType: event.type,
+                    previousStage: lead.previousStage,
+                    stage: lead.stage,
+                    created: lead.created,
+                    reason,
+                });
+                // E-307 — back with Ecofy (S0) or re-pushed into the pickup
+                // queue (S1): the CRM owner no longer applies; the Sales Head
+                // assigns again. History stays in ecofy_lead_assignments.
+                if (lead.previousStage !== lead.stage && (lead.stage === "S0" || lead.stage === "S1")) {
+                    try {
+                        await db.execute(sql`
+                            UPDATE ecofy_leads
+                            SET assigned_to_user_id = NULL, assigned_role = NULL,
+                                next_follow_up_at = NULL, next_appointment_at = NULL,
+                                updated_at = now()
+                            WHERE id = ${lead.id}::uuid
+                        `);
+                    } catch (err) {
+                        console.error("[Ecofy/events] clear owner failed:", errorMessage(err));
+                    }
+                }
+            });
+        }
         return NextResponse.json(reply, {
             status: 200,
             headers: duplicate ? { "x-itarang-duplicate": "true" } : undefined,
         });
     } catch (err) {
         console.error("[Ecofy/events] store failed:", parsed.data.eventId, errorMessage(err));
+        void notifyEcofySyncFailed({ kind: "Inbound Ecofy event not stored", detail: `${parsed.data.eventId}: ${errorMessage(err)}` });
         return NextResponse.json({ error: "store failed" }, { status: 500 });
     }
 }

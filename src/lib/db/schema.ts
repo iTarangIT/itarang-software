@@ -12805,12 +12805,63 @@ export const ecofyLeads = pgTable(
     last_event_id: text("last_event_id"),
     last_event_type: varchar("last_event_type", { length: 60 }),
     last_event_at: timestamp("last_event_at", { withTimezone: true }),
+    // E-307 — CRM-owned; never written by the inbound upsert.
+    assigned_to_user_id: uuid("assigned_to_user_id"),
+    assigned_role: varchar("assigned_role", { length: 30 }),
+    assigned_by: text("assigned_by"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    next_follow_up_at: timestamp("next_follow_up_at", { withTimezone: true }),
+    next_appointment_at: timestamp("next_appointment_at", { withTimezone: true }),
+    follow_up_reminded_at: timestamp("follow_up_reminded_at", { withTimezone: true }),
+    appointment_reminded_at: timestamp("appointment_reminded_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     caseIdUniq: uniqueIndex("ecofy_leads_case_id_uniq").on(t.ecofy_case_id),
     queueIdx: index("ecofy_leads_queue_idx").on(t.temperature, t.queue_entered_at),
+    assigneeIdx: index("ecofy_leads_assignee_idx").on(t.assigned_to_user_id, t.stage),
+  }),
+);
+
+// E-308 — calls / remarks / follow-ups / meeting bookings recorded in the CRM
+// while Ecofy could not take them; replayed to Ecofy by the reminder ticker.
+export const ecofyLeadActivities = pgTable(
+  "ecofy_lead_activities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_lead_id: uuid("ecofy_lead_id").notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    created_by: uuid("created_by"),
+    created_by_name: text("created_by_name"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    sync_status: varchar("sync_status", { length: 12 }).default("pending").notNull(),
+    sync_attempts: integer("sync_attempts").default(0).notNull(),
+    last_attempt_at: timestamp("last_attempt_at", { withTimezone: true }),
+    synced_at: timestamp("synced_at", { withTimezone: true }),
+    sync_error: text("sync_error"),
+  },
+  (t) => ({
+    leadIdx: index("ecofy_lead_activities_lead_idx").on(t.ecofy_lead_id, t.created_at),
+  }),
+);
+
+// E-307 — assign / reassign history for an Ecofy lead.
+export const ecofyLeadAssignments = pgTable(
+  "ecofy_lead_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_lead_id: uuid("ecofy_lead_id").notNull(),
+    from_user_id: uuid("from_user_id"),
+    to_user_id: uuid("to_user_id").notNull(),
+    to_role: varchar("to_role", { length: 30 }),
+    reason: text("reason"),
+    assigned_by: text("assigned_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("ecofy_lead_assignments_lead_idx").on(t.ecofy_lead_id, t.created_at),
   }),
 );
 
