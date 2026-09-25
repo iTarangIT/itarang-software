@@ -25,6 +25,11 @@ export const GET = withErrorHandler(async () => {
     const user = await activeCaller();
     if (!user) return errorResponse("Your account is inactive.", 403);
     const cfg = readWaAssistEnv();
+    // Not switched on here: say so without touching the assistant tables, which
+    // may not exist yet on this host (E-306 is applied before WA_ASSIST_* is set).
+    if (!cfg.ok) {
+        return successResponse({ linked: null, pendingExpiresAt: null, assistant_number: null, configured: false });
+    }
     const state = await getLinkState(user.id);
     return successResponse({
         ...state,
