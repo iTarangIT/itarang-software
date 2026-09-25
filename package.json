@@ -105,6 +105,7 @@
     "docx": "^9.6.1",
     "drizzle-orm": "^0.45.1",
     "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.11.1",
     "framer-motion": "^12.37.0",
     "googleapis": "^171.4.0",
     "ioredis": "^5.10.1",

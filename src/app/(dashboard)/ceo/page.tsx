@@ -21,6 +21,7 @@ import {
 } from "@/components/dashboard/ceo/CeoOverviewCards";
 import { GreenKmCard } from "@/components/dashboard/ceo/GreenKmCard";
 import { DataHealthPanel } from "@/components/dashboard/ceo/DataHealthPanel";
+import { GreenNewsCard } from "@/components/dashboard/ceo/GreenNewsCard";
 import { CeoControlTower } from "@/components/dashboard/ceo/CeoControlTower";
 import { RealizationDrillDown } from "@/components/dashboard/ceo/RealizationDrillDown";
 import {
@@ -245,6 +246,10 @@ export default function CEODashboard() {
           </div>
         </div>
       )}
+
+      {/* E-306 — Green Energy Today: the morning brief + top headlines from
+          the news aggregator. Not window-driven: news is always "now". */}
+      <GreenNewsCard />
 
       {/* Charts and Details Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">

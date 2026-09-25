@@ -60,6 +60,9 @@ import {
   Database,
   Activity,
   AudioLines,
+  Sun,
+  Newspaper,
+  Inbox,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -246,6 +249,29 @@ const COMMON_ITEMS = [
  * longest-href-wins over a flattened list, the badge mapping keys on item.id,
  * and `data-testid="nav-…"` is unchanged for both.
  */
+// E-307 — Sales Head › Ecofy. Children, not flat items: six screens of one
+// pipeline read better folded under one entry. getActiveItemId() is
+// longest-href-wins over the flattened children, so /sales-head/ecofy/queue
+// beats the /sales-head/ecofy Dashboard, and the lead detail route
+// /sales-head/ecofy/leads/[id] keeps "All Leads" lit.
+function ecofySubnav() {
+  return {
+    id: "sh-ecofy",
+    label: "Ecofy",
+    icon: Sun,
+    // A node, not a route (see nbfcSettingsSubnav).
+    href: "/sales-head/ecofy",
+    children: [
+      { id: "sh-ecofy-dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/sales-head/ecofy" },
+      { id: "sh-ecofy-queue", label: "Pickup Queue", icon: Inbox, href: "/sales-head/ecofy/queue" },
+      { id: "sh-ecofy-leads", label: "All Leads", icon: Users, href: "/sales-head/ecofy/leads" },
+      { id: "sh-ecofy-eligibility", label: "Eligibility Queue", icon: ClipboardCheck, href: "/sales-head/ecofy/eligibility" },
+      { id: "sh-ecofy-financing", label: "Financing Queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
+      { id: "sh-ecofy-assets", label: "Assets", icon: Battery, href: "/sales-head/ecofy/assets" },
+    ],
+  };
+}
+
 function nbfcSettingsSubnav(idPrefix: string) {
   return {
     id: `${idPrefix}-nbfc-settings`,
@@ -468,6 +494,12 @@ const roleNavigation: Record<string, any[]> = {
       ],
     },
     {
+      // E-307 — the CEO may open every /sales-head page and works the Ecofy
+      // workspace with Sales Head rights (src/lib/ecofy/access.ts).
+      section: "ECOFY",
+      items: [ecofySubnav()],
+    },
+    {
       section: "PART 0 OVERSIGHT",
       items: [
         {
@@ -560,6 +592,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "IoT Dashboard",
           icon: Battery,
           href: "/ceo/intellicar",
+        },
+        {
+          id: "ceo-news",
+          label: "Green Energy News",
+          icon: Newspaper,
+          href: "/ceo/news",
         },
       ],
     },
@@ -749,6 +787,14 @@ const roleNavigation: Record<string, any[]> = {
         // LEAD MANAGEMENT. It now lives in ROLE_TRAILING_SECTIONS so it renders
         // last — see the note there.
       ],
+    },
+    {
+      // E-307 — the Ecofy workspace: what iTarang Admin does inside Ecofy
+      // (sandbox-ecofy.itarang.com), done from the CRM through the signed
+      // Ecofy API. One node with a sub-navigation (E-259 mechanism); ids keep
+      // the sh- prefix like every other sales_head entry.
+      section: "ECOFY",
+      items: [ecofySubnav()],
     },
     {
       section: "SALES",
@@ -1657,6 +1703,13 @@ const roleNavigation: Record<string, any[]> = {
           href: "/inside-sales",
         },
         {
+          // E-307 — Ecofy leads the Sales Head assigned to this ISR.
+          id: "is-ecofy-leads",
+          label: "Ecofy Leads",
+          icon: Sun,
+          href: "/inside-sales/ecofy-leads",
+        },
+        {
           id: "is-campaigns",
           label: "Campaigns",
           icon: Megaphone,
@@ -1691,6 +1744,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Visits",
           icon: MapPinned,
           href: "/asm",
+        },
+        {
+          // E-307 — Ecofy leads the Sales Head assigned to this ASM.
+          id: "asm-ecofy-leads",
+          label: "Ecofy Leads",
+          icon: Sun,
+          href: "/asm/ecofy-leads",
         },
         {
           id: "asm-campaigns",
@@ -2136,6 +2196,8 @@ interface SubNavItem {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** E-307 — optional count, same pill as a top-level item. */
+  badge?: number | string;
 }
 
 interface NavItemForActive {
@@ -2351,6 +2413,17 @@ function SidebarNav({
                                 strokeWidth={1.75}
                               />
                               <span className="truncate flex-1">{item.label}</span>
+                              {item.badge ? (
+                                <span
+                                  className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                                  style={{
+                                    background: "var(--color-brand-sky)",
+                                    color: "#fff",
+                                  }}
+                                >
+                                  {item.badge}
+                                </span>
+                              ) : null}
                               <ChevronDown
                                 aria-hidden="true"
                                 className="w-3.5 h-3.5 ml-auto shrink-0 opacity-60 transition-transform duration-200 [details[open]_&]:rotate-180"
@@ -2384,6 +2457,17 @@ function SidebarNav({
                                     <span className="truncate flex-1">
                                       {child.label}
                                     </span>
+                                    {child.badge ? (
+                                      <span
+                                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                                        style={{
+                                          background: "var(--color-brand-sky)",
+                                          color: "#fff",
+                                        }}
+                                      >
+                                        {child.badge}
+                                      </span>
+                                    ) : null}
                                   </Link>
                                 );
                               })}
@@ -2664,6 +2748,31 @@ export function Sidebar() {
     return acc;
   }, []);
 
+  // E-307 — Ecofy badges. Sales Head: leads waiting in the pickup queue (on
+  // the Pickup Queue child AND the collapsed "Ecofy" node, so it shows while
+  // folded). ASM / ISR: their follow-ups due, else their open Ecofy leads.
+  // Polled every 60s; reads the local table only.
+  const [ecofyBadge, setEcofyBadge] = useState<{ queue: number; open: number; followUpsDue: number } | null>(null);
+  useEffect(() => {
+    if (!["sales_head", "ceo", "asm", "inside_sales_rep"].includes(inferredRole)) return;
+    let cancelled = false;
+    const load = () =>
+      fetch("/api/ecofy/counts", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then((j) => {
+          if (!cancelled && j?.data) setEcofyBadge(j.data);
+        })
+        .catch(() => {
+          /* silent — badge stays absent on failure (e.g. DB without E-307) */
+        });
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [inferredRole]);
+
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue
   // that turns over a handful of times per week.
@@ -2763,6 +2872,30 @@ export function Sidebar() {
       items: group.items.map((item: { id: string }) => {
         const n = navActivity[item.id];
         return n ? { ...item, badge: n > 99 ? "99+" : n } : item;
+      }),
+    }));
+  }
+
+  if (ecofyBadge) {
+    const cap = (n: number) => (n > 99 ? "99+" : n);
+    const byId: Record<string, number> = {
+      "sh-ecofy": ecofyBadge.queue,
+      "sh-ecofy-queue": ecofyBadge.queue,
+      "asm-ecofy-leads": ecofyBadge.followUpsDue || ecofyBadge.open,
+      "is-ecofy-leads": ecofyBadge.followUpsDue || ecofyBadge.open,
+    };
+    type BadgeNode = { id: string; badge?: number | string; children?: Array<{ id: string; badge?: number | string }> };
+    menuItems = menuItems.map((group: { items: BadgeNode[] }) => ({
+      ...group,
+      items: group.items.map((item) => {
+        const n = byId[item.id];
+        const withChildren = item.children
+          ? {
+              ...item,
+              children: item.children.map((c) => (byId[c.id] ? { ...c, badge: cap(byId[c.id]) } : c)),
+            }
+          : item;
+        return n ? { ...withChildren, badge: cap(n) } : withChildren;
       }),
     }));
   }

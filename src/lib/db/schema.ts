@@ -12763,6 +12763,218 @@ export const dealerLeadFieldChanges = pgTable(
   }),
 );
 
+// E-305 — leads pushed from Ecofy (docs/ECOFY_INTEGRATION.md). Written only by
+// POST /api/integrations/ecofy/events (src/lib/ecofy/inbound.ts); id is the
+// crmLeadId Ecofy links to its case.
+export const ecofyLeads = pgTable(
+  "ecofy_leads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_case_id: text("ecofy_case_id").notNull(),
+    case_no: text("case_no"),
+    version: integer("version").default(0).notNull(),
+    stage: varchar("stage", { length: 20 }),
+    sub_status: text("sub_status"),
+    segment: varchar("segment", { length: 40 }),
+    temperature: varchar("temperature", { length: 10 }),
+    lead_source: varchar("lead_source", { length: 60 }),
+    owner: varchar("owner", { length: 40 }),
+    qualified_by_name: text("qualified_by_name"),
+    queue_entered_at: timestamp("queue_entered_at", { withTimezone: true }),
+    product_interest: varchar("product_interest", { length: 60 }),
+    avg_monthly_bill_inr: numeric("avg_monthly_bill_inr", { precision: 14, scale: 2 }),
+    sanctioned_load_kw: numeric("sanctioned_load_kw", { precision: 10, scale: 2 }),
+    existing_backup: text("existing_backup"),
+    preferred_call_time: text("preferred_call_time"),
+    closure_reason: text("closure_reason"),
+    customer_name: text("customer_name"),
+    customer_mobile: varchar("customer_mobile", { length: 20 }),
+    customer_alt_mobile: varchar("customer_alt_mobile", { length: 20 }),
+    customer_email: text("customer_email"),
+    customer_type: varchar("customer_type", { length: 40 }),
+    business_name: text("business_name"),
+    address: text("address"),
+    city: text("city"),
+    state: varchar("state", { length: 40 }),
+    pincode: varchar("pincode", { length: 12 }),
+    preferred_language: varchar("preferred_language", { length: 20 }),
+    property_type: varchar("property_type", { length: 40 }),
+    ecofy_url: text("ecofy_url"),
+    snapshot: jsonb("snapshot").default({}).notNull(),
+    last_change: jsonb("last_change"),
+    last_event_id: text("last_event_id"),
+    last_event_type: varchar("last_event_type", { length: 60 }),
+    last_event_at: timestamp("last_event_at", { withTimezone: true }),
+    // E-307 — CRM-owned; never written by the inbound upsert.
+    assigned_to_user_id: uuid("assigned_to_user_id"),
+    assigned_role: varchar("assigned_role", { length: 30 }),
+    assigned_by: text("assigned_by"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    next_follow_up_at: timestamp("next_follow_up_at", { withTimezone: true }),
+    next_appointment_at: timestamp("next_appointment_at", { withTimezone: true }),
+    follow_up_reminded_at: timestamp("follow_up_reminded_at", { withTimezone: true }),
+    appointment_reminded_at: timestamp("appointment_reminded_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    caseIdUniq: uniqueIndex("ecofy_leads_case_id_uniq").on(t.ecofy_case_id),
+    queueIdx: index("ecofy_leads_queue_idx").on(t.temperature, t.queue_entered_at),
+    assigneeIdx: index("ecofy_leads_assignee_idx").on(t.assigned_to_user_id, t.stage),
+  }),
+);
+
+// E-308 — calls / remarks / follow-ups / meeting bookings recorded in the CRM
+// while Ecofy could not take them; replayed to Ecofy by the reminder ticker.
+export const ecofyLeadActivities = pgTable(
+  "ecofy_lead_activities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_lead_id: uuid("ecofy_lead_id").notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    created_by: uuid("created_by"),
+    created_by_name: text("created_by_name"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    sync_status: varchar("sync_status", { length: 12 }).default("pending").notNull(),
+    sync_attempts: integer("sync_attempts").default(0).notNull(),
+    last_attempt_at: timestamp("last_attempt_at", { withTimezone: true }),
+    synced_at: timestamp("synced_at", { withTimezone: true }),
+    sync_error: text("sync_error"),
+  },
+  (t) => ({
+    leadIdx: index("ecofy_lead_activities_lead_idx").on(t.ecofy_lead_id, t.created_at),
+  }),
+);
+
+// E-307 — assign / reassign history for an Ecofy lead.
+export const ecofyLeadAssignments = pgTable(
+  "ecofy_lead_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ecofy_lead_id: uuid("ecofy_lead_id").notNull(),
+    from_user_id: uuid("from_user_id"),
+    to_user_id: uuid("to_user_id").notNull(),
+    to_role: varchar("to_role", { length: 30 }),
+    reason: text("reason"),
+    assigned_by: text("assigned_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("ecofy_lead_assignments_lead_idx").on(t.ecofy_lead_id, t.created_at),
+  }),
+);
+
+// E-305 — Ecofy sync ledger, both directions. UNIQUE (direction, event_id) is
+// the inbound dedupe and the outbound retry key.
+export const ecofySyncEvents = pgTable(
+  "ecofy_sync_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    direction: varchar("direction", { length: 10 }).notNull(),
+    event_id: text("event_id").notNull(),
+    event_type: varchar("event_type", { length: 60 }).notNull(),
+    ecofy_case_id: text("ecofy_case_id"),
+    ecofy_lead_id: uuid("ecofy_lead_id"),
+    payload: jsonb("payload").notNull(),
+    response: jsonb("response"),
+    http_status: integer("http_status"),
+    attempts: integer("attempts").default(1).notNull(),
+    error: text("error"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    directionEventUniq: uniqueIndex("ecofy_sync_events_direction_event_uniq").on(
+      t.direction,
+      t.event_id,
+    ),
+    caseIdx: index("ecofy_sync_events_case_idx").on(t.ecofy_case_id, t.created_at),
+  }),
+);
+
+// --- GREEN ENERGY NEWS FEED (E-306) ---
+// CEO dashboard news aggregator: RSS + Google News RSS → Gemini tagging and a
+// daily 5-bullet brief. See src/lib/news/*. Source of truth: drizzle/E-306.
+
+export const greenNewsItems = pgTable(
+  "green_news_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** sha256 of the canonical URL — the insert-time dedupe key. */
+    url_hash: varchar("url_hash", { length: 64 }).notNull(),
+    url: text("url").notNull(),
+    source_key: varchar("source_key", { length: 40 }).notNull(),
+    source_name: text("source_name"),
+    title: text("title").notNull(),
+    /** Normalised-title key: same story from two feeds. */
+    title_hash: varchar("title_hash", { length: 64 }).notNull(),
+    snippet: text("snippet"),
+    /** Gemini one-liner; NULL until classified. */
+    summary: text("summary"),
+    image_url: text("image_url"),
+    published_at: timestamp("published_at", { withTimezone: true }).notNull(),
+    fetched_at: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+    /** 'india' | 'world'; NULL until classified. */
+    region: varchar("region", { length: 10 }),
+    /** Vocabulary in src/lib/news/categories.ts. */
+    category: varchar("category", { length: 30 }),
+    /** 0-100 from Gemini. */
+    relevance: smallint("relevance"),
+    hidden: boolean("hidden").default(false).notNull(),
+    classified_at: timestamp("classified_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    urlHashUniq: uniqueIndex("green_news_items_url_hash_uniq").on(t.url_hash),
+    publishedIdx: index("green_news_items_published_idx").on(t.published_at),
+    regionCategoryIdx: index("green_news_items_region_category_idx").on(
+      t.region,
+      t.category,
+      t.published_at,
+    ),
+    titleHashIdx: index("green_news_items_title_hash_idx").on(t.title_hash),
+  }),
+);
+
+export const greenNewsBriefs = pgTable(
+  "green_news_briefs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The IST calendar day the brief covers. */
+    brief_date: date("brief_date").notNull(),
+    /** [{ text, item_ids: uuid[] }] */
+    bullets: jsonb("bullets").default([]).notNull(),
+    model: text("model"),
+    item_count: integer("item_count").default(0).notNull(),
+    generated_at: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dateUniq: uniqueIndex("green_news_briefs_date_uniq").on(t.brief_date),
+  }),
+);
+
+export const greenNewsRuns = pgTable(
+  "green_news_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey().notNull(),
+    started_at: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finished_at: timestamp("finished_at", { withTimezone: true }),
+    /** 'running' | 'ok' | 'failed' */
+    status: varchar("status", { length: 16 }).default("running").notNull(),
+    /** 'ticker' | 'cron' | 'manual' */
+    triggered_by: varchar("triggered_by", { length: 16 }).notNull(),
+    fetched: integer("fetched").default(0).notNull(),
+    inserted: integer("inserted").default(0).notNull(),
+    classified: integer("classified").default(0).notNull(),
+    brief_written: boolean("brief_written").default(false).notNull(),
+    error: text("error"),
+  },
+  (t) => ({
+    startedIdx: index("green_news_runs_started_idx").on(t.started_at),
+  }),
+);
+
 // E-309 — WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md). Five NEW tables;
 // nothing else reads them, so an unapplied E-309 breaks only the Assistant.
 // Status vocabularies are CHECK constraints in the migration; the source of

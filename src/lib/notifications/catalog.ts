@@ -60,6 +60,10 @@ export type NotificationCategory =
   // corner of "Auctions": an auction is where a recovered battery ends up, not
   // what happens on somebody's doorstep.
   | "Recovery"
+  // [E-307] Leads handed over by Ecofy (sandbox-ecofy.itarang.com) and worked
+  // by the Sales Head, ASMs and ISRs through the Ecofy API. Its own category:
+  // a separate pipeline with its own stages (S1–S8), not a dealer lead.
+  | "Ecofy"
   | "Escalations";
 
 /** Ordered exactly as the filter bar should list them. "System" stays last. */
@@ -87,6 +91,7 @@ export const CATEGORIES: NotificationCategory[] = [
   // between typeGroups() and allGovernableTypes().
   "Recovery",
   "Refurbishment",
+  "Ecofy",
   "Escalations",
   // Buyback's own categories, minus the "System" catch-all it shares with us.
   ...BUYBACK_CATEGORIES.filter((c) => c !== "System"),
@@ -343,6 +348,31 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   // the right home now that a human is being asked to go and fix a price. The
   // duplicate key silently won at runtime and would have mis-filed it; removed.
 
+  // --- Ecofy workspace (E-307) — emitted from src/lib/ecofy/notify.ts ---
+  "ecofy.lead_received": "Ecofy",
+  "ecofy.lead_assigned": "Ecofy",
+  "ecofy.lead_unassigned": "Ecofy",
+  "ecofy.stage_changed": "Ecofy",
+  "ecofy.lead_returned": "Ecofy",
+  "ecofy.lead_closed": "Ecofy",
+  "ecofy.lead_reopened": "Ecofy",
+  "ecofy.activity_logged": "Ecofy",
+  "ecofy.follow_up_due": "Ecofy",
+  "ecofy.appointment_updated": "Ecofy",
+  "ecofy.appointment_reminder": "Ecofy",
+  "ecofy.assessment_updated": "Ecofy",
+  "ecofy.eligibility_requested": "Ecofy",
+  "ecofy.eligibility_decided": "Ecofy",
+  "ecofy.quote_updated": "Ecofy",
+  "ecofy.offer_sent": "Ecofy",
+  "ecofy.file_locked": "Ecofy",
+  "ecofy.financing_updated": "Ecofy",
+  "ecofy.installation_updated": "Ecofy",
+  "ecofy.withdrawal_requested": "Ecofy",
+  "ecofy.withdrawal_decided": "Ecofy",
+  "ecofy.document_updated": "Ecofy",
+  "ecofy.sync_failed": "Ecofy",
+
   // --- Escalations / internal ---
   escalation_raised: "Escalations",
   escalation_resolved: "Escalations",
@@ -367,6 +397,8 @@ const CRITICAL = new Set([
   "enach.failed",
   // E-298 — money the dealer was promised is missing; admin + lender act today.
   "loan.payment_not_received",
+  // E-307 — the CRM and Ecofy disagree about a lead until someone looks.
+  "ecofy.sync_failed",
   "escalation_raised",
   "escalation.raised",
 ]);
@@ -408,6 +440,15 @@ const WARNING = new Set([
   // a resubmitted one is waiting on the NBFC's second look.
   "lead.recalled",
   "lead.resubmitted",
+  // E-307 — each is an Ecofy lead waiting on the recipient: a new lead to
+  // assign, a lead to call, a follow-up or meeting now due, a withdrawal or an
+  // eligibility check awaiting the Sales Head.
+  "ecofy.lead_received",
+  "ecofy.lead_assigned",
+  "ecofy.follow_up_due",
+  "ecofy.appointment_reminder",
+  "ecofy.eligibility_requested",
+  "ecofy.withdrawal_requested",
   "vendor.registered",
   "nbfc.dual_approval",
   "nbfc.wallet_low",
@@ -493,6 +534,12 @@ const NO_EMAIL = new Set([
   "auction.won",
   // E-298 — good news that closes a loop; the bell is enough.
   "loan.payment_received",
+  // E-307 — high-volume Ecofy FYIs (every call a rep logs, every file added)
+  // and the integration-health alert, which is for whoever is watching the
+  // bell. All still switchable on the Email Notification screen.
+  "ecofy.activity_logged",
+  "ecofy.document_updated",
+  "ecofy.sync_failed",
 ]);
 
 /**
@@ -674,6 +721,14 @@ export function linkFor(
     // portal-role bucket here can only be a refurbisher login.
     if (role === "vendor") return "/refurbisher-portal/lots";
     return "/admin/nbfc/refurbishment";
+  }
+
+  if (category === "Ecofy") {
+    // [E-307] emit() always sets a per-recipient href (ASM, ISR and Sales Head
+    // each open the lead under their own prefix); this only catches rows
+    // written without one, and only the Sales Head workspace is role-neutral.
+    if (role === "dealer" || role === "nbfc" || role === "vendor") return null;
+    return lead ? `/sales-head/ecofy/leads/${lead}` : "/sales-head/ecofy";
   }
 
   if (category === "Escalations") {

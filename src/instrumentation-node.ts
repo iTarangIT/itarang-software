@@ -922,6 +922,46 @@ export async function startKycAutoApprovalTicker() {
 // runNbfcRequestSlaTick() returns immediately when the feature is disabled,
 // which is the shipped default — inert until an admin turns it on at
 // /admin/settings/nbfc-request-sla.
+/**
+ * E-307 — Ecofy follow-up / meeting reminders. Every 5 minutes; each reminder
+ * is claimed with UPDATE … RETURNING so it fires exactly once even with two
+ * app instances. A database without E-307 throws on every tick ("column
+ * next_follow_up_at does not exist") — logged, nothing else breaks.
+ */
+export async function startEcofyReminderTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  const TICK_INTERVAL_MS = 5 * 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runEcofyReminderTick } = await import("@/lib/ecofy/reminders");
+      const r = await runEcofyReminderTick();
+      if (r.followUps || r.appointments || r.synced) {
+        console.log(`[instrumentation:ecofy-reminders] sent ${r.followUps} follow-up, ${r.appointments} meeting reminder(s); synced ${r.synced} CRM-kept entr(ies) to Ecofy`);
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:ecofy-reminders] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(tick, 170_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] Ecofy reminder sweep (5m) started in-process");
+}
+
 export async function startNbfcRequestSlaTicker() {
   // Skip on Vercel — /api/cron/nbfc-request-sla owns it there.
   if (process.env.VERCEL === "1") return;
@@ -1601,6 +1641,70 @@ export async function startMonitorMorningTicker() {
   if (typeof interval.unref === "function") interval.unref();
 
   console.log("[instrumentation] monitor-morning (5m, 08:00 IST slot) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// Green Energy News (E-306) — the CEO dashboard's news aggregator.
+//
+// Every 30 minutes this ASKS for a refresh; runGreenNewsRefresh itself refuses
+// to run again within 2 h of the last successful run, so the effective cadence
+// is 2-hourly and a second process (or the /api/cron/green-news backstop) only
+// ever splits work. The morning brief is written by the first run after
+// 06:00 IST and is unique per IST day.
+//
+// Dark outside production unless ENABLE_GREEN_NEWS=1: a dev box pointed at the
+// shared DB would otherwise spend Gemini quota and fill the shared table.
+// ---------------------------------------------------------------------------
+export async function startGreenNewsTicker() {
+  if (process.env.VERCEL === "1") return;
+
+  if (process.env.ENABLE_GREEN_NEWS === "0") {
+    console.log("[instrumentation:green-news] disabled via ENABLE_GREEN_NEWS=0");
+    return;
+  }
+
+  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_GREEN_NEWS !== "1") {
+    console.log(
+      "[instrumentation:green-news] not production — ticker dark. " +
+        "Set ENABLE_GREEN_NEWS=1 to run it here (it writes to the shared news tables and calls Gemini).",
+    );
+    return;
+  }
+
+  const TICK_INTERVAL_MS = 30 * 60_000;
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runGreenNewsRefresh } = await import("@/lib/news/run");
+      const r = await runGreenNewsRefresh({ triggeredBy: "ticker" });
+      if (r.ran) {
+        console.log(
+          `[instrumentation:green-news] run ${r.runId}: fetched ${r.fetched}, inserted ${r.inserted}, ` +
+            `classified ${r.classified}, brief ${r.briefWritten ? "written" : "not due"}` +
+            (r.failedSources.length ? `, ${r.failedSources.length} source(s) failed` : ""),
+        );
+      } else if (r.reason === "failed") {
+        console.error(`[instrumentation:green-news] FAILED: ${r.error}`);
+      }
+    } catch (err) {
+      console.error("[instrumentation:green-news] tick failed:", err instanceof Error ? err.message : err);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // 240s out — behind every other kickoff; a news fetch is the least urgent
+  // thing a freshly-booted process could be doing.
+  const kickoff = setTimeout(tick, 240_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] green-news (30m ask, 2h effective) started in-process");
 }
 
 /**

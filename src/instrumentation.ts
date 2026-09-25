@@ -29,6 +29,7 @@ export async function register() {
       startScraperQueueTicker,
       startKycAutoApprovalTicker,
       startNbfcRequestSlaTicker,
+      startEcofyReminderTicker,
       startRecordingTranscriptionTicker,
       startDriveMirrorTicker,
       startDriveSalesTicker,
@@ -36,6 +37,7 @@ export async function register() {
       startDigestTicker,
       startDealerPaymentReminderTicker,
       startMonitorMorningTicker,
+      startGreenNewsTicker,
       startWaAssistantSweepTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
@@ -49,6 +51,8 @@ export async function register() {
     await startScraperQueueTicker();
     await startKycAutoApprovalTicker();
     await startNbfcRequestSlaTicker();
+    // E-307 — Ecofy follow-up / meeting reminders (kickoff 170s out).
+    await startEcofyReminderTicker();
     await startRecordingTranscriptionTicker();
     await startDriveMirrorTicker();
     // E-280 — Drive sales-invoice scan. Kickoff staggered 195s out, the last
@@ -68,6 +72,9 @@ export async function register() {
     // the digests — it launches Chromium, the most expensive thing any ticker
     // here does, and its send window is hours wide.
     await startMonitorMorningTicker();
+    // E-306 — Green Energy News refresh for the CEO dashboard. Kickoff 240s
+    // out, last of all: a news fetch is the least urgent work on boot.
+    await startGreenNewsTicker();
     // WhatsApp Sales Assistant — expire 10-minute previews, recover actions a
     // dead process left `executing`; reports a WA_ASSIST_* misconfiguration once.
     await startWaAssistantSweepTicker();
