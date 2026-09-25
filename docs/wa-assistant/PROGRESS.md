@@ -211,3 +211,69 @@ That is 11/11 correct, but it is not the full 40-question run, so this criterion
 ### Open questions / risks for Gate 4
 - **Gemini quota.** 20 requests/minute (and a daily cap) is roughly 7–10 turns per minute *for everyone*. The pilot needs billing on that key.
 - Gate 4's end-to-end UC checks will drive the agent with a **scripted model**: deterministic, free, and exercising the real tools, executor and DB. One real-model pass follows once quota allows.
+
+## Gate 4 — pending → executor, `log_call`, `set_follow_up`
+
+6 commits on `Aditya`, not pushed.
+
+### What shipped
+| Commit | Concern |
+|---|---|
+| 0132ce15 | `assertOwner` / `assertNotStale` take an optional `{ tx }`, so the executor checks inside its write transaction. Existing callers unchanged |
+| 8c61b265 | `logLeadTouchpoint()` + pure `planTouchpoint()` extracted from the touchpoint route; `next_follow_up_at` now written **inside** the touchpoint transaction (it used to commit separately afterwards). Route responses unchanged |
+| e5525de8 | `markLeadLost()` extracted from the mark-lost route; `ai_recall_status` exclusion now inside the same transaction. Same 400/404 messages. **Brought forward from Gate 5**, because UC-02 (call + Lost) is a Gate 4 "done when" |
+| 0ade2faa | `actions.ts` (pending store), `executor.ts`, `applierSpec.ts` / `appliers.ts`, `log_call` + `set_follow_up` proposals and appliers, `format.ts`, `when.ts` |
+| bfa6cccc | Router Confirm/Cancel taps, preview buttons, tap-outcome replies, the preview's wamid recorded, 60 s sweep ticker + boot-time `WA_ASSIST_*` notice |
+| 3f0e08cf | `verify --gate 4` (13 checks) |
+
+### How a write works now
+1. **The rep writes a message.** The agent calls `log_call` or `set_follow_up`. The tool checks the pilot flag, scope and ownership, then resolves the words against the frozen §9.3 map. Anything outside the map becomes a question. A follow-up must be in the future and within 90 days.
+2. **The tool stores the resolved plan** in `assistant_actions` as `pending`, with the lead version, before-values and a **redacted** preview. It returns only the preview.
+3. **The renderer sends the preview** (≤900 chars) with exactly **Confirm `ast:c:<id>`** and **Cancel `ast:x:<id>`**; the model's own wording is dropped.
+4. **A Confirm tap goes straight to the executor**, never the model. The executor:
+   - claims the action atomically (`pending → executing`, only for the tapper and only before it expires);
+   - re-checks the pilot flag;
+   - opens one transaction: tags the actor, locks the lead `FOR UPDATE`, runs `assertOwner` + `assertNotStale` against the preview's version, applies the plan through the extracted CRM writers, and marks the action `confirmed` with its after-values.
+5. **High-impact Lost:** the first Confirm writes nothing. It creates a step-2 action with a warning (the step-1 action becomes `escalated`), and only the step-2 Confirm writes.
+6. **Any failure** leaves the action `failed` with its reason, and nothing written. A 60 s sweep expires old previews and fails anything stuck in `executing`.
+
+### Test evidence
+| Command | Result |
+|---|---|
+| `npx vitest run src/lib/assistant src/lib/wa-assistant src/lib/inside-sales src/lib/leads` | 558 passed (new: `writes.test.ts` 17 — UC-02/03/07 plans, every question path, high-impact flag, appliers on the executor's tx, step-2-only confirmation, tampered plan refused; `logTouchpoint.test.ts` 7; `markLost.test.ts` 3; router tap tests 5) |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 4` (sandbox) | **37/37 PASS** (G1 13, G2 6, G3 5, G4 13); sandbox verified clean afterwards (every counter 0) |
+| `npx vitest run` | 4926 passed; only the 2 known `src/lib/storage` baseline files fail |
+| `npx tsc --noEmit` (8 GB) | 6 = baseline; 0 in `src/` / `scripts/` |
+| `npx eslint` on every file changed in Gate 4 | clean |
+
+### "Done when" status
+| Criterion | Evidence (sandbox, real router → lease → agent → executor → DB; model scripted) |
+|---|---|
+| **UC-02** end to end | G4.1: preview with Confirm/Cancel; nothing written until the tap; then Lost/`price_high`, 1 call touchpoint with disposition "Price High" + 1 status touchpoint, action `confirmed`, its tool call linked by `action_id` |
+| **UC-03** end to end | G4.2: status unchanged, `next_follow_up_at` = tomorrow 11:00 IST exactly, call `not_responding` |
+| **UC-07** end to end | G4.3: a `scheduled` `lead_visits` row, and the lead **appears in Today's Schedule** |
+| A typed "yes" writes nothing | G4.1: "yes" → `typed_confirm`, fixed reply; a pasted `ast:c:<id>` typed as text → agent, action still `pending`, 0 writes. Unit: router INV2 cases |
+| Expired taps rejected and logged | G4.6: tap after expiry → "This action expired…", status `expired`, 0 writes, tap logged `tap_confirm` |
+| Replayed taps rejected and logged | G4.4: second Confirm → "Already saved.", written once |
+| Concurrent double taps never execute twice | G4.5: **5 parallel taps → 1 `confirmed` + 4 `in_progress`, one set of writes** |
+
+Also proven:
+- **G4.7:** a lead changed on screen after the preview → `rejected: stale`, 0 writes.
+- **G4.8:** ownership moved → `not_owner`; removed from the pilot list → `writes_disabled`; binding revoked → UC-13 reply and the action never runs.
+- **G4.9:** a failure **after** the call touchpoint → the whole action rolls back.
+- **G4.10:** high-impact Lost needs the second Confirm; a double tap on step 1 doesn't count; `business_closed` also sets `ai_recall_status = excluded`.
+- **G4.11:** Cancel writes nothing.
+- **G4.12:** another user's action id is answered like a missing one.
+- **G4.13:** the sweep works.
+
+### Deviations from the plan
+1. `markLeadLost` was extracted in **Gate 4**, not Gate 5, because UC-02 needs it. The `mark_lost` *tool* is still Gate 5.
+2. **High-impact second confirm also covers `log_call`.** A call logged as "Business Closed" → Lost needs two Confirms, the same rule `mark_lost` will use (and G4.10 already proves it).
+3. For a WhatsApp chat or a note, `log_call` records remarks, a follow-up and interest only. A status or call outcome makes it ask whether it was a call. §9.3 only defines call outcomes, so this is the closed-vocabulary reading.
+4. The **preview is stored redacted**, and the plan is stored with the rep's words exactly. So a PAN typed in remarks is saved to the CRM, as on the screen, but never sent back over WhatsApp.
+5. The executor tags `app.actor_id` for the whole transaction, so the E-304 audit triggers record the Assistant user as the actor of every field change, including `next_follow_up_at`.
+
+### Open questions / risks for Gate 5
+- **Gemini quota.** It is still the free tier. Gate 4's UC checks use a scripted model; a real-model pass of UC-01/02/03/05/07 needs billing.
+- **UC-01 rollback test** (a forced failure after the visit row). The appliers and the executor transaction already make this structural (G4.9 is the same mechanism); Gate 5 adds `log_visit` and its explicit test.
+- **`claim_lead`** is the only write whose lead has no owner. Its applier uses `ownership: "claim"`: the pool predicate is re-checked on the **locked** row, then `claimLead(..., { tx })`.
