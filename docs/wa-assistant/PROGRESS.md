@@ -336,3 +336,93 @@ Also proven:
 
 ### Next: Gate 6 (break it)
 The automated attack suite (`verify-wa-assistant-attacks.ts` + `attacks.test.ts`) over every case in BRD §10 Day 6, each asserting both **blocked** and a **log row**, plus the Hinglish mapping check against 30 real call notes.
+
+## Gate 6 — break it
+
+4 commits on `Aditya`, not pushed. No product code changed: every attack was already blocked. The gate found two product gaps in the vocabulary (below) and two fixture bugs in my own first draft (users outside the pilot list; a stubbed lead-card tap), both fixed.
+
+### What shipped
+| Commit | Concern |
+|---|---|
+| f4ab9779 | Shared sandbox harness moved out of `verify-wa-assistant.ts` into `scripts/wa-assistant-fixtures.ts` (unchanged; `verify --gate 5` still 47/47) |
+| 824a7b8e | `src/lib/assistant/__tests__/attacks.test.ts` (15, no DB) + `scripts/verify-wa-assistant-attacks.ts` (19, sandbox) |
+| 60d4e7be | `scripts/wa-assistant-mapping-check.ts`: the "30 real call notes" check (read-only) |
+
+### Every BRD Day 6 attack: blocked, and where it is visible
+Sandbox checks drive the real router → identity → lease → agent → tools → executor. The model is an **obedient script** that does whatever the attacker's text asks, so a pass means the code held, not that the model behaved.
+
+| BRD attack | Check | Blocked by | Visible in |
+|---|---|---|---|
+| Cross-scope reads by id | A1.1 (agent), A1.2 (forged `ast:lead:` tap, no model) | scope predicate; out-of-scope ≡ nonexistent | `assistant_tool_calls.output = {kind:not_found}`; message `handling` |
+| Writes on non-owned leads | A2.1 (`log_call` / `mark_lost` / `set_follow_up` on a Team-tab lead), A2.2 (ASM `log_visit`, same territory), A2.3 (**planted** pending row, tool bypassed) | `ownedLeadOr`; executor's `assertOwner` on the locked row | `declined` tool calls; action `failed: rejected: not_owner` |
+| Instruction text pasted into chat | A3.1 (mass Lost + "you are admin" + foreign lead + "confirm yourself"), A3.2 (victim taps: high-impact still needs a 2nd tap); unit: stripped `user_id`/`role`, made-up tools, raw SQL, fake buttons in model text, SQL-shaped search text | 1 write per turn; Zod strips unknown keys; registry; only taps reach the executor | 1 `pending` action + 2 × `error = write_limit`; typed yes → `typed_confirm` |
+| Two dealers with one name | A4 | search returns candidates; a name passed as an id matches nothing | `output.kind = candidates` / `not_found` |
+| Tap after 10 min, double tap | A5.1 (3 days late), A5.2 (sequential + 4 concurrent) | atomic `pending → executing` claim with `expires_at` | action `expired`; 4 × `tap_confirm` rows, 1 write |
+| Message from a revoked number | A6 (text and a Confirm tap) | identity trusts active bindings only | `handling = unlinked` (see note 1) |
+| User deactivated / role changed mid-session | A7 | identity re-check on every message; binding self-revokes | binding `revoked_reason = user_inactive` / `role_changed`; `unlinked` |
+| Same webhook delivered twice | A8 (incl. two copies of a Confirm racing); unit: route-level redelivery | unique `provider_message_id` insert before the 200 | exactly one message row, one execution |
+| Wrong LINK codes | A9.1 (5 wrong → locked; then the **right** code is refused from that number, still works from the rep's own), A9.2 (expired / reused / inactive user), A9.3 (phone handed to another rep) | per-phone lockout; single-use hashed codes; relink revokes | `link_failed` ×5 → `link_locked`; `link_ineligible`; `number_relinked` |
+| Voice note, image, sticker | A10 (+ document) | router step 5 | `handling = media`, by `type`; no tool call, no model |
+| Forged request without a valid signature | A11 (real route: no signature, wrong secret, sender swapped after signing, foreign number); unit: sha1, garbage, misconfigured → 503 | HMAC over the raw body | **structured log only** (see note 2) |
+| (extra) Another user's action id; kill switch | A12 | executor ownership of the action; `ASSISTANT_DISABLED` | `tap_confirm` / `disabled` |
+
+**Mutation check.** Each unit guard was switched off in turn: `maxWritesPerTurn` 1→10, signature check, `phone_number_id` filter, the duplicate short-circuit, and parameterised search (→ raw SQL). Each change turned its test red, and the code was restored.
+
+### Test evidence
+| Command | Result |
+|---|---|
+| `npx vitest run src/lib/assistant/__tests__/attacks.test.ts` | 15 passed |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant-attacks.ts` (sandbox) | **19/19 PASS**; fixtures cleaned up |
+| `node --import tsx --env-file=.env.local scripts/verify-wa-assistant.ts --gate 5` (sandbox, after the harness move) | 47/47 PASS |
+| `npx vitest run` | 4966 passed, 3 skipped; only the 2 known `src/lib/storage` baseline files fail |
+| `npx tsc --noEmit` (8 GB) | 6 = baseline; 0 in `src/` or `scripts/` |
+| `npx eslint` on every Gate 6 file | clean |
+
+### The "30 real call notes" check
+`scripts/wa-assistant-mapping-check.ts`, read-only on sandbox.
+- **Ground truth.** 959 real NeoDove call touchpoints carry both the rep's own note and the disposition they picked.
+- **Report.** `reports/wa-assistant-mapping-check-2026-09-25.md` (gitignored, because it quotes dealer notes).
+
+**Finding 1: the frozen §9.3 map covers 62.7% of real calls.** 358 of 959 (37.3%) carry a CC-sheet disposition that no §9.3 row lists. For those, the Assistant can only ask a question, and the call can never be logged over WhatsApp:
+
+| Disposition | Calls |
+|---|---:|
+| No requirement in current | 190 |
+| Short Hang up | 81 |
+| REJECTED BY US | 67 |
+| Service Issue | 11 |
+| Loan Procedure Issue | 4 |
+| Some other Business | 3 |
+| Deal Closed | 1 |
+| Bad Experience with Trontek | 1 |
+
+Every recorded disposition *is* in the CC sheet (0 unknown). So the gap is the map, not the vocabulary. The map is frozen by the BRD, so this is **raised, not changed**. It needs a product decision: which row, status and lost reason each should propose.
+
+**Finding 2: the Hinglish aliases fired on 0 of 30 real notes.**
+- Reps write English shorthand: "cb after two hour" (call back), "not rq" (no requirement), "deal - eastman, finance - no, monthly rq - 7,8", "switch off", "disconnect call".
+- The aliases are hints to the model, so this is harmless but useless. Adding shorthand hints ("cb", "rq", "not rq", "disconnect") is a vocabulary change, so it is also raised, not made.
+- The labels themselves are noisy. For example, "busy in drive cb after some time" is filed as *Service Issue*, and "not stock available scrap battery" as *Bad Experience with Trontek*. Model agreement against them is therefore a floor, not an exact score.
+
+**Real-model pass (`--model`).** It ran 6 of 30 notes, then Gemini free-tier 429.
+- 2 agree.
+- 2 disagree on genuinely ambiguous notes: "On the way, will confirm evening" (the rep picked *Commercials Explained*, the model *As to Call Back*); "Busy now cb after two hour" (*As to Call Back* vs *Busy in another call*).
+- 2 asked a question.
+- It needs billing to finish; the script already paces itself.
+
+### Notes / decisions for you
+1. **A message from an already-revoked number is logged with `user_id` NULL.** Identity only trusts active bindings, because a lost phone may now be someone else's. The attempt is visible (`handling = unlinked`, the phone), and the rep is found by joining the phone to its revoked binding. A6 asserts exactly that. The join goes into the Gate 7 RUNBOOK review queries.
+2. **Forged / foreign-number webhooks are visible only in the structured log** (`[wa-assist/webhook] bad signature`, `… another phone_number_id`), not in `assistant_wa_messages`. BRD Day 6 says every attack is "visible in assistant_actions or assistant_wa_messages". Writing unauthenticated input to the database would let anyone fill the table. I kept log-only; say if you want a counter table instead.
+3. Findings 1 and 2 above: a product call on the map rows for the 8 missing dispositions, and on shorthand aliases.
+
+### Not done in this gate
+- The model half of the mapping check (24 of 30 notes) and a real-model prompt-injection run: Gemini quota.
+- Manual attacks on the Meta test number: Day 0 Meta setup still pending.
+
+### Next: Gate 7 (release)
+`docs/wa-assistant/RUNBOOK.md`:
+- env vars per environment;
+- applying E-306;
+- adding pilot users;
+- revoking a number;
+- both kill switches;
+- the daily log-review SQL (leaks, unconfirmed writes, stuck `executing`, unhandled inbound, voice-note counts, lockouts, revoked-number attempts).
