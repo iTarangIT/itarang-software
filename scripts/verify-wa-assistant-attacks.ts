@@ -23,7 +23,8 @@ import {
 } from "./wa-assistant-fixtures";
 import { issueLinkCode } from "../src/lib/wa-assistant/link";
 import { resolveSender } from "../src/lib/wa-assistant/identity";
-import { insertInbound } from "../src/lib/wa-assistant/messages";
+import { insertInbound, markHandled, recordOutbound } from "../src/lib/wa-assistant/messages";
+import { runReview } from "./wa-assistant-daily-review";
 import { routeMessage } from "../src/lib/wa-assistant/router";
 import { REPLY } from "../src/lib/wa-assistant/replies";
 import { createPending } from "../src/lib/assistant/actions";
@@ -480,6 +481,75 @@ async function attacks() {
         const k = await tap(off, isrPhone, `ast:c:${id}`);
         assert((await handlingOf(k.providerMessageId))?.handling === "disabled", "kill switch not logged");
         assert((await actionRow(id))?.status === "pending" && (await leadRow(lead)).touchpoints === 0, "ran while disabled");
+    });
+    // ── A13 the daily review sees all of this ───────────────────────────────
+    await check("A13 the RUNBOOK daily review (review.sql) surfaces the attacks above, and every MUST-BE-EMPTY query catches a planted incident", async () => {
+        // One real WhatsApp-logged call, so adoption_share has something to measure.
+        const lead = await makeLead("review-call", { owner: isr.id, status: "Under_Discussion" });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{ name: "log_call", args: { lead_id: lead, channel: "call", connect_status: "not_connected", disposition: "Did not pick" } }]));
+        await tap(deps, isrPhone, `ast:c:${await propose(deps, sent, isrPhone, "nahi uthaya")}`);
+
+        const clean = await runReview("1 hour");
+        const rowsOf = (res: typeof clean, name: string) => res.find((r) => r.name === name)!.rows;
+        const mine = (rows: Record<string, unknown>[], key: string, ids: string[]) => rows.filter((r) => ids.includes(String(r[key])));
+        const fixtureUsers = [isr.id, isr2.id, asm.id, asm2.id];
+
+        // What the attacks left behind is visible.
+        const links = rowsOf(clean, "link_attempts").find((r) => r.wa_phone === phone(66));
+        assert(Number(links?.failed) === 5 && Number(links?.locked) === 1, `link_attempts ${JSON.stringify(links)}`);
+        const revoked = rowsOf(clean, "revoked_number_attempts").find((r) => r.wa_phone === phone(63));
+        assert(revoked?.last_bound_user && Number(revoked.messages) >= 2, `revoked_number_attempts ${JSON.stringify(revoked)}`);
+        const media = new Set(rowsOf(clean, "media_by_type").map((r) => r.type));
+        assert(["audio", "image", "sticker", "document"].every((t) => media.has(t)), `media_by_type ${[...media]}`);
+        const errs = rowsOf(clean, "errors").map((r) => String(r.what));
+        assert(errs.includes("rejected: not_owner") && errs.some((e) => e.includes("write_limit")), `errors ${errs.join(" | ")}`);
+        assert(mine(rowsOf(clean, "usage_per_user"), "user_id", [isr.id]).length === 1, "usage_per_user misses the ISR");
+        const adoption = rowsOf(clean, "adoption_share").find((r) => r.name === isr.name && Number(r.wa_calls) >= 1);
+        assert(adoption && Number(adoption.total_calls) >= 1 && Number(adoption.pct_via_whatsapp) > 0, `adoption_share ${JSON.stringify(rowsOf(clean, "adoption_share"))}`);
+        assert(rowsOf(clean, "tool_latency").length > 0, "tool_latency empty");
+        // …and the attacks produced NO go/no-go incident.
+        for (const n of ["leak_write_on_foreign_lead", "unconfirmed_write", "stuck_executing"]) {
+            assert(mine(rowsOf(clean, n), "user_id", fixtureUsers).length === 0, `${n} flagged the attack run: ${JSON.stringify(rowsOf(clean, n))}`);
+        }
+
+        // Plant one incident per MUST-BE-EMPTY query and require each to be caught.
+        const plantAction = async (status: string, after: Record<string, unknown> | null, updatedAgo = "0 seconds") => {
+            const { id } = await createPending({
+                userId: isr.id, tool: "mark_lost", leadId: othersOpen, leadVersion: null, plan: {},
+                preview: { title: "planted", lines: [], resets_idle_clock: false, warning: null, needs_second_confirm: false, crm_url: "x" },
+                before: {}, sourceMessageId: null,
+            });
+            await db.execute(sql`
+                UPDATE assistant_actions SET status = ${status}, after = ${after ? JSON.stringify(after) : null}::jsonb,
+                       executed_at = now(), updated_at = now() - ${updatedAgo}::interval
+                 WHERE id = ${id}::uuid`);
+            return id;
+        };
+        const untapped = await plantAction("confirmed", { current_owner_id: isr.id });
+        const foreign = await plantAction("confirmed", { current_owner_id: isr2.id });
+        const stuck = await plantAction("executing", null, "10 minutes");
+        await recordOutbound({ waPhone: isrPhone, userId: isr.id, type: "text", text: "PAN ABCDE1234F on file", wamid: null });
+        const orphan = inbound({ waPhone: isrPhone, text: "never routed" });
+        const orphanRow = await insertInbound(orphan);
+        await db.execute(sql`UPDATE assistant_wa_messages SET created_at = now() - interval '10 minutes' WHERE id = ${orphanRow}::uuid`);
+
+        // A message the Assistant answered for a rep who is now deactivated.
+        const gone = await mk("inside_sales_rep");
+        const served = inbound({ waPhone: phone(72), text: "Aaj ka schedule?" });
+        const servedRow = await insertInbound(served);
+        await markHandled(servedRow!, "text_agent", { userId: gone.id });
+        await db.execute(sql`UPDATE users SET is_active = false WHERE id = ${gone.id}::uuid`);
+
+        const planted = await runReview("1 hour");
+        const hit = (name: string, key: string, id: string) => rowsOf(planted, name).some((r) => String(r[key]) === id);
+        assert(hit("unconfirmed_write", "action_id", untapped), "unconfirmed_write missed a write with no tap");
+        assert(hit("leak_write_on_foreign_lead", "action_id", foreign), "leak_write_on_foreign_lead missed a foreign-owner write");
+        assert(hit("stuck_executing", "action_id", stuck), "stuck_executing missed a stuck action");
+        assert(rowsOf(planted, "leak_sensitive_outbound").some((r) => String(r.text).includes("ABCDE1234F")), "leak_sensitive_outbound missed a PAN");
+        assert(hit("unhandled_inbound", "id", orphanRow!), "unhandled_inbound missed an unrouted message");
+        assert(hit("leak_served_ineligible_user", "id", servedRow!), "leak_served_ineligible_user missed a deactivated user's served message");
+        return "14 queries: attack traces visible; 6/6 planted incidents caught";
     });
 }
 
