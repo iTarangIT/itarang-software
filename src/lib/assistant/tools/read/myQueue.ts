@@ -18,6 +18,16 @@ import { queueUrl, toLeadSummary } from "../leads";
 /** The screen's own defaults: what its route reads from `?` with no params. */
 const NO_PARAMS = () => new URLSearchParams();
 
+/**
+ * The queue screens' page size (AsmQueueView / the ISR queue both ask for 25).
+ * Fetched at THAT size and cut to 10, never fetched at 10: several tabs order by
+ * columns with heavy ties (unassigned / unclaimed / territory sort on
+ * final_intent_score, created_at — sandbox has groups of 100 leads identical on
+ * both), so Postgres may break ties differently for LIMIT 10 than for LIMIT 25.
+ * Running the screen's exact query is what makes row N here row N there.
+ */
+export const SCREEN_PAGE_SIZE = 25;
+
 /** Exported so the Gate 3 equality check calls the builders the same way. */
 export async function queueRowsForTool(user: AssistantUser, tab: string, search?: string | null) {
     const q = search?.trim() || null;
@@ -25,19 +35,19 @@ export async function queueRowsForTool(user: AssistantUser, tab: string, search?
         const { filters, sort, visitStatus, visitOutcome } = readAsmQueueFilters(NO_PARAMS());
         const args = { tab: tab as AsmQueueTab, asmId: user.id, q, filters, visitStatus, visitOutcome };
         const [rows, total] = await Promise.all([
-            fetchAsmQueueRows({ ...args, page: 1, limit: MAX_TOOL_ROWS, sort }),
+            fetchAsmQueueRows({ ...args, page: 1, limit: SCREEN_PAGE_SIZE, sort }),
             countAsmQueueRows(args),
         ]);
-        return { rows, total };
+        return { rows: rows.slice(0, MAX_TOOL_ROWS), total };
     }
     const filters = readQueueFilters(NO_PARAMS());
     const sort = readQueueSort(NO_PARAMS());
     const args = { tab: tab as QueueTab, userId: user.id, q, filters, neodoveOnly: false, callbackOnly: false };
     const [rows, total] = await Promise.all([
-        fetchQueueRows({ ...args, page: 1, limit: MAX_TOOL_ROWS, sort }),
+        fetchQueueRows({ ...args, page: 1, limit: SCREEN_PAGE_SIZE, sort }),
         countQueueRows(args),
     ]);
-    return { rows, total };
+    return { rows: rows.slice(0, MAX_TOOL_ROWS), total };
 }
 
 export const myQueue: ToolFactory = (role) => {
