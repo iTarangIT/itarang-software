@@ -10,11 +10,11 @@
 //                        asm / inside_sales_rep → the fixed UC-13 reply. No model,
 //                        no data.
 //   3. Kill switch     → ASSISTANT_DISABLED → one fixed reply. No model, no data.
-//   4. Button / list tap (interactive replyId)
+//   4. Button / list tap (interactive replyId) — never the model:
+//                        ast:c:<id>    → the action executor (the only write path)
+//                        ast:x:<id>    → cancel
 //                        ast:lead:<id> → that lead's card via get_lead_details
-//                        (scope-checked, audited), no model;
-//                        ast:c:<id> → executor, ast:x:<id> → cancel (Gate 4) —
-//                        until then logged and ignored. A tap never reaches the model.
+//                        anything else → logged and ignored.
 //   5. Non-text        → the fixed UC-14 reply, counted by `type`.
 //   6. Text            → a bare "yes / haan / confirm" while a preview is
 //                        waiting gets the fixed "tap Confirm" reply (typing never
@@ -53,6 +53,10 @@ export type RouterDeps = {
     sendPayload: (waPhone: string, payload: WaPayload, userId: string | null) => Promise<void>;
     /** A tapped list row (ast:lead:<id>): the lead card, scope-checked, no model. */
     openLead: (user: AssistantUser, leadId: string, messageRowId: string) => Promise<WaPayload>;
+    /** Confirm tap (ast:c:<id>) → the executor. The ONLY way anything is written. */
+    confirmAction: (user: AssistantUser, actionId: string, messageRowId: string) => Promise<WaPayload>;
+    /** Cancel tap (ast:x:<id>). */
+    cancelAction: (user: AssistantUser, actionId: string) => Promise<WaPayload>;
     /** ASSISTANT_DISABLED, read per message. */
     isDisabled: () => boolean;
     hasPendingAction: (userId: string) => Promise<boolean>;
@@ -62,6 +66,7 @@ export type RouterDeps = {
 };
 
 const TAP_RE = /^ast:(c|x|lead):(.+)$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * A message that is nothing but an attempt to confirm by typing. Only answered
@@ -129,6 +134,17 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         // 4. Taps — never the model.
         if (msg.type === "interactive") {
             const tap = TAP_RE.exec(msg.replyId ?? "");
+            if (tap?.[1] === "c" || tap?.[1] === "x") {
+                const actionId = UUID_RE.test(tap[2]) ? tap[2] : null;
+                const payload =
+                    tap[1] === "c"
+                        ? await deps.confirmAction(user, tap[2], rowId)
+                        : await deps.cancelAction(user, tap[2]);
+                await deps.markHandled(rowId, tap[1] === "c" ? "tap_confirm" : "tap_cancel", { userId, actionId });
+                await deps.sendPayload(msg.waPhone, payload, userId);
+                deps.log("info", "[wa-assist] action tap", { ...meta, userId, actionId, tap: tap[1], latencyMs: Date.now() - started });
+                return;
+            }
             if (tap?.[1] === "lead") {
                 const payload = await deps.openLead(user, tap[2], rowId);
                 await deps.markHandled(rowId, "tap_lead", { userId });

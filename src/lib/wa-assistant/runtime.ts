@@ -4,7 +4,8 @@
 
 import { log } from "@/lib/log";
 import { assistantConfig } from "@/lib/assistant/config";
-import { hasOpenPendingAction } from "@/lib/assistant/actions";
+import { hasOpenPendingAction, setActionMessageId } from "@/lib/assistant/actions";
+import { cancelAction, executeAction } from "@/lib/assistant/executor";
 import { agentTurn, runToolDirect } from "@/lib/assistant/turn";
 import type { WaAssistEnv } from "./env";
 import { WaAssistClient } from "./client";
@@ -12,7 +13,7 @@ import { resolveSender } from "./identity";
 import { verifyLinkCode } from "./link";
 import { withUserLease } from "./lock";
 import { markHandled, recordOutbound } from "./messages";
-import { renderLeadCard, renderTurn, type WaPayload } from "./render";
+import { renderLeadCard, renderTapOutcome, renderTurn, type WaPayload } from "./render";
 import type { RouterDeps } from "./router";
 
 const LEAD_NOT_FOUND = "I couldn't find that lead.";
@@ -31,16 +32,26 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                           header: payload.header,
                           rows: payload.rows,
                       })
-                    : await client.sendText(waPhone, payload.body);
+                    : payload.kind === "buttons"
+                      ? await client.sendButtons(waPhone, payload.body, payload.buttons)
+                      : await client.sendText(waPhone, payload.body);
+            const actionId = payload.kind === "buttons" ? payload.actionId : null;
             await recordOutbound({
                 waPhone,
                 userId,
-                type: payload.kind === "list" ? "list" : "text",
+                type: payload.kind,
                 text: payload.body,
                 wamid: res.ok ? res.wamid : null,
                 error: res.ok ? null : res.error,
-                raw: payload.kind === "list" ? { rows: payload.rows.map((r) => r.id) } : null,
+                actionId,
+                raw:
+                    payload.kind === "list"
+                        ? { rows: payload.rows.map((r) => r.id) }
+                        : payload.kind === "buttons"
+                          ? { buttons: payload.buttons.map((b) => b.id) }
+                          : null,
             });
+            if (actionId && res.ok) await setActionMessageId(actionId, res.wamid);
             if (!res.ok) logFn("error", "[wa-assist] send failed", { status: res.status, error: res.error });
         } catch (err) {
             logFn("error", "[wa-assist] reply failed", {
@@ -63,6 +74,9 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                 body: result.kind === "lead" ? renderLeadCard(result.lead) : LEAD_NOT_FOUND,
             };
         },
+        confirmAction: async (user, actionId, messageRowId) =>
+            renderTapOutcome(await executeAction(actionId, user, { messageId: messageRowId })),
+        cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
         isDisabled: () => assistantConfig().disabled,
         hasPendingAction: hasOpenPendingAction,
         runTextTurn: async (user, text, messageRowId) => {

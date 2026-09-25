@@ -50,7 +50,8 @@ import { numbersInputs, shapeNumbers } from "../src/lib/assistant/tools/read/myN
 import { sanitizeResult } from "../src/lib/assistant/agent";
 import { runToolDirect } from "../src/lib/assistant/turn";
 import { writeTouchpoint } from "../src/lib/touchpoints/write";
-import { renderLeadCard } from "../src/lib/wa-assistant/render";
+import { renderLeadCard, renderTapOutcome } from "../src/lib/wa-assistant/render";
+import { cancelAction, executeAction } from "../src/lib/assistant/executor";
 
 // ── Safety ──────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,9 @@ function routerDeps(
             replies.push({ to, text: payload.body });
         },
         openLead: async () => ({ kind: "text", body: "lead card" }),
+        confirmAction: async (user, actionId, rowId) =>
+            renderTapOutcome(await executeAction(actionId, user, { messageId: rowId })),
+        cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
         isDisabled: () => false,
         hasPendingAction: async () => false,
         runTextTurn,
