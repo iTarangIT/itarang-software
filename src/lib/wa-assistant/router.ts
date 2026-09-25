@@ -11,9 +11,10 @@
 //                        no data.
 //   3. Kill switch     → ASSISTANT_DISABLED → one fixed reply. No model, no data.
 //   4. Button / list tap (interactive replyId)
-//                        ast:c:<id> → executor, ast:x:<id> → cancel,
-//                        ast:lead:<id> → lead details (Gates 3–4); until then
-//                        logged and ignored. A tap never reaches the model.
+//                        ast:lead:<id> → that lead's card via get_lead_details
+//                        (scope-checked, audited), no model;
+//                        ast:c:<id> → executor, ast:x:<id> → cancel (Gate 4) —
+//                        until then logged and ignored. A tap never reaches the model.
 //   5. Non-text        → the fixed UC-14 reply, counted by `type`.
 //   6. Text            → a bare "yes / haan / confirm" while a preview is
 //                        waiting gets the fixed "tap Confirm" reply (typing never
@@ -30,10 +31,11 @@ import type { SenderResolution } from "./identity";
 import type { AssistantUser } from "@/lib/assistant/types";
 import { parseLinkCommand } from "./link";
 import { REPLY, linkedReply, linkLockedReply } from "./replies";
+import type { WaPayload } from "./render";
 
 /** What running one text turn produced — the channel only needs the reply. */
 export type TextTurnOutcome =
-    | { kind: "ok"; text: string; modelCalls: number; toolCalls: number }
+    | { kind: "ok"; payload: WaPayload; modelCalls: number; toolCalls: number }
     | { kind: "busy" }
     | { kind: "not_configured" };
 
@@ -47,6 +49,10 @@ export type RouterDeps = {
     ) => Promise<void>;
     /** Send a plain text reply and log it. Never throws. */
     replyText: (waPhone: string, text: string, userId: string | null) => Promise<void>;
+    /** Send a rendered reply (text or list) and log it. Never throws. */
+    sendPayload: (waPhone: string, payload: WaPayload, userId: string | null) => Promise<void>;
+    /** A tapped list row (ast:lead:<id>): the lead card, scope-checked, no model. */
+    openLead: (user: AssistantUser, leadId: string, messageRowId: string) => Promise<WaPayload>;
     /** ASSISTANT_DISABLED, read per message. */
     isDisabled: () => boolean;
     hasPendingAction: (userId: string) => Promise<boolean>;
@@ -123,6 +129,12 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         // 4. Taps — never the model.
         if (msg.type === "interactive") {
             const tap = TAP_RE.exec(msg.replyId ?? "");
+            if (tap?.[1] === "lead") {
+                const payload = await deps.openLead(user, tap[2], rowId);
+                await deps.markHandled(rowId, "tap_lead", { userId });
+                await deps.sendPayload(msg.waPhone, payload, userId);
+                return;
+            }
             await deps.markHandled(rowId, "tap_ignored", { userId });
             deps.log("info", "[wa-assist] tap ignored", { ...meta, userId, tap: tap?.[1] ?? "unknown" });
             return;
@@ -154,7 +166,7 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
             deps.log("error", "[wa-assist] agent not configured (WA_ASSIST_GEMINI_API_KEY)", meta);
         } else {
             await deps.markHandled(rowId, "text_agent", { userId });
-            await deps.replyText(msg.waPhone, outcome.text, userId);
+            await deps.sendPayload(msg.waPhone, outcome.payload, userId);
             deps.log("info", "[wa-assist] turn", {
                 ...meta,
                 userId,

@@ -33,7 +33,7 @@ const RAHUL: SenderResolution = {
 };
 
 function fakeDeps(sender: SenderResolution = RAHUL) {
-    const replies: { to: string; text: string; userId: string | null }[] = [];
+    const replies: { to: string; text: string; userId: string | null; kind?: string }[] = [];
     const handled: { rowId: string; handling: string; extra?: unknown }[] = [];
     const deps: RouterDeps = {
         verifyLink: vi.fn(async () => ({ kind: "linked" as const, user: RAHUL.kind === "ok" ? RAHUL.user : (null as never) })),
@@ -44,9 +44,18 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
         replyText: vi.fn(async (to, text, userId) => {
             replies.push({ to, text, userId });
         }),
+        sendPayload: vi.fn(async (to, payload, userId) => {
+            replies.push({ to, text: payload.body, userId, kind: payload.kind });
+        }),
+        openLead: vi.fn(async () => ({ kind: "text" as const, body: "lead card" })),
         isDisabled: vi.fn(() => false),
         hasPendingAction: vi.fn(async () => false),
-        runTextTurn: vi.fn(async () => ({ kind: "ok" as const, text: "agent reply", modelCalls: 1, toolCalls: 0 })),
+        runTextTurn: vi.fn(async () => ({
+            kind: "ok" as const,
+            payload: { kind: "text" as const, body: "agent reply" },
+            modelCalls: 1,
+            toolCalls: 0,
+        })),
         log: vi.fn(),
     };
     return { deps, replies, handled };
@@ -114,6 +123,7 @@ describe("routeMessage — order and fixed replies", () => {
         await routeMessage(msg({ type: "interactive", replyId: "ast:c:3f1c", text: "Confirm" }), "r1", f.deps);
         expect(f.handled[0].handling).toBe("tap_ignored");
         expect(f.replies).toEqual([]);
+        expect(f.deps.openLead).not.toHaveBeenCalled();
 
         // Typed text that looks like a button id is just text for the agent.
         const g = fakeDeps();
@@ -125,7 +135,7 @@ describe("routeMessage — order and fixed replies", () => {
     it("text from a linked ASM/ISR goes to the agent; its reply is sent and logged", async () => {
         await routeMessage(msg({ text: "Aaj ka schedule?" }), "r", f.deps);
         expect(f.deps.runTextTurn).toHaveBeenCalledTimes(1);
-        expect(f.replies).toEqual([{ to: PHONE, text: "agent reply", userId: "u-rahul" }]);
+        expect(f.replies).toEqual([{ to: PHONE, text: "agent reply", userId: "u-rahul", kind: "text" }]);
         expect(f.handled[0]).toMatchObject({ handling: "text_agent" });
     });
 
@@ -260,6 +270,26 @@ describe("routeMessage — Gate 2: kill switch, typed confirm, agent outcomes", 
             const f = fakeDeps(sender);
             await routeMessage(msg(m), "r", f.deps);
             expect(f.deps.runTextTurn, JSON.stringify(m)).not.toHaveBeenCalled();
+        }
+    });
+});
+
+describe("routeMessage — Gate 3: list-row taps", () => {
+    it("ast:lead:<id> opens that lead's card for the resolved user, with no model", async () => {
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: "ast:lead:DL-1727890123456-a1b2c3d4", text: "ABC" }), "r", f.deps);
+        expect(f.deps.openLead).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, "DL-1727890123456-a1b2c3d4", "r");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.handled[0].handling).toBe("tap_lead");
+        expect(f.replies).toEqual([{ to: PHONE, text: "lead card", userId: "u-rahul", kind: "text" }]);
+    });
+
+    it("a malformed or foreign tap id is ignored, never opened", async () => {
+        for (const replyId of ["ast:lead:", "lead:DL-1", "ast:zzz:1", ""]) {
+            const f = fakeDeps();
+            await routeMessage(msg({ type: "interactive", replyId }), "r", f.deps);
+            expect(f.deps.openLead, replyId).not.toHaveBeenCalled();
+            expect(f.handled[0].handling).toBe("tap_ignored");
         }
     });
 });
