@@ -338,7 +338,8 @@ describe("prompt and config", () => {
         const c = assistantConfig({ ASSISTANT_DISABLED: " TRUE ", ASSISTANT_WRITES_ENABLED_USER_IDS: "a, b,,c " } as unknown as NodeJS.ProcessEnv);
         expect(c.disabled).toBe(true);
         expect([...c.writeUserIds]).toEqual(["a", "b", "c"]);
-        expect(assistantConfig({} as unknown as NodeJS.ProcessEnv)).toMatchObject({ disabled: false, model: null });
+        expect(assistantConfig({} as unknown as NodeJS.ProcessEnv)).toMatchObject({ disabled: false, model: "gemini-3.6-flash", apiKey: null });
+        expect(assistantConfig({ WA_ASSIST_GEMINI_API_KEY: " k ", ASSISTANT_MODEL: "gemini-2.5-pro" } as unknown as NodeJS.ProcessEnv)).toMatchObject({ model: "gemini-2.5-pro", apiKey: "k" });
         expect(assistantConfig({ ASSISTANT_WRITES_ENABLED_USER_IDS: "" } as unknown as NodeJS.ProcessEnv).writeUserIds.size).toBe(0);
     });
 });

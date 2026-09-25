@@ -23,12 +23,12 @@ export async function agentTurn(
         messageId: string | null;
         now?: Date;
         config?: AssistantConfig;
-        /** Tests inject a scripted model; production builds the OpenAI one. */
+        /** Tests inject a scripted model; production builds the Gemini one. */
         model?: (tools: ToolSpec[]) => ToolCallingModel;
     },
 ): Promise<AgentTurnResult> {
     const cfg = opts.config ?? assistantConfig();
-    if (!opts.model && (!cfg.model || !cfg.openAiKey)) return { kind: "not_configured" };
+    if (!opts.model && !cfg.apiKey) return { kind: "not_configured" };
 
     const writesEnabled = writesEnabledFor(user.id, cfg);
     const tools = toolsFor(user.role, writesEnabled);
@@ -37,7 +37,7 @@ export async function agentTurn(
     const now = opts.now ?? new Date();
     const model = opts.model
         ? opts.model(tools)
-        : createToolCallingModel({ model: cfg.model!, apiKey: cfg.openAiKey!, tools });
+        : createToolCallingModel({ model: cfg.model, apiKey: cfg.apiKey!, tools });
 
     const history = await loadHistory(user.id, "whatsapp", now);
     const out = await runAgentTurn(
