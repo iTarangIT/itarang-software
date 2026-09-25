@@ -53,6 +53,24 @@ export type LeadSummary = {
 };
 
 /**
+ * What a write will do, shown to the user BEFORE anything is saved. Built by
+ * the server from the resolved plan — exactly what the executor will write —
+ * never from model wording.
+ */
+export type Preview = {
+    /** "Log call — ABC Traders" */
+    title: string;
+    lines: { label: string; value: string }[];
+    /** Does this write reset the lead's idle clock (isWorkedTouchpoint)? */
+    resets_idle_clock: boolean;
+    /** A consequence the user must see (high-impact Lost, schedule caveat…). */
+    warning: string | null;
+    /** true = Confirm on THIS preview leads to a second, final confirmation. */
+    needs_second_confirm: boolean;
+    crm_url: string;
+};
+
+/**
  * What a tool returns. Plain JSON — never pre-rendered WhatsApp text. The model
  * sees it (rows capped at MAX_TOOL_ROWS); the channel renders it deterministically.
  *
@@ -64,7 +82,7 @@ export type ToolResult =
     | { kind: "candidates"; question: string; rows: LeadSummary[] }
     | { kind: "lead"; lead: Record<string, unknown> }
     | { kind: "numbers"; data: Record<string, unknown> }
-    | { kind: "preview"; action_id: string; preview: Record<string, unknown> }
+    | { kind: "preview"; action_id: string; preview: Preview }
     | { kind: "not_found" }
     | { kind: "question"; question: string }
     | { kind: "declined"; reason: string; crm_url?: string | null }
