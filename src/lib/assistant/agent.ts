@@ -10,7 +10,8 @@
 //   • a hard deadline; the model call is aborted when it passes
 // A tool that throws becomes a generic error result; the turn continues.
 
-import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { tool } from "@langchain/core/tools";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { MAX_TOOL_ROWS, type ToolContext, type ToolResult } from "./types";
@@ -165,26 +166,31 @@ export async function runAgentTurn(input: AgentTurnInput, deps: AgentDeps): Prom
     return { text: FALLBACK, results, turnMessages: turn, modelCalls };
 }
 
-/** The production model: OpenAI via LangChain, tools bound from their Zod schemas. */
+/**
+ * The production model: Google Gemini via LangChain (ChatGoogleGenerativeAI),
+ * tools bound from their Zod schemas. The integration converts each schema to
+ * a Gemini function declaration (dropping $schema / additionalProperties,
+ * which Gemini rejects). The tool bodies here are never called by LangChain —
+ * runAgentTurn dispatches every call itself, after re-validating it.
+ */
 export function createToolCallingModel(args: {
     model: string;
     apiKey: string;
     tools: ToolSpec[];
 }): ToolCallingModel {
-    const chat = new ChatOpenAI({
+    const chat = new ChatGoogleGenerativeAI({
         model: args.model,
         apiKey: args.apiKey,
         temperature: 0,
         maxRetries: 1,
+        // Gemini 3.x "thinks" by default; measured 3–14 s per call. Mapping one
+        // WhatsApp message to a tool call does not need deep reasoning, and a
+        // turn is up to 4 calls inside a 45 s budget.
+        thinkingConfig: { thinkingLevel: "LOW" },
     });
     return chat.bindTools(
-        args.tools.map((t) => ({
-            type: "function" as const,
-            function: {
-                name: t.name,
-                description: t.description,
-                parameters: z.toJSONSchema(t.schema, { io: "input" }) as Record<string, unknown>,
-            },
-        })),
+        args.tools.map((t) =>
+            tool(async () => "", { name: t.name, description: t.description, schema: t.schema as z.ZodObject }),
+        ),
     ) as unknown as ToolCallingModel;
 }

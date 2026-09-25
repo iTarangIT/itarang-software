@@ -151,7 +151,7 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         } else if (outcome.kind === "not_configured") {
             await deps.markHandled(rowId, "text_not_configured", { userId });
             await deps.replyText(msg.waPhone, REPLY.notReady, userId);
-            deps.log("error", "[wa-assist] agent not configured (ASSISTANT_MODEL / OPENAI_API_KEY)", meta);
+            deps.log("error", "[wa-assist] agent not configured (WA_ASSIST_GEMINI_API_KEY)", meta);
         } else {
             await deps.markHandled(rowId, "text_agent", { userId });
             await deps.replyText(msg.waPhone, outcome.text, userId);
