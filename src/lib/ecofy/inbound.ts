@@ -78,6 +78,8 @@ export type EcofyInboundEvent = z.infer<typeof ecofyEventSchema>;
 export interface EcofyInboundResult {
     duplicate: boolean;
     reply: Record<string, unknown>;
+    /** E-307 — for notifications: set when a lead snapshot was processed. */
+    lead?: { id: string; previousStage: string | null; stage: string | null; created: boolean };
 }
 
 /** ISO string or null; passed to SQL with an explicit ::timestamptz cast. */
@@ -111,9 +113,24 @@ export async function handleEcofyEvent(
 
         let reply: Record<string, unknown>;
         let leadId: string | null = null;
+        let leadInfo: EcofyInboundResult["lead"];
 
         if (event.lead) {
+            // Stage BEFORE this event, so a notification can tell a real move
+            // from Ecofy echoing a change the CRM itself just made.
+            const before = await tx.execute<{ stage: string | null }>(sql`
+                SELECT stage FROM ecofy_leads WHERE ecofy_case_id = ${event.lead.ecofyCaseId}
+            `);
             leadId = await upsertLead(tx, event, event.lead);
+            const after = await tx.execute<{ stage: string | null }>(sql`
+                SELECT stage FROM ecofy_leads WHERE id = ${leadId}::uuid
+            `);
+            leadInfo = {
+                id: leadId,
+                previousStage: before[0]?.stage ?? null,
+                stage: after[0]?.stage ?? null,
+                created: before.length === 0,
+            };
             reply = { crmLeadId: leadId };
         } else {
             // Unknown/leadless event type: stored for inspection, acknowledged
@@ -130,7 +147,7 @@ export async function handleEcofyEvent(
             WHERE id = ${ledgerId}::uuid
         `);
 
-        return { duplicate: false, reply };
+        return { duplicate: false, reply, lead: leadInfo };
     });
 }
 

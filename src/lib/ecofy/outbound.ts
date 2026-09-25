@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { errorMessage } from "@/lib/api-utils";
+import { ECOFY_OUTBOUND_ACTOR } from "./access";
 import { EcofyNotConfiguredError, getEcofyConfig } from "./config";
 import { signEcofyPayload } from "./signature";
 
@@ -48,8 +49,11 @@ export type EcofyOutboundEvent =
 export type SendEcofyEventInput = EcofyOutboundEvent & {
     ecofyCaseId: string;
     crmLeadId: string;
-    /** The CRM person, e.g. "Priya Sharma (Sales Head)". */
-    actorName: string;
+    /**
+     * Ignored for the wire: Ecofy always receives ECOFY_OUTBOUND_ACTOR, never a
+     * person's name (see access.ts). Kept optional so callers need not pass it.
+     */
+    actorName?: string;
     /** Reuse on retry. Omit on the first send. */
     eventId?: string;
     occurredAt?: Date;
@@ -78,7 +82,7 @@ export async function sendEcofyEvent(input: SendEcofyEventInput): Promise<SendEc
         occurredAt: (input.occurredAt ?? new Date()).toISOString(),
         ecofyCaseId: input.ecofyCaseId,
         crmLeadId: input.crmLeadId,
-        actorName: input.actorName,
+        actorName: ECOFY_OUTBOUND_ACTOR,
         data: input.data ?? {},
     };
     const raw = JSON.stringify(payload);
