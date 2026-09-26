@@ -586,8 +586,10 @@ jobs:
           envs: APP_DIR
           script: |
             set -eo pipefail
-            if ! grep -q 'args: "current/server.js"' "$APP_DIR/ecosystem.sandbox.config.js"; then
-              echo "❌ ecosystem.sandbox.config.js on VPS is missing args: \"current/server.js\""
+            # Accept node flags ahead of the script (e.g. --max-old-space-size=1024) —
+            # the literal 'args: "current/server.js"' match broke once the heap flag landed.
+            if ! grep -Eq 'args: "([^"]* )?current/server.js"' "$APP_DIR/ecosystem.sandbox.config.js"; then
+              echo "❌ ecosystem.sandbox.config.js on VPS args does not end in current/server.js"
               echo "--- current args lines ---"
               grep -n 'args:' "$APP_DIR/ecosystem.sandbox.config.js" || true
               exit 1
