@@ -98,6 +98,10 @@ async function logOutbound(
     // event_type is varchar(60): keep ids out of it so it stays short and groupable.
     const template = path.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ":id").replace(/\/\d+(?=\/|$)/g, "/:n");
     const eventType = `api:${method} ${template}`.slice(0, 60);
+    // Sandbox Ecofy (OTP_DEV_ECHO) echoes the plaintext OTP as devCode; never persist it in the ledger.
+    if (response && typeof response === "object" && "devCode" in response) {
+        response = Object.fromEntries(Object.entries(response).filter(([k]) => k !== "devCode"));
+    }
     try {
         await db.execute(sql`
             INSERT INTO ecofy_sync_events
