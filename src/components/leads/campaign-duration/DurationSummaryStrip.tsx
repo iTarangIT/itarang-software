@@ -12,7 +12,7 @@
 //     'completed' — since 2026-09-21 only calls where the dealer actually
 //     SPOKE (lib/ai-dialer/campaignLeadStatus.ts);
 //   · this panel counts calls that CONNECTED and have a usable duration —
-//     including silent calls (status no_conversation, shown as "Pending"),
+//     including silent calls (status silent / hung_up, legacy no_conversation),
 //     where the line was answered but only the AI spoke;
 //   · so "connected" can legitimately EXCEED "completed", and by exactly the
 //     silent and announcement-answered calls.

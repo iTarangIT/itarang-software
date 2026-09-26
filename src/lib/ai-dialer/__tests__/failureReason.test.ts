@@ -265,6 +265,8 @@ describe("a status that already names the reason (2026-09-21)", () => {
             ["no_response", "not_answered"],
             ["rejected", "rejected"],
             ["voicemail", "voicemail"],
+            ["silent", "silent_call"],
+            ["hung_up", "hung_up_early"],
             ["no_conversation", "silent_call"],
         ];
         for (const [status, code] of cases) {
