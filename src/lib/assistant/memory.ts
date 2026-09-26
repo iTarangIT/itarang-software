@@ -5,6 +5,12 @@
 // agent's tool calls and their (already redacted, capped) results, which is
 // what lets a follow-up refer to a lead by pronoun. Tool results are clipped
 // again here so memory can never grow without bound.
+//
+// A history is only valid for the TOOL SET it was built with, so it is stored
+// stamped with it: { toolset, messages }. When the user's tools change — a
+// deploy adds one, they join or leave the write pilot — the old history is
+// dropped. Replaying an old "I can't transfer leads" otherwise makes the model
+// repeat it word for word without looking at the tool it now has.
 
 import { sql } from "drizzle-orm";
 import {
@@ -36,24 +42,52 @@ export function trimTurns(messages: BaseMessage[], maxTurns = MAX_TURNS): BaseMe
     });
 }
 
-export async function loadHistory(userId: string, channel = "whatsapp", now = new Date()): Promise<BaseMessage[]> {
-    const rows = await db.execute<{ messages: StoredMessage[]; last_activity_at: string | Date }>(sql`
+/** The tool set a history belongs to: its tool names, order-independent. */
+export function toolsetStamp(tools: readonly string[]): string {
+    return [...tools].sort().join(",");
+}
+
+/**
+ * The stored column → messages, or null to start fresh: a different tool set,
+ * an unstamped (pre-stamp) history, or a shape we can't read. Pure.
+ */
+export function historyFromStored(raw: unknown, toolset: string): StoredMessage[] | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const h = raw as { toolset?: unknown; messages?: unknown };
+    if (h.toolset !== toolset || !Array.isArray(h.messages)) return null;
+    return h.messages as StoredMessage[];
+}
+
+export async function loadHistory(
+    userId: string,
+    toolset: string,
+    channel = "whatsapp",
+    now = new Date(),
+): Promise<BaseMessage[]> {
+    const rows = await db.execute<{ messages: unknown; last_activity_at: string | Date }>(sql`
         SELECT messages, last_activity_at FROM assistant_conversations
          WHERE user_id = ${userId}::uuid AND channel = ${channel}
     `);
     const row = rows[0];
-    if (!row || !Array.isArray(row.messages)) return [];
+    if (!row) return [];
     if (now.getTime() - new Date(row.last_activity_at).getTime() > IDLE_RESET_MS) return [];
+    const stored = historyFromStored(row.messages, toolset);
+    if (!stored) return [];
     try {
-        return mapStoredMessagesToChatMessages(row.messages);
+        return mapStoredMessagesToChatMessages(stored);
     } catch {
         // A shape we can't read back is a reset, not an outage.
         return [];
     }
 }
 
-export async function saveHistory(userId: string, messages: BaseMessage[], channel = "whatsapp"): Promise<void> {
-    const stored = mapChatMessagesToStoredMessages(trimTurns(messages));
+export async function saveHistory(
+    userId: string,
+    toolset: string,
+    messages: BaseMessage[],
+    channel = "whatsapp",
+): Promise<void> {
+    const stored = { toolset, messages: mapChatMessagesToStoredMessages(trimTurns(messages)) };
     await db.execute(sql`
         INSERT INTO assistant_conversations (user_id, channel, messages, last_activity_at)
         VALUES (${userId}::uuid, ${channel}, ${JSON.stringify(stored)}::jsonb, now())

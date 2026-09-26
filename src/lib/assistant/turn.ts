@@ -6,7 +6,7 @@ import type { AssistantUser, ToolName, ToolResult } from "./types";
 import { assistantConfig, writesEnabledFor, type AssistantConfig } from "./config";
 import { toolsFor } from "./registry";
 import { buildSystemPrompt } from "./prompt";
-import { loadHistory, saveHistory } from "./memory";
+import { loadHistory, saveHistory, toolsetStamp } from "./memory";
 import { logToolCall } from "./audit";
 import { callTool, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
 import type { ToolSpec } from "./tools/spec";
@@ -39,7 +39,9 @@ export async function agentTurn(
         ? opts.model(tools)
         : createToolCallingModel({ model: cfg.model, apiKey: cfg.apiKey!, tools });
 
-    const history = await loadHistory(user.id, "whatsapp", now);
+    // A history built with other tools is dropped (memory.ts): stale refusals must not replay.
+    const toolset = toolsetStamp(tools.map((t) => t.name));
+    const history = await loadHistory(user.id, toolset, "whatsapp", now);
     const out = await runAgentTurn(
         {
             system: buildSystemPrompt({ user, now, tools: tools.map((t) => t.name), writesEnabled }),
@@ -48,7 +50,7 @@ export async function agentTurn(
         },
         { model, tools, ctx: { user, messageId: opts.messageId, now, writesEnabled }, logToolCall },
     );
-    await saveHistory(user.id, [...history, ...out.turnMessages]);
+    await saveHistory(user.id, toolset, [...history, ...out.turnMessages]);
     return { kind: "ok", text: out.text, results: out.results, modelCalls: out.modelCalls };
 }
 
