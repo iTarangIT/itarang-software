@@ -23,6 +23,10 @@ import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
 import {
+  persistCallEndEvidence,
+  type CallEndEvidenceRow,
+} from "@/lib/ai/storage/callEndEvidence";
+import {
   rehostRecording,
   rehostElevenLabsRecording,
 } from "@/lib/ai/storage/recordingStore";
@@ -118,7 +122,10 @@ export async function finalizeElevenLabsCall(
     providerStatus: status,
     transcript,
     terminationReason,
+    durationSecs: duration,
   });
+  // E-310 — kept on ai_call_logs so the split above can be re-read later.
+  const endEvidence: CallEndEvidenceRow = { endReason: terminationReason };
 
   if (!transcript) {
     console.log(
@@ -156,6 +163,7 @@ export async function finalizeElevenLabsCall(
     // branch is the *normal* path for them, not an edge case.
     await upsertAiCallLog({
       callId: conversationId,
+      endEvidence,
       leadId: leadForPhone?.id ?? null,
       startedAt,
       endedAt,
@@ -288,6 +296,7 @@ export async function finalizeElevenLabsCall(
     // upsert the score onto this same row.
     await upsertAiCallLog({
       callId: conversationId,
+      endEvidence,
       leadId: null,
       startedAt,
       endedAt,
@@ -316,6 +325,7 @@ export async function finalizeElevenLabsCall(
       `[elevenlabs:finalize] analysis failed for lead ${lead.id}: ${result.reason}`,
     );
     const r = await markLeadNeedsReview({
+      endEvidence,
       leadId: lead.id,
       followUpHistory: (lead.follow_up_history as unknown[]) || [],
       callId: conversationId,
@@ -368,6 +378,7 @@ export async function finalizeElevenLabsCall(
 
     await upsertAiCallLog({
       callId: conversationId,
+      endEvidence,
       leadId: lead.id,
       startedAt,
       endedAt,
@@ -414,7 +425,7 @@ export async function finalizeElevenLabsCall(
     // (E-169 / E-239 stopped marking it failed), but it is not automatically a
     // conversation either: most dropped_empty calls are the AI greeting a line
     // where the dealer never spoke. classifyCallEnd tells the two apart —
-    // completed if the dealer said something, no_conversation / busy / … if
+    // completed if the dealer said something, silent / hung_up / busy / … if
     // not. The Outcome column still carries "dropped_empty".
     const dr = await completeCampaignLead({
       leadId: lead.id,
@@ -483,6 +494,7 @@ export async function finalizeElevenLabsCall(
 
   await upsertAiCallLog({
     callId: conversationId,
+    endEvidence,
     leadId: lead.id,
     startedAt,
     endedAt,
@@ -716,6 +728,8 @@ async function upsertAiCallLog(opts: {
   // turn's time_in_call_secs. The array already travelled this far as the
   // payload's `conversation`; until E-267 it was dropped here.
   transcriptTurns?: unknown[] | null;
+  /** E-310 — how the provider says the call ended. */
+  endEvidence?: CallEndEvidenceRow;
 }): Promise<void> {
   try {
     const now = new Date();
@@ -785,6 +799,7 @@ async function upsertAiCallLog(opts: {
     // read-then-update body that used to carry this call, so re-attach it to
     // the upsert path or the provider's verbatim turn array is never stored.
     await persistTranscriptTurns(opts.callId || id, opts.transcriptTurns);
+    await persistCallEndEvidence(opts.callId, opts.endEvidence, "elevenlabs:finalize");
   } catch (err) {
     console.error("[elevenlabs:finalize] ai_call_logs upsert failed:", err);
   }
@@ -808,6 +823,7 @@ async function markLeadNeedsReview(opts: {
   endedAt?: Date | null;
   agentId?: string | null;
   callEnd: CallEndClassification;
+  endEvidence?: CallEndEvidenceRow;
 }): Promise<{ campaignId: string | null }> {
   const history = opts.followUpHistory || [];
   const newEntry = {
@@ -837,6 +853,7 @@ async function markLeadNeedsReview(opts: {
 
   await upsertAiCallLog({
     callId: opts.callId,
+    endEvidence: opts.endEvidence,
     leadId: opts.leadId,
     startedAt: opts.startedAt,
     endedAt: opts.endedAt,

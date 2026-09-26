@@ -95,6 +95,7 @@ export function classifyOutcomeFamily(code: FailureReasonCode | null | undefined
         case "no_response":
             return "no_response";
         case "silent_call":
+        case "hung_up_early":
             return "silent";
         case "disconnected":
         case "rejected":

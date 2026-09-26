@@ -106,13 +106,14 @@ async function checkBackfill() {
         call_outcome: string | null;
         transcript: string | null;
         provider_status: string | null;
+        call_duration: number | string | null;
     }>(
         await db.execute(sql`
             SELECT dcl.campaign_id, dcl.status, dcl.call_outcome,
-                   acl.transcript, acl.status AS provider_status
+                   acl.transcript, acl.status AS provider_status, acl.call_duration
               FROM dialer_campaign_leads dcl
               LEFT JOIN LATERAL (
-                    SELECT a.transcript, a.status FROM ai_call_logs a
+                    SELECT a.transcript, a.status, a.call_duration FROM ai_call_logs a
                      WHERE dcl.bolna_call_id IS NOT NULL AND a.call_id = dcl.bolna_call_id
                      ORDER BY (a.transcript IS NOT NULL) DESC LIMIT 1
               ) acl ON true
@@ -126,6 +127,7 @@ async function checkBackfill() {
             callOutcome: r.call_outcome,
             transcript: r.transcript,
             providerStatus: r.provider_status,
+            durationSecs: r.call_duration,
         });
         if (next && next.status !== r.status) {
             const k = `${r.status} → ${next.status}`;

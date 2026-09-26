@@ -17,7 +17,7 @@
 //   - invalid_number            → the network says the number does not exist.
 //
 // Candidates are every non-conversation status (busy, no_response, rejected,
-// voicemail, no_conversation, failed). A silent call (no_conversation) IS
+// voicemail, silent, hung_up, legacy no_conversation, failed). A silent call IS
 // retryable since 2026-09-21: the hard block now requires the dealer to have
 // spoken, which a silent call did not.
 //

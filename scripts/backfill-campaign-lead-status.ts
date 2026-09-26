@@ -1,5 +1,7 @@
 // Re-classify historical dialer_campaign_leads rows with the E-300 rule —
-// "completed" means the dealer actually spoke.
+// "completed" means the dealer actually spoke — and, since 2026-09-26, split
+// the old no_conversation ("Pending") bucket into silent / hung_up /
+// no_response by call duration (and ai_call_logs.end_reason once E-310 is on).
 //
 //   node --import tsx --env-file=.env.local scripts/backfill-campaign-lead-status.ts
 //       dry run: prints the before → after transition matrix, writes nothing
@@ -20,11 +22,14 @@
 // live dialer moved in the meantime is left alone. The counter re-derive is
 // syncCampaignCounters, the same function every campaign event runs.
 //
-// Prints counts and ids only — never transcript text.
+// Prints counts and ids only — never transcript text. Also prints a duration
+// histogram of every row landing in silent / hung_up, the numbers
+// EARLY_HANGUP_SECS is checked against.
 
 import { sql } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import {
+    EARLY_HANGUP_SECS,
     reclassifyStoredAttempt,
     type StoredClassification,
 } from "../src/lib/ai-dialer/campaignLeadStatus";
@@ -41,6 +46,8 @@ type Row = {
     call_outcome: string | null;
     transcript: string | null;
     provider_status: string | null;
+    call_duration: number | string | null;
+    end_reason: string | null;
 };
 
 type Change = {
@@ -65,15 +72,27 @@ async function main() {
     console.log(`backfill-campaign-lead-status — ${APPLY ? "APPLY" : "dry run"} against ${host}`);
     if (campaignArg) console.log(`  scope: campaign ${campaignArg}`);
 
+    // E-310 may not be applied on this database yet; read NULL instead.
+    const hasEndReason =
+        rowsOf<{ n: number }>(
+            await db.execute(sql`
+                SELECT count(*)::int AS n FROM information_schema.columns
+                 WHERE table_name = 'ai_call_logs' AND column_name = 'end_reason'
+            `),
+        )[0]?.n > 0;
+    if (!hasEndReason) console.log("  (E-310 not applied here: end_reason read as NULL)");
+
     // One ai_call_logs row per attempt: call_id is not unique, so prefer the
     // row that carries the transcript. Same evidence the campaign table reads.
     const rows = rowsOf<Row>(
         await db.execute(sql`
             SELECT dcl.id, dcl.campaign_id, dcl.status, dcl.call_outcome,
-                   acl.transcript, acl.status AS provider_status
+                   acl.transcript, acl.status AS provider_status,
+                   acl.call_duration, acl.end_reason
               FROM dialer_campaign_leads dcl
               LEFT JOIN LATERAL (
-                    SELECT a.transcript, a.status
+                    SELECT a.transcript, a.status, a.call_duration,
+                           ${hasEndReason ? sql`a.end_reason` : sql`NULL::text`} AS end_reason
                       FROM ai_call_logs a
                      WHERE dcl.bolna_call_id IS NOT NULL
                        AND a.call_id = dcl.bolna_call_id
@@ -86,6 +105,10 @@ async function main() {
     );
 
     const matrix = new Map<string, number>();
+    // Duration buckets for rows landing in silent / hung_up.
+    const BUCKETS = [0, 3, 5, 10, 15, 20, 30, 60, Infinity];
+    const histogram = new Map<string, number>();
+    let noDuration = 0;
     const changesByCampaign = new Map<string, Change[]>();
     const campaigns = new Set<string>();
 
@@ -96,8 +119,20 @@ async function main() {
             callOutcome: r.call_outcome,
             transcript: r.transcript,
             providerStatus: r.provider_status,
+            durationSecs: r.call_duration,
+            endReason: r.end_reason,
         });
         if (!next) continue;
+
+        if (next.status === "silent" || next.status === "hung_up") {
+            const d = r.call_duration == null ? null : Number(r.call_duration);
+            if (d == null || !Number.isFinite(d)) noDuration++;
+            else {
+                const i = BUCKETS.findIndex((b, j) => d >= b && d < BUCKETS[j + 1]);
+                const label = BUCKETS[i + 1] === Infinity ? `${BUCKETS[i]}s+` : `${BUCKETS[i]}–${BUCKETS[i + 1]}s`;
+                histogram.set(label, (histogram.get(label) ?? 0) + 1);
+            }
+        }
 
         const key = `${r.status} → ${next.status}`;
         matrix.set(key, (matrix.get(key) ?? 0) + 1);
@@ -124,6 +159,14 @@ async function main() {
         console.log(`    ${String(n).padStart(6)}  ${k}${same ? "  (unchanged)" : ""}`);
     }
     console.log(`  rows to change: ${totalChanges} in ${changesByCampaign.size} campaign(s)`);
+
+    console.log(`\n  duration of answered-but-silent calls (hung_up below ${EARLY_HANGUP_SECS}s):`);
+    for (let j = 0; j < BUCKETS.length - 1; j++) {
+        const label =
+            BUCKETS[j + 1] === Infinity ? `${BUCKETS[j]}s+` : `${BUCKETS[j]}–${BUCKETS[j + 1]}s`;
+        console.log(`    ${String(histogram.get(label) ?? 0).padStart(6)}  ${label}`);
+    }
+    if (noDuration) console.log(`    ${String(noDuration).padStart(6)}  (no duration)`);
 
     if (!APPLY) {
         console.log("\n  dry run — nothing written. Re-run with --apply to write.");
