@@ -55,6 +55,8 @@ The dealer bot (`/api/whatsapp/webhook`, `META_WA_*`, `whatsapp_messages`) is a 
 | `ASSISTANT_MODEL` | no | blank | blank | Default `gemini-3.6-flash`. `gemini-2.5-flash` is refused to new API users |
 | `ASSISTANT_WRITES_ENABLED_USER_IDS` | no | fixture/pilot ids | the 4 pilot `users.id` (§6) | Empty = nobody can propose writes; reads work for all linked reps |
 | `ASSISTANT_DISABLED` | no | `false` | `false` | `true` = kill switch (§5) |
+| `WA_ASSIST_VOICE_DISABLED` | no | `false` | `false` | `true` = voice notes get the old "Please type it" reply (§5) |
+| `WA_ASSIST_STT_MODEL` | no | blank | blank | Voice-note transcription model. Default: the agent's model, on the same key — so each voice note is **one more** request against the key's quota |
 | `ENABLE_WA_ASSIST_SWEEP` | no | unset | unset | `0` disables the 60 s sweep (only for debugging) |
 | `NEXT_PUBLIC_APP_URL` | existing | `https://sandbox.itarang.com` | `https://crm.itarang.com` | CRM links in replies |
 
@@ -132,7 +134,7 @@ Do these in order. Each step says what proves it worked.
    - it proposes, you tap **Confirm**;
    - typing "yes" never saves;
    - previews expire in 10 min;
-   - text only (no voice notes);
+   - voice notes work (English, Hindi, Hinglish): it replies 🎙️ "what it heard" first, then answers. If the heard text is wrong, send it again or type it — a voice note can only ever produce a preview, never a save;
    - it can transfer to an ASM, reassign, escalate, mark Converted (GSTIN required) and create a lead — each a preview + Confirm (Phase 2, docs/superpowers/specs/2026-09-25-wa-assistant-phase2-lead-actions-design.md);
    - after a conversion, **Send invite** messages the dealer only after its own Confirm;
    - commercials/quotes, undoing a conversion and deleting leads stay on the CRM.
@@ -150,6 +152,7 @@ From lightest to heaviest. Each needs the env change + reload (§2). On prod, ch
 |---|---|---|---|
 | **Writes off** | `ASSISTANT_WRITES_ENABLED_USER_IDS=` (empty), or remove one id | Write tools disappear; reads keep working | A tap on an old preview is refused `rejected: writes_disabled` (re-checked at the tap) |
 | **Assistant off** | `ASSISTANT_DISABLED=true` | Every linked user gets "The iTarang Sales Assistant is paused right now…"; no model, no data. LINK still works | Taps are refused too (the kill switch sits before taps in the router); nothing runs |
+| **Voice off** | `WA_ASSIST_VOICE_DISABLED=true` | Voice notes get "I can read typed messages only for now. Please type it."; no download, no transcription. Typed text is unaffected | None (a voice note never confirms anything) |
 | **Channel off** | Remove the number-level override in Meta, **or** unset `WA_ASSIST_APP_SECRET` | Meta stops calling us / the webhook answers 503. Reps get no reply at all | Nothing can run |
 
 The model provider going down needs no switch. Turns fail with "Something went wrong, nothing was changed", and taps (no model involved) keep working.
@@ -185,7 +188,8 @@ node --import tsx --env-file=.env.production scripts/wa-assistant-daily-review.t
 | `stuck_executing` | **yes** | The sweep isn't running: check the boot log and `ENABLE_WA_ASSIST_SWEEP` |
 | `unhandled_inbound` | — | A few around a deploy (a restart drops `after()` work) are expected. Reply to the rep by hand; a steady trickle is a bug |
 | `errors` | — | `rejected: stale / not_owner / not_claimable / writes_disabled` = the guards working. Anything else: read the sample |
-| `media_by_type` | — | Voice-note demand for Phase 2 |
+| `media_by_type` | — | Photos / documents reps try to send (and voice notes while Voice off) |
+| `voice_notes` | — | Voice-note volume and outcomes. `voice_failed` in a burst = key quota (429) or a bad token; read `error`. Read `voice_transcripts` for wrong hearings |
 | `link_attempts` | — | Many numbers failing = someone guessing codes (each number locks for an hour after 5) |
 | `revoked_number_attempts` | — | A lost or handed-over phone: call the rep named there (§8) |
 | `usage_per_user` | — | The daily usage report |

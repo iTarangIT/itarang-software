@@ -17,6 +17,9 @@ import { markHandled, recordOutbound } from "./messages";
 import { renderLeadCard, renderPreview, renderTapOutcome, renderTurn, type WaPayload } from "./render";
 import type { RouterDeps } from "./router";
 import type { AssistantUser } from "@/lib/assistant/types";
+import { MAX_VOICE_BYTES, transcribeVoice } from "./voice/transcribe";
+import { loadVoiceVocab } from "./voice/vocab";
+import { voiceConfig } from "./voice/config";
 
 const LEAD_NOT_FOUND = "I couldn't find that lead.";
 
@@ -102,6 +105,24 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
             renderTapOutcome(await executeAction(actionId, user, { messageId: messageRowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
         isDisabled: () => assistantConfig().disabled,
+        isVoiceDisabled: () => voiceConfig().disabled,
+        transcribeVoice: async (user, audio) => {
+            // The spelling hints load while the audio downloads.
+            const [media, vocab] = await Promise.all([
+                client.downloadMedia(audio.id, MAX_VOICE_BYTES),
+                loadVoiceVocab(user),
+            ]);
+            if (!media.ok) {
+                return media.tooLarge ? { kind: "too_long" } : { kind: "failed", error: `download: ${media.error}` };
+            }
+            return transcribeVoice({
+                bytes: media.bytes,
+                mimeType: audio.mimeType ?? media.mimeType,
+                apiKey: assistantConfig().apiKey,
+                model: voiceConfig().model,
+                vocab,
+            });
+        },
         hasPendingAction: hasOpenPendingAction,
         runTextTurn: async (user, text, messageRowId) => {
             const leased = await withUserLease(user.id, () => agentTurn(user, text, { messageId: messageRowId }));

@@ -36,6 +36,10 @@ export const HANDLING = [
     "text_busy",
     "text_not_configured",
     "typed_confirm",
+    "voice_no_speech",
+    "voice_too_long",
+    "voice_unsupported",
+    "voice_failed",
     "error",
 ] as const;
 export type Handling = (typeof HANDLING)[number];
@@ -69,7 +73,7 @@ export async function insertInbound(m: InboundMessage): Promise<string | null> {
 export async function markHandled(
     rowId: string,
     handling: Handling,
-    extra: { userId?: string | null; actionId?: string | null; error?: string | null } = {},
+    extra: { userId?: string | null; actionId?: string | null; error?: string | null; text?: string | null } = {},
 ): Promise<void> {
     await db
         .update(assistantWaMessages)
@@ -79,6 +83,8 @@ export async function markHandled(
             ...(extra.userId !== undefined ? { user_id: extra.userId } : {}),
             ...(extra.actionId !== undefined ? { action_id: extra.actionId } : {}),
             ...(extra.error !== undefined ? { error: clip(extra.error, 1000) } : {}),
+            // A voice note's transcript: what the agent was given, for review.
+            ...(extra.text !== undefined ? { text: clip(extra.text) } : {}),
         })
         .where(eq(assistantWaMessages.id, rowId));
 }

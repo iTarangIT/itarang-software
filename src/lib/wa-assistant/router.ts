@@ -15,10 +15,16 @@
 //                        ast:x:<id>    → cancel
 //                        ast:lead:<id> → that lead's card via get_lead_details
 //                        anything else → logged and ignored.
-//   5. Non-text        → the fixed UC-14 reply, counted by `type`.
+//   5. Voice note      → downloaded and transcribed (no lease, no agent yet),
+//                        the rep is shown what was heard, and the transcript
+//                        continues into step 6 exactly as if it had been typed.
+//                        Nothing heard / too long / failed → a fixed reply.
+//                        WA_ASSIST_VOICE_DISABLED → the UC-14 reply instead.
+//      Other non-text  → the fixed UC-14 reply, counted by `type`.
 //   6. Text            → a bare "yes / haan / confirm" while a preview is
-//                        waiting gets the fixed "tap Confirm" reply (typing never
-//                        saves); anything else → per-user lease → agent → reply.
+//                        waiting gets the fixed "tap Confirm" reply (typing — or
+//                        saying — never saves); anything else → per-user lease →
+//                        agent → reply.
 //
 // Every message ends with a `handling` value on its row. Any unexpected error
 // is logged with the provider message id and answered with one generic
@@ -30,8 +36,9 @@ import type { LinkOutcome } from "./link";
 import type { SenderResolution } from "./identity";
 import type { AssistantUser } from "@/lib/assistant/types";
 import { parseLinkCommand } from "./link";
-import { REPLY, linkedReply, linkLockedReply } from "./replies";
+import { REPLY, heardReply, linkedReply, linkLockedReply } from "./replies";
 import type { WaPayload } from "./render";
+import type { TranscribeOutcome } from "./voice/transcribe";
 
 /** What running one text turn produced — the channel only needs the reply. */
 export type TextTurnOutcome =
@@ -45,7 +52,7 @@ export type RouterDeps = {
     markHandled: (
         rowId: string,
         handling: Handling,
-        extra?: { userId?: string | null; actionId?: string | null; error?: string | null },
+        extra?: { userId?: string | null; actionId?: string | null; error?: string | null; text?: string | null },
     ) => Promise<void>;
     /** Send a plain text reply and log it. Never throws. */
     replyText: (waPhone: string, text: string, userId: string | null) => Promise<void>;
@@ -67,6 +74,10 @@ export type RouterDeps = {
     /** ASSISTANT_DISABLED, read per message. */
     isDisabled: () => boolean;
     hasPendingAction: (userId: string) => Promise<boolean>;
+    /** WA_ASSIST_VOICE_DISABLED, read per message: voice notes get the UC-14 reply. */
+    isVoiceDisabled: () => boolean;
+    /** Download a voice note and turn it into text. Never throws. */
+    transcribeVoice: (user: AssistantUser, audio: { id: string; mimeType: string | null }) => Promise<TranscribeOutcome>;
     /** Lease → agent → memory, for one text message. */
     runTextTurn: (user: AssistantUser, text: string, messageRowId: string) => Promise<TextTurnOutcome>;
     log: (level: "info" | "warn" | "error", msg: string, meta: Record<string, unknown>) => void;
@@ -175,36 +186,78 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
             return;
         }
 
-        // 5. Anything that is not typed text.
-        if (msg.type !== "text") {
+        // 5. Voice notes → text; anything else that is not typed text → UC-14.
+        let text: string;
+        let transcript: string | undefined;
+        if (msg.type === "audio" && !deps.isVoiceDisabled()) {
+            const sttStarted = Date.now();
+            const heard: TranscribeOutcome = msg.audio
+                ? await deps.transcribeVoice(user, msg.audio)
+                : { kind: "failed", error: "audio message without a media id" };
+            if (heard.kind !== "ok") {
+                const [handling, reply] =
+                    heard.kind === "no_speech"
+                        ? (["voice_no_speech", REPLY.voiceNoSpeech] as const)
+                        : heard.kind === "too_long"
+                          ? (["voice_too_long", REPLY.voiceTooLong] as const)
+                          : heard.kind === "unsupported"
+                            ? (["voice_unsupported", REPLY.voiceFailed] as const)
+                            : (["voice_failed", REPLY.voiceFailed] as const);
+                const error =
+                    heard.kind === "failed" ? heard.error : heard.kind === "unsupported" ? `unsupported ${heard.mimeType}` : null;
+                await deps.markHandled(rowId, handling, { userId, ...(error ? { error } : {}) });
+                await deps.replyText(msg.waPhone, reply, userId);
+                deps.log(heard.kind === "failed" ? "warn" : "info", "[wa-assist] voice not usable", {
+                    ...meta,
+                    userId,
+                    outcome: heard.kind,
+                    error,
+                    sttMs: Date.now() - sttStarted,
+                });
+                return;
+            }
+            transcript = heard.text;
+            text = heard.text;
+            // Shown on its own, before the answer: a preview body is never squeezed.
+            await deps.replyText(msg.waPhone, heardReply(heard.text), userId);
+            deps.log("info", "[wa-assist] voice transcribed", {
+                ...meta,
+                userId,
+                chars: heard.text.length,
+                sttMs: Date.now() - sttStarted,
+            });
+        } else if (msg.type !== "text") {
             await deps.markHandled(rowId, "media", { userId });
-            await deps.replyText(msg.waPhone, REPLY.media, userId);
+            await deps.replyText(msg.waPhone, deps.isVoiceDisabled() ? REPLY.media : REPLY.mediaNotVoice, userId);
             deps.log("info", "[wa-assist] media", { ...meta, userId });
             return;
+        } else {
+            text = msg.text ?? "";
         }
 
-        // 6. Text.
-        const text = msg.text ?? "";
+        // 6. Text — typed, or a voice note's transcript (stored on the row for review).
+        const logged = transcript !== undefined ? { userId, text: transcript } : { userId };
         if (isTypedConfirm(text) && (await deps.hasPendingAction(userId))) {
-            await deps.markHandled(rowId, "typed_confirm", { userId });
+            await deps.markHandled(rowId, "typed_confirm", logged);
             await deps.replyText(msg.waPhone, REPLY.tapConfirm, userId);
             return;
         }
 
         const outcome = await deps.runTextTurn(user, text, rowId);
         if (outcome.kind === "busy") {
-            await deps.markHandled(rowId, "text_busy", { userId });
+            await deps.markHandled(rowId, "text_busy", logged);
             await deps.replyText(msg.waPhone, REPLY.busy, userId);
         } else if (outcome.kind === "not_configured") {
-            await deps.markHandled(rowId, "text_not_configured", { userId });
+            await deps.markHandled(rowId, "text_not_configured", logged);
             await deps.replyText(msg.waPhone, REPLY.notReady, userId);
             deps.log("error", "[wa-assist] agent not configured (WA_ASSIST_GEMINI_API_KEY)", meta);
         } else {
-            await deps.markHandled(rowId, "text_agent", { userId });
+            await deps.markHandled(rowId, "text_agent", logged);
             await deps.sendPayload(msg.waPhone, outcome.payload, userId);
             deps.log("info", "[wa-assist] turn", {
                 ...meta,
                 userId,
+                voice: transcript !== undefined,
                 modelCalls: outcome.modelCalls,
                 toolCalls: outcome.toolCalls,
                 latencyMs: Date.now() - started,

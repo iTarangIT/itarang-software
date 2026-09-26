@@ -205,3 +205,79 @@ describe("WaAssistClient", () => {
         expect(fn).toHaveBeenCalledTimes(1);
     });
 });
+
+
+describe("voice notes: parse + downloadMedia", () => {
+    it("parseWebhook carries a voice note's media id and mime type, and nothing for other types", () => {
+        const r = parseWebhook(payload({
+            messages: [
+                { id: "v", from: "919876543210", type: "audio", audio: { id: "MEDIA1", mime_type: "audio/ogg; codecs=opus", voice: true } },
+                { id: "t", from: "919876543210", type: "text", text: { body: "hi" } },
+            ],
+        }));
+        if (!r.ok) throw new Error(r.error);
+        const [v, t] = r.events;
+        expect(v.kind === "message" && v.audio).toEqual({ id: "MEDIA1", mimeType: "audio/ogg; codecs=opus" });
+        expect(t.kind === "message" && t.audio).toBeNull();
+    });
+
+    function mediaFetch(steps: (Response | Error)[]) {
+        const urls: string[] = [];
+        const auth: (string | null)[] = [];
+        let i = 0;
+        const fn = vi.fn(async (url: string, init: RequestInit) => {
+            urls.push(url);
+            auth.push(new Headers(init.headers).get("authorization"));
+            const step = steps[Math.min(i++, steps.length - 1)];
+            if (step instanceof Error) throw step;
+            return step;
+        });
+        return { fn, urls, auth };
+    }
+    const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+    it("resolves the media url, then downloads it — both with the assistant's own token", async () => {
+        const { fn, urls, auth } = mediaFetch([
+            json({ url: "https://lookaside.fbsbx.com/x", mime_type: "audio/ogg", file_size: 4 }),
+            new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }),
+        ]);
+        const c = new WaAssistClient(clientEnv, { fetchImpl: fn as unknown as typeof fetch, ...noSleep });
+        const r = await c.downloadMedia("MEDIA1", 1000);
+        expect(r.ok && [...r.bytes]).toEqual([1, 2, 3, 4]);
+        expect(r.ok && r.mimeType).toBe("audio/ogg");
+        expect(urls).toEqual(["https://graph.facebook.com/v21.0/MEDIA1", "https://lookaside.fbsbx.com/x"]);
+        expect(auth).toEqual(["Bearer EAAG-test-token-abcdefghij", "Bearer EAAG-test-token-abcdefghij"]);
+    });
+
+    it("refuses an oversize file before downloading it", async () => {
+        const { fn } = mediaFetch([json({ url: "https://lookaside.fbsbx.com/x", file_size: 5000 })]);
+        const c = new WaAssistClient(clientEnv, { fetchImpl: fn as unknown as typeof fetch, ...noSleep });
+        const r = await c.downloadMedia("M", 1000);
+        expect(r).toMatchObject({ ok: false, tooLarge: true });
+        expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a 5xx, not a 404", async () => {
+        const a = mediaFetch([
+            json({ error: { message: "boom" } }, 503),
+            json({ url: "https://lookaside.fbsbx.com/x" }),
+            new Response(new Uint8Array([9]), { status: 200 }),
+        ]);
+        const c = new WaAssistClient(clientEnv, { fetchImpl: a.fn as unknown as typeof fetch, ...noSleep });
+        expect((await c.downloadMedia("M", 1000)).ok).toBe(true);
+        expect(a.fn).toHaveBeenCalledTimes(3);
+
+        const b = mediaFetch([json({ error: { message: "Unsupported get request" } }, 404)]);
+        const d = new WaAssistClient(clientEnv, { fetchImpl: b.fn as unknown as typeof fetch, ...noSleep });
+        expect(await d.downloadMedia("M", 1000)).toEqual({ ok: false, status: 404, error: "Unsupported get request" });
+        expect(b.fn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a network failure on every attempt is an error result, never a throw", async () => {
+        const { fn } = mediaFetch([new Error("fetch failed")]);
+        const c = new WaAssistClient(clientEnv, { fetchImpl: fn as unknown as typeof fetch, ...noSleep });
+        expect(await c.downloadMedia("M", 1000)).toEqual({ ok: false, error: "fetch failed" });
+        expect(fn).toHaveBeenCalledTimes(4);
+    });
+});
