@@ -163,6 +163,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "visit"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
+                lead={lead}
                 onSuccess={onVisitSuccess}
             />
             <LogTouchpointModal
