@@ -143,7 +143,8 @@ type Offer = {
     provisional: boolean;
     content: { system: string; equipmentInr: number; installationInr: number; gstInr: number; totalInr: number; financingLine: string; provisionalReason: string | null };
 };
-type Otp = { challengeId: string; maskedMobile: string; expiresAt: string; attemptsRemaining: number };
+/** `devCode` is present only when the Ecofy sandbox runs with OTP_DEV_ECHO=true; production never sends it. */
+type Otp = { challengeId: string; maskedMobile: string; expiresAt: string; attemptsRemaining: number; devCode?: string };
 type FileRec = { fileNo: string; acceptedTotalInr: number; quoteVersion: number; acceptedAt: string; provisional: boolean } | null;
 
 export function OfferTab(p: TabProps) {
@@ -420,6 +421,16 @@ export function OfferTab(p: TabProps) {
                                     <span className="text-xs text-gray-500">
                                         Sent to {otp.maskedMobile}, expires {formatIst(otp.expiresAt)} · {otp.attemptsRemaining} attempts
                                     </span>
+                                )}
+                                {otp?.devCode && (
+                                    <button
+                                        type="button"
+                                        title="Sandbox only: Ecofy echoed the OTP (OTP_DEV_ECHO). Click to fill it in."
+                                        onClick={() => setCode(otp.devCode!)}
+                                        className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 font-mono text-xs tracking-[0.2em] text-amber-800 hover:bg-amber-100"
+                                    >
+                                        Sandbox OTP {otp.devCode}
+                                    </button>
                                 )}
                             </div>
                         )}
