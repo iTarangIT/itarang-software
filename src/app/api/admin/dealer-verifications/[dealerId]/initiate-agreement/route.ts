@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { DEALER_AGREEMENT_EXPIRE_IN_DAYS } from "@/lib/agreement/constants";
 import { eq } from "drizzle-orm";
 import {
   dealerAgreementSigners,
@@ -673,7 +674,8 @@ export async function POST(
         statePresence: scheduleThree.statePresence,
         signers,
         sequential: true,
-        expireInDays: 30,
+        // Digio caps this at 90 — see constants.ts before raising it.
+        expireInDays: DEALER_AGREEMENT_EXPIRE_IN_DAYS,
         // Keep Digio's email/SMS notifications ON so the iTarang signer is
         // notified by email (requirement). Digio's notify flag is global — there
         // is no per-signer suppression — so the dealer may also receive a Digio

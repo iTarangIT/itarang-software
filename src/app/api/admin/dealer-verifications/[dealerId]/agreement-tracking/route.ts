@@ -9,12 +9,16 @@ import {
 } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
-import { fetchDigioAndSyncSigners } from "@/lib/agreement/sync-signers";
+import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
 };
+
+// Nothing left to sync for these — polling the tracking endpoint must not keep
+// hitting Digio once the agreement has settled (or was never initiated).
+const TERMINAL_AGREEMENT_STATUSES = new Set(["completed", "failed", "expired", "not_generated"]);
 
 export async function GET(_req: NextRequest, context: Context) {
   const auth = await requireSalesHead();
@@ -42,26 +46,35 @@ export async function GET(_req: NextRequest, context: Context) {
       .from(dealerAgreementSigners)
       .where(eq(dealerAgreementSigners.application_id, application.id));
 
-    // Self-heal stale state — agreement initiated but a signer is still stuck at
-    // 'sent'/'pending' (e.g. signed on Digio but never refreshed here). The Digio
-    // status call is SLOW (intermittent 500s + retries), so we run it in the
-    // BACKGROUND via after() instead of blocking this response — otherwise the
-    // whole review page hangs on it. The synced rows surface on the next load;
-    // the explicit "Refresh Status" button (refresh-agreement) still syncs live.
+    // Self-heal stale state — agreement initiated but not yet terminal (a signer
+    // still 'sent'/'pending', or every signer signed but agreement_status hasn't
+    // caught up). Run the FULL refresh (same as the "Refresh Status" button:
+    // signer sync + agreement_status + signed PDF / audit-trail caching) so the
+    // review page reaches "completed" on its own — the client polls this
+    // endpoint while the agreement is in flight and picks the result up on its
+    // next tick. The Digio status call is SLOW (intermittent 500s + retries),
+    // so it runs in the BACKGROUND via after() instead of blocking this
+    // response — otherwise the whole review page hangs on it. The lib throttles
+    // overlapping auto-runs per application.
     const hasStaleSigner = signerRows.some((s) => {
       const status = String(s.signer_status || "").toLowerCase();
       return status === "sent" || status === "pending";
     });
-    if (application.provider_document_id && signerRows.length > 0 && hasStaleSigner) {
+    const agreementStatus = String(application.agreement_status || "").toLowerCase();
+    const isNonTerminal = !TERMINAL_AGREEMENT_STATUSES.has(agreementStatus);
+    const needsSync =
+      !!application.provider_document_id &&
+      application.agreement_mode !== "manual" &&
+      (hasStaleSigner || isNonTerminal);
+    if (needsSync) {
       after(async () => {
         try {
-          await fetchDigioAndSyncSigners({
-            application_id: application.id,
-            providerDocumentId: application.provider_document_id!,
-            requestId: application.request_id,
-          });
+          const result = await refreshDealerAgreementFromDigio(application, { source: "auto" });
+          if (!result.ok && result.status !== 429) {
+            console.warn("[AGREEMENT TRACKING] background auto-refresh failed:", result.status, result.message);
+          }
         } catch (syncErr) {
-          console.warn("[AGREEMENT TRACKING] background auto-sync failed:", syncErr);
+          console.warn("[AGREEMENT TRACKING] background auto-refresh threw:", syncErr);
         }
       });
     }
