@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import RequestCorrectionDialog from "@/components/admin/dealer-verification/RequestCorrectionDialog";
@@ -244,6 +244,22 @@ type AgreementTrackingResponse = {
   signers: AgreementSignerRow[];
   timeline: AgreementTimelineItem[];
 };
+
+// Agreement statuses that will never change again on their own — polling stops
+// here. Mirrors TERMINAL_AGREEMENT_STATUSES in the agreement-tracking route.
+const TERMINAL_AGREEMENT_STATUSES = ["completed", "failed", "expired"];
+const AGREEMENT_POLL_INTERVAL_MS = 10_000;
+
+// Button action → API route folder. The slugs don't all follow `${action}-agreement`
+// (the route is `re-initiate-agreement`, and there is no dedicated retry route:
+// "Retry Download Signed Copy" is just a refresh, which re-downloads and caches
+// the signed PDF + audit trail whenever Digio reports the document complete).
+const AGREEMENT_ACTION_ROUTES = {
+  initiate:   "initiate-agreement",
+  refresh:    "refresh-agreement",
+  reinitiate: "re-initiate-agreement",
+  retry:      "refresh-agreement",
+} as const;
 
 // ✅ NEW — shape for the edit form
 type CompanyEditForm = {
@@ -1097,17 +1113,22 @@ export default function DealerReviewPage() {
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
-  const loadAgreementTracking = async () => {
+  // `silent` is used by the in-flight agreement poll: no loading flag (so the
+  // tracking table doesn't flash "Loading…" every tick) and a failed tick keeps
+  // the last good state instead of blanking the panel.
+  const loadAgreementTracking = async (opts: { silent?: boolean } = {}) => {
+    const { silent = false } = opts;
     try {
-      setTrackingLoading(true);
+      if (!silent) setTrackingLoading(true);
       const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/agreement-tracking`, { cache: "no-store" });
       const json = await res.json();
-      if (json.success) setTracking(json.data); else setTracking(null);
+      if (json.success) setTracking(json.data);
+      else if (!silent) setTracking(null);
     } catch (error) {
       console.error("Failed to load agreement tracking", error);
-      setTracking(null);
+      if (!silent) setTracking(null);
     } finally {
-      setTrackingLoading(false);
+      if (!silent) setTrackingLoading(false);
     }
   };
 
@@ -1503,6 +1524,67 @@ export default function DealerReviewPage() {
     }
   };
 
+  // ─── live agreement status ────────────────────────────────────────────────
+  // Nothing pushes Digio signing events into this app (no dealer-agreement
+  // webhook), so while an e-sign agreement is in flight we poll the (fast)
+  // tracking endpoint. Each hit makes the server run the full refresh in the
+  // background; the next tick picks up "completed" and the Download Signed
+  // Agreement / Download Audit Trail buttons appear without anyone clicking
+  // Refresh Status. Stops on any terminal status, and skips ticks while the tab
+  // is hidden — but refetches the moment it is focused again, which is the
+  // common case (sales_head signs as the iTarang signatory in another tab).
+  const shouldPollAgreement =
+    !isManualAgreement &&
+    !isRejected &&
+    hasInitiatedAgreement &&
+    !TERMINAL_AGREEMENT_STATUSES.includes(normalizedAgreementStatus);
+
+  useEffect(() => {
+    if (!shouldPollAgreement) return;
+    let cancelled = false;
+    let inFlight = false;
+
+    const tick = async () => {
+      if (cancelled || inFlight) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        await loadAgreementTracking({ silent: true });
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(tick, AGREEMENT_POLL_INTERVAL_MS);
+    const onFocus = () => { void tick(); };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldPollAgreement, dealerId]);
+
+  // When the poll observes the flip to "completed", pull the dealer detail once
+  // too so data.agreement (status, signedAgreementUrl), the checklist and the
+  // badges agree with the tracking panel.
+  const prevAgreementStatusRef = useRef<string>(normalizedAgreementStatus);
+  useEffect(() => {
+    const prev = prevAgreementStatusRef.current;
+    prevAgreementStatusRef.current = normalizedAgreementStatus;
+    if (normalizedAgreementStatus === "completed" && prev !== "completed" && prev !== "") {
+      void reloadDealer();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedAgreementStatus]);
+
   const handleCancelCorrection = async () => {
     if (cancellingCorrection) return;
     if (!window.confirm(
@@ -1700,7 +1782,7 @@ export default function DealerReviewPage() {
           }}
         : {};
 
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/${action}-agreement`, {
+      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/${AGREEMENT_ACTION_ROUTES[action]}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(action === "initiate" || action === "reinitiate" ? payload : {}),
@@ -2735,7 +2817,11 @@ export default function DealerReviewPage() {
                     {agreementActionLoading === "reinitiate" ? "Re-initiating…" : "Re-initiate Agreement"}
                   </button>
                 )}
-                {(agreementStatusForUi || "").toLowerCase() === "signed" && !data.agreement?.copyUrl && (
+                {/* Fully signed on Digio but no cached signed copy yet (the
+                    download/caching step failed after completion). Previously
+                    keyed on status === "signed", which the refresh normaliser
+                    never emits, so the button was unreachable. */}
+                {signedAgreementReady && !tracking?.signedAgreementUrl && !data.agreement?.signedAgreementUrl && (
                   <button onClick={() => handleAgreementAction("retry")}
                     disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
