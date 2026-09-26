@@ -23,6 +23,10 @@ import { escalateLead } from "./tools/write/escalateLead";
 import { markConverted } from "./tools/write/markConverted";
 import { inviteDealerOnboarding } from "./tools/write/inviteDealerOnboarding";
 import { createLead } from "./tools/write/createLead";
+import { productCatalogue } from "./tools/read/productCatalogue";
+import { quoteStatus } from "./tools/read/quoteStatus";
+import { createQuote } from "./tools/write/createQuote";
+import { sendQuote } from "./tools/write/sendQuote";
 
 const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     my_queue: myQueue,
@@ -40,12 +44,17 @@ const FACTORIES: Readonly<Record<ToolName, ToolFactory>> = Object.freeze({
     mark_converted: markConverted,
     invite_dealer_onboarding: inviteDealerOnboarding,
     create_lead: createLead,
+    product_catalogue: productCatalogue,
+    quote_status: quoteStatus,
+    create_quote: createQuote,
+    send_quote: sendQuote,
 });
 
 /**
  * BRD §5: log_visit is ASM-only; transfer_to_asm is ISR-only (the screen's
  * Transfer button is not offered to an ASM — an ASM hands back with
- * reassign_lead). Everything else is both roles.
+ * reassign_lead). Everything else is both roles — including the quote tools
+ * (product_catalogue, quote_status, create_quote, send_quote).
  */
 export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = Object.freeze({
     inside_sales_rep: Object.freeze([
@@ -53,11 +62,13 @@ export const ROLE_TOOLS: Readonly<Record<AssistantRole, readonly ToolName[]>> = 
         "log_call", "mark_lost", "claim_lead", "set_follow_up",
         "transfer_to_asm", "reassign_lead", "escalate_lead", "mark_converted",
         "invite_dealer_onboarding", "create_lead",
+        "product_catalogue", "quote_status", "create_quote", "send_quote",
     ] as const),
     asm: Object.freeze([
         "my_queue", "search_lead", "get_lead_details", "my_numbers",
         "log_call", "log_visit", "mark_lost", "claim_lead", "set_follow_up",
         "reassign_lead", "escalate_lead", "mark_converted", "invite_dealer_onboarding", "create_lead",
+        "product_catalogue", "quote_status", "create_quote", "send_quote",
     ] as const),
 });
 

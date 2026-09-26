@@ -28,7 +28,14 @@ export const ROLE_LABEL: Record<AssistantRole, string> = {
 
 // ── Tools ───────────────────────────────────────────────────────────────────
 
-export const READ_TOOL_NAMES = ["my_queue", "search_lead", "get_lead_details", "my_numbers"] as const;
+export const READ_TOOL_NAMES = [
+    "my_queue",
+    "search_lead",
+    "get_lead_details",
+    "my_numbers",
+    "product_catalogue",
+    "quote_status",
+] as const;
 export const WRITE_TOOL_NAMES = [
     "log_call",
     "log_visit",
@@ -41,6 +48,8 @@ export const WRITE_TOOL_NAMES = [
     "mark_converted",
     "invite_dealer_onboarding",
     "create_lead",
+    "create_quote",
+    "send_quote",
 ] as const;
 export type ReadToolName = (typeof READ_TOOL_NAMES)[number];
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
@@ -62,6 +71,15 @@ export type LeadSummary = {
     owned_by_you: boolean;
     next_date: string | null;
     crm_url: string;
+};
+
+/** One catalogue product as a tool hands it back. No price: the OEM floor stays with the CEO. */
+export type ProductSummary = {
+    product_id: string;
+    asset_type: "battery" | "charger" | "paraphernalia";
+    product_name: string;
+    model_id: string;
+    detail: string | null;
 };
 
 /**
@@ -94,6 +112,10 @@ export type ToolResult =
     | { kind: "candidates"; question: string; rows: LeadSummary[] }
     | { kind: "lead"; lead: Record<string, unknown> }
     | { kind: "numbers"; data: Record<string, unknown> }
+    /** Catalogue products — names and models only, never a price. */
+    | { kind: "products"; rows: ProductSummary[]; total: number }
+    /** One lead's latest quote (quote_status). */
+    | { kind: "quote"; quote: Record<string, unknown> }
     | { kind: "preview"; action_id: string; preview: Preview }
     | { kind: "not_found" }
     | { kind: "question"; question: string }

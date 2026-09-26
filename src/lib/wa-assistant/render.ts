@@ -142,6 +142,8 @@ function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayl
             body: fit(`⚠️ The invite could not be sent (${why}). Try again, or use Invite on WhatsApp in the CRM.\n${o.crmUrl}`, RENDER_LIMITS.text),
         };
     }
+    if (o.tool === "create_quote") return { kind: "text", body: renderQuoteSaved(o) };
+    if (o.tool === "send_quote") return { kind: "text", body: renderQuoteSent(o) };
     if (o.tool === "mark_converted" && o.leadId) {
         return {
             kind: "buttons",
@@ -150,6 +152,39 @@ function renderConfirmed(o: Extract<ExecOutcome, { kind: "confirmed" }>): WaPayl
         };
     }
     return { kind: "text", body: saved };
+}
+
+/** A reply line plus the lead's CRM link — the link is never the part that gets cut. */
+function withLink(body: string, url: string): string {
+    return `${fit(body, RENDER_LIMITS.text - url.length - 1)}\n${url}`;
+}
+
+/** create_quote confirmed: what the gate decided, and what the rep can do next. */
+function renderQuoteSaved(o: Extract<ExecOutcome, { kind: "confirmed" }>): string {
+    const v = typeof o.after.quote_version === "number" ? ` v${o.after.quote_version}` : "";
+    const qn = typeof o.extra?.quote_number === "string" ? o.extra.quote_number : null;
+    const body =
+        o.after.auto_approved === true
+            ? qn
+                ? `✅ Quote${v} saved and auto-approved. PDF ${qn} is ready — say "send quote" to send it to the dealer.`
+                : `✅ Quote${v} saved and auto-approved, but the PDF could not be made yet. Regenerate it on the CRM screen before sending.`
+            : `⏳ Quote${v} saved — waiting for CEO approval. It can be sent once approved; ask "quote status" to check.`;
+    return withLink(body, o.crmUrl);
+}
+
+/** send_quote confirmed: per-channel delivery, never "sent" for a channel that failed. */
+function renderQuoteSent(o: Extract<ExecOutcome, { kind: "confirmed" }>): string {
+    const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+    const sent = list(o.extra?.sent);
+    const failed = list(o.extra?.failed);
+    const qn = typeof o.extra?.quote_number === "string" ? `${o.extra.quote_number} ` : "";
+    const name = (c: string) => (c === "email" ? "email" : "WhatsApp");
+    let body: string;
+    if (!o.extra) body = "⚠️ The send could not be confirmed. Check the lead's history before sending again.";
+    else if (sent.length && !failed.length) body = `✅ Quotation ${qn}sent to the dealer on ${sent.map(name).join(" and ")}.`;
+    else if (sent.length) body = `⚠️ Quotation ${qn}sent on ${sent.map(name).join(" and ")}, but ${failed.map(name).join(" and ")} failed.`;
+    else body = `⚠️ The quotation was not sent${o.extra.error ? ` (${String(o.extra.error)})` : ""}. Try again, or use Send on the CRM screen.`;
+    return withLink(body, o.crmUrl);
 }
 
 /** The reply to a Confirm / Cancel tap (UC-15 wording for expired and repeated taps). */
@@ -192,8 +227,11 @@ export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
  * everything else is text.
  */
 export function renderTurn(turn: { text: string; results: { tool: string; result: ToolResult }[] }): WaPayload {
-    const preview = [...turn.results].reverse().map((r) => r.result).find((r) => r.kind === "preview");
-    if (preview?.kind === "preview") return renderPreview(preview.preview, preview.action_id);
+    const last = [...turn.results].reverse().find((r) => r.result.kind === "preview");
+    if (last?.result.kind === "preview") {
+        // A send has nothing to edit: it goes to the lead's own phone / email.
+        return renderPreview(last.result.preview, last.result.action_id, { edit: last.tool !== "send_quote" });
+    }
     const text = whatsappText(turn.text);
     const listy = [...turn.results]
         .reverse()

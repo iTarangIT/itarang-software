@@ -47,22 +47,26 @@ describe("registry", () => {
     });
 
     it("off the pilot list → read tools only; on it → the role's writes", () => {
-        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers"]);
-        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers"]);
+        expect(toolNamesFor("inside_sales_rep", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status"]);
+        expect(toolNamesFor("asm", false)).toEqual(["my_queue", "search_lead", "get_lead_details", "my_numbers", "product_catalogue", "quote_status"]);
         expect(toolNamesFor("asm", true)).toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).not.toContain("log_visit");
         expect(toolNamesFor("inside_sales_rep", true)).toEqual([...ROLE_TOOLS.inside_sales_rep]);
     });
 
-    it("all fifteen tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
+    it("all nineteen tools have a Zod schema that rejects junk (unknown keys are stripped, never acted on)", () => {
         const all = [...toolsFor("asm", true), ...toolsFor("inside_sales_rep", true)];
-        expect(new Set(all.map((t) => t.name)).size).toBe(15);
-        for (const t of all.filter((x) => x.name !== "my_numbers")) {
+        expect(new Set(all.map((t) => t.name)).size).toBe(19);
+        // my_numbers and product_catalogue take no lead: checked on their own below.
+        for (const t of all.filter((x) => x.name !== "my_numbers" && x.name !== "product_catalogue")) {
             expect(t.schema.safeParse({ lead_id: "", evil: 1 }).success, t.name).toBe(false);
         }
         const numbers = all.find((t) => t.name === "my_numbers")!;
         expect(numbers.schema.safeParse({ period: "forever" }).success).toBe(false);
         expect(numbers.schema.parse({ user_id: "someone-else" })).toEqual({ period: "this_month" });
+        const catalogue = all.find((t) => t.name === "product_catalogue")!;
+        expect(catalogue.schema.safeParse({ asset_type: "scooter" }).success).toBe(false);
+        expect(catalogue.schema.parse({ lead_id: "DL-1", query: "105ah" })).toEqual({ query: "105ah" });
     });
 
     it("my_queue's tab enum is the role's own tabs", () => {
@@ -144,7 +148,8 @@ describe("scope predicate (INV1)", () => {
                 : t.name === "reassign_lead" ? { lead_id: "DL-1", to: "Priya", reason: "x" }
                 : t.name === "escalate_lead" ? { lead_id: "DL-1", reason: "Other", urgency: "normal", notes: "x" }
                 : t.name === "mark_converted" ? { lead_id: "DL-1", gstin: "x" }
-                : t.name === "invite_dealer_onboarding" ? { lead_id: "DL-1" }
+                : t.name === "invite_dealer_onboarding" || t.name === "send_quote" ? { lead_id: "DL-1" }
+                : t.name === "create_quote" ? { lead_id: "DL-1", lines: [{ product_id: "p-1", quantity: 1, unit_price: 100 }] }
                 : { lead_id: "DL-1", channel: "note" };
             const r = await t.run(ctx(ASM), t.schema.parse(input));
             expect(r.kind, t.name).toBe("declined");
