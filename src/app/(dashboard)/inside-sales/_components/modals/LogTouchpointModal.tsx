@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,10 @@ import {
     VisitFields,
 } from "@/app/(dashboard)/asm/_components/VisitFields";
 import type { VisitNextAction } from "@/lib/asm/types";
+import { autoProgressForCall, type Interest } from "@/lib/leads/autoProgress";
+import { DISPOSITION_BUCKETS, type DispositionBucket } from "@/lib/leads/dispositions";
+
+const INTERESTS: Interest[] = ["hot", "warm", "cold"];
 
 type Props = {
     open: boolean;
@@ -72,9 +76,40 @@ export function LogTouchpointModal({
     const [toStatus, setToStatus] = useState<LeadStatus | "">("");
     const [followUpAt, setFollowUpAt] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    // Temperature change to save with this touchpoint ("" = leave as is).
+    const [toInterest, setToInterest] = useState<Interest | "">("");
+    // Which of status / temperature were filled by the shared auto rule and
+    // not touched by the rep since — the rep's own choice always wins.
+    const [auto, setAuto] = useState({ status: false, interest: false });
+    const [touched, setTouched] = useState({ status: false, interest: false });
+
+    // Pre-fill status + temperature from the call outcome with the SAME rule
+    // the WhatsApp Assistant proposes with (lib/leads/autoProgress.ts).
+    useEffect(() => {
+        if (type !== "inside_sales_call" || !disposition.disposition) return;
+        const derived = autoProgressForCall({
+            connected: disposition.connectStatus === "connected",
+            label: disposition.disposition,
+            bucket: (DISPOSITION_BUCKETS as readonly string[]).includes(disposition.bucket)
+                ? (disposition.bucket as DispositionBucket)
+                : null,
+            currentStatus: lead.lead_status,
+            currentInterest: lead.interest_level,
+        });
+        if (!touched.status) {
+            setChangeStatus(!!derived.statusTo);
+            setToStatus(derived.statusTo ?? "");
+        }
+        if (!touched.interest) setToInterest(derived.interestTo ?? "");
+        setAuto({
+            status: !touched.status && !!derived.statusTo,
+            interest: !touched.interest && !!derived.interestTo,
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- re-derive only when the outcome changes
+    }, [type, disposition.disposition, disposition.connectStatus, disposition.bucket]);
 
     // ASM-only "visit" branch — owns the visit form state independently.
-    const visitForm = useVisitForm(open);
+    const visitForm = useVisitForm(open, lead);
     const isVisit = type === "visit";
 
     const typeOptions: TouchpointType[] =
@@ -97,6 +132,9 @@ export function LogTouchpointModal({
         setChangeStatus(false);
         setToStatus("");
         setFollowUpAt("");
+        setToInterest("");
+        setAuto({ status: false, interest: false });
+        setTouched({ status: false, interest: false });
         setSubmitting(false);
     };
 
@@ -153,6 +191,19 @@ export function LogTouchpointModal({
                     return;
                 }
                 throw new Error(json?.error?.message ?? "Failed to log touchpoint");
+            }
+            // Temperature is its own audited write (interest_level_overrides).
+            // The touchpoint already saved, so a failure here is reported, not rolled back.
+            if (toInterest && toInterest !== lead.interest_level) {
+                const ir = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/interest-level`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        interest_level: toInterest,
+                        reason: auto.interest ? "Auto: from call outcome" : "Set with touchpoint",
+                    }),
+                });
+                if (!ir.ok) toast.error("Touchpoint logged, but the temperature could not be updated.");
             }
             toast.success("Touchpoint logged.");
             reset();
@@ -281,9 +332,14 @@ export function LogTouchpointModal({
                             <input
                                 type="checkbox"
                                 checked={changeStatus}
-                                onChange={(e) => setChangeStatus(e.target.checked)}
+                                onChange={(e) => {
+                                    setChangeStatus(e.target.checked);
+                                    setTouched((t) => ({ ...t, status: true }));
+                                    setAuto((a) => ({ ...a, status: false }));
+                                }}
                             />
                             Update lead status with this touchpoint
+                            {auto.status && <span className="text-[11px] text-emerald-700">(auto from call outcome)</span>}
                         </label>
                         {changeStatus && (
                             <div>
@@ -291,7 +347,11 @@ export function LogTouchpointModal({
                                 <select
                                     className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
                                     value={toStatus}
-                                    onChange={(e) => setToStatus(e.target.value as LeadStatus | "")}
+                                    onChange={(e) => {
+                                        setToStatus(e.target.value as LeadStatus | "");
+                                        setTouched((t) => ({ ...t, status: true }));
+                                        setAuto((a) => ({ ...a, status: false }));
+                                    }}
                                 >
                                     <option value="">— select —</option>
                                     {statusTargets.map((s) => (
@@ -301,6 +361,29 @@ export function LogTouchpointModal({
                                 <p className="text-[11px] text-gray-500 mt-1">
                                     Any status can be set from any other — no transition restrictions.
                                 </p>
+                            </div>
+                        )}
+
+                        {type === "inside_sales_call" && (
+                            <div>
+                                <Label>
+                                    Temperature{" "}
+                                    {auto.interest && <span className="text-[11px] text-emerald-700">(auto from call outcome)</span>}
+                                </Label>
+                                <select
+                                    className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
+                                    value={toInterest}
+                                    onChange={(e) => {
+                                        setToInterest(e.target.value as Interest | "");
+                                        setTouched((t) => ({ ...t, interest: true }));
+                                        setAuto((a) => ({ ...a, interest: false }));
+                                    }}
+                                >
+                                    <option value="">— leave as {lead.interest_level ?? "not set"} —</option>
+                                    {INTERESTS.map((i) => (
+                                        <option key={i} value={i}>{i}</option>
+                                    ))}
+                                </select>
                             </div>
                         )}
 

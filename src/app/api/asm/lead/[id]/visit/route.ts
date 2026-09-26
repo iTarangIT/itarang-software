@@ -4,15 +4,23 @@
 // Assistant logs a visit exactly the same way.
 //
 // next_action is stored on lead_visits for audit; the client reads it from
-// the response to chain into Mark Converted / Mark Lost / Escalate. Status
-// transitions are NOT performed here — they go through their dedicated
-// routes so the canTransition validator stays the single source of truth.
+// the response to chain into Mark Converted / Mark Lost / Escalate. Convert /
+// Lost / Transfer still go through their dedicated routes.
+//
+// Optional status_to (an OPEN progress status) and interest_level: the form
+// pre-fills them from the shared auto rule (lib/leads/autoProgress.ts) — the
+// same one the WhatsApp Assistant uses — and they are written in the SAME
+// transaction as the visit: a status_change_note touchpoint + history, and an
+// audited setInterestLevel.
 
 import { z } from "zod";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { recordVisit } from "@/lib/asm/recordVisit";
 import { assertOwner } from "@/lib/leads/ownership";
+import { withLeadActor } from "@/lib/leads/actorContext";
+import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
+import { setInterestLevel } from "@/lib/leads/interestLevel";
 import {
     VISIT_NEXT_ACTION,
     VISIT_OUTCOME,
@@ -20,6 +28,14 @@ import {
 } from "@/lib/asm/types";
 
 const MUTATE_ROLES = ["asm", "admin"];
+
+/** Statuses a visit may move a lead to. Converted / Lost / Transfer have their own flows. */
+const VISIT_STATUS_TARGETS = [
+    "Under_Discussion",
+    "Commercials_Explained",
+    "Awaiting_Customer_Decision",
+    "Commercials_Finalised",
+] as const;
 
 // PhotoUploader posts to /api/uploads/dealer-documents, which returns an
 // absolute Supabase public URL on the Supabase backend but a same-origin
@@ -47,6 +63,10 @@ const BodySchema = z
         gps_check_in_lng: z.number().min(-180).max(180).nullable().optional(),
         next_action: z.enum(VISIT_NEXT_ACTION),
         next_visit_date: z.string().date().nullable().optional(),
+        status_to: z.enum(VISIT_STATUS_TARGETS).nullable().optional(),
+        interest_level: z.enum(["hot", "warm", "cold"]).nullable().optional(),
+        /** True when interest_level came from the auto rule untouched (audit reason). */
+        interest_auto: z.boolean().optional(),
     })
     .refine((b) => b.visit_status !== "visited" || !!b.visit_outcome, {
         message: "visit_outcome required when visit_status='visited'",
@@ -66,7 +86,38 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const { visitId } = await recordVisit({ ...body, leadId: id, asmId: user.id });
+        const { status_to, interest_level, interest_auto, ...visit } = body;
+        const visited = visit.visit_status === "visited";
+        const { visitId } = await withLeadActor(user.id, async (tx) => {
+            const recorded = await recordVisit({ ...visit, leadId: id, asmId: user.id }, { tx });
+            // A visit that didn't happen can't move the lead.
+            if (visited && status_to) {
+                await logLeadTouchpoint(
+                    {
+                        leadId: id,
+                        actorId: user.id,
+                        body: {
+                            touchpoint_type: "status_change_note",
+                            remarks: `Status after visit: ${visit.visit_remarks}`,
+                            status_change: { to: status_to },
+                        },
+                    },
+                    { tx },
+                );
+            }
+            if (visited && interest_level) {
+                await setInterestLevel(
+                    {
+                        leadId: id,
+                        actorId: user.id,
+                        level: interest_level,
+                        reason: interest_auto ? "Auto: from visit outcome" : "Set with visit",
+                    },
+                    { tx },
+                );
+            }
+            return recorded;
+        });
 
         return successResponse({
             visit_id: visitId,
