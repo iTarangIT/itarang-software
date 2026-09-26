@@ -2,36 +2,17 @@
 // BRD §0.7 — terminal Converted, settable from any status: the funnel-order and
 // final_price gates are gone (a deal can close on the first call, and a lead
 // closed by mistake has to be recoverable). On success it also creates the draft
-// dealer_onboarding_applications row (BRD §0.13 Point A).
+// dealer_onboarding_applications row (BRD §0.13 Point A). The write lives in
+// lib/leads/markConverted.ts, shared with the WhatsApp Assistant.
 
-import { randomUUID } from "node:crypto";
-import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { auditLogs } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
-import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
-import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
 import { isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
-import { withLeadActor } from "@/lib/leads/actorContext";
+import { ConvertLeadNotFoundError, markLeadConverted } from "@/lib/leads/markConverted";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
-
-// BRD §0.13 closing_role audit — derived from actor role + lead history. An
-// Inside Sales rep closing a lead that passed through an ASM (asm_id set, then
-// reassigned back) is a post-handoff close; a direct phone close otherwise.
-function deriveClosingRole(
-    role: string,
-    asmId: string | null,
-): "is_phone" | "asm_visit" | "is_post_handoff" | "admin" {
-    if (role === "asm") return "asm_visit";
-    if (role === "admin") return "admin";
-    return asmId ? "is_post_handoff" : "is_phone";
-}
 
 // GSTIN is REQUIRED here (review R-11): it is the only reliable key from a
 // dealer's invoices back to this lead, and so to the SPOC who closed it. The
@@ -55,106 +36,18 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const rows = await db.execute<{
-            lead_status: string | null;
-            asm_id: string | null;
-        }>(sql`
-            SELECT dl.lead_status, dl.asm_id
-            FROM dealer_leads dl WHERE dl.id = ${id} LIMIT 1
-        `);
-        const state = rows[0];
-        if (!state) return errorResponse("Lead not found", 404);
-        // Reachable from ANY status, a closed one and none at all included.
-        // Re-converting is safe: the onboarding application is created ON
-        // CONFLICT DO NOTHING, keyed on the lead.
-        const fromStatus = state.lead_status as LeadStatus | null;
-
-        const closingRole = deriveClosingRole(user.role, state.asm_id);
-        const remarks =
-            body.notes?.trim() ||
-            "Lead marked as Converted. Dealer onboarding initiated.";
-
-        // BRD §0.13 Point A — conversion and onboarding creation commit or roll
-        // back together. If the onboarding application can't be created, the
-        // status change is undone, so a lead is never left Converted without an
-        // application. writeTouchpoint + the onboarding creator both run on the
-        // same `tx`.
-        // withLeadActor: the E-304 audit trigger records the GSTIN edit (and
-        // any other field this transaction touches) against this user.
-        const onboardingApplicationId = await withLeadActor(user.id, async (tx) => {
-            await tx.execute(sql`
-                UPDATE dealer_leads SET gstin = ${body.gstin} WHERE id = ${id}
-            `);
-
-            await writeTouchpoint(
-                {
-                    dealerLeadId: id,
-                    touchpointType: "status_change_note",
-                    performedBy: user.id,
-                    remarks,
-                    statusChange: {
-                        from: fromStatus,
-                        to: "Converted",
-                        reasonNotes: body.notes ?? null,
-                        closingRole,
-                    },
-                },
-                { tx },
-            );
-
-            const { applicationId } =
-                await createOnboardingApplicationForConvertedLead(id, tx);
-            if (!applicationId) {
-                throw new Error("Failed to create dealer onboarding application");
-            }
-
-            // Pre-fill the onboarding form's GST number so the dealer is not
-            // asked again — and so the two stay the same. Never overwrites a
-            // number the application already carries (a re-conversion).
-            await tx.execute(sql`
-                UPDATE dealer_onboarding_applications
-                   SET gst_number = ${body.gstin}
-                 WHERE id = ${applicationId}::uuid
-                   AND NULLIF(btrim(gst_number), '') IS NULL
-            `);
-
-            // BRD §0.13 audit — record the onboarding initiation event.
-            await tx.insert(auditLogs).values({
-                id: randomUUID(),
-                entity_type: "dealer_lead",
-                entity_id: id,
-                action: "onboarding_initiated",
-                performed_by: user.id,
-                new_data: { onboarding_application_id: applicationId },
-                timestamp: new Date(),
-            });
-
-            return applicationId;
-        });
-
-        // BRD §0.13 Step 7 — notify the closing owner + admins. Best-effort:
-        // the conversion already committed, so a notification failure must not
-        // fail the request.
         try {
-            await notifyUser(user.id, {
-                type: "onboarding_initiated",
-                title: "Dealer onboarding initiated",
-                message:
-                    "Lead converted — a draft dealer onboarding application was created.",
+            const { applicationId, notify } = await markLeadConverted({
                 leadId: id,
-                data: { onboarding_application_id: onboardingApplicationId },
+                actor: { id: user.id, name: user.name, role: user.role },
+                gstin: body.gstin,
+                notes: body.notes,
             });
-            await notifyRoles(["admin", "sales_head", "partner"], {
-                type: "onboarding_initiated",
-                title: "New dealer onboarding application created",
-                message: `${user.name} converted a lead — onboarding application created.`,
-                leadId: id,
-                data: { onboarding_application_id: onboardingApplicationId },
-            });
+            await notify();
+            return successResponse({ ok: true, onboardingApplicationId: applicationId });
         } catch (err) {
-            console.error("[mark-converted] notification failed:", err);
+            if (err instanceof ConvertLeadNotFoundError) return errorResponse("Lead not found", 404);
+            throw err;
         }
-
-        return successResponse({ ok: true, onboardingApplicationId });
     },
 );

@@ -52,6 +52,8 @@ export const CAMPAIGN_LEAD_STATUSES = [
     "busy",
     "rejected",
     "voicemail",
+    "silent",
+    "hung_up",
     "no_conversation",
     "failed",
     "skipped",
@@ -66,6 +68,8 @@ export const ATTEMPTED_STATUSES = [
     "busy",
     "rejected",
     "voicemail",
+    "silent",
+    "hung_up",
     "no_conversation",
     "failed",
 ] as const satisfies readonly CampaignLeadStatus[];
@@ -78,6 +82,8 @@ export const NON_CONVERSATION_STATUSES = [
     "busy",
     "rejected",
     "voicemail",
+    "silent",
+    "hung_up",
     "no_conversation",
     "failed",
 ] as const satisfies readonly CampaignLeadStatus[];
@@ -97,12 +103,18 @@ export const TERMINAL_STATUSES = [
 /**
  * Display labels.
  *
- * `no_conversation` reads "Pending" and `pending` reads "Queued" BY PRODUCT
- * DECISION (2026-09-21): the campaign report calls an attempt that connected
- * without a conversation "Pending". The stored `pending` value cannot be reused
- * for it — advanceCampaign dials every `pending` row, so it would redial in a
- * loop — and a not-yet-dialled lead is relabelled so the two never share a word
- * on screen.
+ * `pending` reads "Queued": a lead not yet dialled.
+ *
+ * A call that connected without a conversation used to be ONE status,
+ * `no_conversation`, shown as "Pending" (2026-09-21). That read like "not
+ * dialled yet" and mixed three different outcomes, so since 2026-09-26 the
+ * classifier splits it along the usual dialer dispositions (dead air vs early
+ * abandon vs ring-no-answer):
+ *   silent   "Silent Call"   — answered and listened, never said a word
+ *   hung_up  "Hung Up Early" — answered, dropped during the greeting
+ *   a 0-second no-transcript "completed" → no_response (never connected)
+ * `no_conversation` stays in the vocabulary for rows the backfill could not
+ * split; the classifier no longer writes it.
  */
 export const CAMPAIGN_LEAD_STATUS_LABELS: Record<CampaignLeadStatus, string> = {
     pending: "Queued",
@@ -112,7 +124,9 @@ export const CAMPAIGN_LEAD_STATUS_LABELS: Record<CampaignLeadStatus, string> = {
     busy: "Busy",
     rejected: "Rejected",
     voicemail: "Voicemail",
-    no_conversation: "Pending",
+    silent: "Silent Call",
+    hung_up: "Hung Up Early",
+    no_conversation: "Silent Call (legacy)",
     failed: "Failed",
     skipped: "Skipped",
 };
@@ -403,6 +417,8 @@ export type CallEndEvidence = {
     answeredByVoicemail?: boolean | null;
     /** ElevenLabs metadata.termination_reason / Bolna hangup_reason. */
     terminationReason?: string | null;
+    /** How long the call lasted, in seconds (ai_call_logs.call_duration). */
+    durationSecs?: number | string | null;
 };
 
 export type CallEndClassification = {
@@ -416,6 +432,38 @@ export type CallEndClassification = {
 };
 
 const VOICEMAIL_TERMINATION = /voice ?mail|answering machine|machine detected|machine_detected/i;
+
+/**
+ * A termination reason saying the OTHER side ended the call — the dealer hung
+ * up, not our agent. ElevenLabs writes "Call ended by remote party" / "client
+ * disconnected"; Bolna's hangup_reason says "user hangup" / "customer hung up".
+ */
+const REMOTE_HANGUP_TERMINATION =
+    /remote party|client disconnected|(?:user|customer|callee)[ _-]?(?:hung[ _-]?up|hangup|ended|disconnected)|hung[ _-]?up by (?:user|customer)/i;
+
+/**
+ * An answered call the dealer dropped before this many seconds is "Hung Up
+ * Early" — they cut the greeting off. Past it they heard the pitch and stayed
+ * silent: "Silent Call". Check against the duration histogram the backfill
+ * prints (scripts/backfill-campaign-lead-status.ts) before changing it.
+ */
+export const EARLY_HANGUP_SECS = 10;
+
+function seconds(v: number | string | null | undefined): number | null {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/** Answered, but the dealer never spoke: which of the two was it? */
+function silentOrHungUp(e: CallEndEvidence): "silent" | "hung_up" {
+    const d = seconds(e.durationSecs);
+    // No duration: only a remote-hangup reason can say "early".
+    if (d == null) {
+        return REMOTE_HANGUP_TERMINATION.test(e.terminationReason ?? "") ? "hung_up" : "silent";
+    }
+    return d < EARLY_HANGUP_SECS ? "hung_up" : "silent";
+}
 
 function statusForReason(code: FailureReasonCode): CallEndStatus | null {
     switch (code) {
@@ -457,8 +505,10 @@ function telephonyText(e: CallEndEvidence): string {
  *   2. The dealer spoke            → completed.
  *   3. A carrier announcement      → busy / no_response / voicemail / failed.
  *   4. A telephony failure (trigger error, initiation failure, SIP code).
- *   5. The AI spoke into a line nobody answered in words → no_conversation.
- *   6. The raw provider status.
+ *   5. The AI spoke into a line nobody answered in words → silent / hung_up
+ *      (by how long the dealer stayed on the line).
+ *   6. The raw provider status ("completed" with nothing exchanged: 0s is
+ *      no_response, otherwise silent / hung_up).
  *   7. failed.
  */
 export function classifyCallEnd(e: CallEndEvidence): CallEndClassification {
@@ -487,15 +537,20 @@ export function classifyCallEnd(e: CallEndEvidence): CallEndClassification {
     }
 
     // The line connected and the AI spoke, but no dealer turn followed.
-    if (reading.anyTurn) return { status: "no_conversation", outcome: null };
+    if (reading.anyTurn) return { status: silentOrHungUp(e), outcome: null };
 
     const provider = (e.providerStatus ?? "").trim().toLowerCase();
     if (provider) {
-        // Finished normally with nothing exchanged: answered, then silence.
-        // Bolna and ElevenLabs both report unanswered calls under their own
-        // statuses, so "completed"/"done" with no transcript is not a ring-out.
+        // Finished "normally" with nothing exchanged. ElevenLabs DEFAULTS a
+        // missing status to "completed" (normalizePostCall), so one with no
+        // transcript and 0 seconds never connected: a ring-out, not silence.
+        // With a duration the line was open, so silent / hung up.
         if (["completed", "done", "ended"].includes(provider)) {
-            return { status: "no_conversation", outcome: null };
+            const d = seconds(e.durationSecs);
+            if (d === 0 || (d == null && !e.terminationReason)) {
+                return { status: "no_response", outcome: null };
+            }
+            return { status: silentOrHungUp(e), outcome: null };
         }
         const status = statusForReason(classifyProviderStatus(provider));
         if (status) return { status, outcome: null };
@@ -515,6 +570,10 @@ export type StoredAttempt = {
     transcript: string | null;
     /** ai_call_logs.status — the raw provider status, if a log row exists. */
     providerStatus: string | null;
+    /** ai_call_logs.call_duration, seconds. */
+    durationSecs?: number | string | null;
+    /** ai_call_logs.end_reason (E-310) — null on rows written before it. */
+    endReason?: string | null;
 };
 
 /**
@@ -553,11 +612,18 @@ export function reclassifyStoredAttempt(a: StoredAttempt): StoredClassification 
     if (lower === "invalid_number") return { status: "failed", outcome: "invalid_number" };
 
     if (/^trigger_(failed|exception)/.test(lower)) {
-        return classifyCallEnd({ triggerError: outcome, transcript: a.transcript });
+        return classifyCallEnd({
+            triggerError: outcome,
+            transcript: a.transcript,
+            durationSecs: a.durationSecs,
+            terminationReason: a.endReason,
+        });
     }
 
     return classifyCallEnd({
         transcript: a.transcript,
+        durationSecs: a.durationSecs,
+        terminationReason: a.endReason,
         // The log's status is the provider's own word. Without a log row, a
         // no-transcript finalize stored the provider status (or an ElevenLabs
         // initiation-failure reason) as the outcome — use that.

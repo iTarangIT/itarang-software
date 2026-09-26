@@ -1,29 +1,41 @@
 // POST /api/asm/lead/[id]/visit
-// BRD §0.8 — ASM logs a visit. Writes lead_visits + a parallel
-// lead_touchpoints row (type='visit') in one transaction so the unified
-// history pane shows visits inline. is_engaged auto-set when outcome ∈
-// {productive, commercials_progressed} per BRD §0.1 Glossary.
+// BRD §0.8 — ASM logs a visit. The write itself (lead_visits row + parallel
+// `visit` touchpoint, one transaction) lives in recordVisit() so the WhatsApp
+// Assistant logs a visit exactly the same way.
 //
 // next_action is stored on lead_visits for audit; the client reads it from
-// the response to chain into Mark Converted / Mark Lost / Escalate. Status
-// transitions are NOT performed here — they go through their dedicated
-// routes so the canTransition validator stays the single source of truth.
+// the response to chain into Mark Converted / Mark Lost / Escalate. Convert /
+// Lost / Transfer still go through their dedicated routes.
+//
+// Optional status_to (an OPEN progress status) and interest_level: the form
+// pre-fills them from the shared auto rule (lib/leads/autoProgress.ts) — the
+// same one the WhatsApp Assistant uses — and they are written in the SAME
+// transaction as the visit: a status_change_note touchpoint + history, and an
+// audited setInterestLevel.
 
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { leadVisits } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { writeTouchpoint } from "@/lib/touchpoints/write";
+import { recordVisit } from "@/lib/asm/recordVisit";
 import { assertOwner } from "@/lib/leads/ownership";
+import { withLeadActor } from "@/lib/leads/actorContext";
+import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
+import { setInterestLevel } from "@/lib/leads/interestLevel";
 import {
-    ENGAGED_OUTCOMES,
     VISIT_NEXT_ACTION,
     VISIT_OUTCOME,
     VISIT_STATUS,
 } from "@/lib/asm/types";
 
 const MUTATE_ROLES = ["asm", "admin"];
+
+/** Statuses a visit may move a lead to. Converted / Lost / Transfer have their own flows. */
+const VISIT_STATUS_TARGETS = [
+    "Under_Discussion",
+    "Commercials_Explained",
+    "Awaiting_Customer_Decision",
+    "Commercials_Finalised",
+] as const;
 
 // PhotoUploader posts to /api/uploads/dealer-documents, which returns an
 // absolute Supabase public URL on the Supabase backend but a same-origin
@@ -51,6 +63,10 @@ const BodySchema = z
         gps_check_in_lng: z.number().min(-180).max(180).nullable().optional(),
         next_action: z.enum(VISIT_NEXT_ACTION),
         next_visit_date: z.string().date().nullable().optional(),
+        status_to: z.enum(VISIT_STATUS_TARGETS).nullable().optional(),
+        interest_level: z.enum(["hot", "warm", "cold"]).nullable().optional(),
+        /** True when interest_level came from the auto rule untouched (audit reason). */
+        interest_auto: z.boolean().optional(),
     })
     .refine((b) => b.visit_status !== "visited" || !!b.visit_outcome, {
         message: "visit_outcome required when visit_status='visited'",
@@ -70,58 +86,37 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        const isEngaged = body.visit_outcome
-            ? ENGAGED_OUTCOMES.includes(body.visit_outcome)
-            : false;
-
-        const visitId = await db.transaction(async (tx) => {
-            const inserted = await tx
-                .insert(leadVisits)
-                .values({
-                    dealer_lead_id: id,
-                    asm_id: user.id,
-                    scheduled_date: body.scheduled_date ?? null,
-                    actual_visit_date:
-                        body.actual_visit_date ??
-                        (body.visit_status === "visited" ? new Date().toISOString().slice(0, 10) : null),
-                    visit_status: body.visit_status,
-                    visit_outcome: body.visit_outcome ?? null,
-                    visit_remarks: body.visit_remarks,
-                    photos: (body.photos ?? []) as never,
-                    gps_check_in_lat:
-                        body.gps_check_in_lat != null ? String(body.gps_check_in_lat) : null,
-                    gps_check_in_lng:
-                        body.gps_check_in_lng != null ? String(body.gps_check_in_lng) : null,
-                    next_action: body.next_action,
-                    next_visit_date: body.next_visit_date ?? null,
-                })
-                .returning({ visit_id: leadVisits.visit_id });
-            return inserted[0]?.visit_id ?? null;
-        });
-
-        // Parallel touchpoint row keeps the unified history pane current.
-        await writeTouchpoint({
-            dealerLeadId: id,
-            touchpointType: "visit",
-            performedBy: user.id,
-            isEngaged,
-            remarks:
-                `${body.visit_status}` +
-                (body.visit_outcome ? ` · ${body.visit_outcome}` : "") +
-                `\n\n${body.visit_remarks}` +
-                (body.next_action === "next_visit" && body.next_visit_date
-                    ? `\n\nNext visit: ${body.next_visit_date}`
-                    : ""),
-            attachments: body.photos?.map((url) => ({ url, type: "photo" })) ?? null,
-            nextAction:
-                body.next_action === "next_visit"
-                    ? "follow_up"
-                    : body.next_action === "convert"
-                        ? "mark_converted"
-                        : body.next_action === "lost"
-                            ? "mark_lost"
-                            : null,
-            nextActionAt: body.next_visit_date ? new Date(body.next_visit_date) : null,
+        const { status_to, interest_level, interest_auto, ...visit } = body;
+        const visited = visit.visit_status === "visited";
+        const { visitId } = await withLeadActor(user.id, async (tx) => {
+            const recorded = await recordVisit({ ...visit, leadId: id, asmId: user.id }, { tx });
+            // A visit that didn't happen can't move the lead.
+            if (visited && status_to) {
+                await logLeadTouchpoint(
+                    {
+                        leadId: id,
+                        actorId: user.id,
+                        body: {
+                            touchpoint_type: "status_change_note",
+                            remarks: `Status after visit: ${visit.visit_remarks}`,
+                            status_change: { to: status_to },
+                        },
+                    },
+                    { tx },
+                );
+            }
+            if (visited && interest_level) {
+                await setInterestLevel(
+                    {
+                        leadId: id,
+                        actorId: user.id,
+                        level: interest_level,
+                        reason: interest_auto ? "Auto: from visit outcome" : "Set with visit",
+                    },
+                    { tx },
+                );
+            }
+            return recorded;
         });
 
         return successResponse({

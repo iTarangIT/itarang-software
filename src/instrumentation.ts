@@ -38,6 +38,7 @@ export async function register() {
       startDealerPaymentReminderTicker,
       startMonitorMorningTicker,
       startGreenNewsTicker,
+      startWaAssistantSweepTicker,
     } = await import("./instrumentation-node");
     await startDialerTickers();
     await startZohoSyncTicker();
@@ -74,5 +75,8 @@ export async function register() {
     // E-306 — Green Energy News refresh for the CEO dashboard. Kickoff 240s
     // out, last of all: a news fetch is the least urgent work on boot.
     await startGreenNewsTicker();
+    // WhatsApp Sales Assistant — expire 10-minute previews, recover actions a
+    // dead process left `executing`; reports a WA_ASSIST_* misconfiguration once.
+    await startWaAssistantSweepTicker();
   }
 }

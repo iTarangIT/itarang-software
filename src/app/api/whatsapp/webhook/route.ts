@@ -10,6 +10,7 @@
 import { after, NextResponse } from "next/server";
 
 import { getAdapter } from "@/lib/whatsapp";
+import { isForPhoneNumber } from "@/lib/whatsapp/meta";
 import { recordInbound, runTurn } from "@/lib/whatsapp/orchestrator";
 
 // Node runtime: we use Buffer + crypto (HMAC) and the postgres pool.
@@ -76,6 +77,11 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   for (const event of events) {
+    // BRD §2.3-8: another number's events (the Sales Assistant) never reach the dealer bot.
+    if (!isForPhoneNumber(event, process.env.META_WA_PHONE_NUMBER_ID)) {
+      console.warn("[WhatsApp/webhook] ignored event for another phone_number_id", { phoneNumberId: event.phoneNumberId });
+      continue;
+    }
     if (event.type === "status") {
       // Delivery receipt — cheap, process inline.
       after(() => runTurn(event));

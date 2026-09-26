@@ -25,7 +25,7 @@
 // how a row that plainly connected could still read "Trigger failed".
 //
 // Since 2026-09-21 the status column carries the classification itself (busy,
-// no_response, rejected, voicemail, no_conversation — campaignLeadStatus.ts),
+// no_response, rejected, voicemail, silent, hung_up — campaignLeadStatus.ts),
 // and a status that already names the reason wins over everything below. The
 // evidence-order rules remain for legacy rows and for 'failed' / 'skipped'.
 //
@@ -43,6 +43,7 @@ export const FAILURE_REASON_CODES = [
     "rejected",
     "invalid_number",
     "silent_call",
+    "hung_up_early",
     "no_response",
     "technical",
     "config_error",
@@ -128,7 +129,14 @@ const SPECS: Record<FailureReasonCode, Spec> = {
     silent_call: {
         code: "silent_call",
         label: "Silent call",
-        hint: "The call connected but the dealer never spoke — the AI talked to silence, a recording or a line that was hung up. Worth trying again.",
+        hint: "The dealer picked up and stayed on the line but never spoke — the AI talked to silence. Worth trying again.",
+        retryable: true,
+        ourFault: false,
+    },
+    hung_up_early: {
+        code: "hung_up_early",
+        label: "Hung up early",
+        hint: "The dealer picked up and cut the call during the greeting, before saying anything. Worth trying again at a different time.",
         retryable: true,
         ourFault: false,
     },
@@ -186,6 +194,9 @@ const STATUS_REASON = new Map<string, FailureReasonCode>([
     ["no_response", "not_answered"],
     ["rejected", "rejected"],
     ["voicemail", "voicemail"],
+    ["silent", "silent_call"],
+    ["hung_up", "hung_up_early"],
+    // Legacy: the single pre-2026-09-26 bucket the two above were split from.
     ["no_conversation", "silent_call"],
 ]);
 

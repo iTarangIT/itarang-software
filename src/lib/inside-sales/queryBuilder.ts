@@ -9,6 +9,7 @@ import { OPEN_STATUSES, TERMINAL_STATUSES } from "@/lib/lifecycle/transitions";
 import { NEODOVE_LINKED_SYNC_STATUSES } from "@/lib/neodove/syncStatus";
 import {
     foldRegionFacets,
+    leadSearchClause,
     queueFilterClauses,
     queueSortOrder,
     regionFacetQuery,
@@ -67,7 +68,13 @@ type BuildArgs = {
  */
 const ISR_DATE_COLUMN = sql`dl.created_at`;
 
-function tabFilter(tab: QueueTab, userId: string) {
+/**
+ * The WHERE clause that defines a tab. Exported for the WhatsApp Assistant's
+ * scope predicate (src/lib/assistant/scope.ts), which is the union of these
+ * clauses — so what the Assistant can see is, by construction, what this
+ * rep's queue shows. Guarded by assistant/__tests__/tabFilter-golden.test.ts.
+ */
+export function tabFilter(tab: QueueTab, userId: string) {
     switch (tab) {
         case "my_open":
             return sql`dl.current_owner_id = ${userId} AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
@@ -102,12 +109,7 @@ function extraFilters({
     filters,
 }: Pick<BuildArgs, "q" | "neodoveOnly" | "callbackOnly" | "filters">) {
     const parts: SQL[] = [];
-    if (q) {
-        const like = `%${q}%`;
-        parts.push(
-            sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`,
-        );
-    }
+    if (q) parts.push(leadSearchClause(q));
     if (neodoveOnly) {
         parts.push(sql` AND ${NEODOVE_STATUS} IN (${NEODOVE_LINKED_LIST})`);
     }

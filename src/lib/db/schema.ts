@@ -12974,3 +12974,152 @@ export const greenNewsRuns = pgTable(
     startedIdx: index("green_news_runs_started_idx").on(t.started_at),
   }),
 );
+
+// E-309 — WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md). Five NEW tables;
+// nothing else reads them, so an unapplied E-309 breaks only the Assistant.
+// Status vocabularies are CHECK constraints in the migration; the source of
+// truth for every column is drizzle/E-309_wa_assistant.sql.
+
+/** User ↔ WhatsApp number. Pending LINK codes are status='pending' rows. */
+export const assistantWaBindings = pgTable(
+  "assistant_wa_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull().references(() => users.id),
+    /** E.164 with the leading '+'; NULL while the row is a pending code. */
+    wa_phone: text("wa_phone"),
+    /** pending | active | revoked */
+    status: varchar("status", { length: 10 }).notNull(),
+    /** HMAC-SHA256 of the 6-digit code — never the code itself. */
+    code_hash: text("code_hash"),
+    code_expires_at: timestamp("code_expires_at", { withTimezone: true }),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    revoked_at: timestamp("revoked_at", { withTimezone: true }),
+    revoked_reason: varchar("revoked_reason", { length: 40 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    activeUserUniq: uniqueIndex("assistant_wa_bindings_active_user_uniq")
+      .on(t.user_id)
+      .where(sql`status = 'active'`),
+    activePhoneUniq: uniqueIndex("assistant_wa_bindings_active_phone_uniq")
+      .on(t.wa_phone)
+      .where(sql`status = 'active'`),
+    pendingUserUniq: uniqueIndex("assistant_wa_bindings_pending_user_uniq")
+      .on(t.user_id)
+      .where(sql`status = 'pending'`),
+    pendingCodeUniq: uniqueIndex("assistant_wa_bindings_pending_code_uniq")
+      .on(t.code_hash)
+      .where(sql`status = 'pending'`),
+  }),
+);
+
+/** Last 20 turns per user, plus the per-user turn lease. */
+export const assistantConversations = pgTable(
+  "assistant_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull().references(() => users.id),
+    channel: varchar("channel", { length: 20 }).default("whatsapp").notNull(),
+    messages: jsonb("messages").default([]).notNull(),
+    last_activity_at: timestamp("last_activity_at", { withTimezone: true }).defaultNow().notNull(),
+    lease_token: uuid("lease_token"),
+    lease_until: timestamp("lease_until", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userChannelUniq: uniqueIndex("assistant_conversations_user_channel_uniq").on(t.user_id, t.channel),
+  }),
+);
+
+/** Every proposed write. Runs only from a Confirm tap, once, within its expiry. */
+export const assistantActions = pgTable(
+  "assistant_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull().references(() => users.id),
+    channel: varchar("channel", { length: 20 }).default("whatsapp").notNull(),
+    tool: varchar("tool", { length: 40 }).notNull(),
+    lead_id: text("lead_id"),
+    /** dealer_leads.updated_at when the preview was built (assertNotStale). */
+    lead_version: timestamp("lead_version", { withTimezone: true }),
+    input: jsonb("input").notNull(),
+    preview: jsonb("preview").notNull(),
+    before: jsonb("before"),
+    after: jsonb("after"),
+    /** pending | executing | confirmed | cancelled | expired | failed | escalated */
+    status: varchar("status", { length: 12 }).default("pending").notNull(),
+    /** 2 = the second Confirm of a high-impact Lost. */
+    step: smallint("step").default(1).notNull(),
+    /** Self-reference (FK in the migration). */
+    parent_action_id: uuid("parent_action_id"),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+    error: text("error"),
+    wa_message_id: text("wa_message_id"),
+    source_message_id: uuid("source_message_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userStatusIdx: index("assistant_actions_user_status_idx").on(t.user_id, t.status),
+    openExpiryIdx: index("assistant_actions_open_expiry_idx")
+      .on(t.status, t.expires_at)
+      .where(sql`status IN ('pending', 'executing')`),
+  }),
+);
+
+/** Inbound + outbound WhatsApp log. provider_message_id UNIQUE = inbound dedupe. */
+export const assistantWaMessages = pgTable(
+  "assistant_wa_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider_message_id: text("provider_message_id"),
+    /** in | out */
+    direction: varchar("direction", { length: 3 }).notNull(),
+    type: varchar("type", { length: 20 }).notNull(),
+    user_id: uuid("user_id"),
+    wa_phone: text("wa_phone").notNull(),
+    phone_number_id: text("phone_number_id"),
+    text: varchar("text", { length: 2000 }),
+    /** What the router did with an inbound message (see wa-assistant/messages.ts). */
+    handling: varchar("handling", { length: 30 }),
+    delivery_status: varchar("delivery_status", { length: 12 }),
+    action_id: uuid("action_id"),
+    raw_payload: jsonb("raw_payload"),
+    error: text("error"),
+    handled_at: timestamp("handled_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    providerIdUniq: uniqueIndex("assistant_wa_messages_provider_id_uniq").on(t.provider_message_id),
+    phoneCreatedIdx: index("assistant_wa_messages_phone_created_idx").on(t.wa_phone, t.created_at),
+    userCreatedIdx: index("assistant_wa_messages_user_created_idx").on(t.user_id, t.created_at),
+    unhandledIdx: index("assistant_wa_messages_unhandled_idx")
+      .on(t.created_at)
+      .where(sql`direction = 'in' AND handled_at IS NULL`),
+  }),
+);
+
+/** Every agent tool call: input and truncated output. */
+export const assistantToolCalls = pgTable(
+  "assistant_tool_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").notNull(),
+    message_id: uuid("message_id"),
+    tool: varchar("tool", { length: 40 }).notNull(),
+    input: jsonb("input"),
+    output: jsonb("output"),
+    ok: boolean("ok").notNull(),
+    error: text("error"),
+    latency_ms: integer("latency_ms"),
+    action_id: uuid("action_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("assistant_tool_calls_user_created_idx").on(t.user_id, t.created_at),
+  }),
+);

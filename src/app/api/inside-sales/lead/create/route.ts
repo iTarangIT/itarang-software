@@ -1,19 +1,14 @@
 // POST /api/inside-sales/lead/create
-// Lightweight manual lead entry for the Inside Sales workspace. Inserts a
-// dealer_leads row as New_Unassigned with no owner, so the lead lands straight
-// in the "Unassigned (Claim)" queue for any rep to pick up. Mirrors the column
-// conventions of /api/dealer-leads (id = DL-<ts>-<nanoid>, phone UNIQUE) plus
-// the BRD §0.7 lifecycle status the queues filter on.
+// Lightweight manual lead entry for the Inside Sales workspace. The write lives
+// in lib/inside-sales/createLead.ts, shared with the WhatsApp Assistant:
+// Inside Sales / admin → New_Unassigned in the claim pool; ASM / partner →
+// owned by the creator.
 
-import { nanoid } from "nanoid";
 import { z } from "zod";
-import { sql } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
+import { createInsideSalesLead, DuplicatePhoneError } from "@/lib/inside-sales/createLead";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -36,90 +31,27 @@ export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(MUTATE_ROLES);
     const body = BodySchema.parse(await req.json());
 
-    // Phone is UNIQUE on dealer_leads — reject duplicates with a clear 409.
-    const existing = await db
-        .select({ id: dealerLeads.id })
-        .from(dealerLeads)
-        .where(sql`${dealerLeads.phone} = ${body.phone}`)
-        .limit(1);
-    if (existing.length > 0) {
-        return errorResponse("A lead with this phone number already exists.", 409);
-    }
-
-    const id = `DL-${Date.now()}-${nanoid(8)}`;
-    const now = new Date();
-
-    // An ASM creating a lead owns it immediately — it should land in their
-    // "My Active Visits" queue (current_owner_id = ASM, non-terminal status),
-    // not the unassigned claim pool. Inside Sales / admin keep the claim-queue
-    // behaviour (New_Unassigned, no owner).
-    const isAsm = user.role === "asm";
-    // The partner login also keeps what it creates — same lift as the ASM so
-    // the lead lands in /partner/leads "My Open" — but it is not an ASM, so
-    // asm_id stays null.
-    const selfAssigns = isAsm || user.role === "partner";
-
+    let created;
     try {
-        await db.insert(dealerLeads).values({
-            id,
-            dealer_name: body.dealer_name,
+        created = await createInsideSalesLead({
+            actor: { id: user.id, role: user.role },
+            dealerName: body.dealer_name,
             phone: body.phone,
-            shop_name: body.shop_name || null,
-            city: body.city || null,
-            state: body.state || null,
-            location: body.city || null,
-            language: body.language || "hindi",
-            interest_level: body.interest_level || null,
-            lead_status: selfAssigns ? "Assigned_Not_Contacted" : "New_Unassigned",
-            current_status: "new",
-            source: "manual_upload_lead",
-            originator_id: user.id,
-            current_owner_id: selfAssigns ? user.id : null,
-            asm_id: isAsm ? user.id : null,
-            assigned_at: selfAssigns ? now : null,
-            is_active: true,
-            total_attempts: 0,
-            final_intent_score: 0,
-            follow_up_history: [],
-            created_at: now,
-            updated_at: now,
+            shopName: body.shop_name,
+            city: body.city,
+            state: body.state,
+            interestLevel: body.interest_level,
+            language: body.language,
+            businessType: body.business_type,
         });
     } catch (err) {
-        const e = err as { code?: string; message?: string };
-        if (e.code === "23505" || e.message?.includes("unique")) {
-            return errorResponse("A lead with this phone number already exists.", 409);
-        }
+        if (err instanceof DuplicatePhoneError) return errorResponse(err.message, 409);
         throw err;
     }
-
-    // E-296 — not on the Drizzle object (see schema.ts), so a raw UPDATE after
-    // the insert. Allowed to fail: the lead exists either way, and the response
-    // says the type did not land on a database without the migration.
-    let businessTypeSaved: boolean | undefined;
-    if (body.business_type) {
-        try {
-            await db.execute(
-                sql`UPDATE dealer_leads SET business_type = ${body.business_type} WHERE id = ${id}`,
-            );
-            businessTypeSaved = true;
-        } catch (e) {
-            businessTypeSaved = false;
-            console.warn("[inside-sales/lead/create] business_type not saved (E-296 applied?):", e);
-        }
-    }
-
-    // E-179 central registry — dealer prospect captured by Inside Sales / ASM.
-    await recordLeadCapture({
-        leadType: "dealer",
-        name: body.dealer_name,
-        phone: body.phone,
-        sourceChannel: "web",
-        sourceTable: "dealer_leads",
-        sourceId: id,
-    });
+    await created.afterCommit();
 
     return successResponse({
-        id,
-        ...(businessTypeSaved !== undefined ? { business_type_saved: businessTypeSaved } : {}),
+        id: created.id,
+        ...(created.businessTypeSaved !== undefined ? { business_type_saved: created.businessTypeSaved } : {}),
     });
 });

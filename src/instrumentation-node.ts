@@ -1706,3 +1706,61 @@ export async function startGreenNewsTicker() {
 
   console.log("[instrumentation] green-news (30m ask, 2h effective) started in-process");
 }
+
+/**
+ * WhatsApp Sales Assistant (docs/wa-assistant/PLAN.md) — every 60s:
+ *   • pending previews past their 10-minute expiry → `expired` (the executor's
+ *     own `expires_at > now()` check is the authority; this keeps the table and
+ *     the log-review queries honest);
+ *   • actions stuck in `executing` for 5 minutes → `failed` (the process died
+ *     mid-write; its transaction rolled back, so nothing was written).
+ * Also reports a WA_ASSIST_* misconfiguration ONCE at boot instead of throwing
+ * at module load, which would break `next build` (plan (c)17). The rest of the
+ * CRM is unaffected by a missing WA config — the webhook just answers 503.
+ * Dark until E-309 is applied (the first tick finds no table and says so).
+ */
+export async function startWaAssistantSweepTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_WA_ASSIST_SWEEP === "0") {
+    console.log("[instrumentation:wa-assist] sweep disabled via ENABLE_WA_ASSIST_SWEEP=0");
+    return;
+  }
+
+  const { readWaAssistEnv } = await import("@/lib/wa-assistant/env");
+  const cfg = readWaAssistEnv();
+  if (!cfg.ok) {
+    console.warn(`[instrumentation:wa-assist] WhatsApp Assistant not configured (webhook will answer 503): ${cfg.problems.join("; ")}`);
+  }
+
+  const TICK_INTERVAL_MS = 60_000;
+  let inFlight = false;
+  let tableMissingLogged = false;
+  const tick = async () => {
+    if (inFlight) return; // a slow tick must not stack
+    inFlight = true;
+    try {
+      const { sweepActions } = await import("@/lib/assistant/executor");
+      const r = await sweepActions();
+      if (r.expired || r.failed) {
+        console.log(`[instrumentation:wa-assist] sweep: ${r.expired} expired, ${r.failed} stuck → failed`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 42P01 = undefined_table: E-309 not applied on this database yet.
+      if (/assistant_actions/.test(msg) && /does not exist/.test(msg)) {
+        if (!tableMissingLogged) console.log("[instrumentation:wa-assist] assistant_actions missing (apply E-309) — sweep idle");
+        tableMissingLogged = true;
+      } else {
+        console.error("[instrumentation:wa-assist] sweep failed:", msg);
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+  // After every other kickoff (last one is 225s).
+  const kickoff = setTimeout(tick, 240_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+  const interval = setInterval(tick, TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+  console.log("[instrumentation] wa-assistant action sweep (60s) started in-process");
+}
