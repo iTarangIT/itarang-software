@@ -36,11 +36,17 @@ export type NewPendingAction = {
  * what gets shown — now, and again for a high-impact second confirmation —
  * while the plan keeps the rep's words exactly as they will be written.
  */
+/**
+ * ONE live card per user: inserting a new pending action cancels every older
+ * pending one of that user in the same statement ("superseded by <id>"), so a
+ * corrected or edited card is the only one that can still be confirmed.
+ */
 export async function createPending(
     a: NewPendingAction,
     opts?: { tx?: Tx },
 ): Promise<{ id: string; expiresAt: Date }> {
     const rows = await (opts?.tx ?? db).execute<{ id: string; expires_at: string | Date }>(sql`
+        WITH ins AS (
         INSERT INTO assistant_actions
             (user_id, channel, tool, lead_id, lead_version, input, preview, before,
              status, step, parent_action_id, expires_at, source_message_id)
@@ -52,6 +58,12 @@ export async function createPending(
              now() + make_interval(mins => ${PENDING_TTL_MINUTES}),
              ${a.sourceMessageId}::uuid)
         RETURNING id, expires_at
+        ), sup AS (
+            UPDATE assistant_actions
+               SET status = 'cancelled', error = 'superseded by ' || (SELECT id::text FROM ins), updated_at = now()
+             WHERE user_id = ${a.userId}::uuid AND status = 'pending' AND id <> (SELECT id FROM ins)
+        )
+        SELECT id, expires_at FROM ins
     `);
     return { id: rows[0]!.id, expiresAt: new Date(rows[0]!.expires_at) };
 }

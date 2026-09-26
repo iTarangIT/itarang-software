@@ -49,6 +49,7 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
         }),
         openLead: vi.fn(async () => ({ kind: "text" as const, body: "lead card" })),
         proposeInvite: vi.fn(async () => ({ kind: "text" as const, body: "invite preview" })),
+        editAction: vi.fn(async () => ({ kind: "text" as const, body: "Kya badalna hai?" })),
         confirmAction: vi.fn(async () => ({ kind: "text" as const, body: "✅ Saved" })),
         cancelAction: vi.fn(async () => ({ kind: "text" as const, body: "Cancelled. Nothing was saved." })),
         isDisabled: vi.fn(() => false),
@@ -291,6 +292,16 @@ describe("routeMessage — Gate 3: list-row taps", () => {
         expect(f.deps.runTextTurn).not.toHaveBeenCalled();
         expect(f.handled[0].handling).toBe("tap_invite");
         expect(f.replies).toEqual([{ to: PHONE, text: "invite preview", userId: "u-rahul", kind: "text" }]);
+    });
+
+    it("ast:e:<id> starts an edit for the resolved user — no model, nothing confirmed", async () => {
+        const ID = "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+        const f = fakeDeps();
+        await routeMessage(msg({ type: "interactive", replyId: `ast:e:${ID}`, text: "Edit" }), "r", f.deps);
+        expect(f.deps.editAction).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, ID);
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.handled[0]).toMatchObject({ handling: "tap_edit", extra: { userId: "u-rahul", actionId: ID } });
     });
 
     it("a malformed or foreign tap id is ignored, never opened", async () => {

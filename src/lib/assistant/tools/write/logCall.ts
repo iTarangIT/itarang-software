@@ -6,6 +6,10 @@
 //   touchpoint (+ non-Lost status change + next_follow_up_at)   logLeadTouchpoint
 //   Lost with its reason (second Confirm if high-impact)         markLeadLost
 //   interest change                                              setInterestLevel
+//
+// Status and temperature the rep did NOT state are filled by the shared auto
+// rule (lib/leads/autoProgress.ts — the same one the CRM modal pre-fills
+// with) and marked "(auto)" on the preview, where the rep can Edit them.
 
 import { z } from "zod";
 import { CONNECT_STATUS, DISPOSITION_BUCKETS } from "@/lib/leads/dispositions";
@@ -15,6 +19,7 @@ import { INTEREST_LEVELS } from "@/lib/admin/salesDashboardTypes";
 import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
 import { markLeadLost } from "@/lib/leads/markLost";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
+import { autoProgressForCall } from "@/lib/leads/autoProgress";
 import { checkCallProposal, NO_CHANGE, type StatusChoice } from "../../vocab";
 import { createPending } from "../../actions";
 import { fmtDate, reasonLabel, statusLabel } from "../../format";
@@ -54,6 +59,8 @@ export const LogCallPlan = z.object({
     /** UTC ISO instant. */
     follow_up_at: z.string().nullable(),
     interest: z.enum(INTEREST_LEVELS).nullable(),
+    /** Which of status_to / interest came from the auto rule (audit + preview). */
+    auto: z.object({ status: z.boolean(), interest: z.boolean() }).default({ status: false, interest: false }),
 });
 export type LogCallPlan = z.infer<typeof LogCallPlan>;
 
@@ -112,6 +119,7 @@ export const logCall: ToolFactory = () =>
             let statusTo: LogCallPlan["status_to"] = null;
             let lost: LogCallPlan["lost"] = null;
             let interest = input.interest ?? null;
+            const auto = { status: false, interest: false };
 
             if (input.channel === "call") {
                 touchpointType = "inside_sales_call";
@@ -129,7 +137,25 @@ export const logCall: ToolFactory = () =>
                 } else if (check.status !== NO_CHANGE && check.status !== lead.lead_status) {
                     statusTo = check.status;
                 }
-                if (!interest && check.interest) interest = check.interest;
+                // Fill what the rep did not say from the shared auto rule. An
+                // explicit "no change" from the rep is respected.
+                if (!lost) {
+                    const derived = autoProgressForCall({
+                        connected: input.connect_status === "connected",
+                        label: input.disposition!,
+                        bucket: input.bucket ?? null,
+                        currentStatus: lead.lead_status,
+                        currentInterest: lead.interest_level,
+                    });
+                    if (input.status === undefined && !statusTo && derived.statusTo) {
+                        statusTo = derived.statusTo;
+                        auto.status = true;
+                    }
+                    if (!interest && derived.interestTo) {
+                        interest = derived.interestTo;
+                        auto.interest = true;
+                    }
+                }
             } else {
                 if (input.status || input.lost_reason || input.disposition) {
                     return ask(
@@ -164,6 +190,7 @@ export const logCall: ToolFactory = () =>
                 lost,
                 follow_up_at: followUpAt,
                 interest,
+                auto,
             };
 
             const name = lead.shop_name || lead.dealer_name || lead.id;
@@ -181,11 +208,13 @@ export const logCall: ToolFactory = () =>
                 value: lost
                     ? `${statusLabel(lead.lead_status)} → Lost (${reasonLabel(lost.reason)})`
                     : statusTo
-                      ? `${statusLabel(lead.lead_status)} → ${statusLabel(statusTo)}`
+                      ? `${statusLabel(lead.lead_status)} → ${statusLabel(statusTo)}${auto.status ? " (auto)" : ""}`
                       : "no change",
             });
             if (followUpAt) lines.push({ label: "Follow-up", value: fmtDate(followUpAt)! });
-            if (interest) lines.push({ label: "Interest", value: `${lead.interest_level ?? "none"} → ${interest}` });
+            if (interest) {
+                lines.push({ label: "Temperature", value: `${lead.interest_level ?? "none"} → ${interest}${auto.interest ? " (auto)" : ""}` });
+            }
             if (plan.call_duration_sec) lines.push({ label: "Duration", value: `${input.duration_minutes} min` });
             if (remarks) lines.push({ label: "Remarks", value: remarks });
 
@@ -255,7 +284,12 @@ export const logCallApplier = defineApplier<LogCallPlan>({
         }
         if (p.interest) {
             await setInterestLevel(
-                { leadId: p.lead_id, actorId: user.id, level: p.interest, reason: "Logged from the WhatsApp Assistant" },
+                {
+                    leadId: p.lead_id,
+                    actorId: user.id,
+                    level: p.interest,
+                    reason: p.auto.interest ? "Auto: from call outcome (WhatsApp Assistant)" : "Logged from the WhatsApp Assistant",
+                },
                 { tx },
             );
         }

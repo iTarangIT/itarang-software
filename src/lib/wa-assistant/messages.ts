@@ -28,6 +28,7 @@ export const HANDLING = [
     "tap_cancel",
     "tap_lead",
     "tap_invite",
+    "tap_edit",
     "tap_ignored",
     "media",
     "text_not_ready",

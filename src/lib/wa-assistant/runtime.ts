@@ -6,6 +6,7 @@ import { log } from "@/lib/log";
 import { assistantConfig } from "@/lib/assistant/config";
 import { hasOpenPendingAction, setActionMessageId } from "@/lib/assistant/actions";
 import { cancelAction, executeAction } from "@/lib/assistant/executor";
+import { beginEdit } from "@/lib/assistant/edit";
 import { agentTurn, runToolDirect } from "@/lib/assistant/turn";
 import type { WaAssistEnv } from "./env";
 import { WaAssistClient } from "./client";
@@ -19,10 +20,22 @@ import type { AssistantUser } from "@/lib/assistant/types";
 
 const LEAD_NOT_FOUND = "I couldn't find that lead.";
 
+/** An Edit tap: the card stays as it is until the rep says what to change. */
+export async function editActionPayload(user: AssistantUser, actionId: string): Promise<WaPayload> {
+    const o = await beginEdit(actionId, user);
+    if (o.kind === "editing") {
+        return {
+            kind: "text",
+            body: `✏️ Kya badalna hai? Bas change likhiye — jaise "follow-up parso 4 baje" ya "temperature hot". (${o.title})`,
+        };
+    }
+    return renderTapOutcome(o);
+}
+
 /** A "Send invite" tap: run invite_dealer_onboarding directly (no model) → its preview, or why not. */
 export async function proposeInvitePayload(user: AssistantUser, leadId: string, messageRowId: string): Promise<WaPayload> {
     const r = await runToolDirect(user, "invite_dealer_onboarding", { lead_id: leadId }, { messageId: messageRowId });
-    if (r.kind === "preview") return renderPreview(r.preview, r.action_id);
+    if (r.kind === "preview") return renderPreview(r.preview, r.action_id, { edit: false });
     if (r.kind === "declined") return { kind: "text", body: r.reason };
     return { kind: "text", body: LEAD_NOT_FOUND };
 }
@@ -84,6 +97,7 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
             };
         },
         proposeInvite: proposeInvitePayload,
+        editAction: editActionPayload,
         confirmAction: async (user, actionId, messageRowId) =>
             renderTapOutcome(await executeAction(actionId, user, { messageId: messageRowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),

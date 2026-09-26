@@ -76,13 +76,14 @@ describe("log_visit proposals (UC-01)", () => {
         expect(a.plan).toEqual({
             lead_id: "DL-1042", visit_status: "visited", visit_outcome: "productive", visit_date: "2026-09-24",
             remarks: "owner Ramesh, needs 10 batteries at X", next_action: "next_visit", next_visit_date: "2026-09-25",
-            interest: "hot", status_to: null, lost: null,
+            // Already Under_Discussion, and the ASM stated the interest: nothing auto.
+            interest: "hot", status_to: null, lost: null, auto: { status: false, interest: false },
         });
         expect(a.preview).toMatchObject({ title: "Log visit — ABC Traders", resets_idle_clock: true, warning: null, needs_second_confirm: false });
         expect(a.preview.lines).toEqual([
             { label: "Visit", value: "visited · productive" },
             { label: "Status", value: "no change" },
-            { label: "Interest", value: "warm → hot" },
+            { label: "Temperature", value: "warm → hot" },
             { label: "Next visit", value: "Fri 25 Sep (goes to Today's Schedule)" },
             { label: "Remarks", value: "owner Ramesh, needs 10 batteries at X" },
         ]);

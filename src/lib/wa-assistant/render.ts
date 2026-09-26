@@ -92,7 +92,7 @@ const PREVIEW_VALUE_MAX = 200;
  * Body ≤ 900: long values are cut first, then the lines; the title, warning and
  * footer always survive.
  */
-export function renderPreview(preview: Preview, actionId: string): WaPayload {
+export function renderPreview(preview: Preview, actionId: string, opts: { edit?: boolean } = {}): WaPayload {
     const head = `*${fit(preview.title, RENDER_LIMITS.header)}*`;
     const footer =
         `Resets idle clock: ${preview.resets_idle_clock ? "yes" : "no"} · Expires in ${PENDING_TTL_MINUTES} min` +
@@ -106,8 +106,11 @@ export function renderPreview(preview: Preview, actionId: string): WaPayload {
     return {
         kind: "buttons",
         body: `${head}\n${lines}${warning}\n${footer}`,
+        // Edit sits between Confirm and Cancel. Not on a high-impact second
+        // confirmation or a dealer invite: there is nothing left to edit.
         buttons: [
             { id: `ast:c:${actionId}`, title: "Confirm" },
+            ...(opts.edit === false ? [] : [{ id: `ast:e:${actionId}`, title: "Edit" }]),
             { id: `ast:x:${actionId}`, title: "Cancel" },
         ],
         actionId,
@@ -156,7 +159,7 @@ export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
         case "confirmed":
             return renderConfirmed(o);
         case "second_confirm":
-            return renderPreview(o.preview, o.actionId);
+            return renderPreview(o.preview, o.actionId, { edit: false });
         case "cancelled":
             return text("Cancelled. Nothing was saved.");
         case "expired":
@@ -165,6 +168,8 @@ export function renderTapOutcome(o: ExecOutcome | CancelOutcome): WaPayload {
             return text("Already saved.");
         case "already_cancelled":
             return text("That was cancelled. Nothing was saved.");
+        case "superseded":
+            return text("That card was replaced by a newer one. Use the latest card.");
         case "in_progress":
             return text("Already saving that…");
         case "failed_before":
