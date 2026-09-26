@@ -481,3 +481,25 @@ Gates 0–7 are done on `Aditya`. What stands between this and the Day 7 release
 
 ### Renumbered E-306 → E-309 (2026-09-25, before merging to `main`)
 While Gates 2–7 were in progress, `main` took E-306 (`E-306_green_news.sql`), E-307 and E-308. The Assistant migration is now **`drizzle/E-309_wa_assistant.sql`**, and the apply script is `scripts/apply-e309.mjs`. The SQL is unchanged, so sandbox, which already has the tables, needs nothing. Read "E-306" in the gate sections above as E-309.
+
+### C. Quotes & commercials (2026-09-26)
+This is the largest item in the gap table. It adds four tools, available to both ASM and ISR:
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `product_catalogue` | read | Searches the active product masters by name, model or spec. It returns `product_id` and never a price: the OEM reference price is the CEO's approval floor and does not reach reps. |
+| `quote_status` | read | For one lead: its latest quote, with approval state, CEO rejection reason, lines, terms, quote number, whether the PDF is ready, the dealer's answer and the last send. Without a lead: your own quotes that are waiting for the CEO or were rejected. |
+| `create_quote` | write | Creates a quote, or a revision when one already exists. Lines come from the catalogue; price and quantity must come from the rep, and the tool asks if either is missing. The preview forecasts "auto-approved" or "goes to the CEO" without showing any rupee floor. The executor re-runs the E-226 gate inside its transaction. |
+| `send_quote` | write | Sends the latest approved quote that has a PDF, to the lead's own phone and email. The send runs after commit and reports per channel. The card has no Edit button. |
+
+- **Shared writers.** Creating and sending quotes was moved out of the two routes into `src/lib/leads/createCommercial.ts` and `src/lib/leads/sendQuotation.ts`. The read and the gate for sending live separately in `quoteSendGate.ts`, which uses only the DB. The routes now call these functions, so the screen and WhatsApp share one code path.
+- **Lazy loading.** The PDF, storage and provider stack is loaded lazily from the appliers. The registry therefore never loads it for every message, and the tests don't need `STORAGE_BACKEND`.
+- **Idle clock.** Quote touchpoints are not "worked" touchpoints (`isWorkedTouchpoint`), so the card says the idle clock does not reset.
+- **No migration needed.** `assistant_actions.tool` is `varchar(40)` with no CHECK constraint.
+
+Evidence:
+- `src/lib/assistant/__tests__/quotes-tools.test.ts`: 21 tests.
+- Full `npx vitest run`: 5110 passed; only the 2 known storage files fail.
+- `tsc`: 0 errors in `src/`.
+- Read-only sandbox run of every new SQL (catalogue, latest quote, send row, last dispatch, pending/rejected list): all pass.
+- `createLeadCommercial` run inside a sandbox transaction that was rolled back: v7 and v8 were created with a single `is_current` row and were gated to `pending` below reference. After the rollback a fresh query shows the lead unchanged at 6 rows.
