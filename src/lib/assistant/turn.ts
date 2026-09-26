@@ -7,6 +7,7 @@ import { assistantConfig, writesEnabledFor, type AssistantConfig } from "./confi
 import { toolsFor } from "./registry";
 import { buildSystemPrompt } from "./prompt";
 import { loadHistory, saveHistory, toolsetStamp } from "./memory";
+import { withEditContext } from "./edit";
 import { logToolCall } from "./audit";
 import { callTool, createToolCallingModel, runAgentTurn, type ToolCallingModel } from "./agent";
 import type { ToolSpec } from "./tools/spec";
@@ -42,11 +43,13 @@ export async function agentTurn(
     // A history built with other tools is dropped (memory.ts): stale refusals must not replay.
     const toolset = toolsetStamp(tools.map((t) => t.name));
     const history = await loadHistory(user.id, toolset, "whatsapp", now);
+    // After an Edit tap, this message is a change to that card.
+    const userText = await withEditContext(user, text);
     const out = await runAgentTurn(
         {
             system: buildSystemPrompt({ user, now, tools: tools.map((t) => t.name), writesEnabled }),
             history,
-            userText: text,
+            userText,
         },
         { model, tools, ctx: { user, messageId: opts.messageId, now, writesEnabled }, logToolCall },
     );

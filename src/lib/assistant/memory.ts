@@ -81,6 +81,39 @@ export async function loadHistory(
     }
 }
 
+/** The card an Edit tap is waiting to revise. */
+export type EditingState = { action_id: string; until: string };
+
+/** Remember the card being edited (kept beside the history in the same jsonb). */
+export async function setEditing(userId: string, editing: EditingState, channel = "whatsapp"): Promise<void> {
+    await db.execute(sql`
+        INSERT INTO assistant_conversations (user_id, channel, messages, last_activity_at)
+        VALUES (${userId}::uuid, ${channel}, ${JSON.stringify({ editing })}::jsonb, now())
+        ON CONFLICT (user_id, channel) DO UPDATE
+           SET messages = jsonb_set(
+                   CASE WHEN jsonb_typeof(assistant_conversations.messages) = 'object'
+                        THEN assistant_conversations.messages ELSE '{}'::jsonb END,
+                   '{editing}', ${JSON.stringify(editing)}::jsonb),
+               updated_at = now()
+    `);
+}
+
+/** Read AND clear the edit state — an Edit applies to the next message only. */
+export async function takeEditing(userId: string, channel = "whatsapp"): Promise<EditingState | null> {
+    const rows = await db.execute<{ editing: EditingState | null }>(sql`
+        SELECT messages -> 'editing' AS editing FROM assistant_conversations
+         WHERE user_id = ${userId}::uuid AND channel = ${channel} AND jsonb_typeof(messages) = 'object'
+    `);
+    const editing = rows[0]?.editing ?? null;
+    if (editing) {
+        await db.execute(sql`
+            UPDATE assistant_conversations SET messages = messages - 'editing', updated_at = now()
+             WHERE user_id = ${userId}::uuid AND channel = ${channel}
+        `);
+    }
+    return editing;
+}
+
 export async function saveHistory(
     userId: string,
     toolset: string,

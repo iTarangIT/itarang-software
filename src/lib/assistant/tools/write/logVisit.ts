@@ -5,6 +5,9 @@
 //   visit row + visit touchpoint + scheduled next visit   recordVisit (the visit route's writer)
 //   interest change                                       setInterestLevel
 //   status change (commercials explained / finalised)     logLeadTouchpoint (status_change_note)
+//
+// Status and temperature the ASM did NOT state are filled by the shared auto
+// rule (lib/leads/autoProgress.ts) and marked "(auto)" on the preview.
 //   Lost with its reason                                  markLeadLost
 // so a failure anywhere leaves none of it (BRD §8.4).
 //
@@ -21,6 +24,7 @@ import { recordVisit } from "@/lib/asm/recordVisit";
 import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
 import { markLeadLost } from "@/lib/leads/markLost";
 import { setInterestLevel } from "@/lib/leads/interestLevel";
+import { autoProgressForVisit } from "@/lib/leads/autoProgress";
 import { checkVisitProposal, NO_CHANGE, type StatusChoice } from "../../vocab";
 import { createPending } from "../../actions";
 import { istNow } from "../../prompt";
@@ -57,6 +61,8 @@ export const LogVisitPlan = z.object({
     /** A non-Lost status change, from the §9.3 visit rows. */
     status_to: z.enum(LEAD_STATUS).nullable(),
     lost: z.object({ reason: z.enum(LOST_REASON), notes: z.string().nullable() }).nullable(),
+    /** Which of status_to / interest came from the auto rule (audit + preview). */
+    auto: z.object({ status: z.boolean(), interest: z.boolean() }).default({ status: false, interest: false }),
 });
 export type LogVisitPlan = z.infer<typeof LogVisitPlan>;
 
@@ -161,8 +167,25 @@ export const logVisit: ToolFactory = () =>
                 nextVisit = day.value;
             }
 
-            const statusTo = !lost && status !== NO_CHANGE && status !== lead.lead_status ? status : null;
-            const interest = input.interest && input.interest !== lead.interest_level ? input.interest : null;
+            let statusTo = !lost && status !== NO_CHANGE && status !== lead.lead_status ? status : null;
+            let interest = input.interest && input.interest !== lead.interest_level ? input.interest : null;
+            const auto = { status: false, interest: false };
+            if (!lost) {
+                const derived = autoProgressForVisit({
+                    visited,
+                    outcome: visited ? input.outcome! : null,
+                    currentStatus: lead.lead_status,
+                    currentInterest: lead.interest_level,
+                });
+                if (input.status === undefined && !statusTo && derived.statusTo) {
+                    statusTo = derived.statusTo;
+                    auto.status = true;
+                }
+                if (!input.interest && derived.interestTo) {
+                    interest = derived.interestTo;
+                    auto.interest = true;
+                }
+            }
 
             const plan: LogVisitPlan = {
                 lead_id: lead.id,
@@ -175,6 +198,7 @@ export const logVisit: ToolFactory = () =>
                 interest,
                 status_to: statusTo,
                 lost,
+                auto,
             };
 
             const lines: Preview["lines"] = [
@@ -188,11 +212,13 @@ export const logVisit: ToolFactory = () =>
                     value: lost
                         ? `${statusLabel(lead.lead_status)} → Lost (${reasonLabel(lost.reason)})`
                         : statusTo
-                          ? `${statusLabel(lead.lead_status)} → ${statusLabel(statusTo)}`
+                          ? `${statusLabel(lead.lead_status)} → ${statusLabel(statusTo)}${auto.status ? " (auto)" : ""}`
                           : "no change",
                 },
             ];
-            if (interest) lines.push({ label: "Interest", value: `${lead.interest_level ?? "none"} → ${interest}` });
+            if (interest) {
+                lines.push({ label: "Temperature", value: `${lead.interest_level ?? "none"} → ${interest}${auto.interest ? " (auto)" : ""}` });
+            }
             if (nextVisit) lines.push({ label: "Next visit", value: `${fmtDate(nextVisit)} (goes to Today's Schedule)` });
             if (plan.next_action === "escalate") lines.push({ label: "Next step", value: "escalate" });
             lines.push({ label: "Remarks", value: remarks });
@@ -251,7 +277,12 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
         );
         if (p.interest) {
             await setInterestLevel(
-                { leadId: p.lead_id, actorId: user.id, level: p.interest, reason: "Logged from the WhatsApp Assistant" },
+                {
+                    leadId: p.lead_id,
+                    actorId: user.id,
+                    level: p.interest,
+                    reason: p.auto.interest ? "Auto: from visit outcome (WhatsApp Assistant)" : "Logged from the WhatsApp Assistant",
+                },
                 { tx },
             );
         }

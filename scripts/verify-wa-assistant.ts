@@ -559,7 +559,11 @@ async function gate4() {
         await say(deps, isrPhone, "Called Shree Motors, not interested, price too high.");
         const id = lastActionId(sent);
         const p = sent.at(-1)!.payload!;
-        assert(p.kind === "buttons" && p.buttons[0].id === `ast:c:${id}` && p.buttons[1].id === `ast:x:${id}`, "buttons");
+        assert(
+            p.kind === "buttons" &&
+                p.buttons.map((b) => b.id).join(" ") === `ast:c:${id} ast:e:${id} ast:x:${id}`,
+            "buttons",
+        );
         assert((await leadRow(lead)).touchpoints === 0, "the preview wrote something");
 
         // INV2: a typed yes / pasted id does NOT confirm.
@@ -787,10 +791,12 @@ async function gate4() {
                 preview: { title: "t", lines: [], resets_idle_clock: false, warning: null, needs_second_confirm: false, crm_url: "x" },
                 before: {}, sourceMessageId: null,
             })).id;
-        const old = await mk();
+        // One live card per user: a new card supersedes older PENDING ones, so
+        // make the stuck one executing before the second card is created.
         const stuck = await mk();
-        await db.execute(sql`UPDATE assistant_actions SET expires_at = now() - interval '1 minute' WHERE id = ${old}::uuid`);
         await db.execute(sql`UPDATE assistant_actions SET status = 'executing', updated_at = now() - interval '6 minutes' WHERE id = ${stuck}::uuid`);
+        const old = await mk();
+        await db.execute(sql`UPDATE assistant_actions SET expires_at = now() - interval '1 minute' WHERE id = ${old}::uuid`);
         await sweepActions();
         assert((await actionRow(old))?.status === "expired", "not expired");
         assert((await actionRow(stuck))?.status === "failed", "stuck not failed");
@@ -837,7 +843,7 @@ async function gate5() {
         await say(deps, asmPhone, "Met ABC Traders yesterday, owner Ramesh. Needs 10 batteries at X each. Aaj phir jaana hai.");
         const id = lastActionId(sent);
         const body = sent.at(-1)!.text;
-        assert(/^\*Log visit — /.test(body) && /Visit: visited · productive/.test(body) && /Interest: none → hot/.test(body) &&
+        assert(/^\*Log visit — /.test(body) && /Visit: visited · productive/.test(body) && /Temperature: none → hot/.test(body) &&
                /Next visit: .*\(goes to Today's Schedule\)/.test(body) && /Resets idle clock: yes/.test(body), body);
         const before = await counts(lead);
         assert(before.visits === 0 && before.touchpoints === 0 && before.overrides === 0, `the preview wrote: ${JSON.stringify(before)}`);
@@ -1194,9 +1200,98 @@ async function gate6() {
     });
 }
 
+async function gate7() {
+    if (!(await hasTable("assistant_actions"))) {
+        await check("G7.* auto status / Edit", async () => {
+            throw new Skip("needs E-309 (drizzle/E-309_wa_assistant.sql) on this database");
+        });
+        return;
+    }
+    const isr: AssistantUser = { id: await makeUser("inside_sales_rep"), name: "WA Test inside_sales_rep", role: "inside_sales_rep" };
+    const asm: AssistantUser = { id: await makeUser("asm"), name: "WA Test asm", role: "asm" };
+    const isrPhone = phone(70);
+    const asmPhone = phone(71);
+    for (const [u, p] of [[isr, isrPhone], [asm, asmPhone]] as const) {
+        await db.execute(sql`INSERT INTO assistant_wa_bindings (user_id, wa_phone, status, verified_at) VALUES (${u.id}::uuid, ${p}, 'active', now())`);
+    }
+    process.env.ASSISTANT_WRITES_ENABLED_USER_IDS = [isr.id, asm.id].join(",");
+    const lastText = (sent: Sent[]) => sent.at(-1)!.text;
+    const leadState = async (id: string) =>
+        (await db.execute<{ lead_status: string | null; interest_level: string | null; next_follow_up_at: string | null }>(sql`
+            SELECT lead_status, interest_level, next_follow_up_at::text AS next_follow_up_at FROM dealer_leads WHERE id = ${id}`))[0]!;
+    const tomorrow = istNow(new Date(Date.now() + 86_400_000)).isoDate;
+    const dayAfter = istNow(new Date(Date.now() + 2 * 86_400_000)).isoDate;
+
+    await check("G7.1 auto: a connected 'Details Shared' call with nothing else said → Under Discussion + warm, marked (auto), audited as auto", async () => {
+        const lead = await makeLead("t7-auto", { owner: isr.id, status: "Assigned_Not_Contacted" });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "log_call",
+            args: { lead_id: lead, channel: "call", connect_status: "connected", disposition: "Details Shared", remarks: "shared brochure" },
+        }]));
+        await say(deps, isrPhone, "Baat hui, details share kar di");
+        const id = lastActionId(sent);
+        assert(/Status: Assigned Not Contacted → Under Discussion \(auto\)/.test(lastText(sent)) && /Temperature: none → warm \(auto\)/.test(lastText(sent)), lastText(sent));
+        await tap(deps, isrPhone, `ast:c:${id}`);
+        const l = await leadState(lead);
+        assert(l.lead_status === "Under_Discussion" && l.interest_level === "warm", JSON.stringify(l));
+        const o = await db.execute<{ reason: string | null }>(sql`
+            SELECT reason FROM interest_level_overrides WHERE dealer_lead_id = ${lead} ORDER BY created_at DESC LIMIT 1`);
+        assert(/^Auto:/.test(o[0]?.reason ?? ""), `override reason ${o[0]?.reason}`);
+    });
+
+    await check("G7.2 auto: an ASM's productive visit on a transferred lead → Under Discussion (auto)", async () => {
+        const lead = await makeLead("t7-visit", { owner: asm.id, asm: asm.id, status: "Transferred_to_ASM" });
+        const sent: Sent[] = [];
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "log_visit",
+            args: { lead_id: lead, visit_status: "visited", outcome: "productive", remarks: "met the owner", next_action: "escalate" },
+        }]));
+        await say(deps, asmPhone, "visit kiya, productive");
+        const id = lastActionId(sent);
+        assert(/Under Discussion \(auto\)/.test(lastText(sent)), lastText(sent));
+        await tap(deps, asmPhone, `ast:c:${id}`);
+        assert((await leadState(lead)).lead_status === "Under_Discussion", "status not moved");
+    });
+
+    await check("G7.3 Edit: card has Confirm/Edit/Cancel; Edit → next message revises it; old card refused as replaced; new card saves the corrected date", async () => {
+        const lead = await makeLead("t7-edit", { owner: isr.id, status: "Under_Discussion" });
+        const sent: Sent[] = [];
+        let turn = 0;
+        const deps = g4Deps(sent, () => scriptedCalls([{
+            name: "set_follow_up",
+            args: { lead_id: lead, follow_up_at: `${turn++ === 0 ? tomorrow : dayAfter}T11:00:00+05:30`, note: "call again" },
+        }]));
+        await say(deps, isrPhone, "kal 11 baje follow up");
+        const first = lastActionId(sent);
+        const card = sent.at(-1)!.payload;
+        assert(card?.kind === "buttons" && card.buttons.map((b) => b.title).join("/") === "Confirm/Edit/Cancel", JSON.stringify(card));
+
+        await tap(deps, isrPhone, `ast:e:${first}`);
+        assert(/Kya badalna hai/.test(lastText(sent)), lastText(sent));
+        assert((await actionRow(first))?.status === "pending", "Edit tap changed the card");
+
+        await say(deps, isrPhone, "kal nahi, parso");
+        const second = lastActionId(sent);
+        assert(second !== first, "no new card");
+        const hist = await db.execute<{ m: string }>(sql`
+            SELECT messages::text AS m FROM assistant_conversations WHERE user_id = ${isr.id}::uuid`);
+        assert(/\[EDIT\]/.test(hist[0]?.m ?? ""), "the edit context never reached the agent");
+        const old = await actionRow(first);
+        assert(old?.status === "cancelled" && /^superseded by /.test(old.error ?? ""), JSON.stringify(old));
+
+        await tap(deps, isrPhone, `ast:c:${first}`);
+        assert(/replaced by a newer one/.test(lastText(sent)), lastText(sent));
+        await tap(deps, isrPhone, `ast:c:${second}`);
+        assert(lastText(sent).startsWith("✅ Saved"), lastText(sent));
+        const l = await leadState(lead);
+        assert(istNow(new Date(l.next_follow_up_at!)).isoDate === dayAfter, `follow-up ${l.next_follow_up_at}`);
+    });
+}
+
 async function main() {
     const gate = Number(process.argv[process.argv.indexOf("--gate") + 1] || "1");
-    await runSuites([gate1, gate2, gate3, gate4, gate5, gate6].slice(0, gate));
+    await runSuites([gate1, gate2, gate3, gate4, gate5, gate6, gate7].slice(0, gate));
 }
 
 void main();

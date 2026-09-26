@@ -61,6 +61,8 @@ export type ExecOutcome =
     | { kind: "expired" }
     | { kind: "already_done" }
     | { kind: "already_cancelled" }
+    /** A newer card (a correction or an Edit) replaced this one. */
+    | { kind: "superseded" }
     | { kind: "in_progress" }
     | { kind: "failed_before" }
     | { kind: "awaiting_second_confirm" }
@@ -71,7 +73,17 @@ export type ExecOutcome =
 /** Why a tap could not claim a pending action. */
 type Unclaimable = Extract<
     ExecOutcome,
-    { kind: "expired" | "already_done" | "already_cancelled" | "in_progress" | "failed_before" | "awaiting_second_confirm" | "not_found" }
+    {
+        kind:
+            | "expired"
+            | "already_done"
+            | "already_cancelled"
+            | "superseded"
+            | "in_progress"
+            | "failed_before"
+            | "awaiting_second_confirm"
+            | "not_found";
+    }
 >;
 
 export type CancelOutcome = { kind: "cancelled" } | Unclaimable;
@@ -81,9 +93,9 @@ export { ActionRejected };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Why a tap could not claim the action — read-only, after the claim failed. */
-async function classifyUnclaimable(actionId: string, userId: string): Promise<Unclaimable> {
-    const rows = await db.execute<{ status: string; user_id: string; expired: boolean }>(sql`
-        SELECT status, user_id::text AS user_id, (expires_at <= now()) AS expired
+export async function classifyUnclaimable(actionId: string, userId: string): Promise<Unclaimable> {
+    const rows = await db.execute<{ status: string; user_id: string; expired: boolean; error: string | null }>(sql`
+        SELECT status, user_id::text AS user_id, (expires_at <= now()) AS expired, error
           FROM assistant_actions WHERE id = ${actionId}::uuid
     `);
     const r = rows[0];
@@ -102,7 +114,7 @@ async function classifyUnclaimable(actionId: string, userId: string): Promise<Un
         case "confirmed":
             return { kind: "already_done" };
         case "cancelled":
-            return { kind: "already_cancelled" };
+            return r.error?.startsWith("superseded") ? { kind: "superseded" } : { kind: "already_cancelled" };
         case "executing":
             return { kind: "in_progress" };
         case "escalated":

@@ -143,7 +143,7 @@ describe("set_follow_up proposals (UC-07)", () => {
     it("ISR: follow-up instant → isr_follow_up plan", async () => {
         const r = await run(ISR, "set_follow_up", { lead_id: "DL-1", follow_up_at: "2026-09-28T10:00:00+05:30", note: "send brochure" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "send brochure" });
+        expect(stored().plan).toEqual({ kind: "isr_follow_up", lead_id: "DL-1", follow_up_at: "2026-09-28T04:30:00.000Z", note: "send brochure", status_to: null });
         expect(stored().preview.resets_idle_clock).toBe(false);
     });
 
@@ -151,7 +151,7 @@ describe("set_follow_up proposals (UC-07)", () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1", shop_name: "Gupta Motors" }));
         const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
+        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote", status_to: null });
         expect(stored().preview).toMatchObject({ title: "Schedule visit — Gupta Motors", warning: null });
         expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to Today's Schedule)" });
     });
@@ -230,14 +230,27 @@ describe("preview + tap rendering", () => {
         resets_idle_clock: true, warning: null, needs_second_confirm: false, crm_url: "https://crm/x",
     };
 
-    it("exactly Confirm / Cancel with ast:c / ast:x ids; body ≤ 900 with the footer intact", () => {
+    it("Confirm / Edit / Cancel (Edit in the middle); body ≤ 900 with the footer intact", () => {
         const p = renderPreview(preview, "act-1");
         expect(p.kind).toBe("buttons");
         if (p.kind !== "buttons") return;
-        expect(p.buttons).toEqual([{ id: "ast:c:act-1", title: "Confirm" }, { id: "ast:x:act-1", title: "Cancel" }]);
+        expect(p.buttons).toEqual([
+            { id: "ast:c:act-1", title: "Confirm" },
+            { id: "ast:e:act-1", title: "Edit" },
+            { id: "ast:x:act-1", title: "Cancel" },
+        ]);
         expect(p.body.length).toBeLessThanOrEqual(RENDER_LIMITS.previewBody);
         expect(p.body.startsWith("*Log call — Shree Motors*")).toBe(true);
         expect(p.body.endsWith("Resets idle clock: yes · Expires in 10 min")).toBe(true);
+    });
+
+    it("no Edit on a high-impact second confirmation or a dealer invite", () => {
+        const p = renderPreview(preview, "act-1", { edit: false });
+        expect(p.kind === "buttons" && p.buttons.map((b) => b.title)).toEqual(["Confirm", "Cancel"]);
+    });
+
+    it("a superseded card's tap says so", () => {
+        expect(renderTapOutcome({ kind: "superseded" }).body).toMatch(/replaced by a newer one/);
     });
 
     it("a preview wins over model text in a turn", async () => {

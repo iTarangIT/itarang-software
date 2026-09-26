@@ -26,7 +26,7 @@ import type { ToolCallingModel } from "../src/lib/assistant/agent";
 import { renderTapOutcome, renderTurn, type WaPayload } from "../src/lib/wa-assistant/render";
 import { cancelAction, executeAction } from "../src/lib/assistant/executor";
 import { hasOpenPendingAction } from "../src/lib/assistant/actions";
-import { proposeInvitePayload } from "../src/lib/wa-assistant/runtime";
+import { editActionPayload, proposeInvitePayload } from "../src/lib/wa-assistant/runtime";
 
 
 // ── Safety ──────────────────────────────────────────────────────────────────
@@ -156,6 +156,7 @@ export function routerDeps(
         },
         openLead: async () => ({ kind: "text", body: "lead card" }),
         proposeInvite: async () => ({ kind: "text", body: "invite preview" }),
+        editAction: async () => ({ kind: "text", body: "edit" }),
         confirmAction: async (user, actionId, rowId) =>
             renderTapOutcome(await executeAction(actionId, user, { messageId: rowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
@@ -261,6 +262,7 @@ export function g4Deps(sent: Sent[], model: () => ToolCallingModel): RouterDeps 
         },
         hasPendingAction: hasOpenPendingAction,
         proposeInvite: proposeInvitePayload,
+        editAction: editActionPayload,
         runTextTurn: async (user, text, rowId) => {
             const r = await withUserLease(user.id, () => agentTurn(user, text, { messageId: rowId, model: () => model() }));
             if (!r.ok) return { kind: "busy" };
