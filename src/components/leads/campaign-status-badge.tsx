@@ -2,13 +2,15 @@
 // (running / scheduled / paused / completed / stopped / failed);
 // CampaignLeadStatusBadge is for per-lead status — the vocabulary and labels
 // in lib/ai-dialer/campaignLeadStatus.ts (Queued / Calling / Completed /
-// No Response / Busy / Rejected / Voicemail / Pending / Failed / Skipped).
+// No Response / Busy / Rejected / Voicemail / Silent Call / Hung Up Early /
+// Failed / Skipped).
 //
-// "Pending" is the attempted-but-no-conversation status (no_conversation) and
-// a not-yet-dialled lead reads "Queued" — a product decision, see the labels
-// in campaignLeadStatus.ts. An unknown lead status renders as a neutral pill
-// carrying its raw value, never as "Pending": that fallback used to make any
-// status this file had not heard of look like it was still waiting to dial.
+// A not-yet-dialled lead reads "Queued"; an answered call the dealer never
+// spoke on is "Silent Call" or "Hung Up Early" (the old single "Pending" /
+// no_conversation bucket, split 2026-09-26 — see the labels in
+// campaignLeadStatus.ts). An unknown lead status renders as a neutral pill
+// carrying its raw value: that fallback used to make any status this file had
+// not heard of look like it was still waiting to dial.
 //
 // KEEP ParentStatus IN STEP WITH WHAT THE BACKEND WRITES. The unknown-status
 // fallback below is PARENT_STYLES.running, so a status missing from this map
@@ -31,6 +33,7 @@ import {
   Voicemail,
   Hourglass,
   MicOff,
+  PhoneForwarded,
   CalendarClock,
   PauseCircle,
   CircleSlash,
@@ -148,6 +151,18 @@ const LEAD_STYLES: Record<
     text: "text-violet-800",
     label: LABELS.voicemail,
     Icon: Voicemail,
+  },
+  silent: {
+    bg: "bg-indigo-100",
+    text: "text-indigo-700",
+    label: LABELS.silent,
+    Icon: MicOff,
+  },
+  hung_up: {
+    bg: "bg-sky-100",
+    text: "text-sky-800",
+    label: LABELS.hung_up,
+    Icon: PhoneForwarded,
   },
   no_conversation: {
     bg: "bg-indigo-100",

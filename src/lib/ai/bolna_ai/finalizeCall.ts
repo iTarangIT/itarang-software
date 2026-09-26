@@ -32,6 +32,10 @@ import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 import { writeAiCallTouchpoint } from "@/lib/ai/storage/callTouchpoint";
+import {
+  persistCallEndEvidence,
+  type CallEndEvidenceRow,
+} from "@/lib/ai/storage/callEndEvidence";
 import { rehostRecording } from "@/lib/ai/storage/recordingStore";
 
 export type BolnaFinalizePayload = {
@@ -117,7 +121,13 @@ export async function finalizeBolnaCall(
     transcript,
     answeredByVoicemail,
     terminationReason: hangupReason,
+    durationSecs: duration,
   });
+  // E-310 — kept on ai_call_logs so the split above can be re-read later.
+  const endEvidence: CallEndEvidenceRow = {
+    endReason: hangupReason,
+    answeredByVoicemail,
+  };
 
   // ── No-transcript path: busy / failed / no-answer ──
   if (!transcript) {
@@ -149,6 +159,7 @@ export async function finalizeBolnaCall(
     if (leadForPhone) {
       await upsertAiCallLog({
         callId,
+        endEvidence,
         leadId: leadForPhone.id,
         status: status || "failed",
         transcript: null,
@@ -280,6 +291,7 @@ export async function finalizeBolnaCall(
       `[bolna:finalize] analysis failed for lead ${lead.id}: ${result.reason}`,
     );
     const r = await markLeadNeedsReview({
+      endEvidence,
       leadId: lead.id,
       followUpHistory: (lead.follow_up_history as unknown[]) || [],
       callId,
@@ -331,6 +343,7 @@ export async function finalizeBolnaCall(
 
     await upsertAiCallLog({
       callId,
+      endEvidence,
       leadId: lead.id,
       status: status || "call-disconnected",
       transcript,
@@ -455,6 +468,7 @@ export async function finalizeBolnaCall(
   // this call. Idempotent — upsert on call_id.
   await upsertAiCallLog({
     callId,
+    endEvidence,
     leadId: lead.id,
     status: status || "completed",
     transcript,
@@ -656,8 +670,23 @@ async function upsertAiCallLog(opts: {
   band?: string | null;
   callStatus?: string | null;
   infoSignalsCount?: number | null;
+  /** E-310 — how the provider says the call ended. */
+  endEvidence?: CallEndEvidenceRow;
 }): Promise<void> {
   try {
+    await writeAiCallLogRow(opts);
+  } catch (err) {
+    console.error("[bolna:finalize] ai_call_logs upsert failed:", err);
+    return;
+  }
+  // After the row exists, whichever branch wrote it.
+  await persistCallEndEvidence(opts.callId, opts.endEvidence, "bolna:finalize");
+}
+
+async function writeAiCallLogRow(
+  opts: Parameters<typeof upsertAiCallLog>[0],
+): Promise<void> {
+  {
     const existing = opts.callId
       ? await db
           .select({ id: aiCallLogs.id })
@@ -720,8 +749,6 @@ async function upsertAiCallLog(opts: {
       info_signals_count: opts.infoSignalsCount ?? null,
       ended_at: now,
     });
-  } catch (err) {
-    console.error("[bolna:finalize] ai_call_logs upsert failed:", err);
   }
 }
 
@@ -741,6 +768,7 @@ async function markLeadNeedsReview(opts: {
   conversation: unknown[];
   reason: string;
   callEnd: CallEndClassification;
+  endEvidence?: CallEndEvidenceRow;
 }): Promise<{ campaignId: string | null }> {
   const history = opts.followUpHistory || [];
   const newEntry = {
@@ -770,6 +798,7 @@ async function markLeadNeedsReview(opts: {
 
   await upsertAiCallLog({
     callId: opts.callId,
+    endEvidence: opts.endEvidence,
     leadId: opts.leadId,
     status: "needs_review",
     transcript: opts.transcript,
