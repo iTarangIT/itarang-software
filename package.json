@@ -85,6 +85,7 @@
     "@google-cloud/vision": "^5.3.4",
     "@google/generative-ai": "^0.24.1",
     "@hookform/resolvers": "^5.2.2",
+    "@langchain/google-genai": "^2.3.2",
     "@langchain/langgraph": "^1.2.0",
     "@langchain/openai": "^1.2.8",
     "@mendable/firecrawl-js": "^4.17.0",

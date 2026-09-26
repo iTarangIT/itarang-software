@@ -400,6 +400,8 @@ const STATUS_PILL_CLS: Partial<Record<CampaignLeadStatus, string>> = {
   busy: "bg-orange-100 text-orange-800",
   rejected: "bg-fuchsia-100 text-fuchsia-800",
   voicemail: "bg-violet-100 text-violet-800",
+  silent: "bg-indigo-100 text-indigo-700",
+  hung_up: "bg-sky-100 text-sky-800",
   no_conversation: "bg-indigo-100 text-indigo-700",
   failed: "bg-rose-100 text-rose-700",
 };

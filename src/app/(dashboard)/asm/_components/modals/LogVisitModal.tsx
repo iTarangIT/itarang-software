@@ -7,16 +7,19 @@ import {
     VisitFields,
 } from "@/app/(dashboard)/asm/_components/VisitFields";
 import type { VisitNextAction } from "@/lib/asm/types";
+import type { VisitLeadState } from "@/app/(dashboard)/asm/_components/VisitFields";
 
 type Props = {
     open: boolean;
     onClose: () => void;
     leadId: string;
     onSuccess: (result: { next_action: VisitNextAction }) => void;
+    /** Current status / temperature, so the form can pre-fill the auto values. */
+    lead?: VisitLeadState;
 };
 
-export function LogVisitModal({ open, onClose, leadId, onSuccess }: Props) {
-    const form = useVisitForm(open);
+export function LogVisitModal({ open, onClose, leadId, onSuccess, lead }: Props) {
+    const form = useVisitForm(open, lead);
 
     const handleSubmit = async () => {
         const result = await form.submit(leadId);

@@ -94,9 +94,9 @@ export async function GET(req: Request) {
             c.call_id,
             c.lead_id,
             c.provider,
-            -- no_conversation rows were 'completed' before 2026-09-21; keep
+            -- no_conversation / silent / hung_up rows were 'completed' before 2026-09-21; keep
             -- the placeholder they always got.
-            CASE WHEN c.status IN ('completed', 'no_conversation') THEN 'completed' ELSE c.outcome END,
+            CASE WHEN c.status IN ('completed', 'no_conversation', 'silent', 'hung_up') THEN 'completed' ELSE c.outcome END,
             NULL,
             c.started_at,
             c.completed_at

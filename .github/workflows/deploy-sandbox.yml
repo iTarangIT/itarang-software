@@ -99,7 +99,10 @@ jobs:
       # two green weeks here; production's workflow is untouched until then.
       - name: Type-check (tsc --noEmit, tsconfig.check.json)
         run: |
-          export NODE_OPTIONS="--max-old-space-size=4096"
+          # 8 GB, like the build step below: tsc outgrew 4 GB on 2026-09-25
+          # ("Ineffective mark-compacts near heap limit" at ~4.08 GB, SIGABRT /
+          # exit 134) — the runner has 16 GB, and the steps run one at a time.
+          export NODE_OPTIONS="--max-old-space-size=8192"
           time npm run type-check
 
       - name: Build (next build --webpack)

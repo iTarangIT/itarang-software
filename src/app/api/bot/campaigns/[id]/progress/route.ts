@@ -47,7 +47,7 @@ export const GET = withBotAuth(
       .groupBy(dialerCampaignLeads.status);
 
     // Every status, zero-filled. `completed` means the dealer actually spoke;
-    // busy / no_response / rejected / voicemail / no_conversation / skipped are
+    // busy / no_response / rejected / voicemail / silent / hung_up / skipped are
     // their own buckets since 2026-09-21 (campaignLeadStatus.ts), so reading
     // only the old four keys would silently lose most of a campaign.
     const counts = Object.fromEntries(

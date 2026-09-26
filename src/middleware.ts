@@ -484,6 +484,9 @@ export async function middleware(request: NextRequest) {
     // "you must be signed in", which is what was missing: before this, an
     // unauthenticated visitor rendered the page instead of being sent to /login.
     path === "/profile" ||
+    // Settings → Link WhatsApp (Sales Assistant). Same "must be signed in"
+    // half as /profile; the page itself re-checks the role.
+    path.startsWith("/settings") ||
     path === "/" ||
     path === "/dashboard";
 

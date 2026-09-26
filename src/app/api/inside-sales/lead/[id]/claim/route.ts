@@ -13,7 +13,7 @@ export const POST = withErrorHandler(
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
 
-        const outcome = await claimLead(id, user.id);
+        const outcome = await claimLead(id, user.id, { actorRole: user.role });
         if (!outcome.ok) {
             switch (outcome.reason) {
                 case "not_found":

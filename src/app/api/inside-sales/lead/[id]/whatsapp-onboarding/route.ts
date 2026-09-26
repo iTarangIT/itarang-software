@@ -6,18 +6,14 @@
 // application (created by mark-converted) and sends the dealer an invite so
 // their first reply continues straight into the onboarding state machine.
 //
-// E-214: the session-linking + invite logic now lives in
+// E-214: the session-linking + invite logic lives in
 // lib/whatsapp/operator-handoff.ts, shared with the operator console's
-// "Invite Dealer" action, so there is one implementation of "bind a number to an
-// application and invite it".
+// "Invite Dealer" action. The lead-side lookup lives in
+// lib/leads/onboardingInvite.ts, shared with the WhatsApp Assistant.
 
-import { sql } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { inviteDealerToApplication } from "@/lib/whatsapp/operator-handoff";
-import { toWaPhone } from "@/lib/whatsapp/operator-identity";
+import { prepareOnboardingInvite, sendOnboardingInvite } from "@/lib/leads/onboardingInvite";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
 
@@ -27,34 +23,16 @@ export const POST = withErrorHandler(
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
 
-        const [lead] = await db
-            .select({
-                phone: dealerLeads.phone,
-                dealer_name: dealerLeads.dealer_name,
-                application_id: dealerLeads.dealer_onboarding_application_id,
-            })
-            .from(dealerLeads)
-            .where(sql`${dealerLeads.id} = ${id}`)
-            .limit(1);
-        if (!lead) return errorResponse("Lead not found", 404);
-        if (!lead.application_id) {
-            return errorResponse(
-                "No onboarding application — mark the lead Converted first.",
-                400,
-            );
-        }
-
-        // dealer_leads.phone is stored as 10 digits; WhatsApp wants E.164 without '+'.
-        const waPhone = toWaPhone(lead.phone ?? "");
-        if (!waPhone) {
+        const prep = await prepareOnboardingInvite(id);
+        if (!prep.ok) {
+            if (prep.reason === "not_found") return errorResponse("Lead not found", 404);
+            if (prep.reason === "no_application") {
+                return errorResponse("No onboarding application — mark the lead Converted first.", 400);
+            }
             return errorResponse("Lead has no valid phone number for WhatsApp.", 400);
         }
 
-        const res = await inviteDealerToApplication({
-            applicationId: lead.application_id,
-            dealerWaPhone: waPhone,
-            dealerName: lead.dealer_name,
-        });
+        const res = await sendOnboardingInvite(prep.target);
 
         return successResponse({
             sessionId: res.sessionId,
