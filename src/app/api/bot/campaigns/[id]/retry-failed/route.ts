@@ -5,7 +5,7 @@
 // source campaign is left untouched so each run stays a clean audit record.
 //
 // Retryable = a non-conversation status (busy, no_response, rejected,
-// voicemail, no_conversation, failed — campaignLeadStatus.RETRYABLE_STATUSES)
+// voicemail, silent, hung_up, no_conversation, failed — campaignLeadStatus.RETRYABLE_STATUSES)
 // EXCEPT no_phone / ineligible_active_lead / invalid_number. The new campaign
 // carries recall:true in region_filter so advanceCampaign bypasses the
 // once-per-day idempotency guard. Leads the AI has since SPOKEN to are dropped

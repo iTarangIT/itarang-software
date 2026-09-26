@@ -31,6 +31,7 @@ import {
   Voicemail,
   Hourglass,
   MicOff,
+  PhoneForwarded,
 } from "lucide-react";
 import {
   CAMPAIGN_LEAD_STATUS_LABELS,
@@ -108,8 +109,9 @@ type Lead = {
 
 type Bucket = "all" | CampaignLeadStatus;
 
-// Tab order. Labels come from the shared vocabulary, so "Pending" here is the
-// attempted-but-no-conversation status and a not-yet-dialled lead is "Queued".
+// Tab order. Labels come from the shared vocabulary: a not-yet-dialled lead is
+// "Queued"; an answered call the dealer never spoke on is "Silent Call" or
+// "Hung Up Early" (no_conversation is the legacy bucket those were split from).
 const BUCKET_ORDER: Bucket[] = [
   "all",
   "pending",
@@ -119,6 +121,8 @@ const BUCKET_ORDER: Bucket[] = [
   "busy",
   "rejected",
   "voicemail",
+  "silent",
+  "hung_up",
   "no_conversation",
   "failed",
   "skipped",
@@ -166,6 +170,7 @@ function StatCard({
   onClick,
   expanded,
   controls,
+  hint,
 }: {
   label: string;
   value: number | string;
@@ -179,10 +184,13 @@ function StatCard({
     | "orange"
     | "fuchsia"
     | "violet"
-    | "indigo";
+    | "indigo"
+    | "sky";
   onClick?: () => void;
   expanded?: boolean;
   controls?: string;
+  /** Tooltip: what the bucket means. */
+  hint?: string;
 }) {
   const toneClass = {
     neutral: "bg-gray-50 text-gray-700 border-gray-200",
@@ -194,6 +202,7 @@ function StatCard({
     fuchsia: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200",
     violet: "bg-violet-50 text-violet-700 border-violet-200",
     indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    sky: "bg-sky-50 text-sky-700 border-sky-200",
   }[tone];
 
   const body = (
@@ -221,7 +230,11 @@ function StatCard({
   );
 
   if (!onClick) {
-    return <div className={`rounded-xl border px-4 py-3 ${toneClass}`}>{body}</div>;
+    return (
+      <div title={hint} className={`rounded-xl border px-4 py-3 ${toneClass}`}>
+        {body}
+      </div>
+    );
   }
 
   return (
@@ -829,7 +842,7 @@ export function CampaignDetailView({
       {/* "Completed" counts conversations only — calls where the dealer
           actually spoke (lib/ai-dialer/campaignLeadStatus.ts). Every other
           way a dialled call can end has its own card. */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <StatCard
           label="Total leads"
           value={campaign.totalLeads}
@@ -875,11 +888,21 @@ export function CampaignDetailView({
           Icon={Voicemail}
           tone="violet"
         />
+        {/* The old single "Pending" card, split. Legacy no_conversation rows
+            (not yet re-classified) count as Silent Call. */}
         <StatCard
-          label={CAMPAIGN_LEAD_STATUS_LABELS.no_conversation}
-          value={count("no_conversation")}
+          label={CAMPAIGN_LEAD_STATUS_LABELS.silent}
+          value={count("silent") + count("no_conversation")}
           Icon={MicOff}
           tone="indigo"
+          hint="The dealer answered and stayed on the line, but never spoke."
+        />
+        <StatCard
+          label={CAMPAIGN_LEAD_STATUS_LABELS.hung_up}
+          value={count("hung_up")}
+          Icon={PhoneForwarded}
+          tone="sky"
+          hint={`The dealer answered and hung up during the greeting, before saying anything.`}
         />
         <StatCard
           label="Failed"

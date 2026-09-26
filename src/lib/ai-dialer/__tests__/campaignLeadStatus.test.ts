@@ -11,6 +11,7 @@ import {
     ATTEMPTED_STATUSES,
     CAMPAIGN_LEAD_STATUSES,
     CAMPAIGN_LEAD_STATUS_LABELS,
+    EARLY_HANGUP_SECS,
     NON_CONVERSATION_STATUSES,
     RETRYABLE_STATUSES,
     TERMINAL_STATUSES,
@@ -113,36 +114,106 @@ describe("the six telephony results in the fix request", () => {
     });
 });
 
-describe("attempted, but no conversation → no_conversation (labelled Pending)", () => {
-    it("the AI greeted a line where the dealer never spoke", () => {
+describe("answered, but the dealer never spoke → silent / hung_up", () => {
+    it("the AI greeted a line where the dealer listened and said nothing", () => {
         // THE inflation: 481 rows on prod were this shape and read "Completed".
+        expect(
+            classifyCallEnd({ providerStatus: "done", transcript: agent, durationSecs: 35 }).status,
+        ).toBe("silent");
+    });
+
+    it("the dealer cut the greeting off", () => {
+        expect(
+            classifyCallEnd({ providerStatus: "done", transcript: agent, durationSecs: 4 }).status,
+        ).toBe("hung_up");
+        expect(
+            classifyCallEnd({
+                providerStatus: "done",
+                transcript: agent,
+                durationSecs: EARLY_HANGUP_SECS - 1,
+            }).status,
+        ).toBe("hung_up");
+        expect(
+            classifyCallEnd({
+                providerStatus: "done",
+                transcript: agent,
+                durationSecs: EARLY_HANGUP_SECS,
+            }).status,
+        ).toBe("silent");
+    });
+
+    it("with no duration, only a remote-hangup reason says early", () => {
         expect(classifyCallEnd({ providerStatus: "done", transcript: agent }).status).toBe(
-            "no_conversation",
+            "silent",
         );
+        expect(
+            classifyCallEnd({
+                transcript: agent,
+                terminationReason: "Call ended by remote party",
+            }).status,
+        ).toBe("hung_up");
+        expect(
+            classifyCallEnd({ transcript: agent, terminationReason: "user_hangup" }).status,
+        ).toBe("hung_up");
     });
 
     it("a dealer turn with no words in it is not speech", () => {
-        expect(
-            classifyCallEnd({ providerStatus: "done", transcript: `${agent}\nuser: ...` }).status,
-        ).toBe("no_conversation");
-        expect(
-            classifyCallEnd({ providerStatus: "done", transcript: `${agent}\nuser: …` }).status,
-        ).toBe("no_conversation");
-        expect(
-            classifyCallEnd({ providerStatus: "done", transcript: `${agent}\nuser:` }).status,
-        ).toBe("no_conversation");
+        for (const noise of ["user: ...", "user: …", "user:"]) {
+            expect(
+                classifyCallEnd({
+                    providerStatus: "done",
+                    transcript: `${agent}\n${noise}`,
+                    durationSecs: 20,
+                }).status,
+                noise,
+            ).toBe("silent");
+            expect(
+                classifyCallEnd({
+                    providerStatus: "done",
+                    transcript: `${agent}\n${noise}`,
+                    durationSecs: 3,
+                }).status,
+                noise,
+            ).toBe("hung_up");
+        }
     });
 
-    it("finished normally with nothing exchanged at all", () => {
-        expect(classifyCallEnd({ providerStatus: "completed" }).status).toBe("no_conversation");
-        expect(classifyCallEnd({ providerStatus: "done", transcript: "" }).status).toBe(
-            "no_conversation",
+    it("'completed' with nothing exchanged and 0 seconds never connected", () => {
+        // ElevenLabs defaults a missing status to "completed".
+        expect(classifyCallEnd({ providerStatus: "completed" }).status).toBe("no_response");
+        expect(classifyCallEnd({ providerStatus: "completed", durationSecs: 0 }).status).toBe(
+            "no_response",
+        );
+        expect(
+            classifyCallEnd({ providerStatus: "done", transcript: "", durationSecs: "0" }).status,
+        ).toBe("no_response");
+    });
+
+    it("'completed' with nothing exchanged but an open line is silent / hung up", () => {
+        expect(classifyCallEnd({ providerStatus: "completed", durationSecs: 20 }).status).toBe(
+            "silent",
+        );
+        expect(classifyCallEnd({ providerStatus: "completed", durationSecs: 3 }).status).toBe(
+            "hung_up",
         );
     });
 
-    it("is labelled Pending, and the queue reads Queued so the two never share a word", () => {
-        expect(CAMPAIGN_LEAD_STATUS_LABELS.no_conversation).toBe("Pending");
+    it("never writes the legacy no_conversation bucket", () => {
+        const inputs = [
+            { transcript: agent },
+            { transcript: agent, durationSecs: 2 },
+            { providerStatus: "completed" },
+            { providerStatus: "done", durationSecs: 50 },
+            { transcript: agent, initiationFailureReason: "unknown" },
+        ];
+        for (const e of inputs) expect(classifyCallEnd(e).status).not.toBe("no_conversation");
+    });
+
+    it("labels: Silent Call / Hung Up Early, the queue reads Queued, nothing reads Pending", () => {
+        expect(CAMPAIGN_LEAD_STATUS_LABELS.silent).toBe("Silent Call");
+        expect(CAMPAIGN_LEAD_STATUS_LABELS.hung_up).toBe("Hung Up Early");
         expect(CAMPAIGN_LEAD_STATUS_LABELS.pending).toBe("Queued");
+        expect(Object.values(CAMPAIGN_LEAD_STATUS_LABELS)).not.toContain("Pending");
     });
 });
 
@@ -234,7 +305,7 @@ describe("evidence order", () => {
     it("an unrecognised telephony string falls through to the transcript", () => {
         expect(
             classifyCallEnd({ transcript: agent, initiationFailureReason: "unknown" }).status,
-        ).toBe("no_conversation");
+        ).toBe("silent");
     });
 
     it("does not read a SIP code out of the digits of a phone number", () => {
@@ -324,15 +395,49 @@ describe("reclassifyStoredAttempt — the backfill's rule", () => {
         expect(reclassifyStoredAttempt({ ...base, status: "calling" })).toBeNull();
     });
 
-    it("the inflated 'completed' row: AI greeted, dealer silent → no_conversation", () => {
+    it("the inflated 'completed' row: AI greeted, dealer silent → silent", () => {
         expect(
             reclassifyStoredAttempt({
                 status: "completed",
                 callOutcome: "dropped_empty",
                 transcript: agent,
                 providerStatus: "done",
+                durationSecs: 40,
             })?.status,
-        ).toBe("no_conversation");
+        ).toBe("silent");
+    });
+
+    it("splits a legacy no_conversation row by duration and end reason", () => {
+        const legacy = {
+            status: "no_conversation",
+            callOutcome: "dropped_empty",
+            transcript: agent,
+            providerStatus: "done",
+        };
+        expect(reclassifyStoredAttempt({ ...legacy, durationSecs: 3 })?.status).toBe("hung_up");
+        expect(reclassifyStoredAttempt({ ...legacy, durationSecs: 45 })?.status).toBe("silent");
+        expect(
+            reclassifyStoredAttempt({ ...legacy, endReason: "client disconnected" })?.status,
+        ).toBe("hung_up");
+        // No log row, no transcript, "completed" as the outcome: never connected.
+        expect(
+            reclassifyStoredAttempt({
+                status: "no_conversation",
+                callOutcome: "completed",
+                transcript: null,
+                providerStatus: null,
+            })?.status,
+        ).toBe("no_response");
+    });
+
+    it("re-classifying a split row is a no-op", () => {
+        const row = { callOutcome: "dropped_empty", transcript: agent, providerStatus: "done" };
+        for (const [status, durationSecs] of [
+            ["silent", 30],
+            ["hung_up", 2],
+        ] as const) {
+            expect(reclassifyStoredAttempt({ ...row, status, durationSecs })?.status).toBe(status);
+        }
     });
 
     it("a real conversation stays completed", () => {
