@@ -26,6 +26,9 @@ const MessageSchema = z.object({
     type: z.string().min(1),
     text: z.object({ body: z.string() }).optional(),
     interactive: InteractiveSchema.optional(),
+    audio: z
+        .object({ id: z.string().min(1).max(256), mime_type: z.string().max(100).optional(), voice: z.boolean().optional() })
+        .optional(),
 });
 
 const StatusSchema = z.object({
@@ -49,7 +52,7 @@ const EnvelopeSchema = z.object({
     entry: z.array(z.object({ changes: z.array(z.unknown()).default([]) })),
 });
 
-/** Media and other non-text kinds get the fixed UC-14 reply; counted by type. */
+/** Non-text kinds. audio (a voice note) is transcribed by the router; the rest get the fixed UC-14 reply. */
 export const MEDIA_TYPES = ["audio", "image", "document", "sticker", "video", "location", "contacts"] as const;
 
 export type InboundMessage = {
@@ -64,6 +67,8 @@ export type InboundMessage = {
     text: string | null;
     /** Only for a genuine interactive button/list reply. */
     replyId: string | null;
+    /** Only for `audio` (a voice note or an audio file): Meta's media id, to download it. */
+    audio?: { id: string; mimeType: string | null } | null;
     raw: unknown;
 };
 
@@ -115,6 +120,7 @@ function parseMessage(phoneNumberId: string, raw: unknown): InboundMessage | nul
         replyId = reply?.id ?? null;
         text = reply?.title ?? null;
     }
+    const audio = msg.type === "audio" && msg.audio ? { id: msg.audio.id, mimeType: msg.audio.mime_type ?? null } : null;
     return {
         kind: "message",
         phoneNumberId,
@@ -123,6 +129,7 @@ function parseMessage(phoneNumberId: string, raw: unknown): InboundMessage | nul
         type: msg.type,
         text,
         replyId,
+        audio,
         raw,
     };
 }

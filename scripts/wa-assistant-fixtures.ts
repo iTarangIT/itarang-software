@@ -161,6 +161,10 @@ export function routerDeps(
             renderTapOutcome(await executeAction(actionId, user, { messageId: rowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
         isDisabled: () => false,
+        // Voice off: these DB checks assert the UC-14 media path. Voice routing is
+        // covered by router.test.ts and scripts/verify-wa-voice.ts.
+        isVoiceDisabled: () => true,
+        transcribeVoice: async () => ({ kind: "failed", error: "not used in DB verification" }),
         hasPendingAction: async () => false,
         runTextTurn,
         log: () => {},

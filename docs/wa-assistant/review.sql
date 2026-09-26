@@ -96,9 +96,31 @@ SELECT 'tool_call', tool || ': ' || coalesce(error, 'error result'), count(*), m
  GROUP BY tool, error
  ORDER BY n DESC;
 
+-- name: voice_notes
+-- Voice notes by outcome. A transcribed one ends as text_agent / typed_confirm /
+-- text_busy like typed text (type stays 'audio'); voice_* = nothing heard, too
+-- long, unsupported format (audio/amr) or a failed download/transcription.
+SELECT handling, count(*) AS messages, count(DISTINCT user_id) AS users,
+       (array_agg(error ORDER BY created_at DESC) FILTER (WHERE error IS NOT NULL))[1] AS last_error
+  FROM assistant_wa_messages
+ WHERE direction = 'in' AND type = 'audio' AND created_at > now() - interval '24 hours'
+ GROUP BY handling
+ ORDER BY messages DESC;
+
+-- name: voice_transcripts
+-- What was heard, for spot-checking accuracy against what the rep meant (the
+-- next message is often the rep correcting it).
+SELECT m.created_at, u.name, m.handling, m.text AS heard
+  FROM assistant_wa_messages m
+  LEFT JOIN users u ON u.id = m.user_id
+ WHERE m.direction = 'in' AND m.type = 'audio' AND m.text IS NOT NULL
+   AND m.created_at > now() - interval '24 hours'
+ ORDER BY m.created_at DESC
+ LIMIT 50;
+
 -- name: media_by_type
--- Voice notes, images, stickers … each got the fixed "text only" reply. The
--- voice-note count is the Phase 2 input (BRD UC-14).
+-- Images, stickers, documents … (and voice notes while WA_ASSIST_VOICE_DISABLED)
+-- each got the fixed "type it" reply (BRD UC-14).
 SELECT type, count(*) AS messages, count(DISTINCT user_id) AS users
   FROM assistant_wa_messages
  WHERE direction = 'in' AND handling = 'media' AND created_at > now() - interval '24 hours'

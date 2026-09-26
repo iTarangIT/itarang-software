@@ -31,7 +31,11 @@ export type SendResult =
     | { ok: true; wamid: string }
     | { ok: false; error: string; status?: number };
 
-export type ListRow = { id: string; title: string; description?: string };
+export type MediaResult =
+    | { ok: true; bytes: Buffer; mimeType: string | null }
+    | { ok: false; error: string; status?: number; tooLarge?: boolean };
+
+export type ListRow ={ id: string; title: string; description?: string };
 
 export class WaLimitError extends Error {}
 
@@ -187,6 +191,71 @@ export class WaAssistClient {
                 action: { button: list.button, sections: [{ title: "Leads", rows: list.rows }] },
             },
         });
+    }
+
+    /**
+     * An inbound media file (a voice note) by its Meta media id: resolve the
+     * short-lived URL, then fetch the bytes, both with the Assistant's own
+     * token. Anything over `maxBytes` is refused before and after the download.
+     * Retries like post(): 429, 5xx and network/timeout only. Never throws.
+     */
+    async downloadMedia(mediaId: string, maxBytes: number): Promise<MediaResult> {
+        const meta = await this.getWithRetry(
+            `https://graph.facebook.com/${this.env.WA_ASSIST_GRAPH_VERSION}/${encodeURIComponent(mediaId)}`,
+        );
+        if (!meta.ok) return meta;
+        const info = (await meta.res.json().catch(() => null)) as {
+            url?: string;
+            mime_type?: string;
+            file_size?: number | string;
+        } | null;
+        if (!info?.url) return { ok: false, error: "Graph API returned no media url" };
+        const declared = Number(info.file_size);
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            return { ok: false, error: `media is ${declared} bytes; the limit is ${maxBytes}`, tooLarge: true };
+        }
+        const file = await this.getWithRetry(info.url);
+        if (!file.ok) return file;
+        const bytes = Buffer.from(await file.res.arrayBuffer());
+        if (bytes.length > maxBytes) {
+            return { ok: false, error: `media is ${bytes.length} bytes; the limit is ${maxBytes}`, tooLarge: true };
+        }
+        if (bytes.length === 0) return { ok: false, error: "media is empty" };
+        return { ok: true, bytes, mimeType: info.mime_type ?? file.res.headers.get("content-type") ?? null };
+    }
+
+    private async getWithRetry(
+        url: string,
+    ): Promise<{ ok: true; res: Response } | { ok: false; error: string; status?: number }> {
+        let last: { ok: false; error: string; status?: number } = { ok: false, error: "not attempted" };
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            if (attempt > 0) {
+                const base = 500 * 2 ** (attempt - 1);
+                await this.sleep(Math.round(base * (0.5 + this.random())));
+            }
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+            try {
+                const res = await this.fetchImpl(url, {
+                    method: "GET",
+                    headers: { Authorization: `Bearer ${this.env.WA_ASSIST_ACCESS_TOKEN}` },
+                    signal: ctrl.signal,
+                });
+                if (res.ok) {
+                    // Read the body inside the timeout window.
+                    const buf = await res.arrayBuffer();
+                    return { ok: true, res: new Response(buf, { status: res.status, headers: res.headers }) };
+                }
+                const json = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+                last = { ok: false, status: res.status, error: json?.error?.message ?? `HTTP ${res.status}` };
+                if (res.status !== 429 && res.status < 500) return last;
+            } catch (err) {
+                last = { ok: false, error: err instanceof Error ? err.message : String(err) };
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+        return last;
     }
 
     /** Blue ticks on an inbound message. Best-effort; never retried beyond post(). */

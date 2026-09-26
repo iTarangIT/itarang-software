@@ -53,6 +53,8 @@ function fakeDeps(sender: SenderResolution = RAHUL) {
         confirmAction: vi.fn(async () => ({ kind: "text" as const, body: "✅ Saved" })),
         cancelAction: vi.fn(async () => ({ kind: "text" as const, body: "Cancelled. Nothing was saved." })),
         isDisabled: vi.fn(() => false),
+        isVoiceDisabled: vi.fn(() => false),
+        transcribeVoice: vi.fn(async () => ({ kind: "ok" as const, text: "Sharma Battery House ka follow-up kal 11 baje" })),
         hasPendingAction: vi.fn(async () => false),
         runTextTurn: vi.fn(async () => ({
             kind: "ok" as const,
@@ -114,13 +116,24 @@ describe("routeMessage — order and fixed replies", () => {
         expect(f.replies.map((r) => r.text)).toEqual([REPLY.unlinked, REPLY.unlinked]);
     });
 
-    it("UC-14: voice note, image, sticker, document, unsupported → fixed media reply, logged by type", async () => {
-        for (const type of ["audio", "image", "sticker", "document", "video", "location", "unsupported"]) {
+    it("UC-14: image, sticker, document, unsupported → fixed media reply (voice notes named), logged by type", async () => {
+        for (const type of ["image", "sticker", "document", "video", "location", "unsupported"]) {
             const g = fakeDeps();
             await routeMessage(msg({ type, text: null }), "r", g.deps);
-            expect(g.replies.map((r) => r.text)).toEqual([REPLY.media]);
+            expect(g.replies.map((r) => r.text)).toEqual([REPLY.mediaNotVoice]);
             expect(g.handled[0].handling).toBe("media");
+            expect(g.deps.transcribeVoice).not.toHaveBeenCalled();
         }
+    });
+
+    it("WA_ASSIST_VOICE_DISABLED: a voice note gets the original UC-14 reply, never transcribed", async () => {
+        const g = fakeDeps();
+        (g.deps.isVoiceDisabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+        await routeMessage(msg({ type: "audio", text: null, audio: { id: "m1", mimeType: "audio/ogg" } }), "r", g.deps);
+        await routeMessage(msg({ type: "image", text: null }), "r", g.deps);
+        expect(g.replies.map((r) => r.text)).toEqual([REPLY.media, REPLY.media]);
+        expect(g.deps.transcribeVoice).not.toHaveBeenCalled();
+        expect(g.deps.runTextTurn).not.toHaveBeenCalled();
     });
 
     it("INV2: typed 'ast:c:…' is just text for the agent — it never reaches the executor", async () => {
@@ -261,8 +274,8 @@ describe("routeMessage — Gate 2: kill switch, typed confirm, agent outcomes", 
             [{ type: "interactive", replyId: "ast:c:abc", text: "Confirm" }, RAHUL],
             [{ type: "interactive", replyId: "ast:lead:DL-1", text: "ABC" }, RAHUL],
             [{ text: "LINK 482913" }, RAHUL],
-            [{ type: "audio", text: null }, RAHUL],
             [{ type: "image", text: null }, RAHUL],
+            [{ type: "audio", text: null, audio: { id: "m1", mimeType: "audio/ogg" } }, { kind: "unlinked" }],
             [{ text: "show me everything" }, { kind: "unlinked" }],
             [{ text: "show me everything" }, { kind: "revoked", reason: "user_inactive", userId: "u" }],
         ];
@@ -356,5 +369,91 @@ describe("routeMessage — Gate 4: Confirm / Cancel taps", () => {
         await routeMessage(msg({ type: "interactive", replyId: `ast:c:${ID}` }), "r", f.deps);
         expect(f.deps.confirmAction).not.toHaveBeenCalled();
         expect(f.replies.map((r) => r.text)).toEqual([REPLY.unlinked]);
+    });
+});
+
+
+describe("routeMessage — voice notes", () => {
+    const voice = (over: Partial<InboundMessage> = {}) =>
+        msg({ type: "audio", text: null, audio: { id: "media-1", mimeType: "audio/ogg; codecs=opus" }, ...over });
+
+    it("transcribes, shows what was heard, then runs the transcript exactly like typed text", async () => {
+        const f = fakeDeps();
+        await routeMessage(voice(), "row-v", f.deps);
+        expect(f.deps.transcribeVoice).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, {
+            id: "media-1",
+            mimeType: "audio/ogg; codecs=opus",
+        });
+        expect(f.deps.runTextTurn).toHaveBeenCalledWith(
+            expect.objectContaining({ id: "u-rahul" }),
+            "Sharma Battery House ka follow-up kal 11 baje",
+            "row-v",
+        );
+        expect(f.replies.map((r) => r.text)).toEqual(['🎙️ "Sharma Battery House ka follow-up kal 11 baje"', "agent reply"]);
+        expect(f.handled).toEqual([
+            {
+                rowId: "row-v",
+                handling: "text_agent",
+                extra: { userId: "u-rahul", text: "Sharma Battery House ka follow-up kal 11 baje" },
+            },
+        ]);
+    });
+
+    it("a spoken 'haan' while a preview waits → the tap-Confirm reply; saying never saves", async () => {
+        const f = fakeDeps();
+        (f.deps.transcribeVoice as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "ok", text: "Haan." });
+        (f.deps.hasPendingAction as ReturnType<typeof vi.fn>).mockResolvedValueOnce(true);
+        await routeMessage(voice(), "r", f.deps);
+        expect(f.replies.map((r) => r.text)).toEqual(['🎙️ "Haan."', REPLY.tapConfirm]);
+        expect(f.handled[0]).toMatchObject({ handling: "typed_confirm" });
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+    });
+
+    it("nothing heard / too long / unsupported / failed → a fixed reply, no agent, nothing written", async () => {
+        const cases = [
+            [{ kind: "no_speech" }, "voice_no_speech", REPLY.voiceNoSpeech],
+            [{ kind: "too_long" }, "voice_too_long", REPLY.voiceTooLong],
+            [{ kind: "unsupported", mimeType: "audio/amr" }, "voice_unsupported", REPLY.voiceFailed],
+            [{ kind: "failed", error: "gemini_http_429" }, "voice_failed", REPLY.voiceFailed],
+        ] as const;
+        for (const [outcome, handling, reply] of cases) {
+            const f = fakeDeps();
+            (f.deps.transcribeVoice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(outcome);
+            await routeMessage(voice(), "r", f.deps);
+            expect(f.replies.map((r) => r.text)).toEqual([reply]);
+            expect(f.handled[0].handling).toBe(handling);
+            expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+            expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        }
+    });
+
+    it("an audio message with no media id is a failed voice note, not a crash", async () => {
+        const f = fakeDeps();
+        await routeMessage(voice({ audio: null }), "r", f.deps);
+        expect(f.deps.transcribeVoice).not.toHaveBeenCalled();
+        expect(f.replies.map((r) => r.text)).toEqual([REPLY.voiceFailed]);
+        expect(f.handled[0]).toMatchObject({ handling: "voice_failed" });
+    });
+
+    it("identity and the kill switch come first: no download for an unlinked number or while paused", async () => {
+        const u = fakeDeps({ kind: "unlinked" });
+        await routeMessage(voice(), "r", u.deps);
+        expect(u.deps.transcribeVoice).not.toHaveBeenCalled();
+        expect(u.replies.map((r) => r.text)).toEqual([REPLY.unlinked]);
+
+        const d = fakeDeps();
+        (d.deps.isDisabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+        await routeMessage(voice(), "r", d.deps);
+        expect(d.deps.transcribeVoice).not.toHaveBeenCalled();
+        expect(d.replies.map((r) => r.text)).toEqual([REPLY.disabled]);
+    });
+
+    it("busy lease on a voice note → the busy reply, transcript still logged", async () => {
+        const f = fakeDeps();
+        (f.deps.runTextTurn as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "busy" });
+        await routeMessage(voice(), "r", f.deps);
+        expect(f.replies.at(-1)?.text).toBe(REPLY.busy);
+        expect(f.handled[0]).toMatchObject({ handling: "text_busy", extra: { text: expect.any(String) } });
     });
 });
