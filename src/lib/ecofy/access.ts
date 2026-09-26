@@ -123,7 +123,7 @@ const STAGES: Record<EcofyAction, string[] | null> = {
     upload_quote: ["S4"],
     compose_offer: ["S4"],
     send_otp: ["S4", "S5"],
-    verify_otp: ["S5"],
+    verify_otp: ["S5", "S6"], // S6 = re-acceptance OTP (sanction below the accepted total)
     create_installation: ["S6", "S7"],
     update_installation: ["S6", "S7", "S8"],
     request_withdrawal: ["S1", "S2", "S3", "S4", "S5", "S6", "S7"],

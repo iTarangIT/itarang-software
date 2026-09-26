@@ -176,6 +176,7 @@ export const ECOFY_LEAD_READS = [
     "installation",
     "withdrawals",
     "documents",
+    "reacceptance",
 ] as const;
 export type EcofyLeadRead = (typeof ECOFY_LEAD_READS)[number];
 
