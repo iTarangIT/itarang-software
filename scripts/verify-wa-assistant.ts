@@ -37,7 +37,7 @@ import { ASM_QUEUE_TABS } from "../src/lib/asm/types";
 import { findLeadInScope } from "../src/lib/assistant/scope";
 import { toolsFor } from "../src/lib/assistant/registry";
 import { agentTurn } from "../src/lib/assistant/turn";
-import { loadHistory, saveHistory } from "../src/lib/assistant/memory";
+import { loadHistory, saveHistory, toolsetStamp } from "../src/lib/assistant/memory";
 import type { AssistantUser } from "../src/lib/assistant/types";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { countQueueRows } from "../src/lib/inside-sales/queryBuilder";
@@ -374,12 +374,16 @@ async function gate2() {
         return `${checked} rows across ${reps.length} reps' tabs all in scope`;
     });
 
-    await check("G2.6 memory: saved turns load back; 24 h idle resets", async () => {
-        await saveHistory(asm.id, [new HumanMessage("hi"), new AIMessage("hello")]);
-        const back = await loadHistory(asm.id);
+    await check("G2.6 memory: saved turns load back; 24 h idle resets; a changed tool set resets", async () => {
+        const reads = toolsetStamp(toolsFor("asm", false).map((t) => t.name));
+        const writes = toolsetStamp(toolsFor("asm", true).map((t) => t.name));
+        await saveHistory(asm.id, reads, [new HumanMessage("hi"), new AIMessage("hello")]);
+        const back = await loadHistory(asm.id, reads);
         assert(back.length === 2 && back[1].content === "hello", JSON.stringify(back.map((m) => m.content)));
         const later = new Date(Date.now() + 25 * 60 * 60 * 1000);
-        assert((await loadHistory(asm.id, "whatsapp", later)).length === 0, "not reset after 24 h idle");
+        assert((await loadHistory(asm.id, reads, "whatsapp", later)).length === 0, "not reset after 24 h idle");
+        // Joined the write pilot (or a deploy added a tool): the old history must not replay.
+        assert((await loadHistory(asm.id, writes)).length === 0, "history replayed after the tool set changed");
     });
 }
 
