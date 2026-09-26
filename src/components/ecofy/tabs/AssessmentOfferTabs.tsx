@@ -155,6 +155,8 @@ export function OfferTab(p: TabProps) {
     const quotes = useLeadData<Quote[]>(leadId, "quotes");
     const offers = useLeadData<Offer[]>(leadId, "offers");
     const file = useLeadData<FileRec>(leadId, "file");
+    const reacceptancePending = c.stage === "S6" && c.subStatus === "REACCEPTANCE_PENDING";
+    const reacceptance = useLeadData<Otp | null>(leadId, "reacceptance", reacceptancePending && can("verify_otp"));
     const epcs = useLookup<EpcPartner>("epc-partners");
     const financiers = useLookup<Financier>("financiers", can("route_financier"));
     const [financierId, setFinancierId] = useState("");
@@ -434,7 +436,43 @@ export function OfferTab(p: TabProps) {
                                 )}
                             </div>
                         )}
-                        {can("verify_otp") && (
+                        {reacceptancePending && can("verify_otp") && (
+                            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <div className="w-full text-xs text-amber-900">
+                                    <b>Re-acceptance OTP.</b> The sanction is below the accepted total. Ecofy sends the customer an OTP with the revised amounts; enter the code the customer reads out to confirm the revised terms (S6 → S7).
+                                </div>
+                                {reacceptance.data ? (
+                                    <>
+                                        <span className="text-xs text-gray-500">
+                                            Sent to {reacceptance.data.maskedMobile}, expires {formatIst(reacceptance.data.expiresAt)} · {reacceptance.data.attemptsRemaining} attempts
+                                        </span>
+                                        <Field label="Customer's OTP" hint="6 digits · 5 attempts · 10 minutes">
+                                            <input
+                                                className={`${inputCls} w-40 text-center tracking-[0.3em]`}
+                                                maxLength={6}
+                                                value={code}
+                                                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                                            />
+                                        </Field>
+                                        <Btn
+                                            variant="success"
+                                            disabled={busy || code.length !== 6}
+                                            onClick={async () => {
+                                                const r = await run("Re-accepted — revised terms confirmed", { action: "verify_otp", challengeId: reacceptance.data!.challengeId, code });
+                                                if (r !== undefined) setCode("");
+                                            }}
+                                        >
+                                            Verify re-acceptance
+                                        </Btn>
+                                    </>
+                                ) : (
+                                    <span className="text-xs text-gray-500">
+                                        {reacceptance.isLoading ? "Checking for a live OTP…" : "No live re-acceptance OTP yet — Ecofy Admin triggers it from the case's Financing tab in Ecofy."}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        {!reacceptancePending && can("verify_otp") && (
                             <div className="flex flex-wrap items-end gap-2">
                                 <Field label="Customer's OTP" hint="6 digits · 5 attempts · 10 minutes">
                                     <input

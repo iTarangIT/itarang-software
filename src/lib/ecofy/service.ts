@@ -135,6 +135,8 @@ const READ_PATHS: Record<EcofyLeadRead, (caseId: string) => string> = {
     installation: (c) => `/cases/${c}/installation`,
     withdrawals: (c) => `/cases/${c}/withdrawals`,
     documents: (c) => `/cases/${c}/documents`,
+    // live re-acceptance OTP challenge (S6, sanction below accepted total) — null when none is SENT
+    reacceptance: (c) => `/cases/${c}/reacceptance`,
 };
 
 export function readLeadData(ecofyCaseId: string, what: EcofyLeadRead): Promise<unknown> {
