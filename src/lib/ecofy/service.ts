@@ -14,7 +14,7 @@ import { db } from "@/lib/db";
 import { ecofyLeads } from "@/lib/db/schema";
 import { errorMessage } from "@/lib/api-utils";
 import { callEcofyApi, type EcofyHttpMethod } from "./api";
-import type { EcofyActionInput, EcofyLeadRead, EcofyLookup } from "./actionSchemas";
+import { toEcofyEpcPartner, type EcofyActionInput, type EcofyLeadRead, type EcofyLookup, type EpcPartnerInput } from "./actionSchemas";
 import { notifyEcofySyncFailed } from "./notify";
 
 export class EcofyCallError extends Error {
@@ -38,6 +38,12 @@ interface CallOpts {
     /** For the outbound ledger. */
     ecofyCaseId?: string | null;
     ecofyLeadId?: string | null;
+    /**
+     * Keep this call out of ecofy_sync_events. Only for POSTs that are reads
+     * in disguise (the calculator's quick estimate, which Ecofy never stores);
+     * every real write stays in the ledger.
+     */
+    skipLedger?: boolean;
 }
 
 function friendly(status: number, code?: string, gate?: string, message?: string): string {
@@ -51,7 +57,7 @@ function friendly(status: number, code?: string, gate?: string, message?: string
 
 /** One Ecofy call. Throws EcofyCallError on a non-2xx; returns `data` from the envelope. */
 export async function ecofyCall<T = unknown>(method: EcofyHttpMethod, path: string, opts: CallOpts = {}): Promise<T> {
-    const mutating = method !== "GET";
+    const mutating = method !== "GET" && !opts.skipLedger;
     let res;
     try {
         res = await callEcofyApi<T>({
@@ -160,6 +166,34 @@ export async function readLookup(what: EcofyLookup): Promise<unknown> {
     return data;
 }
 
+/** One EPC partner as Ecofy returns it (epcOut in m02-settings/service.ts). */
+export interface EcofyEpcPartner {
+    id: string;
+    name: string;
+    contactName: string | null;
+    mobile: string | null;
+    email: string | null;
+    pincodes: string[];
+    segments: string[];
+    active: boolean;
+    createdAt?: string;
+}
+
+/**
+ * Add an EPC partner ("EPC agent") to Ecofy's master (POST /epc-partners,
+ * iTarang Admin). The lookup cache is dropped so the new partner shows in the
+ * pickers right away.
+ */
+export async function createEpcPartner(input: EpcPartnerInput, actorName: string): Promise<EcofyEpcPartner> {
+    const created = await ecofyCall<EcofyEpcPartner>("POST", "/epc-partners", {
+        body: toEcofyEpcPartner(input),
+        idempotencyKey: randomUUID(),
+        actorName,
+    });
+    lookupCache.delete("epc-partners");
+    return created;
+}
+
 export type EcofyQueueKind = "eligibility" | "financing" | "assets";
 const QUEUE_PATHS: Record<EcofyQueueKind, string> = {
     eligibility: "/eligibility-queue",
@@ -181,6 +215,53 @@ export async function readDashboards(): Promise<{ funnel: unknown; ageing: unkno
 
 export function documentDownloadUrl(documentId: string): Promise<{ url: string }> {
     return ecofyCall<{ url: string }>("GET", `/documents/${documentId}/download-url`);
+}
+
+// ---------------------------------------------------------------------------
+// Energy calculator (Ecofy M07/M08). The formula and every value in it live in
+// Ecofy's PUBLISHED calculator release; the CRM only renders the inputs and
+// shows what Ecofy computes. Quick estimates are never stored anywhere.
+// ---------------------------------------------------------------------------
+
+export interface EcofyCalculatorRelease {
+    id: string;
+    version: number;
+    appliances: Array<{ name: string; defaultWatts: number; isMotor: boolean }>;
+    /** Per segment: whether the calculator runs and which input methods it offers. */
+    segments: Record<string, { enabled: boolean; inputs?: string[] }>;
+}
+
+type ReleaseListRow = { id: string; version: number; status: string };
+type ReleaseBundle = ReleaseListRow & {
+    appliances?: Array<{ name: string; defaultWatts: number; isMotor: boolean; active?: boolean }>;
+    params?: { segments?: Record<string, { enabled: boolean; inputs?: string[] }> };
+};
+
+let releaseCache: { at: number; data: EcofyCalculatorRelease } | null = null;
+const RELEASE_TTL_MS = 5 * 60 * 1000;
+
+/** The published calculator release (appliance catalogue + segment inputs) — cached 5 minutes per process. */
+export async function readCalculatorRelease(): Promise<EcofyCalculatorRelease> {
+    if (releaseCache && Date.now() - releaseCache.at < RELEASE_TTL_MS) return releaseCache.data;
+    const list = (await ecofyCall<ReleaseListRow[]>("GET", "/calculator/releases")) ?? [];
+    const pub = list.find((r) => r.status === "PUBLISHED");
+    if (!pub) throw new EcofyCallError("No calculator release is published in Ecofy yet.", 409, "NO_RELEASE", "calculator_release");
+    const bundle = await ecofyCall<ReleaseBundle>("GET", `/calculator/releases/${pub.id}`);
+    const data: EcofyCalculatorRelease = {
+        id: bundle.id,
+        version: bundle.version,
+        appliances: (bundle.appliances ?? [])
+            .filter((a) => a.active !== false)
+            .map((a) => ({ name: a.name, defaultWatts: a.defaultWatts, isMotor: Boolean(a.isMotor) })),
+        segments: bundle.params?.segments ?? {},
+    };
+    releaseCache = { at: Date.now(), data };
+    return data;
+}
+
+/** POST /calculator/estimate — a pure read on Ecofy's side, so it stays out of the outbound ledger. */
+export function runCalculatorEstimate(input: unknown): Promise<unknown> {
+    return ecofyCall("POST", "/calculator/estimate", { body: input, skipLedger: true });
 }
 
 // ---------------------------------------------------------------------------

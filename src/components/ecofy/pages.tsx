@@ -6,46 +6,24 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAuth, requireRole } from "@/lib/auth-utils";
 import { ecofyViewerKind } from "@/lib/ecofy/access";
-import {
-    EcofyNotFoundError,
-    ecofyCounts,
-    getEcofyLeadForViewer,
-    listEcofyLeads,
-    safeEcofyUrl,
-    type EcofyListFilter,
-} from "@/lib/ecofy/queries";
+import type { EcofyListTab } from "@/lib/ecofy/listTypes";
+import { EcofyNotFoundError, ecofyCounts, getEcofyLeadForViewer, safeEcofyUrl } from "@/lib/ecofy/queries";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { EcofyLeadDetail } from "./EcofyLeadDetail";
-import { EcofyLeadTable } from "./EcofyLeadTable";
-import { toTableRow } from "./rows";
+import { EcofyLeadsWorkspace } from "./EcofyLeadsWorkspace";
 
-type SP = Promise<Record<string, string | string[] | undefined>>;
-const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? null;
-
-export async function EcofyListPage(p: {
-    roles: string[];
-    title: string;
-    subtitle: string;
-    hrefBase: string;
-    view: "open" | "queue" | "all";
-    searchParams: SP;
-    emptyText: string;
-    tabs?: Array<{ label: string; href: string; active: boolean }>;
-}) {
+/**
+ * The Ecofy leads list page: header + the My-Visits-style workspace (tabs,
+ * search, filters, CSV, table). The rows come from /api/ecofy/leads on the
+ * client, so this server component only gates the role and threads the
+ * viewer down for the "You" indicator and the manager-only controls.
+ */
+export async function EcofyListPage(p: { roles: string[]; title: string; subtitle: string; hrefBase: string; initialTab: EcofyListTab }) {
     const user = await requireRole(p.roles);
     const kind = ecofyViewerKind(user.role);
-    const sp = await p.searchParams;
-    const filter: EcofyListFilter = {
-        view: p.view,
-        stage: one(sp.stage),
-        temperature: one(sp.temperature),
-        assignee: kind === "manager" ? one(sp.assignee) : null,
-        ownerId: kind === "worker" ? user.id : null,
-        q: one(sp.q),
-    };
-    const [rows, counts] = await Promise.all([listEcofyLeads(filter), ecofyCounts(user)]);
+    if (!kind) notFound();
 
     return (
         <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-6 sm:px-6 md:px-8">
@@ -54,44 +32,10 @@ export async function EcofyListPage(p: {
                     <h1 className="text-2xl font-semibold tracking-tight text-gray-900">{p.title}</h1>
                     <p className="mt-1 text-sm text-gray-600">{p.subtitle}</p>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs">
-                    <Stat label="Open" value={counts.open} />
-                    {kind === "manager" && <Stat label="In pickup queue" value={counts.queue} tone={counts.queueHot ? "red" : undefined} sub={counts.queueHot ? `${counts.queueHot} hot` : undefined} />}
-                    <Stat label="Follow-ups due" value={counts.followUpsDue} tone={counts.followUpsDue ? "amber" : undefined} />
-                    <Stat label="Meetings today" value={counts.meetingsToday} />
-                </div>
             </header>
-            {p.tabs && (
-                <nav className="flex w-fit rounded-lg border border-gray-200 bg-white p-0.5 text-sm">
-                    {p.tabs.map((t) => (
-                        <Link key={t.href} href={t.href} className={`rounded-md px-3 py-1.5 ${t.active ? "bg-gray-900 text-white" : "text-gray-600 hover:text-gray-900"}`}>
-                            {t.label}
-                        </Link>
-                    ))}
-                </nav>
-            )}
             <Suspense>
-                <EcofyLeadTable
-                    rows={rows.map(toTableRow)}
-                    hrefBase={p.hrefBase}
-                    selectable={kind === "manager"}
-                    showAssignee={kind === "manager"}
-                    emptyText={p.emptyText}
-                />
+                <EcofyLeadsWorkspace kind={kind} hrefBase={p.hrefBase} initialTab={p.initialTab} viewerId={user.id} />
             </Suspense>
-        </div>
-    );
-}
-
-function Stat({ label, value, sub, tone }: { label: string; value: number; sub?: string; tone?: "red" | "amber" }) {
-    const cls = tone === "red" ? "border-red-200 bg-red-50 text-red-800" : tone === "amber" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-gray-200 bg-white text-gray-900";
-    return (
-        <div className={`rounded-lg border px-3 py-2 ${cls}`}>
-            <div className="text-[11px] uppercase tracking-wide opacity-70">{label}</div>
-            <div className="text-lg font-semibold leading-tight">
-                {value}
-                {sub ? <span className="ml-1 text-xs font-normal">({sub})</span> : null}
-            </div>
         </div>
     );
 }
