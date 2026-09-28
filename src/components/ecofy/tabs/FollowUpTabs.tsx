@@ -20,6 +20,43 @@ import { useCan, useRunner, type TabProps } from "./shared";
 type TimelineItem = { at: string; kind: string; title: string; detail?: Record<string, unknown>; actor: { fullName: string; role: string | null } | null };
 type AssignmentRow = { id: string; created_at: string; reason: string | null; to_role: string | null; from_name: string | null; to_name: string | null; by_name: string | null };
 type MergedItem = TimelineItem & { source: "Ecofy" | "CRM" };
+type Party = "iTarang" | "Ecofy" | "Platform";
+
+/**
+ * Who actually took the action — from the actor's Ecofy role (ITARANG_* vs
+ * ECOFY_*), not from which system logged it. CRM-side rows without a role are
+ * iTarang by construction; actor-less rows are the platform itself.
+ */
+export function partyOf(i: { actor: { role: string | null } | null; source?: "Ecofy" | "CRM" }): Party {
+    const role = i.actor?.role ?? "";
+    if (role.startsWith("ITARANG")) return "iTarang";
+    if (role.startsWith("ECOFY")) return "Ecofy";
+    if (i.source === "CRM" && i.actor) return "iTarang";
+    return "Platform";
+}
+const PARTY_TONE: Record<Party, "sky" | "green" | "gray"> = { iTarang: "sky", Ecofy: "green", Platform: "gray" };
+
+const flatDetail = (d?: Record<string, unknown>) =>
+    d
+        ? Object.entries(d)
+              .filter(([, v]) => v !== null && v !== undefined && v !== "")
+              .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+              .join(" · ")
+        : "";
+
+/** Timeline → CSV (Excel-friendly: BOM, CRLF, quoted cells) and trigger a download. */
+export function downloadTimelineCsv(fileStem: string, items: MergedItem[]) {
+    const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const head = ["When (IST)", "When (ISO)", "Party", "By", "Role", "Kind", "Event", "Details"];
+    const rows = items.map((i) => [formatIst(i.at), i.at, partyOf(i), i.actor?.fullName ?? "Platform", i.actor?.role ?? "", i.kind, i.title, flatDetail(i.detail)]);
+    const csv = "\uFEFF" + [head, ...rows].map((r) => r.map(q).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${fileStem}-timeline.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
 
 export function useAssignmentHistory(leadId: string) {
     return useQuery({
@@ -41,7 +78,7 @@ function assignmentToItem(h: AssignmentRow): MergedItem {
     };
 }
 
-export function TimelineTab({ leadId }: TabProps) {
+export function TimelineTab({ leadId, c }: TabProps) {
     const q = useLeadData<TimelineItem[]>(leadId, "timeline");
     const a = useAssignmentHistory(leadId);
     const items: MergedItem[] = [
@@ -51,32 +88,43 @@ export function TimelineTab({ leadId }: TabProps) {
     const loading = q.isLoading || a.isLoading;
 
     return (
-        <Panel title="Timeline" right="Ecofy case events + CRM assignments · newest first">
+        <Panel
+            title="Timeline"
+            right={
+                <span className="flex items-center gap-3">
+                    <span>Ecofy case events + CRM assignments · newest first</span>
+                    <button
+                        type="button"
+                        disabled={loading || items.length === 0}
+                        onClick={() => downloadTimelineCsv(c.caseNo || leadId, items)}
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-800 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span aria-hidden>⤓</span> Download CSV
+                    </button>
+                </span>
+            }
+        >
             {loading && <Loading />}
             {q.error ? <ErrorNote error={q.error} /> : null}
             {a.error ? <ErrorNote error={a.error} /> : null}
             {!loading && items.length === 0 && <Empty>Nothing yet.</Empty>}
             <ol className="divide-y divide-gray-100">
-                {items.map((i, idx) => (
-                    <li key={`${i.source}-${idx}`} className="grid gap-1 py-2 text-sm sm:grid-cols-[150px_1fr] sm:gap-3">
-                        <span className="text-xs text-gray-500">{formatIst(i.at)}</span>
-                        <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Chip tone={i.source === "CRM" ? "sky" : "green"}>{i.source}</Chip>
-                                <span className="font-medium text-gray-900">{i.title}</span>
-                            </div>
-                            {i.detail && Object.values(i.detail).some(Boolean) && (
-                                <div className="text-xs text-gray-600">
-                                    {Object.entries(i.detail)
-                                        .filter(([, v]) => v !== null && v !== undefined && v !== "")
-                                        .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
-                                        .join(" · ")}
+                {items.map((i, idx) => {
+                    const party = partyOf(i);
+                    return (
+                        <li key={`${i.source}-${idx}`} className="grid gap-1 py-2 text-sm sm:grid-cols-[150px_1fr] sm:gap-3">
+                            <span className="text-xs text-gray-500">{formatIst(i.at)}</span>
+                            <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Chip tone={PARTY_TONE[party]}>{party}</Chip>
+                                    <span className="font-medium text-gray-900">{i.title}</span>
                                 </div>
-                            )}
-                            <div className="text-[11px] text-gray-400">by {i.actor?.fullName ?? "Platform"}</div>
-                        </div>
-                    </li>
-                ))}
+                                {i.detail && Object.values(i.detail).some(Boolean) && <div className="text-xs text-gray-600">{flatDetail(i.detail)}</div>}
+                                <div className="text-[11px] text-gray-400">by {i.actor?.fullName ?? "Platform"}</div>
+                            </div>
+                        </li>
+                    );
+                })}
             </ol>
         </Panel>
     );

@@ -63,6 +63,7 @@ import {
   Sun,
   Newspaper,
   Inbox,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -269,6 +270,9 @@ function ecofySubnav() {
       { id: "sh-ecofy-financing", label: "Financing Queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
       { id: "sh-ecofy-assets", label: "Assets", icon: Battery, href: "/sales-head/ecofy/assets" },
       { id: "sh-ecofy-calculator", label: "Calculator", icon: Calculator, href: "/sales-head/ecofy/calculator" },
+      // Ecofy CONFLICTS #31 — the release designer moved here from Ecofy's own
+      // Admin menu. Longest-href-wins keeps "Calculator" unlit on this route.
+      { id: "sh-ecofy-calculator-designer", label: "Calculator designer", icon: SlidersHorizontal, href: "/sales-head/ecofy/calculator/designer" },
       { id: "sh-ecofy-epc-agents", label: "EPC Agents", icon: Wrench, href: "/sales-head/ecofy/epc-agents" },
     ],
   };
