@@ -29,6 +29,25 @@ const MessageSchema = z.object({
     audio: z
         .object({ id: z.string().min(1).max(256), mime_type: z.string().max(100).optional(), voice: z.boolean().optional() })
         .optional(),
+    image: z
+        .object({ id: z.string().min(1).max(256), mime_type: z.string().max(100).optional(), caption: z.string().max(3000).optional() })
+        .optional(),
+    document: z
+        .object({
+            id: z.string().min(1).max(256),
+            mime_type: z.string().max(100).optional(),
+            filename: z.string().max(300).optional(),
+            caption: z.string().max(3000).optional(),
+        })
+        .optional(),
+    location: z
+        .object({
+            latitude: z.number().min(-90).max(90),
+            longitude: z.number().min(-180).max(180),
+            name: z.string().max(300).optional(),
+            address: z.string().max(500).optional(),
+        })
+        .optional(),
 });
 
 const StatusSchema = z.object({
@@ -69,6 +88,10 @@ export type InboundMessage = {
     replyId: string | null;
     /** Only for `audio` (a voice note or an audio file): Meta's media id, to download it. */
     audio?: { id: string; mimeType: string | null } | null;
+    /** Only for `image` / `document`: Meta's media id to download, and the rep's caption. */
+    media?: { kind: "image" | "document"; id: string; mimeType: string | null; fileName: string | null; caption: string | null } | null;
+    /** Only for `location`: the pin as sent (a static pin — WhatsApp does not deliver live location to bots). */
+    location?: { lat: number; lng: number; name: string | null; address: string | null } | null;
     raw: unknown;
 };
 
@@ -121,6 +144,27 @@ function parseMessage(phoneNumberId: string, raw: unknown): InboundMessage | nul
         text = reply?.title ?? null;
     }
     const audio = msg.type === "audio" && msg.audio ? { id: msg.audio.id, mimeType: msg.audio.mime_type ?? null } : null;
+    const file = msg.type === "image" ? msg.image : msg.type === "document" ? msg.document : undefined;
+    const media = file
+        ? {
+              kind: msg.type as "image" | "document",
+              id: file.id,
+              mimeType: file.mime_type ?? null,
+              fileName: msg.type === "document" ? (msg.document?.filename ?? null) : null,
+              caption: file.caption?.trim() || null,
+          }
+        : null;
+    // The caption is what the row's `text` shows in the log.
+    if (media?.caption) text = media.caption;
+    const location =
+        msg.type === "location" && msg.location
+            ? {
+                  lat: msg.location.latitude,
+                  lng: msg.location.longitude,
+                  name: msg.location.name?.trim() || null,
+                  address: msg.location.address?.trim() || null,
+              }
+            : null;
     return {
         kind: "message",
         phoneNumberId,
@@ -130,6 +174,8 @@ function parseMessage(phoneNumberId: string, raw: unknown): InboundMessage | nul
         text,
         replyId,
         audio,
+        media,
+        location,
         raw,
     };
 }

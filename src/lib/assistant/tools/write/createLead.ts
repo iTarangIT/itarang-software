@@ -20,6 +20,11 @@ import type { Preview, ToolResult } from "../../types";
 import { defineTool, WRITES_OFF, type ToolFactory } from "../spec";
 import { leadUrl, queueUrl } from "../leads";
 import { ActionRejected, defineApplier } from "../../applierSpec";
+import { eq } from "drizzle-orm";
+import { dealerLeads } from "@/lib/db/schema";
+import { AttachmentId, DOC_TYPE_LABEL, DOC_TYPES, PlannedFile, plannedFile, resolveAttachments } from "../attachments";
+import { fileDocuments } from "./attachDocument";
+import { GSTIN_RE } from "./updateLead";
 
 const INTEREST = ["hot", "warm", "cold"] as const;
 
@@ -32,6 +37,19 @@ export const CreateLeadPlan = z.object({
     interest_level: z.enum(INTEREST).nullable(),
     language: z.string().nullable(),
     business_type: z.enum(BUSINESS_TYPES).nullable(),
+    /** E-311 — details read off a visiting card / GST certificate, set on the new lead in the same transaction. */
+    extra: z
+        .object({
+            area: z.string().nullable(),
+            pincode: z.string().nullable(),
+            contact_email: z.string().nullable(),
+            gstin: z.string().nullable(),
+        })
+        .nullable()
+        .default(null),
+    /** E-311 — the card / certificate itself, filed on the new lead. */
+    source: PlannedFile.nullable().default(null),
+    source_doc_type: z.enum(DOC_TYPES).nullable().default(null),
 });
 export type CreateLeadPlan = z.infer<typeof CreateLeadPlan>;
 
@@ -53,7 +71,9 @@ export const createLead: ToolFactory = () =>
         kind: "write",
         description:
             "Propose creating a NEW dealer lead. Needs the dealer's name and 10-digit mobile number; shop name, city, state, " +
-            "interest level, language and business type are optional — only what the user said. Nothing is saved until Confirm.",
+            "interest level, language and business type are optional — only what the user said. From a visiting card or " +
+            "GST certificate (read_document) also area, pincode, email and GSTIN, and source_attachment_id + " +
+            "source_doc_type to save the card on the new lead. Nothing is saved until Confirm.",
         schema: z.object({
             dealer_name: z.string().trim().min(2).max(200),
             phone: z.string().trim().min(10).max(20).describe("The dealer's mobile number as the user gave it"),
@@ -63,11 +83,29 @@ export const createLead: ToolFactory = () =>
             interest_level: z.enum(INTEREST).optional(),
             language: opt(40),
             business_type: z.enum(BUSINESS_TYPES).optional(),
+            area: opt(120),
+            pincode: opt(10),
+            email: opt(120),
+            gstin: opt(20),
+            source_attachment_id: AttachmentId.optional(),
+            source_doc_type: z.enum(DOC_TYPES).optional(),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
             if (!ctx.writesEnabled) return WRITES_OFF;
             const phone = tenDigitPhone(input.phone);
             if (!phone) return ask("That number doesn't look like a 10-digit mobile number. What is the dealer's number?");
+            const gstin = input.gstin?.toUpperCase().replace(/[\s-]/g, "") || null;
+            if (gstin && !GSTIN_RE.test(gstin)) return ask("That GSTIN doesn't look right (15 characters, like 27ABCDE1234F1Z5). What is it?");
+            const email = input.email?.toLowerCase() || null;
+            if (email && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email)) return ask("That email address doesn't look right. What is it?");
+            const pincode = input.pincode?.replace(/\s/g, "") || null;
+            if (pincode && !/^[1-9]\d{5}$/.test(pincode)) return ask("A pincode has 6 digits. What is it?");
+            let source: CreateLeadPlan["source"] = null;
+            if (input.source_attachment_id) {
+                const found = await resolveAttachments(ctx, [input.source_attachment_id], { kinds: ["image", "document"], forWrite: true });
+                if (found.result) return found.result;
+                source = plannedFile(found.rows[0]);
+            }
 
             const existingId = await findLeadIdByPhone(phone);
             if (existingId) {
@@ -75,7 +113,8 @@ export const createLead: ToolFactory = () =>
                 return {
                     kind: "declined",
                     reason: visible
-                        ? `A lead with this number already exists: ${visible.shop_name || visible.dealer_name || visible.id}.`
+                        ? `A lead with this number already exists: ${visible.shop_name || visible.dealer_name || visible.id}.` +
+                          (source ? " I can save this photo / file on that lead instead (attach_document)." : "")
                         : "A lead with this number already exists.",
                     crm_url: visible ? leadUrl(ctx.user, visible.id) : null,
                 };
@@ -90,6 +129,12 @@ export const createLead: ToolFactory = () =>
                 interest_level: input.interest_level ?? null,
                 language: input.language || null,
                 business_type: input.business_type ?? null,
+                extra:
+                    input.area || pincode || email || gstin
+                        ? { area: input.area || null, pincode, contact_email: email, gstin }
+                        : null,
+                source,
+                source_doc_type: source ? (input.source_doc_type ?? "visiting_card") : null,
             };
             const { selfAssigns } = creationOwnership(ctx.user.role);
             const lines: Preview["lines"] = [
@@ -102,6 +147,12 @@ export const createLead: ToolFactory = () =>
             if (plan.interest_level) lines.push({ label: "Interest", value: plan.interest_level });
             if (plan.language) lines.push({ label: "Language", value: plan.language });
             if (plan.business_type) lines.push({ label: "Business", value: plan.business_type.replace(/_/g, " ") });
+            if (plan.extra?.area || plan.extra?.pincode) {
+                lines.push({ label: "Area", value: [plan.extra.area, plan.extra.pincode].filter(Boolean).join(" · ") });
+            }
+            if (plan.extra?.contact_email) lines.push({ label: "Email", value: plan.extra.contact_email });
+            if (plan.extra?.gstin) lines.push({ label: "GSTIN", value: plan.extra.gstin });
+            if (plan.source) lines.push({ label: "📎 Save", value: `${DOC_TYPE_LABEL[plan.source_doc_type ?? "other"]} on the lead` });
             lines.push({
                 label: "Goes to",
                 value: selfAssigns ? "your queue — owned by you" : "the unassigned claim pool",
@@ -131,7 +182,7 @@ export const createLead: ToolFactory = () =>
 export const createLeadApplier = defineApplier<CreateLeadPlan>({
     schema: CreateLeadPlan,
     ownership: "none",
-    apply: async ({ tx, user }, p) => {
+    apply: async ({ tx, user, actionId }, p) => {
         try {
             const created = await createInsideSalesLead(
                 {
@@ -147,8 +198,23 @@ export const createLeadApplier = defineApplier<CreateLeadPlan>({
                 },
                 { tx },
             );
+            if (p.extra) {
+                const extra = Object.fromEntries(Object.entries(p.extra).filter(([, v]) => v));
+                if (Object.keys(extra).length) await tx.update(dealerLeads).set(extra).where(eq(dealerLeads.id, created.id));
+            }
+            const documentIds = p.source
+                ? await fileDocuments(tx, {
+                      leadId: created.id,
+                      docType: p.source_doc_type ?? "visiting_card",
+                      files: [p.source],
+                      note: null,
+                      userId: user.id,
+                      actionId,
+                  })
+                : [];
             return {
                 lead_id: created.id,
+                document_ids: documentIds,
                 crm_url: leadUrl(user, created.id),
                 business_type_saved: created.businessTypeSaved ?? null,
                 afterCommit: created.afterCommit,

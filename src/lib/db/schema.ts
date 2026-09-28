@@ -13123,3 +13123,63 @@ export const assistantToolCalls = pgTable(
     userCreatedIdx: index("assistant_tool_calls_user_created_idx").on(t.user_id, t.created_at),
   }),
 );
+
+// E-311 — photos / PDFs / location pins sent to the assistant. Stored on
+// arrival; `ref` is the short id the model sees; used once (used_at).
+export const assistantMedia = pgTable(
+  "assistant_media",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ref: varchar("ref", { length: 12 }).notNull(),
+    user_id: uuid("user_id").notNull(),
+    channel: varchar("channel", { length: 20 }).notNull().default("whatsapp"),
+    source_message_id: uuid("source_message_id"),
+    /** image | document | location */
+    kind: varchar("kind", { length: 20 }).notNull(),
+    mime_type: varchar("mime_type", { length: 100 }),
+    byte_size: integer("byte_size"),
+    file_name: text("file_name"),
+    storage_bucket: varchar("storage_bucket", { length: 60 }),
+    storage_key: text("storage_key"),
+    caption: text("caption"),
+    latitude: numeric("latitude", { precision: 10, scale: 7 }),
+    longitude: numeric("longitude", { precision: 10, scale: 7 }),
+    place_name: text("place_name"),
+    place_address: text("place_address"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    used_at: timestamp("used_at", { withTimezone: true }),
+    used_by_action_id: uuid("used_by_action_id"),
+  },
+  (t) => ({
+    userRefUq: uniqueIndex("assistant_media_user_ref_uq").on(t.user_id, t.ref),
+    userUnusedIdx: index("assistant_media_user_unused_idx")
+      .on(t.user_id, t.created_at)
+      .where(sql`used_at IS NULL`),
+  }),
+);
+
+// E-311 — documents on a DEALER lead (dealer_leads.id). Not lead_documents,
+// which is the customer/loan `leads` family.
+export const dealerLeadDocuments = pgTable(
+  "dealer_lead_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    /** gst_certificate | pan | shop_licence | shop_photo | visiting_card | purchase_order | other */
+    doc_type: varchar("doc_type", { length: 40 }).notNull(),
+    storage_bucket: varchar("storage_bucket", { length: 60 }).notNull(),
+    storage_key: text("storage_key").notNull(),
+    mime_type: varchar("mime_type", { length: 100 }),
+    byte_size: integer("byte_size"),
+    file_name: text("file_name"),
+    note: text("note"),
+    /** whatsapp_assistant | crm */
+    source: varchar("source", { length: 30 }).notNull().default("crm"),
+    media_id: uuid("media_id"),
+    uploaded_by: uuid("uploaded_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("dealer_lead_documents_lead_idx").on(t.dealer_lead_id, t.created_at),
+  }),
+);

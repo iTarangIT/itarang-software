@@ -281,3 +281,30 @@ describe("voice notes: parse + downloadMedia", () => {
         expect(fn).toHaveBeenCalledTimes(4);
     });
 });
+
+describe("photos, documents, location pins: parse (E-311)", () => {
+    it("carries the media id, mime, file name and caption; the caption is the row's text", () => {
+        const r = parseWebhook(payload({
+            messages: [
+                { id: "i", from: "919876543210", type: "image", image: { id: "IMG1", mime_type: "image/jpeg", caption: " TIGER ka board " } },
+                { id: "d", from: "919876543210", type: "document", document: { id: "DOC1", mime_type: "application/pdf", filename: "gst.pdf" } },
+                { id: "l", from: "919876543210", type: "location", location: { latitude: 18.5089, longitude: 73.9259, name: "Hadapsar", address: "Pune" } },
+            ],
+        }));
+        if (!r.ok) throw new Error(r.error);
+        const [i, d, l] = r.events;
+        expect(i.kind === "message" && i.media).toEqual({ kind: "image", id: "IMG1", mimeType: "image/jpeg", fileName: null, caption: "TIGER ka board" });
+        expect(i.kind === "message" && i.text).toBe("TIGER ka board");
+        expect(d.kind === "message" && d.media).toEqual({ kind: "document", id: "DOC1", mimeType: "application/pdf", fileName: "gst.pdf", caption: null });
+        expect(l.kind === "message" && l.location).toEqual({ lat: 18.5089, lng: 73.9259, name: "Hadapsar", address: "Pune" });
+        expect(l.kind === "message" && l.media).toBeNull();
+    });
+
+    it("a malformed pin is kept as an unsupported message, never trusted", () => {
+        const r = parseWebhook(payload({
+            messages: [{ id: "l", from: "919876543210", type: "location", location: { latitude: 200, longitude: "x" } }],
+        }));
+        if (!r.ok) throw new Error(r.error);
+        expect(r.events[0]).toMatchObject({ kind: "message", type: "unsupported" });
+    });
+});

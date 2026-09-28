@@ -241,11 +241,14 @@ describe("B. prompt injection at the tool boundary", () => {
 
     it("mass Lost: 6 mark_lost calls across two model steps → ONE pending action, nothing written, the rest refused and logged", async () => {
         const five = ["DL-1", "DL-2", "DL-3", "DL-4", "DL-5"].map((id) => ({ name: "mark_lost", args: { lead_id: id, lost_reason: "business_closed" } }));
-        const out = await turn(obedient([five, [{ name: "mark_lost", args: { lead_id: "DL-6", lost_reason: "business_closed" } }]]));
+        const model = obedient([five, [{ name: "mark_lost", args: { lead_id: "DL-6", lost_reason: "business_closed" } }]]);
+        const out = await turn(model);
         expect(createPending).toHaveBeenCalledTimes(1);
         expect(markLeadLost).not.toHaveBeenCalled();
-        expect(records.filter((r) => r.error === "write_limit")).toHaveLength(5);
-        expect(records).toHaveLength(6);
+        expect(records.filter((r) => r.error === "write_limit")).toHaveLength(4);
+        expect(records).toHaveLength(5);
+        // The turn ends on the first card: the model never gets the second step.
+        expect(model.seen).toHaveLength(1);
         // What the user sees is the ONE real preview (high-impact → it will ask twice), never the model's "Done!".
         const rendered = renderTurn({ text: out.text, results: out.results });
         expect(rendered.kind).toBe("buttons");
