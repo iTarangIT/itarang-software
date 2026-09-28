@@ -17,6 +17,9 @@ import { z } from "zod";
 
 // Every business signal is a strict yes/no fact — never inferred from tone.
 export const YES_NO = ["yes", "no"] as const;
+// The lithium-dealer gate needs a third value: "no" disqualifies the lead while
+// "never answered" only leaves it Cold, so the two must stay distinguishable.
+export const YES_NO_UNKNOWN = ["yes", "no", "unknown"] as const;
 export const DEALER_SEGMENTS = [
   "battery",
   "e_rickshaw",
@@ -35,6 +38,7 @@ export const DISQUALIFIERS = [
 export const LANGUAGES = ["hindi", "english", "hinglish", "unknown"] as const;
 
 export type YesNo = (typeof YES_NO)[number];
+export type YesNoUnknown = (typeof YES_NO_UNKNOWN)[number];
 export type DealerSegment = (typeof DEALER_SEGMENTS)[number];
 export type DealerRole = (typeof DEALER_ROLES)[number];
 export type Disqualifier = (typeof DISQUALIFIERS)[number];
@@ -48,15 +52,20 @@ const yesNo = z.enum(YES_NO).catch("no");
 const evidenceStr = z.string().catch("");
 
 export const QualificationSignalsSchema = z.object({
-  // ── Market relevance (gate) + routing context ──
-  // relevant_dealer = no → Disqualified, regardless of anything else.
+  // ── THE qualifying question (the band gate) ──
+  // "Are you a lithium battery dealer?" — yes → Qualified (75, or 90 with
+  // volume_shared), no → Disqualified, unknown (never answered) → Cold.
+  lithium_dealer: z.enum(YES_NO_UNKNOWN).catch("unknown"),
+
+  // ── Market relevance + routing context (context only since
+  // qualification-2.0.0 — lithium_dealer is the gate now) ──
   relevant_dealer: yesNo,
   dealer_segment: z.enum(DEALER_SEGMENTS).catch("none"), // context/routing only
   dealer_role: z.enum(DEALER_ROLES).catch("unknown"), // context/routing only
 
   // ── The five INFO signals (info_signals_count = how many are "yes") ──
   battery_spec_shared: yesNo, // capacity / voltage / Ah / chemistry stated
-  volume_shared: yesNo, // units per month or business volume / turnover
+  volume_shared: yesNo, // units per month — lifts a lithium "yes" from 75 to 90
   existing_financier_shared: yesNo, // names a financier/NBFC, or states none
   financing_need_expressed: yesNo, // needs financing / rising prices make it necessary
   financing_value_acknowledged: yesNo, // agrees financing would grow his business
@@ -73,6 +82,7 @@ export const QualificationSignalsSchema = z.object({
   // ── Evidence (short quote/paraphrase per signal; "" when absent) ──
   evidence: z
     .object({
+      lithium_dealer: evidenceStr,
       relevant_dealer: evidenceStr,
       battery_spec_shared: evidenceStr,
       volume_shared: evidenceStr,
@@ -82,6 +92,7 @@ export const QualificationSignalsSchema = z.object({
       callback_agreed: evidenceStr,
     })
     .catch({
+      lithium_dealer: "",
       relevant_dealer: "",
       battery_spec_shared: "",
       volume_shared: "",

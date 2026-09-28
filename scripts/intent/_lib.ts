@@ -131,6 +131,7 @@ export function truthSignals(c: GoldenCase): IntentSignals | null {
 // The yes/no facts a reviewer can correct — the keys whose extraction accuracy
 // we report. Mirrors CORRECTABLE_FACTS in the drawer.
 export const LEVELED_KEYS = [
+  "lithium_dealer",
   "relevant_dealer",
   "battery_spec_shared",
   "volume_shared",

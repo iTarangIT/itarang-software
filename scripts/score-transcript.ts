@@ -39,6 +39,7 @@ async function main() {
   const row = (k: string, val: string, evidence: string) =>
     console.log(`  ${k.padEnd(28)} ${val.padEnd(6)} ${evidence}`);
   const ev = s.evidence;
+  row("lithium_dealer", s.lithium_dealer, ev.lithium_dealer);
   row("relevant_dealer", s.relevant_dealer, ev.relevant_dealer);
   row("battery_spec_shared", s.battery_spec_shared, ev.battery_spec_shared);
   row("volume_shared", s.volume_shared, ev.volume_shared);
