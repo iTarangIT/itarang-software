@@ -12,22 +12,20 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
-import { ecofyViewerKind } from "@/lib/ecofy/access";
 import { formatIst, inr, StageBadge, TemperatureBadge } from "./badges";
 import { useLeadData, useRefreshLead, type EcofyCase } from "./client";
 import { CurrentStepCard } from "./CurrentStepCard";
 import { ErrorNote, KV, Loading, Panel } from "./ui";
 import { ActivitiesTab, AppointmentsTab, TimelineTab } from "./tabs/FollowUpTabs";
 import { AssessmentTab, OfferTab } from "./tabs/AssessmentOfferTabs";
-import { DocumentsTab, FinancingTab, InstallationTab, WithdrawalTab } from "./tabs/LaterStageTabs";
+import { DocumentsTab, FinancingTab, InstallationTab } from "./tabs/LaterStageTabs";
 import type { TabProps } from "./tabs/shared";
 import { CrmWorkLog, LocalActivityList, useLocalActivities } from "./CrmWorkLog";
 
 // History and full views. The current step is not a tab — it is the card above.
-const TABS = ["Timeline", "Activities", "Appointments", "Assessment", "Offer", "Financing", "Installation", "Documents", "Withdrawal"] as const;
+// Withdrawal is deliberately not offered from the CRM: Ecofy owns it (its own case page).
+const TABS = ["Timeline", "Activities", "Appointments", "Assessment", "Offer", "Financing", "Installation", "Documents"] as const;
 type Tab = (typeof TABS)[number];
-// Withdrawal is the Sales Head's (iTarang Admin) call: ASM / ISR do not see the tab.
-const MANAGER_ONLY_TABS: readonly Tab[] = ["Withdrawal"];
 
 export interface EcofyLeadDetailProps {
     leadId: string;
@@ -57,8 +55,7 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
     const caseQ = useLeadData<EcofyCase>(leadId, "case");
     const refreshLead = useRefreshLead(leadId);
     const [tab, setTab] = useState<Tab>("Timeline");
-    const manager = ecofyViewerKind(viewer.role) === "manager";
-    const tabs = manager ? TABS : TABS.filter((t) => !MANAGER_ONLY_TABS.includes(t));
+    const tabs = TABS;
     const c = caseQ.data;
 
     const onDone = () => {
@@ -176,7 +173,6 @@ export function EcofyLeadDetail(props: EcofyLeadDetailProps) {
                         {tab === "Financing" && <FinancingTab {...tabProps} />}
                         {tab === "Installation" && <InstallationTab {...tabProps} />}
                         {tab === "Documents" && <DocumentsTab {...tabProps} />}
-                        {tab === "Withdrawal" && manager && <WithdrawalTab {...tabProps} />}
                     </div>
                     <div className="space-y-4">
                         <Panel title="Customer">
